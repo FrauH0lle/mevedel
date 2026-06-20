@@ -61,10 +61,9 @@ unblocking the parent FSM. The sub-agent completes fire-and-forget; its
 result is wrapped in `<agent-result>` and pushed to the parent's mailbox.
 When the LLM produces no tool calls but background agents are still
 running, the FSM parks in **BWAIT** instead of terminating. Completion
-resumes BWAIT→WAIT. Transition injection:
-`mevedel-preset--inject-bwait-transitions` (main) and
-`mevedel-tools--inject-bwait-transition` (sub-agent). `background-agents`
-slot on session/invocation tracks running children.
+resumes BWAIT→WAIT. `mevedel-tools--bwait-injected-table` injects the
+transition table for main and sub-agent FSMs. `background-agents` slot
+on session/invocation tracks running children.
 
 Foreground-callback suppression: when a foreground agent has background
 children, `mevedel-tools--task` stashes the result on the invocation's

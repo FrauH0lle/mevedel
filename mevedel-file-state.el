@@ -75,10 +75,6 @@ not distort byte counts."
    :order nil
    :total-bytes 0))
 
-(defun mevedel-file-cache-size (cache)
-  "Return the number of entries currently in CACHE."
-  (hash-table-count (mevedel-file-cache-table cache)))
-
 (defun mevedel-file-cache-get (cache path)
   "Return the `mevedel-file-state' for PATH in CACHE, or nil if missing.
 
@@ -147,14 +143,6 @@ Returns STATE."
     (mevedel-file-cache--evict cache)
     state))
 
-(defun mevedel-file-cache-map (fn cache)
-  "Call FN with (PATH STATE) for each entry in CACHE.
-
-Iterates in an unspecified order.  Safe to mutate cache entries'
-fields from within FN but not to insert or remove entries."
-  (maphash (lambda (path state) (funcall fn path state))
-           (mevedel-file-cache-table cache)))
-
 (defun mevedel-file-cache-clear (cache)
   "Remove all entries from CACHE."
   (clrhash (mevedel-file-cache-table cache))
@@ -183,7 +171,7 @@ Does not mutate CACHE; pair with
 `mevedel-file-cache-consume-external-changes' after reporting so
 changes are not re-reported."
   (let (changes)
-    (mevedel-file-cache-map
+    (maphash
      (lambda (path state)
        (cond
         ((not (file-exists-p path))
@@ -208,7 +196,7 @@ changes are not re-reported."
                              :old (mevedel-file-state-content state)
                              :new new-content)
                        changes))))))))
-     cache)
+     (mevedel-file-cache-table cache))
     (nreverse changes)))
 
 (defun mevedel-file-cache-consume-external-changes (cache changes)
@@ -230,17 +218,7 @@ as fresh `mevedel-file-state' entries."
 
 
 ;;
-;;; Cache + session recording helpers
-;; foo
-(defun mevedel-file-cache-record (cache path)
-  "Read PATH from disk and store the resulting state in CACHE.
-
-Returns the stored `mevedel-file-state' or nil when PATH cannot be
-read.  Thin convenience wrapper over
-`mevedel-file-state-from-file' + `mevedel-file-cache-put'."
-  (when-let* ((state (mevedel-file-state-from-file path)))
-    (mevedel-file-cache-put cache state)
-    state))
+;;; Session recording helpers
 
 (defun mevedel-session-record-interaction (session path kind turn-count
                                                    &optional offset limit)
@@ -276,8 +254,9 @@ skips the cache update when the session has no workspace or PATH
 cannot be read; the interaction entry is always updated.  Returns the
 updated `mevedel-file-interaction'."
   (when-let* ((ws (mevedel-session-workspace session))
-              (cache (mevedel-workspace-file-cache ws)))
-    (mevedel-file-cache-record cache path))
+              (cache (mevedel-workspace-file-cache ws))
+              (state (mevedel-file-state-from-file path)))
+    (mevedel-file-cache-put cache state))
   (mevedel-session-record-interaction
    session path kind (mevedel-session-turn-count session) offset limit))
 

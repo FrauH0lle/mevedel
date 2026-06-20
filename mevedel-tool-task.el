@@ -1109,10 +1109,6 @@ VIEW-P means use view-buffer separator formatting."
               mevedel-tool-task--hrule)
             "\n")))
 
-(defun mevedel-tool-task--set-session-overlay (session overlay)
-  "Set SESSION's task compatibility OVERLAY."
-  (setf (mevedel-session-task-overlay session) overlay))
-
 (defun mevedel-tool-task--delete-overlay (session)
   "Delete SESSION's task compatibility overlay and clear the slot."
   (let ((ov (mevedel-session-task-overlay session)))

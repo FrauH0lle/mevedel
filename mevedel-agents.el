@@ -83,10 +83,7 @@
   (system-prompt nil :type (or string function))
   (max-turns nil :type (or null integer))
   (reminders nil :type list)
-  (hook-rules nil :type list)
-  (include-workspace-config t :type boolean)
-  (include-memory t :type boolean)
-  (include-environment t :type boolean))
+  (hook-rules nil :type list))
 
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")
@@ -201,10 +198,7 @@ Creates a `mevedel-agent' struct and registers it in
                    ,(when hooks
                       `(progn
                          (require 'mevedel-hooks)
-                         (mevedel-hooks-normalize-rules ',hooks 'agent)))
-                   :include-workspace-config ,include-workspace-config
-                   :include-memory ,include-memory
-                   :include-environment ,include-environment)))
+                         (mevedel-hooks-normalize-rules ',hooks 'agent))))))
        (setf (alist-get ,name-str mevedel-agent--registry nil nil #'equal)
              agent)
        agent)))
@@ -438,18 +432,22 @@ all code changes to worker agents and verifies results before reporting."
   :include-memory nil
   :max-turns 50)
 
-(mevedel-define-agent verifier
-  :description "Adversarial verification specialist.  Read-only -- \
+(defun mevedel-agents--register-verifier ()
+  "Register and return the bundled verifier agent."
+  (mevedel-define-agent verifier
+    :description "Adversarial verification specialist.  Read-only -- \
 tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
-  :tools (read code
-          (:tool "Bash") (:tool "Eval")
-          (:tool "Ask") (:tool "RequestAccess")
-          (:tool "ToolSearch")
-          (:deferred elisp))
-  :prompt-file "agents/verifier.md"
-  :include-memory nil
-  :max-turns 20)
+    :tools (read code
+            (:tool "Bash") (:tool "Eval")
+            (:tool "Ask") (:tool "RequestAccess")
+            (:tool "ToolSearch")
+            (:deferred elisp))
+    :prompt-file "agents/verifier.md"
+    :include-memory nil
+    :max-turns 20))
+
+(mevedel-agents--register-verifier)
 
 (defun mevedel-agents--register-reviewer ()
   "Register and return the bundled reviewer agent."
@@ -471,18 +469,7 @@ returns prioritized structured findings as JSON."
 (defun mevedel-agents-ensure-verifier ()
   "Ensure the bundled verifier agent is registered."
   (unless (mevedel-agent-get "verifier")
-    (mevedel-define-agent verifier
-      :description "Adversarial verification specialist.  Read-only -- \
-tries to break implementations through edge cases, tests, and code \
-review.  Cannot edit, write, or create files."
-      :tools (read code
-              (:tool "Bash") (:tool "Eval")
-              (:tool "Ask") (:tool "RequestAccess")
-              (:tool "ToolSearch")
-              (:deferred elisp))
-      :prompt-file "agents/verifier.md"
-      :include-memory nil
-      :max-turns 20)))
+    (mevedel-agents--register-verifier)))
 
 
 ;;

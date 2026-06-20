@@ -95,7 +95,7 @@
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer "mevedel-chat"
                   (session-name &optional create workspace working-directory))
-(declare-function mevedel--gptel-handle-error-after-advice "mevedel-chat" (fsm))
+(declare-function mevedel--main-fsm-on-error "mevedel-chat" (fsm))
 (defvar mevedel--view-buffer)
 (declare-function mevedel--tutor-buffer "mevedel-chat" (&optional create workspace))
 (declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
@@ -635,8 +635,7 @@ matches WORKING-DIRECTORY are considered."
   ;; turn is the load-bearing transcript; once gptel routes its FSM
   ;; through ERRS the conversation state can no longer roll forward,
   ;; so cancel any in-flight sub-agents and queued permissions.
-  (advice-add 'gptel--handle-error :after
-              #'mevedel--gptel-handle-error-after-advice)
+  (advice-add 'gptel--handle-error :after #'mevedel--main-fsm-on-error)
 
   (message "mevedel installed successfully"))
 
@@ -679,8 +678,7 @@ matches WORKING-DIRECTORY are considered."
     (mevedel-view-uninstall-gptel-menu-advice))
 
   ;; Remove main-agent error termination advice
-  (advice-remove 'gptel--handle-error
-                 #'mevedel--gptel-handle-error-after-advice)
+  (advice-remove 'gptel--handle-error #'mevedel--main-fsm-on-error)
 
   (message "mevedel uninstalled successfully"))
 

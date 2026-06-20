@@ -86,7 +86,6 @@
 (declare-function mevedel-workspace-get-or-create "mevedel-structs"
                   (type id root name))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-request-file-snapshots
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-buffer-name
@@ -216,8 +215,8 @@ add more, and we don't want to act on actions we don't understand).")
   "Convert WORKSPACE to a plist for sidecar storage.
 
 Captures only the identity tuple needed to re-register the workspace on
-load: type, id, root, and name.  The file cache and hints slots are
-process-local and not persisted."
+load: type, id, root, and name.  The file cache is process-local and
+not persisted."
   (when workspace
     (list :type (mevedel-workspace-type workspace)
           :id   (mevedel-workspace-id workspace)
@@ -788,41 +787,6 @@ prompt walker does not treat the drawer as a user prompt.  Returns
               (point-min))
           (point-min))))))
 
-(defun mevedel-session-persistence--in-summary-block-p (pos)
-  "Return non-nil if POS sits inside a `#+begin_summary' block.
-Looks backward from POS for the nearest `#+begin_summary' /
-`#+end_summary' marker."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char pos)
-      (end-of-line)
-      (let ((begin (save-excursion
-                     (re-search-backward "^#\\+begin_summary[ \t]*$" nil t)))
-            (end   (save-excursion
-                     (re-search-backward "^#\\+end_summary[ \t]*$" nil t))))
-        (and begin (or (null end) (> begin end)))))))
-
-(defun mevedel-session-persistence--in-gptel-org-block-p (pos)
-  "Return non-nil if POS is inside a gptel org tool/reasoning block.
-
-gptel stores `#+begin_tool', `#+end_tool',
-`#+begin_reasoning', and `#+end_reasoning' marker lines without the
-`gptel' text property.  The prompt indexer must not treat those
-unpropertized regions as user prompts."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (goto-char pos)
-      (end-of-line)
-      (let ((begin (save-excursion
-                     (re-search-backward
-                      "^#\\+begin_\\(?:tool\\|reasoning\\)\\b" nil t)))
-            (end (save-excursion
-                   (re-search-backward
-                    "^#\\+end_\\(?:tool\\|reasoning\\)\\b" nil t))))
-        (and begin (or (null end) (> begin end)))))))
-
 (defun mevedel-session-persistence--org-scaffolding-only-p (text)
   "Return non-nil when TEXT contains only gptel org block marker glue."
   (let ((cleaned text))
@@ -895,10 +859,6 @@ records the first non-empty line outside gptel-owned org blocks."
                   (throw 'found line-start)))
                 (forward-line 1)))
             nil))))))
-
-(defun mevedel-session-persistence--user-prompt-segment-p (pos next prop)
-  "Return non-nil when [POS, NEXT) is a real user prompt segment."
-  (and (mevedel-session-persistence--user-prompt-start pos next prop) t))
 
 (defun mevedel-session-persistence--collect-prompts (buffer)
   "Return a list of `(:turn N :pos POS :preview STR)' plists for BUFFER.
@@ -1848,7 +1808,7 @@ count, a turn-specific snapshot used by rewind/fork."
   (when-let* ((save-path (mevedel-session-save-path session)))
     (require 'mevedel-persistence)
     (let ((dir (mevedel-session-persistence--instructions-dir save-path))
-          (workspace-root (mevedel-workspace--root
+          (workspace-root (mevedel-workspace-root
                            (mevedel-session-workspace session)))
           (turn (mevedel-session-turn-count session)))
       (make-directory dir t)
@@ -1880,7 +1840,7 @@ older sessions without instruction persistence still resume."
             (with-current-buffer buffer
               (mevedel--load-instructions-file
                path
-               (mevedel-workspace--root (mevedel-session-workspace session))
+               (mevedel-workspace-root (mevedel-session-workspace session))
                nil t
                (mevedel-session-workspace session)))
           (error
@@ -3438,10 +3398,6 @@ entries are not attempted.  The user-visible report goes to
             (push buf buffers)))))
     (nreverse (cl-remove-duplicates buffers))))
 
-(defun mevedel-session-persistence--format-buffer-names (buffers)
-  "Return a concise user-facing list of BUFFERS."
-  (mapconcat #'buffer-name buffers ", "))
-
 (defun mevedel-session-persistence--prepare-buffers-for-restore
     (session cum-turn plan)
   "Prepare visiting buffers before restoring PLAN for SESSION.
@@ -3462,8 +3418,7 @@ after saves.  Returns nil when the restore should be aborted."
                    "Rewind affects %d modified buffer%s (%s): [s]ave, [d]iscard, [a]bort? "
                    (length buffers)
                    (if (= 1 (length buffers)) "" "s")
-                   (mevedel-session-persistence--format-buffer-names
-                    buffers))
+                   (mapconcat #'buffer-name buffers ", "))
                   '(?s ?d ?a))
             (?s
              (save-some-buffers

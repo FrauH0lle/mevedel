@@ -8,8 +8,6 @@
 ;;    lifecycle)
 ;;  - mevedel-define-tool :wrap (derived fields, overrides, rejections,
 ;;    registry keying)
-;;  - mevedel-tool-wrap-gptel-category and
-;;    mevedel-tool-rewrap-gptel-category
 ;;  - mevedel-preset-extra-tool-specs and
 ;;    mevedel-agent-extra-tool-specs merging
 
@@ -358,38 +356,6 @@
                "hello")
       (should (equal "got:hello" result)))
     (test-mevedel-tool-wrap--remove-source "test-src" name)))
-
-
-;;
-;;; Category bulk wrap
-
-(mevedel-deftest mevedel-tool-wrap-gptel-category
-  (:before-each (mevedel-tool-clear-registry)
-   :after-each (mevedel-tool-clear-registry))
-  ,test
-  (test)
-
-  :doc "wraps every tool in category under mevedel-<category>"
-  (let* ((n1 (test-mevedel-tool-wrap--unique "bulk1"))
-         (n2 (test-mevedel-tool-wrap--unique "bulk2"))
-         (cat (format "bulkcat_%d" (cl-incf test-mevedel-tool-wrap--counter))))
-    (test-mevedel-tool-wrap--make-source :name n1 :category cat)
-    (test-mevedel-tool-wrap--make-source :name n2 :category cat)
-    (mevedel-tool-wrap-gptel-category cat :groups '(bulk) :read-only-p t)
-    (should (mevedel-tool-get n1 (concat "mevedel-" cat)))
-    (should (mevedel-tool-get n2 (concat "mevedel-" cat)))
-    (test-mevedel-tool-wrap--remove-source cat n1)
-    (test-mevedel-tool-wrap--remove-source cat n2))
-
-  :doc "rewrap removes existing mevedel entries and wraps current sources"
-  (let* ((name (test-mevedel-tool-wrap--unique "rewrap"))
-         (cat (format "rewrapcat_%d" (cl-incf test-mevedel-tool-wrap--counter))))
-    (test-mevedel-tool-wrap--make-source :name name :category cat)
-    (mevedel-tool-wrap-gptel-category cat :groups '(bulk) :read-only-p t)
-    (should (mevedel-tool-get name (concat "mevedel-" cat)))
-    (mevedel-tool-rewrap-gptel-category cat :groups '(bulk) :read-only-p t)
-    (should (mevedel-tool-get name (concat "mevedel-" cat)))
-    (test-mevedel-tool-wrap--remove-source cat name)))
 
 
 ;;

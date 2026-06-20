@@ -14,6 +14,10 @@
 (eval-when-compile
   (require 'ediff-init))
 
+;; `color'
+(declare-function color-name-to-rgb "color" (color &optional frame))
+(declare-function color-rgb-to-hex "color" (red green blue &optional digits))
+
 ;; `ediff-ptch'
 (declare-function ediff-dispatch-file-patching-job "ediff-ptch" (patch-buf filename &optional startup-hooks))
 (declare-function ediff-get-patch-buffer "ediff-ptch" (&optional arg patch-buf))
@@ -33,8 +37,10 @@
 ;; `mevedel-tool-fs'
 (defvar mevedel--real-path)
 
+;; `mevedel-structs'
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
 ;; `mevedel-workspace'
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 
@@ -144,24 +150,30 @@ is preserved."
         (push (substring text start index) parts))
       (apply #'concat (nreverse parts)))))
 
+(defun mevedel--color-name-to-rgb (color-name)
+  "Return RGB components for COLOR-NAME.
+Batch Emacs reports the default face as unspecified, but mevedel only
+needs the usual light-background defaults there."
+  (or (color-name-to-rgb color-name)
+      ;; Batch has no frame colors; use Emacs' default light frame.
+      (pcase color-name
+        ("unspecified-fg" (color-name-to-rgb "black"))
+        ("unspecified-bg" (color-name-to-rgb "white"))
+        (_ (error "Unknown color: %s" color-name)))))
+
 (defun mevedel--tint (source-color-name tint-color-name &optional intensity)
   "Return hex string color of SOURCE-COLOR-NAME tinted with TINT-COLOR-NAME.
 
 INTENSITY controls the tinting intensity, where 0 means no tinting and 1
 means that the resulting color is the same as the TINT-COLOR-NAME color."
-  (let* ((tint (color-name-to-rgb tint-color-name))
-         (color (color-name-to-rgb source-color-name))
+  (let* ((tint (mevedel--color-name-to-rgb tint-color-name))
+         (color (mevedel--color-name-to-rgb source-color-name))
          (result (cl-mapcar (lambda (color tint)
                               (+ (* (- 1.0 intensity) color)
                                  (* intensity tint)))
                             color
                             tint)))
-    ;; HACK 2025-09-30: Otherwise tests fail as they are not interactive and I
-    ;;   guess then there no colors
-    (apply 'color-rgb-to-hex `(,@(if noninteractive
-                                     (list 1.0 1.0 1.0)
-                                   result)
-                               2))))
+    (apply #'color-rgb-to-hex `(,@result 2))))
 
 (defun mevedel--environment-info-string (&optional workspace working-directory)
   "Return a formatted string containing environment information.
@@ -174,7 +186,7 @@ WORKSPACE defaults to current `mevedel-workspace'. The string includes:
 - Emacs version
 - Current date"
   (let* ((dir (or working-directory
-                  (mevedel-workspace--root
+                  (mevedel-workspace-root
                    (or workspace (mevedel-workspace)))))
          (default-directory dir)
          (is-git-repo (and (executable-find "git")
@@ -523,8 +535,7 @@ Signals an error when the query is malformed."
 
 (defun mevedel--markdown-enquote (input-string)
   "Add Markdown blockquote to each line in INPUT-STRING."
-  (let ((lines (split-string input-string "\n")))
-    (mapconcat (lambda (line) (concat "> " line)) lines "\n")))
+  (replace-regexp-in-string "^" "> " input-string))
 
 
 

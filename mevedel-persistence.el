@@ -102,38 +102,23 @@ contents for position patching if the file changes before restore."
                                    content)))
                           (push (cons file entry) file-alist))))))
              else do
-             (push (if (or include-original-content
+             (let ((entry (copy-sequence (cdr cons))))
+               (when-let* ((content
+                            (or (plist-get entry :original-content)
+                                (and (stringp (car cons))
+                                     (file-exists-p (car cons))
+                                     (with-temp-buffer
+                                       (insert-file-contents (car cons))
+                                       (buffer-substring-no-properties
+                                        (point-min) (point-max)))))))
+                 (setq entry
+                       (mevedel--instruction-entry-with-metadata
+                        entry content)))
+               (unless (or include-original-content
                            (not (listp (cdr cons))))
-                       (let ((entry (copy-sequence (cdr cons))))
-                         (when-let* ((content
-                                      (or (plist-get entry :original-content)
-                                          (and (stringp (car cons))
-                                               (file-exists-p (car cons))
-                                               (with-temp-buffer
-                                                 (insert-file-contents
-                                                  (car cons))
-                                                 (buffer-substring-no-properties
-                                                  (point-min) (point-max)))))))
-                           (setq entry
-                                 (mevedel--instruction-entry-with-metadata
-                                  entry content)))
-                         (cons (car cons) entry))
-                     (let ((entry (copy-sequence (cdr cons))))
-                       (when-let* ((content
-                                    (or (plist-get entry :original-content)
-                                        (and (stringp (car cons))
-                                             (file-exists-p (car cons))
-                                             (with-temp-buffer
-                                               (insert-file-contents
-                                                (car cons))
-                                               (buffer-substring-no-properties
-                                                (point-min) (point-max)))))))
-                         (setq entry
-                               (mevedel--instruction-entry-with-metadata
-                                entry content)))
-                       (cl-remf entry :original-content)
-                       (cons (car cons) entry)))
-                   file-alist))
+                 (cl-remf entry :original-content))
+               (push (cons (car cons) entry)
+                     file-alist)))
     (list :version (mevedel-version)
           :ids (mevedel--instruction-id-state-plist)
           :files file-alist)))

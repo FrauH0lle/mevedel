@@ -95,7 +95,6 @@
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
-(declare-function mevedel-preset--inject-bwait-transitions "mevedel-presets" (table))
 (defvar mevedel-action-preset-alist)
 
 ;; `mevedel-permissions'
@@ -118,6 +117,7 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
@@ -158,6 +158,7 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
+(declare-function mevedel-tools--bwait-injected-table "mevedel-tool-ui" (source))
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 (declare-function mevedel-tools-stop-agent
                   "mevedel-tool-ui" (agent-id &optional reason parent-buffer))
@@ -187,8 +188,6 @@
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--name "mevedel-workspace" (workspace))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (defvar mevedel--workspace)
 (defvar mevedel-workspace-additional-roots)
 
@@ -396,7 +395,7 @@ session struct."
     ;; keyed on source identity; passing the default value directly
     ;; lets every chat buffer share a single cached copy.
     (setq-local gptel-send--transitions
-                (mevedel-preset--inject-bwait-transitions
+                (mevedel-tools--bwait-injected-table
                  (default-value 'gptel-send--transitions)))
     ;; Wrap lines
     (visual-line-mode +1)
@@ -515,7 +514,7 @@ Returns (BUFFER . CREATED-P) where CREATED-P indicates if buffer was
 created. When CREATE-P is non-nil and buffer doesn't exist, create it
 with workspace."
   (let* ((workspace (or workspace (mevedel-workspace)))
-         (workspace-name (mevedel-workspace--name workspace))
+         (workspace-name (mevedel-workspace-name workspace))
          (buf-name (format "*mevedel:%s@%s*" name workspace-name))
          (target-buf (get-buffer buf-name))
          created-p)
@@ -610,7 +609,7 @@ Returns a unified diff string showing original -> final state for each
 file. Uses the `mevedel--request-file-snapshots' to compare original
 states with current file contents in WORKSPACE."
   (let ((diffs "")
-        (workspace-root (mevedel-workspace--root (or workspace (mevedel-workspace)))))
+        (workspace-root (mevedel-workspace-root (or workspace (mevedel-workspace)))))
     (dolist (snapshot mevedel--request-file-snapshots)
       (let* ((filepath (car snapshot))
              (original (cdr snapshot))
@@ -1181,11 +1180,6 @@ A no-op for sub-agent FSMs (their buffers carry
             (format "main-fsm-on-error cleanup failed: %S" err)
             :warning)))))))
 
-(defun mevedel--gptel-handle-error-after-advice (fsm)
-  "After-advice on `gptel--handle-error' driving FSM error handling."
-  (mevedel--main-fsm-on-error fsm))
-
-
 ;;
 ;;; Plan implementation
 
@@ -1258,6 +1252,30 @@ the LLM may have left an open block.  This handles:
             (insert (format "#+end_%s\n" last-open))
             (org-cycle))))))))
 
+(defun mevedel--insert-plan-implementation-turn (prompt display-text)
+  "Insert PROMPT as a user turn and notify the view with DISPLAY-TEXT."
+  (goto-char (point-max))
+  (let ((user-turn-start (point)))
+    (insert gptel-response-separator)
+    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
+      (let ((prefix-length (length prefix)))
+        (unless (and (>= (point) (+ (point-min) prefix-length))
+                     (string= (buffer-substring-no-properties
+                               (- (point) prefix-length) (point))
+                              prefix))
+          (unless (bolp) (insert "\n"))
+          (insert prefix))))
+    (insert prompt "\n")
+    (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
+  (let ((data-turn-start (copy-marker (point) nil)))
+    (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                           mevedel--view-buffer))
+                ((buffer-live-p view))
+                ((fboundp 'mevedel-view--begin-external-turn)))
+      (with-current-buffer view
+        (mevedel-view--begin-external-turn display-text data-turn-start)))
+    data-turn-start))
+
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.
 
@@ -1287,57 +1305,12 @@ as a string prompt, without prior conversation context."
             (mevedel--close-unclosed-blocks)
             (pcase (plist-get action-plist :action)
               ('implement
-               ;; Insert plan as user message and send with full conversation context
-               (goto-char (point-max))
-               (let ((user-turn-start (point)))
-                 (insert gptel-response-separator)
-                 (when-let* ((prefix (alist-get major-mode
-                                                gptel-prompt-prefix-alist)))
-                   (let ((prefix-length (length prefix)))
-                     (unless (and (>= (point) (+ (point-min) prefix-length))
-                                  (string= (buffer-substring-no-properties
-                                            (- (point) prefix-length) (point))
-                                           prefix))
-                       (unless (bolp) (insert "\n"))
-                       (insert prefix))))
-                 (insert prompt "\n")
-                 (mevedel--clear-user-turn-gptel-properties
-                  user-turn-start (point)))
-               (let ((data-turn-start (copy-marker (point) nil)))
-                 (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                                        mevedel--view-buffer))
-                             ((buffer-live-p view))
-                             ((fboundp 'mevedel-view--begin-external-turn)))
-                   (with-current-buffer view
-                     (mevedel-view--begin-external-turn
-                      "Implement accepted plan" data-turn-start))))
+               (mevedel--insert-plan-implementation-turn
+                prompt "Implement accepted plan")
                (gptel-send))
               ('implement-clear
-               ;; Fresh request without conversation context
-               (goto-char (point-max))
-               (let ((user-turn-start (point)))
-                 (insert gptel-response-separator)
-                 (when-let* ((prefix (alist-get major-mode
-                                                gptel-prompt-prefix-alist)))
-                   (let ((prefix-length (length prefix)))
-                     (unless (and (>= (point) (+ (point-min) prefix-length))
-                                  (string= (buffer-substring-no-properties
-                                            (- (point) prefix-length) (point))
-                                           prefix))
-                       (unless (bolp) (insert "\n"))
-                       (insert prefix))))
-                 (insert prompt "\n")
-                 (mevedel--clear-user-turn-gptel-properties
-                  user-turn-start (point)))
-               (let ((data-turn-start (copy-marker (point) nil)))
-                 (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                                        mevedel--view-buffer))
-                             ((buffer-live-p view))
-                             ((fboundp 'mevedel-view--begin-external-turn)))
-                   (with-current-buffer view
-                     (mevedel-view--begin-external-turn
-                      "Implement accepted plan with cleared context"
-                      data-turn-start))))
+               (mevedel--insert-plan-implementation-turn
+                prompt "Implement accepted plan with cleared context")
                (gptel-with-preset 'mevedel-implement
                  (gptel-request prompt
                    :buffer chat-buffer

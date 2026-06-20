@@ -782,18 +782,6 @@ after the last response, or nil if no response exists."
     (when pos
       (next-single-property-change pos 'gptel nil (point-max)))))
 
-(defun mevedel--compact-response-ends-before (limit)
-  "Return response end positions before LIMIT, oldest first."
-  (let ((pos (point-min))
-        ends)
-    (while (< pos limit)
-      (let* ((next (next-single-property-change pos 'gptel nil limit))
-             (prop (get-text-property pos 'gptel)))
-        (when (eq prop 'response)
-          (push next ends))
-        (setq pos next)))
-    (nreverse (delete-dups ends))))
-
 (defun mevedel--compact-user-authored-span-p (beg end)
   "Return non-nil if text from BEG to END is user-authored prompt text."
   (let ((prop (get-text-property beg 'gptel)))

@@ -32,9 +32,7 @@
     (should (equal "/tmp/test-project/" (mevedel-workspace-id ws)))
     (should (equal "/tmp/test-project/" (mevedel-workspace-root ws)))
     (should (equal "test-project" (mevedel-workspace-name ws)))
-    (should (null (mevedel-workspace-additional-roots ws)))
-    (should (null (mevedel-workspace-file-cache ws)))
-    (should (null (mevedel-workspace-hints ws)))))
+    (should (null (mevedel-workspace-file-cache ws)))))
 
 
 ;;
@@ -77,38 +75,12 @@
               'file "/tmp/p1/" "/tmp/p1/" "p1-file")))
     (should-not (eq ws1 ws2))))
 
-(mevedel-deftest mevedel-workspace-get
-  (:before-each (mevedel-workspace-clear-registry)
-   :after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-  :doc "returns nil for unregistered workspace"
-  (should (null (mevedel-workspace-get 'project "/tmp/nonexistent/")))
-
-  :doc "returns workspace after registration"
-  (let ((ws (mevedel-workspace-get-or-create
-             'project "/tmp/p1/" "/tmp/p1/" "p1")))
-    (should (eq ws (mevedel-workspace-get 'project "/tmp/p1/")))))
-
-(mevedel-deftest mevedel-workspace-all
-  (:before-each (mevedel-workspace-clear-registry)
-   :after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-  :doc "returns empty list when registry is empty"
-  (should (null (mevedel-workspace-all)))
-
-  :doc "returns all registered workspaces"
-  (progn
-    (mevedel-workspace-get-or-create 'project "/tmp/p1/" "/tmp/p1/" "p1")
-    (mevedel-workspace-get-or-create 'project "/tmp/p2/" "/tmp/p2/" "p2")
-    (should (= 2 (length (mevedel-workspace-all))))))
-
 (mevedel-deftest mevedel-workspace-clear-registry
   (:doc "`mevedel-workspace-clear-registry' removes all entries")
-  (mevedel-workspace-get-or-create 'project "/tmp/p1/" "/tmp/p1/" "p1")
-  (mevedel-workspace-clear-registry)
-  (should (null (mevedel-workspace-all))))
+  (let ((ws (mevedel-workspace-get-or-create 'project "/tmp/p1/" "/tmp/p1/" "p1")))
+    (mevedel-workspace-clear-registry)
+    (should-not
+     (eq ws (mevedel-workspace-get-or-create 'project "/tmp/p1/" "/tmp/p1/" "p1")))))
 
 
 ;;

@@ -293,7 +293,7 @@
     (mevedel-review--ensure-dispatch-deps 'verify)
     (should (mevedel-agent-get "verifier"))))
 
-(mevedel-deftest mevedel-review--ensure-reviewer-agent-spec ()
+(mevedel-deftest mevedel-review--ensure-agent-spec ()
   ,test
   (test)
   :doc "installs reviewer spec into the dispatch data buffer"
@@ -302,7 +302,7 @@
         (progn
           (with-current-buffer data
             (setq-local mevedel-agent-exec--agents nil))
-          (mevedel-review--ensure-reviewer-agent-spec data)
+          (mevedel-review--ensure-agent-spec data 'review)
           (with-current-buffer data
             (let ((spec (cdr (assoc "reviewer"
                                     mevedel-agent-exec--agents))))

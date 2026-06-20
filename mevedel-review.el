@@ -193,14 +193,6 @@
   '("Bash" :action deny)
   "Generic Bash deny rule that constrains the reviewer to git grants.")
 
-(defconst mevedel-review--task-description
-  "Review code changes against a target"
-  "Human-facing label for the dedicated review task.")
-
-(defconst mevedel-review--verify-task-description
-  "Verify code changes against a target"
-  "Human-facing label for the dedicated verify task.")
-
 (defconst mevedel-review--command-specs
   '((review :name "review"
             :agent "reviewer"
@@ -739,14 +731,12 @@ permission policy decides whether verifier validation commands may run."
       (user-error "Bundled review skill is malformed"))
     skill))
 
-(defun mevedel-review--review-skill (session)
-  "Return the bundled review skill, ignoring SESSION skill overrides."
-  (ignore session)
+(defun mevedel-review--review-skill (_session)
+  "Return the bundled review skill, ignoring session skill overrides."
   (mevedel-review--augment-skill (mevedel-review--bundled-skill)))
 
-(defun mevedel-review--verify-skill (session)
-  "Return the synthetic first-class verify skill for SESSION."
-  (ignore session)
+(defun mevedel-review--verify-skill (_session)
+  "Return the synthetic first-class verify skill."
   (let ((rules (mevedel-review--verify-permission-rules)))
     (mevedel-skill--create
      :name "verify"
@@ -790,10 +780,6 @@ permission policy decides whether verifier validation commands may run."
        (cons (mevedel-agent-to-gptel-spec agent)
              (cl-remove agent-name mevedel-agent-exec--agents
                         :key #'car :test #'equal))))))
-
-(defun mevedel-review--ensure-reviewer-agent-spec (data-buffer)
-  "Ensure DATA-BUFFER can dispatch the bundled reviewer agent."
-  (mevedel-review--ensure-agent-spec data-buffer 'review))
 
 (defun mevedel-review--ensure-dispatch-allowed (data-buffer)
   "Signal if DATA-BUFFER cannot accept a direct review dispatch."

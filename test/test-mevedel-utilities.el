@@ -53,6 +53,13 @@
     (should (equal "bad \\xFF byte" normalized))
     (should-not (test-mevedel-utilities--raw-byte-string-p normalized))))
 
+(mevedel-deftest mevedel--tint ()
+  ,test
+  (test)
+  :doc "resolves noninteractive default-face colors without returning white"
+  (should (equal "#ff7f7f" (mevedel--tint "unspecified-bg" "red" 0.5)))
+  (should (equal "#7f7f7f" (mevedel--tint "unspecified-fg" "white" 0.5))))
+
 (mevedel-deftest mevedel--clear-user-turn-gptel-properties ()
   ,test
   (test)

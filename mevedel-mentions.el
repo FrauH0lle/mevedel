@@ -27,7 +27,6 @@
 
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `mevedel-structs'
@@ -38,6 +37,7 @@
 (declare-function mevedel-session-permission-rules "mevedel-structs" (session))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (session))
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 ;; `mevedel-permissions'
@@ -117,7 +117,7 @@ Returns a string with the reference header and content."
            (mevedel--delimiting-markdown-backticks ref-string))
           (rel-path (file-relative-name
                      (buffer-file-name (overlay-buffer ref))
-                     (mevedel-workspace--root (mevedel-workspace)))))
+                     (mevedel-workspace-root (mevedel-workspace)))))
       (concat
        (format "#### Reference #%d\n\n" (mevedel--instruction-id ref))
        (if (mevedel--instruction-bufferlevel-p ref)
@@ -632,7 +632,7 @@ points back at the chat buffer that owns the session.  Dispatches per
          (workspace-root
           (and session
                (when-let* ((ws (mevedel-session-workspace session)))
-                 (mevedel-workspace--root ws))))
+                 (mevedel-workspace-root ws))))
          (mentions-shown (and session
                               (mevedel-session-mentions-shown session)))
          (turn (and session (mevedel-session-turn-count session)))
@@ -737,7 +737,7 @@ Provides completion for both @ref:ID and @ref:{tag-query} syntax."
                                     (rel-path (when file-name
                                                 (file-relative-name
                                                  file-name
-                                                 (mevedel-workspace--root (mevedel-workspace)))))
+                                                 (mevedel-workspace-root (mevedel-workspace)))))
                                     (line (with-current-buffer buffer
                                             (line-number-at-pos (overlay-start ref))))
                                     (content (with-current-buffer buffer
@@ -810,7 +810,7 @@ When a file is selected, replaces @file:path with the absolute path."
                            (point)))
                (current-input (buffer-substring-no-properties path-start path-end))
                (workspace (mevedel-workspace))
-               (workspace-root (when workspace (mevedel-workspace--root workspace))))
+               (workspace-root (when workspace (mevedel-workspace-root workspace))))
           (when workspace-root
             ;; Parse current input to determine directory context
             (let* ((dir-part (file-name-directory current-input))
@@ -891,60 +891,45 @@ When a file is selected, replaces @file:path with the absolute path."
 ;;
 ;;; Font-lock support for @ref mentions
 
+(defun mevedel-mentions--fontify-keyword (regexp end)
+  "Search forward for a valid mention matching REGEXP before END."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward regexp end t))
+      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
+        (setq found t)))
+    found))
+
 (defun mevedel--fontify-ref-id-keyword (end)
   "Font-lock matcher for @ref:ID mentions up to END.
 Highlights valid reference IDs.  Skips mentions in non-user regions
 or adjacent to quoting chars; see
 `mevedel-mentions--valid-mention-context-p'."
-  (let (found)
-    (while (and (not found)
-                (re-search-forward "@ref:\\([0-9]+\\)" end t))
-      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
-        (setq found t)))
-    found))
+  (mevedel-mentions--fontify-keyword "@ref:\\([0-9]+\\)" end))
 
 (defun mevedel--fontify-ref-tag-keyword (end)
   "Font-lock matcher for @ref:{tag} mentions up to END.
 Highlights valid tag queries.  Skips mentions in non-user regions
 or adjacent to quoting chars."
-  (let (found)
-    (while (and (not found)
-                (re-search-forward "@ref:{\\([^}]+\\)}" end t))
-      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
-        (setq found t)))
-    found))
+  (mevedel-mentions--fontify-keyword "@ref:{\\([^}]+\\)}" end))
 
 (defun mevedel--fontify-file-keyword (end)
   "Font-lock matcher for @file:path mentions up to END.
 Highlights file path references, including optional `#L<start>[-<end>]'
 line-range suffix.  Skips mentions in non-user regions or adjacent
 to quoting chars."
-  (let (found)
-    (while (and (not found)
-                (re-search-forward mevedel-mentions--file-regexp end t))
-      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
-        (setq found t)))
-    found))
+  (mevedel-mentions--fontify-keyword mevedel-mentions--file-regexp end))
 
 (defun mevedel--fontify-agent-keyword (end)
   "Font-lock matcher for @agent:name mentions up to END.
 Skips mentions in non-user regions or adjacent to quoting chars."
-  (let (found)
-    (while (and (not found)
-                (re-search-forward "@agent:\\([[:alnum:]_-]+\\)" end t))
-      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
-        (setq found t)))
-    found))
+  (mevedel-mentions--fontify-keyword "@agent:\\([[:alnum:]_-]+\\)" end))
 
 (defun mevedel--fontify-mcp-keyword (end)
   "Font-lock matcher for @mcp:server:uri mentions up to END.
 Skips mentions in non-user regions or adjacent to quoting chars."
-  (let (found)
-    (while (and (not found)
-                (re-search-forward "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" end t))
-      (when (mevedel-mentions--valid-mention-context-p (match-beginning 0))
-        (setq found t)))
-    found))
+  (mevedel-mentions--fontify-keyword
+   "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" end))
 
 (defconst mevedel-mentions--font-lock-keywords
   '((mevedel--fontify-ref-id-keyword

@@ -96,8 +96,6 @@
 
 ;; `mevedel-tool-ui'
 (require 'mevedel-permission-queue)
-(declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
-                  (tool-name path include-always cont))
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
@@ -1301,14 +1299,6 @@ between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
           (regexp-quote mevedel-pipeline--render-data-close)
           "\n?"))
 
-(defun mevedel-pipeline--media-data-regexp ()
-  "Return the regexp matching a media side-channel block."
-  (concat "\n?"
-          (regexp-quote mevedel-pipeline--media-data-open)
-          "\\(?:.\\|\n\\)*?"
-          (regexp-quote mevedel-pipeline--media-data-close)
-          "\n?"))
-
 (defun mevedel-pipeline--strip-render-data-blocks (string)
   "Return STRING with every render-data side-channel block removed."
   (replace-regexp-in-string
@@ -1371,13 +1361,11 @@ state, never from a model-visible transcript block."
       (let* ((read-eval nil)
              (data (read payload))
              (id (plist-get data :id))
-             (file (plist-get data :file))
              (tool-use-id (plist-get data :tool-use-id)))
         (or (and (stringp id)
                  (mevedel-pipeline--media-store-record-items
                   (gethash id mevedel-pipeline--media-store)
                   id tool-use-id expected-tool-use-id))
-            (ignore file)
             (and expected-tool-use-id
                  (equal expected-tool-use-id tool-use-id)
                  (mevedel-pipeline--read-media-store-record

@@ -99,33 +99,6 @@
                  (items (vectorp . "array")))
                 t))))
     (should (equal t (funcall fn))))
-  :doc "lambda validators:
-`mevedel-tools--validate-params' accepts value passing lambda validation"
-  (let ((fn (lambda ()
-              (let ((score 85))
-                (mevedel-tools--validate-params
-                 nil nil
-                 (score (lambda (x) (and (numberp x) (> x 0)))))
-                t))))
-    (should (equal t (funcall fn))))
-  :doc "lambda validators:
-`mevedel-tools--validate-params' rejects value failing lambda validation"
-  (let ((fn (lambda ()
-              (let ((score -10))
-                (mevedel-tools--validate-params
-                 nil nil
-                 (score (lambda (x) (and (numberp x) (> x 0)))))
-                t))))
-    (should-error (funcall fn)))
-  :doc "lambda validators:
-`mevedel-tools--validate-params' uses custom type name with lambda"
-  (let ((fn (lambda ()
-              (let ((percent 150))
-                (mevedel-tools--validate-params
-                 nil nil
-                 (percent ((lambda (x) (and (numberp x) (>= x 0) (<= x 100))) . "percentage (0-100)")))
-                nil))))
-    (should-error (funcall fn)))
   :doc "optional parameters:
 `mevedel-tools--validate-params' allows nil for optional parameter"
   (let ((fn (lambda ()

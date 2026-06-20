@@ -278,6 +278,24 @@ Handles single quotes, double quotes, and backslash escaping."
       ;; and not in an escaped state
       (and (not in-single) (not in-double) (not escaped)))))
 
+(defun mevedel-tools--command-substitutions-balanced-p (str)
+  "Return t when every `$(' in STR has a matching `)'."
+  (let ((pos 0)
+        (balanced t))
+    (while (and balanced (string-match "\\$(" str pos))
+      (let ((depth 1)
+            (i (match-end 0)))
+        (while (and (< i (length str)) (> depth 0))
+          (let ((c (aref str i)))
+            (cond
+             ((eq c ?\() (setq depth (1+ depth)))
+             ((eq c ?\)) (setq depth (1- depth))))
+            (setq i (1+ i))))
+        (if (= depth 0)
+            (setq pos i)
+          (setq balanced nil))))
+    balanced))
+
 (defun mevedel-tools--contains-complex-syntax-p (str)
   "Return t if STR's syntax is too complex to parse safely, nil otherwise.
 
@@ -286,6 +304,7 @@ Complex syntax includes:
 - Eval or exec commands
 - Here documents
 - Brace expansion
+- Unmatched command substitutions
 - Unbalanced quotes"
   (or
    ;; Variable expansion (but not command substitution which we handle)
@@ -300,11 +319,14 @@ Complex syntax includes:
    ;; Brace expansion that could hide commands
    (and (string-match-p "{[^}]*,[^}]*}" str) t)
 
+   ;; Unmatched command substitution
+   (not (mevedel-tools--command-substitutions-balanced-p str))
+
    ;; Unmatched quotes
    (not (mevedel-tools--quotes-balanced-p str))))
 
 (defun mevedel-tools--split-command-chain (str)
-  "Split STR on command separators, respecting quotes.
+  "Split STR on command separators, respecting quotes and `$()'.
 Handles: && || ; | and newlines.
 Returns list of command segments."
   (let ((result '())
@@ -312,6 +334,7 @@ Returns list of command segments."
         (in-single nil)
         (in-double nil)
         (escaped nil)
+        (subst-depth 0)
         (i 0)
         (len (length str)))
     (while (< i len)
@@ -328,6 +351,12 @@ Returns list of command segments."
           (setq current (concat current (char-to-string c)))
           (setq escaped t))
 
+         ;; Command substitution starts outside single quotes.
+         ((and (eq c ?$) (eq next ?\() (not in-single))
+          (setq current (concat current "$("))
+          (setq subst-depth (1+ subst-depth))
+          (setq i (1+ i)))
+
          ;; Single quote toggle (only outside double quotes)
          ((and (eq c ?') (not in-double))
           (setq current (concat current (char-to-string c)))
@@ -338,8 +367,17 @@ Returns list of command segments."
           (setq current (concat current (char-to-string c)))
           (setq in-double (not in-double)))
 
+         ;; Keep separators inside command substitutions with the segment.
+         ((and (> subst-depth 0) (not in-single) (eq c ?\())
+          (setq current (concat current (char-to-string c)))
+          (setq subst-depth (1+ subst-depth)))
+
+         ((and (> subst-depth 0) (not in-single) (eq c ?\)))
+          (setq current (concat current (char-to-string c)))
+          (setq subst-depth (1- subst-depth)))
+
          ;; Handle separators outside quotes
-         ((and (not in-single) (not in-double))
+         ((and (= subst-depth 0) (not in-single) (not in-double))
           (cond
            ;; && separator
            ((and (eq c ?&) (eq next ?&))
@@ -403,8 +441,10 @@ Handles nested $(...)."
                ((eq c ?\() (setq depth (1+ depth)))
                ((eq c ?\)) (setq depth (1- depth))))
               (setq i (1+ i))))
-          (when (= depth 0)
-            (push (substring str start (1- i)) result)
+          (if (= depth 0)
+              (progn
+                (push (substring str start (1- i)) result)
+                (setq pos i))
             (setq pos i)))))
 
     ;; Extract `...` (backticks)
@@ -796,16 +836,6 @@ the Bash tool path because Bash had its own flattened resolver."
                        (mevedel-permission--load-persistent-rules workspace))))
     (mevedel-permission--collect-buckets
      invocation-rules request-rules session-rules persistent)))
-
-(defun mevedel-tools--bash-effective-rules ()
-  "Return the merged permission-rule list visible to Bash.
-
-Flattened helper kept for callers that don't need bucket
-precedence (e.g. legacy callers, tests).  New code should use
-`mevedel-tools--bash-buckets' to preserve innermost-first
-allow/ask resolution."
-  (let ((buckets (mevedel-tools--bash-buckets)))
-    (apply #'append (mapcar #'cdr buckets))))
 
 (cl-defun mevedel-tools--bash-bucket-action
     (buckets command &key skip-keys)

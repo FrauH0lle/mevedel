@@ -1091,16 +1091,6 @@ PATH matches exactly."
            (if (eq mode-result 'ask) 'ask mode-result)
            'mode))))))
 
-(defun mevedel-check-permission--tail
-    (tool-name buckets path pattern domain name
-               allowed-roots exact-allowed-paths mode read-only-p)
-  "Run steps 5-9 of the permission chain and return the raw outcome."
-  (mevedel-permission-decision-raw-outcome
-   (mevedel-check-permission--tail-decision
-    tool-name buckets path pattern domain name
-    allowed-roots exact-allowed-paths mode read-only-p)))
-
-
 ;;
 ;;; Session rule storage
 

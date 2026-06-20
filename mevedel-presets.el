@@ -331,7 +331,6 @@ the built-in deferred specs from the preset stay in place.
 Has no effect when no extras are registered for PRESET-NAME."
   (when-let* ((extras (alist-get preset-name mevedel-preset-extra-tool-specs)))
     (let* ((resolved (mevedel-tool-resolve extras))
-           (active-tools (plist-get resolved :active))
            (deferred-tools (plist-get resolved :deferred))
            (gptel-resolved (mevedel-tool-resolve-gptel extras))
            (active-gptel (plist-get gptel-resolved :active)))
@@ -354,9 +353,7 @@ Has no effect when no extras are registered for PRESET-NAME."
           (dolist (entry additions)
             (unless (cl-find (car entry) existing :key #'car :test #'equal)
               (setq existing (append existing (list entry)))))
-          (setf (mevedel-session-deferred-set session) existing)))
-      ;; Silence unused-var warning when session is nil.
-      (ignore active-tools))))
+          (setf (mevedel-session-deferred-set session) existing))))))
 
 
 ;;
@@ -643,26 +640,6 @@ alist with mevedel-specific handlers added:
                           (list #'mevedel-tools--handle-terminal-mailbox)))
         (push (list state #'mevedel-tools--handle-terminal-mailbox) handlers))))
   (mevedel--wrap-terminal-handlers handlers))
-
-
-;;
-;;; BWAIT transition table injection
-
-(defun mevedel-preset--inject-bwait-transitions (table)
-  "Return TABLE with BWAIT parking state added.
-
-Inserts a `mevedel-tools--background-agents-pending-p' predicate
-before the `(t . DONE)' fallthrough in both the TYPE and TRET states.
-When the predicate matches (background agents still running, no tool
-calls), the FSM parks in BWAIT instead of terminating.
-
-BWAIT is registered as a terminal-like state with no outgoing
-transitions -- the background agent completion callback forces a
-transition to WAIT explicitly.
-
-Delegates to `mevedel-tools--bwait-injected-table' so the injected
-copy is shared across every preset application."
-  (mevedel-tools--bwait-injected-table table))
 
 
 ;;

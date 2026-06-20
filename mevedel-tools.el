@@ -66,8 +66,9 @@
 (declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-permission-queue-sweep-agent
-                  "mevedel-permission-queue" (origin &optional session))
+(declare-function mevedel-permission-queue-sweep-origin
+                  "mevedel-permission-queue"
+                  (origin &optional session no-render))
 (declare-function mevedel-plan-queue-sweep-agent
                   "mevedel-tool-plan" (origin &optional session))
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -865,12 +866,12 @@ Two cleanups:
     (when (and ctx
                (fboundp 'mevedel-agent-invocation-p)
                (mevedel-agent-invocation-p ctx)
-               (fboundp 'mevedel-permission-queue-sweep-agent))
+               (fboundp 'mevedel-permission-queue-sweep-origin))
       (let ((agent-id (mevedel-agent-invocation-agent-id ctx))
             (parent-session
              (mevedel-agent-invocation-parent-session ctx)))
         (when (and agent-id parent-session)
-          (mevedel-permission-queue-sweep-agent agent-id parent-session))
+          (mevedel-permission-queue-sweep-origin agent-id parent-session))
         (when (and agent-id parent-session
                    (fboundp 'mevedel-plan-queue-sweep-agent))
           (mevedel-plan-queue-sweep-agent agent-id parent-session))))))
