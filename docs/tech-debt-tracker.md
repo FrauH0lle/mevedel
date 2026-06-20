@@ -58,27 +58,6 @@ the maintained docs, a design note, or a commit instead.
 - **Blast radius:** if gptel changes the header-line construction the
   segment will mis-render or error at every redisplay.
 
-### Color tinting fakes a result in noninteractive mode
-
-- **Location:** `mevedel-utilities.el:65` (`mevedel--tint-color`)
-- **What's owed:** real color resolution under `noninteractive` so the
-  tinting helper doesn't return white as a fallback.
-- **Why deferred:** non-interactive Emacs returns `nil` for color
-  lookups; the workaround keeps tests passing but means any
-  noninteractive consumer (batch scripts) gets pure white instead of
-  a tinted value.
-- **Blast radius:** any future code that depends on tinted colors in
-  batch mode will get wrong results without warning.
-
-### diff-apply test "Real World Examples:Example 1" is environment-sensitive
-
-- **Location:** `test/test-mevedel-diff-apply.el:5`
-- **What's owed:** make the test deterministic across environments, or
-  document/skip it cleanly.
-- **Why deferred:** manually verified to work; passes in CI today.
-- **Blast radius:** developers running the suite locally may see
-  spurious failures and waste time tracing them.
-
 ### Own token estimation could be replaced by upstream gptel
 
 - **Location:** token-count machinery driving `mevedel--token-header-segment`

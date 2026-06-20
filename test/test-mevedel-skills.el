@@ -2181,7 +2181,7 @@ allowed-tools:
         ;; `mevedel-agent-exec--agents' so spawn can resolve it.
         (should (assoc-string "skill:demo" mevedel-agent-exec--agents))))))
 
-(mevedel-deftest mevedel-skills--invoke-fork ()
+(mevedel-deftest mevedel-skills-invoke-fork ()
   ,test
   (test)
   :doc "model-skill trigger routes to direct dispatch via mevedel-tools--task"
@@ -4137,7 +4137,7 @@ TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
                         (gethash (file-name-as-directory
                                   (expand-file-name root))
                                  mevedel-skills--dir-buffers)))
-          (should (mevedel-skills--file-under-watched-dir
+          (should (mevedel-skills--file-under-watched-dirs
                    (file-name-concat missing "alpha/SKILL.md"))))
       (kill-buffer buf)
       (delete-directory root t)))

@@ -1508,18 +1508,17 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (should (mevedel-tools--background-agents-pending-p info)))
       (kill-buffer buf))))
 
-(mevedel-deftest mevedel-preset--inject-bwait-transitions
+(mevedel-deftest mevedel-tools--bwait-injected-table
   ()
   ,test
   (test)
 
   :doc "inserts BWAIT before DONE in TYPE and TRET transitions"
-  (require 'mevedel-presets)
   (let* ((table `((INIT . ((t . WAIT)))
                   (WAIT . ((t . TYPE)))
                   (TYPE . ((tool-p . TPRE) (t . DONE)))
                   (TRET . ((error-p . ERRS) (result-p . WAIT) (t . DONE)))))
-         (result (mevedel-preset--inject-bwait-transitions table)))
+         (result (mevedel-tools--bwait-injected-table table)))
     ;; TYPE should have BWAIT before DONE
     (let ((type-transitions (cdr (assq 'TYPE result))))
       (should (= 3 (length type-transitions)))
@@ -1537,24 +1536,22 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
       (should (null (cdr bwait-entry)))))
 
   :doc "does not modify unrelated states"
-  (require 'mevedel-presets)
   (let* ((table `((INIT . ((t . WAIT)))
                   (WAIT . ((t . TYPE)))
                   (TYPE . ((t . DONE)))
                   (TRET . ((t . DONE)))))
-         (result (mevedel-preset--inject-bwait-transitions table)))
+         (result (mevedel-tools--bwait-injected-table table)))
     (should (equal '((t . WAIT)) (cdr (assq 'INIT result))))
     (should (equal '((t . TYPE)) (cdr (assq 'WAIT result)))))
 
   :doc "re-injecting an already-injected table is a no-op (no duplicate predicates)"
-  (require 'mevedel-presets)
   (let* ((mevedel-tools--bwait-table-cache nil)
          (table `((INIT . ((t . WAIT)))
                   (WAIT . ((t . TYPE)))
                   (TYPE . ((tool-p . TPRE) (t . DONE)))
                   (TRET . ((error-p . ERRS) (result-p . WAIT) (t . DONE)))))
-         (once (mevedel-preset--inject-bwait-transitions table))
-         (twice (mevedel-preset--inject-bwait-transitions once)))
+         (once (mevedel-tools--bwait-injected-table table))
+         (twice (mevedel-tools--bwait-injected-table once)))
     ;; Re-injection returns the same object unchanged -- the injector
     ;; bails out when BWAIT is already present.
     (should (eq once twice))

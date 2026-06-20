@@ -31,10 +31,10 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 ;; `mevedel-workspace'
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 (defvar mevedel-system--source-dir
@@ -258,7 +258,7 @@ When NAME is nil, clear all prompt section cache entries."
 
 (defun mevedel-system--workspace-root (workspace)
   "Return WORKSPACE's root, or the current workspace root."
-  (mevedel-workspace--root (or workspace (mevedel-workspace))))
+  (mevedel-workspace-root (or workspace (mevedel-workspace))))
 
 (defun mevedel-system--file-cache-key (file)
   "Return metadata cache key for FILE."
@@ -352,7 +352,7 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
 Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
 single directory, AGENTS.md wins over CLAUDE.md, and AGENTS.local.md is
 loaded after the shared file when present."
-  (when-let* ((workspace-root (and workspace (mevedel-workspace--root workspace))))
+  (when-let* ((workspace-root (and workspace (mevedel-workspace-root workspace))))
     (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
            (cwd (mevedel-system--working-directory workspace working-directory))
            (cwd (if (file-in-directory-p cwd root) cwd root))
@@ -411,7 +411,7 @@ loaded after the shared file when present."
             (mevedel-system-context-working-directory context)))
    (list :none
          (and (mevedel-system-context-workspace context)
-              (mevedel-workspace--root
+              (mevedel-workspace-root
                (mevedel-system-context-workspace context)))
          (mevedel-system-context-working-directory context))))
 

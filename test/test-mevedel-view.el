@@ -2185,6 +2185,65 @@ PROPS is the value for the `gptel' property."
         (should (= (- (point) (mevedel-view--input-start))
                    input-offset)))))
 
+  :doc "request progress render preserves selected-window history point"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (insert (propertize "Earlier answer\n"
+                              'mevedel-view-type 'response
+                              'mevedel-view-source '(1 . 2)))
+          (set-marker-insertion-type mevedel-view--input-marker nil)
+          (set-marker mevedel-view--status-marker
+                      mevedel-view--input-marker)
+          (set-marker mevedel-view--interaction-marker
+                      mevedel-view--input-marker))
+        (goto-char (point-min))
+        (search-forward "Earlier")
+        (goto-char (match-beginning 0))
+        (let ((point-before (point)))
+          (setq mevedel-view--spinner-start-time (current-time))
+          (mevedel-view--ensure-request-progress data-buf)
+          (should (= (window-point (selected-window)) point-before))
+          (should (= (point) point-before))
+          (should (looking-at-p "Earlier"))))))
+
+  :doc "pre-tool render preserves selected-window composer point"
+  (mevedel-view-test--with-buffers
+    (save-window-excursion
+      (switch-to-buffer view-buf)
+      (delete-other-windows)
+      (let ((mevedel-view-spinner-frames '("-" "+"))
+            (mevedel-view--spinner-frame-index 0))
+        (with-current-buffer view-buf
+          (setq mevedel-view--in-flight-turn-start
+                (copy-marker mevedel-view--input-marker nil))
+          (setq mevedel-view--data-turn-start
+                (with-current-buffer data-buf (copy-marker (point-min))))
+          (mevedel-view-test--insert-composer-draft
+           "> quoted\nsecond line" 4))
+        (let ((input-offset
+               (with-current-buffer view-buf
+                 (- (window-point (selected-window))
+                    (mevedel-view--input-start)))))
+          (with-current-buffer data-buf
+            (mevedel-view--pre-tool-hook
+             '(:id "call-1" :name "Read" :args (:file_path "foo.el"))))
+          (with-current-buffer view-buf
+            (should (mevedel-view--position-in-input-region-p
+                     (window-point (selected-window))))
+            (should (= (- (window-point (selected-window))
+                          (mevedel-view--input-start))
+                       input-offset))
+            (should (= (point) (window-point (selected-window))))
+            (should (equal "> quoted\nsecond line"
+                           (mevedel-view--input-text)))
+            (should (looking-at-p "oted")))))))
+
   :doc "pending tool refresh keeps ordinary calling rows and adds a fragment"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -5255,6 +5314,104 @@ PROPS is the value for the `gptel' property."
           (should (eq :separator (get-text-property
                                   (match-beginning 0)
                                   'mevedel-view-fragment-id)))))))
+
+  :doc "permission queue renders only the FIFO head while request progress is visible"
+  (let ((mevedel-view-spinner-animate nil)
+        (mevedel-session-persistence nil))
+    (mevedel-view-test--with-buffers
+      (let ((session (mevedel-session--create
+                      :name "test"
+                      :workspace nil
+                      :permission-rules nil
+                      :permission-mode 'default
+                      :permission-queue nil
+                      :plan-queue nil))
+            outcomes)
+        (with-current-buffer data-buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--view-buffer view-buf))
+        (with-current-buffer view-buf
+          (setq-local mevedel--session session)
+          (mevedel-view--start-spinner "Working..."))
+        (cl-letf (((symbol-function 'gptel-agent--block-bg)
+                   (lambda () 'default)))
+          (with-current-buffer data-buf
+            (dolist (path '("/tmp/one.el" "/tmp/two.el" "/tmp/three.el"))
+              (let ((captured-path path))
+                (mevedel-permission--enqueue
+                 (list :kind 'generic
+                       :tool-name "Read"
+                       :specifier-key :path
+                       :specifier-value captured-path
+                       :include-always nil
+                       :origin "main"
+                       :callback
+                       (lambda (outcome)
+                         (push (cons captured-path outcome) outcomes)))
+                 session)))))
+        (with-current-buffer view-buf
+          (cl-labels
+              ((display-text ()
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))
+               (head-overlay ()
+                 (let* ((entry (car (mevedel-session-permission-queue
+                                     session)))
+                        (id (mevedel-queue--entry-metadata-get
+                             entry :interaction-id)))
+                   (and id (gethash id mevedel-view--interaction-overlays))))
+               (settle-head ()
+                 (mevedel--prompt--settle (head-overlay) 'allow-once))
+               (should-show (count visible-path hidden-paths)
+                 (let ((text (display-text)))
+                   (should (= 1 (mevedel-view-test--count-substring
+                                 "Permission Request" text)))
+                   (should (string-search
+                            (format "%d permission%s pending"
+                                    count (if (= count 1) "" "s"))
+                            text))
+                   (should (string-search visible-path text))
+                   (dolist (path hidden-paths)
+                     (should-not (string-search path text))))))
+            (should-show 3 "/tmp/one.el" '("/tmp/two.el" "/tmp/three.el"))
+            (settle-head)
+            (should-show 2 "/tmp/two.el" '("/tmp/one.el" "/tmp/three.el"))
+            (settle-head)
+            (should-show 1 "/tmp/three.el" '("/tmp/one.el" "/tmp/two.el"))
+            (settle-head)
+            (let ((text (display-text)))
+              (should (= 0 (mevedel-view-test--count-substring
+                            "Permission Request" text)))
+              (should-not (string-search "permission pending" text))
+              (should-not (string-search "permissions pending" text))
+              (should-not (string-search "/tmp/one.el" text))
+              (should-not (string-search "/tmp/two.el" text))
+              (should-not (string-search "/tmp/three.el" text)))
+            (should (equal '(("/tmp/three.el" . allow-once)
+                             ("/tmp/two.el" . allow-once)
+                             ("/tmp/one.el" . allow-once))
+                           outcomes)))))))
+
+  :doc "render removes interaction fragment text from a dead region overlay"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-view--interaction-register
+       (list :kind 'permission :id 'old-permission :count 1
+             :body "old permission prompt\n" :keymap (make-sparse-keymap)
+             :entry 'old-entry :activate #'ignore))
+      (delete-overlay mevedel-view--interaction-region-overlay)
+      (setq mevedel-view--interaction-region-overlay nil)
+      (mevedel-view--interaction-clear-for-rebuild)
+      (mevedel-view--interaction-register
+       (list :kind 'permission :id 'new-permission :count 1
+             :body "new permission prompt\n" :keymap (make-sparse-keymap)
+             :entry 'new-entry :activate #'ignore))
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (= 0 (mevedel-view-test--count-substring
+                      "old permission prompt" text)))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "new permission prompt" text))))))
 
   :doc "clears stale interaction prompt overlays without settling"
   (mevedel-view-test--with-buffers
@@ -9655,7 +9812,7 @@ finds it during slash dispatch."
                  (lambda (&rest _) nil))
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (cl-incf sent))))
-        (mevedel-view--drain-one-queued-user-message data-buf)
+        (mevedel-view--drain-queued-user-message-batch data-buf)
         (should (= 1 sent))
         (should-not (mevedel-session-queued-user-messages session))
         (with-current-buffer data-buf
@@ -9682,7 +9839,7 @@ finds it during slash dispatch."
             (list (list :input "pending" :display-text "pending")))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-one-queued-user-message data-buf)
+        (mevedel-view--drain-queued-user-message-batch data-buf)
         (should-not sent)
         (should (mevedel-session-queued-user-messages session)))))
 
@@ -9707,7 +9864,7 @@ finds it during slash dispatch."
         (should-not (mevedel-session-queued-user-messages session)))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-one-queued-user-message data-buf)
+        (mevedel-view--drain-queued-user-message-batch data-buf)
         (should-not sent))))
 
   :doc "resubmitting an edited queued batch creates one queued entry"

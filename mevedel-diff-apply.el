@@ -85,8 +85,10 @@
 
 (require 'diff-mode)
 
+;; `mevedel-structs'
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
 ;; `mevedel-workspace'
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `mevedel'
@@ -336,7 +338,7 @@ current line if none above."
 
 (defun mevedel--diff-find-file-operations ()
   "Determine if diff application requires the creation/deletion of files."
-  (let ((ws-root (mevedel-workspace--root (mevedel-workspace)))
+  (let ((ws-root (mevedel-workspace-root (mevedel-workspace)))
         files-to-create
         files-to-remove)
     (goto-char (point-min))
@@ -688,22 +690,23 @@ the overlays."
                            ;; Clean up temporary properties
                            (overlay-put ov 'mevedel-diff-orig-start nil)
                            (overlay-put ov 'mevedel-diff-orig-end nil)
-                           ;; Ensure overlay is in instructions list
-                           (mevedel--instruction-activate-buffer buf)
-                           (unless (memq ov (alist-get buf mevedel--instructions))
-                             (push ov (alist-get buf mevedel--instructions)))
                            (message "  Overlay [%d-%d] final [%d-%d]"
                                     orig-start orig-end final-start final-end)
                            (message "    Moved: %S"
                                     (let ((c (buffer-substring-no-properties final-start final-end)))
                                       (if (< (length c) 40) c
                                         (concat (substring c 0 37) "..."))))))
-                       final-overlays))
-                    (setf (alist-get buf mevedel--instructions)
-                          (cl-remove-if (lambda (ov) (null (overlay-buffer ov)))
-                                        (alist-get buf mevedel--instructions)))
-                    (save-buffer)
-                    (mevedel--instruction-save-current-state)))))
+                       final-overlays)
+                      (save-buffer)
+                      (mevedel--instruction-activate-buffer buf)
+                      (maphash (lambda (ov _state)
+                                 (unless (memq ov (alist-get buf mevedel--instructions))
+                                   (push ov (alist-get buf mevedel--instructions))))
+                               final-overlays)
+                      (setf (alist-get buf mevedel--instructions)
+                            (cl-remove-if (lambda (ov) (null (overlay-buffer ov)))
+                                          (alist-get buf mevedel--instructions)))
+                      (mevedel--instruction-save-current-state))))))
               edits-by-buffer)
 
              (when files-to-remove

@@ -2,10 +2,6 @@
 
 ;;; Commentary:
 
-;; XXX 2025-11-02: Test "Real World Examples:Example 1" can fail, depending on
-;;   the evnironment the test runs in. It is manually verified to work correctly
-;;   and should work in the CI pipeline.
-
 ;;; Code:
 
 (require 'mevedel)
@@ -487,6 +483,11 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
 (mevedel-deftest mevedel-diff-apply-buffer
   (:before-each
    (setq mevedel--instructions nil)
+   (setq mevedel--id-counter 0)
+   (setq mevedel--id-usage-map (make-hash-table))
+   (setq mevedel--retired-ids nil)
+   (setq mevedel--instruction-states (make-hash-table :test #'equal))
+   (setq mevedel--instruction-current-state-key :global)
    :after-each
    (dolist (buf (buffer-list))
      (when (string-match-p "mevedel-test" (buffer-name buf))

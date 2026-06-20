@@ -19,10 +19,11 @@
 ;; `gptel'
 (defvar gptel-display-buffer-action)
 
+;; `mevedel-structs'
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
-
 
 ;;
 ;;; Customization
@@ -55,7 +56,7 @@ Newest hints are at the front.")
 (defun mevedel-tools--hints-file-path ()
   "Return absolute path to the hints file for the current workspace.
 Creates the .mevedel/ directory if it doesn't exist."
-  (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+  (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace)))
          (hints-path (if (file-name-absolute-p mevedel-hints-file)
                          mevedel-hints-file
                        (file-name-concat workspace-root mevedel-hints-file)))

@@ -829,57 +829,6 @@ for the keyword meanings."
       (setf (mevedel-tool-gptel-tool mtool) gptel-tool)
       (mevedel-tool-register mtool))))
 
-(defun mevedel-tool-wrap-gptel-category (category &rest keys)
-  "Wrap every gptel-tool in CATEGORY under a mevedel registry entry.
-
-KEYS is a plist of shared metadata passed to `mevedel-define-tool'
-for every tool (e.g. :groups, :read-only-p, :max-result-size).
-Per-tool overrides are not supported -- use
-`mevedel-define-tool :wrap' directly for those.  Returns the list
-of resulting `mevedel-tool' structs."
-  (let ((tools (condition-case _
-                   (gptel-get-tool category)
-                 (error nil)))
-        result)
-    (unless tools
-      (error "No gptel tools found in category %S" category))
-    (dolist (src tools)
-      (push (apply #'mevedel-tool--register-wrap :source src
-                   (mevedel-tool--keys-to-register-args keys))
-            result))
-    (nreverse result)))
-
-(defun mevedel-tool--keys-to-register-args (keys)
-  "Translate user-facing KEYS plist into `mevedel-tool--register-wrap' arg form."
-  (let (out)
-    (cl-loop for (k v) on keys by #'cddr
-             do (pcase k
-                  (:category (setq out (plist-put out :category-override v)))
-                  (:description (setq out (plist-put out :description-override v)))
-                  (:prompt (setq out (plist-put out :prompt-override v)))
-                  (_ (setq out (plist-put out k v)))))
-    out))
-
-(defun mevedel-tool-rewrap-gptel-category (category &rest keys)
-  "Remove wrapped mevedel entries for CATEGORY and re-run the wrap.
-
-Use this after MCP server schema drift or when the source tool list
-has changed.  KEYS are forwarded to each `mevedel-define-tool :wrap'
-call exactly as in `mevedel-tool-wrap-gptel-category'."
-  (let ((target-category (or (plist-get keys :category)
-                             (format "mevedel-%s" category)))
-        (removed 0))
-    (maphash
-     (lambda (key _tool)
-       (when (equal (car key) target-category)
-         (remhash key mevedel-tool--registry)
-         (cl-incf removed)))
-     (copy-hash-table mevedel-tool--registry))
-    (let ((fresh (apply #'mevedel-tool-wrap-gptel-category category keys)))
-      (message "mevedel-tool-rewrap-gptel-category: removed %d, wrapped %d"
-               removed (length fresh))
-      fresh)))
-
 ;;
 ;;; Validation macros
 
@@ -899,9 +848,6 @@ forms where:
       Special: booleanp handles both t and :json-false automatically
     - A cons (PRED . TYPE-NAME) for custom type names
       e.g., (vectorp . \"array\") checks with vectorp, reports \"array\"
-    - A lambda for custom validation
-      e.g., (lambda (x) (and (numberp x) (> x 0)))
-    - A cons (LAMBDA . TYPE-NAME) for lambda with custom name
   - REQUIRED is optional, defaults to t.  If nil, skip validation when
     VAR is nil.
 
@@ -910,9 +856,7 @@ Examples:
     (name stringp)                    ; Required string
     (enabled booleanp)                ; Boolean (handles :json-false)
     (count integerp nil)              ; Optional integer
-    (items (vectorp . \"array\"))     ; Vector reported as \"array\"
-    (score (lambda (x) (and (numberp x) (>= x 0) (<= x 100))))
-    (id ((lambda (x) (stringp x)) . \"non-empty string\")))
+    (items (vectorp . \"array\")))    ; Vector reported as \"array\"
 
 Returns validation code that uses `cl-return-from' if CALLBACK is
 non-nil, otherwise `error', to exit early."
@@ -921,17 +865,8 @@ non-nil, otherwise `error', to exit early."
     (dolist (spec param-specs)
       (cl-destructuring-bind (var type-spec &optional (required t)) spec
         (let* ((var-name (symbol-name var))
-               ;; Handle plain symbols, cons, and lambda expressions
+               ;; Handle plain symbols and cons cells with custom names.
                (type-pred (cond
-                           ;; Plain lambda: (lambda (x) ...)
-                           ((and (consp type-spec)
-                                 (eq 'lambda (car type-spec)))
-                            type-spec)
-                           ;; Lambda with custom name: ((lambda ...) . "type")
-                           ((and (consp type-spec)
-                                 (consp (car type-spec))
-                                 (eq 'lambda (car (car type-spec))))
-                            (car type-spec))
                            ;; Pred with custom name: (pred . "type")
                            ((consp type-spec) (car type-spec))
                            ;; Plain predicate symbol
@@ -940,9 +875,6 @@ non-nil, otherwise `error', to exit early."
                            ;; Custom type name in cdr
                            ((and (consp type-spec) (stringp (cdr type-spec)))
                             (cdr type-spec))
-                           ;; Lambda without custom name
-                           ((and (consp type-pred) (eq 'lambda (car type-pred)))
-                            "valid value")
                            ;; Plain predicate - derive from name
                            (t (replace-regexp-in-string
                                "p$" "" (symbol-name type-pred)))))
@@ -952,9 +884,6 @@ non-nil, otherwise `error', to exit early."
                  ;; Special case: booleanp handles both t and :json-false
                  ((eq type-pred 'booleanp)
                   `(or (eq ,var t) (eq ,var :json-false)))
-                 ;; Lambda expression: use funcall with quoted lambda
-                 ((and (consp type-pred) (eq 'lambda (car type-pred)))
-                  `(funcall ,type-pred ,var))
                  ;; Regular predicate function
                  (t `(,type-pred ,var)))))
 

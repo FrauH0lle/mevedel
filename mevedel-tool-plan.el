@@ -399,11 +399,6 @@ shown as a collapsed hook-context disclosure."
   (when-let* ((sess (or session (mevedel-plan-queue--current-session))))
     (mevedel-queue--get mevedel-plan-queue--spec sess)))
 
-(defun mevedel-plan-queue--set (queue &optional session)
-  "Set SESSION's plan queue to QUEUE."
-  (when-let* ((sess (or session (mevedel-plan-queue--current-session))))
-    (mevedel-queue--set mevedel-plan-queue--spec sess queue)))
-
 (defun mevedel-plan-queue--enqueue (entry)
   "Append plan approval ENTRY to the session FIFO and render the head."
   (mevedel-queue--enqueue mevedel-plan-queue--spec entry))

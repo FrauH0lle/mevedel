@@ -242,16 +242,6 @@ strings in the order the reminders appear."
         (setf (mevedel-reminder-last-fired reminder) turn-count)))
     (nreverse blocks)))
 
-(defun mevedel-reminders--collect (session)
-  "Collect firing reminders for SESSION.
-
-Thin wrapper around `mevedel-reminders--collect-from' that pulls the
-reminder list and turn count off the session struct."
-  (mevedel-reminders--collect-from
-   (mevedel-session-reminders session)
-   (mevedel-session-turn-count session)
-   session))
-
 (defun mevedel-reminders--current-buffer ()
   "Return the chat buffer currently collecting reminders, or nil."
   (and (buffer-live-p mevedel-reminders--current-chat-buffer)
@@ -353,7 +343,10 @@ prompt text."
           (remove-text-properties
            start (point)
            '(gptel nil response nil invisible nil front-sticky nil))))
-      (when-let* ((blocks (mevedel-reminders--collect session)))
+      (when-let* ((blocks (mevedel-reminders--collect-from
+                           (mevedel-session-reminders session)
+                           (mevedel-session-turn-count session)
+                           session)))
         (text-property-search-backward 'gptel nil t)
         (let ((start (point)))
           (insert "\n" (string-join blocks "\n") "\n")

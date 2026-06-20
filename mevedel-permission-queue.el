@@ -21,8 +21,6 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-queue)
 
-(declare-function mevedel-permission--prompt-async "mevedel-tool-ui"
-                  (tool-name path include-always cont &optional count entry))
 (declare-function mevedel-permission--prompt-async-attributed "mevedel-tool-ui"
                   (tool-name path include-always origin cont
                              &optional count entry))
@@ -162,13 +160,7 @@ Dispatches on entry's `:kind' via `--render-entry'."
                                   (mevedel-permission-queue--current-session))))
 
 (defun mevedel-permission-queue--render-generic (entry)
-  "Render a generic-kind permission ENTRY as the visible head.
-Routes through `mevedel-permission--prompt-async' (the
-overlay primitive) which itself delegates to
-`mevedel-permission--prompt-async-attributed' with origin=nil
-when none is provided.  When an origin is set on the entry
-(sub-agent dispatch), bypass the legacy entry point and call the
-attributed variant directly so the attribution line renders."
+  "Render a generic-kind permission ENTRY as the visible head."
   (let ((tool-name (plist-get entry :tool-name))
         (path (plist-get entry :specifier-value))
         (include-always (plist-get entry :include-always))
@@ -177,12 +169,8 @@ attributed variant directly so the attribution line renders."
         (origin (plist-get entry :origin))
         (cb (lambda (outcome)
               (mevedel-permission-queue--on-head-outcome entry outcome))))
-    (if (and origin (not (equal origin "main"))
-             (fboundp 'mevedel-permission--prompt-async-attributed))
-        (mevedel-permission--prompt-async-attributed
-         tool-name path include-always origin cb count entry)
-      (mevedel-permission--prompt-async
-       tool-name path include-always cb count entry))))
+    (mevedel-permission--prompt-async-attributed
+     tool-name path include-always origin cb count entry)))
 
 (defun mevedel-permission-queue--render-bash (entry)
   "Render a bash-kind permission ENTRY using the Bash permission UI.
@@ -254,7 +242,7 @@ queue vocabulary."
        (_ resolved)))
     (_ resolved)))
 
-(defun mevedel-permission-queue--coalesce (rule-outcome &optional session)
+(defun mevedel-permission-queue--coalesce (_rule-outcome &optional session)
   "Re-evaluate SESSION's queued entries against the new rule.
 Entries that resolve to a non-`ask' outcome via
 `mevedel-check-permission' fire their callbacks with that outcome
@@ -266,7 +254,6 @@ The protected-path / deny-precedence nuance is handled inside
 allow rules but not deny rules, so re-evaluation produces the
 correct coalesce semantics without an explicit flag on the
 entry."
-  (ignore rule-outcome)
   (let ((q (mevedel-permission-queue--get session))
         (kept nil))
     (dolist (entry q)
@@ -402,13 +389,6 @@ render the next head entry after sweeping."
     (when (equal resolved-origin "main")
       (mevedel-queue--sweep-origin
        mevedel-permission-queue--spec nil 'aborted session no-render))))
-
-(defun mevedel-permission-queue-sweep-agent (origin &optional session)
-  "Fire `'aborted' on queued entries owned by agent ORIGIN.
-Called when an agent enters a terminal state with entries it had
-queued; the agent's FSM has unwound and nothing would consume the
-answer."
-  (mevedel-permission-queue-sweep-origin origin session))
 
 (provide 'mevedel-permission-queue)
 

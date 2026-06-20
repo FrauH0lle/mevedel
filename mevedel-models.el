@@ -77,19 +77,10 @@ sub-agent default for that invocation."
 ;;
 ;;; Provider parsing
 
-(defun mevedel-model-tier-p (value)
-  "Return non-nil when VALUE names a valid model tier."
-  (memq (if (stringp value) (intern-soft value) value)
-        mevedel-model-tier-symbols))
-
 (defun mevedel-model-normalize-tier (value)
   "Return VALUE as a tier symbol, or nil when VALUE is not a tier."
   (let ((sym (if (stringp value) (intern-soft value) value)))
     (and (memq sym mevedel-model-tier-symbols) sym)))
-
-(defun mevedel-model--provider (backend model)
-  "Return a normalized provider plist for BACKEND and MODEL."
-  (list :backend backend :model model))
 
 (defun mevedel-model-provider-p (value)
   "Return non-nil when VALUE is a resolved provider plist."
@@ -140,7 +131,7 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
         (unless model
           (user-error "Model %s is not registered on backend %s"
                       model-name backend-name))
-        (mevedel-model--provider backend model))
+        (list :backend backend :model model))
     (error
      (if noerror
          nil
@@ -156,12 +147,6 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
     (unless sym
       (user-error "Unknown model tier %S" tier))
     (list :tier sym)))
-
-(defun mevedel-model-provider-selector (provider)
-  "Return PROVIDER as a model selector plist."
-  (unless (mevedel-model-provider-p provider)
-    (user-error "Invalid model provider selector %S" provider))
-  provider)
 
 (defun mevedel-model-resolve-tier (tier &optional noerror)
   "Resolve TIER through `mevedel-model-tiers'.

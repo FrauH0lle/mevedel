@@ -293,7 +293,7 @@ TOOL-NAME carry through to the overlay."
          (diff-buffer (mevedel-tool-fs--setup-diff-buffer
                        temp-file path workspace root data-buffer))
          (diff (with-current-buffer diff-buffer (buffer-string))))
-    (mevedel-preview-mode--show-inline-preview
+    (mevedel-preview-mode--create-overlay
      diff temp-file path callback
      chat-buffer workspace root rel-path
      :tool-name tool-name
@@ -301,16 +301,14 @@ TOOL-NAME carry through to the overlay."
      :apply-fn apply-fn
      :collapsed (mevedel-preview-mode--should-collapse-p diff chat-buffer))))
 
-(defun mevedel-preview-mode--auto-apply (temp-file path callback apply-fn tool-name)
+(defun mevedel-preview-mode--auto-apply (temp-file path callback apply-fn _tool-name)
   "Apply TEMP-FILE to PATH without an interactive overlay.
 Computes the unified diff for the renderer side-channel, runs APPLY-FN
 \(or the default overlay-preserving diff apply when APPLY-FN is nil),
 records the file access, cleans up the diff buffer and temp file, and
 fires CALLBACK with a `(:result :render-data)' plist carrying the patch
 text.  Errors during apply are reported to CALLBACK as a plain error
-string so the LLM still sees a descriptive failure.  TOOL-NAME is passed
-through for interface symmetry but not consumed here."
-  (ignore tool-name)
+string so the LLM still sees a descriptive failure."
   (let* ((data-buffer (current-buffer))
          (root (or (mevedel-workspace--file-in-allowed-roots-p path data-buffer)
                    (file-name-directory (expand-file-name path))))
@@ -363,23 +361,6 @@ start expanded."
       (and chat-height
            (> diff-lines (* chat-height mevedel-inline-preview-threshold))))))
 
-(cl-defun mevedel-preview-mode--show-inline-preview (diff-string temp-file real-path final-callback
-                                                                 chat-buffer workspace root rel-path
-                                                                 &key tool-name diff-buffer apply-fn
-                                                                 user-modified position collapsed)
-  "Show DIFF-STRING from TEMP-FILE for REAL-PATH in CHAT-BUFFER.
-FINAL-CALLBACK receives the preview result.  WORKSPACE, ROOT, and
-REL-PATH describe the workspace-relative target shown in the overlay."
-  (mevedel-preview-mode--create-overlay
-   diff-string temp-file real-path final-callback
-   chat-buffer workspace root rel-path
-   :user-modified user-modified
-   :position position
-   :tool-name tool-name
-   :diff-buffer diff-buffer
-   :apply-fn apply-fn
-   :collapsed collapsed))
-
 (defun mevedel-preview-mode--body-string (diff-string rel-path &optional user-modified)
   "Return the propertized body string for a preview of DIFF-STRING."
   (with-temp-buffer
@@ -396,7 +377,7 @@ REL-PATH describe the workspace-relative target shown in the overlay."
 
 (defun mevedel-preview-mode--create-interaction-overlay
     (diff-string temp-file real-path final-callback chat-buffer workspace root
-                 rel-path user-modified position tool-name diff-buffer apply-fn
+                 rel-path user-modified _position tool-name diff-buffer apply-fn
                  collapsed)
   "Create a preview overlay in CHAT-BUFFER's interaction zone."
   (with-current-buffer chat-buffer
@@ -415,7 +396,6 @@ REL-PATH describe the workspace-relative target shown in the overlay."
                    :priority 300
                    :keymap (mevedel-preview-mode--keymap)
                    :help-echo (mevedel-preview-mode--help-echo)))))
-      (ignore position)
       (mevedel-preview-mode--apply-overlay-properties
        overlay collapsed
        (copy-marker (+ (overlay-start overlay) diff-body-start) nil)
@@ -505,8 +485,8 @@ Returns the created overlay."
            '(read-only t front-sticky nil rear-nonsticky t))
 
           ;; Create overlay with context
-          (let ((ov (mevedel-preview-mode--setup-overlay
-                     start (point) collapsed
+          (let ((ov (mevedel-preview-mode--apply-overlay-properties
+                     (make-overlay start (point) nil t) collapsed
                      diff-body-start-marker diff-body-end-marker)))
             (overlay-put ov 'mevedel--temp-file temp-file)
             (overlay-put ov 'mevedel--real-path real-path)
@@ -610,18 +590,6 @@ and DIFF-BODY-END are markers pointing at the diff content inside OV."
   (when collapsed
     (mevedel-preview-mode-toggle-overlay ov))
   ov)
-
-(defun mevedel-preview-mode--setup-overlay (from to &optional collapsed
-                                                      diff-body-start
-                                                      diff-body-end)
-  "Set up a preview overlay FROM TO.
-
-When COLLAPSED is non-nil, start with the diff body hidden.  DIFF-BODY-START
-and DIFF-BODY-END are markers pointing at the first and last character of the
-diff content inside the overlay; the toggle hides this range specifically so
-the header and key-hint rows remain visible when collapsed."
-  (mevedel-preview-mode--apply-overlay-properties
-   (make-overlay from to nil t) collapsed diff-body-start diff-body-end))
 
 (defun mevedel-preview-mode-toggle-overlay (ov)
   "Toggle preview overlay OV between collapsed and expanded.

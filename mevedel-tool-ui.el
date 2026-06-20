@@ -756,11 +756,6 @@ no-op."
                  (const :tag "Disabled" nil))
   :group 'mevedel)
 
-(define-obsolete-variable-alias
-  'mevedel-agent-foreground-no-progress-timeout
-  'mevedel-agent-no-progress-timeout
-  "0.1")
-
 (defcustom mevedel-agent-no-progress-timeout 600
   "Maximum seconds a live agent may run without visible progress.
 
@@ -1717,10 +1712,6 @@ not deliver duplicate `<agent-result>' blocks."
 (defun mevedel-tools--foreground-watchdog-enabled-p ()
   "Return non-nil when foreground agent no-progress watchdog is enabled."
   (mevedel-tools--agent-no-progress-enabled-p))
-
-(defun mevedel-tools--foreground-watchdog-snapshot (invocation)
-  "Return progress snapshot plist for INVOCATION."
-  (mevedel-tools--agent-progress-snapshot invocation))
 
 (defun mevedel-tools--foreground-watchdog-cancel (agent-id)
   "Cancel the foreground no-progress watchdog for AGENT-ID."
@@ -3813,31 +3804,13 @@ consistent across handle / mailbox / plan / permission elements."
     (concat (mevedel-view--insert-attribution origin) "\n"))
    (t "")))
 
-(defun mevedel-permission--prompt-async (tool-name path include-always cont
-                                                   &optional count entry)
-  "Display the generic permission prompt overlay; settle CONT exactly once.
-
-Async entry point for the 5-button permission UI.  CONT receives one
-of `allow-once' / `allow-session' / `always-allow' / `deny-once' /
-`deny-session' / `aborted'.  When INCLUDE-ALWAYS is non-nil, the
-\"Always allow\" key is offered (persists the rule to disk).
-
-Multiple concurrent prompts produce multiple overlays; each settles
-independently in user-chosen order.  The first overlay per request
-registers a dismiss thunk on the request's cancellers list -- shared
-machinery with `mevedel--prompt-user-with-overlay'.  No
-`recursive-edit', no nesting, no queue serialization."
-  (mevedel-permission--prompt-async-attributed
-   tool-name path include-always nil cont count entry))
-
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
   "Permission prompt with optional ORIGIN attribution header.
 Permission prompts originated by sub-agents carry a
 `from <type>--<idshort>' fragment so the user can see which agent
 is asking.  When ORIGIN is nil or \"main\", the attribution line
-is suppressed.  See
-`mevedel-permission--prompt-async' for the rest of the contract."
+is suppressed."
   (let ((content (concat
                   (propertize "Permission Request\n"
                               'font-lock-face '(:inherit bold :inherit warning))

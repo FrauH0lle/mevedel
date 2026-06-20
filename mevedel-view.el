@@ -1097,37 +1097,49 @@ above the composer does not strand point in rendered transcript text."
              (when (and ws (<= ws (point-max)))
                (set-window-start w ws t))))))))
 
+(defun mevedel-view--call-preserving-user-view-state (thunk)
+  "Call THUNK without moving the user's live view cursor.
+Async redraws may insert, delete, or reconcile view-owned text while the
+user is typing in the composer or browsing transcript history.  Preserve
+all displayed windows plus the editable composer text around THUNK."
+  (mevedel-view--preserving-window-state
+    (mevedel-view--call-preserving-input-text
+     (lambda ()
+       (mevedel-view--call-preserving-input-point thunk)))))
+
 (defun mevedel-view--call-with-request-progress-boundaries (thunk)
   "Call THUNK while preserving request-progress row ordering.
 Request progress lives after status and interaction zones but before the
 input zone.  Only the input boundary should advance across inserted
 spinner text; the status and interaction boundaries stay before it so
 later chrome refreshes can still insert above the spinner."
-  (let ((status-type (and (markerp mevedel-view--status-marker)
-                          (marker-insertion-type
-                           mevedel-view--status-marker)))
-        (interaction-type (and (markerp mevedel-view--interaction-marker)
-                               (marker-insertion-type
-                                mevedel-view--interaction-marker)))
-        (input-type (and (markerp mevedel-view--input-marker)
-                         (marker-insertion-type
-                          mevedel-view--input-marker))))
-    (unwind-protect
-        (progn
-          (when (markerp mevedel-view--status-marker)
-            (set-marker-insertion-type mevedel-view--status-marker nil))
-          (when (markerp mevedel-view--interaction-marker)
-            (set-marker-insertion-type mevedel-view--interaction-marker nil))
-          (when (markerp mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t))
-          (funcall thunk))
-      (when (markerp mevedel-view--status-marker)
-        (set-marker-insertion-type mevedel-view--status-marker status-type))
-      (when (markerp mevedel-view--interaction-marker)
-        (set-marker-insertion-type mevedel-view--interaction-marker
-                                   interaction-type))
-      (when (markerp mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker input-type)))))
+  (mevedel-view--call-preserving-user-view-state
+   (lambda ()
+     (let ((status-type (and (markerp mevedel-view--status-marker)
+                             (marker-insertion-type
+                              mevedel-view--status-marker)))
+           (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                  (marker-insertion-type
+                                   mevedel-view--interaction-marker)))
+           (input-type (and (markerp mevedel-view--input-marker)
+                            (marker-insertion-type
+                             mevedel-view--input-marker))))
+       (unwind-protect
+           (progn
+             (when (markerp mevedel-view--status-marker)
+               (set-marker-insertion-type mevedel-view--status-marker nil))
+             (when (markerp mevedel-view--interaction-marker)
+               (set-marker-insertion-type mevedel-view--interaction-marker nil))
+             (when (markerp mevedel-view--input-marker)
+               (set-marker-insertion-type mevedel-view--input-marker t))
+             (funcall thunk))
+         (when (markerp mevedel-view--status-marker)
+           (set-marker-insertion-type mevedel-view--status-marker status-type))
+         (when (markerp mevedel-view--interaction-marker)
+           (set-marker-insertion-type mevedel-view--interaction-marker
+                                      interaction-type))
+         (when (markerp mevedel-view--input-marker)
+           (set-marker-insertion-type mevedel-view--input-marker input-type)))))))
 
 (defcustom mevedel-view-spinner-animate t
   "Non-nil means animate view buffer spinner glyphs."
@@ -3582,11 +3594,6 @@ The returned plist contains `:kind', `:id', `:open-start', and
             :open-start (match-beginning 0)
             :open-end (match-end 0)))))
 
-(defun mevedel-view--mailbox-any-open-at-point (limit)
-  "Return mailbox open metadata at point before LIMIT, or nil."
-  (or (mevedel-view--mailbox-open-at-point 'agent-result limit)
-      (mevedel-view--mailbox-open-at-point 'agent-message limit)))
-
 (defun mevedel-view--mailbox-close-line-regexp (close-tag)
   "Return a line-oriented regexp for CLOSE-TAG."
   (concat "^[ \t]*" (regexp-quote close-tag) "[ \t]*\\(?:\n\\|\\'\\)"))
@@ -5487,12 +5494,10 @@ ordering intact, then restores their normal insertion behavior."
 
 (defun mevedel-view--call-with-pending-tool-fragment-boundaries (thunk)
   "Call THUNK while pending tool fragments advance lower zone markers."
-  (mevedel-view--call-preserving-input-text
+  (mevedel-view--call-preserving-user-view-state
    (lambda ()
-     (mevedel-view--call-preserving-input-point
-      (lambda ()
-        (mevedel-view--with-render-boundaries-advancing
-          (funcall thunk)))))))
+     (mevedel-view--with-render-boundaries-advancing
+       (funcall thunk)))))
 
 (defun mevedel-view--render-response (start end)
   "Render the data buffer region [START, END] into the view buffer.
@@ -9588,9 +9593,6 @@ HTTP request, then commits the batch by clearing the editable queue."
                  dropped-file-grants session)
                 (mevedel-view--forward-input-now block block)))))))))
 
-(defalias 'mevedel-view--drain-one-queued-user-message
-  #'mevedel-view--drain-queued-user-message-batch)
-
 (defun mevedel-view--run-queued-user-message-drain (data-buffer)
   "Run queued user-message batch drain for DATA-BUFFER if it is live."
   (when (buffer-live-p data-buffer)
@@ -10698,33 +10700,36 @@ HEADER-WIDTH is the optional width used to align the row header."
 
 (defun mevedel-view--call-with-status-fragment-boundaries (thunk)
   "Call THUNK while status fragments advance lower zone boundaries."
-  (mevedel-view--call-preserving-status-point
+  (mevedel-view--call-preserving-user-view-state
    (lambda ()
-     (let ((status-type (and (markerp mevedel-view--status-marker)
-                             (marker-insertion-type
-                              mevedel-view--status-marker)))
-           (interaction-type (and (markerp mevedel-view--interaction-marker)
-                                  (marker-insertion-type
-                                   mevedel-view--interaction-marker)))
-           (input-type (and (markerp mevedel-view--input-marker)
-                            (marker-insertion-type
-                             mevedel-view--input-marker))))
-       (unwind-protect
-           (progn
-             (when (markerp mevedel-view--status-marker)
-               (set-marker-insertion-type mevedel-view--status-marker nil))
-             (when (markerp mevedel-view--interaction-marker)
-               (set-marker-insertion-type mevedel-view--interaction-marker t))
-             (when (markerp mevedel-view--input-marker)
-               (set-marker-insertion-type mevedel-view--input-marker t))
-             (funcall thunk))
-         (when (markerp mevedel-view--status-marker)
-           (set-marker-insertion-type mevedel-view--status-marker status-type))
-         (when (markerp mevedel-view--interaction-marker)
-           (set-marker-insertion-type mevedel-view--interaction-marker
-                                      interaction-type))
-         (when (markerp mevedel-view--input-marker)
-           (set-marker-insertion-type mevedel-view--input-marker input-type)))))))
+     (mevedel-view--call-preserving-status-point
+      (lambda ()
+        (let ((status-type (and (markerp mevedel-view--status-marker)
+                                (marker-insertion-type
+                                 mevedel-view--status-marker)))
+              (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                     (marker-insertion-type
+                                      mevedel-view--interaction-marker)))
+              (input-type (and (markerp mevedel-view--input-marker)
+                               (marker-insertion-type
+                                mevedel-view--input-marker))))
+          (unwind-protect
+              (progn
+                (when (markerp mevedel-view--status-marker)
+                  (set-marker-insertion-type mevedel-view--status-marker nil))
+                (when (markerp mevedel-view--interaction-marker)
+                  (set-marker-insertion-type mevedel-view--interaction-marker t))
+                (when (markerp mevedel-view--input-marker)
+                  (set-marker-insertion-type mevedel-view--input-marker t))
+                (funcall thunk))
+            (when (markerp mevedel-view--status-marker)
+              (set-marker-insertion-type mevedel-view--status-marker status-type))
+            (when (markerp mevedel-view--interaction-marker)
+              (set-marker-insertion-type mevedel-view--interaction-marker
+                                         interaction-type))
+            (when (markerp mevedel-view--input-marker)
+              (set-marker-insertion-type mevedel-view--input-marker
+                                         input-type)))))))))
 
 (defun mevedel-view--status-trailing-newline-suffix (body)
   "Return the suffix needed to preserve BODY's trailing newlines."
@@ -11268,31 +11273,33 @@ OVERLAY is stored on the text as the descriptor's callback handle."
 
 (defun mevedel-view--call-with-interaction-fragment-boundaries (thunk)
   "Call THUNK while interaction fragments advance only the input boundary."
-  (let ((status-type (and (markerp mevedel-view--status-marker)
-                          (marker-insertion-type
-                           mevedel-view--status-marker)))
-        (interaction-type (and (markerp mevedel-view--interaction-marker)
-                               (marker-insertion-type
-                                mevedel-view--interaction-marker)))
-        (input-type (and (markerp mevedel-view--input-marker)
-                         (marker-insertion-type
-                          mevedel-view--input-marker))))
-    (unwind-protect
-        (progn
-          (when (markerp mevedel-view--status-marker)
-            (set-marker-insertion-type mevedel-view--status-marker nil))
-          (when (markerp mevedel-view--interaction-marker)
-            (set-marker-insertion-type mevedel-view--interaction-marker nil))
-          (when (markerp mevedel-view--input-marker)
-            (set-marker-insertion-type mevedel-view--input-marker t))
-          (funcall thunk))
-      (when (markerp mevedel-view--status-marker)
-        (set-marker-insertion-type mevedel-view--status-marker status-type))
-      (when (markerp mevedel-view--interaction-marker)
-        (set-marker-insertion-type mevedel-view--interaction-marker
-                                   interaction-type))
-      (when (markerp mevedel-view--input-marker)
-        (set-marker-insertion-type mevedel-view--input-marker input-type)))))
+  (mevedel-view--call-preserving-user-view-state
+   (lambda ()
+     (let ((status-type (and (markerp mevedel-view--status-marker)
+                             (marker-insertion-type
+                              mevedel-view--status-marker)))
+           (interaction-type (and (markerp mevedel-view--interaction-marker)
+                                  (marker-insertion-type
+                                   mevedel-view--interaction-marker)))
+           (input-type (and (markerp mevedel-view--input-marker)
+                            (marker-insertion-type
+                             mevedel-view--input-marker))))
+       (unwind-protect
+           (progn
+             (when (markerp mevedel-view--status-marker)
+               (set-marker-insertion-type mevedel-view--status-marker nil))
+             (when (markerp mevedel-view--interaction-marker)
+               (set-marker-insertion-type mevedel-view--interaction-marker nil))
+             (when (markerp mevedel-view--input-marker)
+               (set-marker-insertion-type mevedel-view--input-marker t))
+             (funcall thunk))
+         (when (markerp mevedel-view--status-marker)
+           (set-marker-insertion-type mevedel-view--status-marker status-type))
+         (when (markerp mevedel-view--interaction-marker)
+           (set-marker-insertion-type mevedel-view--interaction-marker
+                                      interaction-type))
+         (when (markerp mevedel-view--input-marker)
+           (set-marker-insertion-type mevedel-view--input-marker input-type)))))))
 
 (defun mevedel-view--interaction-relocate-region-start (start)
   "Move interaction fragment/compatibility overlays to begin at START."
@@ -11417,6 +11424,46 @@ OVERLAY is stored on the text as the descriptor's callback handle."
          (remhash id mevedel-view--interaction-overlays)))
      mevedel-view--interaction-overlays)))
 
+(defun mevedel-view--interaction-delete-stale-fragments (region)
+  "Delete interaction fragments outside the current REGION ownership."
+  (let* ((region-id (mevedel-view-fragment--region-id region))
+         (bounds (mevedel-view-fragment--region-bounds region))
+         (region-start (car bounds))
+         (region-end (cdr bounds))
+         (limit (or (mevedel-view--input-marker-position) (point-max)))
+         (pos (point-min)))
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t))
+      (while (< pos limit)
+        (if-let* ((start (text-property-any
+                          pos limit
+                          'mevedel-view-fragment-namespace
+                          'interaction)))
+            (let* ((owner (get-text-property
+                           start 'mevedel-view-fragment-region))
+                   (end (min (or (next-single-property-change
+                                  start
+                                  'mevedel-view-fragment-namespace
+                                  nil limit)
+                                 limit)
+                             (or (next-single-property-change
+                                  start
+                                  'mevedel-view-fragment-region
+                                  nil limit)
+                                 limit))))
+              (if (and (eq owner region-id)
+                       (<= region-start start)
+                       (< start region-end))
+                  (setq pos end)
+                (delete-region start end)
+                (setq bounds (mevedel-view-fragment--region-bounds region)
+                      region-start (car bounds)
+                      region-end (cdr bounds))
+                (setq pos start
+                      limit (or (mevedel-view--input-marker-position)
+                                (point-max)))))
+          (setq pos limit))))))
+
 (defun mevedel-view--interaction-sync-overlays (region pairs)
   "Move descriptor callback overlays to their fragment bounds."
   (dolist (pair pairs)
@@ -11457,6 +11504,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
                           (mevedel-view--interaction-fragment
                            region id descriptor)))
                       pairs))))
+              (mevedel-view--interaction-delete-stale-fragments region)
               (mevedel-view-fragment--reconcile
                region 'interaction fragments
                #'mevedel-view--call-with-interaction-fragment-boundaries)

@@ -69,6 +69,29 @@
   (should (equal nil (mevedel-tools--quotes-balanced-p "\"hello'"))))
 
 ;;
+;;; Command Substitution Balance Tests
+
+(mevedel-deftest mevedel-tools--command-substitutions-balanced-p ()
+  ,test
+  (test)
+  :doc "balanced substitutions:
+`mevedel-tools--command-substitutions-balanced-p' accepts no substitutions"
+  (should (equal t (mevedel-tools--command-substitutions-balanced-p
+                    "echo hello")))
+  :doc "balanced substitutions:
+`mevedel-tools--command-substitutions-balanced-p' accepts simple substitution"
+  (should (equal t (mevedel-tools--command-substitutions-balanced-p
+                    "echo $(pwd)")))
+  :doc "balanced substitutions:
+`mevedel-tools--command-substitutions-balanced-p' accepts nested substitution"
+  (should (equal t (mevedel-tools--command-substitutions-balanced-p
+                    "echo $(echo $(pwd))")))
+  :doc "unbalanced substitutions:
+`mevedel-tools--command-substitutions-balanced-p' rejects unmatched substitution"
+  (should (equal nil (mevedel-tools--command-substitutions-balanced-p
+                      "echo $("))))
+
+;;
 ;;; Complex Syntax Detection Tests
 
 (mevedel-deftest mevedel-tools--contains-complex-syntax-p ()
@@ -107,6 +130,9 @@
   :doc "complex syntax detection:
 `mevedel-tools--contains-complex-syntax-p' detects brace expansion"
   (should (equal t (mevedel-tools--contains-complex-syntax-p "echo {a,b,c}")))
+  :doc "complex syntax detection:
+`mevedel-tools--contains-complex-syntax-p' detects unmatched command substitution"
+  (should (equal t (mevedel-tools--contains-complex-syntax-p "echo $(")))
   :doc "complex syntax detection:
 `mevedel-tools--contains-complex-syntax-p' detects unbalanced quotes"
   (should (equal t (mevedel-tools--contains-complex-syntax-p "echo \"hello"))))
@@ -160,7 +186,12 @@
   :doc "quote handling:
 `mevedel-tools--split-command-chain' handles quotes with separators outside"
   (should (equal '("echo \"hello\"" "ls")
-                 (mevedel-tools--split-command-chain "echo \"hello\" && ls"))))
+                 (mevedel-tools--split-command-chain "echo \"hello\" && ls")))
+  :doc "command substitutions:
+`mevedel-tools--split-command-chain' does not split inside $()"
+  (should (equal '("echo $(git rev-parse || true)" "pwd")
+                 (mevedel-tools--split-command-chain
+                  "echo $(git rev-parse || true) && pwd"))))
 
 ;;
 ;;; Substitution Extraction Tests
@@ -184,6 +215,10 @@
 `mevedel-tools--extract-substitutions' handles empty command string"
   (should (equal '()
                  (mevedel-tools--extract-substitutions "echo hello")))
+  :doc "$() substitutions:
+`mevedel-tools--extract-substitutions' ignores unmatched substitution"
+  (should (equal '()
+                 (mevedel-tools--extract-substitutions "echo $(")))
   :doc "backtick substitutions:
 `mevedel-tools--extract-substitutions' extracts backtick substitution"
   (should (equal '("date")
@@ -300,9 +335,17 @@
   (let ((result (mevedel-tools--extract-commands "echo $(sudo rm -rf /)")))
     ;; Extracts echo, then recursively extracts sudo and rm from the substitution
     (should (equal '("echo" "sudo" "rm") (car result))))
+  :doc "dangerous command extraction:
+`mevedel-tools--extract-commands' detects chains inside substitutions"
+  (let ((result (mevedel-tools--extract-commands "echo $(rm file && true)")))
+    (should (equal '("echo" "rm" "true") (car result))))
   :doc "complex syntax handling:
 `mevedel-tools--extract-commands' marks variable expansion as unparseable"
   (let ((result (mevedel-tools--extract-commands "echo $VAR")))
+    (should (equal t (cdr result))))
+  :doc "complex syntax handling:
+`mevedel-tools--extract-commands' marks unmatched substitutions as unparseable"
+  (let ((result (mevedel-tools--extract-commands "echo $(")))
     (should (equal t (cdr result))))
   :doc "complex syntax handling:
 `mevedel-tools--extract-commands' marks eval as unparseable"
@@ -490,6 +533,15 @@
             ("Bash" :pattern "rm*" :action deny)))
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello\nrm file"))))
+  :doc "operator detection:
+`mevedel-tools--check-bash-permission' handles operators inside substitutions"
+  (progn
+    (setq mevedel-permission-rules
+          '(("Bash" :pattern "*" :action allow)))
+    (setq mevedel-bash-dangerous-commands '())
+    (should (equal 'allow
+                   (mevedel-tools--check-bash-permission
+                    "echo $(git rev-parse --show-toplevel 2>/dev/null || pwd) && git status"))))
   :doc "operator detection:
 `mevedel-tools--check-bash-permission' treats commands without operators as specific match"
   ;; Without operators, specific pattern should take precedence

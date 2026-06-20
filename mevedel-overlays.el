@@ -44,10 +44,10 @@
 (declare-function mevedel--setup-buffer-hooks "mevedel-persistence" (buffer))
 
 ;; `mevedel-workspace'
-(declare-function mevedel-workspace--root "mevedel-workspace" (workspace))
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 (defcustom mevedel-reference-color
   (face-attribute 'font-lock-constant-face :foreground nil 'default)
@@ -320,21 +320,6 @@ while storing independent state per workspace."
   "Make BUFFER's workspace instruction state current."
   (mevedel--instruction-activate-workspace
    (mevedel--instruction-buffer-workspace (or buffer (current-buffer)))))
-
-(defun mevedel--instruction-replace-state
-    (instructions id-counter id-usage-map retired-ids &optional workspace)
-  "Replace WORKSPACE instruction state with the supplied values."
-  (let ((key (mevedel--instruction-workspace-key workspace))
-        (state (list :instructions instructions
-                     :id-counter (or id-counter 0)
-                     :id-usage-map (or id-usage-map (make-hash-table))
-                     :retired-ids retired-ids)))
-    (puthash key state mevedel--instruction-states)
-    (when (equal key mevedel--instruction-current-state-key)
-      (setq mevedel--instructions instructions)
-      (setq mevedel--id-counter (or id-counter 0))
-      (setq mevedel--id-usage-map (or id-usage-map (make-hash-table)))
-      (setq mevedel--retired-ids retired-ids))))
 
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
@@ -2288,30 +2273,6 @@ PRED must be a function which accepts an instruction."
           best-instruction
         nil))))
 
-(defun mevedel--toplevel-instructions (&optional of-type)
-  "Return the global top-level instructions across all buffers.
-
-Returns only instructions of specific type if OF-TYPE is non-nil. If
-OF-TYPE is non-nil, this function does _not_ return the \"next best\"
-instruction of the matching type; i.e., the returned list consists only
-of toplevel instructions that also match the specified type."
-  (mevedel--foreach-instruction instr
-    with toplevels = (make-hash-table)
-    with inferiors = (make-hash-table)
-    unless (or (gethash instr toplevels) (gethash instr inferiors))
-    do (with-current-buffer (overlay-buffer instr)
-         (let* ((instrs (mevedel--instructions-at (overlay-start instr)))
-                (topmost (car (cl-remove-if #'mevedel--parent-instruction instrs)))
-                (children (delq topmost instrs)))
-           (puthash topmost t toplevels)
-           (cl-loop for child in children do (puthash child t inferiors))))
-    finally (cl-return (if of-type
-                           (cl-remove-if-not (lambda (instr)
-                                               (eq (mevedel--instruction-type instr)
-                                                   of-type))
-                                             (hash-table-keys toplevels))
-                         (hash-table-keys toplevels)))))
-
 (defun mevedel--directive-text (directive)
   "Return the directive text of the DIRECTIVE overlay.
 
@@ -2422,15 +2383,6 @@ TEXT unchanged. Truncation uses ellipsis to indicate omitted content."
          (mevedel--update-instruction-overlay reference nil))
         (signal 'quit nil)))))
 
-(defun mevedel--toplevel-references ()
-  "Fetch all toplevel reference instructions.
-
-A toplevel reference instruction is one that has no parents."
-  (seq-filter (lambda (instr)
-                (and (null (mevedel--parent-instruction instr))
-                     (mevedel--referencep instr)))
-              (mevedel--instructions)))
-
 (cl-defun mevedel--ancestral-instructions (instruction &optional of-type)
   "Return a list of ancestors for the current INSTRUCTION.
 
@@ -2524,7 +2476,7 @@ specified DIRECTIVE and tag QUERY."
                                          (with-current-buffer buffer
                                            (file-relative-name
                                             (buffer-file-name buffer)
-                                            (mevedel-workspace--root
+                                            (mevedel-workspace-root
                                              (mevedel-workspace))))))
                                     (if (mevedel--instruction-bufferlevel-p ref)
                                         (format "File `%s`" rel-path)
@@ -2561,7 +2513,7 @@ specified DIRECTIVE and tag QUERY."
             (with-current-buffer directive-buffer
               (file-relative-name
                directive-filename
-               (mevedel-workspace--root (mevedel-workspace)))))))
+               (mevedel-workspace-root (mevedel-workspace)))))))
     (cl-destructuring-bind (directive-region-info-string directive-region-string)
         (mevedel--overlay-region-info directive)
       (let ((expanded-directive-text
@@ -2662,21 +2614,6 @@ treat them as subdirectives, instead."
                               directive-region-info-string)))))
           (buffer-substring-no-properties (point-min) (point-max)))))))
 
-(defun mevedel--ancestral-commentators (instruction)
-  "Return list of references which contain INSTRUCTION that have commentary.
-
-The list is sorted with the topmost references first."
-  (with-current-buffer (overlay-buffer instruction)
-    (let* ((start (overlay-start instruction))
-           (end (overlay-end instruction))
-           (instructions (mevedel--instructions-in start end 'reference))
-           (filtered (cl-remove-if-not (lambda (instr)
-                                         (and (not (string-empty-p (mevedel--commentary-text instr)))
-                                              (mevedel--subinstruction-of-p instruction instr)))
-                                       instructions))
-           (sorted (sort filtered (lambda (a b) (mevedel--subinstruction-of-p b a)))))
-      sorted)))
-
 (defun mevedel--create-id ()
   "Create a unique identifier for an instruction.
 
@@ -2699,13 +2636,6 @@ The id is added to `mevedel--retired-ids'"
     (remhash id mevedel--id-usage-map)
     (push id mevedel--retired-ids)
     (mevedel--instruction-save-current-state)))
-
-(defun mevedel--reset-id-counter ()
-  "Reset all custom variables to their default values."
-  (setq mevedel--id-counter 0)
-  (setq mevedel--id-usage-map (make-hash-table))
-  (setq mevedel--retired-ids ())
-  (mevedel--instruction-save-current-state))
 
 (defun mevedel--instruction-outlinks (instruction)
   "Return the :to links of INSTRUCTION."

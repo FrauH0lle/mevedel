@@ -80,7 +80,7 @@
     (should (hash-table-p (mevedel-file-cache-table cache)))
     (should (null (mevedel-file-cache-order cache)))
     (should (= 0 (mevedel-file-cache-total-bytes cache)))
-    (should (= 0 (mevedel-file-cache-size cache)))))
+    (should (= 0 (hash-table-count (mevedel-file-cache-table cache))))))
 
 (mevedel-deftest mevedel-file-cache-put
   ()
@@ -92,7 +92,7 @@
          (b (mevedel-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
     (mevedel-file-cache-put cache a)
     (mevedel-file-cache-put cache b)
-    (should (= 2 (mevedel-file-cache-size cache)))
+    (should (= 2 (hash-table-count (mevedel-file-cache-table cache))))
     (should (= 5 (mevedel-file-cache-total-bytes cache)))
     (should (equal "/tmp/b" (car (mevedel-file-cache-order cache)))))
 
@@ -102,7 +102,7 @@
          (v2 (mevedel-file-state--create :path "/tmp/a" :content "aaaaa" :size 5)))
     (mevedel-file-cache-put cache v1)
     (mevedel-file-cache-put cache v2)
-    (should (= 1 (mevedel-file-cache-size cache)))
+    (should (= 1 (hash-table-count (mevedel-file-cache-table cache))))
     (should (= 5 (mevedel-file-cache-total-bytes cache)))
     (should (equal "aaaaa"
                    (mevedel-file-state-content
@@ -144,7 +144,7 @@
     (mevedel-file-cache-put cache a)
     (mevedel-file-cache-put cache b)
     (should (mevedel-file-cache-remove cache "/tmp/a"))
-    (should (= 1 (mevedel-file-cache-size cache)))
+    (should (= 1 (hash-table-count (mevedel-file-cache-table cache))))
     (should (= 3 (mevedel-file-cache-total-bytes cache)))
     (should (null (mevedel-file-cache-get cache "/tmp/a"))))
 
@@ -166,7 +166,7 @@
     (mevedel-file-cache-put cache a)
     (mevedel-file-cache-put cache b)
     (mevedel-file-cache-put cache c)
-    (should (= 2 (mevedel-file-cache-size cache)))
+    (should (= 2 (hash-table-count (mevedel-file-cache-table cache))))
     (should (null (mevedel-file-cache-get cache "/tmp/a")))
     (should (mevedel-file-cache-get cache "/tmp/b"))
     (should (mevedel-file-cache-get cache "/tmp/c")))
@@ -179,7 +179,7 @@
          (b (mevedel-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
     (mevedel-file-cache-put cache a)
     (mevedel-file-cache-put cache b)
-    (should (= 1 (mevedel-file-cache-size cache)))
+    (should (= 1 (hash-table-count (mevedel-file-cache-table cache))))
     (should (= 3 (mevedel-file-cache-total-bytes cache)))
     (should (null (mevedel-file-cache-get cache "/tmp/a"))))
 
@@ -198,24 +198,13 @@
     (should (null (mevedel-file-cache-get cache "/tmp/b")))
     (should (mevedel-file-cache-get cache "/tmp/c"))))
 
-(mevedel-deftest mevedel-file-cache-map
-  (:doc "`mevedel-file-cache-map' iterates all entries")
-  (let* ((cache (mevedel-file-cache-create))
-         (a (mevedel-file-state--create :path "/tmp/a" :content "a" :size 1))
-         (b (mevedel-file-state--create :path "/tmp/b" :content "b" :size 1))
-         (seen nil))
-    (mevedel-file-cache-put cache a)
-    (mevedel-file-cache-put cache b)
-    (mevedel-file-cache-map (lambda (path _state) (push path seen)) cache)
-    (should (mevedel-test-same-items-p '("/tmp/a" "/tmp/b") seen :test #'equal))))
-
 (mevedel-deftest mevedel-file-cache-clear
   (:doc "`mevedel-file-cache-clear' empties cache")
   (let* ((cache (mevedel-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "aa" :size 2)))
     (mevedel-file-cache-put cache a)
     (mevedel-file-cache-clear cache)
-    (should (= 0 (mevedel-file-cache-size cache)))
+    (should (= 0 (hash-table-count (mevedel-file-cache-table cache))))
     (should (= 0 (mevedel-file-cache-total-bytes cache)))
     (should (null (mevedel-file-cache-order cache)))
     (should (null (mevedel-file-cache-get cache "/tmp/a")))))
@@ -372,34 +361,12 @@
           (delete-file tmp)
           (let ((changes (mevedel-file-cache-detect-external-changes cache)))
             (mevedel-file-cache-consume-external-changes cache changes))
-          (should (= 0 (mevedel-file-cache-size cache))))
+          (should (= 0 (hash-table-count (mevedel-file-cache-table cache)))))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
 
 ;;
-;;; Cache + session recording
-
-(mevedel-deftest mevedel-file-cache-record
-  ()
-  ,test
-  (test)
-  :doc "reads file into cache and returns state"
-  (let* ((cache (mevedel-file-cache-create))
-         (tmp (make-temp-file "mevedel-rc-" nil ".txt" "hello")))
-    (unwind-protect
-        (let ((state (mevedel-file-cache-record cache tmp)))
-          (should state)
-          (should (equal "hello" (mevedel-file-state-content state)))
-          (should (equal (expand-file-name tmp)
-                         (mevedel-file-state-path state)))
-          (should (mevedel-file-cache-get cache tmp)))
-      (when (file-exists-p tmp) (delete-file tmp))))
-
-  :doc "returns nil when file is unreadable"
-  (let ((cache (mevedel-file-cache-create)))
-    (should (null (mevedel-file-cache-record
-                   cache "/nonexistent/path/xyz")))
-    (should (= 0 (mevedel-file-cache-size cache)))))
+;;; Session recording
 
 (mevedel-deftest mevedel-session-record-file-access
   ()

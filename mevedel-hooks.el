@@ -235,11 +235,13 @@ plist.")
                       "\\([a-z0-9]\\)\\([A-Z]\\)" "\\1-\\2"
                       (replace-regexp-in-string "_" "-" key)))))))
 
-(defun mevedel-hooks--json-value-to-lisp (value)
-  "Convert parsed JSON VALUE into Lisp hook data."
+(defun mevedel-hooks--json-value-to-lisp-with-keys (value key-fn)
+  "Convert parsed JSON VALUE into Lisp hook data using KEY-FN for object keys."
   (cond
    ((vectorp value)
-    (mapcar #'mevedel-hooks--json-value-to-lisp (append value nil)))
+    (mapcar (lambda (item)
+              (mevedel-hooks--json-value-to-lisp-with-keys item key-fn))
+            (append value nil)))
    ((and (listp value)
          (consp (car-safe value))
          (or (stringp (caar value))
@@ -248,37 +250,27 @@ plist.")
       (dolist (entry value plist)
         (setq plist
               (plist-put plist
-                         (mevedel-hooks--keyword-for-json-key (car entry))
-                         (mevedel-hooks--json-value-to-lisp
-                          (cdr entry)))))))
+                         (funcall key-fn (car entry))
+                         (mevedel-hooks--json-value-to-lisp-with-keys
+                          (cdr entry) key-fn))))))
    ((listp value)
-    (mapcar #'mevedel-hooks--json-value-to-lisp value))
+    (mapcar (lambda (item)
+              (mevedel-hooks--json-value-to-lisp-with-keys item key-fn))
+            value))
    ((eq value :json-false) nil)
    (t value)))
 
+(defun mevedel-hooks--json-value-to-lisp (value)
+  "Convert parsed JSON VALUE into Lisp hook data."
+  (mevedel-hooks--json-value-to-lisp-with-keys
+   value #'mevedel-hooks--keyword-for-json-key))
+
 (defun mevedel-hooks--json-tool-input-to-lisp (value)
   "Convert JSON tool input VALUE while preserving arg-key underscores."
-  (cond
-   ((vectorp value)
-    (mapcar #'mevedel-hooks--json-tool-input-to-lisp (append value nil)))
-   ((and (listp value)
-         (consp (car-safe value))
-         (or (stringp (caar value))
-             (symbolp (caar value))))
-    (let (plist)
-      (dolist (entry value plist)
-        (let ((key (if (symbolp (car entry))
-                       (symbol-name (car entry))
-                     (car entry))))
-          (setq plist
-                (plist-put plist
-                           (intern (concat ":" key))
-                           (mevedel-hooks--json-tool-input-to-lisp
-                            (cdr entry))))))))
-   ((listp value)
-    (mapcar #'mevedel-hooks--json-tool-input-to-lisp value))
-   ((eq value :json-false) nil)
-   (t value)))
+  (mevedel-hooks--json-value-to-lisp-with-keys
+   value
+   (lambda (key)
+     (intern (concat ":" (if (symbolp key) (symbol-name key) key))))))
 
 (defun mevedel-hooks--coerce-symbol (value)
   "Coerce VALUE to a symbol when possible."
@@ -1005,9 +997,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
   "Return a human-readable display name for hook EVENT."
   (if (symbolp event) (symbol-name event) (format "%s" event)))
 
-(defun mevedel-hooks--surface (session text &optional spinner-text)
-  "Surface hook TEXT for SESSION and optionally update SPINNER-TEXT."
-  (ignore session)
+(defun mevedel-hooks--surface (_session text &optional spinner-text)
+  "Surface hook TEXT and optionally update SPINNER-TEXT."
   (message "mevedel: %s" text)
   (when-let* ((view-buffer (and (boundp 'mevedel--view-buffer)
                                 mevedel--view-buffer))
@@ -1149,9 +1140,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                (memq event '(PostToolUse PostToolUseFailure)))
       (setq payload
             (plist-put payload :result
-                       (plist-get decision :updated-result))))
-    (when (and (plist-member decision :updated-result)
-               (memq event '(PostToolUse PostToolUseFailure)))
+                       (plist-get decision :updated-result)))
       (setq payload
             (plist-put payload :tool-response
                        (plist-get decision :updated-result))))

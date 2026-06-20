@@ -178,12 +178,11 @@ with `-' (but not `---') count as removed.  Non-string PATCH yields
               (cl-incf removed)))))))
     (cons added removed)))
 
-(defun mevedel-tool-fs--render-diff-summary (name args result render-data)
+(defun mevedel-tool-fs--render-diff-summary (name args _result render-data)
   "Build a collapsible diff rendering plist for Edit/Write results.
 
 NAME is the tool name (\"Edit\" or \"Write\").  ARGS is the tool arg
-plist.  RESULT is the LLM-facing result string (unused; accepted for
-interface compatibility).  RENDER-DATA must be a plist of the form
+plist.  RENDER-DATA must be a plist of the form
   (:kind diff :patch PATCH :path PATH :rel-path REL)
 emitted by `mevedel-preview-mode--apply-overlay'.
 
@@ -193,7 +192,6 @@ so the view falls back to the default one-liner.
 
 The diff starts collapsed in every permission mode so Edit/Write
 results do not expand the transcript by default."
-  (ignore result)
   (when (and (listp render-data)
              (eq (plist-get render-data :kind) 'diff)
              (stringp (plist-get render-data :patch)))
@@ -662,16 +660,6 @@ invalid forms or ranges over the per-request page limit."
   (ignore-errors
     (file-attribute-size (file-attributes path))))
 
-(defun mevedel-tool-fs--format-byte-size (bytes)
-  "Return BYTES formatted for a compact reminder."
-  (cond
-   ((not (numberp bytes)) "unknown size")
-   ((>= bytes (* 1024 1024))
-    (format "%.1f MB" (/ bytes 1048576.0)))
-   ((>= bytes 1024)
-    (format "%.1f KB" (/ bytes 1024.0)))
-   (t (format "%d bytes" bytes))))
-
 (defun mevedel-tool-fs--pdf-page-count (path)
   "Return PDF PATH's page count when `pdfinfo' can determine it."
   (when (executable-find "pdfinfo")
@@ -697,9 +685,7 @@ invalid forms or ranges over the per-request page limit."
          (size (mevedel-tool-fs--file-size path))
          (details (delq nil
                         (list (and size
-                                   (format "%s"
-                                           (mevedel-tool-fs--format-byte-size
-                                            size)))
+                                   (file-size-human-readable size))
                               (and page-count
                                    (format "%d pages" page-count))))))
     (format "PDF `%s` is large%s. Prefer bounded `Read(file_path=\"%s\", pages=\"START-END\")` requests for relevant pages instead of rereading or reattaching the whole document. Each PDF page request is capped at %d pages; use page selectors like \"1-5\" or \"6-\" when you need the next chunk."

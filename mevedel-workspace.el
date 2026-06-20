@@ -23,7 +23,6 @@
 (declare-function mevedel-workspace-get-or-create "mevedel-structs"
                   (type id root name))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--data-buffer)
@@ -175,19 +174,6 @@ registry, creating one lazily if needed."
                (name (when name-fn (funcall name-fn id))))
           (mevedel-workspace-get-or-create type id root name)))))))
 
-(defun mevedel-workspace--root (workspace)
-  "Get the root directory of WORKSPACE struct.
-
-Thin wrapper around the struct accessor `mevedel-workspace-root'.
-Root is validated at struct creation time."
-  (mevedel-workspace-root workspace))
-
-(defun mevedel-workspace--name (workspace)
-  "Get a descriptive name for WORKSPACE struct.
-
-Thin wrapper around the struct accessor `mevedel-workspace-name'."
-  (mevedel-workspace-name workspace))
-
 
 ;;
 ;;; Project root management
@@ -255,7 +241,7 @@ directory and its subdirectories for the current workspace only."
            (p-root (condition-case _
                        (project-root (project-current nil expanded))
                      (error expanded)))
-           (workspace-root (mevedel-workspace--root (mevedel-workspace)))
+           (workspace-root (mevedel-workspace-root (mevedel-workspace)))
            (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
       (unless (member p-root current-roots)
         (setf (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)
@@ -267,13 +253,13 @@ directory and its subdirectories for the current workspace only."
   "Remove DIRECTORY from the list of allowed roots for the current workspace."
   (interactive
    (with-current-buffer (mevedel-workspace--session-data-buffer)
-     (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+     (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace)))
             (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
        (list (if current-roots
                  (completing-read "Remove project root: " current-roots nil t)
                (user-error "No additional project roots configured for this workspace"))))))
   (with-current-buffer (mevedel-workspace--session-data-buffer)
-    (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+    (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace)))
            (current-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
       (setf (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)
             (delete directory current-roots))
@@ -284,7 +270,7 @@ directory and its subdirectories for the current workspace only."
   "Display the list of allowed project roots for the current workspace."
   (interactive)
   (with-current-buffer (mevedel-workspace--session-data-buffer)
-    (let* ((workspace-root (mevedel-workspace--root (mevedel-workspace)))
+    (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace)))
            (additional-roots (alist-get workspace-root mevedel-workspace-additional-roots nil nil #'equal)))
       (message "Workspace root: %s%s"
                workspace-root

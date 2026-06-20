@@ -18,8 +18,9 @@ flowchart TD
 
 Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 
-- **`mevedel-workspace`**: type, id, root, name,
-  additional-roots, file-cache, hints. `.mevedel/` is derived by
+- **`mevedel-workspace`**: type, id, root, name, file-cache.
+  Additional roots live in `mevedel-workspace-additional-roots`.
+  `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, reminders,

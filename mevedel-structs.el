@@ -44,9 +44,7 @@ One workspace per project, shared by all sessions for that project."
   id                ; opaque identifier
   root              ; cached absolute path
   name              ; display name
-  additional-roots  ; list of extra allowed dirs (shared across sessions)
-  file-cache        ; mevedel-file-cache struct: LRU workspace file cache
-  hints)            ; list of hint plists (shared across all sessions)
+  file-cache)       ; mevedel-file-cache struct: LRU workspace file cache
 
 
 ;;
@@ -107,46 +105,25 @@ the table."
 Keyed by (TYPE . ID) cons cells. Workspaces are created lazily on first
 chat buffer creation and cached here.")
 
-(defun mevedel-workspace-get (type id)
-  "Look up a workspace by TYPE and ID in the global registry.
-
-Returns the workspace struct or nil if not found."
-  (gethash (cons type id) mevedel-workspace--registry))
-
-(defun mevedel-workspace-register (workspace)
-  "Register WORKSPACE in the global registry.
-
-Keyed by (TYPE . ID). Overwrites any existing entry for the same key."
-  (puthash (cons (mevedel-workspace-type workspace)
-                 (mevedel-workspace-id workspace))
-           workspace
-           mevedel-workspace--registry)
-  workspace)
-
 (defun mevedel-workspace-get-or-create (type id root name)
   "Return the workspace for TYPE and ID, creating it if needed.
 
 ROOT is the absolute project root path. NAME is the display name. If a
 workspace already exists for this TYPE and ID, return it (ignoring ROOT
 and NAME arguments)."
-  (or (mevedel-workspace-get type id)
-      (mevedel-workspace-register
-       (mevedel-workspace--create
-        :type type
-        :id id
-        :root root
-        :name name
-        :file-cache (mevedel-file-cache--create
-                     :table (make-hash-table :test #'equal)
-                     :order nil
-                     :total-bytes 0)))))
-
-(defun mevedel-workspace-all ()
-  "Return a list of all registered workspace structs."
-  (let (workspaces)
-    (maphash (lambda (_key ws) (push ws workspaces))
-             mevedel-workspace--registry)
-    workspaces))
+  (let ((key (cons type id)))
+    (or (gethash key mevedel-workspace--registry)
+        (puthash key
+                 (mevedel-workspace--create
+                  :type type
+                  :id id
+                  :root root
+                  :name name
+                  :file-cache (mevedel-file-cache--create
+                               :table (make-hash-table :test #'equal)
+                               :order nil
+                               :total-bytes 0))
+                 mevedel-workspace--registry))))
 
 (defun mevedel-workspace-clear-registry ()
   "Remove all workspaces from the global registry.
@@ -386,15 +363,6 @@ Return the expanded paths activated."
                     :test #'equal)
         (push expanded activated)))
     (nreverse activated)))
-
-(defun mevedel-session-active-dropped-file-grant-p (session path)
-  "Return non-nil when SESSION has an active exact-file grant for PATH."
-  (when-let* ((expanded (mevedel-session--normalize-dropped-file-path path)))
-    (member expanded (mevedel-session-active-dropped-file-grants session))))
-
-(defun mevedel-session-clear-active-dropped-file-grants (session)
-  "Clear active drag/drop grants for SESSION."
-  (setf (mevedel-session-active-dropped-file-grants session) nil))
 
 (defun mevedel-session-enqueue-pending-reminder (session body)
   "Append reminder BODY to SESSION's pending reminder FIFO."

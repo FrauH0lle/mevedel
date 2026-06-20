@@ -596,51 +596,36 @@ fragment text."
           (throw 'position nil))))
       nil)))
 
-(defun mevedel-view-fragment--region-has-fragments-p (region)
-  "Return non-nil when REGION already has its managed fragment text."
-  (let* ((region-id (mevedel-view-fragment--region-id region))
-         (bounds (mevedel-view-fragment--region-bounds region))
-         (pos (car bounds))
-         (end (cdr bounds))
-         found)
-    (while (and (< pos end) (not found))
-      (if (eq (get-text-property pos 'mevedel-view-fragment-region)
-              region-id)
-          (setq found t)
-        (setq pos (or (next-single-property-change
-                       pos 'mevedel-view-fragment-region nil end)
-                      end))))
-    found))
-
-(defun mevedel-view-fragment--region-has-any-fragments-p (region)
-  "Return non-nil when REGION has any managed fragment text."
+(defun mevedel-view-fragment--region-has-owner-p (region predicate)
+  "Return non-nil when REGION has fragment text whose owner matches PREDICATE."
   (let* ((bounds (mevedel-view-fragment--region-bounds region))
          (pos (car bounds))
          (end (cdr bounds))
          found)
     (while (and (< pos end) (not found))
-      (if (get-text-property pos 'mevedel-view-fragment-region)
-          (setq found t)
-        (setq pos (or (next-single-property-change
-                       pos 'mevedel-view-fragment-region nil end)
-                      end))))
-    found))
-
-(defun mevedel-view-fragment--region-has-foreign-fragments-p (region)
-  "Return non-nil when REGION has another region's fragment text."
-  (let* ((region-id (mevedel-view-fragment--region-id region))
-         (bounds (mevedel-view-fragment--region-bounds region))
-         (pos (car bounds))
-         (end (cdr bounds))
-         found)
-    (while (and (< pos end) (not found))
       (let ((owner (get-text-property pos 'mevedel-view-fragment-region)))
-        (if (and owner (not (eq owner region-id)))
+        (if (and owner (funcall predicate owner))
             (setq found t)
           (setq pos (or (next-single-property-change
                          pos 'mevedel-view-fragment-region nil end)
                         end)))))
     found))
+
+(defun mevedel-view-fragment--region-has-fragments-p (region)
+  "Return non-nil when REGION already has its managed fragment text."
+  (let ((region-id (mevedel-view-fragment--region-id region)))
+    (mevedel-view-fragment--region-has-owner-p
+     region (lambda (owner) (eq owner region-id)))))
+
+(defun mevedel-view-fragment--region-has-any-fragments-p (region)
+  "Return non-nil when REGION has any managed fragment text."
+  (mevedel-view-fragment--region-has-owner-p region #'identity))
+
+(defun mevedel-view-fragment--region-has-foreign-fragments-p (region)
+  "Return non-nil when REGION has another region's fragment text."
+  (let ((region-id (mevedel-view-fragment--region-id region)))
+    (mevedel-view-fragment--region-has-owner-p
+     region (lambda (owner) (not (eq owner region-id))))))
 
 (defun mevedel-view-fragment--reconcile (region namespace fragments &optional preserve)
   "Reconcile FRAGMENTS for NAMESPACE inside managed REGION.

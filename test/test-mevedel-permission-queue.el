@@ -371,8 +371,8 @@
                       :callback #'ignore))
          captured)
     (setf (mevedel-session-permission-queue session) (list entry))
-    (cl-letf (((symbol-function 'mevedel-permission--prompt-async)
-               (lambda (tool path include-always cont count rendered-entry)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
+               (lambda (tool path include-always _origin cont count rendered-entry)
                  (setq captured
                        (list tool path include-always cont count
                              rendered-entry)))))
@@ -937,7 +937,7 @@
 ;;
 ;;; Per-agent sweep
 
-(mevedel-deftest mevedel-permission-queue-sweep-agent
+(mevedel-deftest mevedel-permission-queue-sweep-origin
   (:doc "sweep fires 'aborted on entries owned by ORIGIN; others stay")
   ,test
   (test)
@@ -960,7 +960,7 @@
        (list :kind 'generic :tool-name "Read"
              :origin "explorer--abc"
              :callback (lambda (o) (push (cons "explore2" o) outcomes))))
-      (mevedel-permission-queue-sweep-agent "explorer--abc" session))
+      (mevedel-permission-queue-sweep-origin "explorer--abc" session))
     ;; explorer-owned entries fired 'aborted.
     (should (eq 'aborted (cdr (assoc "explorer" outcomes))))
     (should (eq 'aborted (cdr (assoc "explore2" outcomes))))
@@ -1027,7 +1027,7 @@
               (should swept-id)
               (with-current-buffer view-buf
                 (should (gethash swept-id mevedel-view--interaction-overlays)))
-              (mevedel-permission-queue-sweep-agent "explorer--abc" session)))
+              (mevedel-permission-queue-sweep-origin "explorer--abc" session)))
           (should (eq 'aborted (cdr (assoc "agent" outcomes))))
           (should-not (assoc "main" outcomes))
           (with-current-buffer view-buf

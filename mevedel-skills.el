@@ -931,12 +931,6 @@ returns directories that have at least one consumer."
                mevedel-skills--dir-buffers)
       hits)))
 
-(defun mevedel-skills--file-under-watched-dir (file)
-  "Return one registered directory containing FILE, or nil.
-Prefer `mevedel-skills--file-under-watched-dirs' when all matching
-consumers must be notified."
-  (car (mevedel-skills--file-under-watched-dirs file)))
-
 (defun mevedel-skills--before-save-hook ()
   "Mark consumers dirty when saving a SKILL.md under a registered dir."
   (when-let* ((file buffer-file-name)
@@ -2393,19 +2387,6 @@ tools propagate through the spawn path's request-locals capture."
      (t
       (mevedel-skills--build-parent-inherited-agent skill)))))
 
-(cl-defun mevedel-skills--invoke-fork
-    (skill arguments callback &key trigger display-callback additional-context)
-  "Fork dispatch dispatcher.
-
-All triggers use direct foreground dispatch through
-`mevedel-tools--task'.  Slash callers must treat CALLBACK as the
-continuation and suppress the original `gptel-send' until/unless an
-inline body is produced."
-  (mevedel-skills--invoke-fork-direct
-   skill arguments callback
-   :trigger trigger :display-callback display-callback
-   :additional-context additional-context))
-
 (cl-defun mevedel-skills--invoke-fork-direct
     (skill arguments callback &key trigger display-callback additional-context)
   "Direct fork dispatch via `mevedel-tools--task'.  Async outcome.
@@ -2608,7 +2589,7 @@ foreground agent and calls CALLBACK when that agent returns."
             skill arguments callback
             :trigger trigger :display-callback display-callback))
           ('fork
-           (mevedel-skills--invoke-fork
+           (mevedel-skills--invoke-fork-direct
             skill arguments callback
             :trigger trigger :display-callback display-callback
             :additional-context additional-context))
