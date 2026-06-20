@@ -171,8 +171,10 @@ writes `:result` to the data buffer and appends a hidden block wrapped in
 `'gptel 'ignore` and `'invisible t`. Parser:
 `mevedel-pipeline-extract-render-data`.
 
-The view is a pure function of the data buffer — re-parsed on every
-rerender, no cached overlay state.
+Tool renderer input is derived from the data buffer on each rerender; it
+must not depend on durable state stored only in view overlays or text
+properties. View-local fragment metadata, collapse state, and renderer caches
+are disposable UI state.
 `mevedel-view--invoke-renderer` `condition-case`s the call; malformed
 output emits a warning and falls through to the one-liner.
 

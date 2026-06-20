@@ -212,7 +212,7 @@ Binds `data-buf' and `view-buf'."
       (goto-char (point-min))
       (should (eq (lookup-key (get-text-property (point) 'keymap)
                               (kbd "RET"))
-                  #'mevedel-view-open-agent-transcript-at-point))
+                  #'mevedel-view-activate-at-point))
       (let ((map (make-sparse-keymap))
             (activated nil))
         (define-key map (kbd "RET")
@@ -222,7 +222,8 @@ Binds `data-buf' and `view-buf'."
                :kind 'ask
                :body "Descriptor\n"
                :keymap map))
-        (goto-char (mevedel-view--interaction-anchor))
+        (goto-char (point-min))
+        (search-forward "Descriptor")
         (call-interactively (key-binding (kbd "RET")))
         (should activated)))))
 

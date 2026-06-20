@@ -1017,24 +1017,31 @@
 ;;; View rendering
 
 (mevedel-deftest mevedel-tool-task--display-overlay
-  (:doc "`mevedel-tool-task--display-overlay' materializes status-zone text")
+  (:doc "`mevedel-tool-task--display-overlay' renders status-zone fragments")
   ,test
   (test)
-  :doc "inserts read-only task text in the live view buffer"
+  :doc "inserts read-only task fragment text in the live view buffer"
   (test-mevedel-tool-task--with-view session data view
-    (with-current-buffer data
-      (mevedel-tool-task--handle-create
-       (list :tasks (vector (list :subject "rendered task")))))
-    (with-current-buffer view
-      (should (string-match-p "rendered task" (buffer-string)))
-      (goto-char (point-min))
-      (search-forward "rendered task")
-      (should (get-text-property (1- (point)) 'read-only))
-      (should (overlayp (mevedel-session-task-overlay session)))
-      (should (eq view (overlay-buffer
-                        (mevedel-session-task-overlay session))))))
+    (let (legacy-overlay)
+      (with-current-buffer data
+        (setq legacy-overlay (make-overlay (point-min) (point-min)))
+        (setf (mevedel-session-task-overlay session) legacy-overlay)
+        (mevedel-tool-task--handle-create
+         (list :tasks (vector (list :subject "rendered task")))))
+      (with-current-buffer view
+        (should (string-match-p "rendered task" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "rendered task")
+        (should (get-text-property (1- (point)) 'read-only))
+        (should (eq 'status (get-text-property
+                             (1- (point))
+                             'mevedel-view-fragment-namespace)))
+        (should (eq 'tasks (get-text-property
+                            (1- (point)) 'mevedel-view-fragment-id)))
+        (should-not (overlay-buffer legacy-overlay))
+        (should-not (mevedel-session-task-overlay session)))))
 
-  :doc "re-rendering replaces the previous materialized region"
+  :doc "re-rendering replaces the previous task fragment region"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
       (mevedel-tool-task--handle-create
@@ -1046,7 +1053,7 @@
       (should (string-match-p "two" (buffer-string)))
       (should (= 1 (how-many "tasks" (point-min) (point-max))))))
 
-  :doc "compact overlay hides completed-only groups until expanded"
+  :doc "compact task fragment hides completed-only groups until expanded"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
       (mevedel-tool-task--handle-create
@@ -1057,13 +1064,13 @@
       (should (string-match-p "worker active" (buffer-string)))
       (should-not (string-match-p "Main · 0 open · 1 done" (buffer-string)))
       (should-not (string-match-p "main done" (buffer-string)))
-      (let ((ov (mevedel-session-task-overlay session)))
-        (overlay-put ov 'mevedel-tool-task--show-completed t)
-        (funcall (overlay-get ov 'mevedel-tool-task--refresh)))
+      (goto-char (point-min))
+      (search-forward "worker active")
+      (mevedel-toggle-tasks)
       (should (string-match-p "Main · 0 open · 1 done" (buffer-string)))
       (should (string-match-p "main done" (buffer-string)))))
 
-  :doc "materialized task overlay suppresses modification hooks"
+  :doc "fragment-backed task render suppresses modification hooks"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer view
       (let ((changes 0))
@@ -1146,7 +1153,7 @@
             (should (string-match-p "drift task" display))
             (should-not (string-match-p "drift task" input)))))))
 
-  :doc "completed-only tasks do not materialize the overlay"
+  :doc "completed-only tasks do not render a status fragment"
   (test-mevedel-tool-task--with-view session data view
     (with-current-buffer data
       (mevedel-tool-task--handle-create
@@ -1157,7 +1164,7 @@
       (should-not (string-match-p "done only" (buffer-string)))
       (should-not (mevedel-session-task-overlay session))))
 
-  :doc "stale status notes alone do not materialize the overlay"
+  :doc "stale status notes alone do not render a status fragment"
   (test-mevedel-tool-task--with-view session data view
     (setf (mevedel-session-task-status-notes session)
           '((nil :note "stale note" :updated-turn 1)))
@@ -1175,7 +1182,11 @@
        (list :tasks (vector (list :subject "last active")))))
     (with-current-buffer view
       (should (string-match-p "last active" (buffer-string)))
-      (should (overlayp (mevedel-session-task-overlay session))))
+      (goto-char (point-min))
+      (search-forward "last active")
+      (should (eq 'tasks (get-text-property
+                          (1- (point)) 'mevedel-view-fragment-id)))
+      (should-not (mevedel-session-task-overlay session)))
     (with-current-buffer data
       (mevedel-tool-task--handle-update
        (list :id 1 :status "completed")))
@@ -1210,6 +1221,28 @@
       (search-forward "Main")
       (mevedel-toggle-tasks)
       (should (string-match-p "active body" (buffer-string)))
+      (should-not (string-match-p "done body" (buffer-string)))))
+
+  :doc "shared fragment activation toggles completed task detail"
+  (test-mevedel-tool-task--with-view session data view
+    (with-current-buffer data
+      (mevedel-tool-task--handle-create
+       (list :tasks (vector (list :subject "active body"
+                                  :status "in_progress")
+                            (list :subject "done body"
+                                  :status "completed")))))
+    (with-current-buffer view
+      (goto-char (point-min))
+      (search-forward "active body")
+      (goto-char (match-beginning 0))
+      (should (eq 'tasks (get-text-property
+                          (point) 'mevedel-view-fragment-id)))
+      (mevedel-view-activate-at-point)
+      (should (string-match-p "done body" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "Main")
+      (goto-char (match-beginning 0))
+      (mevedel-view-activate-at-point)
       (should-not (string-match-p "done body" (buffer-string)))))
 
   :doc "`mevedel-toggle-todos' remains a compatibility alias"

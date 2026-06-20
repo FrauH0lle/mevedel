@@ -414,7 +414,8 @@
 								'font-lock-face)))
 				 (should (markerp mevedel-view--in-flight-turn-start))
 				 (should (markerp mevedel-view--data-turn-start))
-				 (should mevedel-view--spinner-overlay)))
+				 (should (overlayp
+					  mevedel-view--request-progress-region-overlay))))
 			     (let ((response-start
 				    (overlay-get directive
 						 'mevedel-directive-response-start)))

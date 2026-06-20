@@ -1356,11 +1356,6 @@ side-channel data."
       (push (substring string last) chunks)
       (apply #'concat (nreverse chunks)))))
 
-(defun mevedel-pipeline--strip-all-media-data-blocks (string)
-  "Return STRING with every media delimiter block removed."
-  (replace-regexp-in-string
-   (mevedel-pipeline--media-data-regexp) "" string t t))
-
 (defun mevedel-pipeline--strip-side-channel-blocks (string)
   "Return STRING with mevedel side-channel blocks removed."
   (mevedel-pipeline--strip-media-data-blocks
@@ -1486,13 +1481,6 @@ MEDIA is the Lisp object deserialized from inside the block, or nil."
                           (substring result-string trail-end))
                   data))
         (cons result-string nil)))))
-
-(defun mevedel-pipeline--base64-file (path)
-  "Return base64 contents of PATH."
-  (with-temp-buffer
-    (insert-file-contents-literally path)
-    (base64-encode-region (point-min) (point-max) :no-line-break)
-    (buffer-string)))
 
 (defun mevedel-pipeline--media-item-data (item)
   "Return stable base64 data from media ITEM.

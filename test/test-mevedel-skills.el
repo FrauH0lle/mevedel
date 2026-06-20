@@ -1282,16 +1282,16 @@ configuration."
      ,@body))
 
 (defun mevedel-skills-test--shell-injections-sync (text)
-  "Drive `mevedel-skills--run-shell-injections-async' synchronously.
+  "Drive `mevedel-skills--run-body-injections-async' synchronously.
 Returns the outcome plist produced by the async helper."
   (let (outcome)
-    (mevedel-skills--run-shell-injections-async
+    (mevedel-skills--run-body-injections-async
      text (lambda (o) (setq outcome o)))
     (while (null outcome)
       (accept-process-output nil 0.01))
     outcome))
 
-(mevedel-deftest mevedel-skills--run-shell-injections-async ()
+(mevedel-deftest mevedel-skills--run-body-injections-async/shell ()
   ,test
   (test)
   :doc "inline !`cmd` is replaced with stdout"

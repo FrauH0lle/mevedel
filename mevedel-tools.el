@@ -534,32 +534,6 @@ Agent invocations use their agent's name; sessions fall back to
 
 (declare-function mevedel-tools--prune-stale-agents-fsm "mevedel-tool-ui" ())
 
-(defun mevedel-tools--ancestor-buffers (chat-buffer)
-  "Return the list of buffers from CHAT-BUFFER up to the top-level chat.
-
-The returned list starts with CHAT-BUFFER itself, then each ancestor
-reached by following `mevedel--agent-invocation' to its
-`parent-data-buffer'.  Stops when an ancestor is dead, has no
-`mevedel--agent-invocation' bound (the top-level user chat), or
-when a cycle is detected.
-
-Used by tests and recipient helpers that need to inspect the spawn
-tree without exposing sibling-to-sibling routes."
-  (let ((seen (list chat-buffer))
-        (cursor chat-buffer))
-    (while (when-let* (((buffer-live-p cursor))
-                       (inv (buffer-local-value 'mevedel--agent-invocation
-                                                cursor))
-                       ((mevedel-agent-invocation-p inv))
-                       (parent (mevedel-agent-invocation-parent-data-buffer
-                                inv))
-                       ((buffer-live-p parent))
-                       ((not (memq parent seen))))
-             (push parent seen)
-             (setq cursor parent)
-             t))
-    (nreverse seen)))
-
 (defun mevedel-tools--buffer-invocation (buffer)
   "Return BUFFER's agent invocation, or nil for the top-level chat."
   (and (buffer-live-p buffer)

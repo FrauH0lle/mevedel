@@ -1004,7 +1004,7 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))))
 
-  :doc "implementation mode rerender preserves an unselected overlay window when selected point is input"
+  :doc "implementation mode rerender preserves unselected overlay window scroll"
   (let* ((data-buffer (generate-new-buffer " *plan-data*"))
          (target-buffer (generate-new-buffer " *plan-view*"))
          (session (mevedel-session--create
@@ -1022,7 +1022,6 @@
                       "\n")
            "\n\nDo the work."))
          keymap
-         overlay-point
          window-start-pos)
     (unwind-protect
         (progn
@@ -1052,8 +1051,7 @@
               (setq window-start-pos (match-beginning 0))
               (search-forward "mode: default")
               (goto-char (match-beginning 0))
-              (setq overlay-point (point))
-              (set-window-point overlay-window overlay-point)
+              (set-window-point overlay-window (point))
               (set-window-start overlay-window window-start-pos t)
               (setq keymap (get-text-property (point) 'keymap))
               (select-window input-window)
@@ -1063,7 +1061,9 @@
                           'mevedel-view--refresh-skill-argument-hint-after-change)
                          #'ignore))
                 (call-interactively (lookup-key keymap (kbd "m"))))
-              (should (= (window-point overlay-window) overlay-point))
+              (should (get-text-property
+                       (window-point overlay-window)
+                       'mevedel-view-interaction-overlay))
               (should (= (window-start overlay-window) window-start-pos)))))
       (when (buffer-live-p target-buffer)
         (kill-buffer target-buffer))
