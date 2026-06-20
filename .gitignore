@@ -10,6 +10,9 @@
 # Built distribution
 dist/
 
+# Agent worktrees
+.worktrees/
+
 # Backup files
 *~
 
