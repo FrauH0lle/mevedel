@@ -882,7 +882,7 @@ must restore the prior value to avoid cross-test pollution."
 
 
 ;;
-;;; Spec 22: allowed-tools parser
+;;; Allowed-tools parser
 
 (defvar mevedel-permissions-test--fake-tools
   ;; Skip the real registry; build minimal fake tool structs whose
@@ -1004,13 +1004,13 @@ must restore the prior value to avoid cross-test pollution."
 
 
 ;;
-;;; Spec 22: bucket-aware permission resolution
+;;; Bucket-aware permission resolution
 
 (mevedel-deftest mevedel-permission--collect-buckets ()
   ,test
   (test)
   :doc "buckets returned in innermost-first order"
-  ;; Spec 22 §"Permission chain consumption" pass 2 walk order.
+  ;; Pass 2 consumes buckets in innermost-first order.
   (let ((buckets (mevedel-permission--collect-buckets
                   '(:invocation-rule)
                   '(:request-rule)
@@ -1081,10 +1081,9 @@ must restore the prior value to avoid cross-test pollution."
                  '(("Bash" :pattern "rm *" :action ask))))))
 
   :doc "plan-mode suppresses skill bucket for non-read-only tools"
-  ;; Spec 22 §"Plan-mode exception": invocation/request rules are
-  ;; suppressed in pass 2 for non-read-only tools.  Bash is non-
-  ;; read-only and has no get-path, so the chain falls through to
-  ;; step 8 mode-decision which yields deny under plan.
+  ;; Invocation/request rules are suppressed in pass 2 for non-read-only
+  ;; tools.  Bash is non-read-only and has no get-path, so the chain
+  ;; falls through to step 8 mode-decision which yields deny under plan.
   (let ((mevedel-permission-rules nil))
     (should (eq 'deny
                 (mevedel-check-permission

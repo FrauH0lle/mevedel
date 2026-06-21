@@ -145,6 +145,11 @@ Recommended locations:
 - `mevedel-hook-rules`: user defcustom, Emacs-local.
 - `~/.mevedel/hooks.el` and `~/.mevedel/hooks.json`: user files,
   shareable across projects on one machine.
+- Enabled plugin manifests may contribute hooks only after executable
+  hooks have been explicitly enabled for that plugin with `/plugin hooks
+  NAME on` or `/plugin hooks enable NAME`. Mevedel reads the Codex
+  default `./hooks/hooks.json` when the manifest omits `hooks`, or the
+  manifest `hooks` field when present. That field must be a single path.
 - `<workspace>/.mevedel/hooks.el` and
   `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
   workspace.
@@ -157,9 +162,10 @@ Recommended locations:
 - Session/request/invocation hook lists: transient programmatic layers.
 
 Layers merge additively in this order: `mevedel-hook-rules`, user
-`hooks.el`, user `hooks.json`, trusted project `hooks.el`, trusted project
-`hooks.json`, session, request, and agent invocation.  Skill hooks are folded
-into the active request or agent invocation while the skill is active.  Deny
+`hooks.el`, user `hooks.json`, enabled plugin hooks, trusted project
+`hooks.el`, trusted project `hooks.json`, session, request, and agent
+invocation.  Skill hooks are folded into the active request or agent
+invocation while the skill is active.  Deny
 decisions remain restrictive across all layers; allow decisions do not
 override existing explicit permission denies.
 
@@ -219,6 +225,25 @@ session cwd.  Default timeout is 30 seconds with a global cap. Each
 stdout/stderr stream is capped by `mevedel-hooks-command-output-max-chars`
 before parsing decisions or writing log previews, so noisy hooks cannot
 inject unbounded output through `updated_result` or block reasons.
+
+Plugin command hooks run from the same event cwd as user/global hooks but
+receive compatibility environment variables:
+
+- `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `MEVEDEL_PLUGIN_ROOT` point at
+  the plugin root.
+- `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `MEVEDEL_PLUGIN_DATA` point at
+  `~/.mevedel/plugin-data/<plugin-name>` and are created before the
+  command starts.
+
+Superpowers is treated specially when its hooks are enabled: mevedel
+installs a native `SessionStart` Elisp hook that loads the bundled
+`using-superpowers` skill plus a mevedel tool mapping, and skips the
+plugin's manifest hooks. Non-Superpowers plugin hooks keep their manifest
+behavior.
+
+Codex plugin `apps` and `mcpServers` manifest fields are not loaded by
+the hook subsystem. They remain unsupported plugin components until
+mevedel has native app or plugin-scoped MCP loading.
 
 `elisp` calls a function with one event plist argument.  Functions may
 return nil or a decision plist.  Elisp hooks are trusted in-process code
@@ -286,7 +311,8 @@ Top-level terminal events add:
 - `:terminal-reason` for `StopFailure`
 
 Command handlers receive the same data encoded as JSON with snake_case
-keys.  Elisp handlers receive the plist directly.
+keys.  Elisp handlers receive the plist directly, with `:hook-handler`
+holding the normalized handler metadata for declarative handlers.
 
 Decision plist fields:
 

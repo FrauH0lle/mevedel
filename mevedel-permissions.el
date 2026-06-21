@@ -813,7 +813,7 @@ SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 
 (defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
   "Return bucket keys to suppress for the allow/ask pass under MODE.
-spec: plan-mode + non-read-only tool -> skip skill buckets.
+Plan mode skips skill buckets for non-read-only tools.
 For read-only tools the plan-mode preview/permission paths converge
 on allow anyway, so the suppression has no effect there."
   (when (and (eq mode 'plan)
@@ -944,9 +944,9 @@ Step 4 may run async when the tool defines `:check-permission-async'; the
 sync-slot adapter preserves the denial REASON captured from a
 `mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT.
 
-Bucket-aware per spec; see `mevedel-check-permission' for the
-keyword-arg semantics.  EXACT-ALLOWED-PATHS is passed to the shared tail
-as an exact-match in-bounds path list."
+Bucket-aware; see `mevedel-check-permission' for the keyword-arg
+semantics.  EXACT-ALLOWED-PATHS is passed to the shared tail as an
+exact-match in-bounds path list."
   (let* ((mode (or mode mevedel-permission-mode))
          (read-only-p (when tool-struct
                         (mevedel-tool-read-only-p tool-struct)))

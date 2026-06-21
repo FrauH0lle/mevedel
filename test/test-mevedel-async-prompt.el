@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Tests for spec 20: async prompt primitives, settlement, cancellers,
-;; and the RequestAccess dedup waiter list.  The pipeline-level latch,
+;; Tests for async prompt primitives, settlement, cancellers, and the
+;; RequestAccess dedup waiter list.  The pipeline-level latch,
 ;; permission async chain, and step-permission outcome translator are
 ;; covered in test-mevedel-pipeline.el; tests here focus on the UI
 ;; primitives themselves.

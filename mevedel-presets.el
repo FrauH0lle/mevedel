@@ -416,14 +416,13 @@ alist with mevedel-specific handlers added:
       (setcdr wait-entry
               (cons #'mevedel-view--handle-queued-user-message-inject
                     (cdr wait-entry)))))
-  ;; 1b. spec: apply skill request-scoped overrides BEFORE the
-  ;; gptel--handle-wait fires.  This handler runs every WAIT entry
-  ;; (not just the first), so iteration 2+ pick up overrides
-  ;; installed mid-turn by model-side Skill calls.  Prepended BEFORE
-  ;; the begin handler so begin lands at the front of the chain
-  ;; (creating the request and draining the stash); the
-  ;; apply-overrides handler runs immediately after, reading the
-  ;; freshly-drained slot.
+  ;; 1b. Apply skill request-scoped overrides BEFORE gptel--handle-wait
+  ;; fires.  This handler runs every WAIT entry (not just the first),
+  ;; so iteration 2+ pick up overrides installed mid-turn by model-side
+  ;; Skill calls.  Prepended BEFORE the begin handler so begin lands at
+  ;; the front of the chain (creating the request and draining the
+  ;; stash); the apply-overrides handler runs immediately after,
+  ;; reading the freshly-drained slot.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
@@ -434,10 +433,10 @@ alist with mevedel-specific handlers added:
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; Materialize a fork-pending rewind preview before `request-begin'
   ;; runs -- this catches direct data-buffer send paths (gptel-send,
-  ;; agent invocations) that bypass `mevedel-view-send'.  spec:
-  ;; after `mevedel-request-begin' creates the request, drain any
-  ;; buffer-local `mevedel-skills--pending-request-context' stash
-  ;; into the new request's slots.
+  ;; agent invocations) that bypass `mevedel-view-send'.  After
+  ;; `mevedel-request-begin' creates the request, drain any buffer-local
+  ;; `mevedel-skills--pending-request-context' stash into the new
+  ;; request's slots.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
@@ -458,7 +457,7 @@ alist with mevedel-specific handlers added:
                               (mevedel-request-begin
                                mevedel--session
                                mevedel--current-directive-uuid)
-                              ;; spec: drain pending stash from
+                              ;; Drain pending stash from
                               ;; slash-dispatched skill invocation.
                               (when (and (boundp 'mevedel--current-request)
                                          mevedel--current-request)

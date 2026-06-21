@@ -27,6 +27,14 @@
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-plugin-hooks "mevedel-plugins" (cl-x) t)
+(declare-function mevedel-plugin-hooks-file "mevedel-plugins" (cl-x) t)
+(declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
+(declare-function mevedel-plugin-root "mevedel-plugins" (cl-x) t)
+(declare-function mevedel-plugins-enabled "mevedel-plugins" ())
+(declare-function mevedel-plugins--hooks-enabled-p "mevedel-plugins" (plugin))
+(declare-function mevedel-plugins-native-hook-rules "mevedel-plugins" (plugin))
+(declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins" (plugin-name))
 (declare-function mevedel-view--update-spinner "mevedel-view" (status))
 (declare-function mevedel-view--spinner-active-p "mevedel-view" ())
 (defvar gptel-model)
@@ -430,7 +438,7 @@ treated as `SubagentStop'."
       'mevedel
       (format "Could not read hook config %s: %s"
               file (error-message-string err))
-      :warning)
+     :warning)
      nil)))
 
 (defun mevedel-hooks--config-files-in-dir (dir)
@@ -539,6 +547,75 @@ treated as `SubagentStop'."
        (cdr entry))))
    rules))
 
+(defun mevedel-hooks--annotate-plugin-rules (rules plugin)
+  "Return RULES with every handler annotated for PLUGIN execution."
+  (let* ((name (mevedel-plugin-name plugin))
+         (root (mevedel-plugin-root plugin))
+         (data (mevedel-plugins-plugin-data-dir name)))
+    (mapcar
+     (lambda (entry)
+       (cons
+        (car entry)
+        (mapcar
+         (lambda (group)
+           (let ((copy (copy-sequence group)))
+             (when-let* ((hooks (plist-get copy :hooks)))
+               (setq copy
+                     (plist-put
+                      copy :hooks
+                      (mapcar
+                       (lambda (handler)
+                         (let ((handler (copy-sequence handler)))
+                           (setq handler (plist-put handler :source 'plugin))
+                           (setq handler (plist-put handler :plugin-name name))
+                           (setq handler (plist-put handler :plugin-root root))
+                           (plist-put handler :plugin-data data)))
+                       hooks))))
+             copy))
+         (cdr entry))))
+     rules)))
+
+(defun mevedel-hooks--plugin-manifest-rules (plugin)
+  "Return normalized manifest hook rules for PLUGIN."
+  (let ((entries (or (and (fboundp 'mevedel-plugin-hooks)
+                          (mevedel-plugin-hooks plugin))
+                     (and (mevedel-plugin-hooks-file plugin)
+                          (list (list :file
+                                      (mevedel-plugin-hooks-file
+                                       plugin))))))
+        rules)
+    (dolist (entry entries rules)
+      (setq rules
+            (append
+             rules
+             (cond
+              ((plist-get entry :file)
+               (mevedel-hooks--read-config-file
+                (plist-get entry :file)))))))))
+
+(defun mevedel-hooks--plugin-config-rules ()
+  "Return normalized hook rules from plugins with enabled hooks."
+  (when (require 'mevedel-plugins nil t)
+    (let (rules)
+      (dolist (plugin (mevedel-plugins-enabled) rules)
+        (when (mevedel-plugins--hooks-enabled-p plugin)
+          (when-let* ((native-rules (mevedel-plugins-native-hook-rules
+                                     plugin)))
+            (setq rules
+                  (append rules
+                           (mevedel-hooks--annotate-plugin-rules
+                            (mevedel-hooks-normalize-rules native-rules)
+                            plugin))))
+          (when-let* ((manifest-rules (and (not (equal (mevedel-plugin-name plugin)
+                                                        "superpowers"))
+                                           (mevedel-hooks--plugin-manifest-rules
+                                            plugin))))
+            (setq rules
+                  (append rules
+                          (mevedel-hooks--annotate-plugin-rules
+                           manifest-rules
+                           plugin)))))))))
+
 (defun mevedel-hooks-effective-rules
     (&optional session workspace request invocation)
   "Return effective hook rules for SESSION / WORKSPACE context."
@@ -553,6 +630,7 @@ treated as `SubagentStop'."
                     (mevedel-hooks--annotate-rules-source
                      (mevedel-hooks--read-config-file file)
                      'user-file))))
+    (setq rules (append rules (mevedel-hooks--plugin-config-rules)))
     (dolist (file (mevedel-hooks--project-config-files workspace))
       (setq rules
             (append rules
@@ -1146,6 +1224,25 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                        (plist-get decision :updated-result))))
     payload))
 
+(defun mevedel-hooks--command-process-environment (handler)
+  "Return process environment for command HANDLER."
+  (if (not (eq (plist-get handler :source) 'plugin))
+      process-environment
+    (let ((root (plist-get handler :plugin-root))
+          (data (plist-get handler :plugin-data)))
+      (if (and (stringp root) (stringp data))
+          (progn
+            (make-directory data t)
+            (append
+             (list (concat "PLUGIN_ROOT=" root)
+                   (concat "CLAUDE_PLUGIN_ROOT=" root)
+                   (concat "PLUGIN_DATA=" data)
+                   (concat "CLAUDE_PLUGIN_DATA=" data)
+                   (concat "MEVEDEL_PLUGIN_ROOT=" root)
+                   (concat "MEVEDEL_PLUGIN_DATA=" data))
+             process-environment))
+        process-environment))))
+
 (defun mevedel-hooks--run-command-handler
     (event handler event-plist session callback)
   "Run command HANDLER for EVENT and call CALLBACK with decision."
@@ -1260,7 +1357,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                (when (buffer-live-p stderr-buffer) (kill-buffer stderr-buffer))
                (funcall callback decision)))))
       (condition-case err
-          (progn
+          (let ((process-environment
+                 (mevedel-hooks--command-process-environment handler)))
             (setq stderr-process
                   (make-pipe-process
                    :name "mevedel-hook-stderr"
@@ -1348,13 +1446,19 @@ Returns (DECISION . EVENT-PLIST) after serial mutations."
         (cons merged payload))
     (cons decision event-plist)))
 
+(defun mevedel-hooks--elisp-event-plist (event-plist handler)
+  "Return EVENT-PLIST annotated with HANDLER metadata."
+  (plist-put (copy-sequence event-plist) :hook-handler handler))
+
 (defun mevedel-hooks--run-elisp-handler
     (event handler event-plist session)
   "Run Elisp HANDLER for EVENT and return its decision."
   (let ((fn (plist-get handler :function)))
     (condition-case err
         (if (functionp fn)
-            (let* ((decision (funcall fn event-plist))
+            (let* ((decision (funcall fn
+                                      (mevedel-hooks--elisp-event-plist
+                                       event-plist handler)))
                    (normalized (mevedel-hooks--normalize-decision
                                 decision)))
               (mevedel-hooks--log
