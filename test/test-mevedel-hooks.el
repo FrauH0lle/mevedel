@@ -12,6 +12,7 @@
           "helpers"))
 
 (require 'mevedel-hooks)
+(require 'mevedel-plugins)
 
 
 ;;
@@ -42,6 +43,22 @@
   "Return a session rooted at ROOT."
   (mevedel-session-create
    "hooks-test" (mevedel-hooks-test--workspace root) root))
+
+(defun mevedel-hooks-test--write-plugin-manifest (root json)
+  "Write plugin manifest JSON under ROOT."
+  (make-directory (file-name-concat root ".codex-plugin") t)
+  (with-temp-file (file-name-concat root ".codex-plugin" "plugin.json")
+    (insert json)))
+
+(defun mevedel-hooks-test--clear-plugin-env ()
+  "Remove plugin compatibility variables from local `process-environment'."
+  (dolist (name '("PLUGIN_ROOT"
+                  "CLAUDE_PLUGIN_ROOT"
+                  "PLUGIN_DATA"
+                  "CLAUDE_PLUGIN_DATA"
+                  "MEVEDEL_PLUGIN_ROOT"
+                  "MEVEDEL_PLUGIN_DATA"))
+    (setenv name nil)))
 
 (defun mevedel-hooks-test--deny-fn (_event)
   "Test hook returning a deny decision."
@@ -263,6 +280,216 @@
                    (current-buffer)))
           (should-not (assq 'PreToolUse
                             (mevedel-hooks-effective-rules nil workspace))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-hooks-effective-rules/plugin-hooks
+  (:doc "loads enabled plugin hook files with metadata between user and project layers")
+  (let* ((root (make-temp-file "mevedel-hooks-plugin-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-plugin-user" t)))
+         (plugin-root (file-name-as-directory
+                       (file-name-concat user-dir "plugins" "repo")))
+         (workspace (mevedel-hooks-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-hooks-require-project-trust t))
+    (unwind-protect
+        (progn
+          (make-directory user-dir t)
+          (make-directory (file-name-concat plugin-root "hooks") t)
+          (make-directory (file-name-concat root ".mevedel") t)
+          (with-temp-file (file-name-concat user-dir "hooks.json")
+            (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\"echo user\"}]}]}}"))
+          (with-temp-file (file-name-concat plugin-root "hooks" "hooks.json")
+            (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\"echo plugin\","
+                    "\"timeout\":7,\"statusMessage\":\"plugin status\"}]}]}}"))
+          (mevedel-hooks-test--write-plugin-manifest
+           plugin-root
+           "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
+          (with-temp-file (file-name-concat root ".mevedel" "hooks.el")
+            (prin1
+             '((PreToolUse
+                ((:matcher "Bash"
+                  :hooks ((:type command :command "echo project"))))))
+             (current-buffer)))
+          (mevedel-hooks-trust-project workspace)
+          (let ((handlers (mevedel-hooks--matching-handlers
+                           'PreToolUse
+                           '(:tool-name "Bash")
+                           (mevedel-hooks-effective-rules
+                            session workspace))))
+            (should (equal '(user-file project-file)
+                           (mapcar (lambda (handler)
+                                     (plist-get handler :source))
+                                   handlers))))
+          (mevedel-plugins-enable-hooks "demo")
+          (let* ((handlers (mevedel-hooks--matching-handlers
+                            'PreToolUse
+                            '(:tool-name "Bash")
+                            (mevedel-hooks-effective-rules
+                             session workspace)))
+                 (plugin-handler (cadr handlers)))
+            (should (equal '(user-file plugin project-file)
+                           (mapcar (lambda (handler)
+                                     (plist-get handler :source))
+                                   handlers)))
+            (should (equal "demo"
+                           (plist-get plugin-handler :plugin-name)))
+            (should (equal plugin-root
+                           (plist-get plugin-handler :plugin-root)))
+            (should (equal (file-name-concat user-dir "plugin-data" "demo")
+                           (plist-get plugin-handler :plugin-data)))
+            (should (= 7 (plist-get plugin-handler :timeout)))
+            (should (equal "plugin status"
+                           (plist-get plugin-handler :status-message))))
+          (mevedel-plugins-disable-hooks "demo")
+          (let ((handlers (mevedel-hooks--matching-handlers
+                           'PreToolUse
+                           '(:tool-name "Bash")
+                           (mevedel-hooks-effective-rules
+                            session workspace))))
+            (should (equal '(user-file project-file)
+                           (mapcar (lambda (handler)
+                                     (plist-get handler :source))
+                                   handlers)))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-hooks-effective-rules/plugin-hook-manifest-shapes
+  (:doc "loads default and explicit string plugin hook files")
+  (let* ((root (make-temp-file "mevedel-hooks-plugin-shapes-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-plugin-shapes-user" t)))
+         (workspace (mevedel-hooks-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-user-dir user-dir))
+    (unwind-protect
+        (progn
+          (let ((default-root (file-name-as-directory
+                               (file-name-concat user-dir "plugins" "default"))))
+            (make-directory (file-name-concat default-root "hooks") t)
+            (with-temp-file (file-name-concat default-root "hooks" "hooks.json")
+              (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                      "\"hooks\":[{\"type\":\"command\","
+                      "\"command\":\"echo default\"}]}]}}"))
+            (mevedel-hooks-test--write-plugin-manifest
+             default-root "{\"name\":\"default\"}")
+            (mevedel-plugins-enable-hooks "default"))
+          (let ((path-root (file-name-as-directory
+                            (file-name-concat user-dir "plugins" "path"))))
+            (make-directory (file-name-concat path-root "hooks") t)
+            (with-temp-file (file-name-concat path-root "hooks" "a.json")
+              (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                      "\"hooks\":[{\"type\":\"command\","
+                      "\"command\":\"echo path-a\"}]}]}}"))
+            (mevedel-hooks-test--write-plugin-manifest
+             path-root
+             "{\"name\":\"path\",\"hooks\":\"./hooks/a.json\"}")
+            (mevedel-plugins-enable-hooks "path"))
+          (let* ((handlers (mevedel-hooks--matching-handlers
+                            'PreToolUse
+                            '(:tool-name "Bash")
+                            (mevedel-hooks-effective-rules
+                             session workspace)))
+                 (commands (sort (mapcar (lambda (handler)
+                                            (plist-get handler :command))
+                                          handlers)
+                                 #'string<)))
+            (should (equal '("echo default"
+                             "echo path-a")
+                           commands))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-hooks-effective-rules/superpowers-native-hooks
+  (:doc "uses native Superpowers bootstrap and skips manifest hooks")
+  (let* ((root (make-temp-file "mevedel-hooks-superpowers-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-superpowers-user" t)))
+         (plugin-root (file-name-as-directory
+                       (file-name-concat user-dir "plugins" "repo")))
+         (workspace (mevedel-hooks-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-hooks-require-project-trust t))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat plugin-root "hooks") t)
+          (with-temp-file (file-name-concat plugin-root "hooks" "hooks.json")
+            (insert "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"startup\","
+                    "\"hooks\":[{\"type\":\"command\","
+                    "\"command\":\"\\\"${PLUGIN_ROOT}/hooks/run-hook.cmd\\\" session-start-codex\"},"
+                    "{\"type\":\"command\","
+                    "\"command\":\"superpowers-extra\"}]}]}}"))
+          (mevedel-hooks-test--write-plugin-manifest
+           plugin-root
+           "{\"name\":\"superpowers\",\"hooks\":\"hooks/hooks.json\"}")
+          (let ((rules (mevedel-hooks-effective-rules session workspace)))
+            (should-not
+             (mevedel-hooks--matching-handlers
+              'SessionStart '(:source "startup") rules)))
+          (mevedel-plugins-enable-hooks "superpowers")
+          (let* ((rules (mevedel-hooks-effective-rules session workspace))
+                 (handlers (mevedel-hooks--matching-handlers
+                            'SessionStart '(:source "startup") rules)))
+            (dolist (source '("startup" "resume" "clear"))
+              (should (= 1
+                         (length (mevedel-hooks--matching-handlers
+                                  'SessionStart
+                                  (list :source source)
+                                  rules)))))
+            (should (= 1 (length handlers)))
+            (should (eq 'elisp (plist-get (car handlers) :type)))
+            (should (eq 'mevedel-plugins-superpowers-bootstrap-hook
+                        (plist-get (car handlers) :function)))
+            (should (equal "superpowers"
+                           (plist-get (car handlers) :plugin-name)))
+            (should-not (cl-some
+                         (lambda (handler)
+                           (when-let* ((command (plist-get handler :command)))
+                             (string-match-p "\\bsession-start-codex\\b"
+                                             command)))
+                         handlers))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-hooks-run-event/superpowers-bootstrap-context
+  (:doc "returns Superpowers bootstrap text from native SessionStart hook")
+  (let* ((root (make-temp-file "mevedel-hooks-superpowers-run-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-superpowers-run-user" t)))
+         (plugin-root (file-name-as-directory
+                       (file-name-concat user-dir "plugins" "repo")))
+         (skill-file (file-name-concat plugin-root "skills"
+                                       "using-superpowers" "SKILL.md"))
+         (workspace (mevedel-hooks-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-hooks-require-project-trust t)
+         (mevedel-hooks-slow-threshold nil))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory skill-file) t)
+          (with-temp-file skill-file
+            (insert "Superpowers runtime skill body.\n"))
+          (mevedel-hooks-test--write-plugin-manifest
+           plugin-root
+           "{\"name\":\"superpowers\",\"hooks\":\"hooks/hooks.json\"}")
+          (mevedel-plugins-enable-hooks "superpowers")
+          (let* ((decision
+                  (mevedel-hooks-test--await
+                   (lambda (cb)
+                     (mevedel-hooks-run-event
+                      'SessionStart '(:source "startup") cb session workspace))))
+                 (context (car (plist-get decision :additional-context))))
+            (should (string-match-p "You have superpowers in mevedel"
+                                    context))
+            (should (string-match-p "Superpowers runtime skill body"
+                                    context))
+            (should (string-match-p "Mevedel Tool Mapping" context))))
       (delete-directory root t)
       (delete-directory user-dir t))))
 
@@ -762,6 +989,81 @@
 				       :stderr-preview))
 			   (directory-file-name root))))
 			     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/plugin-command-env
+  (:doc "runs plugin command hooks with compatibility env and creates data dir")
+  (let* ((root (make-temp-file "mevedel-hooks-plugin-env-ws" t))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-hooks-plugin-env-user" t)))
+         (plugin-root (file-name-as-directory
+                       (file-name-concat user-dir "plugins" "repo")))
+         (data-dir (file-name-concat user-dir "plugin-data" "demo"))
+         (script (file-name-concat plugin-root "env.sh"))
+         (mevedel-user-dir user-dir)
+         (process-environment (copy-sequence process-environment))
+         (session (mevedel-hooks-test--session root)))
+    (unwind-protect
+        (progn
+          (mevedel-hooks-test--clear-plugin-env)
+          (make-directory (file-name-concat plugin-root "hooks") t)
+          (with-temp-file script
+            (insert "#!/bin/sh\n"
+                    "printf '{\"systemMessage\":\"%s|%s|%s|%s|%s|%s\"}' "
+                    "\"$PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" "
+                    "\"$PLUGIN_DATA\" \"$CLAUDE_PLUGIN_DATA\" "
+                    "\"$MEVEDEL_PLUGIN_ROOT\" \"$MEVEDEL_PLUGIN_DATA\"\n"))
+          (set-file-modes script #o755)
+          (with-temp-file (file-name-concat plugin-root "hooks" "hooks.json")
+            (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\""
+                    script
+                    "\"}]}]}}"))
+          (mevedel-hooks-test--write-plugin-manifest
+           plugin-root
+           "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
+          (mevedel-plugins-enable-hooks "demo")
+          (let ((decision
+                 (mevedel-hooks-test--await
+                  (lambda (cb)
+                    (mevedel-hooks-run-event
+                     'PreToolUse
+                     '(:tool-name "Bash" :tool-input (:command "echo hi"))
+                     cb session)))))
+            (should
+             (equal (mapconcat #'identity
+                               (list plugin-root
+                                     plugin-root
+                                     data-dir
+                                     data-dir
+                                     plugin-root
+                                     data-dir)
+                               "|")
+                    (plist-get decision :system-message)))
+            (should (file-directory-p data-dir)))
+          (mevedel-plugins-disable "demo")
+          (let* ((clean-command
+                  (concat
+                   "if [ -n \"$PLUGIN_ROOT$CLAUDE_PLUGIN_ROOT"
+                   "$PLUGIN_DATA$CLAUDE_PLUGIN_DATA"
+                   "$MEVEDEL_PLUGIN_ROOT$MEVEDEL_PLUGIN_DATA\" ]; "
+                   "then printf '{\"systemMessage\":\"leaked\"}'; "
+                   "else printf '{\"systemMessage\":\"clean\"}'; fi"))
+                 (mevedel-hook-rules
+                  `((PreToolUse
+                     ((:matcher "Bash"
+                       :hooks ((:type command
+                                :command ,clean-command))))))))
+            (let ((decision
+                   (mevedel-hooks-test--await
+                    (lambda (cb)
+                      (mevedel-hooks-run-event
+                       'PreToolUse
+                       '(:tool-name "Bash" :tool-input (:command "echo hi"))
+                       cb session)))))
+              (should (equal "clean"
+                             (plist-get decision :system-message))))))
+      (delete-directory root t)
+      (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command-continuation-buffer
 		 (:doc "resumes later Elisp handlers in the original dispatch buffer")

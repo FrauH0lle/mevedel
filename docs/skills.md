@@ -29,8 +29,22 @@ Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
 non-nil. The default search order is `~/.mevedel/skills/`,
 `~/.claude/skills/`, `.mevedel/skills/`, then `.claude/skills/`.
-Earlier directories win when two skills share a name, and user/project
-skills override bundled skills by name.
+Unique names stay unqualified. When non-plugin skills from different
+sources share a name, all colliding entries are exposed with deterministic
+source prefixes such as `project:review`, `user:review`, or
+`bundled:review`. Same-source duplicates keep the first entry.
+
+Plugin skills are discovered from enabled `.codex-plugin/plugin.json`
+manifests. A manifest `skills` path is resolved relative to the plugin
+root and scanned with source `plugin`. User-facing plugin skill names
+are prefixed with the plugin name from the manifest, so
+`skills/brainstorming/SKILL.md` in the `superpowers` plugin appears as
+`superpowers:brainstorming` in slash completion, the Skill tool listing,
+and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
+unchanged. Installed plugins are scanned under `~/.mevedel/plugins/`,
+including GitHub installs below `github.com/OWNER/REPO`, and
+`mevedel-plugin-extra-roots` can point at additional local plugin roots
+or directories containing plugin roots.
 
 Bundled skills currently include:
 
@@ -48,8 +62,9 @@ topic files, and applicable workspace configuration, then proposes
 cleanup or promotion changes. It should not edit memory unless the user
 explicitly approves the report.
 
-Skill names come from frontmatter `name` when valid, otherwise the
-containing directory name. Names must match `[a-z0-9-]+`.
+Raw skill names come from frontmatter `name` when valid, otherwise the
+containing directory name. Raw names must match `[a-z0-9-]+`; visible
+names may include a generated `source:` or plugin prefix.
 
 Hot reload marks consuming chat buffers dirty when watched skill
 directories change. Completion and reminders rescan on demand when a
@@ -59,13 +74,46 @@ buffer is dirty.
 
 Local slash commands are handled before skill lookup. Built-ins include
 `/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`, `/mode`,
-`/auto`, `/clear`, and `/help`. `/init` sends the repository bootstrap prompt
-that helps create or improve `AGENTS.md`, `AGENTS.local.md`, project
-skills, and hooks. `/auto` toggles the current session between `default`
-and `trust-all`, adding an `auto-mode` reminder while active and a
-one-shot `auto-mode-exit` reminder after it is turned off. `/mode auto`
-is the same as entering `trust-all`; `/mode edit` and `/mode edits` are
-aliases for `accept-edits`.
+`/skills`, `/auto`, `/clear`, `/plugin`, and `/help`. `/init` sends the
+repository bootstrap prompt that helps create or improve `AGENTS.md`,
+`AGENTS.local.md`, project skills, and hooks. `/auto` toggles the current
+session between `default` and `trust-all`, adding an `auto-mode` reminder
+while active and a one-shot `auto-mode-exit` reminder after it is turned
+off. `/mode auto` is the same as entering `trust-all`; `/mode edit`
+and `/mode edits` are aliases for `accept-edits`.
+
+Plugin management:
+
+- `/plugin install OWNER/REPO` clones a GitHub plugin into
+  `~/.mevedel/plugins/github.com/OWNER/REPO`; existing installs are left
+  untouched and should be updated with `/plugin update NAME`.
+- `/plugin update NAME` runs `git pull --ff-only` in the installed plugin
+  root found by manifest name.
+- `/plugin list` shows installed plugins, skill enablement, and hook
+  enablement.
+- `/plugin enable NAME` and `/plugin disable NAME` toggle plugin skill
+  discovery. Disabling a plugin also disables its hooks.
+- `/plugin hooks NAME on` / `/plugin hooks NAME off` toggle executable
+  plugin hooks. `/plugin hooks enable NAME` and
+  `/plugin hooks disable NAME` are accepted aliases.
+- `/plugin reload` refreshes plugin-visible skills in the current chat
+  session when possible.
+
+Codex plugin manifest fields `apps` and `mcpServers` are not loaded
+today; mevedel does not start plugin apps or bundled MCP servers yet.
+
+`/skills` manages visible skills:
+
+- `/skills` or `/skills list` lists session skills and whether each is
+  enabled.
+- `/skills help NAME` shows description, source, and file metadata.
+- `/skills enable NAME` removes NAME from the persisted disabled set.
+- `/skills disable NAME` persists NAME as disabled.
+
+Disabled skills stay on the session for inspection, but they are omitted
+from slash completion, rejected by `Skill(name=...)`, and omitted from
+model-facing skill discovery. The disabled set is stored in
+`skills-state.el` under `mevedel-user-dir`.
 
 Slash completion offers local command names and user-invocable skill
 names at the start of the composer, with annotations for every included
@@ -75,6 +123,8 @@ typed when the buffer only contains `/skill`. Commands can also expose
 first-argument candidates; `/mode` completes `default`, `accept-edits`,
 `plan`, `trust-all`, and the UI aliases `edit`, `edits`, and `auto`,
 while `/model` completes model names from the current gptel backend.
+Skill names with prefixes, such as `superpowers:brainstorming`, are valid
+slash candidates.
 `/review` and `/verify` complete shared explicit target forms such as
 `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`. With no arguments
 they open the target picker; unknown free-form arguments remain custom
@@ -113,6 +163,10 @@ model-side Skill tool, and internal invocation.
 
 Slash invocation may block chat input while async preparation or a
 foreground fork completes. Model-side Skill blocks the parent tool call.
+The companion `ListSkills` tool returns active, model-invocable, enabled
+skills with descriptions. It accepts an optional `query` string for
+case-insensitive search, so reminders can stay short without hiding the
+full skill roster from the model.
 
 Inline slash invocations keep the expanded body in the data buffer, then
 append an ignored `<!-- mevedel-render-data -->` side-channel block with

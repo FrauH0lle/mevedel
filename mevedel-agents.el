@@ -263,8 +263,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   ;; parked in TOOL state -- live messaging is pointless there, so SendMessage
   ;; is not injected.
   (background-p nil :type boolean)
-  ;; spec Request-Scoped Skill Context: rules accumulate across nested skills
-  ;; (additive); model/effort are last-writer-wins. Forks are seeded from
+  ;; Rules accumulate across nested skills (additive); model/effort are
+  ;; last-writer-wins. Forks are seeded from
   ;; parent's currently active rules + the fork skill's own rules at spawn time;
   ;; later additions on either side do not propagate.
   (skill-permission-rules nil :type list)

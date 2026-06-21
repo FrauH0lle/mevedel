@@ -1055,8 +1055,7 @@ FAIL is unused -- handler-owned overlays (RequestAccess)
 embed their failure modes in the result string (`Error: ...').
 Adding a `fail' channel to the handler step would force every async
 tool handler to take one; keeping them string-shaped preserves the
-existing contract.  See spec 20 \"Cancel channel for handler-step-owned
-overlays\".
+existing contract.
 
 Sets `:result' and `:render-data' in CONTEXT for downstream steps;
 NEXT is called on success."

@@ -620,9 +620,9 @@ holds the lock and rewriting would corrupt its audit log."
 Used by sub-agent allocation: a sub-agent can spawn during
 the parent's first turn (before any DONE handler has run), so we
 need the session directory and `agents/' subdirectory but must not
-write `session.meta.el' yet -- spec 19 requires on-disk session
-state to reflect a completed turn boundary.  The parent's first
-DONE autosave will write the sidecar later, picking up any
+write `session.meta.el' yet.  On-disk session state reflects a
+completed turn boundary.  The parent's first DONE autosave will
+write the sidecar later, picking up any
 sub-agent transcript entries that accumulated in the in-memory
 slot.
 
@@ -705,10 +705,10 @@ Only writes when the sidecar file already exists on disk -- i.e.
 the parent's first DONE has fired and a full materialization has
 written `session.meta.el'.  Before that, the session is in shallow
 materialization mode (directory + lock + agents/ but no sidecar)
-and writing now would violate Spec 19's completed-turn boundary
-contract.  In that case the write is deferred to the parent's
-DONE autosave; the in-memory `agent-transcripts' slot still
-reflects current state and will be picked up by that autosave."
+and writing now would violate the completed-turn boundary contract.
+In that case the write is deferred to the parent's DONE autosave;
+the in-memory `agent-transcripts' slot still reflects current state
+and will be picked up by that autosave."
   (when (and session (mevedel-session-save-path session))
     (let ((sidecar (mevedel-session-persistence--sidecar-path
                     (mevedel-session-save-path session))))

@@ -589,7 +589,7 @@ Optional (both forms):
                                  `mevedel-permission-denied' with a reason
                                  string.  Kept for tools whose check is pure
                                  data (introspection, Eval, Bash pattern
-                                 matching after Spec 20 step 3).
+                                 matching after sync validation).
   :check-permission-async FN     Async permission check; signature
                                  (tool-struct input cont) where cont receives
                                  `allow', `deny', (deny . REASON),

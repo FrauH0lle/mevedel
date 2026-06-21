@@ -137,12 +137,15 @@
 		 (:doc "runs normal and declarative session lifecycle hooks")
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-chat-hooks-" t)))
+			(user-dir (file-name-as-directory
+				   (make-temp-file "mevedel-chat-hooks-user-" t)))
 			(workspace (mevedel-workspace--create
 				    :type 'project
 				    :id root
 				    :root root
 				    :name "hooks"))
 			(session (mevedel-session-create "main" workspace root))
+			(mevedel-user-dir user-dir)
 			(normal-events nil)
 			(mevedel-chat-test--hook-events nil)
 			(mevedel-session-start-hook
@@ -174,7 +177,8 @@
 			   '(SessionStart SessionEnd)))
 			 (should (equal (mevedel-session-hook-context-pending session)
 					'("startup context"))))
-		     (delete-directory root t))))
+		     (delete-directory root t)
+		     (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-session-start-hooks-wait
 		 (:doc "waits for asynchronous SessionStart context before returning")

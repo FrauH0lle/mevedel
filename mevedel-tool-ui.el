@@ -541,7 +541,7 @@ Settles the overlay's callback with `deny'.  Does NOT call
 `mevedel-abort' -- deny is a scoped per-tool outcome (the LLM sees
 one failed tool call and may try alternatives), not a request-wide
 teardown.  Earlier behavior tore down the whole request and is
-removed in spec 20."
+no longer used."
   (interactive)
   (when-let* ((ov (mevedel--prompt--overlay-at-point 'mevedel-user-request)))
     (mevedel--prompt--settle ov 'deny)))

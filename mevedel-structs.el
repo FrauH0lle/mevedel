@@ -192,7 +192,7 @@ workspace."
   hook-rules         ; transient session-scoped declarative hook rules
   hook-log           ; transient per-session hook execution log
   hook-context-pending ; transient hook context injected into the next prompt
-  ;; Persistence (spec 19) -- nil until lazy materialization
+  ;; Persistence -- nil until lazy materialization.
   save-path         ; absolute path to the session directory under .mevedel/sessions/
   session-id        ; string: stable session identifier (matches save-path basename)
   created-at        ; ISO timestamp string of session creation
@@ -209,8 +209,7 @@ workspace."
   ;; :parent-turn.  Authoritative in-memory copy; the sidecar
   ;; `:agent-transcripts' value mirrors this slot.
   agent-transcripts
-  ;; spec Request-Scoped Skill Context: list of
-  ;; `mevedel-skill-invocation-record' structs recording every skill
+  ;; List of `mevedel-skill-invocation-record' structs recording every skill
   ;; invoked during this session.  Used by compaction/replay so the
   ;; expanded body survives even when SKILL.md is rewritten on disk.
   ;; Session-lifetime; see also dynamic let-bound depth counter
@@ -385,9 +384,9 @@ Created at request start, cleared in the termination handler."
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
   origin            ; "main" or canonical agent-id that owns this request
-  ;; spec Request-Scoped Skill Context: rules accumulate across
-  ;; nested skills (additive); model selector/effort are
-  ;; last-writer-wins.  All three die with the request struct.
+  ;; Rules accumulate across nested skills (additive); model
+  ;; selector/effort are last-writer-wins.  All three die with the
+  ;; request struct.
   skill-permission-rules
   skill-model-override
   skill-effort-override

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Regression coverage for the extracted sub-agent runtime (spec 18).
+;; Regression coverage for the extracted sub-agent runtime.
 ;; The callback contract is the high-value surface: upstream
 ;; `gptel-agent--task' fired its main callback on every streamed chunk
 ;; and dropped gptel's `t' completion signal, so the parent's

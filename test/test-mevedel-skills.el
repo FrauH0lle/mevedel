@@ -57,6 +57,15 @@
 	      (insert body)))
     skill-file))
 
+(defun mevedel-skills-test--write-plugin-manifest (user-dir repo json)
+  "Create a test plugin manifest JSON for REPO under USER-DIR.
+Return the plugin root directory."
+  (let ((root (file-name-concat user-dir "plugins" repo)))
+    (make-directory (file-name-concat root ".codex-plugin") t)
+    (with-temp-file (file-name-concat root ".codex-plugin" "plugin.json")
+      (insert json))
+    root))
+
 (defun mevedel-skills-test--hook-fn (_event)
   "Test hook used by skill hook normalization tests."
   '(:additional-context "skill hook ran"))
@@ -152,33 +161,47 @@ argument-hint: \"[path]\"
             (should-not (mevedel-skill-body skill))))
       (delete-directory dir t)))
 
-  :doc "earlier directory wins on name conflict"
+  :doc "project/user name conflicts are source-qualified"
   (let* ((mevedel-skills-include-bundled nil)
-         (root-a (make-temp-file "mevedel-skills-a-" t))
-         (root-b (make-temp-file "mevedel-skills-b-" t)))
+         (root (make-temp-file "mevedel-skills-project-" t))
+         (project-dir (file-name-concat root ".mevedel" "skills"))
+         (user-dir (make-temp-file "mevedel-skills-user-" t)))
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
-           root-a "shared"
+           user-dir "shared"
            "name: shared
-description: From root A
-" "A body")
+description: From user
+" "User body")
           (mevedel-skills-test--write-skill
-           root-b "shared"
+           project-dir "shared"
            "name: shared
-description: From root B
-" "B body")
-          (let ((skills (mevedel-skills-scan nil (list root-a root-b))))
-            (should (= 1 (length skills)))
-            (should (equal "From root A"
-                           (mevedel-skill-description (car skills))))))
-      (delete-directory root-a t)
-      (delete-directory root-b t)))
+description: From project
+" "Project body")
+          (let* ((skills (mevedel-skills-scan
+                          root (list user-dir ".mevedel/skills")))
+                 (names (mapcar #'mevedel-skill-name skills))
+                 (project (cl-find "project:shared" skills
+                                   :key #'mevedel-skill-name
+                                   :test #'equal))
+                 (user (cl-find "user:shared" skills
+                                :key #'mevedel-skill-name
+                                :test #'equal)))
+            (should (= 2 (length skills)))
+            (should (member "project:shared" names))
+            (should (member "user:shared" names))
+            (should-not (member "shared" names))
+            (should (equal "From project"
+                           (mevedel-skill-description project)))
+            (should (equal "From user"
+                           (mevedel-skill-description user)))))
+      (delete-directory root t)
+      (delete-directory user-dir t)))
 
   :doc "skills missing a description fall back to the first body paragraph"
-  ;; Spec 22 Failure Modes: \\='Missing description' \xe2\x86\x92 use first non-empty
-  ;; markdown paragraph/header.  The skill loads with the body-derived
-  ;; description rather than being skipped.
+  ;; A missing description uses the first non-empty markdown
+  ;; paragraph/header.  The skill loads with the body-derived description
+  ;; rather than being skipped.
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
@@ -271,8 +294,252 @@ paths:
                  (lambda (s) (eq 'bundled (mevedel-skill-source s)))
                  skills)))
 
+  :doc "enabled plugin skills are discovered with plugin-prefixed names"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skill-dirs nil)
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-plugin-skills-" t)))
+         (mevedel-user-dir user-dir)
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
+         (plugin-skills (file-name-concat plugin-root "skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           plugin-skills "from-plugin"
+           "name: from-plugin
+description: Plugin skill
+" "Body")
+          (let* ((skills (mevedel-skills-scan nil nil))
+                 (skill (cl-find "demo:from-plugin" skills
+                                 :key #'mevedel-skill-name :test #'equal)))
+            (should skill)
+            (should (eq 'plugin (mevedel-skill-source skill)))
+            (should (equal "Plugin skill"
+                           (mevedel-skill-description skill)))
+            (should-not (cl-find "from-plugin" skills
+                                 :key #'mevedel-skill-name :test #'equal))))
+      (delete-directory user-dir t)))
+
+  :doc "disabled plugin skills are skipped"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skill-dirs nil)
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-plugin-disabled-" t)))
+         (mevedel-user-dir user-dir)
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
+         (plugin-skills (file-name-concat plugin-root "skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           plugin-skills "disabled-skill"
+           "name: disabled-skill
+description: Disabled plugin skill
+" "Body")
+          (with-temp-file (file-name-concat user-dir "plugins.el")
+            (prin1 '(("demo" :enabled nil :hooks-enabled nil))
+                   (current-buffer)))
+          (should-not
+           (cl-find "demo:disabled-skill" (mevedel-skills-scan nil nil)
+                    :key #'mevedel-skill-name :test #'equal)))
+      (delete-directory user-dir t)))
+
+  :doc "explicit scan dirs do not include installed plugin skills"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-plugin-explicit-dirs-" t))
+         (configured-skills (file-name-concat root "skills"))
+         (user-dir (file-name-as-directory
+                    (file-name-concat root "user")))
+         (mevedel-user-dir user-dir)
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"plugin-skills\"}"))
+         (plugin-skills (file-name-concat plugin-root "plugin-skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           configured-skills "configured"
+           "name: configured
+description: Configured skill
+" "Configured body")
+          (mevedel-skills-test--write-skill
+           plugin-skills "from-plugin"
+           "name: from-plugin
+description: Plugin skill
+" "Plugin body")
+          (let ((skills (mevedel-skills-scan nil (list configured-skills))))
+            (should (cl-find "configured" skills
+                             :key #'mevedel-skill-name :test #'equal))
+            (should-not (cl-find "from-plugin" skills
+                                 :key #'mevedel-skill-name :test #'equal))))
+      (delete-directory root t)))
+
+  :doc "explicit source-tagged plugin dirs are scanned as plugin skills"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-plugin-source-tagged-" t))
+         (plugin-skills (file-name-concat root "plugin-skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           plugin-skills "from-plugin"
+           "name: from-plugin
+description: Plugin skill
+" "Plugin body")
+          (let* ((skills (mevedel-skills-scan
+                          nil
+                          (list (cons plugin-skills '(plugin . "demo")))))
+                 (skill (cl-find "demo:from-plugin" skills
+                                 :key #'mevedel-skill-name :test #'equal)))
+            (should skill)
+            (should (eq 'plugin (mevedel-skill-source skill)))))
+      (delete-directory root t)))
+
+  :doc "plugin skills are namespaced so configured skills coexist"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-plugin-precedence-" t))
+         (user-dir (file-name-as-directory
+                    (file-name-concat root "user")))
+         (configured-skills (file-name-concat root "skills"))
+         (mevedel-user-dir user-dir)
+         (mevedel-skill-dirs (list configured-skills))
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"plugin-skills\"}"))
+         (plugin-skills (file-name-concat plugin-root "plugin-skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           configured-skills "shared"
+           "name: shared
+description: Configured skill
+" "Configured body")
+          (mevedel-skills-test--write-skill
+           plugin-skills "shared"
+           "name: shared
+description: Plugin skill
+" "Plugin body")
+          (let* ((skills (mevedel-skills-scan nil nil))
+                 (configured (cl-find "shared" skills
+                                      :key #'mevedel-skill-name
+                                      :test #'equal))
+                 (plugin (cl-find "demo:shared" skills
+                                  :key #'mevedel-skill-name
+                                  :test #'equal)))
+            (should configured)
+            (should plugin)
+            (should (eq 'user (mevedel-skill-source configured)))
+            (should (eq 'plugin (mevedel-skill-source plugin)))
+            (should (equal "Configured skill"
+                           (mevedel-skill-description configured)))
+            (should (equal "Plugin skill"
+                           (mevedel-skill-description plugin)))))
+      (delete-directory root t)))
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-plugin-project-precedence-" t))
+         (workspace-root (file-name-concat root "workspace"))
+         (project-skills (file-name-concat workspace-root ".mevedel/skills"))
+         (user-dir (file-name-as-directory
+                    (file-name-concat root "user")))
+         (mevedel-user-dir user-dir)
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"plugin-skills\"}"))
+         (plugin-skills (file-name-concat plugin-root "plugin-skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           project-skills "shared"
+           "name: shared
+description: Project skill
+" "Project body")
+          (mevedel-skills-test--write-skill
+           plugin-skills "shared"
+           "name: shared
+description: Plugin skill
+" "Plugin body")
+          (let* ((skills (mevedel-skills-scan workspace-root nil))
+                 (project (cl-find "shared" skills
+                                   :key #'mevedel-skill-name
+                                   :test #'equal))
+                 (plugin (cl-find "demo:shared" skills
+                                  :key #'mevedel-skill-name
+                                  :test #'equal)))
+            (should project)
+            (should plugin)
+            (should (eq 'project (mevedel-skill-source project)))
+            (should (eq 'plugin (mevedel-skill-source plugin)))
+            (should (equal "Project skill"
+                           (mevedel-skill-description project)))
+            (should (equal "Plugin skill"
+                           (mevedel-skill-description plugin)))))
+      (delete-directory root t)))
+  (let* ((root (make-temp-file "mevedel-plugin-bundled-precedence-" t))
+         (user-dir (file-name-as-directory
+                    (file-name-concat root "user")))
+         (mevedel-user-dir user-dir)
+         (mevedel-skill-dirs nil)
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
+         (plugin-skills (file-name-concat plugin-root "skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           plugin-skills "coordinator"
+           "name: coordinator
+description: Plugin coordinator
+" "Body")
+          (let* ((skills (mevedel-skills-scan nil nil))
+                 (coordinator (cl-find "coordinator" skills
+                                       :key #'mevedel-skill-name
+                                       :test #'equal))
+                 (plugin (cl-find "demo:coordinator" skills
+                                  :key #'mevedel-skill-name
+                                  :test #'equal)))
+            (should coordinator)
+            (should plugin)
+            (should (eq 'bundled (mevedel-skill-source coordinator)))
+            (should (eq 'plugin (mevedel-skill-source plugin)))))
+      (delete-directory root t)))
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-plugin-same-skill-" t))
+         (user-dir (file-name-as-directory
+                    (file-name-concat root "user")))
+         (mevedel-user-dir user-dir)
+         (mevedel-skill-dirs nil)
+         (plugin-a-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-a" "{\"name\":\"alpha\",\"skills\":\"skills\"}"))
+         (plugin-b-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-b" "{\"name\":\"beta\",\"skills\":\"skills\"}")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           (file-name-concat plugin-a-root "skills")
+           "shared"
+           "name: shared
+description: Alpha shared
+" "Body")
+          (mevedel-skills-test--write-skill
+           (file-name-concat plugin-b-root "skills")
+           "shared"
+           "name: shared
+description: Beta shared
+" "Body")
+          (let ((names (mapcar #'mevedel-skill-name
+                               (mevedel-skills-scan nil nil))))
+            (should (member "alpha:shared" names))
+            (should (member "beta:shared" names))
+            (should-not (member "shared" names))))
+      (delete-directory root t)))
+
   :doc "frontmatter `name' wins; missing `name' falls back to directory"
-  ;; Spec 22 Data Model: name resolution prefers frontmatter over directory.
+  ;; Name resolution prefers frontmatter over directory.
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
@@ -315,7 +582,7 @@ description: present
       (delete-directory dir t)))
 
   :doc "arguments frontmatter parsed with numeric-only filtered"
-  ;; Spec 22 Argument Substitution: numeric-only names cannot shadow $0/$1.
+  ;; Numeric-only names cannot shadow $0/$1.
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
@@ -436,7 +703,7 @@ when-to-use: dash loses
       (delete-directory dir t)))
 
   :doc "invalid YAML in frontmatter logs a warning and skips the skill"
-  ;; Spec 22 Failure Modes: \\='Invalid YAML' \xe2\x86\x92 skip skill, log warning.
+  ;; Invalid YAML skips the skill and logs a warning.
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t))
          (warnings nil))
@@ -470,7 +737,6 @@ description: present
       (delete-directory dir t)))
 
   :doc "allowed-tools strings are parsed into allowed-tool-rules at scan"
-  ;; Spec 22 §"Implementation Plan" item 3 final bullet:
   ;; --from-plist runs each `allowed-tools' string through the parser.
   ;; Malformed entries warn-and-skip; valid entries become rules.
   (let* ((mevedel-skills-include-bundled nil)
@@ -519,9 +785,8 @@ allowed-tools:
             (should (equal '(("Read" :action allow)
                              ("Bash" :pattern "git status" :action allow))
                            (mevedel-skill-allowed-tool-rules ok)))
-            ;; Detail-spec §"Validation at skill load": a malformed
-            ;; allowed-tools entry skips the WHOLE skill rather than
-            ;; dropping individual entries.
+            ;; A malformed allowed-tools entry skips the whole skill
+            ;; rather than dropping individual entries.
             (should (null bad))
             (should (cl-some (lambda (m)
                                (and (string-match-p "with-bad-entry" m)
@@ -613,6 +878,36 @@ display-name: Friendly Label
             (should (equal "Friendly Label"
                            (mevedel-skill-display-name with-d)))))
       (delete-directory dir t))))
+
+
+(mevedel-deftest mevedel-skills--qualify-conflicting-names ()
+  ,test
+  (test)
+  :doc "unique and already-qualified plugin names are preserved"
+  (let* ((plugin (mevedel-skill--create
+                  :name "superpowers:brainstorming"
+                  :source 'plugin))
+         (user (mevedel-skill--create
+                :name "brainstorming"
+                :source 'user))
+         (solo (mevedel-skill--create
+                :name "solo"
+                :source 'project))
+         (skills (mevedel-skills--qualify-conflicting-names
+                  (list plugin user solo))))
+    (should (equal '("superpowers:brainstorming" "brainstorming" "solo")
+                   (mapcar #'mevedel-skill-name skills))))
+
+  :doc "same-source duplicates keep the first entry"
+  (let* ((first (mevedel-skill--create
+                 :name "shared" :description "first" :source 'user))
+         (second (mevedel-skill--create
+                  :name "shared" :description "second" :source 'user))
+         (skills (mevedel-skills--qualify-conflicting-names
+                  (list first second))))
+    (should (= 1 (length skills)))
+    (should (equal "shared" (mevedel-skill-name (car skills))))
+    (should (equal "first" (mevedel-skill-description (car skills))))))
 
 
 ;;
@@ -750,6 +1045,8 @@ description: Review changed code
   :doc "skills scanned from the workspace root end up on the session"
   (let* ((mevedel-skills-include-bundled nil)
          (root (make-temp-file "mevedel-skills-ws-" t))
+         (mevedel-user-dir (file-name-as-directory
+                            (file-name-concat root "user")))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
          (skill-root (file-name-concat root ".mevedel/skills/")))
@@ -777,6 +1074,8 @@ description: Interview relentlessly about a plan
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skills-install-reg-" t))
+         (mevedel-user-dir (file-name-as-directory
+                            (file-name-concat root "user")))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
@@ -794,6 +1093,38 @@ description: Interview relentlessly about a plan
           (should (memq buf
                         (gethash (file-name-as-directory
                                   (expand-file-name root))
+                                 mevedel-skills--dir-buffers))))
+      (mevedel-skills-test--reset-watchers)
+      (kill-buffer buf)
+      (delete-directory root t)))
+
+  :doc "registers enabled plugin skill roots for hot reload"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-plugin-watch-root-" t))
+         (workspace-root (file-name-concat root "workspace"))
+         (user-dir (file-name-as-directory
+                    (file-name-concat root "user")))
+         (mevedel-user-dir user-dir)
+         (mevedel-skill-dirs nil)
+         (plugin-root
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
+         (plugin-skills (file-name-as-directory
+                         (file-name-concat plugin-root "skills")))
+         (ws (mevedel-skills-test--make-workspace workspace-root))
+         (session (mevedel-session-create "main" ws))
+         (buf (generate-new-buffer " *mevedel-test-plugin-watch-root*")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--reset-watchers)
+          (make-directory plugin-skills t)
+          (with-current-buffer buf
+            (mevedel-skills-install session buf))
+          (should (null (mevedel-session-skills session)))
+          (should (memq buf
+                        (gethash (file-name-as-directory
+                                  (expand-file-name plugin-skills))
                                  mevedel-skills--dir-buffers))))
       (mevedel-skills-test--reset-watchers)
       (kill-buffer buf)
@@ -847,7 +1178,7 @@ paths:
 
 
 ;;
-;;; Phase 3: Request-scoped skill context (spec 22)
+;;; Request-scoped skill context
 
 (mevedel-deftest mevedel-skills--drain-pending-context ()
   ,test
@@ -1065,9 +1396,8 @@ paths:
                    (mevedel-skills--substitute-vars
                     "args=$ARGUMENTS" "foo bar baz" session skill))))
 
-  :doc "$0/$1/etc are zero-based per ccs / spec 22"
-  ;; Spec 22 Argument Substitution: zero-based, no compatibility for
-  ;; one-based.  Under this design $1 means the SECOND token.
+  :doc "$0/$1/etc are zero-based"
+  ;; No one-based compatibility: $1 means the second token.
   (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "first=foo second=bar"
                    (mevedel-skills--substitute-vars
@@ -1225,7 +1555,7 @@ ARGUMENTS: hello"
                     "hi" nil skill))))
 
   :doc "shell-style parsing keeps quoted arguments together"
-  ;; Spec 22: quoted strings stay together, even with whitespace inside.
+  ;; Quoted strings stay together, even with whitespace inside.
   (let ((skill (mevedel-skill--create
                 :name "x"
                 :argument-names '("title"))))
@@ -1234,8 +1564,7 @@ ARGUMENTS: hello"
                     "title is $title" "\"hello world\"" nil skill))))
 
   :doc "ARGUMENTS: appended when args supplied but no placeholder substituted"
-  ;; Spec 22 Argument Substitution: append fires only when no placeholder
-  ;; matched and raw args are non-empty.
+  ;; Append only when no placeholder matched and raw args are non-empty.
   (let ((skill (mevedel-skill--create :name "x")))
     (should (equal "no placeholders here\n\nARGUMENTS: foo bar"
                    (mevedel-skills--substitute-vars
@@ -1723,8 +2052,7 @@ allowed-tools:
   ,test
   (test)
   :doc ":trust-literal-p t skips dangerous-commands downgrade"
-  ;; Spec 22 §"Shell Injection" §"Effects under :trust-literal-p":
-  ;; the dangerous-commands list does NOT downgrade allow to ask.
+  ;; The dangerous-commands list does not downgrade allow to ask.
   (let ((mevedel-bash-dangerous-commands '("rm"))
         (mevedel-permission-rules '(("Bash" :pattern "rm *" :action allow))))
     (should (eq 'allow
@@ -1734,7 +2062,7 @@ allowed-tools:
                 (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
 
   :doc ":trust-literal-p t skips fail-safe-complex-syntax"
-  ;; Spec 22: fail-safe complex-syntax check is bypassed.
+  ;; Fail-safe complex-syntax checks are bypassed.
   (let ((mevedel-bash-fail-safe-on-complex-syntax t)
         (mevedel-permission-rules '(("Bash" :pattern "echo *" :action allow))))
     ;; Variable expansion would normally trip fail-safe.
@@ -1776,8 +2104,7 @@ allowed-tools:
                    "gh issue list")))))
 
   :doc "session deny beats invocation/request skill allow on Bash"
-  ;; Spec 22 pass 1 (deny absolute): a session deny should still
-  ;; win over a skill-bucket allow.
+  ;; A session deny still wins over a skill-bucket allow.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "b2" :root "/tmp/b2" :name "b2"
               :file-cache (mevedel-file-cache--create
@@ -2106,8 +2433,8 @@ allowed-tools:
     (should (eq 'load-failure (plist-get outcome :reason))))
 
   :doc "recursion-depth limit yields recursion-limit-exceeded"
-  ;; Spec 22 §"Recursion depth": dynamic let-bound counter; 0 max means
-  ;; even the first invocation exceeds.
+  ;; Dynamic let-bound counter; 0 max means even the first invocation
+  ;; exceeds.
   (let ((skill (mevedel-skill--create :name "x" :body "X"))
         (mevedel-skills-max-recursion-depth 0)
         outcome)
@@ -2227,8 +2554,8 @@ allowed-tools:
         (should (null (plist-get outcome :render-data))))))
 
   :doc "fork-direct forwards :render-data when the task callback wraps it"
-  ;; Spec 22 §"Invocation API" line 134: outcome carries :render-data
-  ;; so the renderer can expose the transcript-open affordance.
+  ;; Outcome carries :render-data so the renderer can expose the
+  ;; transcript-open affordance.
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
                  :name "demo" :context 'fork :agent "explorer"
@@ -2422,7 +2749,98 @@ description: Yell
              (lambda (r) (setq received r))
              (list :name "shout" :arguments "loudly")))
           (should (equal "YELL loudly" received)))
-      (delete-directory dir t))))
+      (delete-directory dir t)))
+
+  :doc "disabled skill is rejected before model invocation"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "hidden"
+                 :body "should not run"))
+         received)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (mevedel-skills--set-enabled "hidden" nil)
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--invoke-handler
+             (lambda (r) (setq received r))
+             (list :name "hidden")))
+          (should (string-match-p "disabled" received)))
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-skills--list-handler ()
+  ,test
+  (test)
+  :doc "returns active model-invocable enabled skills"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (alpha (mevedel-skill--create
+                 :name "alpha" :description "Alpha helper"
+                 :active-p t :model-invocable-p t))
+         (beta (mevedel-skill--create
+                :name "beta" :description "Beta helper"
+                :active-p t :model-invocable-p t))
+         (model-disabled (mevedel-skill--create
+                          :name "internal" :description "Internal"
+                          :active-p t :model-invocable-p nil))
+         (dormant (mevedel-skill--create
+                   :name "dormant" :description "Dormant"
+                   :active-p nil :model-invocable-p t
+                   :path-patterns '("*.el")))
+         received)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session)
+                (list alpha beta model-disabled dormant))
+          (mevedel-skills--set-enabled "beta" nil)
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--list-handler
+             (lambda (r) (setq received r))
+             (list :query "alp")))
+          (should (string-match-p "alpha: Alpha helper" received))
+          (should-not (string-match-p "beta" received))
+          (should-not (string-match-p "internal" received))
+          (should-not (string-match-p "dormant" received)))
+      (delete-directory user-dir t)))
+
+  :doc "refreshes session skills before listing"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (fresh (mevedel-skill--create
+                 :name "fresh" :description "Fresh helper"
+                 :active-p t :model-invocable-p t))
+         refreshed
+         received)
+    (unwind-protect
+        (with-temp-buffer
+          (setq mevedel--session session)
+          (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+                     (lambda (_buffer s)
+                       (setq refreshed s)
+                       (setf (mevedel-session-skills s) (list fresh)))))
+            (mevedel-skills--list-handler
+             (lambda (r) (setq received r))
+             nil))
+          (should (eq refreshed session))
+          (should (string-match-p "fresh: Fresh helper" received)))
+      (delete-directory user-dir t))))
+
+(mevedel-deftest mevedel-skills--register
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "registers Skill and ListSkills tools"
+  (progn
+    (mevedel-skills--register)
+    (should (mevedel-tool-get "Skill" "mevedel"))
+    (should (mevedel-tool-get "ListSkills" "mevedel"))))
 
 
 ;;
@@ -2464,6 +2882,11 @@ maps to \"### \"."
   :doc "`/command args' parses to (name args 0)"
   (should (equal '("model" "gpt-4" 0)
                  (mevedel-skills--parse-slash-line "/model gpt-4")))
+
+  :doc "plugin-prefixed skill names parse as commands"
+  (should (equal '("superpowers:brainstorming" "now" 0)
+                 (mevedel-skills--parse-slash-line
+                  "/superpowers:brainstorming now")))
 
   :doc "additional lines after the command are appended to ARGS"
   ;; Skill commands (`/coordinator', `/grill-me', ...) take a
@@ -2596,10 +3019,9 @@ spanning lines")))
                                (buffer-string))))))
 
   :doc "user-invocable: false skill returns 'unknown and aborts the send"
-  ;; Spec 22 §"Invocation Gating": user-slash invocation of a
-  ;; skill marked `user-invocable: false' must message and abort.
-  ;; Returning `unknown' makes the surrounding advice skip
-  ;; gptel-send so the literal `/internal-only' text is not sent.
+  ;; User-slash invocation of a skill marked `user-invocable: false'
+  ;; must message and abort.  Returning `unknown' makes the surrounding
+  ;; advice skip gptel-send so the literal `/internal-only' text is not sent.
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "internal-only"
@@ -2721,6 +3143,29 @@ spanning lines")))
         (should (eq 'local (mevedel-skills--dispatch-slash-command)))
         (should called)
         (should (equal "### " (buffer-string))))))
+
+  :doc "`/plugin list' messages the plugin command result"
+  (let* ((session (mevedel-skills-test--make-session))
+         (user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-plugin-slash-" t)))
+         (mevedel-user-dir user-dir)
+         messages)
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo" "{\"name\":\"demo\"}")
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands mevedel-slash-commands))
+              (cl-letf (((symbol-function 'message)
+                         (lambda (fmt &rest args)
+                           (push (apply #'format-message fmt args) messages)
+                           nil)))
+                (insert "### /plugin list")
+                (goto-char (point-max))
+                (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+                (should (equal "### " (buffer-string)))
+                (should (member "demo skills:on hooks:off" messages))))))
+      (delete-directory user-dir t)))
 
   :doc "`/clear' asks before clearing a non-materialized session"
   (let ((session (mevedel-skills-test--make-session))
@@ -2874,12 +3319,115 @@ spanning lines")))
       (when (file-directory-p tempdir)
         (delete-directory tempdir t)))))
 
+(mevedel-deftest mevedel-cmd--skills ()
+  ,test
+  (test)
+  :doc "list and help report session skills"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "visible"
+                 :description "Visible description"
+                 :source 'project))
+         message-text)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (cl-letf (((symbol-function 'message)
+                       (lambda (fmt &rest args)
+                         (setq message-text (apply #'format fmt args)))))
+              (mevedel-cmd--skills "list")
+              (should (string-match-p "visible" message-text))
+              (should (string-match-p "enabled" message-text))
+              (mevedel-cmd--skills "help visible")
+              (should (string-match-p "Visible description"
+                                      message-text)))))
+      (delete-directory user-dir t)))
+
+  :doc "disable and enable persist skill state"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "visible"))
+         message-text)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (cl-letf (((symbol-function 'message)
+                       (lambda (fmt &rest args)
+                         (setq message-text (apply #'format fmt args)))))
+              (mevedel-cmd--skills "disable visible")
+              (should (string-match-p "disabled" message-text))
+              (should-not (mevedel-skills--skill-enabled-p skill))
+              (mevedel-cmd--skills "enable visible")
+              (should (string-match-p "enabled" message-text))
+              (should (mevedel-skills--skill-enabled-p skill)))))
+      (delete-directory user-dir t)))
+
+  :doc "disable follows a file-backed skill through generated renaming"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (root (make-temp-file "mevedel-skills-state-root-" t))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "shared" "description: Shared\n" "Body"))
+         (other-file (mevedel-skills-test--write-skill
+                      root "other" "description: Other\n" "Body"))
+         (skill (mevedel-skill--create
+                 :name "shared" :source-file skill-file))
+         (renamed (mevedel-skill--create
+                   :name "user:shared" :source-file skill-file))
+         (other (mevedel-skill--create
+                 :name "shared" :source-file other-file))
+         message-text)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (cl-letf (((symbol-function 'message)
+                       (lambda (fmt &rest args)
+                         (setq message-text (apply #'format fmt args)))))
+              (mevedel-cmd--skills "disable shared")
+              (should (string-match-p "disabled" message-text))
+              (should-not (mevedel-skills--disabled-names))
+              (should (mevedel-skills--disabled-keys))
+              (should-not (mevedel-skills--skill-enabled-p renamed))
+              (should (mevedel-skills--skill-enabled-p other)))))
+      (delete-directory user-dir t)
+      (delete-directory root t)))
+
+  :doc "legacy disabled names match generated local prefixes"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (root (make-temp-file "mevedel-skills-state-root-" t))
+         (skill-file (mevedel-skills-test--write-skill
+                      root "shared" "description: Shared\n" "Body"))
+         (skill (mevedel-skill--create
+                 :name "user:shared"
+                 :source 'user
+                 :source-file skill-file)))
+    (unwind-protect
+        (progn
+          (mevedel-skills--set-enabled "shared" nil)
+          (should-not (mevedel-skills--skill-enabled-p skill))
+          (mevedel-skills--set-enabled skill t)
+          (should (mevedel-skills--skill-enabled-p skill))
+          (should-not (mevedel-skills--disabled-names)))
+      (delete-directory user-dir t)
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-skills--gptel-send-advice ()
   ,test
   (test)
   :doc "local command aborts the send (orig-fn not called)"
-  ;; Spec 22 §"Slash invocation lifecycle": advice is `:around', so we
-  ;; assert behavior by checking whether the original send is called.
+  ;; The advice is `:around', so we assert behavior by checking whether
+  ;; the original send is called.
   (let ((session (mevedel-skills-test--make-session))
         (orig-called nil))
     (mevedel-skills-test--with-chat-buffer session
@@ -2934,9 +3482,8 @@ spanning lines")))
       (should orig-called)))
 
   :doc "stash leaks are cleared after advice returns"
-  ;; Spec 22 §"Slash invocation lifecycle": unwind-protect clears the
-  ;; pending-stash if the begin handler did not drain it (e.g.,
-  ;; because gptel-send aborted before WAIT).
+  ;; `unwind-protect' clears the pending stash if the begin handler did
+  ;; not drain it (e.g. because gptel-send aborted before WAIT).
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (insert "### plain text")
@@ -2962,6 +3509,24 @@ spanning lines")))
 (mevedel-deftest mevedel-slash-capf ()
   ,test
   (test)
+  :doc "global local commands include plugin and skills"
+  (let ((session (mevedel-skills-test--make-session)))
+    (should (eq 'mevedel-plugins-slash-command
+                (cdr (assoc "plugin" mevedel-slash-commands))))
+    (should (eq 'mevedel-cmd--skills
+                (cdr (assoc "skills" mevedel-slash-commands))))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### /pl")
+      (goto-char (point-max))
+      (let* ((capf (mevedel-slash-capf))
+             (cands (and capf
+                         (mevedel-skills-test--capf-candidates capf "pl")))
+             (annot (and capf (plist-get (nthcdr 3 capf)
+                                         :annotation-function))))
+        (should capf)
+        (should (member "plugin" cands))
+        (should (string-match-p "list" (funcall annot "plugin"))))))
+
   :doc "returns local commands and session skills as candidates"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create :name "simplify")))
@@ -2984,6 +3549,21 @@ spanning lines")))
                          (funcall annot "help")))
           (should (equal " [skill]" (funcall annot "simplify")))))))
 
+  :doc "plugin-prefixed skill candidates complete as one slash name"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "superpowers:brainstorming")))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### /superpowers:b")
+        (goto-char (point-max))
+        (let ((capf (mevedel-slash-capf)))
+          (should capf)
+          (should (equal '("superpowers:brainstorming")
+                         (mevedel-skills-test--capf-candidates
+                          capf "superpowers:b")))))))
+
   :doc "special command annotations describe argument behavior"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
@@ -2997,6 +3577,7 @@ spanning lines")))
                ("clear" . ignore)
                ("help" . ignore)
                ("init" . ignore)
+               ("plugin" . ignore)
                ("review" . ignore)
                ("verify" . ignore))))
         (insert "### /")
@@ -3008,6 +3589,9 @@ spanning lines")))
             (should (string-prefix-p " [command]" (funcall annot name)))
             (should-not (equal " [command]" (funcall annot name))))
           (should (string-match-p "default" (funcall annot "mode")))
+          (should (string-match-p "list" (funcall annot "plugin")))
+          (should (string-match-p "update" (funcall annot "plugin")))
+          (should (string-match-p "reload" (funcall annot "plugin")))
           (should (string-match-p "target args"
                                   (funcall annot "review")))
           (should (string-match-p "target args"
@@ -3030,6 +3614,49 @@ spanning lines")))
                           (mevedel-skills-test--capf-candidates capf)))
           (should (string-match-p "read-only"
                                   (funcall annot "plan")))))))
+
+  :doc "plugin command completes first argument options"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands
+             '(("plugin" . mevedel-plugins-slash-command))))
+        (insert "### /plugin l")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (equal '("list")
+                         (mevedel-skills-test--capf-candidates
+                          capf "l")))
+          (dolist (candidate '("enable" "disable" "hooks" "install"
+                               "update" "reload"))
+            (should (member candidate
+                            (mevedel-skills-test--capf-candidates capf))))
+          (should (string-match-p "installed"
+                                  (funcall annot "list")))
+          (should (string-match-p "installed plugin"
+                                  (funcall annot "update")))
+          (should (string-match-p "current session"
+                                  (funcall annot "reload")))))))
+
+  :doc "skills command completes subcommands"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands '(("skills" . ignore))))
+        (insert "### /skills dis")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (equal '("disable")
+                         (mevedel-skills-test--capf-candidates
+                          capf "dis")))
+          (should (member "enable"
+                          (mevedel-skills-test--capf-candidates capf)))
+          (should (string-match-p "disable"
+                                  (funcall annot "disable")))))))
 
   :doc "model command completes current backend model names"
   (mevedel-skills-test--with-model-backends
@@ -3111,8 +3738,7 @@ spanning lines")))
     (should (null (mevedel-slash-capf))))
 
   :doc "user-invocable: false skills are omitted from completion"
-  ;; Spec 22 §"Completion and UI": user-invocable false skills are
-  ;; not shown in slash completion.
+  ;; User-invocable false skills are not shown in slash completion.
   (let* ((session (mevedel-skills-test--make-session))
          (visible (mevedel-skill--create :name "visible"))
          (hidden (mevedel-skill--create :name "hidden"
@@ -3128,8 +3754,29 @@ spanning lines")))
           (should (member "visible" cands))
           (should-not (member "hidden" cands))))))
 
+  :doc "disabled skills are omitted from completion"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (visible (mevedel-skill--create :name "visible"))
+         (hidden (mevedel-skill--create :name "hidden")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list visible hidden))
+          (mevedel-skills--set-enabled "hidden" nil)
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands nil))
+              (insert "### /")
+              (goto-char (point-max))
+              (let* ((capf (mevedel-slash-capf))
+                     (cands (and capf
+                                 (mevedel-skills-test--capf-candidates capf))))
+                (should (member "visible" cands))
+                (should-not (member "hidden" cands))))))
+      (delete-directory user-dir t)))
+
   :doc "[dormant] annotation appears for path-scoped not-yet-active skills"
-  ;; Spec 22 §"Completion and UI": annotate dormant skills.
+  ;; Dormant skills get an annotation.
   (let* ((session (mevedel-skills-test--make-session))
          (active (mevedel-skill--create :name "ready"))
          (dormant (mevedel-skill--create
@@ -3148,8 +3795,8 @@ spanning lines")))
           (should (equal " [skill] [dormant]" (funcall annot "lazy")))))))
 
   :doc "argument hints appear after the [skill] annotation"
-  ;; Spec 22 §"Completion and UI": annotation includes argument
-  ;; hint from `argument-hint' or generated from `arguments'.
+  ;; Annotation includes argument hint from `argument-hint' or generated
+  ;; from `arguments'.
   (let* ((session (mevedel-skills-test--make-session))
          (with-hint (mevedel-skill--create :name "find"
                                            :argument-hint "[query]"))
@@ -3171,6 +3818,8 @@ spanning lines")))
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skills-capf-hot-" t))
+         (mevedel-user-dir (file-name-as-directory
+                            (file-name-concat root "user")))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
@@ -3202,7 +3851,9 @@ spanning lines")))
                 (should-not (member "bar"
                                     (mevedel-skills-test--capf-candidates
                                      capf "b")))))))
-      (when (buffer-live-p buf) (kill-buffer buf))
+      (when (buffer-live-p buf)
+        (mevedel-skills--unregister-buffer buf)
+        (kill-buffer buf))
       (delete-directory root t)))
 
 (mevedel-deftest mevedel-skills--progressive-argument-hint ()
@@ -3416,7 +4067,7 @@ spanning lines")))
     (should (string-suffix-p "..." entry)))
 
   :doc "when_to_use suffix appended after the description"
-  ;; Spec 22 §"Skill Listing" entry format: `- name: desc - when_to_use'.
+  ;; Entry format: `- name: desc - when_to_use'.
   (let ((skill (mevedel-skill--create
                 :name "demo" :description "Do a thing"
                 :when-to-use "when the user asks for a thing")))
@@ -3455,7 +4106,26 @@ spanning lines")))
           (list active-invocable dormant disabled))
     (let ((names (mapcar #'mevedel-skill-name
                          (mevedel-skills--listing-candidates session))))
-      (should (equal '("a") names)))))
+      (should (equal '("a") names))))
+
+  :doc "omits user-disabled skills"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (enabled (mevedel-skill--create
+                   :name "enabled" :description "E"
+                   :model-invocable-p t :active-p t))
+         (disabled (mevedel-skill--create
+                    :name "disabled" :description "D"
+                    :model-invocable-p t :active-p t)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list enabled disabled))
+          (mevedel-skills--set-enabled "disabled" nil)
+          (let ((names (mapcar #'mevedel-skill-name
+                               (mevedel-skills--listing-candidates session))))
+            (should (equal '("enabled") names))))
+      (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-skills--format-listing ()
   ,test
@@ -3465,6 +4135,7 @@ spanning lines")))
                        (mevedel-skill--create :name "s2" :description "d2")))
          (listing (mevedel-skills--format-listing skills)))
     (should (string-match-p "for use with the Skill tool" listing))
+    (should (string-match-p "ListSkills" listing))
     (should (string-match-p "^- s1: d1$" listing))
     (should (string-match-p "^- s2: d2$" listing)))
 
@@ -3503,8 +4174,8 @@ spanning lines")))
       (should (string-match-p "simplify: Review code" body))))
 
   :doc "disabled-only skills do not cause firing"
-  ;; Spec 22 §"Skill Listing": when ALL skills are model-invocable=nil,
-  ;; the listing has nothing to say -- no firing.
+  ;; When all skills are model-invocable=nil, the listing has nothing
+  ;; to say.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r2" :root "/tmp/r2" :name "r2"
               :file-cache (mevedel-file-cache--create
@@ -3519,10 +4190,10 @@ spanning lines")))
     (should-not (funcall (mevedel-reminder-trigger reminder) session)))
 
   :doc "dormant model-invocable skills cause firing for the dormant note"
-  ;; Spec 22 §"Skill Listing": when the only model-invocable skills
-  ;; are dormant (path-scoped, not yet activated), the reminder still
-  ;; fires so it can append the fixed dormant-skill note telling the
-  ;; model that direct-by-name invocation works.
+  ;; When the only model-invocable skills are dormant (path-scoped, not
+  ;; yet activated), the reminder still fires so it can append the fixed
+  ;; dormant-skill note telling the model that direct-by-name invocation
+  ;; works.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r3" :root "/tmp/r3" :name "r3"
               :file-cache (mevedel-file-cache--create
@@ -3542,7 +4213,7 @@ spanning lines")))
       (should-not (string-match-p "dormant: d" body))))
 
   :doc "listing entry includes when_to_use when set"
-  ;; Spec 22 §"Skill Listing" entry format: `- name: description - when_to_use'.
+  ;; Entry format: `- name: description - when_to_use'.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r4" :root "/tmp/r4" :name "r4"
               :file-cache (mevedel-file-cache--create
@@ -3561,7 +4232,7 @@ spanning lines")))
                body))))
 
   :doc "listing ordering: user > project > bundled"
-  ;; Spec 22 §"Skill Listing" precedence.
+  ;; Listing precedence.
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r5" :root "/tmp/r5" :name "r5"
               :file-cache (mevedel-file-cache--create
@@ -3598,6 +4269,8 @@ spanning lines")))
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications '(check-on-save))
          (root (make-temp-file "mevedel-skills-reminder-hot-" t))
+         (mevedel-user-dir (file-name-as-directory
+                            (file-name-concat root "user")))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
@@ -3782,6 +4455,8 @@ TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications '(check-on-save))
          (root (make-temp-file "mevedel-skills-rescan-" t))
+         (mevedel-user-dir (file-name-as-directory
+                            (file-name-concat root "user")))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
@@ -3950,6 +4625,8 @@ TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skills-manual-" t))
+         (mevedel-user-dir (file-name-as-directory
+                            (file-name-concat root "user")))
          (mevedel-skill-dirs (list root))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
