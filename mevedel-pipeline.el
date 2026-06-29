@@ -45,22 +45,20 @@
                   "mevedel-permissions" (tool-name cont &rest args))
 (declare-function mevedel-permission-decision-raw-outcome
                   "mevedel-permissions" (decision))
+(declare-function mevedel-permission--checker-args
+                  "mevedel-permissions" (context))
+(declare-function mevedel-permission--invocation-context
+                  "mevedel-permissions" (&rest args))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--path-in-allowed-roots-p
-                  "mevedel-permissions" (path roots))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
 (declare-function mevedel-tool-exec--bash-decision-specifier-value
                   "mevedel-tool-exec" (command))
-(declare-function mevedel--all-allowed-roots
-                  "mevedel-workspace" (&optional buffer))
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" (result tool-name &rest args))
-(declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -676,64 +674,24 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
          (tool-name (mevedel-tool-name tool))
-         (get-path-fn (mevedel-tool-get-path tool))
-         (path (when get-path-fn
-                 (ignore-errors (funcall get-path-fn args))))
-         (pattern (when-let* ((fn (mevedel-tool-get-pattern tool)))
-                    (ignore-errors (funcall fn args))))
-         (domain (when-let* ((fn (mevedel-tool-get-domain tool)))
-                   (ignore-errors (funcall fn args))))
-         (name (when-let* ((fn (mevedel-tool-get-name tool)))
-                 (ignore-errors (funcall fn args))))
          (session (plist-get context :session))
          (workspace (plist-get context :workspace))
-         (workspace-root (when workspace
-                           (ignore-errors
-                             (mevedel-workspace-root workspace))))
-         (base-allowed-roots
-          (when (and workspace
-                     (fboundp 'mevedel--all-allowed-roots))
-            (ignore-errors
-              (mevedel--all-allowed-roots
-               (plist-get context :buffer)))))
-         (allowed-roots base-allowed-roots)
-         (exact-allowed-paths
-          (and (equal tool-name "Read")
-               session
-               (mevedel-session-active-dropped-file-grants session)))
-         (persistent-rules (when workspace
-                             (mevedel-permission--load-persistent-rules
-                              workspace)))
-         (session-rules (when session
-                          (mevedel-session-permission-rules session)))
          (request (plist-get context :request))
-         (request-rules (and request
-                             (mevedel-request-skill-permission-rules request)))
          (invocation (plist-get context :invocation))
-         (invocation-rules
-          (and invocation
-               (mevedel-agent-invocation-skill-permission-rules invocation)))
-         (mode (when session (mevedel-session-permission-mode session))))
-    ;; Tripwire: a non-read-only tool reaching the permission step
-    ;; without a session in context means session-scoped rules and
-    ;; the active permission mode are silently invisible -- the
-    ;; chain falls back to the defcustom-scoped
-    ;; `mevedel-permission-rules' / `mevedel-permission-mode' alone.
-    ;; That silent fallback is the actual hazard.  Make the
-    ;; contract violation visible so it surfaces in *Warnings*
-    ;; instead of producing surprising deny / allow outcomes.
-    (unless session
-      (display-warning
-       'mevedel
-       (format "Permission step for %s ran with no session in \
-context; falling back to defcustom defaults.  Session-scoped \
-rules and the active permission mode are not being consulted.  \
-This usually means the tool was dispatched from a buffer whose \
-`mevedel--session' was not set; in production that should not \
-happen for a non-read-only tool."
-               tool-name)
-       :warning))
-    (mevedel-check-permission-async-with-metadata
+         (permission-context
+          (mevedel-permission--invocation-context
+           :tool tool
+           :args args
+           :session session
+           :workspace workspace
+           :request request
+           :invocation invocation
+           :buffer (plist-get context :buffer)
+           :warn-no-session-p t))
+         (path (plist-get permission-context :path))
+         (workspace-root (plist-get permission-context :workspace-root))
+         (allowed-roots (plist-get permission-context :allowed-roots)))
+    (apply #'mevedel-check-permission-async-with-metadata
      tool-name
      (lambda (decision)
        (let* ((raw-outcome (mevedel-permission-decision-raw-outcome decision))
@@ -752,26 +710,14 @@ happen for a non-read-only tool."
           :tool-name tool-name :path path :session session
           :workspace workspace :workspace-root workspace-root
           :allowed-roots allowed-roots
-          :decision logged-decision)))
-     :tool-struct tool
-     :path path
-     :pattern pattern
-     :domain domain
-     :name name
-     :content args
-     :invocation-rules invocation-rules
-     :request-rules request-rules
-     :session-rules session-rules
-     :persistent-rules persistent-rules
-     :mode mode
-     :workspace-root workspace-root
-     :allowed-roots allowed-roots
-     :exact-allowed-paths exact-allowed-paths)))
+          :decision logged-decision
+          :permission-context permission-context)))
+     (mevedel-permission--checker-args permission-context))))
 
 (cl-defun mevedel-pipeline--dispatch-permission-outcome
     (outcome context next fail
              &key tool-name path session workspace workspace-root allowed-roots
-             decision)
+             decision permission-context)
   "Translate a permission OUTCOME into NEXT / FAIL for the pipeline step.
 
 OUTCOME is the union of (a) results emitted by a permission slot via
@@ -796,33 +742,22 @@ translator fires NEXT / FAIL."
     ('ask
      (let* ((args (plist-get context :args))
             (tool (plist-get context :tool))
-            (pattern (when-let* ((fn (and tool
-                                          (mevedel-tool-get-pattern tool))))
-                       (ignore-errors (funcall fn args))))
-            (domain (when-let* ((fn (and tool
-                                         (mevedel-tool-get-domain tool))))
-                      (ignore-errors (funcall fn args))))
-            (name (when-let* ((fn (and tool
-                                       (mevedel-tool-get-name tool))))
-                    (ignore-errors (funcall fn args))))
-            (specifier-key (cond (pattern :pattern)
-                                 (domain :domain)
-                                 (name :name)
-                                 (path :path)))
-            (specifier-value (or pattern domain name path))
-            (workspace-boundary-p
-             (and path
-                  (not (mevedel-permission--path-in-allowed-roots-p
-                        path (or allowed-roots
-                                 (and workspace-root
-                                      (list workspace-root)))))))
-            (rule-tool (if workspace-boundary-p "*" tool-name))
-            (rule-key (if workspace-boundary-p :path specifier-key))
-            (rule-value (if workspace-boundary-p
-                            (concat (file-name-directory
-                                     (expand-file-name path))
-                                    "**")
-                          specifier-value))
+            (permission-context
+             (or permission-context
+                 (mevedel-permission--invocation-context
+                  :tool tool
+                  :args args
+                  :session session
+                  :workspace workspace
+                  :request (plist-get context :request)
+                  :invocation (plist-get context :invocation)
+                  :buffer (plist-get context :buffer)
+                  :path path
+                  :workspace-root workspace-root
+                  :allowed-roots allowed-roots)))
+            (rule-tool (plist-get permission-context :rule-tool))
+            (rule-key (plist-get permission-context :rule-key))
+            (rule-value (plist-get permission-context :rule-value))
             (decision-metadata decision))
        (cl-labels
            ((enqueue-prompt
@@ -846,8 +781,9 @@ translator fires NEXT / FAIL."
                      :specifier-key rule-key
                      :specifier-value rule-value
                      :protected-path
-                     (and path (mevedel-permission--path-protected-p path))
-                     :include-always (not (null workspace))
+                     (plist-get permission-context :protected-path)
+                     :include-always
+                     (plist-get permission-context :include-always)
                      :workspace workspace
                      :origin
                      ;; Resolve the leaf agent's canonical id by looking
@@ -891,7 +827,8 @@ translator fires NEXT / FAIL."
                               :tool-name tool-name :path path :session session
                               :workspace workspace
                               :workspace-root workspace-root
-                              :allowed-roots allowed-roots))
+                              :allowed-roots allowed-roots
+                              :permission-context permission-context))
                          (error
                           (funcall fail (error-message-string err))))))
                session)))

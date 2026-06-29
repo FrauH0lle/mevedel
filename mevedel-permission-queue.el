@@ -31,12 +31,13 @@
                   (expression callback &optional origin count entry
                               mode preserve-ui))
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
+(declare-function mevedel-permission--checker-args
+                  "mevedel-permissions" (context))
+(declare-function mevedel-permission--invocation-context
+                  "mevedel-permissions" (&rest args))
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
-                  (command &key trust-literal-p))
+                  (command &rest args))
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
 
@@ -300,14 +301,8 @@ For Bash, the same context binding flows into
 (that function reads it directly); we let-bind to make the
 session visible to it as well."
   (let* ((session (plist-get entry :session))
-         (session-rules
-          (and session (mevedel-session-permission-rules session)))
-         (mode
-          (and session (mevedel-session-permission-mode session)))
          (workspace
           (and session (mevedel-session-workspace session)))
-         (workspace-root
-          (and workspace (mevedel-workspace-root workspace)))
          (allowed-roots
           (when (and workspace (fboundp 'mevedel--all-allowed-roots))
             (ignore-errors (mevedel--all-allowed-roots))))
@@ -323,26 +318,34 @@ session visible to it as well."
              (spec-key (or (plist-get entry :specifier-key) :path))
              (spec-value (plist-get entry :specifier-value)))
          (condition-case _err
-             (apply #'mevedel-check-permission
-                    tool-name
-                    (append
-                     (and spec-key spec-value (list spec-key spec-value))
-                     (list :session-rules session-rules
-                           :mode mode
-                           :workspace-root workspace-root
-                           :allowed-roots allowed-roots)))
+             (let ((context
+                    (mevedel-permission--invocation-context
+                     :tool-name tool-name
+                     :session session
+                     :workspace workspace
+                     :allowed-roots allowed-roots
+                     :path (and (eq spec-key :path) spec-value)
+                     :pattern (and (eq spec-key :pattern) spec-value)
+                     :domain (and (eq spec-key :domain) spec-value)
+                     :name (and (eq spec-key :name) spec-value))))
+               (apply #'mevedel-check-permission
+                      tool-name
+                      (mevedel-permission--checker-args context)))
            (error 'ask))))
       ('bash
        (let* ((command (plist-get entry :command))
+              (context
+               (mevedel-permission--invocation-context
+                :tool-name "Bash"
+                :session session
+                :workspace workspace
+                :allowed-roots allowed-roots
+                :pattern command))
               (rule-decision
                (condition-case _err
-                   (mevedel-check-permission
-                    "Bash"
-                    :pattern command
-                    :session-rules session-rules
-                    :mode mode
-                    :workspace-root workspace-root
-                    :allowed-roots allowed-roots)
+                   (apply #'mevedel-check-permission
+                          "Bash"
+                          (mevedel-permission--checker-args context))
                  (error 'ask))))
          (cond
           ((eq rule-decision 'deny) 'deny)
@@ -350,7 +353,8 @@ session visible to it as well."
            (let ((safety
                   (condition-case _err
                       (mevedel-tools--check-bash-permission
-                       command :trust-literal-p nil)
+                       command :trust-literal-p nil
+                       :permission-context context)
                     (error 'ask))))
              (if (memq safety '(allow deny)) safety 'ask)))
           (t 'ask))))
