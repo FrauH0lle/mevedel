@@ -139,9 +139,9 @@ dedicated foreground validation tasks. They share a target picker for
 uncommitted changes, diff against a base branch merge-base, a specific
 commit, the last commit, or custom instructions. Unlike ordinary slash
 skills, this path is first-class: it ignores user/project skills named
-`review`, constructs the agent task explicitly, and shares target CAPF for
-explicit slash forms such as `current`, `HEAD`, `branch:<name>`, and
-`commit:<rev>`.
+`review`, routes foreground execution through the shared fork skill
+dispatch path, and shares target CAPF for explicit slash forms such as
+`current`, `HEAD`, `branch:<name>`, and `commit:<rev>`.
 
 `/review` dispatches the `reviewer` agent and parses its Codex-style JSON
 finding shape: `findings`, `overall_correctness`, `overall_explanation`,

@@ -30,16 +30,12 @@
 (declare-function mevedel-skills--build-skill
                   "mevedel-skills" (skill-file source))
 (declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
-(declare-function mevedel-skills--run-expansion-hook
-                  "mevedel-skills"
-                  (skill arguments prompt trigger session callback))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (declare-function copy-mevedel-skill "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-allowed-tool-rules "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-allowed-tools "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-agent "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-hooks "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skill-p "mevedel-skills" (object))
 (declare-function mevedel-skill-source "mevedel-skills" (cl-x) t)
@@ -91,11 +87,6 @@
 
 ;; `mevedel-agent-exec'
 (defvar mevedel-agent-exec--agents)
-
-;; `mevedel-tool-ui'
-(declare-function mevedel-tools--task
-                  "mevedel-tool-ui"
-                  (main-cb agent description prompt &rest args))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
@@ -820,23 +811,6 @@ permission policy decides whether verifier validation commands may run."
       (when (bound-and-true-p mevedel--current-request)
         (mevedel-request-end)))))
 
-(defun mevedel-review--task-outcome (response &optional command)
-  "Return a validation fork-style outcome from task RESPONSE for COMMAND."
-  (let* ((wrapped-p (and (listp response)
-                         (plist-member response :result)))
-         (result (if wrapped-p (plist-get response :result) response))
-         (render-data (and wrapped-p (plist-get response :render-data)))
-         (agent-id (or (and render-data (plist-get render-data :agent-id))
-                       (mevedel-review--command-agent-name command)))
-         (outcome (list :status 'ok
-                        :kind 'fork
-                        :result (or result "")
-                        :agent-id agent-id
-                        :render-data render-data)))
-    (if (eq (or command 'review) 'review)
-        (mevedel-review--mark-command-outcome outcome)
-      outcome)))
-
 (defun mevedel-review--progress-render-data (invocation hint &optional command)
   "Return parent-view render-data for validation INVOCATION and HINT."
   (let* ((agent (and (mevedel-agent-invocation-p invocation)
@@ -901,52 +875,22 @@ CALLBACK receives the normalized fork-style outcome.  SUBMIT-CONTEXT, when
 non-empty, is appended after `UserPromptExpansion' handling.  PROGRESS-CALLBACK,
 when non-nil, receives the spawned invocation before the child request is
 dispatched.  COMMAND defaults to `review'."
-  (require 'mevedel-tool-ui)
   (let* ((command (or command 'review))
          (session (and (boundp 'mevedel--session) mevedel--session))
-         (skill (mevedel-review--command-skill command session))
-         (agent-name (mevedel-review--command-agent-name command))
-         (agent (mevedel-agent-get agent-name))
-         (rules (and (mevedel-skill-p skill)
-                     (mevedel-skill-allowed-tool-rules skill)))
-         (hooks (and (mevedel-skill-p skill)
-                     (mevedel-skill-hooks skill))))
-    (unless agent
-      (user-error "%s agent is not available"
-                  (mevedel-review--command-label command)))
-    (mevedel-skills--run-expansion-hook
-     skill prompt prompt 'user-slash session
-     (lambda (prepared decision)
-       (if (and (plist-member decision :continue)
-                (not (plist-get decision :continue)))
-           (funcall callback
-                    (list :status 'error
-                          :reason 'hook-blocked
-                          :message
-                          (or (plist-get decision :stop-reason)
-                              (format "UserPromptExpansion hook stopped %s"
-                                      (mevedel-review--command-name command)))))
-         (let ((prepared
-                (if (and (stringp submit-context)
-                         (not (string-empty-p submit-context)))
-                    (concat prepared "\n\n" submit-context)
-                  prepared)))
-           (condition-case err
-               (mevedel-tools--task
-                (lambda (response &rest _rest)
-                  (funcall callback
-                           (mevedel-review--task-outcome response command)))
-                agent
-                (or hint (mevedel-review--command-description command))
-                prepared
-                :skill-permission-rules rules
-                :skill-hook-rules hooks
-                :on-invocation progress-callback)
-             (error
-              (funcall callback
-                       (list :status 'error
-                             :reason 'agent-dispatch-failed
-                             :message (error-message-string err)))))))))))
+         (skill (mevedel-review--command-skill command session)))
+    (mevedel-skills-invoke
+     skill prompt
+     (lambda (outcome)
+       (funcall callback
+                (if (and (eq command 'review)
+                         (eq (plist-get outcome :status) 'ok))
+                    (mevedel-review--mark-command-outcome outcome)
+                  outcome)))
+     :trigger 'user-slash
+     :description (or hint (mevedel-review--command-description command))
+     :additional-context submit-context
+     :on-invocation progress-callback
+     :skip-gates t)))
 
 (defun mevedel-review--transform-command-outcome (outcome &optional command)
   "Transform validation OUTCOME for COMMAND before parent insertion."

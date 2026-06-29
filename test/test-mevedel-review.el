@@ -329,68 +329,59 @@
 (mevedel-deftest mevedel-review--run-task ()
   ,test
   (test)
-  :doc "dispatches the reviewer agent directly with expansion and review rules"
+  :doc "dispatches review through shared fork skill invocation"
   (let ((data (generate-new-buffer " *mevedel-review-run-task*"))
-        captured-agent captured-description captured-prompt captured-rules
-        outcome)
+        captured-skill captured-arguments captured-options outcome)
     (unwind-protect
         (with-current-buffer data
-          (require 'mevedel-tool-ui)
           (setq-local mevedel--session
                       (mevedel-session--create :name "review"))
-          (cl-letf (((symbol-function 'mevedel-review--review-skill)
-                     (lambda (_session)
-                       (mevedel-skill--create
-                        :name "review" :context 'fork
-                        :agent "reviewer" :source 'bundled
-                        :allowed-tool-rules '((rule . git))
-                        :hooks '((Stop ((:hooks ((:elisp ignore)))))))))
-                    ((symbol-function 'mevedel-agent-get)
-                     (lambda (name)
-                       (and (equal name "reviewer")
-                            (mevedel-agent--create :name "reviewer"))))
-                    ((symbol-function 'mevedel-skills--run-expansion-hook)
-                     (lambda (_skill arguments prompt trigger _session callback)
-                       (should (equal "prompt" arguments))
-                       (should (equal "prompt" prompt))
-                       (should (eq 'user-slash trigger))
-                       (funcall callback
-                                "expanded prompt"
-                                '(:continue t))))
-                    ((symbol-function 'mevedel-tools--task)
-                     (lambda (main-cb agent description prompt &rest args)
-                       (setq captured-agent (mevedel-agent-name agent))
-                       (setq captured-description description)
-                       (setq captured-prompt prompt)
-                       (setq captured-rules
-                             (plist-get args :skill-permission-rules))
-                       (funcall main-cb
-                                '(:result "review json"
-                                  :render-data
-                                  (:agent-id "reviewer--abc"))))))
-            (mevedel-review--run-task
-             "prompt" "target"
-             (lambda (result) (setq outcome result))
-             "<hook-context>extra</hook-context>")
-            (should (equal "reviewer" captured-agent))
-            (should (equal "target" captured-description))
-            (should (equal
-                     "expanded prompt\n\n<hook-context>extra</hook-context>"
-                     captured-prompt))
-            (should (equal '((rule . git)) captured-rules))
-            (should (eq 'ok (plist-get outcome :status)))
-            (should (eq 'fork (plist-get outcome :kind)))
-            (should (equal "review json" (plist-get outcome :result)))
-            (should (equal "reviewer--abc" (plist-get outcome :agent-id)))
-            (should (plist-get outcome :mevedel-review-command))))
+          (let ((progress-callback #'ignore))
+            (cl-letf (((symbol-function 'mevedel-review--review-skill)
+                      (lambda (_session)
+                        (mevedel-skill--create
+                         :name "review" :context 'fork
+                         :agent "reviewer" :source 'bundled
+                         :allowed-tool-rules '((rule . git))
+                         :hooks '((Stop ((:hooks ((:elisp ignore)))))))))
+                      ((symbol-function 'mevedel-skills-invoke)
+                       (lambda (skill arguments callback &rest args)
+                         (setq captured-skill skill)
+                         (setq captured-arguments arguments)
+                         (setq captured-options args)
+                         (funcall callback
+                                  '(:status ok :kind fork
+                                    :result "review json"
+                                    :agent-id "reviewer--abc")))))
+              (mevedel-review--run-task
+               "prompt" "target"
+               (lambda (result) (setq outcome result))
+               "<hook-context>extra</hook-context>"
+               progress-callback)
+              (should (equal "review" (mevedel-skill-name captured-skill)))
+              (should (equal "prompt" captured-arguments))
+              (should (eq 'user-slash
+                          (plist-get captured-options :trigger)))
+              (should (plist-get captured-options :skip-gates))
+              (should (equal "target"
+                             (plist-get captured-options :description)))
+              (should (equal "<hook-context>extra</hook-context>"
+                             (plist-get captured-options
+                                        :additional-context)))
+              (should (eq progress-callback
+                          (plist-get captured-options :on-invocation)))
+              (should (eq 'ok (plist-get outcome :status)))
+              (should (eq 'fork (plist-get outcome :kind)))
+              (should (equal "review json" (plist-get outcome :result)))
+              (should (equal "reviewer--abc" (plist-get outcome :agent-id)))
+              (should (plist-get outcome :mevedel-review-command)))))
       (kill-buffer data)))
 
-  :doc "dispatches the verifier agent without review output marking"
+  :doc "dispatches verify through shared fork skill invocation"
   (let ((data (generate-new-buffer " *mevedel-verify-run-task*"))
-        captured-agent captured-rules outcome)
+        captured-skill captured-options outcome)
     (unwind-protect
         (with-current-buffer data
-          (require 'mevedel-tool-ui)
           (setq-local mevedel--session
                       (mevedel-session--create :name "verify"))
           (cl-letf (((symbol-function 'mevedel-review--verify-skill)
@@ -399,60 +390,42 @@
                         :name "verify" :context 'fork
                         :agent "verifier" :source 'bundled
                         :allowed-tool-rules '((rule . git)))))
-                    ((symbol-function 'mevedel-agent-get)
-                     (lambda (name)
-                       (and (equal name "verifier")
-                            (mevedel-agent--create :name "verifier"))))
-                    ((symbol-function 'mevedel-skills--run-expansion-hook)
-                     (lambda (_skill arguments prompt trigger _session callback)
-                       (should (equal "prompt" arguments))
-                       (should (equal "prompt" prompt))
-                       (should (eq 'user-slash trigger))
-                       (funcall callback "expanded prompt" '(:continue t))))
-                    ((symbol-function 'mevedel-tools--task)
-                     (lambda (main-cb agent _description _prompt &rest args)
-                       (setq captured-agent (mevedel-agent-name agent))
-                       (setq captured-rules
-                             (plist-get args :skill-permission-rules))
-                       (funcall main-cb
-                                '(:result "verifier result"
-                                  :render-data
-                                  (:agent-id "verifier--abc"))))))
+                    ((symbol-function 'mevedel-skills-invoke)
+                     (lambda (skill _arguments callback &rest args)
+                       (setq captured-skill skill)
+                       (setq captured-options args)
+                       (funcall callback
+                                '(:status ok :kind fork
+                                  :result "verifier result"
+                                  :agent-id "verifier--abc")))))
             (mevedel-review--run-task
              "prompt" "target"
              (lambda (result) (setq outcome result))
              nil nil 'verify)
-            (should (equal "verifier" captured-agent))
-            (should (equal '((rule . git)) captured-rules))
+            (should (equal "verify" (mevedel-skill-name captured-skill)))
+            (should (plist-get captured-options :skip-gates))
             (should (eq 'ok (plist-get outcome :status)))
             (should (equal "verifier result" (plist-get outcome :result)))
             (should (equal "verifier--abc" (plist-get outcome :agent-id)))
             (should-not (plist-get outcome :mevedel-review-command))))
       (kill-buffer data)))
 
-  :doc "reports pre-dispatch task errors through the callback"
+  :doc "reports shared dispatch errors through the callback"
   (let ((data (generate-new-buffer " *mevedel-review-run-task-error*"))
         outcome)
     (unwind-protect
         (with-current-buffer data
-          (require 'mevedel-tool-ui)
           (cl-letf (((symbol-function 'mevedel-review--review-skill)
                      (lambda (_session)
                        (mevedel-skill--create
                         :name "review" :context 'fork
                         :agent "reviewer" :source 'bundled)))
-                    ((symbol-function 'mevedel-agent-get)
-                     (lambda (name)
-                       (and (equal name "reviewer")
-                            (mevedel-agent--create :name "reviewer"))))
-                    ((symbol-function 'mevedel-review--permission-rules)
-                     (lambda () nil))
-                    ((symbol-function 'mevedel-skills--run-expansion-hook)
-                     (lambda (_skill _arguments prompt _trigger _session callback)
-                       (funcall callback prompt nil)))
-                    ((symbol-function 'mevedel-tools--task)
-                     (lambda (&rest _args)
-                       (error "dispatch exploded"))))
+                    ((symbol-function 'mevedel-skills-invoke)
+                     (lambda (_skill _arguments callback &rest _args)
+                       (funcall callback
+                                '(:status error
+                                  :reason agent-dispatch-failed
+                                  :message "dispatch exploded")))))
             (mevedel-review--run-task
              "prompt" "target"
              (lambda (result) (setq outcome result)))

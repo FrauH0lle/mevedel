@@ -213,9 +213,10 @@ the agent runs. This handle is sourced from hidden agent-transcript
 render-data, updates as the agent calls tools, and remains separate from
 the final summary.
 
-At dispatch time, `mevedel-review.el` builds the task explicitly and
-passes skill-scoped allow rules for read-only `git` Bash commands used to
-inspect diffs (`git diff`, `git status`, `git log`, `git show`,
+At dispatch time, `mevedel-review.el` keeps target/result semantics local
+and routes foreground agent execution through `mevedel-skills-invoke`.
+It supplies skill-scoped allow rules for read-only `git` Bash commands
+used to inspect diffs (`git diff`, `git status`, `git log`, `git show`,
 `git merge-base`, `git rev-parse`, `git ls-files`, and `git cat-file`),
 plus `head` as a pipe filter for bounded object inspection. Review adds a
 local deny rule for other Bash commands; verify does not, so normal
