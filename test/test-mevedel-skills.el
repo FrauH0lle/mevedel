@@ -2422,6 +2422,22 @@ allowed-tools:
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'disabled (plist-get outcome :reason))))
 
+  :doc "skip-gates lets internal commands invoke disabled skills"
+  (let ((skill (mevedel-skill--create
+                :name "human-only"
+                :body "X"
+                :model-invocable-p nil))
+        outcome)
+    (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+               (lambda (_) nil)))
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'model-skill
+       :skip-gates t))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "X" (plist-get outcome :body))))
+
   :doc "missing body returns load-failure error"
   (let ((skill (mevedel-skill--create :name "no-body"))
         outcome)
@@ -2619,6 +2635,30 @@ allowed-tools:
   (should (string-match-p "Task body" captured-prompt))
   (should (string-match-p "<hook-context>ctx</hook-context>"
                           captured-prompt)))
+
+  :doc "fork dispatch forwards custom description and invocation callback"
+  (let* ((agent (mevedel-agent--create :name "explorer"))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explorer"
+                 :body "Task body"))
+         (progress-callback #'ignore)
+         captured-description
+         captured-on-invocation)
+    (cl-letf (((symbol-function 'mevedel-agent-get)
+               (lambda (n) (and (equal n "explorer") agent)))
+              ((symbol-function 'mevedel-tools--task)
+               (lambda (cb _agent desc _prompt &rest args)
+                 (setq captured-description desc)
+                 (setq captured-on-invocation
+                       (plist-get args :on-invocation))
+                 (funcall cb "agent finished"))))
+      (mevedel-skills-invoke
+       skill nil #'ignore
+       :trigger 'user-slash
+       :description "target hint"
+       :on-invocation progress-callback))
+    (should (equal "target hint" captured-description))
+    (should (eq progress-callback captured-on-invocation)))
 
   :doc "fork dispatch errors return an error outcome"
   (let* ((agent (mevedel-agent--create :name "explorer"))

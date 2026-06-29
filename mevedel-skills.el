@@ -2607,7 +2607,8 @@ tools propagate through the spawn path's request-locals capture."
       (mevedel-skills--build-parent-inherited-agent skill)))))
 
 (cl-defun mevedel-skills--invoke-fork-direct
-    (skill arguments callback &key trigger display-callback additional-context)
+    (skill arguments callback &key trigger display-callback
+           additional-context description on-invocation)
   "Direct fork dispatch via `mevedel-tools--task'.  Async outcome.
 
 Builds the target `mevedel-agent' via
@@ -2633,7 +2634,9 @@ that already operate async (e.g., the `Skill' tool handler)."
       (let* ((body (or (mevedel-skill-load-body skill) ""))
              (substituted (mevedel-skills--substitute-vars
                            body arguments session skill))
-             (description (or (mevedel-skill-description skill) skill-name))
+             (description (or description
+                              (mevedel-skill-description skill)
+                              skill-name))
              (rules (mevedel-skill-allowed-tool-rules skill))
              (model (mevedel-skills--model-selector skill))
              (effort (mevedel-skill-effort skill))
@@ -2726,7 +2729,8 @@ that already operate async (e.g., the `Skill' tool handler)."
                           :skill-permission-rules rules
                           :skill-model-override model
                           :skill-effort-override effort
-                          :skill-hook-rules hooks)
+                          :skill-hook-rules hooks
+                          :on-invocation on-invocation)
                        (error
                         (mevedel-skills--invoke-error
                          skill 'agent-dispatch-failed
@@ -2742,7 +2746,8 @@ that already operate async (e.g., the `Skill' tool handler)."
                callback display-callback)))))))))
 
 (cl-defun mevedel-skills-invoke
-    (skill arguments callback &key trigger display-callback additional-context)
+    (skill arguments callback &key trigger display-callback
+           additional-context description on-invocation skip-gates)
   "Invoke SKILL with ARGUMENTS through the unified skill API.
 
 CALLBACK is invoked with a normalized invocation outcome plist:
@@ -2762,6 +2767,11 @@ events.
 
 ADDITIONAL-CONTEXT is appended to fork-skill agent prompts after body
 injections have prepared the prompt.
+
+DESCRIPTION overrides the task description for fork skills.
+ON-INVOCATION is forwarded to `mevedel-tools--task' for fork skills.
+SKIP-GATES bypasses user-disabled/user-invocable/model-invocable gates
+for first-class local commands that own their dispatch semantics.
 
 Recursion depth is tracked via the dynamic let-bound
 `mevedel-skills--invoke-depth'.
@@ -2786,20 +2796,23 @@ foreground agent and calls CALLBACK when that agent returns."
                mevedel-skills-max-recursion-depth skill-name)
        callback display-callback))
      ;; User-disabled skill gating.
-     ((not (mevedel-skills--skill-enabled-p skill))
+     ((and (not skip-gates)
+           (not (mevedel-skills--skill-enabled-p skill)))
       (mevedel-skills--invoke-error
        skill 'disabled
        (format "Skill '%s' is disabled" skill-name)
        callback display-callback))
      ;; User-slash gating.
-     ((and (eq trigger 'user-slash)
+     ((and (not skip-gates)
+           (eq trigger 'user-slash)
            (not (mevedel-skill-user-invocable-p skill)))
       (mevedel-skills--invoke-error
        skill 'disabled
        (format "Skill '%s' is not user-invocable" skill-name)
        callback display-callback))
      ;; Model-side gating.
-     ((and (eq trigger 'model-skill)
+     ((and (not skip-gates)
+           (eq trigger 'model-skill)
            (not (mevedel-skill-model-invocable-p skill)))
       (mevedel-skills--invoke-error
        skill 'disabled
@@ -2817,7 +2830,9 @@ foreground agent and calls CALLBACK when that agent returns."
            (mevedel-skills--invoke-fork-direct
             skill arguments callback
             :trigger trigger :display-callback display-callback
-            :additional-context additional-context))
+            :additional-context additional-context
+            :description description
+            :on-invocation on-invocation))
           (other
            (mevedel-skills--invoke-error
             skill 'unknown-skill
