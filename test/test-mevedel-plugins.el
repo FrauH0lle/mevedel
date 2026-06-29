@@ -16,6 +16,9 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel--session)
+(defvar mevedel--workspace)
+
 
 ;;
 ;;; Helpers
@@ -34,11 +37,29 @@
   (with-temp-file (file-name-concat root ".codex-plugin" "plugin.json")
     (insert json)))
 
-(defun mevedel-plugins-test--read-state (user-dir)
-  "Read test plugin state under USER-DIR."
-  (with-temp-buffer
-    (insert-file-contents (file-name-concat user-dir "plugins.el"))
-    (read (current-buffer))))
+(defun mevedel-plugins-test--workspace (root)
+  "Return a test workspace rooted at ROOT."
+  (mevedel-workspace--create
+   :type 'test :id root :root root :name "test"))
+
+(defun mevedel-plugins-test--session (root)
+  "Return a test session rooted at ROOT."
+  (let ((workspace (mevedel-plugins-test--workspace root)))
+    (mevedel-session-create "main" workspace root)))
+
+(defun mevedel-plugins-test--slash (session args)
+  "Run `/plugin' ARGS as SESSION."
+  (let ((mevedel--session session)
+        (mevedel--workspace (mevedel-session-workspace session)))
+    (mevedel-plugins-slash-command args)))
+
+(defun mevedel-plugins-test--read-state (workspace)
+  "Read test plugin state under WORKSPACE."
+  (let ((file (mevedel-plugins-state-file workspace)))
+    (when (file-readable-p file)
+      (with-temp-buffer
+        (insert-file-contents file)
+        (read (current-buffer))))))
 
 (defvar mevedel-plugins-test--read-eval-ran nil)
 
@@ -196,59 +217,78 @@
 (mevedel-deftest mevedel-plugins-enabled
   (:vars* ((user-dir (file-name-as-directory
                       (make-temp-file "mevedel-plugins-state-" t)))
+           (workspace-root (file-name-as-directory
+                            (make-temp-file "mevedel-plugins-workspace-" t)))
+           (session (mevedel-plugins-test--session workspace-root))
+           (workspace (mevedel-session-workspace session))
            (mevedel-user-dir user-dir))
-   :after-each (delete-directory user-dir t))
+   :after-each (progn
+                 (delete-directory user-dir t)
+                 (delete-directory workspace-root t)))
   ,test
   (test)
-  :doc "enables discovered plugins by default and leaves hooks disabled"
+  :doc "keeps discovered plugins disabled by default in each workspace"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
-    (should (equal '("demo")
-                   (mapcar #'mevedel-plugin-name
-                           (mevedel-plugins-enabled))))
-    (should (equal "demo skills:on hooks:off"
-                   (mevedel-plugins-slash-command "list"))))
+    (should-not (mevedel-plugins-enabled workspace))
+    (should (equal "demo skills:off hooks:off"
+                   (mevedel-plugins-test--slash session "list"))))
+
+  :doc "keeps activation isolated between workspaces"
+  (let* ((root (mevedel-plugins-test--plugin-root user-dir "repo"))
+         (other-root (file-name-as-directory
+                      (make-temp-file "mevedel-plugins-other-ws-" t)))
+         (other-workspace (mevedel-plugins-test--workspace other-root)))
+    (unwind-protect
+        (progn
+          (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+          (mevedel-plugins-enable "demo" workspace)
+          (should (equal '("demo")
+                         (mapcar #'mevedel-plugin-name
+                                 (mevedel-plugins-enabled workspace))))
+          (should-not (mevedel-plugins-enabled other-workspace)))
+      (delete-directory other-root t)))
 
   :doc "persists enable and hook toggles"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
     (should (equal "Enabled hooks for plugin demo."
-                   (mevedel-plugins-slash-command "hooks enable demo")))
+                   (mevedel-plugins-test--slash
+                    session "hooks enable demo")))
     (should (equal "Disabled plugin demo."
-                   (mevedel-plugins-slash-command "disable demo")))
-    (should-not (mevedel-plugins-enabled))
+                   (mevedel-plugins-test--slash session "disable demo")))
+    (should-not (mevedel-plugins-enabled workspace))
     (should (equal '(("demo" :enabled nil :hooks-enabled nil))
-                   (mevedel-plugins-test--read-state user-dir)))
+                   (mevedel-plugins-test--read-state workspace)))
     (should (equal "Enabled hooks for plugin demo."
-                   (mevedel-plugins-slash-command "hooks enable demo")))
+                   (mevedel-plugins-test--slash
+                    session "hooks enable demo")))
     (should (equal '(("demo" :enabled t :hooks-enabled t))
-                   (mevedel-plugins-test--read-state user-dir)))
+                   (mevedel-plugins-test--read-state workspace)))
     (should (equal "demo skills:on hooks:on"
-                   (mevedel-plugins-slash-command "list"))))
+                   (mevedel-plugins-test--slash session "list"))))
 
   :doc "supports plan-compatible hook on and off aliases"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
     (should (equal "Enabled hooks for plugin demo."
-                   (mevedel-plugins-slash-command "hooks demo on")))
+                   (mevedel-plugins-test--slash session "hooks demo on")))
     (should (equal "demo skills:on hooks:on"
-                   (mevedel-plugins-slash-command "list")))
+                   (mevedel-plugins-test--slash session "list")))
     (should (equal "Disabled hooks for plugin demo."
-                   (mevedel-plugins-slash-command "hooks demo off")))
+                   (mevedel-plugins-test--slash session "hooks demo off")))
     (should (equal "demo skills:on hooks:off"
-                   (mevedel-plugins-slash-command "list"))))
+                   (mevedel-plugins-test--slash session "list"))))
 
   :doc "enabling hooks for plugin named superpowers does not queue bootstrap"
-  (let* ((root (mevedel-plugins-test--plugin-root user-dir "repo"))
-         (session (mevedel-session--create :name "main")))
+  (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest
      root
      "{\"name\":\"superpowers\",\"skills\":\"skills\",\"hooks\":\"hooks/hooks.json\"}")
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (should (equal "Enabled hooks for plugin superpowers."
-                     (mevedel-plugins-slash-command "hooks superpowers on")))
-      (should-not (mevedel-session-hook-context-pending session)))))
+    (should (equal "Enabled hooks for plugin superpowers."
+                   (mevedel-plugins-test--slash
+                    session "hooks superpowers on")))
+    (should-not (mevedel-session-hook-context-pending session))))
 
 (mevedel-deftest mevedel-plugins--read-state
   (:vars* ((user-dir (file-name-as-directory
@@ -268,14 +308,22 @@
 (mevedel-deftest mevedel-plugins-plugin-root
   (:vars* ((user-dir (file-name-as-directory
                       (make-temp-file "mevedel-plugins-root-" t)))
+           (workspace-root (file-name-as-directory
+                            (make-temp-file "mevedel-plugins-root-ws-" t)))
+           (workspace (mevedel-plugins-test--workspace workspace-root))
            (mevedel-user-dir user-dir))
-   :after-each (delete-directory user-dir t))
+   :after-each (progn
+                 (delete-directory user-dir t)
+                 (delete-directory workspace-root t)))
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
     (should (equal (file-name-as-directory (expand-file-name root))
                    (mevedel-plugins-plugin-root "demo")))
     (should (equal (file-name-concat user-dir "plugin-data" "demo")
-                   (mevedel-plugins-plugin-data-dir "demo")))))
+                   (mevedel-plugins-plugin-data-dir "demo")))
+    (should (equal (file-name-concat workspace-root ".mevedel"
+                                     "plugin-data" "demo")
+                   (mevedel-plugins-plugin-data-dir "demo" workspace)))))
 
 
 ;;
@@ -284,27 +332,38 @@
 (mevedel-deftest mevedel-plugins-slash-command
   (:vars* ((user-dir (file-name-as-directory
                       (make-temp-file "mevedel-plugins-slash-" t)))
+           (workspace-root (file-name-as-directory
+                            (make-temp-file "mevedel-plugins-slash-ws-" t)))
+           (session (mevedel-plugins-test--session workspace-root))
+           (workspace (mevedel-session-workspace session))
            (mevedel-user-dir user-dir))
-   :after-each (delete-directory user-dir t))
+   :after-each (progn
+                 (delete-directory user-dir t)
+                 (delete-directory workspace-root t)))
   ,test
   (test)
   :doc "returns user-facing strings for bad input"
-  (should (string-match-p "Usage:" (mevedel-plugins-slash-command "")))
+  (should (string-match-p "Usage:"
+                          (mevedel-plugins-test--slash session "")))
   (should (equal "Unknown plugin: missing."
-                 (mevedel-plugins-slash-command "enable missing")))
+                 (mevedel-plugins-test--slash session "enable missing")))
   (should (equal (concat "Invalid plugin target: use OWNER/REPO or a "
                          "GitHub repository.")
-                 (mevedel-plugins-slash-command "install https://example.com/x.git")))
+                 (mevedel-plugins-test--slash
+                  session "install https://example.com/x.git")))
   (let ((mevedel-plugins-git-executor
          (lambda (_directory _args)
            (ert-fail "git should not run for unsafe plugin target"))))
     (should (equal (concat "Invalid plugin target: use OWNER/REPO or a "
                            "GitHub repository.")
-                   (mevedel-plugins-slash-command "install owner/.."))))
+                   (mevedel-plugins-test--slash
+                    session "install owner/.."))))
 
-  :doc "installs a GitHub plugin with stubbed git and prompts for hooks"
+  :doc "installs a GitHub plugin with stubbed git and leaves it disabled"
   (let (calls)
-    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t))
+    (cl-letf (((symbol-function 'yes-or-no-p)
+               (lambda (_prompt)
+                 (ert-fail "install should not prompt for hooks")))
               (mevedel-plugins-git-executor
                (lambda (directory args)
                  (push (list directory args) calls)
@@ -318,7 +377,8 @@
                     "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}"))
                  (list 0 ""))))
       (should (equal "Installed plugin demo."
-                     (mevedel-plugins-slash-command "install owner/repo")))
+                     (mevedel-plugins-test--slash
+                      session "install owner/repo")))
       (should (equal (list (list (mevedel-plugins-dir)
                                  (list "clone" "--depth" "1"
                                        "https://github.com/owner/repo.git"
@@ -326,8 +386,8 @@
                                         user-dir "plugins" "github.com"
                                         "owner" "repo"))))
                      calls))
-      (should (equal "demo skills:on hooks:on"
-                     (mevedel-plugins-slash-command "list")))))
+      (should (equal "demo skills:off hooks:off"
+                     (mevedel-plugins-test--slash session "list")))))
 
   :doc "updates an installed plugin by manifest name"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
@@ -339,7 +399,7 @@
              (push (list directory args) calls)
              (list 0 ""))))
       (should (equal "Updated plugin demo."
-                     (mevedel-plugins-slash-command "update demo")))
+                     (mevedel-plugins-test--slash session "update demo")))
       (should (equal (list (list (file-name-as-directory
                                   (expand-file-name root))
                                  (list "pull" "--ff-only")))
@@ -353,7 +413,8 @@
            (lambda (_directory _args)
              (ert-fail "install should not run git for existing destinations"))))
       (should (equal "Plugin demo is already installed; use /plugin update demo."
-                     (mevedel-plugins-slash-command "install owner/repo")))))
+                     (mevedel-plugins-test--slash
+                      session "install owner/repo")))))
 
   :doc "install refuses existing manifestless destination without suggesting update"
   (let ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo")))
@@ -367,7 +428,7 @@
                         "manifest was found; fix or remove it before "
                         "installing owner/repo.")
                 root)
-        (mevedel-plugins-slash-command "install owner/repo")))))
+        (mevedel-plugins-test--slash session "install owner/repo")))))
 
   :doc "manual updates preserve existing hook consent without prompting"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
@@ -378,7 +439,7 @@
     (mevedel-plugins-test--write-manifest
      root
      "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
-    (mevedel-plugins-enable-hooks "demo")
+    (mevedel-plugins-enable-hooks "demo" workspace)
     (cl-letf (((symbol-function 'yes-or-no-p)
                (lambda (_prompt)
                  (ert-fail "update should not prompt for hook consent")))
@@ -387,9 +448,9 @@
                  (push (list directory args) calls)
                  (list 0 ""))))
       (should (equal "Updated plugin demo."
-                     (mevedel-plugins-slash-command "update demo")))
+                     (mevedel-plugins-test--slash session "update demo")))
       (should (equal "demo skills:on hooks:on"
-                     (mevedel-plugins-slash-command "list")))))
+                     (mevedel-plugins-test--slash session "list")))))
 
   :doc "manual updates preserve disabled plugin state"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
@@ -400,8 +461,8 @@
     (mevedel-plugins-test--write-manifest
      root
      "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
-    (mevedel-plugins-enable-hooks "demo")
-    (mevedel-plugins-disable "demo")
+    (mevedel-plugins-enable-hooks "demo" workspace)
+    (mevedel-plugins-disable "demo" workspace)
     (cl-letf (((symbol-function 'yes-or-no-p)
                (lambda (_prompt)
                  (ert-fail "update should not prompt for hook consent")))
@@ -410,18 +471,18 @@
                  (push (list directory args) calls)
                  (list 0 ""))))
       (should (equal "Updated plugin demo."
-                     (mevedel-plugins-slash-command "update demo")))
+                     (mevedel-plugins-test--slash session "update demo")))
       (should (equal '(("demo" :enabled nil :hooks-enabled nil))
-                     (mevedel-plugins-test--read-state user-dir)))
+                     (mevedel-plugins-test--read-state workspace)))
       (should (equal "demo skills:off hooks:off"
-                     (mevedel-plugins-slash-command "list")))))
+                     (mevedel-plugins-test--slash session "list")))))
 
   :doc "manual updates preserve prior state when manifest name changes"
   (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
          calls)
     (make-directory root t)
     (mevedel-plugins-test--write-manifest root "{\"name\":\"old-name\"}")
-    (mevedel-plugins-disable "old-name")
+    (mevedel-plugins-disable "old-name" workspace)
     (let ((mevedel-plugins-git-executor
            (lambda (directory args)
              (push (list directory args) calls)
@@ -430,11 +491,78 @@
               "{\"name\":\"new-name\"}")
              (list 0 ""))))
       (should (equal "Updated plugin new-name."
-                     (mevedel-plugins-slash-command "update old-name")))
+                     (mevedel-plugins-test--slash
+                      session "update old-name")))
       (should (equal '(("new-name" :enabled nil :hooks-enabled nil))
-                     (mevedel-plugins-test--read-state user-dir)))
+                     (mevedel-plugins-test--read-state workspace)))
       (should (equal "new-name skills:off hooks:off"
-                     (mevedel-plugins-slash-command "list")))))
+                     (mevedel-plugins-test--slash session "list")))))
+
+  :doc "remove deletes managed plugin root, workspace plugin data, and state"
+  (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
+         (data-dir (mevedel-plugins-plugin-data-dir "demo" workspace))
+         refreshes)
+    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+    (make-directory data-dir t)
+    (with-temp-file (file-name-concat data-dir "cache")
+      (insert "cached"))
+    (mevedel-plugins-enable-hooks "demo" workspace)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t))
+              ((symbol-function 'mevedel-skills-rescan)
+               (lambda () (push t refreshes))))
+      (should (equal "Removed plugin demo."
+                     (mevedel-plugins-test--slash session "remove demo"))))
+    (should-not (file-exists-p root))
+    (should-not (file-exists-p data-dir))
+    (should-not (mevedel-plugins-test--read-state workspace))
+    (should (= 1 (length refreshes))))
+
+  :doc "uninstall is an alias for remove"
+  (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
+         (data-dir (mevedel-plugins-plugin-data-dir "demo" workspace)))
+    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+    (make-directory data-dir t)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
+      (should (equal "Removed plugin demo."
+                     (mevedel-plugins-test--slash
+                      session "uninstall demo"))))
+    (should-not (file-exists-p root))
+    (should-not (file-exists-p data-dir)))
+
+  :doc "remove cancellation leaves plugin root, data, and state intact"
+  (let* ((root (mevedel-plugins-test--github-plugin-root user-dir "owner" "repo"))
+         (data-dir (mevedel-plugins-plugin-data-dir "demo" workspace)))
+    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+    (make-directory data-dir t)
+    (mevedel-plugins-disable "demo" workspace)
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) nil)))
+      (should (equal "Remove cancelled for plugin demo."
+                     (mevedel-plugins-test--slash session "remove demo"))))
+    (should (file-exists-p root))
+    (should (file-exists-p data-dir))
+    (should (equal '(("demo" :enabled nil :hooks-enabled nil))
+                   (mevedel-plugins-test--read-state workspace))))
+
+  :doc "remove reports unknown plugins"
+  (should (equal "Unknown plugin: missing."
+                 (mevedel-plugins-test--slash session "remove missing")))
+
+  :doc "remove refuses extra-root plugins"
+  (let* ((extra-dir (file-name-as-directory
+                     (make-temp-file "mevedel-plugins-extra-remove-" t)))
+         (root (file-name-concat extra-dir "repo")))
+    (unwind-protect
+        (let ((mevedel-plugin-extra-roots (list extra-dir)))
+          (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (_prompt)
+                       (ert-fail "extra-root removal should not prompt"))))
+            (should (string-match-p
+                     "Plugin demo is not managed by mevedel; remove .* manually\\."
+                     (mevedel-plugins-test--slash
+                      session "remove demo"))))
+          (should (file-exists-p root)))
+      (delete-directory extra-dir t)))
 
   :doc "reload returns a user-facing string"
   (should (equal "Plugin registry reloaded. No active session skills to refresh."
@@ -449,7 +577,7 @@
                (lambda (type message &optional level _buffer-name)
                  (push (list type message level) warnings))))
       (should (equal "Plugin registry reload failed: refresh broke."
-                     (mevedel-plugins-slash-command "reload")))
+                     (mevedel-plugins-test--slash session "reload")))
       (should (equal '((mevedel "Plugin registry refresh failed: refresh broke" :warning))
                      warnings))))
 
@@ -469,13 +597,13 @@
                       dest
                       "{\"name\":\"fresh\"}")))
                  (list 0 ""))))
-      (mevedel-plugins-slash-command "enable demo")
-      (mevedel-plugins-slash-command "disable demo")
-      (mevedel-plugins-slash-command "hooks demo on")
-      (mevedel-plugins-slash-command "hooks demo off")
-      (mevedel-plugins-slash-command "install owner/fresh")
-      (mevedel-plugins-slash-command "update demo")
-      (mevedel-plugins-slash-command "reload")
+      (mevedel-plugins-test--slash session "enable demo")
+      (mevedel-plugins-test--slash session "disable demo")
+      (mevedel-plugins-test--slash session "hooks demo on")
+      (mevedel-plugins-test--slash session "hooks demo off")
+      (mevedel-plugins-test--slash session "install owner/fresh")
+      (mevedel-plugins-test--slash session "update demo")
+      (mevedel-plugins-test--slash session "reload")
       (should (= 7 (length refreshes)))))
 
   :doc "git executor failures return a user-facing string"
@@ -483,9 +611,10 @@
 	         (lambda (_directory _args)
 	           (signal 'error '("git is missing")))))
     (should (equal "Failed to install plugin owner/repo: git is missing"
-                   (mevedel-plugins-slash-command "install owner/repo"))))
+                   (mevedel-plugins-test--slash
+                    session "install owner/repo"))))
 
-  :doc "fresh installs without hooks do not prompt and leave hooks disabled"
+  :doc "fresh installs without hooks do not prompt and leave plugin disabled"
   (let (calls)
     (cl-letf (((symbol-function 'yes-or-no-p)
                (lambda (_prompt)
@@ -500,9 +629,10 @@
                     "{\"name\":\"demo\"}"))
                  (list 0 ""))))
       (should (equal "Installed plugin demo."
-                     (mevedel-plugins-slash-command "install owner/repo")))
-      (should (equal "demo skills:on hooks:off"
-                     (mevedel-plugins-slash-command "list")))))
+                     (mevedel-plugins-test--slash
+                      session "install owner/repo")))
+      (should (equal "demo skills:off hooks:off"
+                     (mevedel-plugins-test--slash session "list")))))
 
   :doc "fresh installs fail when the clone lacks a manifest"
   (let ((mevedel-plugins-git-executor
@@ -510,7 +640,8 @@
            (make-directory (car (last args)) t)
            (list 0 ""))))
     (should (equal "Failed to install plugin owner/repo: no Codex plugin manifest found."
-                   (mevedel-plugins-slash-command "install owner/repo")))))
+                   (mevedel-plugins-test--slash
+                    session "install owner/repo")))))
 
 
 (provide 'test-mevedel-plugins)

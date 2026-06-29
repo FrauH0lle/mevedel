@@ -8892,6 +8892,8 @@ fork."
               ;; Most local slash commands don't send a turn.  A command may
               ;; return this sentinel when it took ownership of the input.
               (unless (eq result 'mevedel-view-sent)
+                (when (stringp result)
+                  (message "%s" result))
                 (mevedel-view-history-add input)
                 (mevedel-view--clear-input))))
            (skill

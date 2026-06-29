@@ -30,9 +30,12 @@
 (declare-function mevedel-plugin-hooks-file "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-root "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugins-enabled "mevedel-plugins" ())
-(declare-function mevedel-plugins--hooks-enabled-p "mevedel-plugins" (plugin))
-(declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins" (plugin-name))
+(declare-function mevedel-plugins-enabled "mevedel-plugins"
+                  (&optional workspace))
+(declare-function mevedel-plugins--hooks-enabled-p "mevedel-plugins"
+                  (plugin &optional workspace))
+(declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins"
+                  (plugin-name &optional workspace))
 (declare-function mevedel-view--update-spinner "mevedel-view" (status))
 (declare-function mevedel-view--spinner-active-p "mevedel-view" ())
 (defvar gptel-model)
@@ -545,11 +548,12 @@ treated as `SubagentStop'."
        (cdr entry))))
    rules))
 
-(defun mevedel-hooks--annotate-plugin-rules (rules plugin)
-  "Return RULES with every handler annotated for PLUGIN execution."
+(defun mevedel-hooks--annotate-plugin-rules (rules plugin &optional workspace)
+  "Return RULES with every handler annotated for PLUGIN execution.
+Plugin runtime data is scoped to WORKSPACE when provided."
   (let* ((name (mevedel-plugin-name plugin))
          (root (mevedel-plugin-root plugin))
-         (data (mevedel-plugins-plugin-data-dir name)))
+         (data (mevedel-plugins-plugin-data-dir name workspace)))
     (mapcar
      (lambda (entry)
        (cons
@@ -591,19 +595,20 @@ treated as `SubagentStop'."
                (mevedel-hooks--read-config-file
                 (plist-get entry :file)))))))))
 
-(defun mevedel-hooks--plugin-config-rules ()
-  "Return normalized hook rules from plugins with enabled hooks."
+(defun mevedel-hooks--plugin-config-rules (&optional workspace)
+  "Return normalized hook rules from plugins with enabled hooks in WORKSPACE."
   (when (require 'mevedel-plugins nil t)
     (let (rules)
-      (dolist (plugin (mevedel-plugins-enabled) rules)
-        (when (mevedel-plugins--hooks-enabled-p plugin)
+      (dolist (plugin (mevedel-plugins-enabled workspace) rules)
+        (when (mevedel-plugins--hooks-enabled-p plugin workspace)
           (when-let* ((manifest-rules (mevedel-hooks--plugin-manifest-rules
                                         plugin)))
             (setq rules
                   (append rules
                           (mevedel-hooks--annotate-plugin-rules
                            manifest-rules
-                           plugin)))))))))
+                           plugin
+                           workspace)))))))))
 
 (defun mevedel-hooks-effective-rules
     (&optional session workspace request invocation)
@@ -619,7 +624,7 @@ treated as `SubagentStop'."
                     (mevedel-hooks--annotate-rules-source
                      (mevedel-hooks--read-config-file file)
                      'user-file))))
-    (setq rules (append rules (mevedel-hooks--plugin-config-rules)))
+    (setq rules (append rules (mevedel-hooks--plugin-config-rules workspace)))
     (dolist (file (mevedel-hooks--project-config-files workspace))
       (setq rules
             (append rules
