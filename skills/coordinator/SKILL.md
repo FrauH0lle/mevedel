@@ -18,6 +18,9 @@ anything yourself.
 3. **Dispatch workers** with `Agent(run_in_background=true)`.
    Background agents return immediately and run concurrently.
    Independent tasks should be dispatched in the same tool batch.
+   Parallelize only when tasks do not share write targets or likely
+   root causes. If two failures may come from the same underlying
+   bug, diagnose that path first instead of splitting it prematurely.
 4. **Monitor** worker results. Background agents deliver their
    results to your mailbox as `<agent-message>` blocks on your
    next turn. Update task status with `TaskUpdate` as tasks start
@@ -65,6 +68,29 @@ This unblocks your FSM so you can:
 
 Worker results arrive as `<agent-message>` blocks containing an
 `<agent-result>` element with the agent's type, ID, and output.
+
+## Worker handoffs
+
+For short tasks, ask workers to return their result inline. For broad
+research, multi-file implementation, review, or any result that would
+be long, tell the worker to write a report under
+`.mevedel/agent-handoffs/<task-slug>-report.md` and return only:
+
+- `STATUS`: `DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, or `BLOCKED`
+- report file path, if one was written
+- files changed or inspected
+- checks run and outcomes
+- remaining risks, questions, or follow-up tasks
+
+Treat `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, and `BLOCKED` as
+actionable. Read the concern, supply missing context with
+`SendMessage`, dispatch a targeted follow-up worker, or ask the user
+when the missing decision cannot be inferred.
+
+When directing a reviewer or verifier, prefer an existing review
+package file if the parent task produced one. Tell the reviewer to
+read that file first and avoid broad repository rediscovery unless a
+specific finding needs targeted follow-up evidence.
 
 ## Communication channels
 

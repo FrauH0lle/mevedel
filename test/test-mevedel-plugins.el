@@ -238,14 +238,9 @@
     (should (equal "demo skills:on hooks:off"
                    (mevedel-plugins-slash-command "list"))))
 
-  :doc "enabling Superpowers hooks queues bootstrap context in a live session"
+  :doc "enabling hooks for plugin named superpowers does not queue bootstrap"
   (let* ((root (mevedel-plugins-test--plugin-root user-dir "repo"))
-         (skill-file (file-name-concat root "skills"
-                                       "using-superpowers" "SKILL.md"))
          (session (mevedel-session--create :name "main")))
-    (make-directory (file-name-directory skill-file) t)
-    (with-temp-file skill-file
-      (insert "Superpowers skill body.\n"))
     (mevedel-plugins-test--write-manifest
      root
      "{\"name\":\"superpowers\",\"skills\":\"skills\",\"hooks\":\"hooks/hooks.json\"}")
@@ -253,9 +248,7 @@
       (setq-local mevedel--session session)
       (should (equal "Enabled hooks for plugin superpowers."
                      (mevedel-plugins-slash-command "hooks superpowers on")))
-      (let ((context (car (mevedel-session-hook-context-pending session))))
-        (should (string-match-p "You have superpowers in mevedel" context))
-        (should (string-match-p "Superpowers skill body" context))))))
+      (should-not (mevedel-session-hook-context-pending session)))))
 
 (mevedel-deftest mevedel-plugins--read-state
   (:vars* ((user-dir (file-name-as-directory
@@ -283,54 +276,6 @@
                    (mevedel-plugins-plugin-root "demo")))
     (should (equal (file-name-concat user-dir "plugin-data" "demo")
                    (mevedel-plugins-plugin-data-dir "demo")))))
-
-
-;;
-;;; Native plugin hooks
-
-(mevedel-deftest mevedel-plugins--superpowers-bootstrap-context
-  (:vars* ((root (file-name-as-directory
-                  (make-temp-file "mevedel-plugins-superpowers-" t))))
-   :after-each (delete-directory root t))
-  (let* ((skill-file (file-name-concat root "skills"
-                                       "using-superpowers" "SKILL.md"))
-         (body "Superpowers skill body.\nUse relevant skills first.\n")
-         (plugin (mevedel-plugin--create
-                  :name "superpowers"
-                  :root root)))
-    (make-directory (file-name-directory skill-file) t)
-    (with-temp-file skill-file
-      (insert body))
-    (let ((context
-           (mevedel-plugins--superpowers-bootstrap-context plugin)))
-      (should (string-prefix-p "<EXTREMELY-IMPORTANT>\n" context))
-      (should (string-suffix-p "\n</EXTREMELY-IMPORTANT>\n" context))
-      (should (string-match-p "You have superpowers in mevedel" context))
-      (should (string-match-p (regexp-quote body) context))
-      (should (string-match-p "Mevedel Tool Mapping" context))
-      (should (string-match-p "Dispatch a subagent" context))
-      (should
-       (string-match-p
-        (concat "You have superpowers in mevedel"
-                "\\(?:.\\|\n\\)*"
-                "Superpowers skill body"
-                "\\(?:.\\|\n\\)*"
-                "Mevedel Tool Mapping"
-                "\\(?:.\\|\n\\)*"
-                "Dispatch a subagent"
-                "\\(?:.\\|\n\\)*"
-                "</EXTREMELY-IMPORTANT>")
-        context)))))
-
-(mevedel-deftest mevedel-plugins--superpowers-bootstrap-context/unreadable
-  (:vars* ((root (file-name-as-directory
-                  (make-temp-file "mevedel-plugins-superpowers-" t))))
-   :after-each (delete-directory root t))
-  (let ((plugin (mevedel-plugin--create
-                 :name "superpowers"
-                 :root root)))
-    (should-not
-     (mevedel-plugins--superpowers-bootstrap-context plugin))))
 
 
 ;;

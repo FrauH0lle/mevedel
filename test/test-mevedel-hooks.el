@@ -404,8 +404,8 @@
       (delete-directory root t)
       (delete-directory user-dir t))))
 
-(mevedel-deftest mevedel-hooks-effective-rules/superpowers-native-hooks
-  (:doc "uses native Superpowers bootstrap and skips manifest hooks")
+(mevedel-deftest mevedel-hooks-effective-rules/superpowers-manifest-hooks
+  (:doc "uses manifest hooks for plugin named superpowers")
   (let* ((root (make-temp-file "mevedel-hooks-superpowers-ws" t))
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-hooks-superpowers-user" t)))
@@ -435,61 +435,17 @@
           (let* ((rules (mevedel-hooks-effective-rules session workspace))
                  (handlers (mevedel-hooks--matching-handlers
                             'SessionStart '(:source "startup") rules)))
-            (dolist (source '("startup" "resume" "clear"))
-              (should (= 1
-                         (length (mevedel-hooks--matching-handlers
-                                  'SessionStart
-                                  (list :source source)
-                                  rules)))))
-            (should (= 1 (length handlers)))
-            (should (eq 'elisp (plist-get (car handlers) :type)))
-            (should (eq 'mevedel-plugins-superpowers-bootstrap-hook
-                        (plist-get (car handlers) :function)))
-            (should (equal "superpowers"
-                           (plist-get (car handlers) :plugin-name)))
-            (should-not (cl-some
-                         (lambda (handler)
-                           (when-let* ((command (plist-get handler :command)))
-                             (string-match-p "\\bsession-start-codex\\b"
-                                             command)))
-                         handlers))))
-      (delete-directory root t)
-      (delete-directory user-dir t))))
-
-(mevedel-deftest mevedel-hooks-run-event/superpowers-bootstrap-context
-  (:doc "returns Superpowers bootstrap text from native SessionStart hook")
-  (let* ((root (make-temp-file "mevedel-hooks-superpowers-run-ws" t))
-         (user-dir (file-name-as-directory
-                    (make-temp-file "mevedel-hooks-superpowers-run-user" t)))
-         (plugin-root (file-name-as-directory
-                       (file-name-concat user-dir "plugins" "repo")))
-         (skill-file (file-name-concat plugin-root "skills"
-                                       "using-superpowers" "SKILL.md"))
-         (workspace (mevedel-hooks-test--workspace root))
-         (session (mevedel-session-create "main" workspace root))
-         (mevedel-user-dir user-dir)
-         (mevedel-hooks-require-project-trust t)
-         (mevedel-hooks-slow-threshold nil))
-    (unwind-protect
-        (progn
-          (make-directory (file-name-directory skill-file) t)
-          (with-temp-file skill-file
-            (insert "Superpowers runtime skill body.\n"))
-          (mevedel-hooks-test--write-plugin-manifest
-           plugin-root
-           "{\"name\":\"superpowers\",\"hooks\":\"hooks/hooks.json\"}")
-          (mevedel-plugins-enable-hooks "superpowers")
-          (let* ((decision
-                  (mevedel-hooks-test--await
-                   (lambda (cb)
-                     (mevedel-hooks-run-event
-                      'SessionStart '(:source "startup") cb session workspace))))
-                 (context (car (plist-get decision :additional-context))))
-            (should (string-match-p "You have superpowers in mevedel"
-                                    context))
-            (should (string-match-p "Superpowers runtime skill body"
-                                    context))
-            (should (string-match-p "Mevedel Tool Mapping" context))))
+            (should (= 2 (length handlers)))
+            (should (equal '("\"${PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start-codex"
+                             "superpowers-extra")
+                           (sort (mapcar (lambda (handler)
+                                            (plist-get handler :command))
+                                          handlers)
+                                 #'string<)))
+            (should (cl-every (lambda (handler)
+                                (equal "superpowers"
+                                       (plist-get handler :plugin-name)))
+                              handlers))))
       (delete-directory root t)
       (delete-directory user-dir t))))
 

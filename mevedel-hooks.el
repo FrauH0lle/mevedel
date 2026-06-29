@@ -33,7 +33,6 @@
 (declare-function mevedel-plugin-root "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugins-enabled "mevedel-plugins" ())
 (declare-function mevedel-plugins--hooks-enabled-p "mevedel-plugins" (plugin))
-(declare-function mevedel-plugins-native-hook-rules "mevedel-plugins" (plugin))
 (declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins" (plugin-name))
 (declare-function mevedel-view--update-spinner "mevedel-view" (status))
 (declare-function mevedel-view--spinner-active-p "mevedel-view" ())
@@ -599,17 +598,8 @@ treated as `SubagentStop'."
     (let (rules)
       (dolist (plugin (mevedel-plugins-enabled) rules)
         (when (mevedel-plugins--hooks-enabled-p plugin)
-          (when-let* ((native-rules (mevedel-plugins-native-hook-rules
-                                     plugin)))
-            (setq rules
-                  (append rules
-                           (mevedel-hooks--annotate-plugin-rules
-                            (mevedel-hooks-normalize-rules native-rules)
-                            plugin))))
-          (when-let* ((manifest-rules (and (not (equal (mevedel-plugin-name plugin)
-                                                        "superpowers"))
-                                           (mevedel-hooks--plugin-manifest-rules
-                                            plugin))))
+          (when-let* ((manifest-rules (mevedel-hooks--plugin-manifest-rules
+                                        plugin)))
             (setq rules
                   (append rules
                           (mevedel-hooks--annotate-plugin-rules

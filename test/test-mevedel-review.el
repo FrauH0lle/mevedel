@@ -82,6 +82,65 @@
                      (mevedel-review--read-target "/tmp/project/" 'verify)))
       (should (equal "Verify instructions: " seen-prompt)))))
 
+(mevedel-deftest mevedel-review--write-package
+  (:doc "writes a review package file for a git range")
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-review-package-" t)))
+         (package-file (file-name-concat root ".mevedel"
+                                         "review-packages"
+                                         "range.diff")))
+    (unwind-protect
+        (progn
+          (should (zerop (process-file "git" nil nil nil
+                                       "init" "-q" "-b" "main" root)))
+          (let ((default-directory root))
+            (process-file "git" nil nil nil "config" "user.name" "Test")
+            (process-file "git" nil nil nil
+                          "config" "user.email" "test@example.test"))
+          (with-temp-file (file-name-concat root "a.txt")
+            (insert "one\n"))
+          (let ((default-directory root))
+            (should (zerop (process-file "git" nil nil nil "add" "a.txt")))
+            (should (zerop (process-file "git" nil nil nil
+                                         "commit" "-q" "-m" "base"))))
+          (let ((base (with-temp-buffer
+                        (let ((default-directory root))
+                          (should (zerop (process-file "git" nil t nil
+                                                       "rev-parse" "HEAD"))))
+                        (string-trim (buffer-string)))))
+            (with-temp-file (file-name-concat root "a.txt")
+              (insert "one\ntwo\n"))
+            (let ((default-directory root))
+              (should (zerop (process-file "git" nil nil nil "add" "a.txt")))
+              (should (zerop (process-file "git" nil nil nil
+                                           "commit" "-q" "-m" "change"))))
+            (should (equal package-file
+                           (mevedel-review--write-package
+                            root
+                            (list :type 'range
+                                  :base base
+                                  :head "HEAD")
+                            package-file)))
+            (let ((text (with-temp-buffer
+                          (insert-file-contents package-file)
+                          (buffer-string))))
+              (should (string-search "# Review package:" text))
+              (should (string-search "## Commits" text))
+              (should (string-search "change" text))
+              (should (string-search "## Diff" text))
+              (should (string-search "+two" text)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-review--prompt-with-package
+  (:doc "tells reviewers to read the package before broad git inspection")
+  (let ((prompt (mevedel-review--prompt-with-package
+                 "Review this range."
+                 "/tmp/review.diff"
+                 'review)))
+    (should (string-search "Review package file: /tmp/review.diff" prompt))
+    (should (string-search "Read that file first" prompt))
+    (should (string-search "Do not rerun broad git commands" prompt))))
+
 (mevedel-deftest mevedel-review-parse-output ()
   ,test
   (test)
