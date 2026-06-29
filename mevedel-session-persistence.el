@@ -43,6 +43,8 @@
   (require 'cl-lib)
   (require 'mevedel-structs))
 
+(require 'mevedel-transcript)
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -792,79 +794,6 @@ prompt walker does not treat the drawer as a user prompt.  Returns
               (point-min))
           (point-min))))))
 
-(defun mevedel-session-persistence--org-scaffolding-only-p (text)
-  "Return non-nil when TEXT contains only gptel org block marker glue."
-  (let ((cleaned text))
-    (setq cleaned
-          (replace-regexp-in-string
-           "#\\+\\(?:begin\\|end\\)_\\(?:tool\\|reasoning\\)[^\n]*\n?"
-           "" cleaned))
-    (string-empty-p (string-trim cleaned))))
-
-(defun mevedel-session-persistence--org-block-depth-before (pos block-re)
-  "Return nesting depth before POS for org blocks matching BLOCK-RE.
-
-BLOCK-RE should match the suffix after `#+begin_' / `#+end_', for
-example `tool\\|reasoning'."
-  (save-excursion
-    (save-restriction
-      (widen)
-      (let ((depth 0)
-            (regexp (format "^#\\+\\(begin\\|end\\)_\\(?:%s\\)\\b"
-                            block-re)))
-        (goto-char (point-min))
-        (while (re-search-forward regexp pos t)
-          (if (equal (match-string 1) "begin")
-              (cl-incf depth)
-            (setq depth (max 0 (1- depth)))))
-        depth))))
-
-(defun mevedel-session-persistence--user-prompt-start (pos next prop)
-  "Return the real user prompt start in [POS, NEXT), or nil.
-
-Nil-`gptel' regions can contain a mixture of org block glue and the
-next user prompt, for example `#+end_tool' / reasoning text /
-`#+end_reasoning' / user text.  Scan line-wise so the prompt index
-records the first non-empty line outside gptel-owned org blocks."
-  (when (null prop)
-    (save-excursion
-      (save-restriction
-        (widen)
-        (let ((tool-depth
-               (mevedel-session-persistence--org-block-depth-before
-                pos "tool\\|reasoning"))
-              (summary-depth
-               (mevedel-session-persistence--org-block-depth-before
-                pos "summary")))
-          (goto-char pos)
-          (catch 'found
-            (while (< (point) next)
-              (let* ((line-start (point))
-                     (line-end (min next (line-end-position)))
-                     (line (buffer-substring-no-properties
-                            line-start line-end)))
-                (cond
-                 ((string-match-p
-                   "\\`[ \t]*#\\+begin_\\(?:tool\\|reasoning\\)\\b"
-                   line)
-                  (cl-incf tool-depth))
-                 ((string-match-p
-                   "\\`[ \t]*#\\+end_\\(?:tool\\|reasoning\\)\\b"
-                   line)
-                  (setq tool-depth (max 0 (1- tool-depth))))
-                 ((string-match-p "\\`[ \t]*#\\+begin_summary\\b" line)
-                  (cl-incf summary-depth))
-                 ((string-match-p "\\`[ \t]*#\\+end_summary\\b" line)
-                  (setq summary-depth (max 0 (1- summary-depth))))
-                 ((and (= tool-depth 0)
-                       (= summary-depth 0)
-                       (not (string-empty-p (string-trim line)))
-                       (not (mevedel-session-persistence--org-scaffolding-only-p
-                             line)))
-                  (throw 'found line-start)))
-                (forward-line 1)))
-            nil))))))
-
 (defun mevedel-session-persistence--collect-prompts (buffer)
   "Return a list of `(:turn N :pos POS :preview STR)' plists for BUFFER.
 
@@ -884,27 +813,28 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
       (save-excursion
         (save-restriction
           (widen)
-          (let ((pos (mevedel-session-persistence--content-start buffer))
+          (let ((content-start
+                 (mevedel-session-persistence--content-start buffer))
                 (turn 0)
                 (results nil))
-            (while (< pos (point-max))
-              (let* ((next (next-single-property-change
-                            pos 'gptel nil (point-max)))
-                     (prop (get-text-property pos 'gptel)))
-                (when-let* ((prompt-start
-                             (mevedel-session-persistence--user-prompt-start
-                              pos next prop)))
-                  (let ((text (buffer-substring-no-properties
-                               prompt-start next)))
-                    (when (string-match "[^[:space:]].*$" text)
-                      (cl-incf turn)
-                      (push (list :turn turn
-                                  :pos prompt-start
-                                  :preview (truncate-string-to-width
-                                            (match-string 0 text)
-                                            80 nil nil "..."))
-                            results))))
-                (setq pos next)))
+            (dolist (seg (mevedel-transcript--extract-segments
+                          content-start
+                          (point-max)))
+              (pcase-let ((`(,type ,seg-start ,seg-end) seg))
+                (when (eq type 'user)
+                  (when-let* ((prompt-start
+                               (mevedel-transcript--user-prompt-start
+                                (max seg-start content-start) seg-end nil)))
+                    (let ((text (buffer-substring-no-properties
+                                 prompt-start seg-end)))
+                      (when (string-match "[^[:space:]].*$" text)
+                        (cl-incf turn)
+                        (push (list :turn turn
+                                    :pos prompt-start
+                                    :preview (truncate-string-to-width
+                                              (match-string 0 text)
+                                              80 nil nil "..."))
+                              results)))))))
             (nreverse results)))))))
 
 (defun mevedel-session-persistence--prompt-count-in-text (text)
@@ -1044,7 +974,7 @@ non-empty line, truncated to 120 characters."
                               pos 'gptel nil (point-max)))
                        (prop (get-text-property pos 'gptel)))
                   (when-let* ((prompt-start
-                               (mevedel-session-persistence--user-prompt-start
+                               (mevedel-transcript--user-prompt-start
                                 pos next prop)))
                     (let ((text (buffer-substring-no-properties
                                  prompt-start next)))
@@ -1529,8 +1459,7 @@ response run that follows it."
                (not (memq (char-before response-start) '(?\n ?\r)))
                (not (mevedel-session-persistence--response-continuation-marker-p
                      prefix-start response-start))
-               (string-match-p
-                "[^ \t\n\r]"
+               (mevedel-transcript--response-continuation-text-p
                 (buffer-substring-no-properties prefix-start response-start)))
       (cons prefix-start response-start))))
 
@@ -3612,24 +3541,12 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
   (save-excursion
     (save-restriction
       (widen)
-      (let ((pos (mevedel-session-persistence--content-start
-                  (current-buffer)))
-            (turn 0)
-            (cutoff (point-max)))
-        (catch 'done
-          (while (< pos (point-max))
-            (let* ((next (next-single-property-change
-                          pos 'gptel nil (point-max)))
-                   (prop (get-text-property pos 'gptel)))
-              (when-let* ((prompt-start
-                           (mevedel-session-persistence--user-prompt-start
-                            pos next prop)))
-                (cl-incf turn)
-                (when (> turn turn-n)
-                  (setq cutoff prompt-start)
-                  (throw 'done nil)))
-              (setq pos next))))
-        cutoff))))
+      (or (plist-get
+           (nth turn-n
+                (mevedel-session-persistence--collect-prompts
+                 (current-buffer)))
+           :pos)
+          (point-max)))))
 
 (defun mevedel-session-persistence--load-truncated
     (session buffer segment-n file-turn-n &optional cum-turn logical-turn-n)

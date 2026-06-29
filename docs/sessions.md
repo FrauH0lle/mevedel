@@ -56,6 +56,12 @@ to backup names), workspace identity, `:working-directory`, fork lineage
 `:agent-transcripts` metadata. Older sidecars without
 `:working-directory` restore at the workspace root.
 
+The prompt-index is rebuilt from `mevedel-transcript--extract-segments`
+over the live segment. Only shared `user` spans whose real prompt text
+starts outside gptel-owned org tool/reasoning/summary scaffolding become
+rewind entries, so property drawers, compaction summaries, tool glue, and
+stale structural gaps are not offered as user turns.
+
 Hook execution logs are append-only diagnostics.  The in-memory
 `hook-log` slot is transient and capped, while `hook-log.el` keeps the
 session's persisted hook entries as sanitized plists.  It is not read back

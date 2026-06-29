@@ -83,6 +83,7 @@ Data model
 
 Chat / view
   mevedel-chat.el             session lifecycle
+  mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-view.el             compact user-facing view buffer
   mevedel-view-fragment.el    identity-backed view chrome blocks
   mevedel-view-history.el     view input history ring and persistence

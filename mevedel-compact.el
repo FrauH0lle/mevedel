@@ -12,6 +12,7 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel))
+(require 'mevedel-transcript)
 
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
@@ -771,24 +772,13 @@ manual user instructions.  SESSION supplies invoked skill records."
 
 (defun mevedel--compact-find-boundary ()
   "Find the compaction boundary in the current buffer.
-Walk backward from the end to find the end of the last response.
-Everything up to that point will be compacted.  Return the position just
-after the last response, or nil if no response exists."
-  (let ((pos (point-max)))
-    (while (and pos (not (eq (get-text-property pos 'gptel) 'response)))
-      (setq pos (previous-single-property-change pos 'gptel)))
-    ;; pos is now inside the last response region (or nil).
-    ;; Find where this response region ends.
-    (when pos
-      (next-single-property-change pos 'gptel nil (point-max)))))
-
-(defun mevedel--compact-user-authored-span-p (beg end)
-  "Return non-nil if text from BEG to END is user-authored prompt text."
-  (let ((prop (get-text-property beg 'gptel)))
-    (and (not (memq prop '(response ignore)))
-         (not (and (consp prop) (eq (car prop) 'tool)))
-         (not (string-blank-p
-               (buffer-substring-no-properties beg end))))))
+Return the position just after the last response, or nil if no response
+exists."
+  (let (boundary)
+    (dolist (seg (mevedel-transcript--extract-segments (point-min) (point-max)))
+      (when (eq (car seg) 'response)
+        (setq boundary (caddr seg))))
+    boundary))
 
 (defun mevedel--compact-turn-starts-before (limit)
   "Return complete turn start positions before LIMIT, oldest first.
@@ -796,20 +786,22 @@ after the last response, or nil if no response exists."
 User-authored text after the previous assistant response begins a turn.
 Tool-call/result spans between assistant response chunks do not create a
 new turn."
-  (let ((pos (mevedel--compact-body-start))
-        (after-response t)
+  (let ((after-response t)
         starts)
-    (while (< pos limit)
-      (let* ((next (next-single-property-change pos 'gptel nil limit))
-             (prop (get-text-property pos 'gptel)))
-        (cond
-         ((eq prop 'response)
-          (setq after-response t))
-         ((and after-response
-               (mevedel--compact-user-authored-span-p pos next))
-          (push pos starts)
-          (setq after-response nil)))
-        (setq pos next)))
+    (dolist (seg (mevedel-transcript--extract-segments
+                  (mevedel--compact-body-start) limit))
+      (let ((seg-end (min (caddr seg) limit)))
+        (when (< (cadr seg) seg-end)
+          (pcase (car seg)
+            ('response
+             (setq after-response t))
+            ('user
+             (when-let* ((prompt-start
+                          (and after-response
+                               (mevedel-transcript--user-prompt-start
+                                (cadr seg) seg-end nil))))
+               (push prompt-start starts)
+               (setq after-response nil)))))))
     (nreverse starts)))
 
 (defun mevedel--compact-tail-start (limit aggressive)

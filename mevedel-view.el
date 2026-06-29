@@ -19,6 +19,7 @@
 
 (eval-when-compile (require 'cl-lib))
 (require 'mevedel-utilities)
+(require 'mevedel-transcript)
 
 ;; `cl-extra'
 (declare-function cl-subseq "cl-extra" (seq start &optional end))
@@ -930,7 +931,7 @@ Values are t when collapsed and nil when expanded.")
 Set by `mevedel-view--insert-user-message' when the view's send path
 echoes the user's input immediately, and consumed (cleared) by
 `mevedel-view--render-response' to skip the user turn that
-`mevedel-view--extract-segments' may pick up for the same exchange,
+`mevedel-transcript--extract-segments' may pick up for the same exchange,
 which would otherwise produce a duplicate \"You\" block above the
 assistant reply.  Tests that drive function
 `mevedel-view--render-response' directly (without going through the
@@ -3196,35 +3197,7 @@ INFO is a plist with at least :name and :args."
 
 
 ;;
-;;; Data buffer segment extraction
-
-(defun mevedel-view--skip-leading-properties-drawer (pos)
-  "Return POS advanced past a leading `:PROPERTIES:' drawer, if any.
-
-gptel-org stores per-buffer state (preset, model, backend, system
-prompt, bounds) in an org `:PROPERTIES:' drawer at the top of the
-data buffer.  The drawer has no `gptel' text property, so the segment
-extractor would classify it as a user turn and render its raw text in
-the view on a full rerender (session resume, compaction, manual
-refresh).  Skip past it so the rendered view starts at real content."
-  (save-excursion
-    (goto-char pos)
-    (if (and (looking-at-p ":PROPERTIES:$")
-             (re-search-forward "^:END:[ \t]*\n" nil t))
-        (point)
-      pos)))
-
-(defun mevedel-view--skip-leading-summary-block (pos)
-  "Return POS advanced past a leading compaction summary block, if any."
-  (save-excursion
-    (goto-char pos)
-    (skip-chars-forward " \t\n")
-    (if (and (looking-at-p "#\\+begin_summary\\b")
-             (re-search-forward "^#\\+end_summary[^\n]*\n?" nil t))
-        (progn
-          (skip-chars-forward " \t\n")
-          (point))
-      pos)))
+;;; Data buffer property restoration
 
 (defun mevedel-view--gptel-props-present-p (start end)
   "Return non-nil when START..END contain any `gptel' text property."
@@ -3248,8 +3221,8 @@ already present, still normalize them so stale restored bounds can
 self-heal on rerender."
   (when (and (derived-mode-p 'org-mode)
              (not (mevedel-view--running-agent-transcript-buffer-p)))
-    (let ((scan-start (mevedel-view--skip-leading-summary-block
-                       (mevedel-view--skip-leading-properties-drawer
+    (let ((scan-start (mevedel-transcript--skip-leading-summary-block
+                       (mevedel-transcript--skip-leading-properties-drawer
                         (point-min))))
           (inhibit-read-only t))
       (when (and (org-entry-get (point-min) "GPTEL_BOUNDS")
@@ -3267,755 +3240,6 @@ self-heal on rerender."
     (and (mevedel-agent-invocation-p inv)
          (eq (mevedel-agent-invocation-transcript-status inv)
              'running))))
-
-(defun mevedel-view--extract-segments (start end)
-  "Extract segments from the data buffer between START and END.
-Returns a list of (TYPE DATA-START DATA-END) where TYPE is one of
-`user', `response', `tool', or `ignore'.  Walks forward through
-text property changes on the `gptel' property.
-
-START and END are first expanded to whole `gptel' property runs.  This
-matters for incremental re-rendering via `gptel-post-response-functions':
-those hooks may report a changed region that begins in the middle of an
-existing tool or response segment.  Without boundary expansion, the
-first extracted tool segment can start after the leading newline and
-opening paren of the tool plist, so reparsing sees `:name ...' instead
-of `(:name ...)'."
-  (let (segments seg-start seg-type)
-    (save-excursion
-      (setq start (or (previous-single-property-change (min (1+ start) (point-max))
-                                                       'gptel nil (point-min))
-                      (point-min))
-            end (or (next-single-property-change end 'gptel nil (point-max))
-                    (point-max)))
-      (setq start (mevedel-view--skip-leading-properties-drawer start))
-      (setq start (mevedel-view--skip-leading-summary-block start))
-      (goto-char start)
-      (setq seg-start start
-            seg-type (mevedel-view--classify-gptel-prop
-                      (get-text-property start 'gptel)))
-      (while (< (point) end)
-        (let ((next (next-single-property-change (point) 'gptel nil end)))
-          (goto-char next)
-          (when (< next end)
-            ;; Property changed before end -- push the completed segment
-            ;; and start a new one.
-            (push (list seg-type seg-start next) segments)
-            (setq seg-start next
-                  seg-type (mevedel-view--classify-gptel-prop
-                            (get-text-property next 'gptel))))))
-      ;; Push the final (or only) segment.
-      (when (< seg-start end)
-        (push (list seg-type seg-start end) segments)))
-    (setq segments (nreverse segments))
-    (mevedel-view--split-queued-user-message-batch-segments
-     (mevedel-view--repair-response-fragment-segments
-      (mevedel-view--split-structural-user-response-prefixes
-       (mevedel-view--normalize-tool-block-segments segments start end))))))
-
-(defun mevedel-view--split-queued-user-message-batch-segments (segments)
-  "Split generated queued-message batch suffixes out of user SEGMENTS."
-  (let (out)
-    (dolist (seg segments (nreverse out))
-      (pcase-let ((`(,type ,seg-start ,seg-end) seg))
-        (if (not (eq type 'user))
-            (push seg out)
-          (let (split-start)
-            (save-excursion
-              (goto-char seg-start)
-              (while (and (not split-start)
-                          (search-forward "<system-reminder>" seg-end t))
-                (let ((candidate (match-beginning 0)))
-                  (when (mevedel-view--queued-user-message-batch-items-from-text
-                         (buffer-substring-no-properties candidate seg-end))
-                    (setq split-start candidate)))))
-            (if split-start
-                (progn
-                  (when (< seg-start split-start)
-                    (push (list type seg-start split-start) out))
-                  (push (list type split-start seg-end) out))
-              (push seg out))))))))
-
-(defun mevedel-view--org-tool-blocks-overlapping (segments start end)
-  "Return org tool block bounds from SEGMENTS overlapping START..END.
-Bounds include the `#+begin_tool' and `#+end_tool' marker lines.  The
-view uses these structural anchors to repair stale restored
-`GPTEL_BOUNDS' that split a single tool block across several property
-runs."
-  (let (blocks)
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward "^#\\+begin_tool\\b" end t)
-        (let* ((block-start (match-beginning 0))
-               (marker-end (match-end 0))
-               (block-end
-                (and (mevedel-view--org-tool-block-start-p block-start)
-                     (mevedel-view--tool-block-end-from-start block-start)))
-               (overlap-p
-                (and block-end
-                     (or (mevedel-view--tool-block-overlaps-tool-segment-p
-                          segments block-start block-end)
-                         (mevedel-view--tool-block-inside-ignore-segment-p
-                          segments block-start block-end)))))
-          (when (and block-end (not overlap-p))
-            (when-let* ((min-end
-                         (mevedel-view--first-tool-segment-start-after
-                          segments block-start end))
-                        (retry-min
-                         (or (mevedel-view--tool-block-start-before
-                              min-end block-end)
-                             min-end)))
-              (when-let* ((retry-end
-                            (mevedel-view--tool-block-retry-end
-                             block-start nil block-end retry-min)))
-                (setq block-end retry-end)
-                (setq overlap-p
-                      (and block-end
-                           (mevedel-view--tool-block-overlaps-tool-segment-p
-                            segments block-start block-end))))))
-          (if (and block-end
-                   (< block-start end)
-                   (> block-end start)
-                   overlap-p)
-              (progn
-                (push (cons block-start block-end) blocks)
-                (goto-char (max block-end marker-end)))
-            (goto-char (min (1+ block-start) (point-max)))))))
-    (sort blocks
-          (lambda (a b) (< (car a) (car b))))))
-
-(defun mevedel-view--tool-block-overlaps-tool-segment-p
-    (segments block-start block-end)
-  "Return non-nil when SEGMENTS overlap BLOCK-START..BLOCK-END."
-  (let (found)
-    (while (and segments (not found))
-      (let ((seg (car segments)))
-        (setq found
-              (and (eq (car seg) 'tool)
-                   (< (cadr seg) block-end)
-                   (> (caddr seg) block-start))))
-      (setq segments (cdr segments)))
-    found))
-
-(defun mevedel-view--tool-block-inside-ignore-segment-p
-    (segments block-start block-end)
-  "Return non-nil when an ignore SEGMENTS entry contains BLOCK-START..BLOCK-END."
-  (let (found)
-    (while (and segments (not found))
-      (let ((seg (car segments)))
-        (setq found
-              (and (eq (car seg) 'ignore)
-                   (<= (cadr seg) block-start)
-                   (<= block-end (caddr seg)))))
-      (setq segments (cdr segments)))
-    found))
-
-(defun mevedel-view--first-tool-segment-start-after (segments pos limit)
-  "Return the first tool segment start in SEGMENTS after POS and before LIMIT."
-  (let (found)
-    (while (and segments (not found))
-      (let ((seg (car segments)))
-        (when (and (eq (car seg) 'tool)
-                   (> (cadr seg) pos)
-                   (< (cadr seg) limit))
-          (setq found (cadr seg))))
-      (setq segments (cdr segments)))
-    found))
-
-(defun mevedel-view--org-tool-block-start-p (pos)
-  "Return non-nil when POS is at a persisted org tool block start.
-Literal `#+begin_tool' text can appear inside tool output.  A real
-persisted tool block is followed by the serialized `(:name ...)' tool
-plist, so use that as the structural discriminator instead of text
-properties, which can be stale after restoring `GPTEL_BOUNDS'."
-  (save-excursion
-    (goto-char pos)
-    (forward-line 1)
-    (skip-chars-forward " \t\n")
-    (looking-at-p "(\\s-*:name\\_>")))
-
-(defun mevedel-view--tool-block-bounds-for-run (seg-start seg-end
-                                                          &optional limit)
-  "Return recovered org tool block bounds for a tool run.
-SEG-START and SEG-END are the bounds of an actual `gptel' tool
-property run.  Recovery is anchored to that run rather than to every
-marker-looking line in the buffer, so transcript-like text inside a
-tool result does not create nested fake tool blocks.  LIMIT, when
-non-nil, is the start of the next actual tool run."
-  (when-let* ((block-start
-               (mevedel-view--tool-block-start-for-run seg-start seg-end
-                                                       limit))
-              (block-end
-               (mevedel-view--tool-block-end-from-start block-start limit
-                                                        seg-start)))
-    (when (and (< block-start seg-end)
-               (> block-end seg-start))
-      (cons block-start block-end))))
-
-(defun mevedel-view--tool-block-start-for-run (seg-start seg-end
-                                                         &optional limit)
-  "Return the structural `#+begin_tool' for tool run SEG-START..SEG-END.
-LIMIT bounds the backward search when non-nil."
-  (let (found)
-    (save-excursion
-      (goto-char seg-end)
-      (while (re-search-backward "^#\\+begin_tool\\b" nil t)
-        (let ((candidate (point)))
-          (when (and (< candidate seg-end)
-                     (mevedel-view--org-tool-block-start-p candidate))
-            (let ((block-end
-                   (mevedel-view--tool-block-end-from-start candidate limit)))
-              (when (and block-end
-                         (or (> block-end seg-start)
-                             (let ((retry-min
-                                    (or (mevedel-view--tool-block-start-before
-                                         seg-start block-end)
-                                        seg-start)))
-                               (mevedel-view--tool-block-retry-end
-                                candidate limit block-end retry-min))))
-                (when (<= block-end seg-start)
-                  (let ((retry-min
-                         (or (mevedel-view--tool-block-start-before
-                              seg-start block-end)
-                             seg-start)))
-                    (setq block-end
-                          (mevedel-view--tool-block-retry-end
-                           candidate limit block-end retry-min))))
-                (when (and block-end (> block-end seg-start))
-                  ;; Keep scanning backward and retain the earliest
-                  ;; containing block.  That rejects nested transcript text
-                  ;; when stale bounds start after the nested marker.
-                  (setq found candidate))))))))
-    found))
-
-(defun mevedel-view--tool-block-retry-end (block-start limit block-end
-                                                       retry-min)
-  "Return an extended structural close for BLOCK-START, or nil.
-LIMIT bounds the search when non-nil.  BLOCK-END is the normal close
-for BLOCK-START and RETRY-MIN is a later
-marker-looking block start where the restored tool run begins.  Recovery
-is accepted only when the outer block extends beyond that later block's
-own first close, which distinguishes nested-looking tool text from a
-completed earlier block followed by a real tool call."
-  (when (mevedel-view--tool-block-retry-gap-p block-end retry-min)
-    (let ((retry-end
-           (mevedel-view--tool-block-end-from-start block-start limit
-                                                    retry-min))
-          (inner-close
-           (mevedel-view--first-tool-close-after retry-min limit)))
-      (when (and retry-end inner-close (> retry-end inner-close))
-        retry-end))))
-
-(defun mevedel-view--tool-block-start-before (pos limit)
-  "Return the nearest structural tool block start before POS after LIMIT."
-  (let (found)
-    (save-excursion
-      (goto-char pos)
-      (while (and (not found)
-                  (re-search-backward "^#\\+begin_tool\\b" limit t))
-        (when (mevedel-view--org-tool-block-start-p (point))
-          (setq found (point)))))
-    found))
-
-(defun mevedel-view--tool-block-retry-gap-p (block-end min-end)
-  "Return non-nil when BLOCK-END..MIN-END resemble tool output.
-This gate is used only after the normal structural close for a block
-falls before the restored tool run.  It permits the recovery case where
-a literal close marker appears inside tool output before a nested-looking
-marker, while preventing an earlier completed tool block from swallowing
-the next real tool call."
-  (and block-end
-       min-end
-       (< block-end min-end)
-       (let ((gap (buffer-substring-no-properties block-end min-end)))
-         (and (string-match-p "[^ \t\n]" gap)
-              (mevedel-view--range-has-gptel-prop-p
-               block-end min-end '(tool))
-              (not (mevedel-view--range-has-gptel-prop-p
-                    block-end min-end '(response ignore)))))))
-
-(defun mevedel-view--first-tool-close-after (pos &optional limit)
-  "Return the first non-response `#+end_tool' marker end after POS.
-LIMIT bounds the search when non-nil."
-  (let (found)
-    (save-excursion
-      (goto-char pos)
-      (while (and (not found)
-                  (re-search-forward "^#\\+end_tool[^\n]*\n?" limit t))
-        (let ((marker-start (match-beginning 0))
-              (marker-end (match-end 0)))
-          (unless (eq (mevedel-view--classify-gptel-prop
-                       (get-text-property marker-start 'gptel))
-                      'response)
-            (setq found marker-end)))))
-    found))
-
-(defun mevedel-view--range-has-gptel-prop-p (start end types)
-  "Return non-nil when START..END contain a `gptel' property in TYPES."
-  (let (found)
-    (save-excursion
-      (goto-char start)
-      (while (and (< (point) end) (not found))
-        (let ((type (mevedel-view--classify-gptel-prop
-                     (get-text-property (point) 'gptel))))
-          (when (memq type types)
-            (setq found t))
-          (goto-char (or (next-single-property-change (point) 'gptel nil end)
-                         end)))))
-    found))
-
-(defun mevedel-view--blank-gap-p (start end)
-  "Return non-nil if START..END is only whitespace."
-  (or (>= start end)
-      (string-empty-p
-       (string-trim
-        (buffer-substring-no-properties start end)))))
-
-(defconst mevedel-view--mailbox-block-specs
-  '((agent-result
-     :open "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"\\([^\"]+\\)\"[^>]*>"
-     :close "</agent-result>")
-    (agent-message
-     :open "<agent-message\\s-+[^>]*from=\"\\([^\"]+\\)\"[^>]*>"
-     :close "</agent-message>"))
-  "Structural mailbox block regexes.
-
-The open regex captures the agent id in match group 1.")
-
-(defun mevedel-view--mailbox-spec (kind key)
-  "Return mailbox KIND spec value for KEY."
-  (plist-get (cdr (assq kind mevedel-view--mailbox-block-specs)) key))
-
-(defun mevedel-view--mailbox-open-at-point (kind limit)
-  "Return mailbox open metadata for KIND at point before LIMIT.
-The returned plist contains `:kind', `:id', `:open-start', and
-`:open-end'."
-  (let ((regex (mevedel-view--mailbox-spec kind :open)))
-    (when (and regex
-               (<= (point) limit)
-               (looking-at regex)
-               (<= (match-end 0) limit))
-      (list :kind kind
-            :id (match-string-no-properties 1)
-            :open-start (match-beginning 0)
-            :open-end (match-end 0)))))
-
-(defun mevedel-view--mailbox-close-line-regexp (close-tag)
-  "Return a line-oriented regexp for CLOSE-TAG."
-  (concat "^[ \t]*" (regexp-quote close-tag) "[ \t]*\\(?:\n\\|\\'\\)"))
-
-(defun mevedel-view--mailbox-nested-open-regexp (close-tag)
-  "Return a broad nested mailbox opener regexp for CLOSE-TAG."
-  (pcase close-tag
-    ("</agent-result>" "<agent-result\\(?:\\s-\\|>\\)")
-    ("</agent-message>" "<agent-message\\(?:\\s-\\|>\\)")))
-
-(defun mevedel-view--mailbox-structural-close-at (start close-re)
-  "Return close bounds when START is on a structural CLOSE-RE line."
-  (save-excursion
-    (goto-char start)
-    (beginning-of-line)
-    (when (looking-at close-re)
-      (cons (match-beginning 0) (match-end 0)))))
-
-(defun mevedel-view--mailbox-find-close (open-regexp close-tag limit)
-  "Return structural close bounds for CLOSE-TAG before LIMIT.
-OPEN-REGEXP matches normal nested mailbox openings of the same kind.
-The return value is a cons cell `(BODY-END . CLOSE-END)'.  Close
-markers are accepted only as standalone lines; matching nested openings
-first keeps literal nested mailbox examples from ending the outer card."
-  (let* ((close-re (mevedel-view--mailbox-close-line-regexp close-tag))
-         (loose-close-re (regexp-quote close-tag))
-         (nested-open-re (mevedel-view--mailbox-nested-open-regexp close-tag))
-         (event-re (concat "\\(?:" open-regexp "\\)"
-                           (when nested-open-re
-                             (concat "\\|\\(?:" nested-open-re "\\)"))
-                           "\\|\\(?:" loose-close-re "\\)"))
-         (depth 0))
-    (catch 'done
-      (while (re-search-forward event-re limit t)
-        (let ((start (match-beginning 0)))
-          (cond
-           ((mevedel-view--mailbox-structural-close-at start close-re)
-            (if (> depth 0)
-                (cl-decf depth)
-              (throw 'done
-                     (mevedel-view--mailbox-structural-close-at
-                      start close-re))))
-           ((save-excursion
-              (goto-char start)
-              (looking-at loose-close-re))
-            (when (> depth 0)
-              (cl-decf depth)))
-           (t
-            (cl-incf depth)))))
-      nil)))
-
-(defun mevedel-view--mailbox-block-at-point (kind limit)
-  "Return mailbox block metadata for KIND at point before LIMIT.
-The returned plist includes open metadata plus `:body-start',
-`:body-end', and `:close-end'."
-  (let ((open (mevedel-view--mailbox-open-at-point kind limit))
-        close)
-    (when open
-      (save-excursion
-        (goto-char (plist-get open :open-end))
-        (setq close
-              (mevedel-view--mailbox-find-close
-               (mevedel-view--mailbox-spec kind :open)
-               (mevedel-view--mailbox-spec kind :close)
-               limit)))
-      (when close
-        (append open
-                (list :body-start (plist-get open :open-end)
-                      :body-end (car close)
-                      :close-end (cdr close)))))))
-
-(defun mevedel-view--mailbox-any-block-at-point (limit)
-  "Return mailbox block metadata at point before LIMIT, or nil."
-  (or (mevedel-view--mailbox-block-at-point 'agent-result limit)
-      (mevedel-view--mailbox-block-at-point 'agent-message limit)))
-
-(defun mevedel-view--mailbox-start-in-range-p (start end)
-  "Return non-nil if a mailbox opening tag appears in START..END."
-  (save-excursion
-    (goto-char start)
-    (or (re-search-forward "<agent-result\\(?:\\s-\\|>\\)" end t)
-        (progn
-          (goto-char start)
-          (re-search-forward "<agent-message\\(?:\\s-\\|>\\)" end t)))))
-
-(defun mevedel-view--tool-block-gap-crosses-boundary-p (start end)
-  "Return non-nil when START..END crosses non-tool conversation content."
-  (and (< start end)
-       (or (mevedel-view--range-has-gptel-prop-p start end
-                                                 '(response ignore))
-           (mevedel-view--mailbox-start-in-range-p start end)
-           (save-excursion
-             (goto-char start)
-             (re-search-forward
-              "^\\(?:<system-reminder>\\|<queued-user-message-batch\\_>\\|<hook-context>\\)"
-              end t)))))
-
-(defun mevedel-view--tool-block-truncated-before-p (start end)
-  "Return non-nil if a mevedel truncation marker appears in START..END."
-  (and (< start end)
-       (save-excursion
-         (goto-char start)
-         (re-search-forward
-          "\\[mevedel: tool output truncated; omitted [0-9]+ chars\\]"
-          end t))))
-
-(defun mevedel-view--tool-block-call-readable-before-p (start end)
-  "Return non-nil when START..END begins with a readable tool call plist."
-  (and (< start end)
-       (condition-case nil
-           (save-restriction
-             (narrow-to-region start end)
-             (save-excursion
-               (goto-char start)
-               (forward-line 1)
-               (skip-chars-forward " \t\n")
-               (let ((sexp (read (current-buffer))))
-                 (and (listp sexp)
-                      (stringp (plist-get sexp :name))))))
-         (error nil))))
-
-(defun mevedel-view--tool-block-end-from-start (block-start &optional limit
-                                                            min-end)
-  "Return the structural close for the tool block at BLOCK-START.
-LIMIT bounds the search when non-nil.
-The close is the last non-response `#+end_tool' marker before the next
-structural `#+begin_tool' that appears after at least one close marker.
-That separates adjacent persisted tools while preserving marker-looking
-text inside a tool result.  If MIN-END is non-nil, ignore closes at or
-before MIN-END when deciding whether a following begin marker starts the
-next persisted tool."
-  (let (last-close done)
-    (save-excursion
-      (goto-char block-start)
-      (forward-line 1)
-      (while (and (not done)
-                  (re-search-forward "^#\\+\\(begin_tool\\b\\|end_tool[^\n]*\n?\\)"
-                                     limit t))
-        (let ((marker-start (match-beginning 0))
-              (marker-end (match-end 0)))
-          (cond
-           ((and (not last-close)
-                 (save-excursion
-                   (goto-char marker-start)
-                   (looking-at-p "^#\\+begin_tool\\b"))
-                 (mevedel-view--org-tool-block-start-p marker-start)
-                 (mevedel-view--range-has-gptel-prop-p
-                  block-start marker-start '(tool))
-                 (not (mevedel-view--same-tool-run-before-p
-                       marker-start block-start))
-                 (or (mevedel-view--tool-block-truncated-before-p
-                      block-start marker-start)
-                     (not (mevedel-view--tool-block-call-readable-before-p
-                           block-start marker-start))))
-            (setq last-close marker-start
-                  done t))
-           ((and last-close
-                 (or (not min-end) (> last-close min-end))
-                 (save-excursion
-                   (goto-char marker-start)
-                   (looking-at-p "^#\\+begin_tool\\b"))
-                 (mevedel-view--org-tool-block-start-p marker-start)
-                 (or (not (mevedel-view--same-tool-run-before-p
-                           marker-start block-start))
-                     (mevedel-view--tool-block-gap-crosses-boundary-p
-                      last-close marker-start)
-                     (mevedel-view--blank-gap-p
-                      last-close marker-start)))
-            (setq done t))
-           ((save-excursion
-              (goto-char marker-start)
-              (looking-at-p "^#\\+end_tool"))
-            (let ((marker-type
-                   (mevedel-view--classify-gptel-prop
-                    (get-text-property marker-start 'gptel))))
-              (unless (and (eq marker-type 'response)
-                           (or (mevedel-view--range-has-gptel-prop-p
-                                (or last-close block-start)
-                                marker-start '(response ignore))
-                               (not (or
-                                     (mevedel-view--range-has-gptel-prop-p
-                                      (or last-close block-start)
-                                      marker-start '(tool))
-                                     (and last-close
-                                          (mevedel-view--gap-body-text-p
-                                           last-close marker-start))))))
-                (setq last-close marker-end))))))))
-    last-close))
-
-(defun mevedel-view--same-tool-run-before-p (pos limit)
-  "Return non-nil if POS has the same tool prop as prior text after LIMIT."
-  (let ((prop (get-text-property pos 'gptel))
-        found)
-    (when (eq (mevedel-view--classify-gptel-prop prop) 'tool)
-      (save-excursion
-        (goto-char pos)
-        (while (and (> (point) limit) (not found))
-          (backward-char 1)
-          (unless (memq (char-after) '(?\s ?\t ?\n ?\r))
-            (setq found (equal (get-text-property (point) 'gptel)
-                               prop))))))
-    found))
-
-(defun mevedel-view--gap-body-text-p (start end)
-  "Return non-nil when START..END resemble unclassified tool body text."
-  (and (< start end)
-       (not (mevedel-view--range-has-gptel-prop-p
-             start end '(response ignore)))
-       (string-match-p "[^ \t\n]"
-                       (buffer-substring-no-properties start end))))
-
-(defun mevedel-view--normalize-tool-block-segments (segments start end)
-  "Return SEGMENTS with overlapping org tool blocks made canonical.
-START and END are the requested data-buffer range.  Each org tool
-block overlapping that range becomes one `tool' segment covering the
-whole block; property runs that only contain pieces of the block marker
-or tool sexp are dropped.  Text outside tool blocks keeps its original
-classification."
-  (let ((blocks (mevedel-view--org-tool-blocks-overlapping segments start end))
-        out)
-    (dolist (block blocks)
-      (let ((block-start (car block))
-            (block-end (cdr block)))
-        (while (and segments (<= (caddr (car segments)) block-start))
-          (push (pop segments) out))
-        (when (and segments (< (cadr (car segments)) block-start))
-          (let ((seg (car segments)))
-            (push (list (car seg) (cadr seg) block-start) out)))
-        (while (and segments (< (cadr (car segments)) block-end))
-          (let ((seg (car segments)))
-            (setq segments (cdr segments))
-            (when (> (caddr seg) block-end)
-              (setq segments
-                    (cons (list (if (eq (car seg) 'tool)
-                                    'user
-                                  (car seg))
-                                block-end (caddr seg))
-                          segments)))))
-        (push (list 'tool block-start block-end) out)))
-    (nconc (nreverse out) segments)))
-
-(defun mevedel-view--leading-structural-user-tail-start (start end)
-  "Return assistant-tail start after leading structural user blocks.
-START..END is a nil-`gptel' segment.  Returns nil unless the segment
-begins with one or more complete mailbox/reminder blocks followed by
-non-whitespace prose."
-  (let ((patterns '(("<system-reminder>" . "</system-reminder>")
-                    ("<queued-user-message-batch\\_>" . "</queued-user-message-batch>")
-                    ("<hook-context>" . "</hook-context>")))
-        last-block-end done)
-    (save-excursion
-      (goto-char start)
-      (while (and (not done) (< (point) end))
-        (skip-chars-forward " \t\n\r" end)
-        (let (matched)
-          (cond
-           ((setq matched
-                  (mevedel-view--mailbox-any-block-at-point end))
-            (goto-char (plist-get matched :close-end))
-            (setq last-block-end (point)
-                  matched t))
-           (t
-            (dolist (pattern patterns)
-              (when (and (not matched)
-                         (looking-at-p (car pattern)))
-                (setq matched t)
-                (if (search-forward (cdr pattern) end t)
-                    (progn
-                      (when (and (< (point) end)
-                                 (eq (char-after) ?\n))
-                        (forward-char 1))
-                      (setq last-block-end (point)))
-                  (setq done t))))))
-          (unless matched
-            (setq done t))))
-      (when last-block-end
-        (goto-char last-block-end)
-        (skip-chars-forward " \t\n\r" end)
-        (when (and (< (point) end)
-                   (string-match-p
-                    "[^ \t\n\r]"
-                    (buffer-substring-no-properties (point) end)))
-          (point))))))
-
-(defun mevedel-view--response-continuation-gap-p (start end)
-  "Return non-nil if START..END is a response prefix gap."
-  (and (< start end)
-       (not (memq (char-before end) '(?\n ?\r)))
-       (string-match-p
-        "[^ \t\n\r]"
-        (buffer-substring-no-properties start end))))
-
-(defun mevedel-view--split-structural-user-response-prefixes (segments)
-  "Split assistant response prefixes out of structural user SEGMENTS.
-Stale restored bounds can leave an `<agent-result>' block and the first
-characters of the following assistant text in one nil-property segment,
-with the next segment marked `response'.  Split that mid-line prefix so
-the normal response merger can keep the assistant turn intact."
-  (let (out rest)
-    (setq rest segments)
-    (while rest
-      (let* ((seg (car rest))
-             (next (cadr rest))
-             (tail-start
-              (and (eq (car seg) 'user)
-                   (eq (car-safe next) 'response)
-                   (mevedel-view--leading-structural-user-tail-start
-                    (cadr seg) (caddr seg)))))
-        (if (and tail-start
-                 (< tail-start (caddr seg))
-                 (mevedel-view--response-continuation-gap-p
-                  tail-start (caddr seg)))
-            (progn
-              (when (< (cadr seg) tail-start)
-                (push (list 'user (cadr seg) tail-start) out))
-              (push (list 'response tail-start (caddr seg)) out))
-          (push seg out)))
-      (setq rest (cdr rest)))
-    (nreverse out)))
-
-(defun mevedel-view--repair-response-fragment-segments (segments)
-  "Return SEGMENTS with stale response fragments reclassified.
-Older or externally edited transcripts can restore `GPTEL_BOUNDS' a
-few characters into an assistant response, leaving the leading text as
-a nil-property `user' segment between a tool and a response.  Such
-fragments should render as part of the assistant response, not as a
-fake thinking block or user turn."
-  (let (converted prev-type rest)
-    (setq rest (mevedel-view--merge-adjacent-segments segments '(user)))
-    (while rest
-      (let* ((seg (car rest))
-             (type (car seg))
-             (next-type (car-safe (cadr rest)))
-             (prev-seg (car converted))
-             (convert-p
-              (and (eq type 'user)
-                   (or (and (memq prev-type '(tool ignore))
-                            (eq next-type 'response)
-                            (mevedel-view--response-fragment-segment-p
-                             seg (cadr rest)))
-                       (mevedel-view--response-continuation-segment-p
-                        prev-seg seg (cadr rest))))))
-        (push (if convert-p
-                  (list 'response (cadr seg) (caddr seg))
-                seg)
-              converted)
-        (setq prev-type (if convert-p 'response type))
-        (setq rest (cdr rest))))
-    (mevedel-view--merge-adjacent-segments (nreverse converted) '(response))))
-
-(defun mevedel-view--response-fragment-segment-p (seg next-seg)
-  "Return non-nil when SEG resembles a stale prefix of NEXT-SEG.
-This is deliberately conservative so a real user prompt in a
-`tool -> user -> response' sequence does not get swallowed into the
-assistant turn."
-  (and next-seg
-       (let* ((text (buffer-substring-no-properties (cadr seg) (caddr seg)))
-              (trimmed (string-trim text))
-              (next-text
-               (buffer-substring-no-properties (cadr next-seg)
-                                               (caddr next-seg)))
-              (next-trimmed (string-trim-left next-text)))
-         (and (not (string-empty-p trimmed))
-              (<= (length text) 120)
-              (not (string-match-p "\n" text))
-              (not (string-match-p "\\`\\(?:\\*+\\|#+\\|[-+*]\\)[ \t]"
-                                   trimmed))
-              (not (mevedel-view--scaffolding-only-p
-                    (current-buffer) (cadr seg) (caddr seg)))
-              (not (string-empty-p next-trimmed))
-              (let ((ch (aref next-trimmed 0)))
-                (or (and (>= ch ?a) (<= ch ?z))
-                    (memq ch '(?, ?. ?\; ?: ?\) ?\] ?\}))))))))
-
-(defun mevedel-view--response-continuation-segment-p (prev-seg seg next-seg)
-  "Return non-nil when SEG continues a response split mid-line."
-  (and prev-seg
-       next-seg
-       (eq (car prev-seg) 'response)
-       (eq (car seg) 'user)
-       (eq (car next-seg) 'response)
-       (< (cadr seg) (caddr seg))
-       (> (cadr seg) (point-min))
-       (not (memq (char-before (cadr seg)) '(?\n ?\r)))
-       (let ((trimmed
-              (string-trim
-               (buffer-substring-no-properties (cadr seg) (caddr seg)))))
-         (and (not (string-empty-p trimmed))
-              (not (string-match-p "\\`\\(?:\\*+\\|#+\\|[-+*]\\)[ \t]"
-                                   trimmed))))))
-
-(defun mevedel-view--merge-adjacent-segments (segments types)
-  "Merge contiguous SEGMENTS whose type is a member of TYPES."
-  (let (out)
-    (dolist (seg segments)
-      (let ((prev (car out)))
-        (if (and prev
-                 (memq (car prev) types)
-                 (eq (car prev) (car seg))
-                 (= (caddr prev) (cadr seg)))
-            (setcar out (list (car seg) (cadr prev) (caddr seg)))
-          (push seg out))))
-    (nreverse out)))
-
-(defun mevedel-view--classify-gptel-prop (prop)
-  "Classify a `gptel' text property value PROP into a segment type symbol."
-  (pcase prop
-    ('nil 'user)
-    ('response 'response)
-    ('ignore 'ignore)
-    (`(tool . ,_id) 'tool)
-    (_ 'response)))
-
-
-;;
-;;; Turn grouping
 
 (defun mevedel-view--group-into-turns (segments &optional data-buf)
   "Group SEGMENTS by conversation role.
@@ -6435,7 +5659,7 @@ the render so user toggles survive streaming ticks."
               (with-current-buffer data-buf (point-max))))
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
-                       (mevedel-view--extract-segments data-from data-to))))
+                       (mevedel-transcript--extract-segments data-from data-to))))
          (turns (mevedel-view--group-into-turns segments data-buf))
          (in-flight-p (mevedel-view--normalize-in-flight-turn-start))
          (pre-rendered-user-visible-p
@@ -6989,78 +6213,9 @@ Empty string when the turn contains only whitespace or markers."
              (buffer-substring-no-properties
               body-start (match-beginning 0)))))))))
 
-(defun mevedel-view--queued-user-message-batch-control-text (text)
-  "Return TEXT trimmed of leading org tool-close glue.
-Generated queued batches can be inserted immediately after a tool block,
-leaving unpropertized `#+end_tool' marker text in the same nil-`gptel'
-segment.  Strip only that trailing-tool structural glue so ordinary prose
-containing queued-message XML is still rendered literally."
-  (when (stringp text)
-    (with-temp-buffer
-      (insert (string-trim text))
-      (goto-char (point-min))
-      (while (looking-at "#\\+end_tool\\b[^\n]*\n?")
-        (delete-region (match-beginning 0) (match-end 0))
-        (skip-chars-forward " \t\r\n"))
-      (string-trim (buffer-string)))))
-
 (defun mevedel-view--queued-user-message-batch-items-from-text (text)
-  "Return generated queued user-message items parsed from TEXT, or nil.
-TEXT must consist only of leading org tool-close glue, the generated
-optional system reminder, and one complete queued-message batch.  Literal
-examples embedded in user text are not treated as control markup."
-  (when (stringp text)
-    (with-temp-buffer
-      (insert (mevedel-view--queued-user-message-batch-control-text text))
-      (goto-char (point-min))
-      (when (looking-at "<system-reminder>")
-        (goto-char (match-end 0))
-        (if (search-forward "</system-reminder>" nil t)
-            (skip-chars-forward " \t\r\n")
-          (goto-char (point-max))))
-      (when (looking-at
-             "<queued-user-message-batch[[:space:]][^>]*count=\"\\([0-9]+\\)\"[^>]*>")
-        (let ((count (string-to-number (match-string 1)))
-              (body-start (match-end 0)))
-          (goto-char body-start)
-          (when (search-forward "</queued-user-message-batch>" nil t)
-            (let ((body-end (match-beginning 0)))
-              (skip-chars-forward " \t\r\n")
-              (when (= (point) (point-max))
-                (mevedel-view--queued-user-message-items-from-body
-                 (buffer-substring-no-properties body-start body-end)
-                 count)))))))))
-
-(defun mevedel-view--queued-user-message-items-from-body (body count)
-  "Return queued user-message items parsed from BODY matching COUNT."
-  (with-temp-buffer
-    (insert body)
-    (goto-char (point-min))
-    (let (items ok)
-      (setq ok t)
-      (while ok
-        (skip-chars-forward " \t\r\n")
-        (cond
-         ((eobp)
-          (setq ok nil))
-         ((looking-at
-           "<queued-user-message[[:space:]][^>]*index=\"\\([0-9]+\\)\"[^>]*>")
-          (let ((index (string-to-number (match-string 1)))
-                (body-start (match-end 0)))
-            (goto-char body-start)
-            (if (search-forward "</queued-user-message>" nil t)
-                (push (cons index
-                            (string-trim
-                             (buffer-substring-no-properties
-                              body-start (match-beginning 0))))
-                      items)
-              (setq ok :invalid))))
-         (t
-          (setq ok :invalid))))
-      (when (and (not (eq ok :invalid))
-                 (= count (length items))
-                 (> count 0))
-        (mapcar #'cdr (sort items (lambda (a b) (< (car a) (car b)))))))))
+  "Return generated queued user-message items parsed from TEXT, or nil."
+  (mevedel-transcript--queued-user-message-batch-items-from-text text))
 
 (defun mevedel-view--queued-user-message-batch-segment-p
     (data-buf seg-start seg-end)
@@ -7229,7 +6384,7 @@ buffer for gptel, but the view must not render them as `You' turns."
              (skip-chars-forward " \t\r\n")
              (if (eobp)
                  nil
-               (if-let* ((block (mevedel-view--mailbox-any-block-at-point
+               (if-let* ((block (mevedel-transcript--mailbox-any-block-at-point
                                   (point-max))))
                    (progn
                      (setq found t)
@@ -7733,7 +6888,7 @@ Restored `GPTEL_BOUNDS' can drift into the `#+begin_tool' line or
 past `#+end_tool' when older transcripts are opened.  The org block
 markers remain structural anchors, so use them to recover the whole
 tool block before parsing the tool plist and render-data side channel."
-  (mevedel-view--tool-block-bounds-for-run seg-start seg-end))
+  (mevedel-transcript--tool-block-bounds-for-run seg-start seg-end))
 
 (defun mevedel-view--tool-segment-text (seg-start seg-end)
   "Return raw tool text for SEG-START..SEG-END.
@@ -8806,7 +7961,7 @@ rerender)."
       ;; compaction leaves ignored/shadowed old content followed by a
       ;; summary block; segment rotation starts directly with a summary
       ;; block followed by live tail content.
-      (let ((scan-start (mevedel-view--skip-leading-properties-drawer
+      (let ((scan-start (mevedel-transcript--skip-leading-properties-drawer
                          (point-min)))
             (view-buf (if render-agent-transcript-p
                           render-view-buf
@@ -8828,7 +7983,7 @@ rerender)."
           (mevedel-view--insert-compaction-indicator view-buf)
           (setq compaction-indicator-inserted t))
         (let ((after-summary
-               (mevedel-view--skip-leading-summary-block scan-start)))
+               (mevedel-transcript--skip-leading-summary-block scan-start)))
           (when (> after-summary scan-start)
             (unless compaction-indicator-inserted
               (mevedel-view--insert-compaction-indicator view-buf)
@@ -8839,7 +7994,7 @@ rerender)."
         ;; can't walk back into the leading drawer / compacted region.
         (save-restriction
           (narrow-to-region scan-start (point-max))
-          (let* ((segments (mevedel-view--extract-segments
+          (let* ((segments (mevedel-transcript--extract-segments
                             (point-min) (point-max)))
                  (turns (mevedel-view--group-into-turns segments data-buf))
                  (view-buf (if render-agent-transcript-p
@@ -10566,7 +9721,7 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
                   (insert "\n")
                   (let ((body-start (point)))
                     (when-let* ((close
-                                  (mevedel-view--mailbox-find-close
+                                  (mevedel-transcript--mailbox-find-close
                                    open-regex close-tag
                                    (marker-position end-marker))))
                       (let* ((body-end (car close))
@@ -11374,7 +10529,7 @@ HEADER-WIDTH is the optional width used to align the row header."
         (save-restriction
           (widen)
           (catch 'found
-            (dolist (seg (mevedel-view--extract-segments (point-min) (point-max)))
+            (dolist (seg (mevedel-transcript--extract-segments (point-min) (point-max)))
               (when (eq (car seg) 'tool)
                 (when-let* ((call (mevedel-view--tool-call-parse
                                    data-buf (cadr seg) (caddr seg))))

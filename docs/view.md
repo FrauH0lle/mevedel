@@ -35,6 +35,14 @@ flowchart TD
     H --> A
 ```
 
+Full rerenders parse the data buffer through
+`mevedel-transcript--extract-segments`, after skipping gptel-org leading
+metadata and any leading compaction summary. `mevedel-view.el` then owns
+turn grouping and rendering. Transcript span classification, tool block
+recovery, generated queued-message parsing, and mailbox structural
+parsing live in `mevedel-transcript.el` so persistence and compaction use
+the same structural view of the buffer.
+
 ## Zones
 
 The view buffer is split into vertically ordered regions. The data buffer
