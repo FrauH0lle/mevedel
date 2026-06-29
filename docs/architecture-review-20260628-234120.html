@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review - mevedel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      body { background: #fafaf9; }
+      .module { border: 1px solid #cbd5e1; background: #fff; border-radius: 10px; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); color: #fff; border-radius: 10px; }
+      .shallow { border: 1px solid #cbd5e1; background: #fff; border-radius: 10px; }
+      .seam-line { border-top: 2px dashed #64748b; }
+      .leak-line { height: 2px; background: #dc2626; transform: rotate(-5deg); transform-origin: left; }
+      .thin-interface { height: 18px; background: #e2e8f0; border-radius: 6px 6px 0 0; }
+      .fat-interface { height: 58px; background: #fee2e2; border-radius: 6px 6px 0 0; }
+      .impl { background: #f8fafc; border-top: 1px solid #cbd5e1; border-radius: 0 0 6px 6px; }
+      .arrow { color: #dc2626; font-weight: 700; }
+      .diagram-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: .08em; color: #64748b; }
+      .code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    </style>
+  </head>
+  <body class="text-slate-900 font-sans">
+    <main class="max-w-6xl mx-auto px-6 py-10 space-y-10">
+      <header class="space-y-5">
+        <div>
+          <p class="text-xs uppercase tracking-wider text-slate-500">mevedel - architecture review - 2026-06-28</p>
+          <h1 class="text-4xl font-semibold tracking-normal">Deepening opportunities</h1>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-4 text-sm">
+          <div class="module p-3"><span class="inline-block w-4 h-4 align-middle module mr-2"></span>module</div>
+          <div class="module p-3"><span class="inline-block w-8 align-middle seam-line mr-2"></span>seam</div>
+          <div class="module p-3"><span class="inline-block w-8 align-middle leak-line mr-2"></span>leakage</div>
+          <div class="module p-3"><span class="inline-block w-4 h-4 align-middle deep mr-2"></span>deep module</div>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-8">
+        <article id="transcript-structure" class="module p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-2xl font-semibold mr-auto">Concentrate transcript structure</h2>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">in-process</span>
+          </div>
+          <div class="grid lg:grid-cols-[1.1fr_1fr] gap-6">
+            <div>
+              <p class="diagram-label mb-2">Files</p>
+              <ul class="code text-sm text-slate-700 space-y-1">
+                <li>mevedel-view.el:3201, 4193</li>
+                <li>mevedel-session-persistence.el:777, 868, 3247</li>
+                <li>mevedel-compact.el:762, 914</li>
+                <li>test/test-mevedel-view.el, test/test-mevedel-session-persistence.el, test/test-mevedel-compact.el</li>
+              </ul>
+            </div>
+            <div class="text-sm space-y-2">
+              <p><strong>Problem.</strong> User turn, response, tool, summary, and org-glue rules repeat across view rendering, prompt indexing, rewind, and compaction.</p>
+              <p><strong>Solution.</strong> Put transcript structure classification behind one deep module; callers stop owning parser fragments.</p>
+              <ul class="grid sm:grid-cols-2 gap-2 pt-2">
+                <li class="rounded bg-slate-50 px-3 py-2">locality: parse bugs fixed once</li>
+                <li class="rounded bg-slate-50 px-3 py-2">leverage: one test surface</li>
+                <li class="rounded bg-slate-50 px-3 py-2">depth: org glue goes internal</li>
+                <li class="rounded bg-slate-50 px-3 py-2">seam: transcript shape</li>
+              </ul>
+            </div>
+          </div>
+          <div class="grid lg:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">Before: four shallow modules learn the same transcript rules</p>
+              <div class="grid grid-cols-2 gap-3 text-sm">
+                <div class="shallow p-3">
+                  <div class="fat-interface"></div>
+                  <div class="impl p-2 h-20">view rendering<br><span class="text-red-600">turn/tool glue</span></div>
+                </div>
+                <div class="shallow p-3">
+                  <div class="fat-interface"></div>
+                  <div class="impl p-2 h-20">prompt index<br><span class="text-red-600">turn/tool glue</span></div>
+                </div>
+                <div class="shallow p-3">
+                  <div class="fat-interface"></div>
+                  <div class="impl p-2 h-20">compaction<br><span class="text-red-600">summary glue</span></div>
+                </div>
+                <div class="shallow p-3">
+                  <div class="fat-interface"></div>
+                  <div class="impl p-2 h-20">rewind<br><span class="text-red-600">turn cutoff</span></div>
+                </div>
+              </div>
+              <div class="mt-4 leak-line"></div>
+              <p class="text-xs text-red-700 mt-2">Representation leaks into every caller.</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">After: one deep module owns structure</p>
+              <div class="deep p-5 min-h-56">
+                <div class="thin-interface mb-4"></div>
+                <p class="font-semibold">Transcript structure module</p>
+                <div class="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-100">
+                  <div class="rounded border border-slate-500 p-2">turns</div>
+                  <div class="rounded border border-slate-500 p-2">tool blocks</div>
+                  <div class="rounded border border-slate-500 p-2">summary blocks</div>
+                  <div class="rounded border border-slate-500 p-2">gptel props</div>
+                </div>
+              </div>
+              <div class="grid grid-cols-4 gap-2 mt-3 text-xs text-center text-slate-600">
+                <div class="module p-2">view</div>
+                <div class="module p-2">index</div>
+                <div class="module p-2">compact</div>
+                <div class="module p-2">rewind</div>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article id="permission-context" class="module p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-2xl font-semibold mr-auto">Deepen permission invocation context</h2>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">in-process</span>
+          </div>
+          <div class="grid lg:grid-cols-[1.1fr_1fr] gap-6">
+            <div>
+              <p class="diagram-label mb-2">Files</p>
+              <ul class="code text-sm text-slate-700 space-y-1">
+                <li>mevedel-pipeline.el:658</li>
+                <li>mevedel-permissions.el:823</li>
+                <li>mevedel-permission-queue.el:283</li>
+                <li>mevedel-tool-exec.el:812</li>
+              </ul>
+            </div>
+            <div class="text-sm space-y-2">
+              <p><strong>Problem.</strong> The permission decision module is deep, but pipeline, queue, Bash, and Eval rebuild overlapping session, request, rule, and specifier context.</p>
+              <p><strong>Solution.</strong> Concentrate permission invocation context in the permission area; callers cross one seam before the 9-step implementation runs.</p>
+              <ul class="grid sm:grid-cols-2 gap-2 pt-2">
+                <li class="rounded bg-slate-50 px-3 py-2">locality: queue decisions match</li>
+                <li class="rounded bg-slate-50 px-3 py-2">leverage: Bash/Eval adapters shrink</li>
+                <li class="rounded bg-slate-50 px-3 py-2">depth: missing-session policy central</li>
+                <li class="rounded bg-slate-50 px-3 py-2">interface stops leaking buckets</li>
+              </ul>
+            </div>
+          </div>
+          <div class="grid lg:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">Before: callers build permission facts separately</p>
+              <pre class="mermaid">
+flowchart TB
+  P[Pipeline step] --> C1[context copy]
+  Q[Permission queue] --> C2[context copy]
+  B[Bash adapter] --> C3[context copy]
+  E[Eval adapter] --> C4[context copy]
+  C1 -.leak.-> D[9-step decision]
+  C2 -.leak.-> D
+  C3 -.leak.-> D
+  C4 -.leak.-> D
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class C1,C2,C3,C4 leak;
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">After: one invocation-context seam</p>
+              <pre class="mermaid">
+flowchart TB
+  P[Pipeline step] --> S[Permission invocation context]
+  Q[Permission queue] --> S
+  B[Bash adapter] --> S
+  E[Eval adapter] --> S
+  S --> D[Deep permission module]
+  D --> R[allow / ask / deny]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a;
+  class S,D deep;
+              </pre>
+            </div>
+          </div>
+        </article>
+
+        <article id="review-dispatch" class="module p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-2xl font-semibold mr-auto">Share fork dispatch between review and skills</h2>
+            <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">in-process</span>
+          </div>
+          <div class="grid lg:grid-cols-[1.1fr_1fr] gap-6">
+            <div>
+              <p class="diagram-label mb-2">Files</p>
+              <ul class="code text-sm text-slate-700 space-y-1">
+                <li>mevedel-review.el:897</li>
+                <li>mevedel-skills.el:2336, 2434, 2609</li>
+                <li>test/test-mevedel-review.el:329</li>
+                <li>test/test-mevedel-skills.el:2511</li>
+              </ul>
+            </div>
+            <div class="text-sm space-y-2">
+              <p><strong>Problem.</strong> Review and verify are first-class, but they repeat fork skill dispatch: expansion hooks, scoped permission rules, hook context, agent launch, and outcome normalization.</p>
+              <p><strong>Solution.</strong> Keep review as the module for target selection and result semantics; concentrate fork dispatch behind one agent/skill seam.</p>
+              <ul class="grid sm:grid-cols-2 gap-2 pt-2">
+                <li class="rounded bg-slate-50 px-3 py-2">locality: hook ordering once</li>
+                <li class="rounded bg-slate-50 px-3 py-2">leverage: review uses skill path</li>
+                <li class="rounded bg-slate-50 px-3 py-2">tests hit shared dispatch</li>
+                <li class="rounded bg-slate-50 px-3 py-2">review semantics stay local</li>
+              </ul>
+            </div>
+          </div>
+          <div class="grid lg:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">Before: parallel dispatch implementations</p>
+              <div class="grid grid-cols-2 gap-4 min-h-64">
+                <div class="shallow p-3">
+                  <div class="fat-interface"></div>
+                  <div class="impl p-3 space-y-2 text-sm">
+                    <p class="font-semibold">Skill fork</p>
+                    <p>hooks</p><p>permissions</p><p>agent launch</p><p>outcome</p>
+                  </div>
+                </div>
+                <div class="shallow p-3">
+                  <div class="fat-interface"></div>
+                  <div class="impl p-3 space-y-2 text-sm">
+                    <p class="font-semibold">Review / verify</p>
+                    <p>hooks</p><p>permissions</p><p>agent launch</p><p>outcome</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">After: target semantics call one dispatch module</p>
+              <div class="grid grid-cols-2 gap-4 text-sm">
+                <div class="module p-4 min-h-24">Skill module<br><span class="text-slate-500">body semantics</span></div>
+                <div class="module p-4 min-h-24">Review module<br><span class="text-slate-500">target/result semantics</span></div>
+              </div>
+              <div class="text-center py-3 arrow">-&gt;</div>
+              <div class="deep p-5">
+                <div class="thin-interface mb-4"></div>
+                <p class="font-semibold">Fork dispatch implementation</p>
+                <p class="text-sm text-slate-200 mt-2">scoped hooks, permissions, agent launch, outcome delivery</p>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article id="view-zones" class="module p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-2xl font-semibold mr-auto">Deepen the view zone protocol</h2>
+            <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+            <span class="rounded-full bg-slate-100 text-slate-700 px-3 py-1 text-xs">in-process</span>
+          </div>
+          <div class="grid lg:grid-cols-[1.1fr_1fr] gap-6">
+            <div>
+              <p class="diagram-label mb-2">Files</p>
+              <ul class="code text-sm text-slate-700 space-y-1">
+                <li>mevedel-view-fragment.el:630</li>
+                <li>mevedel-view.el:1171, 11185, 11758</li>
+                <li>test/test-mevedel-view.el:4306, 5194, 9889</li>
+              </ul>
+            </div>
+            <div class="text-sm space-y-2">
+              <p><strong>Problem.</strong> The fragment primitive is deep, but request progress, pending tools, status, and interaction zones still repeat composer preservation and marker ordering rules.</p>
+              <p><strong>Solution.</strong> Push more zone ordering and preservation implementation behind the existing fragment seam or an adjacent view-zone module.</p>
+              <ul class="grid sm:grid-cols-2 gap-2 pt-2">
+                <li class="rounded bg-slate-50 px-3 py-2">locality: composer invariants once</li>
+                <li class="rounded bg-slate-50 px-3 py-2">leverage: every zone update benefits</li>
+                <li class="rounded bg-slate-50 px-3 py-2">deepens existing fragment seam</li>
+                <li class="rounded bg-slate-50 px-3 py-2">less repeated redraw testing</li>
+              </ul>
+            </div>
+          </div>
+          <div class="grid lg:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">Before: each zone preserves the composer</p>
+              <div class="space-y-2 text-sm">
+                <div class="module p-3 border-l-4 border-red-500">history-live - marker + preservation</div>
+                <div class="module p-3 border-l-4 border-red-500">status - marker + preservation</div>
+                <div class="module p-3 border-l-4 border-red-500">interaction - marker + preservation</div>
+                <div class="module p-3 border-l-4 border-red-500">progress - marker + preservation</div>
+                <div class="module p-3 bg-slate-50">composer text</div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 bg-white p-4">
+              <p class="diagram-label mb-3">After: zone protocol owns ordering and preservation</p>
+              <div class="deep p-5 min-h-56">
+                <div class="thin-interface mb-4"></div>
+                <p class="font-semibold">View zone module</p>
+                <div class="mt-4 grid grid-cols-2 gap-3 text-sm text-slate-100">
+                  <div class="rounded border border-slate-500 p-2">regions</div>
+                  <div class="rounded border border-slate-500 p-2">fragment reconcile</div>
+                  <div class="rounded border border-slate-500 p-2">composer preservation</div>
+                  <div class="rounded border border-slate-500 p-2">marker ordering</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section id="top-recommendation" class="deep p-7 space-y-3">
+        <p class="text-xs uppercase tracking-wider text-slate-300">Top recommendation</p>
+        <h2 class="text-2xl font-semibold">Concentrate transcript structure</h2>
+        <p class="text-slate-100 max-w-3xl">It touches view buffer rendering, session persistence, compaction, rewind, and tests. One deep module gives the most locality and leverage without re-litigating existing ADRs.</p>
+        <a href="#transcript-structure" class="inline-block rounded bg-white text-slate-900 px-4 py-2 text-sm font-semibold">Jump to card</a>
+      </section>
+    </main>
+  </body>
+</html>

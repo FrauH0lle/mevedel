@@ -54,6 +54,7 @@
 (require 'mevedel-system)
 (require 'mevedel-agents)
 (require 'mevedel-presets)
+(require 'mevedel-transcript)
 (require 'mevedel-compact)
 (require 'mevedel-view-fragment)
 (require 'mevedel-reminders)

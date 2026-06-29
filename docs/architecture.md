@@ -97,3 +97,22 @@ The data buffer is normally org-mode so gptel can persist
 `:PROPERTIES:` are escaped with `,` in the data buffer to prevent
 nested-drawer confusion; the rendered view strips those storage
 artifacts where appropriate.
+
+## Transcript structure
+
+`mevedel-transcript.el` is the shared, read-only transcript structure
+module. Its primary entry point, `mevedel-transcript--extract-segments`,
+classifies data-buffer spans as `(TYPE START END)` where type is
+`user`, `response`, `tool`, or `ignore`, using gptel text properties as
+the source of truth and repairing known org/gptel structural glue.
+
+The module also owns the small structural helpers needed to skip leading
+property drawers and compaction summaries, recover whole org tool
+blocks, split generated queued-user batches, parse agent mailbox blocks,
+and find the first real user prompt line outside tool/reasoning/summary
+scaffolding.
+
+View rendering, session prompt indexing/rewind, and compaction all read
+these shared spans. They keep their own policies: the view groups and
+renders turns, session persistence builds prompt previews and fork state,
+and compaction chooses response boundaries and preserved-tail policy.

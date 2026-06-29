@@ -1888,6 +1888,42 @@ installs the real hook)."
         (should (all-prop-p agent-start agent-end nil))
         (should (all-prop-p agent-prefix-start agent-response-end
                             'response)))))
+  :doc "does not repair response prefixes across a real prompt"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n")
+    (let (first-prompt-start tool-start tool-end second-prompt-start
+          response-prefix-start response-start response-end)
+      (setq first-prompt-start (point))
+      (insert "First prompt\n")
+      (setq tool-start (point))
+      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
+              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
+              "contents\n"
+              "#+end_tool\n")
+      (setq tool-end (point))
+      (setq second-prompt-start (point))
+      (insert "Second prompt\n")
+      (setq response-prefix-start (point))
+      (insert "Conti")
+      (setq response-start (point))
+      (insert "nuing the answer.\n")
+      (setq response-end (point))
+      (put-text-property (+ tool-start 42) (- tool-end 12)
+                         'gptel '(tool . "call_read"))
+      (put-text-property response-start response-end
+                         'gptel 'response)
+      (mevedel-session-persistence--normalize-gptel-properties)
+      (should-not (get-text-property second-prompt-start 'gptel))
+      (should-not (get-text-property response-prefix-start 'gptel))
+      (should (eq (get-text-property response-start 'gptel) 'response))
+      (let ((prompts (mevedel-session-persistence--collect-prompts
+                      (current-buffer))))
+        (should (= 2 (length prompts)))
+        (should (= first-prompt-start (plist-get (car prompts) :pos)))
+        (should (= second-prompt-start (plist-get (cadr prompts) :pos)))
+        (should (equal "Second prompt"
+                       (plist-get (cadr prompts) :preview))))))
   :doc "keeps queued user batches out of repaired assistant prefixes"
   (with-temp-buffer
     (org-mode)
@@ -3762,6 +3798,20 @@ workspace tree."
       (should (= 1 (length prompts)))
       (should (string-match-p "Real prompt"
                               (plist-get (car prompts) :preview)))))
+  :doc "skips indented leading property drawer"
+  (with-temp-buffer
+    (insert "  :PROPERTIES:\n")
+    (insert "  :MEVEDEL_SESSION: metadata\n")
+    (insert "  :END:\n")
+    (let ((prompt-start (point)))
+      (insert "Real prompt after metadata\n")
+      (insert (propertize "response" 'gptel 'response))
+      (let ((prompts (mevedel-session-persistence--collect-prompts
+                      (current-buffer))))
+        (should (= 1 (length prompts)))
+        (should (= prompt-start (plist-get (car prompts) :pos)))
+        (should (equal "Real prompt after metadata"
+                       (plist-get (car prompts) :preview))))))
   :doc "skips unpropertized gptel org tool and reasoning scaffolding"
   (with-temp-buffer
     (insert "Fetch a page\n")
@@ -3780,7 +3830,20 @@ workspace tree."
       (should (equal "Fetch a page"
                      (plist-get (nth 0 prompts) :preview)))
       (should (equal "Search for docs"
-                     (plist-get (nth 1 prompts) :preview))))))
+                     (plist-get (nth 1 prompts) :preview)))))
+  :doc "keeps user-authored org block marker as prompt start"
+  (with-temp-buffer
+    (let ((prompt-start (point)))
+      (insert "#+begin_src emacs-lisp\n")
+      (insert "(message \"hello\")\n")
+      (insert "#+end_src\n")
+      (insert (propertize "Response.\n" 'gptel 'response))
+      (let ((prompts (mevedel-session-persistence--collect-prompts
+                      (current-buffer))))
+        (should (= 1 (length prompts)))
+        (should (= prompt-start (plist-get (car prompts) :pos)))
+        (should (equal "#+begin_src emacs-lisp"
+                       (plist-get (car prompts) :preview)))))))
 
 (mevedel-deftest mevedel-session-persistence--update-prompt-index ()
   ,test
@@ -3938,7 +4001,25 @@ workspace tree."
       (insert "Search for docs\n")
       (insert (propertize "Second answer.\n" 'gptel 'response))
       (should (= next-prompt-pos
-                 (mevedel-session-persistence--find-turn-cutoff 1))))))
+                 (mevedel-session-persistence--find-turn-cutoff 1)))))
+  :doc "stays consistent with transcript-repaired assistant fragments"
+  (with-temp-buffer
+    (insert "First prompt\n")
+    (insert (propertize "Initial answer.\n" 'gptel 'response))
+    (insert (propertize "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nbody\n"
+                        'gptel '(tool . "call_1")))
+    (insert "Conti")
+    (insert (propertize "nuing the answer.\n" 'gptel 'response))
+    (let ((next-prompt-pos (point)))
+      (insert "Second prompt\n")
+      (insert (propertize "Second answer.\n" 'gptel 'response))
+      (let ((prompts (mevedel-session-persistence--collect-prompts
+                      (current-buffer))))
+        (should (= 2 (length prompts)))
+        (should (equal "Second prompt"
+                       (plist-get (nth 1 prompts) :preview)))
+        (should (= next-prompt-pos
+                   (mevedel-session-persistence--find-turn-cutoff 1)))))))
 
 (mevedel-deftest mevedel-rewind ()
   ,test

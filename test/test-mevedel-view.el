@@ -13,6 +13,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-transcript)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-registry)
@@ -153,14 +154,14 @@ PROPS is the value for the `gptel' property."
 ;;
 ;;; Segment extraction
 
-(mevedel-deftest mevedel-view--extract-segments ()
+(mevedel-deftest mevedel-transcript--extract-segments ()
   ,test
   (test)
   :doc "single user segment"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Hello\n" nil)
     (with-current-buffer data-buf
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
         (should (eq 'user (caar segs))))))
 
@@ -169,7 +170,7 @@ PROPS is the value for the `gptel' property."
     (mevedel-view-test--insert-data data-buf "*** Hello\n" nil)
     (mevedel-view-test--insert-data data-buf "Hi there\n" 'response)
     (with-current-buffer data-buf
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (= 2 (length segs)))
         (should (eq 'user (caar segs)))
         (should (eq 'response (caadr segs))))))
@@ -183,7 +184,7 @@ PROPS is the value for the `gptel' property."
      '(tool . "call_1"))
     (mevedel-view-test--insert-data data-buf "More response\n" 'response)
     (with-current-buffer data-buf
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (= 3 (length segs)))
         (should (eq 'response (caar segs)))
         (should (eq 'tool (caadr segs)))
@@ -201,7 +202,7 @@ PROPS is the value for the `gptel' property."
      "|------|------|\n| Alice | Engineer |\n"
      'response)
     (with-current-buffer data-buf
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
         (should (eq 'response (caar segs))))))
 
@@ -218,7 +219,7 @@ PROPS is the value for the `gptel' property."
       (let* ((tool-start (next-single-property-change (point-min) 'gptel))
              (mid-start (+ tool-start 2))
              (mid-end (+ tool-start 10))
-             (segs (mevedel-view--extract-segments mid-start mid-end)))
+             (segs (mevedel-transcript--extract-segments mid-start mid-end)))
         (should (= 1 (length segs)))
         (pcase-let ((`(,kind ,seg-start ,_seg-end) (car segs)))
           (should (eq 'tool kind))
@@ -246,7 +247,7 @@ PROPS is the value for the `gptel' property."
           (search-backward "eclaration")
           (setq response-start (point)))
         (put-text-property response-start (point) 'gptel 'response))
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (equal '(response tool response) (mapcar #'car segs)))
         (should (string-prefix-p "#+begin_tool"
                                  (buffer-substring-no-properties
@@ -269,7 +270,7 @@ PROPS is the value for the `gptel' property."
         (setq response-start (point))
         (insert "p completed.\n")
         (put-text-property response-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user response) (mapcar #'car segs)))
           (should (= (cadr (car segs)) block-start))
           (should (= (caddr (car segs)) prefix-start))
@@ -295,7 +296,7 @@ PROPS is the value for the `gptel' property."
         (setq response-start (point))
         (insert "nuing the answer.\n")
         (put-text-property response-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user response) (mapcar #'car segs)))
           (should (= (cadr (car segs)) block-start))
           (should (= (caddr (car segs)) prefix-start))
@@ -310,7 +311,7 @@ PROPS is the value for the `gptel' property."
      "Text mentioning markers:\n#+begin_tool (Read :file_path \"/tmp/f\")\n(:name \"Read\")\n#+end_tool\n"
      'response)
     (with-current-buffer data-buf
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
         (should (eq 'response (caar segs))))))
   :doc "preserves text after a stale tool run extends beyond end marker"
@@ -328,7 +329,7 @@ PROPS is the value for the `gptel' property."
         ;; Stale bounds can cover the block and spill into following text.
         (put-text-property (+ block-start 20) (point)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool user) (mapcar #'car segs)))
           (should (= block-end (cadr (cadr segs))))
           (should (string-match-p
@@ -349,7 +350,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property block-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool) (mapcar #'car segs)))
           (should (= block-end (caddr (car segs))))))))
   :doc "keeps persisted-looking tool blocks inside recovered tool results"
@@ -369,7 +370,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property block-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= block-end (caddr (car segs))))))))
@@ -388,7 +389,7 @@ PROPS is the value for the `gptel' property."
         (setq response-start (point))
         (insert "Assistant text can mention markers.\n#+end_tool\n")
         (put-text-property response-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool response) (mapcar #'car segs)))
           (should (= block-end (caddr (car segs))))))))
   :doc "does not extend stale spill through response marker text"
@@ -406,7 +407,7 @@ PROPS is the value for the `gptel' property."
         (put-text-property block-start (point)
                            'gptel '(tool . "call_1"))
         (put-text-property response-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool response) (mapcar #'car segs)))
           (should (= block-end (caddr (car segs))))))))
   :doc "recovers outer block when stale bounds start at nested marker"
@@ -427,7 +428,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property nested-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= block-end (caddr (car segs))))))))
@@ -451,7 +452,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property nested-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= nested-start (cadr (cadr segs))))
@@ -475,7 +476,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property block-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= block-end (caddr (car segs))))))))
@@ -497,7 +498,7 @@ PROPS is the value for the `gptel' property."
         (setq second-end (point))
         (put-text-property first-start second-end
                            'gptel '(tool . "call_shared"))
-        (let ((segs (mevedel-view--extract-segments
+        (let ((segs (mevedel-transcript--extract-segments
                      (point-min) (point-max))))
           (should (equal '(tool tool) (mapcar #'car segs)))
           (should (= first-start (cadr (car segs))))
@@ -532,7 +533,7 @@ PROPS is the value for the `gptel' property."
         ;; and a mailbox delivery.
         (put-text-property first-start second-end
                            'gptel '(tool . "call_stale"))
-        (let ((segs (mevedel-view--extract-segments
+        (let ((segs (mevedel-transcript--extract-segments
                      (point-min) (point-max))))
           (should (equal '(tool user tool) (mapcar #'car segs)))
           (should (= first-start (cadr (car segs))))
@@ -563,7 +564,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property nested-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= nested-start (cadr (cadr segs))))
@@ -586,7 +587,7 @@ PROPS is the value for the `gptel' property."
         (setq block-end (point))
         (put-text-property stale-start (- block-end 12)
                            'gptel '(tool . "call_1"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool) (mapcar #'car segs)))
           (should (= block-start (cadr (car segs))))
           (should (= block-end (caddr (car segs))))))))
@@ -606,7 +607,7 @@ PROPS is the value for the `gptel' property."
         (setq real-end (point))
         (put-text-property (+ real-start 20) (- real-end 12)
                            'gptel '(tool . "call_real"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user tool) (mapcar #'car segs)))
           (should (= real-start (cadr (cadr segs))))
           (should (= real-end (caddr (cadr segs))))))))
@@ -627,7 +628,7 @@ PROPS is the value for the `gptel' property."
         (setq real-end (point))
         (put-text-property (+ real-start 20) (- real-end 12)
                            'gptel '(tool . "call_real"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user tool) (mapcar #'car segs)))
           (should (= real-start (cadr (cadr segs))))
           (should (= real-end (caddr (cadr segs))))))))
@@ -650,7 +651,7 @@ PROPS is the value for the `gptel' property."
         (setq real-end (point))
         (put-text-property (+ real-start 20) (- real-end 12)
                            'gptel '(tool . "call_real"))
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(user response tool) (mapcar #'car segs)))
           (should (= real-start (cadr (caddr segs))))
           (should (= real-end (caddr (caddr segs))))))))
@@ -670,7 +671,7 @@ PROPS is the value for the `gptel' property."
         (put-text-property block-start close-start
                            'gptel '(tool . "call_1"))
         (put-text-property close-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool response) (mapcar #'car segs)))
           (should (= close-end (caddr (car segs))))
           (should (= response-start (cadr (cadr segs))))))))
@@ -691,7 +692,7 @@ PROPS is the value for the `gptel' property."
         (put-text-property block-start body-start
                            'gptel '(tool . "call_1"))
         (put-text-property close-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool response) (mapcar #'car segs)))
           (should (= close-end (caddr (car segs))))
           (should (= response-start (cadr (cadr segs))))))))
@@ -713,7 +714,7 @@ PROPS is the value for the `gptel' property."
         (put-text-property block-start close-start
                            'gptel '(tool . "call_1"))
         (put-text-property close-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool response) (mapcar #'car segs)))
           (should (= close-end (caddr (car segs))))
           (should (= response-start (cadr (cadr segs))))))))
@@ -736,7 +737,7 @@ PROPS is the value for the `gptel' property."
         (put-text-property block-start gap-start
                            'gptel '(tool . "call_1"))
         (put-text-property close-start (point) 'gptel 'response)
-        (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+        (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
           (should (equal '(tool response) (mapcar #'car segs)))
           (should (= close-end (caddr (car segs))))
           (should (= response-start (cadr (cadr segs))))))))
@@ -752,7 +753,7 @@ PROPS is the value for the `gptel' property."
         (setq response-start (point))
         (insert "sure, here is the explanation\n")
         (put-text-property response-start (point) 'gptel 'response)
-        (let ((segments (mevedel-view--extract-segments
+        (let ((segments (mevedel-transcript--extract-segments
                          (point-min) (point-max))))
           (should (equal '(tool user response)
                          (mapcar #'car segments)))))))
@@ -761,7 +762,7 @@ PROPS is the value for the `gptel' property."
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "thinking...\n" 'ignore)
     (with-current-buffer data-buf
-      (let ((segs (mevedel-view--extract-segments (point-min) (point-max))))
+      (let ((segs (mevedel-transcript--extract-segments (point-min) (point-max))))
         (should (= 1 (length segs)))
         (should (eq 'ignore (caar segs)))))))
 
@@ -831,7 +832,7 @@ PROPS is the value for the `gptel' property."
     (mevedel-view-test--insert-data data-buf "\n\n" nil)
     (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
     (with-current-buffer data-buf
-      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+      (let* ((segments (mevedel-transcript--extract-segments (point-min) (point-max)))
              (turns (mevedel-view--group-into-turns segments data-buf)))
         (should (equal '(assistant)
                        (mapcar (lambda (turn) (plist-get turn :role))
@@ -844,7 +845,7 @@ PROPS is the value for the `gptel' property."
     (mevedel-view-test--insert-data data-buf "\n\nSecond prompt.\n\n" nil)
     (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
     (with-current-buffer data-buf
-      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+      (let* ((segments (mevedel-transcript--extract-segments (point-min) (point-max)))
              (turns (mevedel-view--group-into-turns segments data-buf)))
         (should (equal '(assistant user assistant)
                        (mapcar (lambda (turn) (plist-get turn :role))
@@ -857,7 +858,7 @@ PROPS is the value for the `gptel' property."
      data-buf "\n\nSecond prompt.\n\n#+begin_reasoning\n" nil)
     (mevedel-view-test--insert-data data-buf "thinking\n" 'ignore)
     (with-current-buffer data-buf
-      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+      (let* ((segments (mevedel-transcript--extract-segments (point-min) (point-max)))
              (turns (mevedel-view--group-into-turns segments data-buf)))
         (should (equal '(assistant user assistant)
                        (mapcar (lambda (turn) (plist-get turn :role))
@@ -870,7 +871,7 @@ PROPS is the value for the `gptel' property."
      data-buf "\n\n#+begin_reasoning\n" nil)
     (mevedel-view-test--insert-data data-buf "thinking\n" 'ignore)
     (with-current-buffer data-buf
-      (let* ((segments (mevedel-view--extract-segments (point-min) (point-max)))
+      (let* ((segments (mevedel-transcript--extract-segments (point-min) (point-max)))
              (turns (mevedel-view--group-into-turns segments data-buf)))
         (should (= 1 (length turns)))
         (should (eq 'assistant (plist-get (car turns) :role)))))))
@@ -5967,13 +5968,13 @@ PROPS is the value for the `gptel' property."
           (when (buffer-live-p agent-view) (kill-buffer agent-view))
           (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))))
 
-(mevedel-deftest mevedel-view--skip-leading-properties-drawer ()
+(mevedel-deftest mevedel-transcript--skip-leading-properties-drawer ()
   ,test
   (test)
   :doc "advances past a well-formed :PROPERTIES: drawer at POS"
   (with-temp-buffer
     (insert ":PROPERTIES:\n:GPTEL_MODEL: x\n:END:\nhello\n")
-    (let ((after (mevedel-view--skip-leading-properties-drawer (point-min))))
+    (let ((after (mevedel-transcript--skip-leading-properties-drawer (point-min))))
       (should (> after (point-min)))
       (should (string= "hello\n" (buffer-substring-no-properties
                                   after (point-max))))))
@@ -5981,20 +5982,20 @@ PROPS is the value for the `gptel' property."
   (with-temp-buffer
     (insert "no drawer here\n")
     (should (= (point-min)
-               (mevedel-view--skip-leading-properties-drawer (point-min)))))
+               (mevedel-transcript--skip-leading-properties-drawer (point-min)))))
   :doc "returns POS unchanged when drawer is malformed (no :END:)"
   (with-temp-buffer
     (insert ":PROPERTIES:\n:GPTEL_MODEL: x\nstuff\n")
     (should (= (point-min)
-               (mevedel-view--skip-leading-properties-drawer (point-min))))))
+               (mevedel-transcript--skip-leading-properties-drawer (point-min))))))
 
-(mevedel-deftest mevedel-view--skip-leading-summary-block ()
+(mevedel-deftest mevedel-transcript--skip-leading-summary-block ()
   ,test
   (test)
   :doc "advances past a leading compaction summary block"
   (with-temp-buffer
     (insert "#+begin_summary mevedel-role=compaction-summary\nsummary\n#+end_summary\nlive\n")
-    (let ((after (mevedel-view--skip-leading-summary-block (point-min))))
+    (let ((after (mevedel-transcript--skip-leading-summary-block (point-min))))
       (should (> after (point-min)))
       (should (string= "live\n" (buffer-substring-no-properties
                                  after (point-max))))))
@@ -6002,7 +6003,7 @@ PROPS is the value for the `gptel' property."
   (with-temp-buffer
     (insert "live\n")
     (should (= (point-min)
-               (mevedel-view--skip-leading-summary-block (point-min))))))
+               (mevedel-transcript--skip-leading-summary-block (point-min))))))
 
 
 ;;
@@ -7817,7 +7818,7 @@ state of its inner sections"
       (let* ((tool-start (next-single-property-change (point-min) 'gptel))
              (mid-start (+ tool-start 2))
              (mid-end (+ tool-start 12))
-             (segs (mevedel-view--extract-segments mid-start mid-end))
+             (segs (mevedel-transcript--extract-segments mid-start mid-end))
              (tool-seg (car segs))
              (call (mevedel-view--tool-call-parse
                     data-buf (cadr tool-seg) (caddr tool-seg))))
@@ -8061,7 +8062,7 @@ state of its inner sections"
         (put-text-property second-start (point) 'gptel '(tool . "read"))
         (let ((tool-segs (cl-remove-if-not
                           (lambda (seg) (eq (car seg) 'tool))
-                          (mevedel-view--extract-segments
+                          (mevedel-transcript--extract-segments
                            (point-min) (point-max)))))
           (should (= 2 (length tool-segs)))
           (let ((second-call (mevedel-view--tool-call-parse
@@ -8088,7 +8089,7 @@ state of its inner sections"
         (put-text-property second-start (point) 'gptel '(tool . "read"))
         (let ((tool-segs (cl-remove-if-not
                           (lambda (seg) (eq (car seg) 'tool))
-                          (mevedel-view--extract-segments
+                          (mevedel-transcript--extract-segments
                            (point-min) (point-max)))))
           (should (= 2 (length tool-segs)))
           (let ((second-call (mevedel-view--tool-call-parse

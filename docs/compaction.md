@@ -193,6 +193,12 @@ both constraints:
 - budget: `mevedel-compact-tail-budget` of usable context, default
   0.25.
 
+Response boundaries and preserved-tail turn starts are derived from
+`mevedel-transcript--extract-segments`. A turn start is the first real
+user prompt line after an assistant response, excluding gptel-owned
+tool/reasoning/summary scaffolding, so clipped or restored org markers do
+not create fake preserved turns.
+
 Tool blocks in both the preserved tail and summary request body are made
 structurally safe under character caps: persisted `#+begin_tool` /
 `#+end_tool` markers stay balanced, large string arguments are shortened as

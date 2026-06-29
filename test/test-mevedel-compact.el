@@ -1082,6 +1082,75 @@
     (should (= (mevedel--compact-usable-tokens) 4000))
     (should (= (mevedel--compact-threshold-tokens) 3200))))
 
+(mevedel-deftest mevedel--compact-turn-starts-before ()
+  ,test
+  (test)
+  :doc "ignores leading org metadata when finding turn starts"
+  (with-temp-buffer
+    (insert ":PROPERTIES:\n:foo: bar\n:END:\n")
+    (let ((u1-start (point)))
+      (insert "u1\n")
+      (let ((a1-start (point)))
+        (insert "a1\n")
+        (put-text-property a1-start (point) 'gptel 'response))
+      (let ((u2-start (point)))
+        (insert "u2\n")
+        (let ((a2-start (point)))
+          (insert "a2\n")
+          (put-text-property a2-start (point) 'gptel 'response))
+        (should (equal (mevedel--compact-turn-starts-before (point-max))
+                       (list u1-start u2-start))))))
+
+  :doc "does not count prompt text after limit in a widened user span"
+  (with-temp-buffer
+    (let ((u1-start (point)))
+      (insert "u1\n")
+      (let ((a1-start (point)))
+        (insert "a1\n")
+        (put-text-property a1-start (point) 'gptel 'response))
+      (insert "\n  ")
+      (let ((limit (point)))
+        (insert "u2\n")
+        (should (equal (mevedel--compact-turn-starts-before limit)
+                       (list u1-start))))))
+  :doc "skips unpropertized reasoning and tool scaffolding before prompt"
+  (with-temp-buffer
+    (let ((u1-start (point)))
+      (insert "u1\n")
+      (let ((a1-start (point)))
+        (insert "a1\n")
+        (put-text-property a1-start (point) 'gptel 'response))
+      (insert "#+begin_reasoning\nThinking text.\n")
+      (insert "#+begin_tool (WebFetch :url \"https://example.com\")\n")
+      (let ((tool-start (point)))
+        (insert "(:name \"WebFetch\" :args (:url \"https://example.com\"))\n\n"
+                "body\n")
+        (put-text-property tool-start (point) 'gptel '(tool . "call_1")))
+      (insert "#+end_tool\nMore thinking.\n#+end_reasoning\n")
+      (let ((u2-start (point)))
+        (insert "u2\n")
+        (let ((a2-start (point)))
+          (insert "a2\n")
+          (put-text-property a2-start (point) 'gptel 'response))
+        (should (equal (mevedel--compact-turn-starts-before (point-max))
+                       (list u1-start u2-start))))))
+  :doc "keeps user-authored org block marker as turn start"
+  (with-temp-buffer
+    (let ((u1-start (point)))
+      (insert "u1\n")
+      (let ((a1-start (point)))
+        (insert "a1\n")
+        (put-text-property a1-start (point) 'gptel 'response))
+      (let ((u2-start (point)))
+        (insert "#+begin_src emacs-lisp\n")
+        (insert "(message \"hello\")\n")
+        (insert "#+end_src\n")
+        (let ((a2-start (point)))
+          (insert "a2\n")
+          (put-text-property a2-start (point) 'gptel 'response))
+        (should (equal (mevedel--compact-turn-starts-before (point-max))
+                       (list u1-start u2-start)))))))
+
 (mevedel-deftest mevedel--compact-tail-start ()
   ,test
   (test)
