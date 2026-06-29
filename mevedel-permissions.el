@@ -12,8 +12,19 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-skill-permission-rules
+                  "mevedel-agents" (cl-x) t)
+
 ;; `mevedel-structs'
+(declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel-user-dir)
 (defvar mevedel--view-buffer)
@@ -50,7 +61,12 @@
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
+
+;; `mevedel-workspace'
+(declare-function mevedel--all-allowed-roots
+                  "mevedel-workspace" (&optional buffer))
 
 
 ;;
@@ -810,6 +826,143 @@ SKIP-KEYS is a list of bucket-key symbols to skip during the walk
   (if (and (listp content) (keywordp (car-safe content)))
       (plist-put (copy-sequence content) :permission-decision-metadata t)
     content))
+
+(cl-defun mevedel-permission--invocation-context
+    (&key tool tool-name args session workspace request invocation buffer
+          path pattern domain name mode workspace-root allowed-roots
+          exact-allowed-paths invocation-rules request-rules session-rules
+          persistent-rules warn-no-session-p)
+  "Return normalized permission invocation context.
+
+The context concentrates facts shared by the permission decision
+chain, prompt queue, and Bash/Eval adapters: specifiers, rule
+buckets, mode, workspace roots, dropped-file grants, and the rule
+shape to store when an outside-root prompt is approved."
+  (setq tool-name (or tool-name (and tool (mevedel-tool-name tool))))
+  (when (and tool args)
+    (cl-flet ((extract (getter current)
+                (or current
+                    (when-let* ((fn (funcall getter tool)))
+                      (ignore-errors (funcall fn args))))))
+      (setq path    (extract #'mevedel-tool-get-path    path)
+            pattern (extract #'mevedel-tool-get-pattern pattern)
+            domain  (extract #'mevedel-tool-get-domain  domain)
+            name    (extract #'mevedel-tool-get-name    name))))
+  (setq workspace (or workspace
+                      (and session (mevedel-session-workspace session)))
+        workspace-root
+        (or workspace-root
+            (and workspace
+                 (ignore-errors (mevedel-workspace-root workspace))))
+        allowed-roots
+        (or allowed-roots
+            (when (and workspace (fboundp 'mevedel--all-allowed-roots))
+              (ignore-errors (mevedel--all-allowed-roots buffer))))
+        exact-allowed-paths
+        (or exact-allowed-paths
+            (and (equal tool-name "Read")
+                 session
+                 (mevedel-session-active-dropped-file-grants session)))
+        invocation-rules
+        (or invocation-rules
+            (and invocation
+                 (mevedel-agent-invocation-skill-permission-rules
+                  invocation)))
+        request-rules
+        (or request-rules
+            (and request (mevedel-request-skill-permission-rules request)))
+        session-rules
+        (or session-rules
+            (and session (mevedel-session-permission-rules session)))
+        persistent-rules
+        (or persistent-rules
+            (and workspace
+                 (mevedel-permission--load-persistent-rules workspace)))
+        mode (or mode (and session (mevedel-session-permission-mode session))))
+  (when (and warn-no-session-p (not session))
+    (display-warning
+     'mevedel
+     (format "Permission step for %s ran with no session in \
+context; falling back to defcustom defaults.  Session-scoped \
+rules and the active permission mode are not being consulted.  \
+This usually means the tool was dispatched from a buffer whose \
+`mevedel--session' was not set; in production that should not \
+happen for a non-read-only tool."
+             tool-name)
+     :warning))
+  (let* ((specifier-key (cond (pattern :pattern)
+                              (domain :domain)
+                              (name :name)
+                              (path :path)))
+         (specifier-value (or pattern domain name path))
+         (workspace-boundary-p
+          (and path
+               (not (mevedel-permission--path-in-allowed-roots-p
+                     path (or allowed-roots
+                              (and workspace-root
+                                   (list workspace-root)))))))
+         (rule-key (if workspace-boundary-p :path specifier-key))
+         (rule-value (if workspace-boundary-p
+                         (concat (file-name-directory
+                                  (expand-file-name path))
+                                 "**")
+                       specifier-value))
+         (buckets (mevedel-permission--collect-buckets
+                   invocation-rules request-rules
+                   session-rules persistent-rules)))
+    (list :tool tool
+          :tool-name tool-name
+          :args args
+          :session session
+          :workspace workspace
+          :request request
+          :invocation invocation
+          :buffer buffer
+          :path path
+          :pattern pattern
+          :domain domain
+          :name name
+          :specifier-key specifier-key
+          :specifier-value specifier-value
+          :protected-path (and path (mevedel-permission--path-protected-p path))
+          :workspace-root workspace-root
+          :allowed-roots allowed-roots
+          :exact-allowed-paths exact-allowed-paths
+          :rule-tool (if workspace-boundary-p "*" tool-name)
+          :rule-key rule-key
+          :rule-value rule-value
+          :include-always (not (null workspace))
+          :invocation-rules invocation-rules
+          :request-rules request-rules
+          :session-rules session-rules
+          :persistent-rules persistent-rules
+          :buckets buckets
+          :mode mode)))
+
+(defun mevedel-permission--checker-args (context)
+  "Return `mevedel-check-permission' keyword args for CONTEXT."
+  (let ((content (plist-get context :args))
+        (tool-name (plist-get context :tool-name)))
+    (when (and (member tool-name '("Bash" "Eval"))
+               (listp content)
+               (keywordp (car-safe content)))
+      (setq content (plist-put (copy-sequence content)
+                               :permission-context context)))
+    (list :tool-struct (plist-get context :tool)
+          :path (plist-get context :path)
+          :pattern (plist-get context :pattern)
+          :domain (plist-get context :domain)
+          :name (plist-get context :name)
+          :content content
+          :invocation-rules (plist-get context :invocation-rules)
+          :request-rules (plist-get context :request-rules)
+          :session-rules (plist-get context :session-rules)
+          :persistent-rules (plist-get context :persistent-rules)
+          :mode (plist-get context :mode)
+          :workspace-root (plist-get context :workspace-root)
+          :allowed-roots (plist-get context :allowed-roots)
+          :exact-allowed-paths
+          (plist-get context :exact-allowed-paths))))
 
 (defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
   "Return bucket keys to suppress for the allow/ask pass under MODE.

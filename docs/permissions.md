@@ -50,6 +50,12 @@ Hook integration sits around this chain:
   reason/context shown to the model, but it cannot turn the denial into an
   allow.
 
+Permission invocation context is normalized in the permission module before
+callers enter the decision chain. That context centralizes specifier
+extraction, rule buckets, mode, allowed roots, dropped-file exact grants,
+missing-session fallback warnings, and the prompt rule shape used for
+outside-root approvals.
+
 ## Bucket precedence
 
 Steps 2 and 5 consume rules from multiple buckets, in this order:

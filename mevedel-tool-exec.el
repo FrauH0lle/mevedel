@@ -665,10 +665,13 @@ avoids saving a brittle whole-chain string such as
    (mapcar #'mevedel-tool-exec--bash-allow-pattern-for-segment
            (mevedel-tools--split-command-chain command))))
 
-(defun mevedel-tool-exec--effective-permission-mode ()
+(defun mevedel-tool-exec--effective-permission-mode
+    (&optional permission-context)
   "Return the effective permission mode for the current tool call."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
-    (or (and session (mevedel-session-permission-mode session))
+    (or (and permission-context
+             (plist-get permission-context :mode))
+        (and session (mevedel-session-permission-mode session))
         mevedel-permission-mode)))
 
 (defun mevedel-tool-exec--effective-trust-p (trust-literal-p &optional mode)
@@ -809,33 +812,37 @@ for the full command."
       buckets))
    (car (mevedel-tools--extract-commands command))))
 
-(defun mevedel-tools--bash-buckets ()
+(defun mevedel-tools--bash-buckets (&optional permission-context)
   "Return the bucket alist visible to Bash, innermost-first.
 
 Includes the request-scoped skill rule buckets so a skill's
 `allowed-tools: [Bash(...)]' grants are honored by the Bash
 permission check; without this, skill rules silently failed for
 the Bash tool path because Bash had its own flattened resolver."
-  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
-         (workspace (cond
-                     (session (mevedel-session-workspace session))
-                     ((and (boundp 'mevedel--workspace) mevedel--workspace))))
-         (request (and (boundp 'mevedel--current-request)
-                       mevedel--current-request))
-         (invocation (and (boundp 'mevedel--agent-invocation)
-                          mevedel--agent-invocation))
-         (invocation-rules
-          (and invocation
-               (mevedel-agent-invocation-skill-permission-rules invocation)))
-         (request-rules
-          (and request
-               (mevedel-request-skill-permission-rules request)))
-         (session-rules (when session
-                          (mevedel-session-permission-rules session)))
-         (persistent (when workspace
-                       (mevedel-permission--load-persistent-rules workspace))))
-    (mevedel-permission--collect-buckets
-     invocation-rules request-rules session-rules persistent)))
+  (or (and permission-context (plist-get permission-context :buckets))
+      (let* ((session (and (boundp 'mevedel--session) mevedel--session))
+             (workspace (cond
+                         (session (mevedel-session-workspace session))
+                         ((and (boundp 'mevedel--workspace)
+                               mevedel--workspace))))
+             (request (and (boundp 'mevedel--current-request)
+                           mevedel--current-request))
+             (invocation (and (boundp 'mevedel--agent-invocation)
+                              mevedel--agent-invocation))
+             (invocation-rules
+              (and invocation
+                   (mevedel-agent-invocation-skill-permission-rules
+                    invocation)))
+             (request-rules
+              (and request
+                   (mevedel-request-skill-permission-rules request)))
+             (session-rules (when session
+                              (mevedel-session-permission-rules session)))
+             (persistent (when workspace
+                           (mevedel-permission--load-persistent-rules
+                            workspace))))
+        (mevedel-permission--collect-buckets
+         invocation-rules request-rules session-rules persistent))))
 
 (cl-defun mevedel-tools--bash-bucket-action
     (buckets command &key skip-keys)
@@ -864,7 +871,8 @@ allows."
      buckets "Bash" nil command nil nil skip-keys))))
 
 (cl-defun mevedel-tools--check-bash-permission
-    (command &key trust-literal-p ignore-effective-trust-p)
+    (command &key trust-literal-p ignore-effective-trust-p
+             permission-context)
   "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
 
 Rules come from invocation, request, session, persistent, and
@@ -902,8 +910,9 @@ without requiring a session-level rule."
   (let* ((extraction (mevedel-tools--extract-commands command))
          (commands (car extraction))
          (unparseable (cdr extraction))
-         (buckets (mevedel-tools--bash-buckets))
-         (mode (mevedel-tool-exec--effective-permission-mode))
+         (buckets (mevedel-tools--bash-buckets permission-context))
+         (mode (mevedel-tool-exec--effective-permission-mode
+                permission-context))
          (effective-trust-p
           (and (not ignore-effective-trust-p)
                (mevedel-tool-exec--effective-trust-p trust-literal-p mode)))
@@ -1165,16 +1174,20 @@ CALLBACK receives nil or a normalized guidance plist."
     (mevedel-tool-exec--bash-guardian-model-async
      command context callback))))
 
-(defun mevedel-tool-exec--bash-trust-all-guardian-needed-p (command)
+(defun mevedel-tool-exec--bash-trust-all-guardian-needed-p
+    (command &optional permission-context)
   "Return non-nil when COMMAND should get deny-only guardian review.
 This is only for `trust-all' mode.  The guardian is consulted when the
 normal classifier would have asked, avoiding latency for routine allowed
 commands while still giving the optional guardian a chance to veto
 suspicious Bash."
   (and mevedel-permission-guardian
-       (eq (mevedel-tool-exec--effective-permission-mode) 'trust-all)
+       (eq (mevedel-tool-exec--effective-permission-mode
+            permission-context)
+           'trust-all)
        (eq (mevedel-tools--check-bash-permission
-            command :ignore-effective-trust-p t)
+            command :ignore-effective-trust-p t
+            :permission-context permission-context)
            'ask)))
 
 (defun mevedel-tool-exec--bash-guardian-context (command)
@@ -1274,12 +1287,8 @@ execution scope."
 ;;
 ;;; Eval permission adapter
 
-(defun mevedel-tools--eval-buckets ()
-  "Return the bucket alist visible to Eval, innermost-first."
-  (mevedel-tools--bash-buckets))
-
 (cl-defun mevedel-tools--check-eval-permission
-    (&key trust-literal-p)
+    (&key trust-literal-p permission-context)
   "Decide `allow', `deny', or `ask' for an Eval invocation.
 
 Normal model-requested Eval asks unless an explicit deny rule applies
@@ -1289,8 +1298,9 @@ allow rule for Eval may bypass the prompt.  Deny rules still win
 absolutely, and plan mode suppresses skill-bucket allows because Eval is
 not read-only.  In plan mode, Eval is denied unless an explicit
 non-skill allow rule returns an earlier `allow' decision."
-  (let* ((buckets (mevedel-tools--eval-buckets))
-         (mode (mevedel-tool-exec--effective-permission-mode))
+  (let* ((buckets (mevedel-tools--bash-buckets permission-context))
+         (mode (mevedel-tool-exec--effective-permission-mode
+                permission-context))
          (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
          (action (mevedel-permission--first-non-nil-action
                   buckets "Eval" nil nil nil nil skip-keys)))
@@ -1318,6 +1328,7 @@ slot vocabulary as before: `allow', `deny', `(deny . REASON)',
 denial parity with the sync slot is preserved."
   (let* ((expression (plist-get input :expression))
          (trust-literal-p (plist-get input :trust-literal-p))
+         (permission-context (plist-get input :permission-context))
          (metadata-p (plist-get input :permission-decision-metadata))
          mode
          mode-error
@@ -1342,7 +1353,8 @@ denial parity with the sync slot is preserved."
                 metadata-p 'deny 'eval-policy)))
      (t
       (pcase (mevedel-tools--check-eval-permission
-              :trust-literal-p trust-literal-p)
+              :trust-literal-p trust-literal-p
+              :permission-context permission-context)
         ('allow
          (when metadata-p
            (mevedel-tool-exec--log-permission-decision
@@ -1372,7 +1384,7 @@ denial parity with the sync slot is preserved."
            (when metadata-p
              (mevedel-tool-exec--log-permission-decision
               "Eval" 'ask 'eval-policy))
-           (mevedel-permission--enqueue
+           (apply #'mevedel-permission--enqueue
             (list :kind 'eval
                   :expression expression
                   :mode (symbol-name mode)
@@ -1408,7 +1420,9 @@ denial parity with the sync slot is preserved."
                        (funcall
                         cont
                         (mevedel-tool-exec--permission-decision-result
-                         metadata-p 'deny 'eval-policy))))))))))))))
+                         metadata-p 'deny 'eval-policy))))))
+            (and (plist-get permission-context :session)
+                 (list (plist-get permission-context :session)))))))))))
 
 
 ;;
@@ -1430,16 +1444,18 @@ Feedback is shaped into the existing
 parity with the sync slot."
   (let ((command (plist-get input :command))
         (trust-literal-p (plist-get input :trust-literal-p))
+        (permission-context (plist-get input :permission-context))
         (metadata-p (plist-get input :permission-decision-metadata)))
     (if (null command)
         (funcall cont nil)
       (let ((decision (mevedel-tools--check-bash-permission
-                       command :trust-literal-p trust-literal-p)))
+                       command :trust-literal-p trust-literal-p
+                       :permission-context permission-context)))
         (cond
          ((not (eq decision 'ask))
           (if (and (eq decision 'allow)
                    (mevedel-tool-exec--bash-trust-all-guardian-needed-p
-                    command))
+                    command permission-context))
               (mevedel-tool-exec--bash-deny-only-guardian-async
                command cont metadata-p)
             (when metadata-p
@@ -1474,12 +1490,14 @@ parity with the sync slot."
                                  command)))))
          (t
           (let* ((source-buffer (current-buffer))
-                 (session (or (and (boundp 'mevedel--session)
+                 (session (or (plist-get permission-context :session)
+                              (and (boundp 'mevedel--session)
                                    mevedel--session)
                               (mevedel-permission-queue--current-session)))
                  (guardian-pending t)
-                 (workspace (and session
-                                 (mevedel-session-workspace session)))
+                 (workspace (or (plist-get permission-context :workspace)
+                                (and session
+                                     (mevedel-session-workspace session))))
                  (extraction (mevedel-tools--extract-commands command))
                  (commands (car extraction))
                  (commands-summary

@@ -636,6 +636,21 @@
     (setq mevedel-permission-rules nil)
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'ask (mevedel-tools--check-bash-permission "somecmd foo"))))
+  :doc "explicit context:
+`mevedel-tools--check-bash-permission' reads rules from explicit context"
+  (let* ((session (mevedel-session--create
+                   :name "test"
+                   :permission-rules
+                   '(("Bash" :pattern "customcmd*" :action allow))))
+         (context (mevedel-permission--invocation-context
+                   :tool-name "Bash"
+                   :pattern "customcmd run"
+                   :session session))
+         (mevedel-permission-rules nil)
+         (mevedel-bash-dangerous-commands nil))
+    (should (equal 'allow
+                   (mevedel-tools--check-bash-permission
+                    "customcmd run" :permission-context context))))
   :doc "trust-all:
 `mevedel-tools--check-bash-permission' allows unknown commands"
   (let ((mevedel-permission-mode 'trust-all))
@@ -1510,6 +1525,18 @@
        (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
     (should-not enqueued))
+
+  :doc "explicit context Eval uses context mode without ambient session"
+  (let* ((session (mevedel-session--create
+                   :name "test" :permission-mode 'trust-all))
+         (context (mevedel-permission--invocation-context
+                   :tool-name "Eval"
+                   :session session))
+         (mevedel-permission-mode 'default)
+         (mevedel-permission-rules nil))
+    (should (eq 'allow
+                (mevedel-tools--check-eval-permission
+                 :permission-context context))))
 
   :doc "explicit Eval deny beats trust-all"
   (let ((mevedel-permission-mode 'trust-all)

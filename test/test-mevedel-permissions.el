@@ -937,6 +937,81 @@ must restore the prior value to avoid cross-test pollution."
   (mevedel-permissions-test--with-fake-tools
     (should (null (mevedel-permission--tool-specifier-key "Ask")))))
 
+(mevedel-deftest mevedel-permission--invocation-context ()
+  ,test
+  (test)
+  :doc "extracts checker facts and prompt rule facts for an outside path"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-perm-root-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-perm-outside-" t)))
+         (path (file-name-concat outside "secret.txt"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "root" :root root
+                     :name "root" :file-cache nil))
+         (session (mevedel-session--create
+                   :name "test" :workspace workspace
+                   :permission-mode 'default
+                   :permission-rules '(("Read" :action ask))))
+         (tool (mevedel-tool--create
+                :name "Read" :read-only-p t
+                :get-path (lambda (args) (plist-get args :file_path)))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+                   (lambda (&optional _buffer) (list root))))
+          (let ((context (mevedel-permission--invocation-context
+                          :tool tool
+                          :args (list :file_path path)
+                          :session session
+                          :workspace workspace)))
+            (should (equal path (plist-get context :path)))
+            (should (equal root (plist-get context :workspace-root)))
+            (should (equal (list root)
+                           (plist-get context :allowed-roots)))
+            (should (eq :path (plist-get context :specifier-key)))
+            (should (equal path (plist-get context :specifier-value)))
+            (should (equal "*" (plist-get context :rule-tool)))
+            (should (eq :path (plist-get context :rule-key)))
+            (should (equal (file-name-concat outside "**")
+                           (plist-get context :rule-value)))
+            (should (plist-get context :include-always))))
+      (delete-directory root t)
+      (delete-directory outside t)))
+
+  :doc "explicit specifiers override tool getter extraction"
+  (let* ((tool (mevedel-tool--create
+                :name "Bash" :read-only-p nil
+                :get-pattern (lambda (_args) "getter-pattern")))
+         (context (mevedel-permission--invocation-context
+                   :tool tool
+                   :args '(:command "getter-pattern")
+                   :pattern "explicit-pattern")))
+    (should (equal "explicit-pattern" (plist-get context :pattern)))
+    (should (eq :pattern (plist-get context :specifier-key)))
+    (should (equal "explicit-pattern"
+                   (plist-get context :specifier-value)))))
+
+(mevedel-deftest mevedel-permission--checker-args ()
+  ,test
+  (test)
+  :doc "returns the existing checker keyword interface from context"
+  (let* ((tool (mevedel-tool--create :name "Read" :read-only-p t))
+         (context (list :tool tool
+                        :path "/tmp/file.txt"
+                        :session-rules '(("Read" :action allow))
+                        :mode 'default
+                        :workspace-root "/tmp/"
+                        :allowed-roots '("/tmp/")
+                        :exact-allowed-paths '("/tmp/file.txt")))
+         (args (mevedel-permission--checker-args context)))
+    (should (eq tool (plist-get args :tool-struct)))
+    (should (equal "/tmp/file.txt" (plist-get args :path)))
+    (should (equal '(("Read" :action allow))
+                   (plist-get args :session-rules)))
+    (should (eq 'default (plist-get args :mode)))
+    (should (equal '("/tmp/file.txt")
+                   (plist-get args :exact-allowed-paths)))))
+
 (mevedel-deftest mevedel-permission--parse-rule-string ()
   ,test
   (test)
