@@ -13,6 +13,9 @@ dist/
 # Agent worktrees
 .worktrees/
 
+# Local agent issue tracker / scratch space
+.scratch/
+
 # Backup files
 *~
 

@@ -53,6 +53,9 @@ Bundled skills currently include:
   `/review` command uses the same reviewer contract but dispatches its
   task directly so user/project skills named `review` cannot override the
   review workflow.
+- `git-worktree` — model-only guidance for checking Git worktree
+  isolation and mirroring the `/worktree` defaults when explicit
+  model-driven fallback is needed.
 - `analyze-log` — user-invocable gptel HTTP log analysis helper.
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
@@ -73,14 +76,27 @@ buffer is dirty.
 ## Local Slash Commands
 
 Local slash commands are handled before skill lookup. Built-ins include
-`/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`, `/mode`,
-`/skills`, `/auto`, `/clear`, `/plugin`, and `/help`. `/init` sends the
-repository bootstrap prompt that helps create or improve `AGENTS.md`,
+`/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`,
+`/worktree`, `/mode`, `/skills`, `/auto`, `/clear`, `/plugin`, and
+`/help`. `/init` sends the repository bootstrap prompt that helps create
+or improve `AGENTS.md`,
 `AGENTS.local.md`, project skills, and hooks. `/auto` toggles the current
 session between `default` and `trust-all`, adding an `auto-mode` reminder
 while active and a one-shot `auto-mode-exit` reminder after it is turned
 off. `/mode auto` is the same as entering `trust-all`; `/mode edit`
 and `/mode edits` are aliases for `accept-edits`.
+
+Worktree isolation has split surfaces:
+
+- `/worktree` is the deterministic human command. `/worktree status` is
+  read-only. `/worktree create [NAME] [--for "purpose"] [--clean]`
+  creates a new branch and linked checkout under `.worktrees/`, opens a
+  fresh session there, and does not auto-send a model prompt.
+- `git-worktree` is model-visible but not user-invocable. It embeds
+  best-effort read-only Git detection and tells the model how to mirror
+  `/worktree` defaults when the user explicitly requested isolation.
+- A model-visible `Worktree` tool is deferred; until then, model-driven
+  creation uses ordinary permission-gated Bash.
 
 Plugin management:
 

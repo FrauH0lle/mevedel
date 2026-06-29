@@ -56,6 +56,15 @@ to backup names), workspace identity, `:working-directory`, fork lineage
 `:agent-transcripts` metadata. Older sidecars without
 `:working-directory` restore at the workspace root.
 
+Worktree sessions are ordinary sessions whose `:working-directory` is a
+Git linked worktree under the same workspace, created by `/worktree
+create`. The old session remains live; the new session does not inherit
+active requests, permission queues, tasks, background agents, or transcript
+history. Unless `--clean` is used, the new data buffer starts with a
+visible setup-context user turn explaining the source session, source
+directory, worktree directory, branch, purpose, and warnings. That turn is
+not sent automatically.
+
 The prompt-index is rebuilt from `mevedel-transcript--extract-segments`
 over the live segment. Only shared `user` spans whose real prompt text
 starts outside gptel-owned org tool/reasoning/summary scaffolding become

@@ -172,7 +172,8 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--begin-external-turn
                   "mevedel-view"
-                  (display-text data-turn-start &optional kind hook-context))
+                  (display-text data-turn-start &optional kind hook-context
+                                no-spinner))
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
 (declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
 (declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
@@ -1252,8 +1253,14 @@ the LLM may have left an open block.  This handles:
             (insert (format "#+end_%s\n" last-open))
             (org-cycle))))))))
 
-(defun mevedel--insert-plan-implementation-turn (prompt display-text)
-  "Insert PROMPT as a user turn and notify the view with DISPLAY-TEXT."
+(defun mevedel--insert-local-user-turn
+    (prompt &optional display-text kind hook-context no-spinner)
+  "Insert PROMPT as a user turn without sending a request.
+
+DISPLAY-TEXT is mirrored to the view, defaulting to PROMPT.  KIND and
+HOOK-CONTEXT are forwarded to `mevedel-view--begin-external-turn',
+with NO-SPINNER forwarded when non-nil."
+  (require 'mevedel-utilities)
   (goto-char (point-max))
   (let ((user-turn-start (point)))
     (insert gptel-response-separator)
@@ -1273,8 +1280,14 @@ the LLM may have left an open block.  This handles:
                 ((buffer-live-p view))
                 ((fboundp 'mevedel-view--begin-external-turn)))
       (with-current-buffer view
-        (mevedel-view--begin-external-turn display-text data-turn-start)))
+        (mevedel-view--begin-external-turn
+         (or display-text prompt) data-turn-start kind hook-context
+         no-spinner)))
     data-turn-start))
+
+(defun mevedel--insert-plan-implementation-turn (prompt display-text)
+  "Insert PROMPT as a user turn and notify the view with DISPLAY-TEXT."
+  (mevedel--insert-local-user-turn prompt display-text))
 
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.

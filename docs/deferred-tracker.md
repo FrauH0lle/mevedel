@@ -86,6 +86,32 @@ inlining a paragraph.
 
 ## Sessions and persistence
 
+### Model-visible Worktree tool
+
+- **Source:** worktree feature design discussion
+- **What's owed:** Add a model-callable `Worktree` tool for deterministic
+  worktree status/create actions instead of relying on the model to follow
+  the `git-worktree` skill with Bash.
+- **Why deferred:** v1 can combine a user-facing `/worktree` command with
+  model-visible skill guidance and normal permission-gated Bash.
+- **Status check:** No `Worktree` tool exists; worktree creation is not a
+  tool-pipeline primitive.
+- **Blast radius:** Model-driven worktree creation remains prompt-guided
+  rather than schema-driven until the tool exists.
+
+### Plan implementation in a new worktree session
+
+- **Source:** worktree feature design discussion
+- **What's owed:** Add an option from Plan mode to implement an approved
+  plan in a freshly-created worktree session, carrying the plan context
+  into that session before implementation starts.
+- **Why deferred:** The first worktree pass needs to settle basic
+  worktree command/session semantics before adding Plan-mode branching.
+- **Status check:** Plan mode can implement in the current session; no
+  worktree-backed implementation target exists.
+- **Blast radius:** Users must manually create/switch worktrees before
+  implementing plans when they want isolated changes.
+
 ### Bulk session-management UI
 
 - **Source:** `specs/19-session-persistence.md` Q4
