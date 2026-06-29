@@ -11,8 +11,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+(require 'cl-lib)
 
 (require 'json)
 (require 'subr-x)
@@ -608,7 +607,7 @@ treated as `SubagentStop'."
 
 (defun mevedel-hooks-effective-rules
     (&optional session workspace request invocation)
-  "Return effective hook rules for SESSION / WORKSPACE context."
+  "Return effective hook rules for SESSION, WORKSPACE, REQUEST, and INVOCATION."
   (let* ((workspace (or workspace
                         (and session (mevedel-session-workspace session))))
          rules)
@@ -641,7 +640,7 @@ treated as `SubagentStop'."
 
 ;;;###autoload
 (defun mevedel-hooks-trust-project (&optional workspace)
-  "Trust the current project's hook config files.
+  "Trust WORKSPACE's hook config files.
 
 Interactively, uses `mevedel--session' or `mevedel--workspace' in the
 current buffer.  Trust is keyed by workspace id, path, and file hash."
@@ -914,7 +913,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                   additional))))
 
 (defun mevedel-hooks-record-session-reminder (event session decision)
-  "Queue model-visible hook guidance for selected hook DECISION outcomes."
+  "Queue model-visible hook guidance for EVENT, SESSION, and DECISION."
   (when-let* ((session session)
               (decision (mevedel-hooks--safe-decision decision)))
     (cond
@@ -1094,7 +1093,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
         (plist-get decision :system-message))))
 
 (defun mevedel-hooks--surface-final-decision (event session decision)
-  "Surface user-visible fields from hook DECISION for EVENT."
+  "Surface user-visible fields from hook DECISION for EVENT and SESSION."
   (let ((decision (mevedel-hooks--safe-decision decision)))
     (mevedel-hooks-record-session-reminder event session decision)
     (cond
@@ -1191,7 +1190,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks--apply-decision-to-event-plist
     (event event-plist decision)
-  "Return EVENT-PLIST updated with mutating fields from DECISION."
+  "Return EVENT-PLIST for EVENT updated with mutating fields from DECISION."
   (let ((payload (copy-sequence event-plist))
         (decision (mevedel-hooks--safe-decision decision)))
     (when (plist-member decision :updated-input)
@@ -1397,7 +1396,8 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
 
 (defun mevedel-hooks--run-native-functions
     (event event-plist session decision)
-  "Run Emacs native hook functions for EVENT.
+  "Run native hook functions for EVENT with EVENT-PLIST, SESSION, and DECISION.
+
 Returns (DECISION . EVENT-PLIST) after serial mutations."
   (if-let* ((hook-var (alist-get event mevedel-hooks--function-hook-alist)))
       (let ((merged decision)
@@ -1609,6 +1609,9 @@ decision plist."
 
 EVENT-PLIST is matched exactly like `mevedel-hooks-run-event', but no
 native function, Elisp handler, or command handler is executed.
+
+SESSION, WORKSPACE, REQUEST, and INVOCATION supply the context under
+inspection.
 
 Interactively, prompt for an event and optional matcher target, then
 display the dry-run result."

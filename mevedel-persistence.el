@@ -13,6 +13,7 @@
 
 (require 'cl-lib)
 (require 'ediff)
+(require 'subr-x)
 
 (require 'mevedel-overlays)
 (require 'mevedel-utilities)
@@ -165,7 +166,7 @@ Returns the number of saved instructions."
                                    nil))
 
 (defun mevedel--skip-printed-string (text pos)
-  "Return the position after the string in TEXT that starts at POS."
+  "Return the position after the string in TEXT at POS."
   (let ((len (length text))
         (pos (1+ pos)))
     (catch 'done
@@ -384,7 +385,7 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
 
 (defun mevedel--instruction-anchor-raw-match-p
     (start end anchor &optional range)
-  "Return non-nil if raw START/END still matches ANCHOR."
+  "Return non-nil if raw START and END still match ANCHOR in RANGE."
   (when (mevedel--instruction-bounds-valid-p start end range)
     (if (plist-get anchor :bodyless)
         (mevedel--instruction-anchor-context-match-p start end anchor)
@@ -406,7 +407,7 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
 
 (defun mevedel--instruction-anchor-resolve-bodyless
     (overlay-start overlay-end anchor range)
-  "Resolve a bodyless instruction point from ANCHOR in RANGE."
+  "Resolve bodyless ANCHOR in RANGE from OVERLAY-START to OVERLAY-END."
   (or (and (mevedel--instruction-anchor-raw-match-p
             overlay-start overlay-end anchor range)
            (cons overlay-start overlay-end))
@@ -427,7 +428,7 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
 
 (defun mevedel--instruction-anchor-resolve-text
     (overlay-start overlay-end anchor range)
-  "Resolve a non-bodyless instruction range from ANCHOR in RANGE."
+  "Resolve text ANCHOR in RANGE from OVERLAY-START to OVERLAY-END."
   (or (and (mevedel--instruction-anchor-raw-match-p
             overlay-start overlay-end anchor range)
            (cons overlay-start overlay-end))
@@ -452,7 +453,7 @@ When RANGE is non-nil, it is a cons cell limiting valid bounds."
 
 (defun mevedel--instruction-anchor-resolve
     (overlay-start overlay-end anchor parent-range)
-  "Resolve instruction bounds for ANCHOR or return nil when unresolved."
+  "Resolve ANCHOR near OVERLAY-START and OVERLAY-END within PARENT-RANGE."
   (let ((range (or parent-range (cons (point-min) (point-max)))))
     (cond
      ((null anchor) (cons overlay-start overlay-end))

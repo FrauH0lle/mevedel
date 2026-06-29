@@ -106,7 +106,7 @@ agent can discover them."
   "Return AGENT's tool specs merged with user-declared extras.
 
 Combines `mevedel-agent-tools' with any matching entry in
-`mevedel-agent-extra-tool-specs'. The agent's own specs come first so
+`mevedel-agent-extra-tool-specs'.  The agent's own specs come first so
 the built-in set stays stable; user extras are appended."
   (let* ((name (mevedel-agent-name agent))
          (sym (intern name))
@@ -318,14 +318,14 @@ and render-data markers are runtime-only caches for cheap live updates."
   "Create a fresh `mevedel-agent-invocation' for AGENT.
 
 The invocation gets an independent clone of AGENT's reminders so
-`last-fired' tracking is isolated from other invocations. When the agent
+`last-fired' tracking is isolated from other invocations.  When the agent
 has a `max-turns' cap, a one-shot max-turns-warning reminder is
 prepended automatically so the agent gets a single nudge near the turn
 limit without any per-agent declaration.
 
 The agent's `:tools' spec is resolved; the `:deferred' portion seeds the
 invocation's `deferred-set' so ToolSearch running inside the spawned
-sub-agent can discover the agent's own lazy tools. When the deferred set
+sub-agent can discover the agent's own lazy tools.  When the deferred set
 is non-empty, invocation-scoped roster and expiry reminders are added so
 the sub-agent learns which tools it can activate without polluting the
 main session's reminder list."
@@ -479,11 +479,11 @@ returns prioritized structured findings as JSON."
   "Set up agents for the current request.
 
 If PRESET-NAME is non-nil and has an `:agents' entry in
-`mevedel-preset--registry', only those agents are registered. Otherwise
+`mevedel-preset--registry', only those agents are registered.  Otherwise
 all agents in `mevedel-agent--registry' are registered.
 
 Populates the buffer-local `mevedel-agent-exec--agents' and updates the
-Agent tool's `:enum' slot. Must be called in the chat buffer."
+Agent tool's `:enum' slot.  Must be called in the chat buffer."
   (let* ((meta (and preset-name
                     (alist-get preset-name mevedel-preset--registry)))
          (allowed (plist-get meta :agents))

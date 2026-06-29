@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Sequential step-based execution engine for mevedel tools. Each tool
+;; Sequential step-based execution engine for mevedel tools.  Each tool
 ;; invocation runs through a standard pipeline: validate -> permission ->
 ;; snapshot -> handler -> render-transform -> persist ->
 ;; specialist-nudges -> attach-render-data -> post-hooks -> attach-media.
@@ -16,7 +16,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
@@ -301,7 +301,7 @@ schema, while mevedel normalizes them back into a full plist."
       (plist-get call :id))))
 
 (defun mevedel-pipeline--run (steps callback context)
-  "Run pipeline STEPS sequentially, calling CALLBACK with the result.
+  "Run the pipeline, calling CALLBACK with the result.
 
 STEPS is a list of step functions.  Each step takes (CONTEXT NEXT FAIL)
 where CONTEXT is a plist of accumulated state, NEXT is a continuation
@@ -319,8 +319,8 @@ Each step's NEXT and FAIL continuations are wrapped in a per-step
 logged via `display-warning'.  This is defense-in-depth -- primitives
 may latch at the UI layer too -- but the runner latch is authoritative.
 
-CALLBACK must be the once-fire wrapper installed at the top-level entry
-(`mevedel-pipeline-run-tool').  The runner's `condition-case' branches
+CALLBACK must be the once-fire wrapper installed by
+`mevedel-pipeline-run-tool'.  The runner's `condition-case' branches
 fire CALLBACK directly with an `Error: ...' string when a sync error
 escapes the step body or its NEXT recursion -- the wrapper guarantees
 the consumer sees exactly one outcome even when the recursion already
@@ -461,7 +461,10 @@ signal handler."
 
 (defun mevedel-pipeline--run-hook-event
     (event event-plist callback context session workspace request invocation)
-  "Run hook EVENT in CONTEXT's dispatch buffer when it is still live."
+  "Run hook EVENT with EVENT-PLIST in CONTEXT's live dispatch buffer.
+
+CALLBACK, SESSION, WORKSPACE, REQUEST, and INVOCATION are forwarded to
+the hook runner."
   (let ((buffer (plist-get context :buffer)))
     (if (buffer-live-p buffer)
         (with-current-buffer buffer
@@ -516,7 +519,7 @@ signal handler."
 
 (defun mevedel-pipeline--log-permission-decision
     (context decision &rest props)
-  "Persist a sanitized permission-decision diagnostic for CONTEXT."
+  "Persist sanitized DECISION diagnostics for CONTEXT with PROPS."
   (let ((session (plist-get context :session)))
     (when (and session
                (not (plist-get decision :logged)))
@@ -552,7 +555,7 @@ signal handler."
             props)))
 
 (defun mevedel-pipeline--step-pre-tool-hooks (context next fail)
-  "Run `PreToolUse' hooks before permission checking.
+  "Run `PreToolUse' hooks for CONTEXT, then call NEXT or FAIL.
 
 Hooks see validated args and may rewrite them.  Rewritten args are
 validated again before the pipeline continues.  Permission decisions
@@ -631,7 +634,8 @@ returned `ask'; explicit denials from the resolver stay intact."
 
 (defun mevedel-pipeline--fail-permission-denied
     (context fail reason &optional model-reason)
-  "Run `PermissionDenied' hooks, then call FAIL with REASON.
+  "Run `PermissionDenied' hooks for CONTEXT, then call FAIL with REASON.
+
 MODEL-REASON is included in the hook event when available."
   (let ((session (plist-get context :session))
         (workspace (plist-get context :workspace)))
@@ -718,7 +722,7 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
     (outcome context next fail
              &key tool-name path session workspace workspace-root allowed-roots
              decision permission-context)
-  "Translate a permission OUTCOME into NEXT / FAIL for the pipeline step.
+  "Translate permission OUTCOME for CONTEXT into NEXT or FAIL.
 
 OUTCOME is the union of (a) results emitted by a permission slot via
 `cont' (`allow', `deny', `(deny . REASON)', `(feedback . TEXT)',
@@ -728,10 +732,13 @@ overlay after an `ask' is routed through it (`allow-once',
 `aborted').
 
 `ask' routes through the standard prompt path and recurses with the
-user's UI choice.  Rule-scope outcomes (`allow-session' etc.) are
+user’s UI choice.  Rule-scope outcomes (`allow-session' etc.) are
 pre-collapsed via `mevedel-permission--apply-prompt-result' so that
 session / persistent rules land with the correct scope before the
-translator fires NEXT / FAIL."
+translator fires NEXT / FAIL.
+
+TOOL-NAME, PATH, SESSION, WORKSPACE, WORKSPACE-ROOT, ALLOWED-ROOTS,
+DECISION, and PERMISSION-CONTEXT describe the permission context."
   (when (and decision (not (eq outcome 'ask)))
     (mevedel-pipeline--log-permission-decision context decision))
   (pcase outcome
@@ -961,8 +968,9 @@ that contains a `:result' key."
 
 (defun mevedel-pipeline--split-handler-return (raw)
   "Split handler return RAW into a (RESULT . RENDER-DATA) cons.
+
 When RAW matches `mevedel-pipeline--render-plist-p', destructure into its
-`:result' and `:render-data' fields. Otherwise RAW is taken as the result
+`:result' and `:render-data' fields.  Otherwise RAW is taken as the result
 with no render-data."
   (if (mevedel-pipeline--render-plist-p raw)
       (cons (plist-get raw :result) (plist-get raw :render-data))
@@ -1026,7 +1034,7 @@ NEXT is called on success."
 
 (defconst mevedel-pipeline--render-data-open "<!-- mevedel-render-data -->"
   "Opening delimiter marking a hidden render-data side-channel block.
-Emitted inside tool results so the view-buffer interpreter can extract
+Emitted inside tool results so the view buffer interpreter can extract
 the serialized render-data without re-running the tool.")
 
 (defconst mevedel-pipeline--render-data-close "<!-- /mevedel-render-data -->"
@@ -1065,7 +1073,7 @@ channel.")
   (length (prin1-to-string (mevedel-pipeline--plain-render-data data))))
 
 (defun mevedel-pipeline--step-render-transform (context next _fail)
-  "Run TOOL's `:render-transform' to synthesize bounded render-data.
+  "Run CONTEXT's TOOL `:render-transform', then call NEXT.
 
 The transform receives the normalized string result before oversized
 result persistence and before render/media side-channel attachment.
@@ -1139,7 +1147,7 @@ display."
                (format "%S:%S:%S" (current-time) (emacs-pid) (random t))))
 
 (defun mevedel-pipeline--media-store-dir (session buffer)
-  "Return a persistent media side-channel directory for SESSION."
+  "Return a persistent media side-channel directory for SESSION in BUFFER."
   (when-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
     (let ((media-dir (file-name-concat dir "media")))
       (make-directory media-dir t)
@@ -1147,7 +1155,9 @@ display."
 
 (defun mevedel-pipeline--write-media-store-record
     (id items session buffer tool-use-id)
-  "Persist media ITEMS under ID for SESSION, returning the file path."
+  "Persist ITEMS under ID for SESSION and BUFFER, returning the file path.
+
+TOOL-USE-ID records the tool call that owns the media."
   (when-let* ((dir (mevedel-pipeline--media-store-dir session buffer)))
     (let ((file (file-name-concat dir (concat "media-" id ".el"))))
       (with-temp-buffer
@@ -1164,7 +1174,10 @@ display."
 
 (defun mevedel-pipeline--read-media-store-record
     (id session buffer expected-tool-use-id)
-  "Return media items for ID from SESSION's trusted media store."
+  "Return media items for ID from SESSION's trusted media store.
+
+BUFFER selects the store directory.  EXPECTED-TOOL-USE-ID rejects stale
+records when non-nil."
   (when-let* ((id (and (stringp id) id))
               (dir (mevedel-pipeline--media-store-dir session buffer))
               (file (file-name-concat dir (concat "media-" id ".el"))))
@@ -1199,7 +1212,9 @@ payload.  EXPECTED-TOOL-USE-ID comes from the gptel tool-call record."
 
 (defun mevedel-pipeline--store-media-data
     (media &optional session buffer tool-use-id)
-  "Store MEDIA items and return a serializable side-channel reference."
+  "Store MEDIA for SESSION and BUFFER, returning a side-channel reference.
+
+TOOL-USE-ID records the tool call that owns the media."
   (when (mevedel-pipeline--valid-media-items-p media)
     (let* ((items (mevedel-pipeline--sanitize-media-items media))
            (id (mevedel-pipeline--media-store-id))
@@ -1215,7 +1230,9 @@ payload.  EXPECTED-TOOL-USE-ID comes from the gptel tool-call record."
 
 (defun mevedel-pipeline--format-media-data-block
     (media &optional session buffer tool-use-id)
-  "Return the serialized side-channel block string for MEDIA items."
+  "Return serialized side-channel block for MEDIA.
+
+SESSION, BUFFER, and TOOL-USE-ID describe the tool call owner."
   (if-let* ((ref (mevedel-pipeline--store-media-data
                   media session buffer tool-use-id)))
       (propertize
@@ -1295,9 +1312,11 @@ side-channel data."
 (defun mevedel-pipeline--read-media-data-payload
     (payload &optional session buffer expected-tool-use-id)
   "Read media side-channel PAYLOAD, returning stored media items.
+
 The payload is read with `read-eval' disabled.  It contains only an
 opaque store reference; media bytes are loaded from pipeline-owned
-state, never from a model-visible transcript block."
+state, never from a model-visible transcript block.  SESSION, BUFFER, and
+EXPECTED-TOOL-USE-ID select the trusted store record."
   (condition-case _
       (let* ((read-eval nil)
              (data (read payload))
@@ -1326,7 +1345,9 @@ state, never from a model-visible transcript block."
                    allow-payload-tool-use-id)
   "Return (VISIBLE-PART . MEDIA) parsed from RESULT-STRING.
 VISIBLE-PART is the tool result with media side-channel blocks stripped.
-MEDIA is the Lisp object deserialized from inside the block, or nil."
+MEDIA is the Lisp object deserialized from inside the block, or nil.
+SESSION, BUFFER, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
+control trusted side-channel lookup."
   (if (not (stringp result-string))
       (cons result-string nil)
     (let ((open nil)
@@ -1745,8 +1766,10 @@ string literals before retrying `read'."
        (error :mevedel-parse-failed)))))
 
 (defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
-  "Return (BEG . END) of the first render-data block whose plist
-`:agent-id' is AGENT-ID, or nil.
+  "Return bounds of the first render-data block for AGENT-ID.
+
+The return value is (BEG . END), or nil when no block has a matching
+`:agent-id'.
 Searches the current buffer from `point-min'.  Used by the
 background handle patch path to locate the block whose hidden
 plist should be updated when a sub-agent's status changes."
@@ -1806,9 +1829,9 @@ result."
           (insert block))))))
 
 (defun mevedel--parse-tool-results-scrub-advice (orig-fun backend tool-use)
-  "Strip render-data blocks from tool-call `:result' for the LLM payload.
+  "Strip render-data blocks from TOOL-USE results for BACKEND via ORIG-FUN.
 
-Wraps `gptel--parse-tool-results' (a cl-defgeneric with per-backend
+Wraps `gptel--parse-tool-results' (a `cl-defgeneric' with per-backend
 methods in gptel-openai.el, gptel-anthropic.el, ...) which is the sole
 point at which `:result' strings are copied into the API-shaped
 tool_result message.  Both request paths funnel through it:
@@ -1891,8 +1914,10 @@ the view parser, persistence) keeps seeing the full block."
   "Return (VISIBLE-PART . RENDER-DATA) parsed from RESULT-STRING.
 VISIBLE-PART is the tool result with the side-channel block stripped.
 RENDER-DATA is the Lisp object deserialized from inside the block, or
-nil when no valid block is present. Unparseable payloads are treated as
-absent: the original string is returned verbatim in VISIBLE-PART."
+nil when no valid block is present.  Unparseable payloads are treated as
+absent: the original string is returned verbatim in VISIBLE-PART.
+SESSION, BUFFER, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
+control trusted side-channel lookup."
   (if (not (stringp result-string))
       (cons result-string nil)
     (let ((open (string-search mevedel-pipeline--render-data-open
@@ -1927,7 +1952,7 @@ absent: the original string is returned verbatim in VISIBLE-PART."
                       data)))))))))
 
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
-  "Embed the render-data side-channel adjacent to the tool :result.
+  "Embed render-data from CONTEXT, then call NEXT.
 
 When CONTEXT holds a non-nil `:render-data' value and the `:result' is
 a string, append a hidden delimiter-wrapped block carrying the
@@ -1951,7 +1976,7 @@ When no render-data was produced, passes CONTEXT through unchanged."
       (funcall next context))))
 
 (defun mevedel-pipeline--step-attach-media-data (context next _fail)
-  "Embed media side-channel data adjacent to the tool :result.
+  "Embed media side-channel data from CONTEXT, then call NEXT.
 
 MEDIA is a list of plists, usually carrying at least `:path', `:mime',
 and `:kind'.  The block is hidden in the data buffer and stripped at the
@@ -2019,7 +2044,7 @@ possibly-updated context."
                              result tool session buffer))))))))
 
 (defun mevedel-pipeline--step-post-tool-hooks (context next _fail)
-  "Run `PostToolUse' or `PostToolUseFailure' hooks.
+  "Run post-tool hooks for CONTEXT, then call NEXT.
 
 Hooks receive both `:raw-result' and the final `:result'.  Only an
 explicit `:updated-result' changes the model-visible tool result."
@@ -2148,7 +2173,7 @@ explicit `:updated-result' changes the model-visible tool result."
                (mevedel-pipeline--ctx-deferred-injected ctx))))
 
 (defun mevedel-pipeline--nudge-context (context)
-  "Return the context whose nudge throttle should be updated."
+  "Return CONTEXT owner whose nudge throttle should be updated."
   (or (plist-get context :invocation)
       (plist-get context :session)))
 
@@ -2169,7 +2194,7 @@ explicit `:updated-result' changes the model-visible tool result."
     t))
 
 (defun mevedel-pipeline--code-path-p (path)
-  "Return non-nil when PATH looks like a code file."
+  "Return non-nil when PATH names a code file."
   (and (stringp path)
        (member (downcase (or (file-name-extension path) ""))
                mevedel-pipeline--code-file-extensions)))
@@ -2183,7 +2208,7 @@ explicit `:updated-result' changes the model-visible tool result."
                 mevedel-pipeline--code-file-extensions)))
 
 (defun mevedel-pipeline--grep-result-code-p (result)
-  "Return non-nil when RESULT contains code-file paths."
+  "Return non-nil when RESULT has code-file paths."
   (and (stringp result)
        (cl-some (lambda (line)
                   (let ((path (car (split-string line ":" t))))
@@ -2199,7 +2224,7 @@ explicit `:updated-result' changes the model-visible tool result."
       (mevedel-pipeline--grep-result-code-p result)))
 
 (defun mevedel-pipeline--identifier-like-pattern-p (pattern)
-  "Return non-nil when PATTERN looks like a specific code identifier."
+  "Return non-nil when PATTERN matches a specific code identifier."
   (and (stringp pattern)
        (string-match-p "\\`[[:alpha:]_][[:alnum:]_-]*\\'" pattern)
        (or (string-match-p "[-_]" pattern)
@@ -2208,7 +2233,7 @@ explicit `:updated-result' changes the model-visible tool result."
                              pattern)))))
 
 (defun mevedel-pipeline--structural-code-pattern-p (pattern)
-  "Return non-nil when PATTERN looks like a structural code search."
+  "Return non-nil when PATTERN is a structural code search."
   (and (stringp pattern)
        (member (downcase pattern)
                mevedel-pipeline--structural-code-patterns)))
@@ -2257,13 +2282,13 @@ explicit `:updated-result' changes the model-visible tool result."
     (mevedel-reminders-specialist-capabilities session)))
 
 (defun mevedel-pipeline--family-applicable-p (context caps family names)
-  "Return non-nil when specialist FAMILY with NAMES applies for CONTEXT."
+  "Return non-nil when CAPS or CONTEXT enables FAMILY for NAMES."
   (or (plist-get caps family)
       (mevedel-pipeline--tool-name-present-p
        (mevedel-pipeline--nudge-context context) names)))
 
 (defun mevedel-pipeline--specialist-load-text (context names query)
-  "Return a ToolSearch hint for NAMES/QUERY when those tools are deferred."
+  "Return a ToolSearch hint for NAMES and QUERY in CONTEXT."
   (let ((ctx (mevedel-pipeline--nudge-context context)))
     (when (cl-some (lambda (entry) (member (cadr (car entry)) names))
                    (mevedel-pipeline--ctx-deferred-set ctx))
@@ -2271,7 +2296,7 @@ explicit `:updated-result' changes the model-visible tool result."
               query))))
 
 (defun mevedel-pipeline--grep-specialist-nudges (context args result caps)
-  "Return bounded specialist nudges for a Grep call."
+  "Return bounded specialist nudges for Grep CONTEXT, ARGS, RESULT, and CAPS."
   (let ((pattern (plist-get args :pattern))
         (code-result-p
          (and (mevedel-pipeline--grep-code-target-p args result)
@@ -2312,7 +2337,7 @@ explicit `:updated-result' changes the model-visible tool result."
     (nreverse nudges)))
 
 (defun mevedel-pipeline--read-specialist-nudges (context args result caps)
-  "Return bounded specialist nudges for a Read call."
+  "Return bounded specialist nudges for Read CONTEXT, ARGS, RESULT, and CAPS."
   (let ((path (plist-get args :file_path))
         nudges)
     (when (and (mevedel-pipeline--code-path-p path)
@@ -2374,7 +2399,7 @@ explicit `:updated-result' changes the model-visible tool result."
     result))
 
 (defun mevedel-pipeline--step-specialist-nudges (context next _fail)
-  "Append bounded specialist-tool guidance after generic tool calls."
+  "Append bounded specialist-tool guidance for CONTEXT, then call NEXT."
   (let* ((tool (plist-get context :tool))
          (name (and tool (mevedel-tool-name tool)))
          (args (plist-get context :args))
@@ -2447,7 +2472,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
 (defun mevedel-pipeline-run-tool (tool callback args)
   "Execute TOOL through the standard pipeline.
 
-CALLBACK is the async result callback from gptel. ARGS is a plist of
+CALLBACK is the async result callback from gptel.  ARGS is a plist of
 tool arguments (e.g., (:file_path \"/foo\" :content \"bar\")).
 
 Captures the caller's session and workspace into the pipeline

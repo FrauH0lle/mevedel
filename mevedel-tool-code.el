@@ -7,8 +7,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
 ;; `imenu'
@@ -149,7 +150,7 @@ and :file_path."
                                       (error-message-string err))))))))))
 
 (defun mevedel-tool-code--xref-definitions (callback args)
-  "Find symbols matching a pattern using xref-backend-apropos.
+  "Find symbols matching a pattern using `xref-backend-apropos'.
 CALLBACK receives the result string.  ARGS is a plist with :pattern
 and :file_path."
   (require 'xref)
@@ -415,7 +416,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     (mevedel-tool-code--result-lines result)))
 
 (defun mevedel-tool-code--render-xref (name args result _render-data)
-  "Rendering plist for xref search tools."
+  "Return rendering plist for xref tool NAME with ARGS and RESULT."
   (when (stringp result)
     (let* ((target (or (plist-get args :identifier)
                        (plist-get args :pattern)
@@ -436,7 +437,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-code--render-imenu (name args result _render-data)
-  "Rendering plist for Imenu results."
+  "Return rendering plist for Imenu tool NAME with ARGS and RESULT."
   (when (stringp result)
     (let* ((file (mevedel-tool-code--display-file
                   (plist-get args :file_path)))
@@ -453,7 +454,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-code--render-treesitter (name args result _render-data)
-  "Rendering plist for Treesitter results."
+  "Return rendering plist for tree-sitter tool NAME with ARGS and RESULT."
   (when (stringp result)
     (let* ((file (mevedel-tool-code--display-file
                   (plist-get args :file_path)))

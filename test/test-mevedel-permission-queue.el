@@ -35,7 +35,7 @@
 (require 'mevedel-skills)
 
 (defun test-pq--make-session (&optional rules)
-  "Create a fresh session for queue tests, optionally with RULES."
+  "Create a fresh queue-test session, optionally with RULES."
   (mevedel-session--create
    :name "test"
    :workspace nil

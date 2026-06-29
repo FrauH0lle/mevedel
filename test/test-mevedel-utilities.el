@@ -18,7 +18,7 @@
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
 
 (defun test-mevedel-utilities--raw-byte-string-p (string)
-  "Return non-nil when STRING contains raw byte characters."
+  "Return non-nil for STRING with raw byte characters."
   (catch 'found
     (dotimes (index (length string))
       (when (eq (char-charset (aref string index)) 'eight-bit)

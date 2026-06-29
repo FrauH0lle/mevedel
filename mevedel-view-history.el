@@ -10,7 +10,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 (require 'ring)
 (require 'subr-x)
 (require 'mevedel-utilities)
@@ -271,7 +271,7 @@ files are renamed to `.bad', warned about once, and ignored."
          (mevedel-view-history--rename-bad-file path))))))
 
 (defun mevedel-view-history-save (&optional view-buffer)
-  "Persist VIEW-BUFFER's input history when session persistence allows it."
+  "Persist VIEW-BUFFER input history when session persistence permits."
   (let ((buf (or view-buffer (current-buffer))))
     (when (buffer-live-p buf)
       (with-current-buffer buf
@@ -384,10 +384,10 @@ files are renamed to `.bad', warned about once, and ignored."
 (defun mevedel-view-history-search ()
   "Incrementally search backward through input history.
 Typing narrows matches as in a small history isearch.  `M-r' during
-the search cycles through matching entries.  `RET' accepts the
-current match.  `C-g' restores the input that was present before
-search started and quits; `C-c C-k' restores that input and aborts the
-active request."
+the search cycles through matching entries.  `RET' accepts the current
+match.  `C-g' restores the input that was present before search started
+and quits; `\\[mevedel-abort]' restores that input and aborts the active
+request."
   (interactive)
   (if (not (mevedel-view-history--input-active-p))
       (mevedel-view-history--call-global-key (kbd "M-r"))

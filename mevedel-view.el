@@ -17,7 +17,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl-lib))
+(require 'cl-lib)
 (require 'mevedel-utilities)
 (require 'mevedel-transcript)
 
@@ -146,6 +146,10 @@
 ;; `mevedel-view-fragment'
 (declare-function mevedel-view-fragment--find-bounds
                   "mevedel-view-fragment" (region namespace id))
+(declare-function mevedel-view-fragment--region-bounds
+                  "mevedel-view-fragment" (region))
+(declare-function mevedel-view-fragment--region-id
+                  "mevedel-view-fragment" (region))
 (declare-function mevedel-view-fragment--reconcile
                   "mevedel-view-fragment"
                   (region namespace fragments &optional preserve))
@@ -1443,7 +1447,7 @@ navigation and activation fallbacks."
    (delq nil (append maps (list mevedel-view--display-map)))))
 
 (defun mevedel-view--status-task-keymap ()
-  "Return the view-buffer keymap for the task status fragment."
+  "Return the `view-buffer' keymap for the task status fragment."
   (mevedel-view--display-fragment-keymap
    (define-keymap
      "<tab>" #'mevedel-view-toggle-section
@@ -1663,7 +1667,8 @@ instead of signaling when no image is available."
 
 (put 'mevedel-view-yank-dwim 'delete-selection 'yank)
 (defun mevedel-view-yank-dwim (&optional arg)
-  "Yank text, or save a clipboard image and insert it as an `@file'."
+  "Yank text, or save a clipboard image and insert it as an `@file'.
+ARG is passed through from the interactive prefix."
   (interactive "*P")
   (if-let* (((window-system))
             (path (mevedel-view--save-clipboard-image t)))
@@ -4578,6 +4583,7 @@ the raw tool segment."
     (data-buf seg-start seg-end collapsed-only raw)
   "Return a cache key for DATA-BUF SEG-START..SEG-END rendering.
 RAW is the expanded tool segment text used for content-based invalidation.
+COLLAPSED-ONLY records whether only collapsed rendering is needed.
 Unrelated appends to DATA-BUF should not invalidate completed tool segment
 renderings, but changes to the segment text itself should."
   (with-current-buffer data-buf
@@ -5347,7 +5353,7 @@ place, but change when a later rewrite reuses the same numeric start."
           (mevedel-view--source-collapse-anchor source))))
 
 (defun mevedel-view--source-collapse-in-flight-key-p (key)
-  "Return non-nil when KEY uses the temporary in-flight anchor."
+  "Return non-nil when KEY has the temporary in-flight anchor."
   (and (consp key)
        (eq (car key) 'source)
        (equal (nth 3 key) '(in-flight))))
@@ -5378,7 +5384,7 @@ an explicitly expanded section."
         (cons key value)))))
 
 (defun mevedel-view--rendering-with-collapse-state (rendering source)
-  "Return RENDERING with saved source-backed collapse state applied.
+  "Return RENDERING with saved collapse state from SOURCE applied.
 When no saved state exists, return RENDERING unchanged."
   (if-let* ((rendering rendering)
             (vtype (or (plist-get rendering :vtype) 'tool-summary))
@@ -6219,13 +6225,13 @@ Empty string when the turn contains only whitespace or markers."
 
 (defun mevedel-view--queued-user-message-batch-segment-p
     (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF's SEG-START..SEG-END is a queued-message batch."
+  "Return non-nil when DATA-BUF SEG-START..SEG-END spans a message batch."
   (with-current-buffer data-buf
     (mevedel-view--queued-user-message-batch-items-from-text
      (buffer-substring-no-properties seg-start seg-end))))
 
 (defun mevedel-view--queued-user-message-batch-turn-p (turn data-buf)
-  "Return non-nil when TURN contains a generated queued-message batch."
+  "Return non-nil when TURN in DATA-BUF has a generated message batch."
   (cl-some
    (lambda (seg)
      (and (eq (car seg) 'user)
@@ -8429,7 +8435,7 @@ before this feature still works."
     (nreverse grants)))
 
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
-  "Return non-nil when queued user messages should wait for user action."
+  "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (eq (mevedel-session-permission-mode sess) 'plan)
         (mevedel-session-plan-queue sess))))
@@ -10398,13 +10404,13 @@ HEADER-WIDTH is the optional width used to align the row header."
     t))
 
 (defun mevedel-view--status-task-body (session show-completed)
-  "Return propertized status-zone task text for SESSION."
+  "Return propertized status-zone task text for SESSION and SHOW-COMPLETED."
   (let ((body (mevedel-tool-task--display-string session show-completed t)))
     (add-text-properties 0 (length body) '(mevedel-tool-task t) body)
     body))
 
 (defun mevedel-view--status-session (&optional data-buf)
-  "Return the session used for status rendering."
+  "Return DATA-BUF session used for status rendering."
   (or (and data-buf
            (buffer-live-p data-buf)
            (buffer-local-value 'mevedel--session data-buf))
@@ -11009,7 +11015,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
     overlay))
 
 (defun mevedel-view--interaction-overlay-for (id descriptor region)
-  "Return the live callback overlay for descriptor ID."
+  "Return live callback overlay for ID, DESCRIPTOR, and REGION."
   (let ((overlay (and (hash-table-p mevedel-view--interaction-overlays)
                       (gethash id mevedel-view--interaction-overlays))))
     (unless (and (overlayp overlay) (overlay-buffer overlay))
@@ -11066,7 +11072,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
      mevedel-view--interaction-overlays)))
 
 (defun mevedel-view--interaction-delete-stale-fragments (region)
-  "Delete interaction fragments outside the current REGION ownership."
+  "Delete interaction fragments outside REGION ownership."
   (let* ((region-id (mevedel-view-fragment--region-id region))
          (bounds (mevedel-view-fragment--region-bounds region))
          (region-start (car bounds))
@@ -11106,7 +11112,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
           (setq pos limit))))))
 
 (defun mevedel-view--interaction-sync-overlays (region pairs)
-  "Move descriptor callback overlays to their fragment bounds."
+  "Move REGION descriptor callback overlays for PAIRS to fragment bounds."
   (dolist (pair pairs)
     (pcase-let* ((`(,id . ,descriptor) pair)
                  (overlay (and (hash-table-p mevedel-view--interaction-overlays)

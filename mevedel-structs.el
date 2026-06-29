@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Workspace, session, and request structs that form the foundation for
-;; mevedel's state management. All other modules reference these structs.
+;; mevedel's state management.  All other modules reference these structs.
 
 ;;; Code:
 
@@ -28,7 +28,7 @@
   "Global user state directory.
 
 Stores user-wide skills, global config, and global permission rules.
-Project-level state goes in PROJECT/.mevedel/ instead. Lookup functions
+Project-level state goes in PROJECT/.mevedel/ instead.  Lookup functions
 check project dir first, then global."
   :type 'directory
   :group 'mevedel)
@@ -102,13 +102,13 @@ the table."
 (defvar mevedel-workspace--registry (make-hash-table :test #'equal)
   "Global registry of workspace structs.
 
-Keyed by (TYPE . ID) cons cells. Workspaces are created lazily on first
+Keyed by (TYPE . ID) cons cells.  Workspaces are created lazily on first
 chat buffer creation and cached here.")
 
 (defun mevedel-workspace-get-or-create (type id root name)
   "Return the workspace for TYPE and ID, creating it if needed.
 
-ROOT is the absolute project root path. NAME is the display name. If a
+ROOT is the absolute project root path.  NAME is the display name.  If a
 workspace already exists for this TYPE and ID, return it (ignoring ROOT
 and NAME arguments)."
   (let ((key (cons type id)))
@@ -290,7 +290,7 @@ Format: *mevedel:SESSION@WORKSPACE*"
 (defun mevedel-session-create (name workspace &optional working-directory)
   "Create a new session named NAME for WORKSPACE.
 
-Returns the session struct. Does not create the buffer -- the caller is
+Returns the session struct.  Does not create the buffer -- the caller is
 responsible for buffer setup.  WORKING-DIRECTORY defaults to the
 workspace root and is kept stable for the lifetime of the session."
   (mevedel-session--create
@@ -422,7 +422,7 @@ SKILL.md (which may have changed)."
 
 (defvar-local mevedel--current-request nil
   "The `mevedel-request' struct for the active request.
-Set at request start, cleared in the termination handler. Tool functions
+Set at request start, cleared in the termination handler.  Tool functions
 access this through the buffer-local.")
 
 
@@ -475,7 +475,7 @@ only call sites that may invoke cancellers."
   "Create a new request for SESSION, guarding against stale requests.
 
 If `mevedel--current-request' is already set, log a warning and replace
-it. Optional DIRECTIVE-UUID sets the directive being processed. Returns
+it.  Optional DIRECTIVE-UUID sets the directive being processed.  Returns
 the new request struct."
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")

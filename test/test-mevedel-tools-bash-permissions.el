@@ -22,6 +22,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(declare-function gptel-tool-args "gptel" (tool))
+
 (defun test-bash-permissions--read-permission-log (session)
   "Read permission log entries for SESSION."
   (let ((file (mevedel-permission-log-path session))

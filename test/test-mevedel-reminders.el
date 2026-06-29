@@ -24,6 +24,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar imenu--index-alist)
+
 
 ;;
 ;;; Struct creation

@@ -24,7 +24,7 @@
 ;;; Helpers
 
 (defun test-mevedel-tool-task--make-session ()
-  "Return a fresh session struct for task tests."
+  "Return a fresh session struct for task-tool cases."
   (let ((ws (mevedel-workspace--create
              :type 'project
              :id "/tmp/tasktest/"
@@ -45,7 +45,7 @@
 
 (defmacro test-mevedel-tool-task--with-view (session-var data-var view-var
                                                          &rest body)
-  "Bind SESSION-VAR, DATA-VAR, and VIEW-VAR for task view tests."
+  "Bind SESSION-VAR, DATA-VAR, and VIEW-VAR, then run BODY."
   (declare (indent 3))
   `(let* ((,session-var (test-mevedel-tool-task--make-session))
           (,data-var (generate-new-buffer " *task-data-test*"))

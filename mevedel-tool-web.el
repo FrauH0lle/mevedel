@@ -37,7 +37,7 @@
         (and host (not (string-empty-p host)) host)))))
 
 (defun mevedel-tool-web--render-transform (name args result)
-  "Return bounded render metadata for wrapped web tool RESULT."
+  "Return bounded render metadata for web tool NAME with ARGS and RESULT."
   (let ((url (plist-get args :url))
         (query (plist-get args :query)))
     (list :kind 'web
@@ -52,10 +52,10 @@
 ;;; Renderers
 
 (defun mevedel-tool-web--render-fetch (name args result render-data)
-  "Rendering plist for the WebFetch / YouTube tools.
+  "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA.
 Header shows the URL's host and the fetched size; body fontifies in
 the data buffer's major mode.  The view parser passes renderers
-unescaped tool results, so org-mode storage escapes are not shown in
+unescaped tool results, so `org-mode' storage escapes are not shown in
 the expanded body."
   (when (stringp result)
     (let* ((url (plist-get args :url))
@@ -69,7 +69,7 @@ the expanded body."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-web--render-search (name args result render-data)
-  "Rendering plist for the WebSearch tool.
+  "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA.
 Header shows the query and output line count; body fontifies in the
 data buffer's major mode (see `mevedel-tool-web--render-fetch' for
 why)."

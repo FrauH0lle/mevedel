@@ -198,7 +198,6 @@
 
 (mevedel-deftest mevedel-workspace--file-in-allowed-roots-p
   (:before-each (mevedel-workspace-clear-registry)
-   :after-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
                       (make-temp-file "mevedel-ws-roots-" t)))
            (extra-dir (file-name-as-directory
@@ -206,9 +205,11 @@
            (outside-dir (file-name-as-directory
                          (make-temp-file "mevedel-ws-outside-" t))))
    :after-each
-   (delete-directory root-dir t)
-   (delete-directory extra-dir t)
-   (delete-directory outside-dir t))
+   (progn
+     (mevedel-workspace-clear-registry)
+     (delete-directory root-dir t)
+     (delete-directory extra-dir t)
+     (delete-directory outside-dir t)))
   ,test
   (test)
   :doc "returns matching root for file inside workspace"

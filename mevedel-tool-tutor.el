@@ -8,8 +8,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
 ;; `gptel-request'
@@ -399,7 +400,7 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
 ;;; Renderers
 
 (defun mevedel-tool-tutor--render-get-hints (name _args result _render-data)
-  "Rendering plist for GetHints output."
+  "Return rendering plist for GetHints NAME and RESULT."
   (when (stringp result)
     (let ((lines (length (split-string result "\n" t))))
       (list :header (format "%s: hint history (%d %s)"
@@ -412,7 +413,7 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-tutor--render-record-hint (name args result _render-data)
-  "Compact rendering plist for RecordHint output."
+  "Return compact rendering plist for RecordHint NAME, ARGS, and RESULT."
   (when (stringp result)
     (list :header (format "%s: %s (depth %s)"
                           (or name "RecordHint")
@@ -492,7 +493,7 @@ If CONCEPT-FILTER is non-nil, only show hints for that concept."
 
 ;;;###autoload
 (defun mevedel-display-hints (&optional concept)
-  "Display tutor hints for the current workspace.
+  "Display tutor hints for CONCEPT in the current workspace.
 With prefix arg, prompt for specific concept to display."
   (interactive "P")
   (let* ((hints-alist (mevedel-tools--read-hints-file))

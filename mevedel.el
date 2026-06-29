@@ -66,6 +66,10 @@
 (require 'mevedel-chat)
 (require 'mevedel-worktree)
 
+;; `cl-seq'
+(declare-function cl-remove-duplicates "cl-seq" (cl-seq &rest cl-keys))
+(declare-function cl-remove-if "cl-seq" (cl-pred cl-list &rest cl-keys))
+
 ;; `gptel'
 (declare-function gptel--apply-preset "ext:gptel" (preset setter))
 (defvar gptel-display-buffer-action)
@@ -159,7 +163,7 @@ Can be one of the symbols:
 (defun mevedel-version (&optional here message)
   "Return the current version of mevedel.
 
-Interactively, or when MESSAGE is non-nil, show it in echo area. With
+Interactively, or when MESSAGE is non-nil, show it in echo area.  With
 prefix argument, or when HERE is non-nil, insert it at point."
   (interactive (list (or current-prefix-arg 'interactive)))
   (let ((version "v0.5.0"))
@@ -173,7 +177,7 @@ prefix argument, or when HERE is non-nil, insert it at point."
   "Propose a patch to implement directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
-process completes. The callback will receive two arguments: ERROR (nil
+process completes.  The callback will receive two arguments: ERROR (nil
 on success, a string error description on failure, or the symbol
 \\='abort if the request was aborted) and FSM (the gptel-fsm object for
 the request)."
@@ -193,7 +197,7 @@ the request)."
   "Propose a revision to a patch based on the directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
-process completes. The callback will receive two arguments: ERROR (nil
+process completes.  The callback will receive two arguments: ERROR (nil
 on success, a string error description on failure, or the symbol
 \\='abort if the request was aborted) and FSM (the gptel-fsm object for
 the request)."
@@ -215,7 +219,7 @@ the request)."
   "Discuss the directive at point.
 
 If CALLBACK is provided, it will be called when the implementation
-process completes. The callback will receive two arguments: ERROR (nil
+process completes.  The callback will receive two arguments: ERROR (nil
 on success, a string error description on failure, or the symbol
 \\='abort if the request was aborted) and FSM (the gptel-fsm object for
 the request)."
@@ -235,7 +239,7 @@ the request)."
   "Guide user to solve directive through hints (no solutions).
 
 If CALLBACK is provided, it will be called when the tutoring process
-completes. The callback will receive two arguments: ERROR (nil on
+completes.  The callback will receive two arguments: ERROR (nil on
 success, a string error description on failure, or the symbol \\='abort
 if the request was aborted) and FSM (the gptel-fsm object for the
 request)."
@@ -542,8 +546,9 @@ in SESSIONS creates a new session with that name."
                                       &optional directory-scoped)
   "Start or switch to a chat in WORKSPACE with WORKING-DIRECTORY.
 
-When DIRECTORY-SCOPED is non-nil, only sessions whose working directory
-matches WORKING-DIRECTORY are considered."
+When PROMPT-SESSION is non-nil, prompt for the target session.  When
+DIRECTORY-SCOPED is non-nil, only sessions whose working directory matches
+WORKING-DIRECTORY are considered."
   (let* ((all-sessions (mevedel--workspace-sessions workspace))
          (sessions (if directory-scoped
                        (mevedel--sessions-in-working-directory

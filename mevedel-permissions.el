@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Unified permission decision function for all mevedel tools. Replaces
+;; Unified permission decision function for all mevedel tools.  Replaces
 ;; scattered per-tool permission checks with a single 9-step decision
 ;; chain: extract context -> deny rules -> protected paths -> tool
 ;; check-permission -> allow rules -> mode hard-deny -> allowed roots
@@ -172,7 +172,7 @@ TOOL-NAME is a string matching a tool name (e.g., \"Read\", \"Edit\"),
 or \"*\" to match all tools.
 
 SPECIFIER is optional and selects what aspect of the invocation the
-rule matches against. At most one specifier is allowed per rule:
+rule matches against.  At most one specifier is allowed per rule:
 
   :path    GLOB  - filesystem path (supports *, **, ?, ~)
                    Used by Read, Edit, Write, Glob, Grep, MkDir, Bash
@@ -208,7 +208,7 @@ Example:
   '("**/.git/**" "~/.ssh/**" "~/.gnupg/**")
   "Path patterns that always require confirmation.
 
-Even `trust-all' mode prompts for these paths. Each entry is a glob
+Even `trust-all' mode prompts for these paths.  Each entry is a glob
 pattern matched against the full expanded path."
   :type '(repeat string)
   :group 'mevedel)
@@ -359,7 +359,8 @@ Fires on `setopt', `customize-set-variable', `custom-set-variables',
       (set-default-toplevel-value sym val))))
 
 (defun mevedel-permission-mode--set (sym val)
-  "Custom setter for `mevedel-permission-mode'.
+  "Set SYM to VAL for `mevedel-permission-mode'.
+
 Thin wrapper around `mevedel-permission--set-session-scoped' that
 targets the session struct's `permission-mode' slot.  See that helper's
 docstring for the full scoping contract."
@@ -394,7 +395,8 @@ session struct slot."
       (default-toplevel-value sym))))
 
 (defun mevedel-permission-mode--get (sym)
-  "Custom getter for `mevedel-permission-mode'.
+  "Return SYM's session-scoped `mevedel-permission-mode' value.
+
 Returns the current session's `permission-mode' slot when the call is
 made from inside a session; otherwise returns the global default."
   (mevedel-permission--get-session-scoped
@@ -456,7 +458,8 @@ old value.  See `mevedel-permission-mode--set' and
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 
 (defun mevedel-permission--tool-specifier-key (tool-name)
-  "Return the specifier keyword for TOOL-NAME, or nil when none applies.
+  "Return the specifier keyword for TOOL-NAME, or nil if absent.
+
 Looks the tool up in the registry and returns `:pattern', `:domain',
 `:name', or `:path' based on which `get-*' slot is populated.  Returns
 nil when TOOL-NAME is unknown or declares no getter.
@@ -623,8 +626,8 @@ A rule may carry at most one of these.  The first match wins.")
 
 RULES is a list in the format of `mevedel-permission-rules'.  Rule
 matches are determined by the rule's specifier (one of `:path',
-`:pattern', `:domain', `:name') against the corresponding keyword
-value.  Unqualified rules match unconditionally.  Returns a list of
+`:pattern', `:domain', `:name') against PATH, PATTERN, DOMAIN, or NAME.
+Unqualified rules match unconditionally.  Return a list of
 matching rules in order (later entries = higher priority)."
   (let ((matches nil)
         (values `((:path    . ,path)
@@ -653,9 +656,9 @@ matching rules in order (later entries = higher priority)."
   "Determine the effective action from RULES for TOOL-NAME and specifiers.
 
 Rules that carry a specifier (any of `:path', `:pattern', `:domain',
-`:name') take precedence over unqualified rules.  Within each group,
-deny > ask > allow.  Returns `allow', `deny', `ask', or nil if no
-rules match."
+`:name') match PATH, PATTERN, DOMAIN, or NAME and take precedence over
+unqualified rules.  Within each group, deny > ask > allow.  Return
+`allow', `deny', `ask', or nil if no rules match."
   (let ((matching (mevedel-permission--find-rules
                    rules tool-name
                    :path path :pattern pattern
@@ -738,7 +741,11 @@ Returns `allow', `deny', or `ask'."
 
 (defun mevedel-permission--collect-buckets
     (invocation-rules request-rules session-rules persistent-rules)
-  "Return the bucket alist used by the bucket-aware resolver.
+  "Return permission-rule buckets from all rule layers.
+
+INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and PERSISTENT-RULES are
+the dynamic rule layers.
+
 Buckets are listed innermost-first; pass 2 (allow/ask) walks them
 in order and returns the first non-nil decision.  Pass 1 (deny)
 is order-insensitive but reuses the same alist."
@@ -750,14 +757,14 @@ is order-insensitive but reuses the same alist."
 
 (defun mevedel-permission--bucket-action
     (bucket-rules tool-name path pattern domain name)
-  "Resolve a single BUCKET-RULES list to its action for the given context."
+  "Resolve BUCKET-RULES action for TOOL-NAME, PATH, PATTERN, DOMAIN, and NAME."
   (mevedel-permission--rules-action
    bucket-rules tool-name
    :path path :pattern pattern :domain domain :name name))
 
 (defun mevedel-permission--first-deny-bucket
     (buckets tool-name path pattern domain name)
-  "Return the first bucket key in BUCKETS yielding a `deny' action."
+  "Return first BUCKETS key denying TOOL-NAME for PATH, PATTERN, DOMAIN, or NAME."
   (cl-loop for (key . rules) in buckets
            when (eq (mevedel-permission--bucket-action
                      rules tool-name path pattern domain name)
@@ -766,14 +773,16 @@ is order-insensitive but reuses the same alist."
 
 (defun mevedel-permission--any-deny
     (buckets tool-name path pattern domain name)
-  "Return non-nil if any bucket in BUCKETS yields a `deny' action.
-Buckets is the alist from `mevedel-permission--collect-buckets'."
+  "Return non-nil if BUCKETS deny TOOL-NAME for PATH, PATTERN, DOMAIN, or NAME.
+BUCKETS is the alist from `mevedel-permission--collect-buckets'."
   (not (null (mevedel-permission--first-deny-bucket
               buckets tool-name path pattern domain name))))
 
 (defun mevedel-permission--first-non-nil-action-with-bucket
     (buckets tool-name path pattern domain name skip-keys)
-  "Walk BUCKETS innermost-first and return (ACTION . BUCKET).
+  "Walk BUCKETS for TOOL-NAME and return (ACTION . BUCKET).
+
+PATH, PATTERN, DOMAIN, and NAME are the specifier values.
 SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 \\=(used for the plan-mode skill-bucket suppression)."
   (cl-loop for (key . rules) in buckets
@@ -784,7 +793,9 @@ SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 
 (defun mevedel-permission--first-non-nil-action
     (buckets tool-name path pattern domain name skip-keys)
-  "Walk BUCKETS innermost-first, return first non-nil bucket action.
+  "Walk BUCKETS for TOOL-NAME and return first non-nil bucket action.
+
+PATH, PATTERN, DOMAIN, and NAME are the specifier values.
 SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 \\=(used for the plan-mode skill-bucket suppression)."
   (car (mevedel-permission--first-non-nil-action-with-bucket
@@ -799,7 +810,7 @@ SKIP-KEYS is a list of bucket-key symbols to skip during the walk
 
 (defun mevedel-permission--decision
     (outcome via &rest props)
-  "Return permission decision metadata for OUTCOME through VIA."
+  "Return permission decision metadata for OUTCOME through VIA with PROPS."
   (let ((normalized (mevedel-permission--normalize-outcome outcome)))
     (append (list :outcome normalized
                   :raw-outcome outcome
@@ -835,9 +846,12 @@ SKIP-KEYS is a list of bucket-key symbols to skip during the walk
   "Return normalized permission invocation context.
 
 The context concentrates facts shared by the permission decision
-chain, prompt queue, and Bash/Eval adapters: specifiers, rule
-buckets, mode, workspace roots, dropped-file grants, and the rule
-shape to store when an outside-root prompt is approved."
+chain, prompt queue, and Bash/Eval adapters.
+
+TOOL, TOOL-NAME, ARGS, SESSION, WORKSPACE, REQUEST, INVOCATION, BUFFER,
+PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
+EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
+PERSISTENT-RULES, and WARN-NO-SESSION-P provide the context facts."
   (setq tool-name (or tool-name (and tool (mevedel-tool-name tool))))
   (when (and tool args)
     (cl-flet ((extract (getter current)
@@ -965,7 +979,8 @@ happen for a non-read-only tool."
           (plist-get context :exact-allowed-paths))))
 
 (defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
-  "Return bucket keys to suppress for the allow/ask pass under MODE.
+  "Return bucket keys to suppress for MODE and READ-ONLY-P.
+
 Plan mode skips skill buckets for non-read-only tools.
 For read-only tools the plan-mode preview/permission paths converge
 on allow anyway, so the suppression has no effect there."
@@ -1068,7 +1083,9 @@ The 9-step decision chain:
      mode read-only-p)))
 
 (defun mevedel-check-permission (tool-name &rest args)
-  "Check permission for TOOL-NAME, returning `allow', `deny', or `ask'."
+  "Check permission for TOOL-NAME with ARGS.
+
+Return `allow', `deny', or `ask'."
   (mevedel-permission-decision-raw-outcome
    (apply #'mevedel-check-permission-with-metadata tool-name args)))
 
@@ -1087,10 +1104,15 @@ The 9-step decision chain:
                                                     mode workspace-root
                                                     allowed-roots
                                                     exact-allowed-paths)
-  "Async variant of `mevedel-check-permission'.
+  "Async variant of `mevedel-check-permission' for TOOL-NAME.
 
 Invokes CONT with permission decision metadata.  The original pipeline
 outcome is available through `mevedel-permission-decision-raw-outcome'.
+
+TOOL-STRUCT, PATH, PATTERN, DOMAIN, NAME, CONTENT, INVOCATION-RULES,
+REQUEST-RULES, SESSION-RULES, PERSISTENT-RULES, MODE, WORKSPACE-ROOT,
+ALLOWED-ROOTS, and EXACT-ALLOWED-PATHS are forwarded into the permission
+decision context.
 
 Steps 1-3 and 5-9 run synchronously just like `mevedel-check-permission'.
 Step 4 may run async when the tool defines `:check-permission-async'; the
@@ -1187,7 +1209,7 @@ exact-match in-bounds path list."
        (t (funcall resume-from-5))))))
 
 (defun mevedel-check-permission-async (tool-name cont &rest args)
-  "Async variant of `mevedel-check-permission'."
+  "Check TOOL-NAME permission with ARGS, then call CONT asynchronously."
   (apply #'mevedel-check-permission-async-with-metadata
          tool-name
          (lambda (decision)
@@ -1198,16 +1220,19 @@ exact-match in-bounds path list."
 (defun mevedel-check-permission--tail-decision
     (tool-name buckets path pattern domain name
                allowed-roots exact-allowed-paths mode read-only-p)
-  "Run steps 5-9 of the permission chain and return decision metadata.
+  "Return decision metadata for TOOL-NAME in the permission-chain tail.
 
-Factored out so both the sync and async entry points can share the
-tail.  Specifier extraction (step 1), the deny / protected-path
+Factored out so both the sync and async entry points can share the tail
+covering steps 5-9.  Specifier extraction (step 1), the deny /
+protected-path
 branches (steps 2-3), and the tool-slot branch (step 4) are handled
 by the callers -- this function presumes they already ran.  BUCKETS
 is the bucket alist from `mevedel-permission--collect-buckets'.
+PATH, PATTERN, DOMAIN, and NAME are the specifier values.
 ALLOWED-ROOTS is the list of directories treated as in-bounds for paths.
 EXACT-ALLOWED-PATHS is a list of paths treated as in-bounds only when
-PATH matches exactly."
+PATH matches exactly.  MODE and READ-ONLY-P control final fallback
+behavior."
   (let ((skip-keys
          (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
     (cond
@@ -1262,7 +1287,7 @@ SPEC-KEY (ignored when SPEC-KEY is nil)."
     (session tool-name action &optional path &key spec-key spec-value)
   "Add a permission rule to SESSION's rule list.
 
-TOOL-NAME is the tool name string. ACTION is `allow' or `deny'.
+TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
 
 Positional PATH is retained for existing call sites; when supplied it is
 equivalent to SPEC-KEY `:path' with that value.  Callers specifying
@@ -1272,11 +1297,10 @@ instead, leaving PATH nil.
 Mutates SESSION's `permission-rules' slot via `setf' -- this is a
 **by-reference** write.  Sub-agents share the parent session by
 reference (see `mevedel-agent-exec--allocate-agent-buffer'), so a
-rule recorded inside any sub-agent's permission prompt
-(\"allow-session\", \"deny-session\") immediately applies to the
-parent and to every other live sub-agent sharing the same session
-struct.  This is a deliberate contract, not an accident of the
-buffer-local plumbing."
+rule recorded inside any sub-agent's permission prompt, such as
+\"allow-session\" or \"deny-session\", immediately applies to the parent
+and to every other live sub-agent sharing the same session struct.  This
+is a deliberate contract, not an accident of the buffer-local plumbing."
   (let* ((key (or spec-key (and path :path)))
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule tool-name action key value))

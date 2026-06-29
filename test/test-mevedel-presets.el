@@ -23,6 +23,9 @@
 
 (defvar gptel-request--transitions)
 (defvar gptel--known-presets)
+(defvar mevedel-session-persistence)
+(declare-function mevedel-skills--apply-overrides-handler
+                  "mevedel-skills" (fsm))
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -196,9 +199,9 @@
             (TYPE . ((err . ERRS)
                      (t . DONE)))))
          (base-handlers (list (list 'WAIT)
-                              (list 'DONE
-                                    (lambda (_fsm)
-                                      (error "post response failed")))
+	                              (list 'DONE
+	                                    (lambda (_fsm)
+	                                      (error "Post response failed")))
                               (list 'ERRS)))
          (handlers (mevedel-preset--build-handlers base-handlers))
          (ws (mevedel-workspace-get-or-create

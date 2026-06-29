@@ -39,8 +39,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-structs))
 
 (require 'mevedel-transcript)
@@ -176,7 +177,7 @@ artifacts appear; explicit `mevedel-save-session' still works."
 
 Snapshots beyond this cap are evicted oldest-first; backup files no
 longer referenced by any retained snapshot are deleted (refcount GC).
-`nil' disables eviction (snapshots accumulate indefinitely)."
+nil disables eviction (snapshots accumulate indefinitely)."
   :type '(choice (integer :tag "Max snapshots")
           (const :tag "No limit" nil))
   :group 'mevedel)
@@ -608,7 +609,7 @@ holds the lock and rewriting would corrupt its audit log."
 
 (defun mevedel-session-persistence--prune-agent-transcripts-after-fork
     (session fork-turn)
-  "Drop transcript entries whose `:parent-turn' exceeds FORK-TURN."
+  "Drop SESSION transcript entries whose `:parent-turn' exceeds FORK-TURN."
   (let ((entries (mevedel-session-agent-transcripts session)))
     (setf (mevedel-session-agent-transcripts session)
           (cl-remove-if (lambda (entry)
@@ -617,7 +618,7 @@ holds the lock and rewriting would corrupt its audit log."
                         entries))))
 
 (defun mevedel-session-persistence--shallow-ensure-files (session buffer)
-  "Materialize SESSION's session directory and lock without writing the sidecar.
+  "Materialize SESSION and BUFFER paths without writing the sidecar.
 
 Used by sub-agent allocation: a sub-agent can spawn during
 the parent's first turn (before any DONE handler has run), so we
@@ -686,7 +687,8 @@ persistence is disabled.  Idempotent."
 
 (defun mevedel-session-persistence--update-transcript-entry
     (session agent-id updates)
-  "Merge UPDATES (a plist) into SESSION's transcript entry for AGENT-ID."
+  "Return nil after merging transcript data into SESSION entry for AGENT-ID.
+The argument UPDATES is the change plist."
   (when (and session agent-id)
     (let ((existing (alist-get agent-id
                                (mevedel-session-agent-transcripts session)
@@ -701,7 +703,7 @@ persistence is disabled.  Idempotent."
                 merged))))))
 
 (defun mevedel-session-persistence--write-sidecar-now (session buffer)
-  "Best-effort sidecar rewrite for SESSION.
+  "Best-effort sidecar rewrite for SESSION and BUFFER.
 
 Only writes when the sidecar file already exists on disk -- i.e.
 the parent's first DONE has fired and a full materialization has
@@ -838,7 +840,7 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
             (nreverse results)))))))
 
 (defun mevedel-session-persistence--prompt-count-in-text (text)
-  "Return the number of user prompts detected in TEXT."
+  "Return the number of user prompt markers detected in TEXT."
   (if (string-empty-p (or text ""))
     0
     (with-temp-buffer
@@ -1018,7 +1020,7 @@ transcript buffers and return nil."
 If SESSION has no `save-path' yet, allocate a fresh session id,
 create the session directory tree (session dir + `agents/' +
 `file-history/'), acquire the `.lock' file, set BUFFER's
-`buffer-file-name' to the first segment file, and save the buffer.
+variable `buffer-file-name' to the first segment file, and save the buffer.
 
 Does NOT write the sidecar -- the caller (always
 `mevedel-session-persistence-save') is expected to do that once it
@@ -1026,7 +1028,7 @@ has updated the prompt-index and snapshot maps.  Keeping the write
 in one place avoids double-writing the sidecar on first save.
 
 Idempotent -- if SESSION already has a `save-path', repairs BUFFER's
-`buffer-file-name' so it visits the current segment before any save.
+variable `buffer-file-name' so it visits the current segment before any save.
 Returns SESSION's `save-path' (allocated or existing) on success, nil
 when persistence is disabled."
   (when mevedel-session-persistence
@@ -1150,7 +1152,7 @@ when persistence is disabled."
           (and (consp prop) (eq (car prop) 'tool))))))
 
 (defun mevedel-session-persistence--tool-prop-in-range-p (start end)
-  "Return non-nil when START..END already contains a tool `gptel' prop."
+  "Return non-nil when START..END already spans a tool `gptel' prop."
   (mevedel-session-persistence--gptel-prop-in-range
    start end
    (lambda (prop)
@@ -1176,7 +1178,7 @@ when persistence is disabled."
               (throw 'found (caddr range)))))))))
 
 (defun mevedel-session-persistence--org-tool-block-start-p (pos)
-  "Return non-nil when POS starts a persisted org tool block."
+  "Return non-nil when a persisted org tool block is at POS."
   (save-excursion
     (goto-char pos)
     (forward-line 1)
@@ -1414,7 +1416,7 @@ property.  Tool VALUE is the gptel tool call id when available."
 
 (defun mevedel-session-persistence--response-continuation-marker-p
     (start end)
-  "Return non-nil when START..END contains new transcript structure."
+  "Return non-nil when START..END has new transcript structure."
   (save-excursion
     (goto-char start)
     (re-search-forward
@@ -1682,7 +1684,7 @@ bounds no longer change."
                  "GPTEL_BOUNDS" serialized))))))))))
 
 (defun mevedel-session-persistence--save-gptel-state-around (orig-fun &rest args)
-  "Save gptel state without freezing dynamic mevedel system prompts.
+  "Call ORIG-FUN with ARGS without freezing dynamic system prompt values.
 
 This is an around-advice for `gptel--save-state'.  For non-mevedel
 buffers and static prompts it delegates unchanged.  For mevedel chat
@@ -1713,7 +1715,7 @@ positions match the post-drawer-update buffer."
         (mevedel-session-persistence--stabilize-gptel-bounds)))))
 
 (defun mevedel-session-persistence--install-gptel-save-state-advice ()
-  "Install mevedel's dynamic-system preservation advice for gptel saves."
+  "Install mevedel's dynamic-system preservation advice for gptel save operations."
   (unless (advice-member-p
            #'mevedel-session-persistence--save-gptel-state-around
            'gptel--save-state)
@@ -1741,7 +1743,7 @@ positions match the post-drawer-update buffer."
    (format "turn-%06d.el" turn)))
 
 (defun mevedel-session-persistence--save-instructions (session buffer)
-  "Persist the current workspace instruction state for SESSION.
+  "Persist current instruction state for SESSION and BUFFER.
 
 Writes both `instructions/current.el' and, when the session has a turn
 count, a turn-specific snapshot used by rewind/fork."
@@ -1910,7 +1912,7 @@ No-op when `mevedel-session-persistence' is nil."
         (when (file-exists-p tmp) (delete-file tmp))))))
 
 (defun mevedel-file-history--maybe-snapshot (session path pre-content)
-  "Decide whether PATH's state at turn end warrants a new backup.
+  "Decide whether SESSION PATH state at turn end warrants a new backup.
 
 PATH is an absolute filesystem path that was touched by the just-completed
 turn's tools.  PRE-CONTENT is PATH's content at the start of the turn,
@@ -2100,7 +2102,7 @@ automatic segment rotation."
 Sets `MEVEDEL_SESSION_ID', `MEVEDEL_SEGMENT_NUMBER',
 `MEVEDEL_SEGMENT_CREATED_AT', and `MEVEDEL_VERSION'.  Caller is
 responsible for ensuring the buffer is in `org-mode' (mevedel data
-buffers are locked to org-mode by `mevedel--chat-buffer-setup')."
+buffers are locked to `org-mode' by `mevedel--chat-buffer-setup')."
   (when (derived-mode-p 'org-mode)
     (require 'org)
     (org-entry-put (point-min) "MEVEDEL_VERSION" (mevedel-version))
@@ -2256,7 +2258,7 @@ user\\='s view, by contrast, sees a foldable block."
 Performs the split-on-compact rotation:
   1. Saves the current segment file before replacing the live buffer.
   2. Advances `mevedel-session-current-segment' on SESSION.
-  3. Re-points BUFFER's `buffer-file-name' at the new segment path.
+  3. Re-points BUFFER's variable `buffer-file-name' at the new segment path.
   4. Erases BUFFER and re-builds it: per-segment org property drawer
      followed by SUMMARY wrapped in an `#+begin_summary' block, then
      TAIL-TEXT and PENDING-TEXT when supplied.
@@ -2382,7 +2384,7 @@ nil if SESSION is not yet materialized."
 
 (cl-defun mevedel-session-persistence-start-fresh-segment
     (session buffer &key initial-text)
-  "Finalize SESSION's current segment and start a blank live segment.
+  "Finalize SESSION's current segment and start a blank live segment in BUFFER.
 
 INITIAL-TEXT, when non-nil, is inserted after the new segment's org
 metadata.  This is used by `/clear' to leave a fresh prompt prefix in
@@ -2502,7 +2504,7 @@ already owns (or is replacing) an existing lock."
         (prin1 plist (current-buffer))))))
 
 (defun mevedel-session-persistence--write-lock-atomic (lock-path buffer-name)
-  "Atomically create LOCK-PATH with this Emacs as holder.
+  "Atomically create LOCK-PATH for BUFFER-NAME with this Emacs as holder.
 Returns t on success, nil when LOCK-PATH already exists (race lost).
 
 Uses `add-name-to-file' which is POSIX link(2) and thus atomic: if
@@ -2584,7 +2586,8 @@ loss."
 
 Returns:
   t   - lock acquired (or broken from a previous holder).
-  nil - user chose read-only access; caller should set buffer-read-only.
+  nil - user chose read-only access; caller should set variable
+        `buffer-read-only'.
 
 Signals `user-error' when the user declines to break a stale lock or
 aborts any of the 3-way conflict prompts.
@@ -2631,7 +2634,7 @@ Behavior table:
             (?a (user-error "Session resume aborted")))))
        (t
         (if (y-or-n-p
-             (format "Stale mevedel lock (PID %d, buffer %s). Break and proceed? "
+             (format "Stale mevedel lock (PID %d, buffer %s).  Break and proceed? "
                      (plist-get existing :pid)
                      (plist-get existing :buffer)))
             (progn
@@ -2902,7 +2905,7 @@ WORKSPACE is the current workspace (resolved by the caller)."
      :permission-mode 'default)))
 
 (defun mevedel-session-persistence--find-live-buffer (session-id buf-name)
-  "Return the live buffer for SESSION-ID, or nil.
+  "Return live buffer for SESSION-ID and BUF-NAME, or nil.
 Prefers a buffer whose `mevedel--session' has a matching session-id
 so same-named sessions in one workspace do not collide.  Falls back
 to a lookup by buffer name for buffers that never materialized a
@@ -3118,10 +3121,10 @@ turn's response was saved."
       result)))
 
 (defun mevedel-session-persistence--plan-action (session path target-plist)
-  "Return a plan-entry plist describing what restore should do for PATH.
+  "Return SESSION restore action plist for PATH.
 
 TARGET-PLIST is the snapshot entry recorded for PATH at the picked turn
-(or earlier).  Possible `:action' values:
+or earlier.  Possible `:action' values are:
 
   noop       File already matches target state.
   delete     Target state is absent; file currently exists.
@@ -3340,7 +3343,7 @@ entries are not attempted.  The user-visible report goes to
 
 (defun mevedel-session-persistence--prepare-buffers-for-restore
     (session cum-turn plan)
-  "Prepare visiting buffers before restoring PLAN for SESSION.
+  "Prepare visiting buffers before restoring PLAN for SESSION at CUM-TURN.
 
 If modified buffers visit affected files, prompt the user to save,
 discard, or abort.  Returns the current restore plan, recomputing it
@@ -3409,18 +3412,18 @@ RESULT is the plist returned by `mevedel-session-persistence-execute-restore'."
 
 Set by `mevedel-rewind' after loading a truncated segment; cleared by
 `mevedel-session-persistence-fork-now' once the next user message
-materializes the fork.  When non-nil, `buffer-file-name' is also nil
-so saves cannot overwrite the original segment file.")
+materializes the fork.  When non-nil, variable `buffer-file-name' is
+also nil so saves cannot overwrite the original segment file.")
 
 (defvar-local mevedel-session--rewind-context nil
   "Plist describing this buffer's rewind preview state.
 
 Set by `mevedel-session-persistence--load-truncated' alongside
 `mevedel-session--fork-pending'.  Consumed by
-`mevedel-session-persistence-fork-now' to materialize the fork
-(it needs to know which parent session, segment, and cumulative turn
-the picked prompt corresponds to so that predecessor segments and the
-referenced file-history backups can be copied into the fork's directory).
+`mevedel-session-persistence-fork-now' to materialize the fork.  It
+needs the parent session, segment, and cumulative turn for the picked
+prompt so predecessor segments and referenced file-history backups can
+be copied into the fork's directory.
 
 Plist keys:
   :parent-session-id  Parent session's id.
@@ -3432,7 +3435,7 @@ Plist keys:
   :picked-cum-turn    Cumulative turn (used as `:file-snapshots' key).")
 
 (defun mevedel-session-persistence--prompt-candidates (session)
-  "Return an alist of `(DISPLAY . PLIST)' for SESSION's prompts.
+  "Return alist entries of DISPLAY to PLIST for SESSION prompt history.
 
 PLIST has `:segment', `:turn', `:file-turn', `:cum-turn', `:pos',
 `:preview'.
@@ -3553,10 +3556,10 @@ bodies, and gptel org tool/reasoning scaffolding to stay consistent with
   "Reload BUFFER from SESSION's SEGMENT-N truncated to FILE-TURN-N's response.
 
 Erases BUFFER, re-inserts the segment file's content, restores gptel's
-text-property bounds, then truncates everything after the picked
-turn's response.  Sets `buffer-file-name' to nil and the buffer-local
-`mevedel-session--fork-pending' flag so the next send creates a fork
-and so save cannot overwrite the original segment file in the meantime.
+text-property bounds, then truncates everything after the picked turn's
+response.  Sets variable `buffer-file-name' to nil and sets the
+buffer-local `mevedel-session--fork-pending' flag so the next send
+creates a fork and save cannot overwrite the original segment file.
 
 CUM-TURN, if provided, is recorded in the rewind context for use by
 `mevedel-session-persistence-fork-now'.  LOGICAL-TURN-N, if provided,
@@ -3622,8 +3625,8 @@ have been excluded."
   "Pick a previous user prompt in the current session and rewind to it.
 
 Truncates the live buffer back to the picked prompt's response, sets
-`buffer-file-name' to nil so saves cannot corrupt the original segment
-file, and flags the buffer for fork-on-next-send.  The original
+variable `buffer-file-name' to nil so saves cannot corrupt the original
+segment file, and flags the buffer for fork-on-next-send.  The original
 session's segment files are never modified -- every back-in-time pick
 is reversible (re-pick the latest prompt to come back).
 
@@ -3758,6 +3761,7 @@ retry rewind"))))
   "Return transcript entries whose `:parent-turn' is in copied ranges.
 
 PROMPT-INDEX is the session sidecar's segment prompt index.
+AGENT-TRANSCRIPTS is the sidecar's transcript entry alist.
 PICKED-SEGMENT and PICKED-CUM-TURN describe the rewind target.  The
 copied transcript set is derived from concrete segment ranges:
 predecessor segments are copied whole; the picked segment is copied
@@ -3804,7 +3808,7 @@ directory.
 The session struct on BUFFER is mutated in place: `:session-id',
 `:save-path', `:created-at', `:updated-at', `:current-segment', and
 `:forked-from-*' are updated; `:fork-pending' and the rewind context
-are cleared.  `buffer-file-name' is repointed at the fork's segment.
+are cleared.  Variable `buffer-file-name' is repointed at the fork's segment.
 The new session's lock is acquired.
 
 Errors when BUFFER is not in rewind preview state.  Returns the
@@ -4009,8 +4013,8 @@ PICKED-CUM-TURN is nil, returns SNAPSHOTS unchanged."
 
 Updates `:session-name', renames the on-disk session directory (so
 its prefix matches the new name), updates `:save-path' / `:session-id'
-on the session struct, repoints the buffer's `buffer-file-name' to
-the renamed directory, rewrites the sidecar, and renames the chat
+on the session struct, repoints the buffer's variable `buffer-file-name'
+to the renamed directory, rewrites the sidecar, and renames the chat
 buffer per `mevedel-session-buffer-name'.
 
 Works from a chat buffer or a view buffer."
@@ -4174,7 +4178,7 @@ CATEGORY is exposed as completion metadata for completion UI integrations."
 (defun mevedel-resume ()
   "Resume a saved mevedel session in the current workspace.
 
-Pick a session via `completing-read'. If the picked session's chat
+Pick a session via `completing-read'.  If the picked session's chat
 buffer is already alive in Emacs, switch to it instead of re-loading
 from disk."
   (interactive)
@@ -4220,11 +4224,11 @@ from disk."
   "Save the current mevedel session to disk explicitly.
 
 Forces a save even when nothing has changed since the last
-auto-save (useful after manual edits to the chat buffer). Triggers lazy
+auto-save (useful after manual edits to the chat buffer).  Triggers lazy
 materialization if the session has not yet hit disk.
 
 With a prefix ARG, prompts for a new session name and clones the entire
-session directory under a fresh id. The current buffer is repointed at
+session directory under a fresh id.  The current buffer is repointed at
 the clone; the original on-disk session is preserved untouched and can
 be reopened with `mevedel-resume'.
 

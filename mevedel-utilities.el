@@ -84,7 +84,7 @@ insertion from running expensive editor hooks."
   "Cycle list LIST around ELEMENT.
 
 If ELEMENT is found in LIST, returns a list with ELEMENT as the head and
-the rest of the list rotated around it. Otherwise, returns the LIST."
+the rest of the list rotated around it.  Otherwise, returns the LIST."
   (if-let* ((element-tail (member element list)))
       (append element-tail
               (cl-loop for elt in list
@@ -116,7 +116,7 @@ the rest of the list rotated around it. Otherwise, returns the LIST."
     (apply #'concat (nreverse parts))))
 
 (defun mevedel--normalize-message-text (text)
-  "Return TEXT with raw UTF-8 byte runs decoded for message display/storage.
+  "Return TEXT with raw UTF-8 byte sequences decoded for display/storage.
 
 This repairs strings where valid UTF-8 bytes reached Emacs as raw
 `eight-bit' characters, which cannot be written as `utf-8-unix'.  Any
@@ -176,9 +176,10 @@ means that the resulting color is the same as the TINT-COLOR-NAME color."
     (apply #'color-rgb-to-hex `(,@result 2))))
 
 (defun mevedel--environment-info-string (&optional workspace working-directory)
-  "Return a formatted string containing environment information.
+  "Return formatted environment information for WORKSPACE.
 
-WORKSPACE defaults to current `mevedel-workspace'. The string includes:
+WORKSPACE defaults to current `mevedel-workspace'.  WORKING-DIRECTORY
+overrides the workspace root.  The string includes:
 - Working directory
 - Git repository status
 - Platform (operating system type)
@@ -221,7 +222,7 @@ every newline in STRING so that it aligns visually under PREFIX-STRING.
 If PADDING is non-nil, then pad the entire string from the left with it.
 
 If BUFFER is provided, STRING will be wrapped to not overflow the fill
-column of BUFFER. Wrapping will attempt to respect word boundaries and
+column of BUFFER.  Wrapping will attempt to respect word boundaries and
 only hyphenate words as a last resort if a word is too long to fit on a
 line by itself."
   (let* ((paragraph-padding (if prefix-string
@@ -280,7 +281,7 @@ line by itself."
       (string-trim (buffer-string)))))
 
 (defun mevedel--clear-user-turn-gptel-properties (start end)
-  "Clear inherited text properties from user transcript text."
+  "Clear inherited text properties between START and END."
   (let ((inhibit-read-only t))
     (set-text-properties start end nil))
   (mevedel--restore-render-data-gptel-properties start end))
@@ -610,9 +611,9 @@ between the files being compared."
 Operates on the current buffer, which must be a mevedel diff preview
 buffer with the buffer-local `mevedel--real-path' set.  Saves the
 current window configuration and launches an ediff patching job that
-targets `mevedel--real-path' directly, bypassing `diff-find-file-name'
-(which is fragile on freshly-generated unified diffs and would crash on
-new-file stubs).  Binds `mevedel--current-ediff-patch-buffer' so the
+targets `mevedel--real-path' directly, bypassing fragile
+`diff-find-file-name' handling on freshly-generated unified diffs and
+new-file stubs.  Binds `mevedel--current-ediff-patch-buffer' so the
 quit-hook callbacks can identify the right diff buffer even when
 multiple previews coexist and share the canonical buffer name."
   (interactive)

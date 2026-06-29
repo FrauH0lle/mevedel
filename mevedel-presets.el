@@ -16,8 +16,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-structs)
   ;; Needed for `setf' on `gptel-fsm' struct slots (native comp)
   (require 'gptel-request nil t))
@@ -383,19 +384,19 @@ Has no effect when no extras are registered for PRESET-NAME."
 HANDLERS is an alist like `gptel-send--handlers'.  Returns a new
 alist with mevedel-specific handlers added:
 
-  1. Deferred tool injection (WAIT state handler)
-  1a. Inbound agent-message delivery (WAIT state handler)
-  2. Final patch generation (terminal state handler)
-  3. Request callback invocation (terminal state handler)
-  4. File snapshot and access request cleanup (terminal state handler)
-  5. Session turn-count increment (terminal state handler)
-  5a. Token baseline correction
-  5b. Session autosave (DONE state handler only)
-  5c. Turn terminal hooks
-  5d. Temporary implementation permission mode restore
-  6. Request cleanup
-  7. BWAIT parking
-  8. Terminal mailbox guard"
+  1.  Deferred tool injection (WAIT state handler)
+  1a.  Inbound agent-message delivery (WAIT state handler)
+  2.  Final patch generation (terminal state handler)
+  3.  Request callback invocation (terminal state handler)
+  4.  File snapshot and access request cleanup (terminal state handler)
+  5.  Session turn-count increment (terminal state handler)
+  5a.  Token baseline correction
+  5b.  Session autosave (DONE state handler only)
+  5c.  Turn terminal hooks
+  5d.  Temporary implementation permission mode restore
+  6.  Request cleanup
+  7.  BWAIT parking
+  8.  Terminal mailbox guard"
   ;; 1. Deferred tool injection: add to WAIT state
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -723,7 +724,7 @@ state with no possible transitions to another state."
    (t (format "%S" handler))))
 
 (defun mevedel--safe-fsm-handler (handler)
-  "Return a wrapper that runs FSM HANDLER without aborting sibling handlers."
+  "Return a wrapper to run FSM HANDLER without aborting sibling handlers."
   (lambda (fsm)
     (condition-case err
         (funcall handler fsm)
@@ -737,7 +738,7 @@ state with no possible transitions to another state."
        nil))))
 
 (defun mevedel--wrap-terminal-handlers (handlers &optional transitions)
-  "Wrap terminal-state HANDLERS so one failure cannot skip cleanup."
+  "Wrap terminal-state HANDLERS for TRANSITIONS so one failure cannot skip cleanup."
   (let ((terminal-states (mevedel--terminal-states handlers transitions)))
     (mapcar
      (lambda (entry)

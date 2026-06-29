@@ -48,7 +48,7 @@ model-visible Worktree tool, use normal permission-gated Bash as a fallback.
 Ask for consent before creating a worktree unless the user already clearly
 requested it.
 
-Mirror `/worktree` v1 defaults when creating through Bash:
+Mirror `/worktree` defaults when creating through Bash:
 
 - Create under `.worktrees/` in the current workspace.
 - Add `/.worktrees/` to `.git/info/exclude`; do not edit `.gitignore`.
@@ -60,4 +60,4 @@ Mirror `/worktree` v1 defaults when creating through Bash:
 
 If the checkout is dirty, warn that uncommitted source changes are not copied.
 If `HEAD` is detached, warn that the new branch starts from the current commit.
-Do not create a new worktree from a submodule in v1.
+Do not create a new worktree from a submodule.

@@ -10,8 +10,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+(require 'cl-lib)
 
 (require 'json)
 (require 'subr-x)
@@ -480,7 +479,7 @@ CWD is used for git merge-base resolution."
       (_ (user-error "Unknown verify target: %S" target)))))
 
 (defun mevedel-review--prompt-and-hint (command target &optional cwd)
-  "Return (PROMPT . HINT) for COMMAND and TARGET."
+  "Return (PROMPT . HINT) for COMMAND, TARGET, and CWD."
   (if (eq command 'verify)
       (mevedel-review--verify-target-prompt-and-hint target cwd)
     (mevedel-review--target-prompt-and-hint target cwd)))
@@ -561,7 +560,7 @@ MODE is the optional markdown fence language."
      "diff")))
 
 (defun mevedel-review--write-uncommitted-package (cwd)
-  "Insert review package sections for uncommitted changes in CWD."
+  "Insert review package sections for the uncommitted diff in CWD."
   (insert "## Target\n\n")
   (insert "- Type: uncommitted changes\n\n")
   (mevedel-review--insert-package-output
@@ -956,7 +955,7 @@ permission policy decides whether verifier validation commands may run."
         (mevedel-request-end)))))
 
 (defun mevedel-review--progress-render-data (invocation hint &optional command)
-  "Return parent-view render-data for validation INVOCATION and HINT."
+  "Return render data for INVOCATION, HINT, and COMMAND."
   (let* ((agent (and (mevedel-agent-invocation-p invocation)
                      (mevedel-agent-invocation-agent invocation)))
          (agent-id (and (mevedel-agent-invocation-p invocation)
@@ -991,7 +990,7 @@ permission policy decides whether verifier validation commands may run."
        (list :transcript-relative-path rel)))))
 
 (defun mevedel-review--insert-progress-handle (invocation hint &optional command)
-  "Insert a hidden live progress handle for validation INVOCATION."
+  "Insert hidden progress handle for INVOCATION, HINT, and COMMAND."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (agent-id (mevedel-agent-invocation-agent-id invocation)))
     (require 'mevedel-pipeline)
@@ -1044,7 +1043,7 @@ dispatched.  COMMAND defaults to `review'."
     outcome))
 
 (defun mevedel-review--handle-direct-outcome (outcome data-buffer &optional command)
-  "Handle validation OUTCOME for a direct dispatch targeting DATA-BUFFER."
+  "Handle OUTCOME for COMMAND direct dispatch targeting DATA-BUFFER."
   (when (buffer-live-p data-buffer)
     (pcase (plist-get outcome :status)
       ('ok
@@ -1066,7 +1065,7 @@ dispatched.  COMMAND defaults to `review'."
 
 (defun mevedel-review--handle-view-outcome
     (outcome view-buffer data-buffer &optional command)
-  "Handle validation OUTCOME for a view-backed dispatch."
+  "Handle OUTCOME for COMMAND dispatch from VIEW-BUFFER to DATA-BUFFER."
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
     (pcase (plist-get outcome :status)
@@ -1095,7 +1094,8 @@ dispatched.  COMMAND defaults to `review'."
 
 (defun mevedel-review--send-from-view
     (display prompt hint view-buffer data-buffer &optional command)
-  "Run a dedicated validation task from VIEW-BUFFER for DATA-BUFFER."
+  "Run COMMAND task for DISPLAY, PROMPT, and HINT from VIEW-BUFFER.
+DATA-BUFFER receives the task transcript."
   (with-current-buffer view-buffer
     (mevedel-view--run-prompt-submit-hook
      display display
@@ -1131,7 +1131,7 @@ dispatched.  COMMAND defaults to `review'."
               command)))))))))
 
 (defun mevedel-review--dispatch (prompt hint &optional cwd command)
-  "Dispatch validation COMMAND with PROMPT and user-facing HINT."
+  "Dispatch COMMAND with PROMPT, HINT, and CWD."
   (let ((command (or command 'review)))
     (mevedel-review--ensure-dispatch-deps command)
     (let* ((data-buffer (or (mevedel-review--current-data-buffer)

@@ -401,8 +401,8 @@ Header shows the directory path with a created, exists, or error suffix."
   "Alist of (FILEPATH . ORIGINAL-CONTENT) tracking files modified.
 
 Each entry stores the original state of a file before any modifications
-in the current request. ORIGINAL-CONTENT is nil if the file didn't exist
-before the request. Cleared when request completes.")
+in the current request.  ORIGINAL-CONTENT is nil if the file didn't exist
+before the request.  Cleared when request completes.")
 
 (defun mevedel--snapshot-file-if-needed (filepath)
   "Capture original state of FILEPATH before first modification in request.
@@ -1045,7 +1045,7 @@ truncated with a [...] marker."
       1)))
 
 (defun mevedel-tool-fs--read-continuation-hint (path next-line)
-  "Return continuation guidance for truncated Read output from PATH."
+  "Return continuation guidance for PATH starting at NEXT-LINE."
   (format "\n\n... Read output truncated. Use Read(file_path=%S, offset=%d, limit=%d) to continue, or use Grep for targeted searches."
           path next-line mevedel-tool-fs--read-default-limit))
 
@@ -1355,7 +1355,7 @@ and optional :path."
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
-CALLBACK receives the result string. ARGS is a plist with :pattern and
+CALLBACK receives the result string.  ARGS is a plist with :pattern and
 optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 :type, :multiline, :context, :-A, :-B, :-C."
   (let* ((pattern (plist-get args :pattern))

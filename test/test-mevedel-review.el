@@ -15,6 +15,9 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel--agent-invocation)
+(defvar mevedel-agent-exec--agents)
+
 
 (mevedel-deftest mevedel-review--target-prompt-and-hint ()
   ,test
@@ -264,8 +267,7 @@
   (let ((mevedel-permission-rules (mevedel-review--permission-rules))
         (mevedel-bash-dangerous-commands nil)
         (mevedel--session nil)
-        (mevedel--current-request nil)
-        (mevedel--agent-invocation nil))
+        (mevedel--current-request nil))
     (should
      (eq 'allow
          (mevedel-tools--check-bash-permission
@@ -295,8 +297,7 @@
   (let ((mevedel-permission-rules (mevedel-review--permission-rules))
         (mevedel-bash-dangerous-commands nil)
         (mevedel--session nil)
-        (mevedel--current-request nil)
-        (mevedel--agent-invocation nil))
+        (mevedel--current-request nil))
     (should
      (eq 'deny
          (mevedel-tools--check-bash-permission "git checkout main")))

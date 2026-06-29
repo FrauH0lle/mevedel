@@ -442,9 +442,9 @@
 
   :doc "reload reports unexpected refresh failures"
   (let (warnings)
-    (cl-letf (((symbol-function 'mevedel-skills-rescan)
-               (lambda ()
-                 (error "refresh broke")))
+	      (cl-letf (((symbol-function 'mevedel-skills-rescan)
+	               (lambda ()
+	                 (signal 'error '("refresh broke"))))
               ((symbol-function 'display-warning)
                (lambda (type message &optional level _buffer-name)
                  (push (list type message level) warnings))))
@@ -479,9 +479,9 @@
       (should (= 7 (length refreshes)))))
 
   :doc "git executor failures return a user-facing string"
-  (let ((mevedel-plugins-git-executor
-         (lambda (_directory _args)
-           (error "git is missing"))))
+	  (let ((mevedel-plugins-git-executor
+	         (lambda (_directory _args)
+	           (signal 'error '("git is missing")))))
     (should (equal "Failed to install plugin owner/repo: git is missing"
                    (mevedel-plugins-slash-command "install owner/repo"))))
 

@@ -11,10 +11,11 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
   (require 'mevedel-tool-registry))
 
-(require 'cl-lib)
 (require 'subr-x)
 (require 'mevedel-structs)
 
@@ -247,7 +248,7 @@ The JSON object from gptel may arrive as either form; normalize once."
         (mevedel-tool-task--write-turn session)))
 
 (defun mevedel-tool-task--create-one (session spec &optional id)
-  "Return a task for SESSION from SPEC plist.
+  "Return a task for SESSION from SPEC plist, using ID when non-nil.
 Returns the new `mevedel-task' struct."
   (let* ((p (mevedel-tool-task--object-to-plist spec))
          (subject (mevedel-tool-task--plist-get-any p :subject))
@@ -279,7 +280,8 @@ Returns the new `mevedel-task' struct."
       task)))
 
 (defun mevedel-tool-task--update-one (session id updates)
-  "Apply UPDATES plist to the task with ID in SESSION.
+  "Return task ID in SESSION after applying replacement fields.
+The argument UPDATES is the plist of replacement fields.
 Returns the updated task.  Signals an error if ID is unknown."
   (let ((task (mevedel-tool-task--find session id))
         (p (mevedel-tool-task--object-to-plist updates)))
@@ -350,7 +352,7 @@ Returns the updated task.  Signals an error if ID is unknown."
     task))
 
 (defun mevedel-tool-task--propagate-completion (session task)
-  "Remove TASK's ID from the `blocked-by' slot of every task it blocks.
+  "Remove TASK's ID from blocked tasks in SESSION.
 Also clears TASK's `blocks' slot once propagated, since downstream
 dependencies no longer point back to it."
   (let ((id (mevedel-task-id task)))
@@ -360,7 +362,7 @@ dependencies no longer point back to it."
               (delq id (mevedel-task-blocked-by other)))))))
 
 (defun mevedel-tool-task--canonical-agent-owner-p (owner)
-  "Return non-nil when OWNER looks like a concrete sub-agent id."
+  "Return non-nil when OWNER matches a concrete sub-agent id."
   (and (stringp owner)
        (string-match-p "\\`[[:alnum:]_-]+--[[:xdigit:]]\\{32\\}\\'" owner)))
 
@@ -506,7 +508,7 @@ group and sorting agent-owned groups by owner label."
      (mevedel-session-tasks session))))
 
 (defun mevedel-tool-task--clear-inactive-status-notes (session)
-  "Drop status notes for owners that no longer have open tasks."
+  "Drop SESSION status notes for owners with no open tasks."
   (setf (mevedel-session-task-status-notes session)
         (cl-remove-if-not
          (lambda (entry)
@@ -714,7 +716,7 @@ Return (SELECTED . REMAINING)."
 
 (defun mevedel-tool-task--select-active-candidates
     (candidates remaining)
-  "Select active CANDIDATES into render groups.
+  "Select active CANDIDATES into render groups while REMAINING permits it.
 The first visible row for each owner is selected before extra rows from
 already visible owners, so one busy owner cannot consume the whole cap."
   (mevedel-tool-task--select-candidates
@@ -737,7 +739,7 @@ already visible owners, so one busy owner cannot consume the whole cap."
 
 (defun mevedel-tool-task--reserve-active-summary
     (selected candidates groups remaining)
-  "Reserve one line for a hidden-active summary when needed.
+  "Reserve one line from SELECTED CANDIDATES in GROUPS when needed.
 Return (HIDDEN . REMAINING)."
   (let ((hidden (mevedel-tool-task--hidden-active-count groups)))
     (when (and (> hidden 0) (<= remaining 0) selected)
@@ -1008,7 +1010,7 @@ displayed key matches the actual binding -- see
 `mevedel-tool-task--toggle-key-label'.")
 
 (defun mevedel-tool-task--toggle-key-label ()
-  "Return the key-description string for toggling the task overlay.
+  "Return the `key-description' string for toggling the task overlay.
 Looks up `mevedel-toggle-tasks' directly in the overlay's keymap so
 the label is correct regardless of where point is when the display
 string is built.  Falls back to `M-x mevedel-toggle-tasks' if the
@@ -1038,7 +1040,7 @@ character so keybindings on trailing newlines still toggle the fragment."
                     prev))))))
 
 (defun mevedel-toggle-tasks ()
-  "Toggle whether the session task list shows completed tasks."
+  "Toggle completed task visibility in the session task list."
   (interactive)
   (if-let* ((pos (mevedel-tool-task--fragment-position))
             (collapse-key (get-text-property
@@ -1093,7 +1095,7 @@ character so keybindings on trailing newlines still toggle the fragment."
 (defun mevedel-tool-task--display-string (session show-completed view-p)
   "Return task display for SESSION.
 SHOW-COMPLETED controls whether completed task detail is included.
-VIEW-P means use view-buffer separator formatting."
+VIEW-P means use `view-buffer' separator formatting."
   (let* ((body (mevedel-tool-task--format-groups
                 session show-completed (not show-completed)
                 (mevedel-tool-task--overlay-line-budget)))
@@ -1195,7 +1197,7 @@ to the tracking-marker overlay in the data buffer."
 ;;; Tool handlers
 
 (defun mevedel-tool-task--task-container-p (value)
-  "Return non-nil when VALUE looks like a task object in a list batch."
+  "Return non-nil when VALUE matches a task object in a list batch."
   (and (listp value)
        (or (and (keywordp (car value))
                 (consp (cdr value)))
@@ -1226,7 +1228,7 @@ Accepts a vector, list, or single task object; always returns a list."
   "Accepted top-level owner keys for task status notes.")
 
 (defun mevedel-tool-task--note-feedback (owner note stored)
-  "Return model-facing feedback for a status note operation."
+  "Return feedback for OWNER status NOTE when STORED."
   (let ((label (mevedel-tool-task--owner-label owner)))
     (cond
      (stored
@@ -1396,7 +1398,7 @@ feedback string when :note has a value, otherwise nil."
     0))
 
 (defun mevedel-tool-task--render-event (name _args result _render-data)
-  "Compact non-expandable renderer for task mutation/status events."
+  "Return compact event renderer for NAME and RESULT."
   (when (stringp result)
     (list :header (format "%s: %s"
                           (or name "Task")
@@ -1405,7 +1407,7 @@ feedback string when :note has a value, otherwise nil."
           :expandable-p nil)))
 
 (defun mevedel-tool-task--render-list (name args result _render-data)
-  "Rendering plist for TaskList output."
+  "Return rendering plist for TaskList NAME, ARGS, and RESULT."
   (when (stringp result)
     (let* ((status-filter (plist-get args :status))
            (count (mevedel-tool-task--task-line-count result))
@@ -1423,7 +1425,7 @@ feedback string when :note has a value, otherwise nil."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-task--render-get (name args result _render-data)
-  "Rendering plist for TaskGet output."
+  "Return rendering plist for TaskGet NAME, ARGS, and RESULT."
   (when (stringp result)
     (let ((id (plist-get args :id)))
       (list :header (format "%s: #%s"

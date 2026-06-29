@@ -66,10 +66,10 @@
 
 (defun mevedel-permission-queue--current-session ()
   "Resolve the session struct that owns the permission queue.
+
 Reads `mevedel--session' from the current buffer, falling back
-to `mevedel--data-buffer''s buffer-local binding when present
-(view buffers expose the data buffer reference but not the
-session struct)."
+to `mevedel--data-buffer''s buffer-local binding when present.
+View buffers expose the data buffer reference but not the session struct."
   (mevedel-queue--current-session))
 
 (defun mevedel-permission-queue--get (&optional session)
@@ -102,7 +102,7 @@ SESSION defaults to the current session."
     (append base props)))
 
 (defun mevedel-permission-queue--log (event entry &optional session &rest props)
-  "Log permission queue EVENT for ENTRY in SESSION."
+  "Log permission queue EVENT for ENTRY in SESSION with PROPS."
   (when-let* ((sess (or session
                         (plist-get entry :session)
                         (mevedel-permission-queue--current-session))))
@@ -247,8 +247,8 @@ queue vocabulary."
   "Re-evaluate SESSION's queued entries against the new rule.
 Entries that resolve to a non-`ask' outcome via
 `mevedel-check-permission' fire their callbacks with that outcome
-(translated per kind) and are removed from the queue; entries
-that still resolve to `ask' stay in place.
+translated for their kind and are removed from the queue.  Entries that
+still resolve to `ask' stay in place.
 
 The protected-path / deny-precedence nuance is handled inside
 `mevedel-check-permission' itself: protected paths short-circuit
@@ -283,13 +283,13 @@ entry."
 
 (defun mevedel-permission-queue--reevaluate (entry)
   "Re-evaluate ENTRY through the decision chain with current rules.
-Returns one of `allow' / `deny' / `ask'.
+Return one of `allow' / `deny' / `ask'.
 
 Dispatches on `:kind' (generic/bash/eval).
 
 Critical: `mevedel-check-permission' consumes session-rules,
 persistent-rules, mode, and workspace-root via keyword args; it
-does NOT read `mevedel--session'.  An earlier draft only bound
+does not read `mevedel--session'.  An earlier draft only bound
 `mevedel--session' inside this function and the just-created
 session rule was invisible to queued sibling re-evaluation --
 the FIFO queue's central rule-coalescing was effectively a
@@ -297,9 +297,9 @@ no-op.  This function now extracts the rule context from the
 entry's captured :session and passes it explicitly.
 
 For Bash, the same context binding flows into
-`mevedel-tools--check-bash-permission' via `mevedel--session'
-(that function reads it directly); we let-bind to make the
-session visible to it as well."
+`mevedel-tools--check-bash-permission' via `mevedel--session'.
+That function reads it directly; we let-bind to make the session visible
+to it as well."
   (let* ((session (plist-get entry :session))
          (workspace
           (and session (mevedel-session-workspace session)))
@@ -374,7 +374,8 @@ Called from `mevedel-abort' / request-cancel-fn."
 
 (defun mevedel-permission-queue-sweep-origin
     (origin &optional session no-render)
-  "Fire `'aborted' on queued entries whose `:origin' matches ORIGIN.
+  "Abort queued entries for ORIGIN in SESSION.
+
 Nil-origin entries are treated as \"main\" for compatibility with
 older in-memory queue entries.  When NO-RENDER is non-nil, do not
 render the next head entry after sweeping."

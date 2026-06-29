@@ -28,6 +28,9 @@
 
 (defvar test-mevedel-tool-wrap--counter 0
   "Monotonically increasing suffix for unique source-tool names.")
+(defvar mevedel-preset--registry)
+(defvar mevedel-preset-extra-tool-specs)
+(declare-function mevedel-preset--setup-extras "mevedel-presets" (preset))
 
 (defun test-mevedel-tool-wrap--unique (base)
   "Return a unique tool name derived from BASE for this test run."
@@ -37,7 +40,8 @@
     (&key (name "src_tool") function (args nil)
           (async nil) (category "test-src") (description "src")
           (include t))
-  "Register a synthetic `gptel-tool' in CATEGORY and return it."
+  "Register a synthetic `gptel-tool' named NAME in CATEGORY.
+FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
   (gptel-make-tool
    :name name
    :function (or function (lambda (&rest _) "ok"))
@@ -146,9 +150,9 @@
 
   :doc "sync source error propagates to callback as Error: string"
   (let* ((name (test-mevedel-tool-wrap--unique "err"))
-         (_ (test-mevedel-tool-wrap--make-source
-             :name name
-             :function (lambda (_v) (error "boom"))
+	         (_ (test-mevedel-tool-wrap--make-source
+	             :name name
+	             :function (lambda (_v) (error "Boom"))
              :args '((:name "v" :type string :description "v"))))
          (handler (mevedel-tool--call-wrapped-handler
                    "test-src" name nil))
