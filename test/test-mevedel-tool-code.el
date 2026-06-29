@@ -17,20 +17,26 @@
                byte-compile-current-file))
           "helpers"))
 
-(defvar mevedel-tool-code-test-open-state nil)
-(defvar mevedel-tool-code-test-xref-backend-state nil)
+(defvar mevedel-tool-code-test-open-state nil
+  "State captured while opening a test xref location.")
+(defvar mevedel-tool-code-test-xref-backend-state nil
+  "State captured while invoking the test xref backend.")
 
 (cl-defstruct (mevedel-tool-code-test-location
                (:constructor mevedel-tool-code-test-location-create (file)))
+  "Test xref location carrying a source FILE."
   file)
 
 (cl-defmethod xref-location-group ((location mevedel-tool-code-test-location))
+  "Return the xref group for test LOCATION."
   (mevedel-tool-code-test-location-file location))
 
 (cl-defmethod xref-location-line ((_location mevedel-tool-code-test-location))
+  "Return nil because test locations do not track line numbers."
   nil)
 
 (cl-defmethod xref-location-marker ((location mevedel-tool-code-test-location))
+  "Return a marker for test LOCATION while capturing open state."
   (setq mevedel-tool-code-test-open-state
         (list enable-local-variables find-file-hook hack-local-variables-hook))
   (with-current-buffer
@@ -41,12 +47,14 @@
 
 (cl-defmethod xref-backend-references
   ((_backend (eql mevedel-tool-code-test-backend)) _identifier)
+  "Capture backend state and return no references."
   (setq mevedel-tool-code-test-xref-backend-state
         (list enable-local-variables find-file-hook hack-local-variables-hook))
   nil)
 
 (cl-defmethod xref-backend-apropos
   ((_backend (eql mevedel-tool-code-test-backend)) _pattern)
+  "Capture backend state and return no apropos matches."
   (setq mevedel-tool-code-test-xref-backend-state
         (list enable-local-variables find-file-hook hack-local-variables-hook))
   nil)

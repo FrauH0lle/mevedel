@@ -133,15 +133,16 @@ in the callback; normalize it here so the assertions stay shape-agnostic."
            (old-str "Line 2")
            (new-str "Line 2 Modified")
            (diff-buffer-name "*mevedel-diff-preview*")
-           (original-threshold mevedel-inline-preview-threshold))
-   :vars ((callback-invoked nil)
-          (callback-result nil))
+           (original-threshold mevedel-inline-preview-threshold)
+           (callback-invoked nil)
+           (callback-result nil))
    :before-each
    (progn
      ;; Setup - force inline preview mode and auto-approve
      (setq mevedel-inline-preview-threshold 2.0  ; Very high to always use inline
            callback-invoked nil
            callback-result nil)
+     (ignore callback-invoked callback-result)
      ;; Add advice to auto-approve if separate buffer mode is used
      (advice-add 'read-char-choice :around #'mevedel-test-edit--read-char-choice-advice)
      (with-temp-file test-file
@@ -156,15 +157,12 @@ in the callback; normalize it here so the assertions stay shape-agnostic."
          (ignore-errors (set-window-text-height window 50))))
      (sit-for 0.1)
 
-     ;; Define callback
-     (defun test-edit-simple-callback (result)
-       (setq callback-invoked t
-             callback-result result))
-
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
        (mevedel-tool-fs--edit
-        #'test-edit-simple-callback
+        (lambda (result)
+          (setq callback-invoked t
+                callback-result result))
         (list :file_path test-file
               :old_string old-str
               :new_string new-str)))
@@ -256,7 +254,7 @@ emacs --script run-tests.el
 # Or run tests in batch mode
 emacs --batch -l run-tests.el
 ```")
-           (new-str "```bash
+	           (new-str "```bash
 # Run unit tests with ERT using Eask
 eask test ert test/test-*
 
@@ -264,15 +262,16 @@ eask test ert test/test-*
 npx @emacs-eask/cli test ert test/test-*
 ```")
            (diff-buffer-name "*mevedel-diff-preview*")
-           (original-threshold mevedel-inline-preview-threshold))
-   :vars ((callback-invoked nil)
-          (callback-result nil))
+           (original-threshold mevedel-inline-preview-threshold)
+           (callback-invoked nil)
+           (callback-result nil))
    :before-each
    (progn
      ;; Setup - force inline preview mode and auto-approve
      (setq mevedel-inline-preview-threshold 2.0  ; Very high to always use inline
            callback-invoked nil
            callback-result nil)
+     (ignore callback-invoked callback-result)
      ;; Add advice to auto-approve if separate buffer mode is used
      (advice-add 'read-char-choice :around #'mevedel-test-edit--read-char-choice-advice)
      (with-temp-file test-file
@@ -287,15 +286,12 @@ npx @emacs-eask/cli test ert test/test-*
          (ignore-errors (set-window-text-height window 50))))
      (sit-for 0.1)
 
-     ;; Define callback
-     (defun test-edit-markdown-callback (result)
-       (setq callback-invoked t
-             callback-result result))
-
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
        (mevedel-tool-fs--edit
-        #'test-edit-markdown-callback
+        (lambda (result)
+          (setq callback-invoked t
+                callback-result result))
         (list :file_path test-file
               :old_string old-str
               :new_string new-str)))
@@ -392,14 +388,10 @@ resulted in content being appended instead of replaced.")
          (ignore-errors (set-window-text-height window 50))))
      (sit-for 0.1)
 
-     ;; Define callback
-     (defun test-edit-content-callback (result)
-       (ignore result))
-
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
        (mevedel-tool-fs--edit
-        #'test-edit-content-callback
+        (lambda (result) (ignore result))
         (list :file_path test-file
               :old_string old-str
               :new_string new-str)))
@@ -466,9 +458,9 @@ resulted in content being appended instead of replaced.")
            (original-content "Original content\n")
            (old-str "Original")
            (new-str "Modified")
-           (original-threshold mevedel-inline-preview-threshold))
-   :vars ((callback-invoked nil)
-          (callback-result nil))
+           (original-threshold mevedel-inline-preview-threshold)
+           (callback-invoked nil)
+           (callback-result nil))
    :before-each
    (progn
      ;; Setup - force inline preview mode and auto-approve
@@ -488,15 +480,12 @@ resulted in content being appended instead of replaced.")
          (ignore-errors (set-window-text-height window 50))))
      (sit-for 0.1)
 
-     ;; Define callback
-     (defun test-edit-reject-callback (result)
-       (setq callback-invoked t
-             callback-result result))
-
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
        (mevedel-tool-fs--edit
-        #'test-edit-reject-callback
+        (lambda (result)
+          (setq callback-invoked t
+                callback-result result))
         (list :file_path test-file
               :old_string old-str
               :new_string new-str)))
@@ -549,8 +538,8 @@ resulted in content being appended instead of replaced.")
            (original-content "Start\nLine A\nLine B\nLine C\nEnd\n")
            (old-str "Line A\nLine B\nLine C")
            (new-str "Replaced\nContent")
-           (original-threshold mevedel-inline-preview-threshold))
-   :vars ((callback-invoked nil))
+           (original-threshold mevedel-inline-preview-threshold)
+           (callback-invoked nil))
    :before-each
    (progn
      ;; Setup - force inline preview mode and auto-approve
@@ -569,15 +558,12 @@ resulted in content being appended instead of replaced.")
          (ignore-errors (set-window-text-height window 50))))
      (sit-for 0.1)
 
-     ;; Define callback
-     (defun test-edit-multiline-callback (result)
-       (ignore result)
-       (setq callback-invoked t))
-
      ;; Execute Edit tool
      (with-current-buffer chat-buffer
        (mevedel-tool-fs--edit
-        #'test-edit-multiline-callback
+        (lambda (result)
+          (ignore result)
+          (setq callback-invoked t))
         (list :file_path test-file
               :old_string old-str
               :new_string new-str)))

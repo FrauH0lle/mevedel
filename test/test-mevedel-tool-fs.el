@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-structs)
+(require 'ert)
 (require 'mevedel-file-state)
 (require 'mevedel-tool-registry)
 (require 'mevedel-view)

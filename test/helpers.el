@@ -4,6 +4,8 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 
 ;;
 ;;; Test macro
@@ -14,21 +16,21 @@
   "Generate multiple test templates.
 
 TEMPLATE is an implicitly backquoted form that serves as the base
-structure for the generated tests. It can contain placeholders
+structure for the generated tests.  It can contain placeholders
 that will be filled with values from the bindings.
 
 VARS is an optional list of symbols that define the destructuring
-pattern for BINDINGS. Each symbol in VARS will be bound to
+pattern for BINDINGS.  Each symbol in VARS will be bound to
 corresponding values from BINDINGS.
 
 BINDINGS is a list of values that will be used to fill the
-template. The number of bindings must be evenly divisible by the
-number of VARS. BINDINGS can include :doc keywords followed by
+template.  The number of bindings must be evenly divisible by the
+number of VARS.  BINDINGS can include :doc keywords followed by
 documentation strings for individual test cases.
 
 The macro returns a list of filled templates, with each template
 having its placeholders replaced by the corresponding values from
-BINDINGS. Each template is paired with its documentation string.
+BINDINGS.  Each template is paired with its documentation string.
 
 Implementation Details:
 - If no VARS or BINDINGS are provided, returns just the TEMPLATE
@@ -106,7 +108,7 @@ This would generate:
 
 (defun mevedel-test--normalize-cases (vars bindings)
   "Ensure each test case group has a docstring.
-VARS is the list of variable names. BINDINGS is the list of test
+VARS is the list of variable names.  BINDINGS is the list of test
 inputs/outputs and optional docstrings."
   (let ((i 0)
         item
@@ -140,9 +142,9 @@ inputs/outputs and optional docstrings."
                             (&key before-each after-each expected-result
                                   doc tags vars vars* &allow-other-keys)
                             &rest template)
-  "Define one or more ERT tests for OBJECT with TEMPLATE.
+  "Define one or more ERT test cases for OBJECT with TEMPLATE.
 
-OBJECT is the symbol being tested. It can be a function, macro,
+OBJECT is the symbol being tested.  It can be a function, macro,
 or other symbol.
 
 KEYWORD ARGUMENTS:
@@ -160,10 +162,10 @@ encompass the whole test body, including the code from
 
 TEMPLATE:
 TEMPLATE is a list of forms that will be expanded into test cases
-using `mevedel-test--template'. There are several patterns:
+using `mevedel-test--template'.  There are several patterns:
 
 1. SIMPLE TEST (no variables):
-   Just provide a test body. Use ,test placeholder and (test) binding.
+   Just provide a test body.  Use ,test placeholder and (test) binding.
 
 2. PARAMETERIZED TEST (with variables):
    Provide a template form with placeholders, variable names, and values.
@@ -345,7 +347,7 @@ See also:
 
 (defun mevedel-test-same-items-p (expected actual &rest cl-keys)
   "Verify that EXPECTED and ACTUAL have the same items.
-The order of items does not matter. Returns t if lists match, nil
+The order of items does not matter.  Return t if lists match, nil
 otherwise.
 CL-KEYS as in `cl-set-difference'.
 \nKeywords supported:  :test :test-not :key
@@ -354,8 +356,8 @@ CL-KEYS as in `cl-set-difference'.
        (null (apply #'cl-set-difference actual expected cl-keys))))
 
 (defun mevedel-test-contains-items-p (expected actual &rest cl-keys)
-  "Verify that ACTUAL contains EXPECTED items.
-The order of items does not matter. Returns t if lists match, nil
+  "Verify EXPECTED items are present in ACTUAL.
+The order of items does not matter.  Return t if lists match, nil
 otherwise.
 CL-KEYS as in `cl-set-difference'.
 \nKeywords supported: :test :test-not :key

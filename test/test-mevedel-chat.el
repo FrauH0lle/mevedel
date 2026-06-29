@@ -18,10 +18,25 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar gptel-org-branching-context)
+(defvar gptel-org-ignore-elements)
+(defvar mevedel-view--data-turn-start)
+(defvar mevedel-view--in-flight-turn-start)
+(defvar mevedel-view--input-marker)
+(defvar mevedel-view--request-progress-region-overlay)
+(defvar org-agenda-file-menu-enabled)
+(defvar org-element-cache-persistent)
+(defvar org-element-use-cache)
+(defvar org-indent-mode)
+(defvar org-mode-hook)
+(declare-function mevedel-view--render-incremental "mevedel-view"
+                  (data-buffer))
+(declare-function org-indent-mode "org-indent" (&optional arg))
+
 (defvar mevedel-chat-test--hook-events nil)
 
 (defun mevedel-chat-test--record-hook (event)
-  "Record lifecycle hook EVENT for tests."
+  "Record lifecycle hook EVENT for chat cases."
   (push event mevedel-chat-test--hook-events)
   nil)
 
@@ -115,7 +130,7 @@
 			   (cl-letf (((symbol-function 'org-install-agenda-files-menu)
 				      (lambda ()
 					(setq menu-called t)
-					(error "menu setup should not run")))
+						(error "Menu setup should not run")))
 				     ((symbol-function 'gptel-mode)
 				      #'ignore)
 				     ((symbol-function
@@ -266,7 +281,7 @@
 			       :vars* ((root-dir (file-name-as-directory
 						  (make-temp-file "mevedel-chat-cwd-" t)))
 				       (module-dir (file-name-concat root-dir "packages" "api"))
-				       chat-buffer)
+				       (chat-buffer nil))
 			       :after-each
 			       (progn
 				 (mevedel-workspace-clear-registry)

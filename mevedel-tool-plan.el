@@ -9,8 +9,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
 (require 'mevedel-queue)
 (require 'mevedel-utilities)
@@ -207,7 +208,7 @@ current data buffer."
         (plist-get metadata :absolute-path))))
 
 (defun mevedel-plan-mode--write-current-plan (plan-markdown session buffer)
-  "Write PLAN-MARKDOWN to SESSION's current plan artifact.
+  "Write PLAN-MARKDOWN to SESSION's current plan artifact for BUFFER.
 Returns the absolute path."
   (let ((path (mevedel-plan-mode-current-plan-path session buffer))
         (plan-markdown (mevedel--normalize-message-text plan-markdown)))
@@ -427,7 +428,7 @@ shown as a collapsed hook-context disclosure."
   (mevedel-queue--abort-all mevedel-plan-queue--spec 'aborted session))
 
 (defun mevedel-plan-queue-sweep-agent (origin &optional session)
-  "Abort queued plans whose `:origin' matches ORIGIN."
+  "Abort queued SESSION plans whose `:origin' matches ORIGIN."
   (mevedel-queue--sweep-origin
    mevedel-plan-queue--spec origin 'aborted session))
 
@@ -717,7 +718,7 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
 
 (defun mevedel-plan-mode--approval-entry
     (plan-markdown chat-buffer session)
-  "Return a plan approval queue entry for PLAN-MARKDOWN."
+  "Return a plan approval queue entry for PLAN-MARKDOWN in CHAT-BUFFER SESSION."
   (list :body plan-markdown
         :chat-buffer chat-buffer
         :origin "main"
@@ -746,7 +747,7 @@ artifact before the approval prompt is displayed."
 
 (defun mevedel-plan-mode-restore-pending-approval
     (&optional session chat-buffer)
-  "Restore a presented plan approval prompt for SESSION if needed."
+  "Restore pending approval for SESSION in CHAT-BUFFER if needed."
   (let* ((chat-buffer (or chat-buffer (current-buffer)))
          (session (or session (and (boundp 'mevedel--session)
                                    mevedel--session)))
@@ -767,7 +768,7 @@ artifact before the approval prompt is displayed."
    (buffer-substring-no-properties start end)))
 
 (defun mevedel-plan-mode--post-response (start end)
-  "Detect `<proposed_plan>' blocks in completed Plan-mode responses."
+  "Detect `<proposed_plan>' blocks between START and END."
   (when (and (bound-and-true-p mevedel--session)
              (eq (mevedel-session-permission-mode mevedel--session) 'plan))
     (when-let* ((plan (mevedel-plan-mode-extract-proposed-plan

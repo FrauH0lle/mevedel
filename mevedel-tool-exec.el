@@ -134,7 +134,7 @@ that has unwound."
 
 (defun mevedel-tool-exec--log-permission-decision
     (tool-name outcome via &rest props)
-  "Persist a Bash/Eval permission decision diagnostic."
+  "Persist TOOL-NAME permission decision OUTCOME via VIA with PROPS."
   (when-let* ((session (mevedel-tool-exec--permission-log-session)))
     (apply #'mevedel-permission-log
            session 'permission-decision
@@ -667,7 +667,7 @@ avoids saving a brittle whole-chain string such as
 
 (defun mevedel-tool-exec--effective-permission-mode
     (&optional permission-context)
-  "Return the effective permission mode for the current tool call."
+  "Return effective permission mode for PERMISSION-CONTEXT."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (or (and permission-context
              (plist-get permission-context :mode))
@@ -813,7 +813,7 @@ for the full command."
    (car (mevedel-tools--extract-commands command))))
 
 (defun mevedel-tools--bash-buckets (&optional permission-context)
-  "Return the bucket alist visible to Bash, innermost-first.
+  "Return Bash buckets for PERMISSION-CONTEXT, innermost-first.
 
 Includes the request-scoped skill rule buckets so a skill's
 `allowed-tools: [Bash(...)]' grants are honored by the Bash
@@ -873,7 +873,7 @@ allows."
 (cl-defun mevedel-tools--check-bash-permission
     (command &key trust-literal-p ignore-effective-trust-p
              permission-context)
-  "Decide `allow', `deny', or `ask' for COMMAND against permission rules.
+  "Decide Bash permission for COMMAND and PERMISSION-CONTEXT.
 
 Rules come from invocation, request, session, persistent, and
 defcustom buckets (in that innermost-first order) and are
@@ -1176,7 +1176,7 @@ CALLBACK receives nil or a normalized guidance plist."
 
 (defun mevedel-tool-exec--bash-trust-all-guardian-needed-p
     (command &optional permission-context)
-  "Return non-nil when COMMAND should get deny-only guardian review.
+  "Return non-nil when COMMAND and PERMISSION-CONTEXT need guardian review.
 This is only for `trust-all' mode.  The guardian is consulted when the
 normal classifier would have asked, avoiding latency for routine allowed
 commands while still giving the optional guardian a chance to veto
@@ -1203,7 +1203,7 @@ suspicious Bash."
 
 (defun mevedel-tool-exec--bash-deny-only-guardian-async
     (command cont &optional metadata-p)
-  "Run deny-only guardian review for COMMAND, then call CONT.
+  "Run deny-only guardian review for COMMAND and METADATA-P, then call CONT.
 Guardian deny recommendations become `deny'.  Timeout, failure, invalid
 output, and non-deny recommendations allow by default."
   (mevedel-tool-exec--bash-guardian-classify-async
@@ -1238,15 +1238,15 @@ Expressions longer than this are truncated with a toggle to expand."
 
 (defun mevedel--prompt-user-for-eval
     (expression callback &optional origin count entry mode preserve-ui)
-  "Display the Eval-permission overlay; deliver UI outcome to CALLBACK.
+  "Display Eval permission overlay for EXPRESSION and CALLBACK.
 
-CALLBACK is invoked once with one of `allow-once', `deny-once',
-(feedback . TEXT), or `aborted'.  Long expressions are truncated in
+CALLBACK is invoked once with `allow-once', `deny-once', a feedback cons,
+or `aborted'.  Long expressions are truncated in
 the display and can be toggled with TAB.  ORIGIN, when non-main,
 renders the same attribution line used by generic and Bash permission
 prompts.  COUNT is the permission queue depth for the composite
-interaction-zone counter.  MODE and PRESERVE-UI describe the requested
-execution scope."
+interaction-zone counter.  ENTRY identifies the queued prompt.  MODE and
+PRESERVE-UI describe the requested execution scope."
   (let* ((lines (split-string expression "\n"))
          (long-p (> (length lines) mevedel-eval-expression-display-limit))
          (display-expr (if long-p
@@ -1289,7 +1289,7 @@ execution scope."
 
 (cl-defun mevedel-tools--check-eval-permission
     (&key trust-literal-p permission-context)
-  "Decide `allow', `deny', or `ask' for an Eval invocation.
+  "Decide Eval permission for TRUST-LITERAL-P and PERMISSION-CONTEXT.
 
 Normal model-requested Eval asks unless an explicit deny rule applies
 or the effective permission mode is `trust-all'.  When TRUST-LITERAL-P
@@ -1731,7 +1731,7 @@ direct non-workspace uses."
 
 (defun mevedel-tool-exec--signal-process
     (process process-group-p signal &optional pid)
-  "Send SIGNAL to PROCESS, using its process group when requested.
+  "Send SIGNAL to PROCESS, using PROCESS-GROUP-P and PID when requested.
 When PID is non-nil, use it as the process group id even if PROCESS
 has already exited."
   (let ((target-pid (or pid (and (processp process) (process-id process)))))
@@ -1759,7 +1759,7 @@ PID preserves the process group id after PROCESS exits."
     (mevedel-tool-exec--signal-process process process-group-p 'KILL pid)))
 
 (defun mevedel-tool-exec--bash-format-result (exit-code output timed-out timeout)
-  "Return Bash result text for EXIT-CODE, OUTPUT, and TIMED-OUT."
+  "Return Bash result text for EXIT-CODE, OUTPUT, TIMED-OUT, and TIMEOUT."
   (cond
    (timed-out
     (format "Command timed out after %ss and was terminated:\nSTDOUT+STDERR:\n%s"
@@ -1930,7 +1930,8 @@ window configuration after evaluation."
 
 (defun mevedel-tool-exec--eval-batch-script
     (expression result-file workdir load-path-value result-format)
-  "Return bootstrap source for child Emacs batch Eval EXPRESSION."
+  "Return batch Eval source for EXPRESSION writing RESULT-FILE.
+WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
   (concat
    ";;; -*- lexical-binding: t -*-\n"
    (prin1-to-string
@@ -2106,7 +2107,7 @@ Header shows a truncated first line of the command; body fontifies as
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-exec--render-eval (name args result _render-data)
-  "Rendering plist for the Eval tool."
+  "Return rendering plist for Eval NAME with ARGS and RESULT."
   (when (stringp result)
     (let* ((expression (or (plist-get args :expression) ""))
            (first-line (car (split-string expression "\n")))

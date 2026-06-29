@@ -17,6 +17,8 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-slash-commands)
+
 (defun mevedel-worktree-test--workspace (root)
   "Return a test workspace rooted at ROOT."
   (mevedel-workspace--create

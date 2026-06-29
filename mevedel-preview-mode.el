@@ -362,7 +362,9 @@ start expanded."
            (> diff-lines (* chat-height mevedel-inline-preview-threshold))))))
 
 (defun mevedel-preview-mode--body-string (diff-string rel-path &optional user-modified)
-  "Return the propertized body string for a preview of DIFF-STRING."
+  "Return propertized body for DIFF-STRING at REL-PATH.
+
+USER-MODIFIED adds the edited marker when non-nil."
   (with-temp-buffer
     (when user-modified
       (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
@@ -379,7 +381,11 @@ start expanded."
     (diff-string temp-file real-path final-callback chat-buffer workspace root
                  rel-path user-modified _position tool-name diff-buffer apply-fn
                  collapsed)
-  "Create a preview overlay in CHAT-BUFFER's interaction zone."
+  "Create preview overlay for DIFF-STRING in CHAT-BUFFER's interaction zone.
+
+TEMP-FILE, REAL-PATH, FINAL-CALLBACK, WORKSPACE, ROOT, REL-PATH,
+USER-MODIFIED, TOOL-NAME, DIFF-BUFFER, APPLY-FN, and COLLAPSED describe
+the preview and its callbacks."
   (with-current-buffer chat-buffer
     (let* ((id (mevedel-preview-mode--next-interaction-id))
            (prefix (if user-modified (length "[Modified via ediff]\n") 0))

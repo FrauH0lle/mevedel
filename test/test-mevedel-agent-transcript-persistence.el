@@ -36,6 +36,15 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar gptel-org-ignore-elements)
+(defvar org-element-cache-persistent)
+(defvar org-element-use-cache)
+(defvar org-indent-mode)
+(defvar org-mode-hook)
+(declare-function org-entry-delete "org" (pom property))
+(declare-function org-entry-put "org" (pom property value))
+(declare-function org-indent-mode "org-indent" (&optional arg))
+
 
 ;;
 ;;; Setup helpers
@@ -69,7 +78,8 @@
 
 (defun test-mevedel-spec21--make-agent-buffer
     (agent-name agent-id parent-buffer session)
-  "Create an agent invocation buffer for AGENT-NAME under PARENT-BUFFER."
+  "Create an agent invocation buffer for AGENT-NAME.
+AGENT-ID, PARENT-BUFFER, and SESSION configure the invocation."
   (let* ((agent (mevedel-agent--create :name agent-name
                                        :system-prompt "stub"
                                        :tools nil
@@ -1216,7 +1226,7 @@ Returns the overlay backing buffer, which the caller should kill."
 
   :doc "errors in gptel-cb don't strand mevedel-cb"
   (let* ((mevedel-fired nil)
-         (gptel-cb (lambda (&rest _) (error "boom")))
+         (gptel-cb (lambda (&rest _) (error "Boom")))
          (mevedel-cb (lambda (&rest _) (setq mevedel-fired t)))
          (wrapped (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
     (funcall wrapped "chunk" '(:context nil))

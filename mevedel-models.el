@@ -9,8 +9,7 @@
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+(require 'cl-lib)
 
 ;; `gptel-request'
 (declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
@@ -200,7 +199,8 @@ string.  Returns either (:tier TIER) or (:backend BACKEND :model MODEL)."
 (defun mevedel-model-resolve-selector (selector &optional noerror)
   "Resolve SELECTOR to a provider plist, or nil for inherit.
 
-SELECTOR may be nil, (:tier TIER), or a provider plist."
+SELECTOR may be nil, (:tier TIER), or a provider plist.  When NOERROR is
+non-nil, return nil instead of signaling for invalid selectors."
   (cond
    ((null selector) nil)
    ((mevedel-model-provider-p selector) selector)

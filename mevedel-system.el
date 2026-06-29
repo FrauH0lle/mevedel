@@ -80,8 +80,8 @@ REPLACEMENTS is an alist of (NAME . VALUE), where NAME is a string."
 (defun mevedel-system-render-agent-prompt-file (relative-path &optional replacements)
   "Return agent prompt file RELATIVE-PATH with REPLACEMENTS applied.
 
-This uses gptel-agent's Markdown/Org parser so mevedel agent files share
-the same template behavior as native gptel-agent definitions."
+This uses `gptel-agent' Markdown/Org parsing so mevedel agent files
+share the same template behavior as native `gptel-agent' definitions."
   (let ((path (mevedel-system--prompt-path relative-path)))
     (unless (file-readable-p path)
       (error "Prompt file not found: %s" path))
@@ -233,7 +233,7 @@ When NAME is nil, clear all prompt section cache entries."
             value))))))
 
 (defun mevedel-system-prompt-section-report (&optional base-prompt workspace working-directory)
-  "Return audit data for prompt sections under the current context."
+  "Return audit data for BASE-PROMPT, WORKSPACE, and WORKING-DIRECTORY."
   (let* ((context (mevedel-system--make-context
                    (or base-prompt mevedel-system--base-prompt)
                    workspace working-directory)))
@@ -328,7 +328,7 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
   "Function returning the dynamic persistent memory prompt.")
 
 (defun mevedel-system--memory-cache-key (context)
-  "Return cache key for the memory prompt section."
+  "Return cache key for the memory prompt section in CONTEXT."
   (list
    :file (mevedel-system--file-cache-key
           (mevedel-system--memory-file
@@ -336,7 +336,7 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
    :date (mevedel-system--current-date)))
 
 (defun mevedel-system--working-directory (workspace working-directory)
-  "Return the effective working directory for WORKSPACE."
+  "Return effective WORKING-DIRECTORY for WORKSPACE."
   (file-name-as-directory
    (expand-file-name
     (or working-directory
@@ -380,7 +380,7 @@ loaded after the shared file when present."
               dirs)))))
 
 (defun mevedel-system--workspace-config-content (workspace &optional working-directory)
-  "Return layered AGENTS/CLAUDE workspace guidance for WORKSPACE, or nil."
+  "Return guidance for WORKSPACE and WORKING-DIRECTORY, or nil."
   (when-let* ((files (mevedel-system--workspace-config-files
                      workspace working-directory)))
     (string-join
@@ -394,7 +394,7 @@ loaded after the shared file when present."
      "\n\n")))
 
 (defun mevedel-system--workspace-config-prompt (workspace &optional working-directory)
-  "Return the workspace configuration prompt for WORKSPACE, or nil."
+  "Return config prompt for WORKSPACE and WORKING-DIRECTORY, or nil."
   (when-let* ((content (mevedel-system--workspace-config-content
                        workspace working-directory)))
     (concat "## Workspace Configuration\n\n"
@@ -403,7 +403,7 @@ loaded after the shared file when present."
             content)))
 
 (defun mevedel-system--workspace-config-cache-key (context)
-  "Return cache key for the workspace configuration prompt section."
+  "Return cache key for the workspace configuration section in CONTEXT."
   (or
    (mapcar #'mevedel-system--file-cache-key
            (mevedel-system--workspace-config-files
@@ -416,7 +416,7 @@ loaded after the shared file when present."
          (mevedel-system-context-working-directory context))))
 
 (defun mevedel-system--environment-prompt (workspace &optional working-directory)
-  "Return the dynamic environment prompt for WORKSPACE."
+  "Return dynamic environment prompt for WORKSPACE and WORKING-DIRECTORY."
   (concat "## Environment\n\n"
           "Here is useful information about the environment you are running in:\n<env>\n"
           (mevedel--environment-info-string workspace working-directory)
@@ -434,7 +434,7 @@ loaded after the shared file when present."
    "\n\n"))
 
 (defun mevedel-system--make-context (base-prompt workspace working-directory)
-  "Return normalized prompt context for BASE-PROMPT."
+  "Return normalized context for BASE-PROMPT, WORKSPACE, and WORKING-DIRECTORY."
   (let* ((workspace (or workspace (mevedel-workspace)))
          (working-directory
           (mevedel-system--working-directory workspace working-directory)))
@@ -509,7 +509,7 @@ rendered in their registered order; unknown names are ignored."
            (mevedel-system--prompt-sections-sorted)))))
 
 (defun mevedel-system-build-prompt (base-prompt &optional workspace working-directory)
-  "Build the full request-time system prompt.
+  "Build the full request-time system prompt from BASE-PROMPT.
 
 WORKSPACE specifies the workspace context for configuration, memory, and
 environment sections.  If nil, use the current buffer's workspace.
@@ -527,9 +527,10 @@ provider prefix-cache reuse."
   "Build a system prompt for an agent from BASE-PROMPT.
 
 The agent prompt is always emitted as the `base' section.  The keyword
-flags control whether the normal dynamic sections are appended.  This
-lets utility agents keep a narrow identity prompt while still receiving
-environment details."
+flags WORKSPACE-CONFIG, MEMORY, and ENVIRONMENT control whether the
+normal dynamic sections are appended for WORKSPACE and WORKING-DIRECTORY.
+This lets utility agents keep a narrow identity prompt while still
+receiving environment details."
   (let ((sections (append '(base)
                           (when workspace-config '(workspace-config))
                           (when memory '(memory))

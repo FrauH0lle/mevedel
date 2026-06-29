@@ -104,7 +104,7 @@ example `tool\\|reasoning'."
         depth))))
 
 (defun mevedel-transcript--user-prompt-start (pos next prop)
-  "Return the real user prompt start in [POS, NEXT), or nil.
+  "Return the real PROP prompt start in [POS, NEXT), or nil.
 
 Nil-`gptel' regions can contain a mixture of org block glue and the
 next user prompt, for example `#+end_tool' / reasoning text /
@@ -355,7 +355,7 @@ runs."
 
 (defun mevedel-transcript--tool-block-inside-ignore-segment-p
     (segments block-start block-end)
-  "Return non-nil when an ignore SEGMENTS entry contains BLOCK-START..BLOCK-END."
+  "Return non-nil when an ignore entry in SEGMENTS spans BLOCK-START..BLOCK-END."
   (let (found)
     (while (and segments (not found))
       (let ((seg (car segments)))
@@ -931,7 +931,7 @@ assistant turn."
                     (memq ch '(?, ?. ?\; ?: ?\) ?\] ?\}))))))))
 
 (defun mevedel-transcript--response-continuation-segment-p (prev-seg seg next-seg)
-  "Return non-nil when SEG continues a response split mid-line."
+  "Return non-nil when SEG continues PREV-SEG and NEXT-SEG mid-line."
   (and prev-seg
        next-seg
        (eq (car prev-seg) 'response)

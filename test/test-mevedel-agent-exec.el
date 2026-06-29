@@ -28,6 +28,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar gptel-org-branching-context)
+
 
 ;;
 ;;; Test helpers
@@ -309,11 +311,11 @@ fire-count and payload."
 				   (should (string-match-p
 					    (regexp-quote (format "Transcript: %s" abs-path))
 					    body))
-				   (should (string-match-p
+					   (should (string-match-p
 					    (regexp-quote (format "Read(file_path=%S)" abs-path))
-					    body)))))
-			     (when (file-directory-p tempdir) (delete-directory tempdir t))
-			     (when (buffer-live-p buf) (kill-buffer buf)))
+					    body))))
+				     (when (file-directory-p tempdir) (delete-directory tempdir t))
+				     (when (buffer-live-p buf) (kill-buffer buf))))
 
 			 :doc "error (`nil'): fallback partial is inlined without scaffold"
 			 (let* ((buf (generate-new-buffer " *mev-agent-error-partial*"))

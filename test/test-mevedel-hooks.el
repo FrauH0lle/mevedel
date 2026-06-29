@@ -14,6 +14,8 @@
 (require 'mevedel-hooks)
 (require 'mevedel-plugins)
 
+(defvar mevedel--agent-invocation)
+
 
 ;;
 ;;; Helpers
@@ -61,11 +63,11 @@
     (setenv name nil)))
 
 (defun mevedel-hooks-test--deny-fn (_event)
-  "Test hook returning a deny decision."
+  "Return a deny decision for hook cases."
   '(:permission-decision deny :permission-reason "blocked"))
 
 (defun mevedel-hooks-test--rewrite-fn (_event)
-  "Test hook returning updated input."
+  "Return updated input for hook cases."
   '(:updated-input (:command "echo rewritten")))
 
 (defvar mevedel-hooks-test--read-eval-ran nil)
@@ -73,20 +75,20 @@
 (defvar mevedel-hooks-test--seen-buffer nil)
 
 (defun mevedel-hooks-test--capture-fn (event)
-  "Capture EVENT for serial hook tests."
+  "Capture EVENT for serial hook cases."
   (setq mevedel-hooks-test--seen-event event)
   nil)
 
 (defun mevedel-hooks-test--suppress-output-fn (_event)
-  "Return a reserved decision field for native hook tests."
+  "Return a reserved decision field for native hook cases."
   '(:suppress-output t))
 
 (defun mevedel-hooks-test--stop-fn (_event)
-  "Return a stop decision for terminal-behavior tests."
+  "Return a stop decision for terminal-behavior cases."
   '(:continue nil :stop-reason "stop"))
 
 (defun mevedel-hooks-test--malformed-fn (_event)
-  "Return a malformed decision for hook boundary tests."
+  "Return a malformed decision for hook boundary cases."
   :args)
 
 (defun mevedel-hooks-test--malformed-file-symbol-fn (_event)
@@ -94,19 +96,19 @@
   (intern "test-mevedel-view.el."))
 
 (defun mevedel-hooks-test--context-fn (_event)
-  "Return additional context for terminal-behavior tests."
+  "Return additional context for terminal-behavior cases."
   '(:additional-context ("later")))
 
 (defun mevedel-hooks-test--allow-fn (_event)
-  "Return an allow decision for permission hook tests."
+  "Return an allow decision for permission hook cases."
   '(:permission-decision allow))
 
 (defun mevedel-hooks-test--system-message-fn (_event)
-  "Return a system-message decision for reminder tests."
+  "Return a system-message decision for reminder cases."
   '(:system-message "remember the project rule"))
 
 (defun mevedel-hooks-test--buffer-fn (_event)
-  "Capture the current buffer for async continuation tests."
+  "Capture the current buffer for async continuation cases."
   (setq mevedel-hooks-test--seen-buffer (current-buffer))
   nil)
 

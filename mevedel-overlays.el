@@ -17,6 +17,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 
 (require 'mevedel-utilities)
 
@@ -48,6 +49,7 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 (defcustom mevedel-reference-color
   (face-attribute 'font-lock-constant-face :foreground nil 'default)
@@ -101,30 +103,29 @@
   :group 'mevedel)
 
 (defcustom mevedel-subinstruction-tint-coefficient 0.4
-  "Coeffecient multiplied by by tint intensities.
+  "Coefficient multiplied by tint intensities.
 
-Only applicable to the subinstructions. Makes it possible to have more a
-more finely-tuned control over how tinting looks.
+Only applicable to subinstructions, allowing finer control over tinting.
 
 Does not affect the label colors, just the backgrounds."
   :type 'float
   :group 'mevedel)
 
 (defcustom mevedel-empty-tag-query-matches-all t
-  "Determines behavior of directives without a tag search query.
+  "Determine behavior of directives without a tag search query.
 
 If set to t, directives without a specific tag search query will use all
-available references. Alternatively, if this is set to nil, directives
-without a search query will not use any references."
+available references.  If set to nil, directives without a search query
+will not use any references."
   :type 'boolean
   :group 'mevedel)
 
 (defcustom mevedel-always-match-untagged-references t
-  "Controls inclusion of untagged references in directive prompts.
+  "Control inclusion of untagged references in directive prompts.
 
 When set to t, untagged references are always incorporated into
-directive references, ensuring comprehensive coverage. Conversely, when
-set to nil, untagged references are ignored, unless
+directive references, ensuring comprehensive coverage.  When set to nil,
+untagged references are ignored unless
 `mevedel-empty-tag-query-matches-all' is set to t.
 
 A reference is considered untagged when it has no direct tags.
@@ -134,14 +135,14 @@ considered untagged."
   :group 'mevedel)
 
 (defcustom mevedel-include-full-instructions t
-  "Controls if instructions are fully included in the prompt.
+  "Control whether instructions are fully included in the prompt.
 
 When set to non-nil, the content of directives and references is
-included in the prompt submitted to the LLM. Otherwise, only the file
-and line numbers.
+included in the prompt submitted to the LLM.  When nil, only file and
+line numbers are included.
 
 Setting this to nil makes the initial prompt shorter but relies on the
-LLM to find and read the instructions. Depending on the model, this
+LLM to find and read the instructions.  Depending on the model, this
 might yield better or worse results."
   :type 'boolean
   :group 'mevedel)
@@ -543,7 +544,7 @@ available."
   "Delete instruction(s) either at point or within the selected region.
 
 Display a message to the user showing how many instructions were
-deleted. Throw a user error if no instructions to delete were found."
+deleted.  Throw a user error if no instructions to delete were found."
   (interactive)
   (let ((deleted-count 0))
     (if (use-region-p)
@@ -600,11 +601,11 @@ deleted. Throw a user error if no instructions to delete were found."
 (defun mevedel-convert-instructions ()
   "Convert instructions between reference and directive type.
 
-If a region is selected, convert all instructions within the region. If
+If a region is selected, convert all instructions within the region.  If
 no region is selected, convert only the highest priority instruction at
 point.
 
-Bodyless directives cannot be converted to references. Attempting to do
+Bodyless directives cannot be converted to references.  Attempting to do
 so will throw a user error."
   (interactive)
   (let* ((instructions (if (use-region-p)
@@ -717,11 +718,10 @@ This command is useful to see what is actually being sent to the model."
 (defun mevedel-modify-directive-tag-query ()
   "Prompt minibuffer to enter a tag search query for a directive.
 
-The directive in question is either the directive under the curent
-point.
+The directive in question is the directive under the current point.
 
 A tag query is an _infix_ expression, containing symbol atoms and the
-operator symbols: `and', `or', `not'. If no operator is present between
+operator symbols: `and', `or', `not'.  If no operator is present between
 two expressions, then an implicit `and' operator is assumed.
 
 Examples:
@@ -846,9 +846,10 @@ later restoration."
 
 (defun mevedel--stash-buffer (buffer &optional file-contents)
   "Stash BUFFER's instructions and original content.
+
 Save the buffer's instructions and original content to
 `mevedel--instructions', then remove the instruction overlays from the
-buffer. The content is either the current buffer content or
+buffer.  The content is either the current buffer content or
 FILE-CONTENTS."
   (mevedel--instruction-activate-buffer buffer)
   (let ((instrs (mevedel--stashed-buffer-instructions buffer)))
@@ -899,8 +900,9 @@ FILE-CONTENTS."
      (cl-return (list :buffer-count buffer-count :line-count line-count)))))
 
 (defun mevedel--reference-list-info-string (refs)
-  "Return a formatted string with reference statistics.
-REFS is a list of references to format. The string includes hit count,
+  "Return a formatted statistics string for REFS.
+
+REFS is a list of references to format.  The string includes hit count,
 buffer count, and line count with proper pluralization."
   (cl-destructuring-bind (&key buffer-count line-count)
       (mevedel--reference-list-info refs)
@@ -1163,7 +1165,7 @@ A directive is empty if it does not have a body or secondary directives."
   "Create or scale an instruction of the given TYPE within the region.
 
 If a region is selected but partially covers an existing instruction,
-then the function will resize it. See either `mevedel-create-reference'
+then the function will resize it.  See either `mevedel-create-reference'
 or `mevedel-create-directive' for details on how the resizing works."
   (if (use-region-p)
       (let ((intersecting-instructions
@@ -1387,10 +1389,10 @@ itself."
 (defun mevedel--create-directive-in (buffer start end &optional bodyless directive-text)
   "Create a region directive from START to END in BUFFER.
 
-This function switches to another buffer midway of execution. BODYLESS
+This function switches to another buffer midway of execution.  BODYLESS
 controls special formatting if non-nil.
 
-DIRECTIVE-TEXT is used as the default directive. Having DIRECTIVE-TEXT
+DIRECTIVE-TEXT is used as the default directive.  Having DIRECTIVE-TEXT
 be non-nil prevents the opening of a prompt buffer."
   (let ((ov (mevedel--create-instruction-overlay-in buffer start end)))
     (unless bodyless
@@ -1469,8 +1471,8 @@ Returns: t if A and B are congruent, nil otherwise."
   "Return an instruction overlay at point for action dispatch.
 
 If multiple instruction overlays exist at point, prompt the user to
-select one via `completing-read'. If only one overlay exists, return it
-directly. Returns nil if no overlays exist at point."
+select one via `completing-read'.  If only one overlay exists, return it
+directly.  Return nil if no overlays exist at point."
   (let* ((ovs (mevedel--instructions-at (point)))
          (ov-strings (cl-loop for ov in ovs
                               collect (string-trim (overlay-get ov 'before-string))))
@@ -1566,7 +1568,7 @@ active in the buffer."
       (remove-hook 'eldoc-documentation-functions 'mevedel--ov-actions-help 'local))))
 
 (defun mevedel--ov-actions-show-answer (&optional instructions)
-  "Navigate to the directive answer in the view buffer.
+  "Navigate to INSTRUCTIONS' directive answer in the view buffer.
 
 Falls back to the authoritative chat buffer if the compact view is not live."
   (interactive (list (mevedel--ov-actions-getov)))
@@ -1870,7 +1872,7 @@ CALLBACK is supplied by Eldoc, see `eldoc-documentation-functions'."
   "Update the appearance of the INSTRUCTION overlay.
 
 This function updates the overlay label text, color of the label text,
-and the background of the instruction overlay. This function should be
+and the background of the instruction overlay.  This function should be
 called every time there is a hierarchy or status change in the
 instruction overlay that we wish to reflect.
 
@@ -2207,7 +2209,7 @@ UPDATE-CHILDREN is non-nil."
 (defun mevedel--instructions-at (point &optional type)
   "Return a list of instructions at current POINT.
 
-Optionally return only instructions of specific TYPE. Also returns
+Optionally return only instructions of specific TYPE.  Also returns
 bodyless overlays located right before the point."
   (cl-remove-if-not (lambda (ov)
                       (and (overlay-get ov 'mevedel-instruction)
@@ -2250,10 +2252,10 @@ Does not return instructions that contain the region in its entirety."
 (cl-defun mevedel--topmost-instruction (instruction &optional of-type pred)
   "Return the topmost instruction containing the INSTRUCTION, if any.
 
-If OF-TYPE is non-nil, filter by the specified instruction OF-TYPE. If
+If OF-TYPE is non-nil, filter by the specified instruction OF-TYPE.  If
 OF-TYPE is nil, the instruction returned is the top-level one.
 
-If PRED is non-nil, then the best instruction must also satisfy it. The
+If PRED is non-nil, then the best instruction must also satisfy it.  The
 PRED must be a function which accepts an instruction."
   (unless instruction
     (cl-return-from mevedel--topmost-instruction nil))
@@ -2306,8 +2308,9 @@ text shown in UI elements such as the minibuffer prompt."
 
 (defun mevedel-truncate-directive (text)
   "Truncate TEXT to `mevedel-instructions-truncated-max' characters.
+
 Returns TEXT truncated if longer than the maximum, otherwise returns
-TEXT unchanged. Truncation uses ellipsis to indicate omitted content."
+TEXT unchanged.  Truncation uses ellipsis to indicate omitted content."
   (truncate-string-to-width
    text mevedel-instructions-truncated-max nil nil
    t))
@@ -2618,7 +2621,7 @@ treat them as subdirectives, instead."
   "Create a unique identifier for an instruction.
 
 Retrieves an unused ID from retired IDs or generates a new one by
-incrementing the ID counter. Tracks ID usage via a hash table."
+incrementing the ID counter.  Tracks ID usage via a hash table."
   (let ((id
          (if mevedel--retired-ids
              (prog1

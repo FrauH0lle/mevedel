@@ -29,6 +29,11 @@
           "helpers"))
 
 (defvar mevedel-session-persistence)
+(defvar mevedel-plugin-extra-roots)
+(declare-function mevedel-session-persistence--sidecar-path
+                  "mevedel-session-persistence" (save-path))
+(declare-function mevedel-session-persistence-read
+                  "mevedel-session-persistence" (file))
 
 
 ;;
@@ -67,11 +72,11 @@ Return the plugin root directory."
     root))
 
 (defun mevedel-skills-test--hook-fn (_event)
-  "Test hook used by skill hook normalization tests."
+  "Test hook used by skill hook normalization."
   '(:additional-context "skill hook ran"))
 
 (defun mevedel-skills-test--expansion-fn (_event)
-  "Test hook used by skill expansion tests."
+  "Test hook used by skill expansion."
   '(:updated-input "Expanded by hook"
     :additional-context "expansion context"))
 
@@ -1632,8 +1637,8 @@ configuration."
      ,@body))
 
 (defun mevedel-skills-test--shell-injections-sync (text)
-  "Drive `mevedel-skills--run-body-injections-async' synchronously.
-Returns the outcome plist produced by the async helper."
+  "Drive `mevedel-skills--run-body-injections-async' with TEXT synchronously.
+Return the outcome plist produced by the async helper."
   (let (outcome)
     (mevedel-skills--run-body-injections-async
      text (lambda (o) (setq outcome o)))
@@ -2723,9 +2728,9 @@ allowed-tools:
                    (funcall callback '(:status error
                                        :reason stop
                                        :message "stop"))))
-                ((symbol-function 'mevedel-tools--task)
-                 (lambda (&rest _)
-                   (error "should not dispatch"))))
+	                ((symbol-function 'mevedel-tools--task)
+	                 (lambda (&rest _)
+	                   (error "Should not dispatch"))))
         (mevedel-skills-invoke
          skill nil #'ignore
          :trigger 'user-slash)))
@@ -2908,7 +2913,7 @@ description: Yell
 ;;; Phase C — slash commands and completion
 
 (defun mevedel-skills-test--make-session (&optional name)
-  "Return a throwaway session with a minimal workspace."
+  "Return a throwaway session named NAME with a minimal workspace."
   (let ((ws (mevedel-workspace--create
              :type 'test :id "t" :root "/tmp/t" :name (or name "t")
              :file-cache (mevedel-file-cache--create
@@ -3274,9 +3279,9 @@ spanning lines")))
                            (setq asked prompt)
                            t))
                         ((symbol-function
-                          'mevedel-session-persistence-start-fresh-segment)
-                         (lambda (&rest _args)
-                           (error "should not rotate preview buffer"))))
+	                          'mevedel-session-persistence-start-fresh-segment)
+	                         (lambda (&rest _args)
+	                           (error "Should not rotate preview buffer"))))
                 (insert "Rewound transcript\n### /clear")
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-skills--dispatch-slash-command)))
@@ -3364,9 +3369,9 @@ spanning lines")))
                          (lambda (&rest _args) nil))
                         ((symbol-function 'mevedel-version)
                          (lambda (&rest _args) "test-version"))
-                        ((symbol-function 'ask-user-about-supersession-threat)
-                         (lambda (&rest _args)
-                           (error "supersession prompt"))))
+	                        ((symbol-function 'ask-user-about-supersession-threat)
+	                         (lambda (&rest _args)
+	                           (error "Supersession prompt"))))
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-skills--dispatch-slash-command)))
                 (should (= 2 (mevedel-session-current-segment session)))
@@ -3562,9 +3567,9 @@ spanning lines")))
       (goto-char (point-max))
       (setq-local mevedel-skills--pending-request-context
                   '(:permission-rules nil :model haiku))
-      (ignore-errors
-        (mevedel-skills--gptel-send-advice
-         (lambda (&rest _) (error "boom"))))
+	      (ignore-errors
+	        (mevedel-skills--gptel-send-advice
+	         (lambda (&rest _) (error "Boom"))))
       (should (null mevedel-skills--pending-request-context)))))
 
 (mevedel-deftest mevedel-slash-capf ()
@@ -3700,6 +3705,132 @@ spanning lines")))
                                   (funcall annot "update")))
           (should (string-match-p "current session"
                                   (funcall annot "reload")))))))
+
+  :doc "plugin command completes installed plugin names for update"
+  (let* ((user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-skills-plugin-capf-" t)))
+         (mevedel-user-dir user-dir)
+         (mevedel-plugin-extra-roots nil)
+         (session (mevedel-skills-test--make-session)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-a" "{\"name\":\"demo\"}")
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-b" "{\"name\":\"other\"}")
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands
+                   '(("plugin" . mevedel-plugins-slash-command))))
+              (insert "### /plugin update de")
+              (goto-char (point-max))
+              (let* ((capf (mevedel-slash-capf))
+                     (annot (and capf (plist-get (nthcdr 3 capf)
+                                                 :annotation-function))))
+                (should capf)
+                (should (equal '("demo")
+                               (mevedel-skills-test--capf-candidates
+                                capf "de")))
+                (should (member "other"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (string-match-p "installed plugin"
+                                        (funcall annot "demo")))))))
+      (delete-directory user-dir t)))
+
+  :doc "plugin command completes installed plugin names for enable and disable"
+  (let* ((user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-skills-plugin-capf-" t)))
+         (mevedel-user-dir user-dir)
+         (mevedel-plugin-extra-roots nil)
+         (session (mevedel-skills-test--make-session)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-a" "{\"name\":\"demo\"}")
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-b" "{\"name\":\"other\"}")
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands
+                   '(("plugin" . mevedel-plugins-slash-command))))
+              (insert "### /plugin enable ")
+              (goto-char (point-max))
+              (let ((capf (mevedel-slash-capf)))
+                (should capf)
+                (should (member "demo"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (member "other"
+                                (mevedel-skills-test--capf-candidates capf))))
+              (erase-buffer)
+              (insert "### /plugin disable o")
+              (goto-char (point-max))
+              (let ((capf (mevedel-slash-capf)))
+                (should capf)
+                (should (equal '("other")
+                               (mevedel-skills-test--capf-candidates
+                                capf "o")))))))
+      (delete-directory user-dir t)))
+
+  :doc "plugin hooks command completes actions, plugin names, and states"
+  (let* ((user-dir (file-name-as-directory
+                    (make-temp-file "mevedel-skills-plugin-capf-" t)))
+         (mevedel-user-dir user-dir)
+         (mevedel-plugin-extra-roots nil)
+         (session (mevedel-skills-test--make-session)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-a" "{\"name\":\"demo\"}")
+          (mevedel-skills-test--write-plugin-manifest
+           user-dir "repo-b" "{\"name\":\"other\"}")
+          (mevedel-skills-test--with-chat-buffer session
+            (let ((mevedel-slash-commands
+                   '(("plugin" . mevedel-plugins-slash-command))))
+              (insert "### /plugin hooks ")
+              (goto-char (point-max))
+              (let* ((capf (mevedel-slash-capf))
+                     (annot (and capf (plist-get (nthcdr 3 capf)
+                                                 :annotation-function))))
+                (should capf)
+                (should (member "enable"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (member "disable"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (member "demo"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (string-match-p "hook command"
+                                        (funcall annot "enable")))
+                (should (string-match-p "installed plugin"
+                                        (funcall annot "demo"))))
+              (erase-buffer)
+              (insert "### /plugin hooks enable o")
+              (goto-char (point-max))
+              (let ((capf (mevedel-slash-capf)))
+                (should capf)
+                (should (equal '("other")
+                               (mevedel-skills-test--capf-candidates
+                                capf "o"))))
+              (erase-buffer)
+              (insert "### /plugin hooks demo ")
+              (goto-char (point-max))
+              (let* ((capf (mevedel-slash-capf))
+                     (annot (and capf (plist-get (nthcdr 3 capf)
+                                                 :annotation-function))))
+                (should capf)
+                (should (member "on"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (member "off"
+                                (mevedel-skills-test--capf-candidates capf)))
+                (should (string-match-p "hook state"
+                                        (funcall annot "on")))))))
+      (delete-directory user-dir t)))
+
+  :doc "plugin install target remains freeform"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands
+             '(("plugin" . mevedel-plugins-slash-command))))
+        (insert "### /plugin install ")
+        (goto-char (point-max))
+        (should (null (mevedel-slash-capf))))))
 
   :doc "skills command completes subcommands"
   (let ((session (mevedel-skills-test--make-session)))
@@ -4460,8 +4591,8 @@ Called from `:before-each' so cross-test bleed cannot occur."
   (clrhash mevedel-skills--mtime-cache))
 
 (defun mevedel-skills-test--wait-for (predicate &optional timeout)
-  "Drain notifications until PREDICATE returns non-nil or TIMEOUT elapses.
-TIMEOUT defaults to 2 seconds.  Returns the last predicate value."
+  "Drain notifications until PREDICATE is non-nil or TIMEOUT elapses.
+TIMEOUT defaults to 2 seconds.  Return the last predicate value."
   (let ((deadline (+ (float-time) (or timeout 2.0)))
         result)
     (while (and (not (setq result (funcall predicate)))

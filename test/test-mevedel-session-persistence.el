@@ -26,6 +26,10 @@
 
 (defvar gptel--preset)
 (defvar gptel-system-prompt)
+(defvar so-long-predicate)
+(declare-function org-entry-delete "org" (pom property))
+(declare-function org-entry-get "org" (pom property &optional inherit literal-nil))
+(declare-function org-entry-put "org" (pom property value))
 
 
 ;;
@@ -84,7 +88,7 @@ TOOL-PROP."
           (plist-get parts :suffix-end)))))
 
 (defun test-mevedel-session-persistence--make-session (root)
-  "Build a populated session for round-trip testing."
+  "Build a populated session for ROOT in round-trip cases."
   (let* ((workspace (test-mevedel-session-persistence--make-workspace root))
          (root (mevedel-workspace-root workspace))
          (session   (mevedel-session-create "main" workspace)))
@@ -658,7 +662,7 @@ installs the real hook)."
     (kill-buffer buf)))
 
 (defun test-mevedel-session-persistence--reset-instructions ()
-  "Reset global and workspace-scoped instruction state for tests."
+  "Reset global and workspace-scoped instruction state for persistence cases."
   (setq mevedel--instructions nil)
   (setq mevedel--id-counter 0)
   (setq mevedel--id-usage-map (make-hash-table))
@@ -2688,7 +2692,7 @@ workspace tree."
       (test-mevedel-session-persistence--make-materialized-session)
     (unwind-protect
         (let* ((buf (get-buffer "*test-data-buf*"))
-               (orig-segment buffer-file-name)
+               (_orig-segment buffer-file-name)
                (new-path (mevedel-session-persistence-rotate-segment
                           session buf "Summary of the prior conversation.")))
           (with-current-buffer buf
@@ -2738,9 +2742,9 @@ workspace tree."
             (insert "\nPending prompt")
             (set-file-times buffer-file-name (time-add (current-time) 5))
             (should-not (verify-visited-file-modtime buf)))
-          (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
-                     (lambda (&rest _args)
-                       (error "supersession prompt"))))
+	          (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
+	                     (lambda (&rest _args)
+	                       (error "Supersession prompt"))))
             (should (mevedel-session-persistence-rotate-segment
                      session buf "Summary after stale pending text."
                      :pending-text "\nPending prompt")))
@@ -2924,9 +2928,9 @@ workspace tree."
                (old-segment (with-current-buffer buf buffer-file-name))
                (old-text (with-current-buffer buf
                            (buffer-substring (point-min) (point-max)))))
-          (cl-letf (((symbol-function 'mevedel-session-persistence-write)
-                     (lambda (&rest _)
-                       (error "sidecar write failed"))))
+	          (cl-letf (((symbol-function 'mevedel-session-persistence-write)
+	                     (lambda (&rest _)
+	                       (error "Sidecar write failed"))))
             (should-error
              (mevedel-session-persistence-rotate-segment
               session buf "Summary that will not commit.")))
@@ -2950,8 +2954,8 @@ workspace tree."
                          (mevedel-session-save-path session))))
           (cl-letf (((symbol-function
                       'mevedel-session-persistence--save-instructions)
-                     (lambda (&rest _)
-                       (error "instruction save failed"))))
+	                     (lambda (&rest _)
+	                       (error "Instruction save failed"))))
             (should-error
              (mevedel-session-persistence-rotate-segment
               session buf "Summary that will not commit.")))
@@ -2980,9 +2984,9 @@ workspace tree."
               (goto-char (point-max))
               (insert "Pending prompt\n"))
             (set-buffer-modified-p t))
-          (cl-letf (((symbol-function 'save-buffer)
-                     (lambda (&rest _)
-                       (error "save failed"))))
+	          (cl-letf (((symbol-function 'save-buffer)
+	                     (lambda (&rest _)
+	                       (error "Save failed"))))
             (should-error
              (mevedel-session-persistence-rotate-segment
               session buf "Summary."

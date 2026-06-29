@@ -136,11 +136,14 @@ names at the start of the composer, with annotations for every included
 slash command. Completing a root slash name inserts a real argument
 separator so display-only skill hints cannot make `/skill [arg]` look
 typed when the buffer only contains `/skill`. Commands can also expose
-first-argument candidates; `/mode` completes `default`, `accept-edits`,
-`plan`, `trust-all`, and the UI aliases `edit`, `edits`, and `auto`,
-while `/model` completes model names from the current gptel backend.
-Skill names with prefixes, such as `superpowers:brainstorming`, are valid
-slash candidates.
+argument candidates based on the current argument position; `/mode`
+completes `default`, `accept-edits`, `plan`, `trust-all`, and the UI
+aliases `edit`, `edits`, and `auto`, while `/model` completes model names
+from the current gptel backend. `/plugin` completes subcommands, then
+installed plugin names for `enable`, `disable`, `update`, and supported
+`hooks` forms; `/plugin install` remains freeform. Skill names with
+prefixes, such as `superpowers:brainstorming`, are valid slash
+candidates.
 `/review` and `/verify` complete shared explicit target forms such as
 `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`. With no arguments
 they open the target picker; unknown free-form arguments remain custom

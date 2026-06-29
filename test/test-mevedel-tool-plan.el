@@ -20,12 +20,14 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-plans-directory)
+
 (defun test-mevedel-tool-plan--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
 
 (defun test-mevedel-tool-plan--raw-byte-string-p (string)
-  "Return non-nil when STRING contains raw byte characters."
+  "Return non-nil for STRING with raw byte characters."
   (catch 'found
     (dotimes (index (length string))
       (when (eq (char-charset (aref string index)) 'eight-bit)

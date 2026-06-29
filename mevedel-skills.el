@@ -10,8 +10,10 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'mevedel-agents))
 
 (require 'gptel-agent)
 (require 'mevedel-structs)
@@ -23,11 +25,19 @@
 ;; `gptel'
 (defvar gptel-post-tool-call-functions)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent--create "mevedel-agents" (&rest args))
+(declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+
 ;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
+(declare-function mevedel-pipeline--positional-to-plist
+                  "mevedel-pipeline" (arg-values arg-specs))
+(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
+                  (tool callback args))
 
 ;; `mevedel-reminders'
 (defvar mevedel-reminders--current-chat-buffer)
@@ -116,6 +126,7 @@
 (declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-skills-dir "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugins-enabled "mevedel-plugins" ())
+(declare-function mevedel-plugins-list "mevedel-plugins" ())
 (declare-function mevedel-plugins-skill-dirs "mevedel-plugins" ())
 (declare-function mevedel-plugins-slash-command "mevedel-plugins" (args))
 (autoload 'mevedel-plugins-slash-command "mevedel-plugins" nil nil)
@@ -441,7 +452,7 @@ SOURCE-FILE identifies the offending skill in the warning."
         nil)))))
 
 (defun mevedel-skills--validate-shell (val source-file)
-  "Validate shell VAL.  Returns `bash', `powershell', or `bash' on error.
+  "Validate shell VAL.  Return `bash', `powershell', or `bash' on error.
 Defaults to `bash' when VAL is nil.  SOURCE-FILE identifies the
 offending skill in the warning."
   (let ((sym (cond ((null val) 'bash)
@@ -513,7 +524,7 @@ returned unchanged."
       (nreverse rules)))))
 
 (defun mevedel-skills--normalize-hooks (hooks &optional scope)
-  "Normalize SKILL.md HOOKS frontmatter for request propagation."
+  "Normalize SKILL.md HOOKS frontmatter for SCOPE request propagation."
   (when hooks
     (require 'mevedel-hooks)
     (mevedel-hooks-normalize-rules
@@ -693,7 +704,7 @@ omits `description'."
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
 Performs name resolution (frontmatter `:name' > directory name) and
 validation.  Returns nil with a warning when the skill is invalid
-(bad name, etc.).  Computes description fallback from the body when
+\\(bad name, etc.).  Computes description fallback from the body when
 frontmatter omits `description'."
   (let ((plist (mevedel-skills--parse-frontmatter skill-file)))
     (when plist
@@ -922,7 +933,7 @@ external skill changes are picked up before lookup."
   "Return non-nil when this Emacs has filesystem-notification support.
 Probes for any of the backend `*-add-watch' primitives Emacs uses to
 implement `file-notify-add-watch'.  Avoids depending on internals
-(`file-notify--library') which moved between Emacs versions."
+\\(`file-notify--library') which moved between Emacs versions."
   (and (require 'filenotify nil 'noerror)
        (or (fboundp 'inotify-add-watch)
            (fboundp 'kqueue-add-watch)
@@ -1001,7 +1012,7 @@ them anymore.")
 (defvar mevedel-skills--dir-buffers (make-hash-table :test #'equal)
   "Map of absolute directory path to list of consumer chat buffers.
 A buffer joins the list for every directory its session resolves
-(top-level + existing subdirectories + any leaf containing a SKILL.md)
+\\(top-level + existing subdirectories + any leaf containing a SKILL.md)
 so that watcher events on that directory can identify which sessions
 to mark dirty.")
 
@@ -1512,6 +1523,8 @@ The stash plist keys map onto the request slots:
 (defun mevedel-skills--transform-apply-model-override (fsm)
   "Pre-realize transform: apply skill model overrides to prompt locals.
 
+FSM is the active gptel request state machine.
+
 gptel realizes request payloads from the temp prompt buffer's
 buffer-local `gptel-backend' and `gptel-model'.  Applying the override
 here lets cross-backend skill pins build backend-correct request data.
@@ -1639,7 +1652,8 @@ argumentSubstitution.ts."
       (mevedel-skills--literal-placeholder-range-p text start end)))
 
 (defun mevedel-skills--author-ranges-p (text &rest ranges)
-  "Return non-nil when every START/END range in TEXT is author-written."
+  "Return non-nil when every range in RANGES is author-written in TEXT.
+RANGES is a flat list of START/END pairs."
   (let ((author-p t))
     (while (and ranges author-p)
       (let ((start (pop ranges))
@@ -1667,7 +1681,8 @@ argumentSubstitution.ts."
   "Literal skill variable placeholders supported by substitution.")
 
 (defun mevedel-skills--placeholder-end-at-point (argument-names)
-  "Return placeholder end at point, or nil when point is not at one."
+  "Return placeholder end at point, or nil when point is not at one.
+ARGUMENT-NAMES is the list of named skill arguments."
   (or (cl-loop for placeholder in mevedel-skills--literal-variable-placeholders
                when (looking-at (regexp-quote placeholder))
                return (match-end 0))
@@ -1688,6 +1703,7 @@ argumentSubstitution.ts."
 
 (defun mevedel-skills--protect-escaped-placeholders (text argument-names)
   "Return TEXT with escaped placeholders made literal.
+ARGUMENT-NAMES is the list of named skill arguments.
 A backslash before a recognized placeholder, such as `\\$ARGUMENTS',
 is removed and the placeholder is protected from substitution."
   (with-temp-buffer
@@ -1881,8 +1897,8 @@ shadow `$0'/`$1' shorthand."
 (defun mevedel-skills--run-shell-command-async (command marker callback)
   "Run COMMAND through the Bash tool pipeline, then call CALLBACK.
 
-CALLBACK receives either (:status ok :output STRING) or
-(:status error :reason SYMBOL :message STRING).  MARKER is the
+CALLBACK receives either \\=(:status ok :output STRING) or
+\\=(:status error :reason SYMBOL :message STRING).  MARKER is the
 original shell-injection marker used in diagnostics."
   (let ((tool (or (ignore-errors (mevedel-tool-get "Bash"))
                   (progn
@@ -1929,8 +1945,8 @@ original shell-injection marker used in diagnostics."
 (defun mevedel-skills--run-elisp-expression-async (expression marker callback)
   "Run EXPRESSION through the Eval tool pipeline, then call CALLBACK.
 
-CALLBACK receives either (:status ok :output STRING) or
-(:status error :reason SYMBOL :message STRING).  MARKER is the
+CALLBACK receives either \\=(:status ok :output STRING) or
+\\=(:status error :reason SYMBOL :message STRING).  MARKER is the
 original elisp-injection marker used in diagnostics."
   (let ((tool (or (ignore-errors (mevedel-tool-get "Eval"))
                   (progn
@@ -1993,7 +2009,7 @@ original elisp-injection marker used in diagnostics."
            (string-match-p "\\````!el[ \t]*\\'" line))))
 
 (defun mevedel-skills--markdown-authored-fence-close-end (text close-re start)
-  "Return end of the next author-written fence close in TEXT after START."
+  "Return end of the next CLOSE-RE match in TEXT after START."
   (let ((search start)
         close-end)
     (while (and (not close-end)
@@ -2183,8 +2199,8 @@ The return value is a plist with :start, :end, :command, and
 (defun mevedel-skills--run-body-injections-async (text callback)
   "Replace skill body injection markers in TEXT, then call CALLBACK.
 
-CALLBACK receives either (:status ok :body STRING) or
-(:status error :reason SYMBOL :message STRING).
+CALLBACK receives either \\=(:status ok :body STRING) or
+\\=(:status error :reason SYMBOL :message STRING).
 
 Supported markers:
 - !`COMMAND`          inline: run COMMAND, substitute stdout
@@ -2250,7 +2266,8 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
 
 (defun mevedel-skills--invoke-error (skill reason message
                                            callback display-callback)
-  "Fire the error-outcome path: emit error event, deliver outcome plist."
+  "Emit SKILL error event, then deliver REASON and MESSAGE to CALLBACK.
+DISPLAY-CALLBACK receives the lifecycle event when non-nil."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
     (mevedel-skills--display-event
      display-callback
@@ -2262,8 +2279,9 @@ DISPLAY-CALLBACK may be nil; EVENT is a lifecycle event plist
 (defun mevedel-skills--run-expansion-hook
     (skill arguments prompt trigger session callback)
   "Run `UserPromptExpansion' for a user slash SKILL expansion.
-CALLBACK receives (PROMPT DECISION).  Non-user TRIGGER values skip the
-hook and call CALLBACK with PROMPT and nil."
+ARGUMENTS is the raw slash argument string.  SESSION supplies workspace
+context.  CALLBACK receives (PROMPT DECISION).  Non-user TRIGGER values
+skip the hook and call CALLBACK with PROMPT and nil."
   (if (not (eq trigger 'user-slash))
       (funcall callback prompt nil)
     (require 'mevedel-hooks)
@@ -2287,7 +2305,8 @@ hook and call CALLBACK with PROMPT and nil."
        session workspace request nil))))
 
 (defun mevedel-skills--invoke-done (skill outcome callback display-callback)
-  "Fire the success path: emit done event, deliver outcome plist."
+  "Emit SKILL done event, then deliver OUTCOME to CALLBACK.
+DISPLAY-CALLBACK receives the lifecycle event when non-nil."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
     (mevedel-skills--display-event
      display-callback
@@ -2320,6 +2339,8 @@ that boundary defensive."
 (defun mevedel-skills-format-inline-render-data (skill arguments)
   "Return hidden render-data for an expanded inline slash SKILL.
 
+ARGUMENTS is the raw slash argument string.
+
 The block is ignored by gptel and consumed by `mevedel-view' so the
 data buffer keeps the expanded prompt while the view can show the
 original slash invocation compactly."
@@ -2339,7 +2360,7 @@ original slash invocation compactly."
 
 (defun mevedel-skills--insert-inline-slash-render-data
     (skill arguments)
-  "Insert hidden render-data for an expanded inline slash SKILL."
+  "Insert hidden render-data for SKILL with raw slash ARGUMENTS."
   (insert (mevedel-skills-format-inline-render-data skill arguments)))
 
 (cl-defun mevedel-skills--activate-context
@@ -2358,8 +2379,9 @@ TRIGGER selects the install path:
 
 PERMISSION-RULES is a list of parsed mevedel rules to append.
 MODEL is a selector plist or nil.  EFFORT is a symbol or nil (currently
-inert).  INVOKED-SKILL is a `mevedel-skill-invocation-record' to
-record on the session for compaction/replay.
+inert).  HOOK-RULES is a list of normalized hook rules.  INVOKED-SKILL
+is a `mevedel-skill-invocation-record' to record on the session for
+compaction/replay.
 
 Emits one-time per-invocation `display-warning' notices when MODEL
 or EFFORT is set so skill authors know:
@@ -2443,6 +2465,10 @@ or EFFORT is set so skill authors know:
 (cl-defun mevedel-skills--invoke-inline
     (skill arguments callback &key trigger display-callback)
   "Inline-context invocation.
+
+SKILL is the skill to run.  ARGUMENTS is the raw slash/model argument
+string.  CALLBACK receives the final outcome.  TRIGGER records the
+invocation source.  DISPLAY-CALLBACK receives lifecycle events.
 
 Preparation order matches the body-injection section:
   1. Load body
@@ -2547,8 +2573,6 @@ Preparation order matches the body-injection section:
 	       (plist-get injection-outcome :message)
 	       callback display-callback))))))))))
 
-(declare-function mevedel-agent-get "mevedel-agents" (name))
-(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (defvar mevedel-agent-exec--agents)
 (defvar gptel-system-prompt)
 
@@ -2619,6 +2643,12 @@ tools propagate through the spawn path's request-locals capture."
     (skill arguments callback &key trigger display-callback
            additional-context description on-invocation)
   "Direct fork dispatch via `mevedel-tools--task'.  Async outcome.
+
+SKILL is the skill to run.  ARGUMENTS is the raw slash/model argument
+string.  CALLBACK receives the final outcome.  TRIGGER records the
+invocation source.  DISPLAY-CALLBACK receives lifecycle events.
+ADDITIONAL-CONTEXT and DESCRIPTION are passed through to the spawned
+agent task.  ON-INVOCATION is called with the agent invocation object.
 
 Builds the target `mevedel-agent' via
 `mevedel-skills--build-fork-agent', then dispatches the substituted
@@ -2854,7 +2884,7 @@ foreground agent and calls CALLBACK when that agent returns."
 ;;; Skill tool handler
 
 (defun mevedel-skills--render-skill-tool (name args result _render-data)
-  "Rendering plist for the Skill tool."
+  "Return rendering plist for NAME, ARGS, and RESULT from the Skill tool."
   (when (stringp result)
     (let* ((skill-name (or (plist-get args :name) "?"))
            (lines (length (split-string result "\n" t))))
@@ -2934,7 +2964,8 @@ returns the body; error returns a `Error: ' prefixed message."
         body))))
 
 (defun mevedel-skills--list-handler (callback args)
-  "Pipeline handler for the `ListSkills' tool."
+  "Pipeline handler for the `ListSkills' tool.
+CALLBACK is the async tool callback.  ARGS is a plist with optional :query."
   (let* ((query (plist-get args :query))
          (session (and (boundp 'mevedel--session) mevedel--session)))
     (cond
@@ -3069,7 +3100,7 @@ With a non-empty ARGS string, set `gptel-model' to the interned symbol."
     (message "Current model: %s" gptel-model)))
 
 (defun mevedel-cmd--compact (args)
-  "Run `mevedel-compact' on the current chat buffer."
+  "Run `mevedel-compact' on the current chat buffer with ARGS."
   (mevedel-compact nil args))
 
 (defun mevedel-skills--refresh-view-input-prompt ()
@@ -3089,6 +3120,7 @@ With a non-empty ARGS string, set `gptel-model' to the interned symbol."
 
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
+ARGS is the raw slash-command argument string.
 Recognized modes: default, accept-edits, plan, trust-all, and UI aliases.
 
 Routes through the lifecycle-aware permission transition path."
@@ -3217,7 +3249,7 @@ Routes through the lifecycle-aware permission transition path."
     (message "Unknown skill: %s" name)))
 
 (defun mevedel-cmd--skills (args)
-  "List, describe, enable, or disable skills."
+  "List, describe, enable, or disable skills using ARGS."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (let* ((parts (split-string (or args "") "[ \t\n]+" t))
@@ -3413,7 +3445,9 @@ active request, and reset gptel's status indicator."
 
 (defun mevedel-skills--text-after-local-command-delete
     (delete-start region-end after-prefix)
-  "Return buffer text after deleting a local slash command region."
+  "Return buffer text after deleting a local slash command region.
+DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
+the deleted command followed the prompt prefix."
   (let ((text (buffer-substring-no-properties (point-min) (point-max))))
     (with-temp-buffer
       (insert text)
@@ -3424,7 +3458,9 @@ active request, and reset gptel's status indicator."
 
 (defun mevedel-skills--refresh-visited-file-before-local-edit
     (delete-start region-end after-prefix)
-  "Refresh stale visited-file metadata before slash command edits."
+  "Refresh stale visited-file metadata before slash command edits.
+DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
+the deleted command followed the prompt prefix."
   (when (and buffer-file-name
              (bound-and-true-p mevedel-session-persistence)
              (bound-and-true-p mevedel--session)
@@ -3437,6 +3473,10 @@ active request, and reset gptel's status indicator."
 (defun mevedel-skills--handle-slash-outcome
     (skill outcome delete-start region-end after-prefix continue-fn)
   "Apply slash skill OUTCOME in the current data buffer.
+
+SKILL is the invoked slash skill.  DELETE-START and REGION-END bound
+the original slash text.  AFTER-PREFIX means the slash followed the
+prompt prefix.
 
 CONTINUE-FN, when non-nil, resumes the original `gptel-send' after an
 inline body has been inserted.  Fork outcomes suppress that send and
@@ -3539,6 +3579,8 @@ Returns:
 
 (defun mevedel-skills--gptel-send-advice (orig-fn &rest args)
   "`:around' advice on `gptel-send' for slash-command dispatch.
+
+ORIG-FN and ARGS are the original `gptel-send' function and arguments.
 
 Dispatches the leading `/command' on the prompt region first.
 - Local commands and unknown slashes abort the send (do not call
@@ -3643,7 +3685,7 @@ table was created."
 
 (defun mevedel-skills--slash-completion-table
     (buffer session local-commands)
-  "Return a dynamic completion table for slash commands and skills."
+  "Return dynamic completion table for BUFFER, SESSION, and LOCAL-COMMANDS."
   (lambda (string pred action)
     (complete-with-action
      action
@@ -3657,7 +3699,9 @@ table was created."
 
 (defun mevedel-skills--slash-annotation
     (name buffer session local-commands)
-  "Return completion annotation for slash candidate NAME."
+  "Return completion annotation for slash candidate NAME.
+BUFFER and SESSION identify the current chat.  LOCAL-COMMANDS is the
+slash-command alist."
   (cond
    ((assoc name local-commands)
     (mevedel-skills--slash-command-annotation name))
@@ -3696,43 +3740,115 @@ table was created."
           (push name result))))
     (sort (delete-dups result) #'string<)))
 
-(defun mevedel-skills--slash-command-argument-candidates (name)
-  "Return completion candidates for slash command NAME's first argument."
-  (pcase name
-    ("mode" (mapcar #'car mevedel-skills--mode-command-candidates))
-    ("skills" (mapcar #'car mevedel-skills--skills-command-candidates))
-    ("model" (mevedel-skills--model-command-candidates))
-    ("plugin" (mapcar #'car mevedel-skills--plugin-command-candidates))
-    ("worktree" '("status" "create"))
-    ((or "review" "verify")
-     (mapcar #'car mevedel-skills--validation-target-command-candidates))
+(defun mevedel-skills--plugin-name-candidates ()
+  "Return installed plugin names for slash command argument completion."
+  (require 'mevedel-plugins)
+  (sort (delete-dups
+         (mapcar #'mevedel-plugin-name (mevedel-plugins-list)))
+        #'string<))
+
+(defun mevedel-skills--plugin-command-argument-candidates (args arg-index)
+  "Return `/plugin' completion candidates for ARGS at ARG-INDEX.
+ARGS is the list of completed arguments before the argument being completed."
+  (pcase arg-index
+    (0 (mapcar #'car mevedel-skills--plugin-command-candidates))
+    (1 (pcase args
+         ((or `("enable") `("disable") `("update"))
+          (mevedel-skills--plugin-name-candidates))
+         (`("hooks")
+          (delete-dups
+           (append '("enable" "disable")
+                   (mevedel-skills--plugin-name-candidates))))
+         (_ nil)))
+    (2 (pcase args
+         (`("hooks" ,action)
+          (if (member action '("enable" "disable"))
+              (mevedel-skills--plugin-name-candidates)
+            '("on" "off")))
+         (_ nil)))
     (_ nil)))
 
-(defun mevedel-skills--slash-command-argument-annotation (name candidate)
-  "Return annotation for slash command NAME argument CANDIDATE."
-  (pcase name
-    ("mode" (cdr (assoc candidate mevedel-skills--mode-command-candidates)))
-    ("skills" (cdr (assoc candidate mevedel-skills--skills-command-candidates)))
-    ("model" " model")
-    ("plugin" (cdr (assoc candidate mevedel-skills--plugin-command-candidates)))
-    ("worktree" " command")
-    ((or "review" "verify")
-     (cdr (assoc candidate mevedel-skills--validation-target-command-candidates)))
+(defun mevedel-skills--slash-command-argument-candidates
+    (name &optional args arg-index)
+  "Return completion candidates for slash command NAME.
+ARGS is the list of completed command arguments, and ARG-INDEX is the zero-based
+index of the argument being completed."
+  (let ((arg-index (or arg-index 0)))
+    (pcase name
+      ("mode" (and (zerop arg-index)
+                   (mapcar #'car mevedel-skills--mode-command-candidates)))
+      ("skills" (and (zerop arg-index)
+                     (mapcar #'car mevedel-skills--skills-command-candidates)))
+      ("model" (and (zerop arg-index)
+                    (mevedel-skills--model-command-candidates)))
+      ("plugin" (mevedel-skills--plugin-command-argument-candidates
+                 args arg-index))
+      ("worktree" (and (zerop arg-index) '("status" "create")))
+      ((or "review" "verify")
+       (and (zerop arg-index)
+            (mapcar #'car mevedel-skills--validation-target-command-candidates)))
+      (_ nil))))
+
+(defun mevedel-skills--plugin-command-argument-annotation
+    (candidate args arg-index)
+  "Return `/plugin' argument annotation for CANDIDATE.
+ARGS is the list of completed arguments before ARG-INDEX."
+  (pcase arg-index
+    (0 (cdr (assoc candidate mevedel-skills--plugin-command-candidates)))
+    (1 (pcase args
+         ((or `("enable") `("disable") `("update"))
+          " installed plugin")
+         (`("hooks")
+          (if (member candidate '("enable" "disable"))
+              " hook command"
+            " installed plugin"))
+         (_ nil)))
+    (2 (pcase args
+         (`("hooks" ,action)
+          (if (member action '("enable" "disable"))
+              " installed plugin"
+            " hook state"))
+         (_ nil)))
     (_ nil)))
 
-(defun mevedel-skills--slash-command-argument-table (name)
-  "Return dynamic completion table for slash command NAME arguments."
+(defun mevedel-skills--slash-command-argument-annotation
+    (name candidate &optional args arg-index)
+  "Return annotation for slash command NAME argument CANDIDATE.
+ARGS is the list of completed command arguments, and ARG-INDEX is the zero-based
+index of the argument being completed."
+  (let ((arg-index (or arg-index 0)))
+    (pcase name
+      ("mode" (and (zerop arg-index)
+                   (cdr (assoc candidate
+                               mevedel-skills--mode-command-candidates))))
+      ("skills" (and (zerop arg-index)
+                     (cdr (assoc candidate
+                                 mevedel-skills--skills-command-candidates))))
+      ("model" (and (zerop arg-index) " model"))
+      ("plugin" (mevedel-skills--plugin-command-argument-annotation
+                 candidate args arg-index))
+      ("worktree" (and (zerop arg-index) " command"))
+      ((or "review" "verify")
+       (and (zerop arg-index)
+            (cdr (assoc candidate
+                        mevedel-skills--validation-target-command-candidates))))
+      (_ nil))))
+
+(defun mevedel-skills--slash-command-argument-table (name args arg-index)
+  "Return dynamic completion table for slash command NAME.
+ARGS and ARG-INDEX describe the argument position being completed."
   (lambda (string pred action)
     (complete-with-action
      action
-     (mevedel-skills--slash-command-argument-candidates name)
+     (mevedel-skills--slash-command-argument-candidates
+      name args arg-index)
      string pred)))
 
 (defun mevedel-skills--slash-root-exit-function (_candidate status)
   "Insert a real separator after completing a root slash candidate.
-Ghost argument hints render after point, so without an inserted space a
-user can visually see `/skill [arg]' while the buffer still contains
-`/skill'."
+STATUS is the completion exit status.  Ghost argument hints render after point,
+so without an inserted space a user can visually see `/skill [arg]' while the
+buffer still contains `/skill'."
   (when (and (memq status '(finished exact sole))
              (or (eobp)
                  (not (memq (char-after) '(?\s ?\t ?\n)))))
@@ -3766,8 +3882,10 @@ current line is skipped."
 (defun mevedel-skills--slash-capf-context (&optional input-start)
   "Return slash completion context at point.
 
-The return value is a plist with :kind `root' or `argument' plus
-:start, :end, and command-specific fields."
+INPUT-START constrains completion to the first view-composer line.  The return
+value is a plist with :kind `root' or `argument' plus :start, :end, and
+command-specific fields.  Argument contexts include :args and :arg-index for the
+completed arguments before point."
   (catch 'context
     (let* ((slash-start (mevedel-skills--slash-command-start input-start))
            (line-end (line-end-position)))
@@ -3793,21 +3911,22 @@ The return value is a plist with :kind `root' or `argument' plus
                    (args-start (save-excursion
                                  (goto-char name-end)
                                  (skip-chars-forward " \t" line-end)
-                                 (point)))
-                   (before-point
-                    (buffer-substring-no-properties args-start (point))))
-              (when (and (<= args-start (point))
-                         (string-match-p "\\`[ \t]*[^ \t\n]*\\'"
-                                         before-point))
-                (throw 'context
-                       (list :kind 'argument
-                             :name name
-                             :start (+ args-start
-                                       (if (string-match "\\`[ \t]*"
-                                                         before-point)
-                                           (match-end 0)
-                                         0))
-                             :end (point)))))))))))
+                                 (point))))
+              (when (<= args-start (point))
+                (let* ((arg-start (save-excursion
+                                    (skip-chars-backward "^ \t\n" args-start)
+                                    (point)))
+                       (args-before
+                        (split-string
+                         (buffer-substring-no-properties args-start arg-start)
+                         "[ \t]+" t)))
+                  (throw 'context
+                         (list :kind 'argument
+                               :name name
+                               :args args-before
+                               :arg-index (length args-before)
+                               :start arg-start
+                               :end (point))))))))))))
 
 (defun mevedel-skills--slash-capf
     (buffer session local-commands &optional input-start)
@@ -3834,26 +3953,29 @@ the first view-composer line when called from the view buffer."
                #'mevedel-skills--slash-root-exit-function))
         ('argument
          (let* ((name (plist-get context :name))
+                (args (plist-get context :args))
+                (arg-index (plist-get context :arg-index))
                 (candidates
                  (and (assoc name local-commands)
                       (mevedel-skills--slash-command-argument-candidates
-                       name))))
+                       name args arg-index))))
            (when candidates
              (list (plist-get context :start)
                    (plist-get context :end)
-                   (mevedel-skills--slash-command-argument-table name)
+                   (mevedel-skills--slash-command-argument-table
+                    name args arg-index)
                    :exclusive 'no
                    :annotation-function
                    (lambda (candidate)
                      (mevedel-skills--slash-command-argument-annotation
-                      name candidate))))))))))
+                      name candidate args arg-index))))))))))
 
 (defun mevedel-slash-capf ()
   "Completion-at-point for slash commands, skills, and command options.
 
 Root completion is active at the line-start `/name' position, after an
 optional gptel prompt prefix.  Command option completion is active for
-commands that declare finite first-argument choices."
+commands that declare finite argument choices."
   (when (bound-and-true-p mevedel--session)
     (mevedel-skills--slash-capf
      (current-buffer) mevedel--session mevedel-slash-commands)))

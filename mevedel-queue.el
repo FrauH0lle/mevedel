@@ -166,7 +166,7 @@ that joined the queue while the head is already visible."
         (mevedel-queue--render-head spec session)))))
 
 (defun mevedel-queue--pop (spec entry outcome)
-  "Settle queue head ENTRY with OUTCOME and render the next head."
+  "Settle SPEC queue head ENTRY with OUTCOME and render the next head."
   (let* ((session (plist-get entry :session))
          (queue (and session (mevedel-queue--get spec session)))
          (head (car queue)))
@@ -206,7 +206,7 @@ that joined the queue while the head is already visible."
 
 (defun mevedel-queue--sweep-origin
     (spec origin outcome &optional session no-render)
-  "Settle queued entries whose origin equals ORIGIN with OUTCOME.
+  "Settle SPEC entries whose origin equals ORIGIN with OUTCOME in SESSION.
 When NO-RENDER is non-nil, leave the next head unrendered."
   (let* ((session (or session (mevedel-queue--current-session)))
          (queue (and session (mevedel-queue--get spec session)))

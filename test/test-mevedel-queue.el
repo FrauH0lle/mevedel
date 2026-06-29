@@ -17,7 +17,7 @@
 (require 'mevedel-queue)
 
 (defun test-mevedel-queue--session ()
-  "Return a minimal session for queue tests."
+  "Return a minimal queue-test session."
   (mevedel-session--create
    :name "test"
    :workspace nil
@@ -40,8 +40,8 @@ signal after recording."
              (setcar outcomes-cell
                      (cons (cons (plist-get entry :id) outcome)
                            (car outcomes-cell)))
-             (when (eq outcome error-on)
-               (error "settle failed")))
+	             (when (eq outcome error-on)
+	               (error "Settle failed")))
    :entry-origin (lambda (entry) (plist-get entry :origin))))
 
 (mevedel-deftest mevedel-queue--enqueue

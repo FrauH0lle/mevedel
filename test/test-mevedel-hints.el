@@ -8,7 +8,9 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-tutor)
 (require 'helpers
-         (file-name-concat (file-name-directory (or load-file-name buffer-file-name))
+         (file-name-concat (file-name-directory (or buffer-file-name
+                                                    load-file-name
+                                                    byte-compile-current-file))
                            "helpers.el"))
 
 
@@ -16,7 +18,7 @@
 ;;; Test helpers
 
 (defun mevedel-test--hints-setup ()
-  "Set up test environment for hints tests."
+  "Set up the hints test environment."
   ;; Set up a temporary workspace with a git repo so project-current works
   (let ((dir (mevedel-test-make-temp-dir)))
     (let ((default-directory dir))

@@ -15,8 +15,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry))
 
 (require 'mevedel-structs)
@@ -132,7 +133,7 @@ payload was capped.  Set to nil to disable truncation."
 
 Creates `mevedel-tools--ctx-deferred-SLOT' that reads from either a
 `mevedel-session' or a `mevedel-agent-invocation', plus a `setf'
-expander that writes to the correct underlying cl-defstruct slot."
+expander that writes to the correct underlying `cl-defstruct' slot."
   (let* ((getter (intern (format "mevedel-tools--ctx-deferred-%s" slot)))
          (session-acc (intern (format "mevedel-session-deferred-%s" slot)))
          (inv-acc (intern (format "mevedel-agent-invocation-deferred-%s" slot))))
@@ -240,7 +241,7 @@ call.  Nil outside tool dispatch.")
        (equal name gptel--ersatz-json-tool)))
 
 (defun mevedel-tools--deferred-entry-name-p (name entries)
-  "Return non-nil when ENTRIES contains a deferred tool named NAME."
+  "Return non-nil when a deferred tool named NAME is in ENTRIES."
   (cl-some (lambda (entry)
              (equal name (cadr (car entry))))
            entries))
@@ -281,7 +282,7 @@ call.  Nil outside tool dispatch.")
          (not (mevedel-tools--ersatz-json-tool-p name)))))
 
 (defun mevedel-tools--settle-unknown-tool-calls (fsm)
-  "Convert unresolved unknown tool calls in FSM into tool-result errors."
+  "Convert unresolved unknown tool-use entries in FSM into errors."
   (when-let* ((info (gptel-fsm-info fsm)))
     (let ((ctx (mevedel-tools--deferred-context-for fsm))
           (tools (plist-get info :tools)))
@@ -370,12 +371,11 @@ tests or tool dispatch paths already inside an agent buffer)."
   "Manage deferred tool lifecycle in FSM's request payload.
 
 Runs as a WAIT state handler, before `gptel--handle-wait' fires the
-HTTP request.  Operates on whichever deferred context owns FSM
-(session or agent invocation), reading and mutating its deferred
-state slots:
+HTTP request.  Operates on the session or agent invocation that owns
+FSM, reading and mutating its deferred state slots:
 
   - `deferred-set'       alist (PATH . DESC) of discoverable tools
-  - `deferred-pending'   gptel-tools queued by ToolSearch(load=t)
+  - `deferred-pending'   `gptel-tools' queued by ToolSearch(load=t)
   - `deferred-injected'  alist of tool-name -> remaining TTL counter
   - `deferred-used'      tool-names invoked since the last turn
   - `deferred-expired'   tool-names evicted this turn (for reminder)
@@ -729,7 +729,7 @@ asynchronously on the recipient's next FSM turn via
     (and (buffer-live-p buf) buf)))
 
 (defun mevedel-tools--agent-result-delivered-p (agent-id buffer)
-  "Return non-nil when BUFFER already contains AGENT-ID's result block."
+  "Return non-nil when AGENT-ID's result block is already in BUFFER."
   (when (and (stringp agent-id)
              (not (string-empty-p agent-id))
              (buffer-live-p buffer))
@@ -745,7 +745,7 @@ asynchronously on the recipient's next FSM turn via
            nil t))))))
 
 (defun mevedel-tools--filter-duplicate-agent-results (messages ctx fsm)
-  "Return MESSAGES without already-delivered `<agent-result>' blocks."
+  "Return MESSAGES for CTX and FSM without delivered agent results."
   (if-let* ((buffer (mevedel-tools--ctx-transcript-buffer ctx fsm)))
       (let (seen)
         (cl-remove-if
@@ -767,7 +767,7 @@ asynchronously on the recipient's next FSM turn via
     messages))
 
 (defun mevedel-tools--insert-session-injected-prompt (session fsm block)
-  "Insert injected mailbox BLOCK into SESSION's main data buffer.
+  "Insert injected mailbox BLOCK for SESSION and FSM into the data buffer.
 
 `gptel--inject-prompt' mutates the realized request payload, but
 does not write that synthetic user-role message back to the data

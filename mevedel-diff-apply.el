@@ -360,12 +360,11 @@ current line if none above."
 (defun mevedel-diff-apply-buffer ()
   "Apply diff using delete-and-recreate approach for overlay preservation.
 
-This variant of `diff-apply-buffer' tries to
- - correctly adjus overlays in modified buffers
- - creates/removes files if required
+Compared to `diff-apply-buffer', this variant adjusts overlays in
+modified buffers and creates or removes files when required.
 
 This version first trims common prefixes/suffixes from each hunk to find
-the minimal change region. It then calculates overlay adjustments based
+the minimal change region.  It then calculates overlay adjustments based
 on this precise region, applies the change, and deletes and re-creates
 the overlays."
   (interactive)

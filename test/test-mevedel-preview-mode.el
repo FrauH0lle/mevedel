@@ -299,7 +299,7 @@ cleanup."
                 (current-buffer)
                 `((mevedel--real-path . "/tmp/fake.txt")
                   (mevedel--final-callback . ,(lambda (r) (setq result r)))
-                  (mevedel--apply-fn . ,(lambda () (error "boom")))))))
+	                  (mevedel--apply-fn . ,(lambda () (signal 'error '("boom"))))))))
       (mevedel-preview-mode--register ov)
       (mevedel-preview-mode--approve-overlay ov)
       (should (stringp result))
@@ -551,7 +551,7 @@ cleanup."
 ;;; Auto-apply
 
 (defun mevedel-preview-test--make-auto-apply-buffer (path)
-  "Create a chat-like buffer with the minimal state `--auto-apply' needs."
+  "Create a chat-like buffer with PATH and minimal `--auto-apply' state."
   (let ((buf (generate-new-buffer " *preview-test-auto*")))
     (with-current-buffer buf
       (setq-local mevedel--workspace
@@ -605,7 +605,7 @@ cleanup."
             (mevedel-preview-mode--auto-apply
              tmp real
              (lambda (r) (setq result r))
-             (lambda () (error "boom"))
+             (lambda () (signal 'error '("boom")))
              "Write"))
           (should (stringp result))
           (should (string-match-p "Error auto-applying" result))

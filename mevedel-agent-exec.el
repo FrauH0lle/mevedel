@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Mevedel-owned sub-agent runtime. Extracted from `gptel-agent-tools' so
+;; Mevedel-owned sub-agent runtime.  Extracted from `gptel-agent-tools' so
 ;; mevedel controls the surface where private coupling used to concentrate: the
 ;; task dispatch function, the sub-agent FSM handler table, and the agent
 ;; registry.
@@ -816,10 +816,10 @@ dying buffer, otherwise `gptel-abort' would print a spurious
 (defun mevedel-agent-exec--save-transcript-buffer (invocation)
   "Save INVOCATION's agent buffer to its transcript file (best-effort).
 
-Returns nil and skips when the buffer is dead, has no variable
+Return nil and skip when the buffer is dead, has no variable
 `buffer-file-name', or when its variable `buffer-file-name' no longer
-matches the recorded transcript path (e.g. user renamed via
-`set-visited-file-name'). Otherwise calls `basic-save-buffer' silently
+matches the recorded transcript path, for example when the user renamed it via
+`set-visited-file-name').  Otherwise calls `basic-save-buffer' silently
 so no interactive prompt can fire from inside an FSM handler and routine
 transcript autosaves do not flood `*Messages*'; `before-save-hook' still
 drives `gptel-org--save-state' for `GPTEL_BOUNDS' round-tripping.
@@ -903,7 +903,7 @@ After insertion, triggers a transcript save so the injection is durable
 before the WAIT handler fires the HTTP request.
 
 Best-effort: failure to write to the buffer is logged and ignored so it
-cannot abort the WAIT cycle. The LLM payload is authoritative regardless
+cannot abort the WAIT cycle.  The LLM payload is authoritative regardless
 of buffer state."
   (when (and (mevedel-agent-invocation-p invocation)
              (stringp block)
@@ -944,7 +944,7 @@ of buffer state."
 (defun mevedel-agent-exec--finalize (invocation status)
   "Mark INVOCATION's transcript STATUS terminal and save once more.
 
-STATUS is one of `completed', `error', `aborted'. Idempotent: if the
+STATUS is one of `completed', `error', `aborted'.  Idempotent: if the
 invocation already has a terminal status, returns immediately.
 
 Patches the parent's `<!-- mevedel-render-data -->' block so the view
@@ -1051,7 +1051,7 @@ Reads `gptel-fsm-info' and delegates to
 
 (defun mevedel-agent-exec--plain-error-response
     (agent-type description error-details)
-  "Return the legacy model-visible error response body."
+  "Return the legacy model-visible error for AGENT-TYPE DESCRIPTION ERROR-DETAILS."
   (format "Error: Task %s could not finish task \"%s\".
 
 Error details: %S"
@@ -1059,10 +1059,11 @@ Error details: %S"
 
 (defun mevedel-agent-exec--agent-error-response
     (agent-type description error-details info &optional fallback-partial)
-  "Return a model-visible error response for an agent failure.
+  "Return agent failure text for AGENT-TYPE DESCRIPTION ERROR-DETAILS.
+
 When the UI helper is loaded and INFO carries a live invocation, include
 transcript or partial-response recovery details.  Otherwise keep the
-legacy plain error response."
+legacy plain error response.  FALLBACK-PARTIAL is forwarded when present."
   (let ((inv (mevedel-agent-exec--invocation-from-info info)))
     (if (and (mevedel-agent-invocation-p inv)
              (fboundp 'mevedel-tools--agent-error-response))
@@ -1077,7 +1078,7 @@ legacy plain error response."
   "Tool-preview renderer for the Agent tool.
 
 Called by gptel during tool preview for each Agent call to format the
-call's (TYPE DESCRIPTION PROMPT) argument list inline. ARG-VALUES is the
+call's (TYPE DESCRIPTION PROMPT) argument list inline.  ARG-VALUES is the
 positional argument list; the second plist is the tool call info, unused
 here.
 
@@ -1122,7 +1123,7 @@ sub-agent-runtime extraction scope and replacing it earns little."
   "Schedule an agent-buffer save for FSM after tool-result handling.
 
 Long tool loops can run many WAIT/TOOL/TRET cycles between two DONE
-events. Saving through a debounce keeps recent output durable without
+events.  Saving through a debounce keeps recent output durable without
 running Org save machinery synchronously on every tool boundary."
   (when-let* ((inv (mevedel-agent-exec--invocation-from-fsm fsm)))
     (mevedel-agent-exec--schedule-transcript-save inv)))
@@ -1230,7 +1231,7 @@ Additions:
   "Return non-nil when AGENT-TYPE should be forced to use a tool first.
 
 Coordinator INVOCATIONs are only useful when they actually create tasks
-and/or dispatch workers. On the first turn, force tool use so a
+and/or dispatch workers.  On the first turn, force tool use so a
 text-only \"I'll do it\" response cannot terminate the foreground skill
 dispatch."
   (and (equal agent-type "coordinator")
@@ -1600,12 +1601,12 @@ Returns the spawned FSM."
 
 GPTEL-CB is gptel's stock insertion callback captured from the FSM's
 `:callback' info slot (typically `gptel--insert-response' or
-`gptel-curl--stream-insert-response'). MEVEDEL-CB is the bookkeeping
+`gptel-curl--stream-insert-response').  MEVEDEL-CB is the bookkeeping
 callback returned by `mevedel-agent-exec--make-callback'.
 
 For each event delivered by gptel:
 
-- terminal events (response is t, nil, or `abort'): run MEVEDEL-CB only. These
+- terminal events (response is t, nil, or `abort'): run MEVEDEL-CB only.  These
   produce no buffer insertion; gptel's stock callback would be a no-op insert
   path.
 - insertable events (string chunks, `(tool-call . ...)`, `(tool-result . ...)`,

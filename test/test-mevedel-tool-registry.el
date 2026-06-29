@@ -104,7 +104,7 @@
                                                  :groups '(edit)))
     (let ((read-tools (mevedel-tool-for-groups '(read))))
       (should (= 2 (length read-tools)))
-      (should (cl-every (lambda (t) (memq 'read (mevedel-tool-groups t)))
+      (should (cl-every (lambda (tool) (memq 'read (mevedel-tool-groups tool)))
                         read-tools))))
 
   :doc "returns empty for unknown group"

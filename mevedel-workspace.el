@@ -80,11 +80,11 @@ To add a new workspace type, add an entry to this alist and update
 Format: ((WORKSPACE-ROOT . (DIR1 DIR2 ...)) ...)
 
 For each workspace, the listed directories will be added to the allowed
-roots for LLM access. This allows granting access to directories outside
+roots for LLM access.  This allows granting access to directories outside
 the primary workspace root on a per-workspace basis.
 
 When set buffer-locally in a chat buffer, grants persist only for that
-session. When set globally, grants persist across all sessions."
+session.  When set globally, grants persist across all sessions."
   :type '(alist :key-type directory :value-type (repeat directory))
   :group 'mevedel)
 
@@ -96,7 +96,7 @@ session. When set globally, grants persist across all sessions."
   "Cached `mevedel-workspace' struct for this buffer.
 
 In chat buffers, this is set during buffer creation (before the session
-is created) and serves as a temporary cache. Once `mevedel--session' is
+is created) and serves as a temporary cache.  Once `mevedel--session' is
 set, workspace access goes through the session instead.
 
 In non-session buffers (patch, diff-preview), this holds the workspace
@@ -151,7 +151,7 @@ Returns (file . FILENAME) if the buffer is visiting a file, nil otherwise."
 
 In chat buffers with an active session, returns the session's workspace.
 When `mevedel--workspace' is set (e.g., during buffer setup before the
-session exists), returns that cached value. Otherwise, auto-detects via
+session exists), returns that cached value.  Otherwise, auto-detects via
 `mevedel-workspace-functions' and returns a struct from the global
 registry, creating one lazily if needed."
   (with-current-buffer (or buffer (current-buffer))

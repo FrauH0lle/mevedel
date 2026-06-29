@@ -78,7 +78,7 @@ the upstream no-permission behaviour."
     0))
 
 (defun mevedel-tool-introspect--render-transform (name args result)
-  "Return bounded render metadata for wrapped introspection RESULT."
+  "Return bounded render metadata for introspection NAME, ARGS, and RESULT."
   (list :kind 'introspection
         :tool name
         :target (mevedel-tool-introspect--primary-value args)
@@ -87,7 +87,7 @@ the upstream no-permission behaviour."
         :chars (length result)))
 
 (defun mevedel-tool-introspect--render (name args result render-data)
-  "Rendering plist for wrapped introspection tools."
+  "Return rendering plist for NAME using ARGS, RESULT, and RENDER-DATA."
   (when (stringp result)
     (let* ((target (or (plist-get render-data :target)
                        (mevedel-tool-introspect--primary-value args)))
@@ -116,7 +116,7 @@ the upstream no-permission behaviour."
 
 ;;;###autoload
 (defun mevedel-tool-introspect--register ()
-  "Wrap the 16 gptel-agent introspection tools for mevedel.
+  "Wrap the 16 `gptel-agent' introspection tools for mevedel.
 
 Idempotent: any existing `mevedel-introspection' entries are purged
 before wrapping, so repeat calls (e.g. during tests or reloads) are

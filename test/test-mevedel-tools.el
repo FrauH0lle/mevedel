@@ -28,12 +28,14 @@
                byte-compile-current-file))
           "helpers"))
 
+(declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
+
 
 ;;
 ;;; Helpers
 
 (defun mevedel-tools-test--make-session ()
-  "Create a fresh session for tests."
+  "Create a fresh tools-test session."
   (let ((ws (mevedel-workspace-get-or-create
              'project "/tmp/mt/" "/tmp/mt/" "mt")))
     (mevedel-session-create "main" ws)))
@@ -1180,7 +1182,6 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   :doc "background mode calls main-cb immediately with launch status"
   (let* ((session (mevedel-tools-test--make-session))
          (buf (generate-new-buffer " *mt-bg*"))
-         (captured-cb nil)
          (result nil))
     (unwind-protect
         (with-current-buffer buf
@@ -1193,8 +1194,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
                      ((symbol-function 'mevedel-agent-exec--run)
-                      (lambda (cb _type _desc _prompt &rest _)
-                        (setq captured-cb cb)
+                      (lambda (_cb _type _desc _prompt &rest _)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
               (mevedel-tools--task-by-name
@@ -1211,7 +1211,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                     ((stringp result) result)
                     ((and (listp result) (plist-get result :result))
                      (plist-get result :result))
-                    (t (error "unexpected main-cb shape: %S" result)))))
+	                    (t (error "Unexpected main-cb shape: %S" result)))))
               (should (stringp launch-string))
               (should (string-match-p "background" launch-string))
               (should (string-match-p "explorer" launch-string)))
@@ -1419,10 +1419,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
         (with-current-buffer buf
           (setq-local mevedel--session session)
           (setq-local mevedel-tools--agents-fsm nil)
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
-                     (lambda (&rest _)
-                       (setq runner-called t)
-                       (error "runner must not be called for unknown agent"))))
+	          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+	                     (lambda (&rest _)
+	                       (setq runner-called t)
+	                       (error "Runner must not be called for unknown agent"))))
             (mevedel-tools--task-by-name
              (lambda (resp &rest _) (setq result resp))
              "no-such-agent-type" "oops" "do nothing")
@@ -1442,9 +1442,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
         (with-current-buffer buf
           (setq-local mevedel--session session)
           (setq-local mevedel-tools--agents-fsm nil)
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
-                     (lambda (&rest _)
-                       (error "boom"))))
+	          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+	                     (lambda (&rest _)
+	                       (error "Boom"))))
             (let ((mevedel-tools--current-fsm nil))
               (should-error
                (mevedel-tools--task-by-name
@@ -1577,8 +1577,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
   :doc "background spawn tracks agent on parent context"
   (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-bwait-track*"))
-         (captured-cb nil))
+         (buf (generate-new-buffer " *mt-bwait-track*")))
     (unwind-protect
         (with-current-buffer buf
           (setq-local mevedel--session session)
@@ -1588,8 +1587,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
                      ((symbol-function 'mevedel-agent-exec--run)
-                      (lambda (cb _type _desc _prompt &rest _)
-                        (setq captured-cb cb)
+                      (lambda (_cb _type _desc _prompt &rest _)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
               (mevedel-tools--task-by-name
@@ -2449,10 +2447,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                          'timer))
                       ((symbol-function 'float-time)
                        (lambda (&optional _time) clock))
-                      ((symbol-function 'mevedel-tools-stop-agent)
-                       (lambda (&rest args)
-                         (setq stopped args)
-                         (error "simulated stop failure"))))
+	                      ((symbol-function 'mevedel-tools-stop-agent)
+	                       (lambda (&rest args)
+	                         (setq stopped args)
+	                         (error "Simulated stop failure"))))
               (mevedel-tools--bwait-watchdog-expire parent)
               (setq clock 110.0)
               (mevedel-tools--bwait-watchdog-expire parent))
@@ -2577,10 +2575,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             ;; Break push-message so the bg callback's push branch raises;
             ;; remove-background-agent MUST still run so the parent isn't
             ;; stranded in BWAIT.
-            (cl-letf (((symbol-function 'mevedel-tools--ctx-push-message)
-                       (lambda (&rest _)
-                         (cl-incf push-called)
-                         (error "simulated push failure")))
+	            (cl-letf (((symbol-function 'mevedel-tools--ctx-push-message)
+	                       (lambda (&rest _)
+	                         (cl-incf push-called)
+	                         (error "Simulated push failure")))
                       ((symbol-function 'mevedel-tools--ctx-remove-background-agent)
                        (lambda (_ctx _id)
                          (cl-incf remove-called))))

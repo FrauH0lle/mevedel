@@ -7,8 +7,9 @@
 
 ;;; Code:
 
+(require 'cl-lib)
+
 (eval-when-compile
-  (require 'cl-lib)
   (require 'gptel-request)
   (require 'mevedel-tool-registry)
   (require 'mevedel-agents)
@@ -124,6 +125,8 @@
 (declare-function mevedel-session-persistence--update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
+(declare-function mevedel-request-push-canceller
+                  "mevedel-structs" (request canceller))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-open-agent-transcript
@@ -260,7 +263,7 @@ safest default."
 
 (defun mevedel-tools--request-access--log
     (event root reason &optional buffer &rest props)
-  "Persist RequestAccess diagnostic EVENT for ROOT and REASON."
+  "Persist RequestAccess EVENT for ROOT, REASON, BUFFER, and PROPS."
   (when-let* ((session (mevedel-permission-log-current-session buffer)))
     (apply #'mevedel-permission-log
            session event
@@ -657,11 +660,11 @@ C-c C-k deny  f feedback"
     ov))
 
 (defun mevedel--prompt-user-for-access (root reason callback)
-  "Display the directory-access prompt; deliver UI outcome to CALLBACK.
+  "Display access prompt for ROOT and REASON; deliver outcome to CALLBACK.
 
-CALLBACK receives the bare overlay outcome (`approve' / `deny' /
-(feedback . TEXT) / `aborted').  The caller is responsible for
-mapping that to its tool-result string and any rule storage.
+CALLBACK receives the bare overlay outcome: `approve', `deny', a
+feedback cons, or `aborted'.  The caller is responsible for mapping that
+to its tool-result string and any rule storage.
 
 Used by `mevedel-tools--request-access' to drive the dedup wrapper --
 non-grant outcomes (deny, feedback, abort) all collapse to \"not
@@ -716,10 +719,11 @@ Anything else collapses to a plain denial string."
 
 CALLBACK is the tool's async callback; receives a tool-result string.
 DIRECTORY is the path to grant access to; REASON explains why.
-Routes the user's choice through `mevedel-tools--request-access'
-(dedup) and `mevedel--prompt-user-for-access' (overlay).  Feedback
-denials carry the user's text into the LLM-visible result; canceller
-teardown produces `\"Error: aborted\"' so a parked sub-agent FSM can
+Routes the user's choice through the dedup wrapper
+`mevedel-tools--request-access' and overlay prompt
+`mevedel--prompt-user-for-access'.  Feedback denials carry the user's
+text into the LLM-visible result; canceller teardown produces
+`\"Error: aborted\"' so a parked sub-agent FSM can
 advance out of TOOL."
   (mevedel-tools--validate-params callback mevedel--tools-request-dir-access
     (directory stringp)
@@ -996,7 +1000,7 @@ not be lost."
     (remhash agent-id mevedel-tools--background-watchdogs)))
 
 (defun mevedel-tools--background-watchdog-arm-live (ctx parent-buffer)
-  "Arm no-progress records for live background agents in CTX.
+  "Arm no-progress records for live background agents in CTX PARENT-BUFFER.
 Return a list of grace intervals that should be considered when
 scheduling the next BWAIT watchdog tick."
   (let (remaining)
@@ -1033,7 +1037,7 @@ scheduling the next BWAIT watchdog tick."
 
 (defun mevedel-tools--background-watchdog-assess
     (agent-id invocation parent-buffer)
-  "Assess live background AGENT-ID and return a watchdog decision plist."
+  "Assess AGENT-ID INVOCATION in PARENT-BUFFER and return a decision plist."
   (cond
    ((not (mevedel-tools--agent-no-progress-enabled-p))
     (list :state 'disabled))
@@ -1251,7 +1255,7 @@ shared injected copy instead of paying a fresh `copy-tree' each time."
     text))
 
 (defun mevedel-tools--agent-result-format (agent-id agent-type description body)
-  "Return a `<agent-result ...>...</agent-result>' block.
+  "Return an AGENT-ID result block for AGENT-TYPE, DESCRIPTION, and BODY.
 
 `agent-id', `type', and `description' attributes are XML-escaped so
 LLM-supplied descriptions containing quote characters cannot break
@@ -1286,7 +1290,7 @@ transcript entries."
    (and ctx (mevedel-tools--ctx-messages ctx))))
 
 (defun mevedel-tools--buffer-has-agent-result-p (buffer agent-id)
-  "Return non-nil if BUFFER already contains an `<agent-result>' for AGENT-ID."
+  "Return non-nil if BUFFER already has an agent result for AGENT-ID."
   (when (and (buffer-live-p buffer) (stringp agent-id))
     (with-current-buffer buffer
       (save-excursion
@@ -1349,7 +1353,9 @@ transcript entries."
 (defun mevedel-tools--queue-background-status-reminder
     (ctx agent-id agent-type description status &optional transcript response
          reason)
-  "Queue a model-visible background-agent status reminder on CTX."
+  "Queue CTX status reminder for AGENT-ID, AGENT-TYPE, and DESCRIPTION.
+STATUS is the new state.  TRANSCRIPT, RESPONSE, and REASON add detail
+when available."
   (when (mevedel-session-p ctx)
     (let ((summary (mevedel-tools--background-response-summary response)))
       (mevedel-session-enqueue-pending-reminder
@@ -1401,7 +1407,7 @@ Returns the parsed verdict symbol, or nil."
 
 (defun mevedel-tools--intentional-stop-abort-response-p
     (invocation response)
-  "Return non-nil when RESPONSE is superseded by StopAgent output."
+  "Return non-nil when INVOCATION RESPONSE is superseded by StopAgent output."
   (and (mevedel-agent-invocation-terminal-reason invocation)
        (eq (mevedel-agent-invocation-transcript-status invocation) 'aborted)
        (or (not (stringp response))
@@ -1615,7 +1621,7 @@ not deliver duplicate `<agent-result>' blocks."
                    (plist-get record :activity-time)))))
 
 (defun mevedel-tools--agent-progress-observed-at (snapshot record now)
-  "Return the best progress timestamp for SNAPSHOT versus RECORD."
+  "Return best progress timestamp for SNAPSHOT, RECORD, and NOW."
   (let ((current-activity (plist-get snapshot :activity-time))
         (last-activity (plist-get record :activity-time)))
     (if (and (numberp current-activity)
@@ -1626,7 +1632,7 @@ not deliver duplicate `<agent-result>' blocks."
 
 (defun mevedel-tools--agent-watchdog-record
     (invocation parent-buffer &optional now extra)
-  "Return a fresh no-progress watchdog record for INVOCATION."
+  "Return watchdog record for INVOCATION, PARENT-BUFFER, NOW, and EXTRA."
   (append (list :invocation invocation
                 :parent-buffer parent-buffer
                 :last-progress-at (or now (float-time)))
@@ -1647,7 +1653,7 @@ not deliver duplicate `<agent-result>' blocks."
     updated))
 
 (defun mevedel-tools--agent-no-progress-assess (record &optional now)
-  "Assess RECORD and return a no-progress watchdog decision plist."
+  "Assess RECORD at NOW and return a no-progress watchdog decision plist."
   (let* ((now (or now (float-time)))
          (invocation (plist-get record :invocation))
          (snapshot (mevedel-tools--agent-progress-snapshot invocation))
@@ -1725,7 +1731,7 @@ not deliver duplicate `<agent-result>' blocks."
 
 (defun mevedel-tools--foreground-watchdog-schedule
     (agent-id record &optional delay)
-  "Schedule foreground watchdog for AGENT-ID with RECORD."
+  "Schedule foreground watchdog for AGENT-ID with RECORD and DELAY."
   (when (mevedel-tools--foreground-watchdog-enabled-p)
     (when-let* ((delay (mevedel-tools--watchdog-delay delay)))
       (let ((timer (run-at-time
@@ -1750,7 +1756,8 @@ not deliver duplicate `<agent-result>' blocks."
 
 (defun mevedel-tools--foreground-watchdog-record
     (invocation agent-id state reason decision)
-  "Persist and log a foreground watchdog observation for INVOCATION."
+  "Persist watchdog observation for INVOCATION, AGENT-ID, STATE, and REASON.
+DECISION is the assessment plist."
   (let* ((session (and (mevedel-agent-invocation-p invocation)
                        (mevedel-agent-invocation-parent-session invocation)))
          (parent-buffer
@@ -1993,7 +2000,8 @@ callback scaffolding."
 
 (defun mevedel-tools--stranded-agent-result-body
     (agent-id agent-type description transcript partial)
-  "Return the model-visible body for a stranded background agent."
+  "Return stranded result for AGENT-ID, AGENT-TYPE, DESCRIPTION, and TRANSCRIPT.
+PARTIAL is included when no transcript is available."
   (concat
    (format "Error: Background agent %s became stranded before it could report a final result.
 
@@ -2102,8 +2110,9 @@ could be recovered from the live agent buffer."))))
 (defun mevedel-tools--agent-error-response
     (agent-id agent-type description error-details invocation
               &optional fallback-partial)
-  "Return the model-visible result body for an errored agent.
+  "Return errored result body for AGENT-ID, AGENT-TYPE, and DESCRIPTION.
 ERROR-DETAILS is formatted with `%S' to preserve provider/parser detail.
+INVOCATION supplies recovery metadata.
 FALLBACK-PARTIAL is used only when no safe transcript or transcript-buffer
 assistant response can be recovered."
   (concat
@@ -2116,7 +2125,8 @@ Agent id: %s"
 
 (defun mevedel-tools--stop-agent-response (agent-id agent-type description
                                                    reason invocation)
-  "Return the model-visible result body for a stopped agent."
+  "Return stopped result for AGENT-ID, AGENT-TYPE, DESCRIPTION, and REASON.
+INVOCATION supplies recovery metadata."
   (concat
    (format "Error: Task %s was stopped before it could finish task \"%s\".
 
@@ -2214,7 +2224,7 @@ defaults to the data buffer reachable from the current buffer."
             (if completed-tool " Parent Agent tool completed." ""))))
 
 (defun mevedel-stop-agent (agent-id &optional reason)
-  "Interactively stop a running sub-agent in the current session."
+  "Interactively stop AGENT-ID in the current session with REASON."
   (interactive
    (let* ((buf (or (mevedel--prompt--data-buffer)
                    (user-error "No mevedel data buffer here")))
@@ -2323,11 +2333,12 @@ MAIN-CB when AGENT-TYPE is not registered."
              skill-model-override skill-effort-override
              skill-hook-rules
              on-invocation)
-  "Internal worker for `mevedel-tools--task'.
+  "Internal worker for MAIN-CB, AGENT-TYPE, DESCRIPTION, and PROMPT.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
-verified it is non-nil.  Other arguments match
-`mevedel-tools--task'.
+verified it is non-nil.  BACKGROUND, MODEL-TIER, SKILL-PERMISSION-RULES,
+SKILL-MODEL-OVERRIDE, SKILL-EFFORT-OVERRIDE, SKILL-HOOK-RULES, and
+ON-INVOCATION match `mevedel-tools--task'.
 
 Dispatch order:
 
@@ -2338,7 +2349,7 @@ Dispatch order:
     4.  Allocate the agent buffer.
     5.  Configure parent-context bindings (done by allocator).
     6.  Shallow-materialize parent session (mid-turn safe).
-    7-9.  Compute path with collision avoidance, set
+    7-9.  Compute path with collision avoidance, set variable
           `buffer-file-name', insert prompt.
     10.  Save initial buffer.
     11.  Add `running' entry to session slot.
@@ -2586,7 +2597,7 @@ Use SendMessage(to=\"%s\", ...) to send this agent guidance."
 (defun mevedel-tools--task--abandon-persistence (invocation)
   "Drop persistence state for INVOCATION after a fatal save failure.
 
-Clears the transcript buffer's `buffer-file-name', removes the
+Clears the transcript buffer's variable `buffer-file-name', removes the
 running entry from the parent session's `agent-transcripts' slot,
 and unsets `transcript-relative-path' on the invocation.  The
 agent buffer keeps running ephemerally (no on-disk transcript)."
@@ -2616,7 +2627,7 @@ agent buffer keeps running ephemerally (no on-disk transcript)."
                               (mevedel-session-agent-transcripts session))))))
 
 (defun mevedel-tools--task--mark-start-blocked (invocation reason)
-  "Mark INVOCATION as terminal when it is blocked before request start."
+  "Mark INVOCATION as terminal for REASON before request start."
   (when (mevedel-agent-invocation-p invocation)
     (setf (mevedel-agent-invocation-transcript-status invocation) 'error)
     (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
@@ -2636,7 +2647,7 @@ the parent session, transcript path computation with collision
 avoidance, `set-visited-file-name', and a session-slot `running'
 entry.  Any failure is logged and falls through to the
 no-persistence branch (the agent buffer remains usable;
-`buffer-file-name' stays nil; no sidecar entry is created)."
+variable `buffer-file-name' stays nil; no sidecar entry is created)."
   (let ((session (mevedel-agent-invocation-parent-session invocation))
         (parent-buf (mevedel-agent-invocation-parent-data-buffer invocation))
         (agent-id (mevedel-agent-invocation-agent-id invocation)))
@@ -2716,7 +2727,7 @@ no-persistence branch (the agent buffer remains usable;
          (message "mevedel: transcript persistence setup failed: %S" err))))))
 
 (defun mevedel-tools--task--wrap-foreground-response (response invocation)
-  "Return RESPONSE wrapped with render-data when transcript metadata exists.
+  "Return RESPONSE for INVOCATION wrapped with render-data when available.
 
 The render-data includes `:calls', `:elapsed', and (when
 applicable) `:reason' fields so `mevedel-tool-ui--render-agent'
@@ -3366,7 +3377,7 @@ ARGS is a plist with :to and :message."
 ;;; Renderers
 
 (defun mevedel-tool-ui--render-agent (name args result render-data)
-  "Rendering plist for the Agent tool.
+  "Return rendering plist for Agent NAME, ARGS, RESULT, and RENDER-DATA.
 Header shows the subagent type, its short task description, the
 state badge (running / done / error / aborted / incomplete),
 and -- when RENDER-DATA carries transcript metadata that passes path
@@ -3454,7 +3465,7 @@ the data buffer's major mode."
    (t 0)))
 
 (defun mevedel-tool-ui--render-ask (name args result _render-data)
-  "Rendering plist for Ask results."
+  "Return rendering plist for Ask NAME, ARGS, and RESULT."
   (when (stringp result)
     (let ((count (mevedel-tool-ui--question-count
                   (plist-get args :questions))))
@@ -3468,7 +3479,7 @@ the data buffer's major mode."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-request-access (name args result _render-data)
-  "Rendering plist for RequestAccess results."
+  "Return rendering plist for RequestAccess NAME, ARGS, and RESULT."
   (when (stringp result)
     (let* ((directory (or (plist-get args :directory) "?"))
            (status (cond
@@ -3484,7 +3495,7 @@ the data buffer's major mode."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-stop-agent (name args result _render-data)
-  "Compact rendering plist for StopAgent results."
+  "Return compact rendering plist for StopAgent NAME, ARGS, and RESULT."
   (when (stringp result)
     (let ((agent-id (or (plist-get args :agent_id) "?")))
       (list :header (format "%s: %s"
@@ -3493,7 +3504,7 @@ the data buffer's major mode."
             :expandable-p nil))))
 
 (defun mevedel-tool-ui--render-tool-search (name args result _render-data)
-  "Rendering plist for ToolSearch results."
+  "Return rendering plist for ToolSearch NAME, ARGS, and RESULT."
   (when (stringp result)
     (let* ((query (or (plist-get args :query) ""))
            (load (mevedel-tool-truthy-p (plist-get args :load)))
@@ -3510,7 +3521,7 @@ the data buffer's major mode."
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-send-message (name args result _render-data)
-  "Compact rendering plist for SendMessage results."
+  "Return compact rendering plist for SendMessage NAME, ARGS, and RESULT."
   (when (stringp result)
     (let ((to (or (plist-get args :to) "?")))
       (list :header (format "%s: %s"
@@ -3704,7 +3715,7 @@ atomically."
 
 (defun mevedel-permission--prompt-body
     (content include-always &optional suppress-allow-session)
-  "Return propertized permission prompt body for CONTENT."
+  "Return prompt body for CONTENT, INCLUDE-ALWAYS, and SUPPRESS-ALLOW-SESSION."
   (mevedel--prompt-framed-body
    (concat
     content
@@ -3733,10 +3744,10 @@ atomically."
 Shared engine for the generic permission prompt and the Bash
 prompt.  CONTENT is a propertized string forming the body
 between the upper and lower warning rules; INCLUDE-ALWAYS gates
-the \"always-allow\" key; SUPPRESS-ALLOW-SESSION hides the
-\"allow-session\" key.  CONT receives the queue-vocabulary
-outcome (`allow-once' / `allow-session' / `always-allow' /
-`deny-once' / `deny-session' / `aborted')."
+the \"always-allow\" key; COUNT and ENTRY carry queue metadata;
+SUPPRESS-ALLOW-SESSION hides the \"allow-session\" key.  CONT receives
+the queue-vocabulary outcome (`allow-once' / `allow-session' /
+`always-allow' / `deny-once' / `deny-session' / `aborted')."
   (let* ((source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)
@@ -3806,11 +3817,12 @@ consistent across handle / mailbox / plan / permission elements."
 
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
-  "Permission prompt with optional ORIGIN attribution header.
+  "Display permission prompt for TOOL-NAME, PATH, and INCLUDE-ALWAYS.
 Permission prompts originated by sub-agents carry a
 `from <type>--<idshort>' fragment so the user can see which agent
 is asking.  When ORIGIN is nil or \"main\", the attribution line
-is suppressed."
+is suppressed.  CONT receives the outcome.  COUNT and ENTRY carry queue
+metadata."
   (let ((content (concat
                   (propertize "Permission Request\n"
                               'font-lock-face '(:inherit bold :inherit warning))
@@ -3894,7 +3906,8 @@ the user).  Dangerous prompts suppress session/permanent allow
 choices.  INCLUDE-ALWAYS gates the always-allow key for
 non-dangerous prompts the same way as the generic prompt.  ORIGIN
 is the canonical agent-id that issued the request; renders the
-attribution line when non-nil and not \"main\".  CONT receives the
+attribution line when non-nil and not \"main\".  COUNT and ENTRY carry
+queue metadata.  CONT receives the
 queue-vocabulary outcome.
 
 Routes Bash through the same prompt machinery as generic
@@ -3965,8 +3978,8 @@ adapter."
 (defun mevedel-permission--prompt-async-eval
     (content cont &optional count entry)
   "Display an Eval permission prompt from caller-built CONTENT.
-CONT receives `allow-once', `deny-once', `(feedback . TEXT)', or
-`aborted'."
+COUNT and ENTRY carry queue metadata.  CONT receives `allow-once',
+`deny-once', a feedback cons, or `aborted'."
   (let* ((source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)

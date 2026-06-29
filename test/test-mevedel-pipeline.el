@@ -26,6 +26,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar warning-minimum-level)
+
 (defun test-mevedel-pipeline--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
@@ -192,7 +194,7 @@
 		    nil)
 		   (funcall saved-next saved-ctx)
 		   ;; Latch: a second invocation must not re-enter the chain.
-		   (let ((display-warning-minimum-level :emergency))
+		   (let ((warning-minimum-level :emergency))
 		     (funcall saved-next saved-ctx))
 		   (should (equal results '("first"))))
 		 :doc "calling fail after next is a no-op (latch)"
@@ -205,7 +207,7 @@
 		    (lambda (r) (push r results))
 		    nil)
 		   (funcall saved-next saved-ctx)
-		   (let ((display-warning-minimum-level :emergency))
+		   (let ((warning-minimum-level :emergency))
 		     (funcall saved-fail "ignored"))
 		   (should (equal results '("ok")))))
 
@@ -1508,7 +1510,7 @@
 			      (lambda (_t _p _a _origin cont &optional _count _entry)
 				(funcall cont 'always-allow)))
 			     ((symbol-function 'mevedel-permission--apply-prompt-result)
-			      (lambda (&rest _) (error "disk write failed"))))
+				      (lambda (&rest _) (error "Disk write failed"))))
 		     (let ((mevedel--session session))
 		       (mevedel-pipeline--step-permission
 			ctx
@@ -1833,7 +1835,7 @@
 			(post-next-signal-step
 			 (lambda (ctx next _fail)
 			   (funcall next (plist-put ctx :result "ok-from-step"))
-			   (error "step body signaled after next-cont fired")))
+				   (error "Step body signaled after next-cont fired")))
 			;; Bypass `mevedel-pipeline-run-tool' to install our custom
 			;; once-fire wrapper around the bare runner so the test
 			;; directly exercises the runner's escape path.
@@ -1849,7 +1851,7 @@
 				 'mevedel
 				 (format "Pipeline final callback signaled: %S" err)
 				 :warning)))))))
-		   (let ((display-warning-minimum-level :emergency))
+		   (let ((warning-minimum-level :emergency))
 		     (mevedel-pipeline--run
 		      (list post-next-signal-step) once-callback nil))
 		   (should (= 1 (length deliveries)))
@@ -1870,8 +1872,8 @@
 			(count 0)
 			(signaling-cb (lambda (_r)
 					(cl-incf count)
-					(error "consumer signaled"))))
-		   (let ((display-warning-minimum-level :emergency))
+						(error "Consumer signaled"))))
+		   (let ((warning-minimum-level :emergency))
 		     (mevedel-pipeline-run-tool tool signaling-cb nil))
 		   ;; The consumer was called once; its signal was caught inside the
 		   ;; once-fire wrapper, so the runner's caller did not unwind.
@@ -2675,7 +2677,7 @@
 			       :name "Boom"
 			       :render-transform
 			       (lambda (_name _args _result)
-				 (error "bad transform"))))
+					 (error "Bad transform"))))
 			(warnings nil)
 			out)
 		   (cl-letf (((symbol-function 'display-warning)
@@ -3334,7 +3336,7 @@
 			(tc (list :name "Edit" :args nil :result raw)))
 		   (should-error
 		    (mevedel--parse-tool-results-scrub-advice
-		     (lambda (&rest _) (error "boom"))
+		     (lambda (&rest _) (error "Boom"))
 		     'dummy-backend (list tc)))
 		   (should (equal raw (plist-get tc :result)))))
 

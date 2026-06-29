@@ -310,7 +310,7 @@
     (list :name name :purpose purpose :clean clean)))
 
 (defun mevedel-worktree--validate-branch-name (name &optional directory)
-  "Validate Git branch NAME for v1 worktree creation.
+  "Validate Git branch NAME for worktree creation.
 
 When DIRECTORY is non-nil, use Git's refname checker for the full
 branch-name grammar before any mutating Git command runs."
@@ -359,7 +359,9 @@ branch-name grammar before any mutating Git command runs."
 
 (defun mevedel-worktree--format-stub
     (source-session source-dir worktree-directory branch purpose warnings)
-  "Return setup-context stub for a new worktree session."
+  "Return setup-context stub for SOURCE-SESSION.
+SOURCE-DIR, WORKTREE-DIRECTORY, BRANCH, PURPOSE and WARNINGS describe the
+new session."
   (string-join
    (append
     (list
@@ -395,7 +397,7 @@ branch-name grammar before any mutating Git command runs."
 
 (defun mevedel-worktree--cleanup-message
     (worktree-directory workspace-root)
-  "Return shell cleanup commands for WORKTREE-DIRECTORY."
+  "Return shell cleanup commands for WORKTREE-DIRECTORY under WORKSPACE-ROOT."
   (let* ((path (if (and workspace-root
                         (file-in-directory-p worktree-directory workspace-root))
                    (directory-file-name
@@ -449,7 +451,7 @@ branch-name grammar before any mutating Git command runs."
         (unless repo-root
           (user-error "Current directory is not a Git repository"))
         (when (eq 'submodule (plist-get status :isolation))
-          (user-error "Cannot create a worktree from a submodule in v1"))
+          (user-error "Cannot create a worktree from a submodule"))
         (when (file-exists-p worktree-directory)
           (user-error "Worktree destination already exists: %s"
                       worktree-directory))

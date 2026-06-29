@@ -88,7 +88,7 @@ in CACHE when found."
     state))
 
 (defun mevedel-file-cache-remove (cache path)
-  "Remove PATH from CACHE, if present.  Returns non-nil when a removal occurred."
+  "Remove PATH from CACHE, and return non-nil when a removal occurred."
   (let* ((key (expand-file-name path))
          (state (gethash key (mevedel-file-cache-table cache))))
     (when state
@@ -154,7 +154,7 @@ Returns STATE."
 ;;; External change detection
 
 (defun mevedel-file-cache-detect-external-changes (cache)
-  "Return a list of external changes affecting CACHE entries.
+  "Return external-change records for CACHE entries.
 
 Iterates over every cached `mevedel-file-state' and stats the
 corresponding file on disk.  An entry is included when the on-disk
@@ -200,7 +200,7 @@ changes are not re-reported."
     (nreverse changes)))
 
 (defun mevedel-file-cache-consume-external-changes (cache changes)
-  "Update CACHE to reflect reported CHANGES.
+  "Update CACHE from external-change records.
 
 CHANGES is a list returned by
 `mevedel-file-cache-detect-external-changes'.  Deleted files are

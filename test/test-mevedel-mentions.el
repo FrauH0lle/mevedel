@@ -49,7 +49,7 @@ Returns (buffer . overlay)."
     (cons buf ov)))
 
 (defun mevedel-test--reset-instructions ()
-  "Reset global and workspace-scoped instruction state for mention tests."
+  "Reset global and workspace-scoped instruction state for mentions."
   (setq mevedel--instructions nil)
   (setq mevedel--id-counter 0)
   (setq mevedel--id-usage-map (make-hash-table))
@@ -736,7 +736,7 @@ Returns (buffer . overlay)."
     (cl-letf (((symbol-function 'mcp-hub-get-servers)
                (lambda () (list (list :name "srv" :status 'connected))))
               ((symbol-function 'mcp-read-resource)
-               (lambda (_conn _uri) (error "boom"))))
+               (lambda (_conn _uri) (signal 'error '("boom")))))
       (let* ((mcp-server-connections table)
              (result (mevedel--handle-mcp-mention
                       (list :match-text "@mcp:srv:bad"

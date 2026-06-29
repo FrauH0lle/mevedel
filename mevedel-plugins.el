@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Minimal Codex-style plugin support. Plugins are installed under
+;; Minimal Codex-style plugin support.  Plugins are installed under
 ;; `mevedel-user-dir'/plugins and each plugin root contains
-;; .codex-plugin/plugin.json. This module discovers manifests, persists
+;; `.codex-plugin/plugin.json'.  This module discovers manifests, persists
 ;; enabled/hook state, and implements the local `/plugin' command body.
 
 ;;; Code:
@@ -236,7 +236,7 @@ Do not descend into a directory once it is recognized as a plugin root."
     (sort roots #'string<)))
 
 (defun mevedel-plugins--drop-duplicate-names (plugins)
-  "Drop every plugin whose manifest name appears more than once."
+  "Drop plugins from PLUGINS whose manifest name appears more than once."
   (let ((counts (make-hash-table :test #'equal))
         dropped
         kept)

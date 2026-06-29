@@ -37,9 +37,13 @@
 ;; `gptel-transient'
 (defvar gptel-system-prompt)
 (defvar mevedel-plugin-extra-roots)
+(defvar org-mode-hook)
+(defvar transient-post-exit-hook)
 (defvar transient--original-buffer)
+(declare-function gptel-menu "ext:gptel-transient" ())
 (declare-function gptel--suffix-system-message "ext:gptel-transient"
                   (&optional cancel))
+(declare-function org-entry-put "org" (pom property value))
 
 (defun test-mevedel-view--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
@@ -134,13 +138,13 @@ PROPS is the value for the `gptel' property."
 	    skill-file))
 
 (defun mevedel-view-test--stop-prompt-hook (_event)
-  "Block prompt submission in view send tests."
+  "Block prompt submission in view-send cases."
   '(:continue nil :stop-reason "blocked"))
 
 (defvar mevedel-view-test--seen-prompt nil)
 
 (defun mevedel-view-test--rewrite-prompt-hook (event)
-  "Capture prompt EVENT and rewrite it in view send tests."
+  "Capture prompt EVENT and rewrite it in view-send cases."
   (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
   '(:updated-input "rewritten prompt"))
 
@@ -317,14 +321,13 @@ PROPS is the value for the `gptel' property."
   :doc "preserves text after a stale tool run extends beyond end marker"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (let (block-start block-end tail-start)
+      (let (block-start block-end)
         (setq block-start (point))
         (insert "#+begin_tool (RecoverRead :file_path \"/tmp/f\")\n"
                 "(:name \"RecoverRead\" :args (:file_path \"/tmp/f\"))\n\n"
                 "file body\n"
                 "#+end_tool\n")
         (setq block-end (point))
-        (setq tail-start (point))
         (insert "Tail text must survive.\n")
         ;; Stale bounds can cover the block and spill into following text.
         (put-text-property (+ block-start 20) (point)
@@ -744,11 +747,10 @@ PROPS is the value for the `gptel' property."
   :doc "does not swallow legitimate user prompt between tool and response"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (let (tool-start user-start response-start)
+      (let (tool-start response-start)
         (setq tool-start (point))
         (insert "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nbody\n")
         (put-text-property tool-start (point) 'gptel '(tool . "call_1"))
-        (setq user-start (point))
         (insert "please explain that output\n")
         (setq response-start (point))
         (insert "sure, here is the explanation\n")
@@ -2646,14 +2648,14 @@ PROPS is the value for the `gptel' property."
       (should-not (buffer-modified-p))
       (should-not (memq view-buf (files--buffers-needing-to-be-saved t))))
     (let ((prompted nil))
-      (cl-letf (((symbol-function 'read-file-name)
-                 (lambda (&rest _)
-                   (setq prompted t)
-                   (error "view buffer requested save filename")))
-                ((symbol-function 'y-or-n-p)
-                 (lambda (&rest _)
-                   (setq prompted t)
-                   (error "view buffer requested save confirmation"))))
+	      (cl-letf (((symbol-function 'read-file-name)
+	                 (lambda (&rest _)
+	                   (setq prompted t)
+	                   (error "View buffer requested save filename")))
+	                ((symbol-function 'y-or-n-p)
+	                 (lambda (&rest _)
+	                   (setq prompted t)
+	                   (error "View buffer requested save confirmation"))))
         (save-some-buffers t (lambda () (eq (current-buffer) view-buf))))
       (should-not prompted))))
 
@@ -3106,12 +3108,12 @@ PROPS is the value for the `gptel' property."
         (delete-process process)))))
 
 (defun mevedel-view-test--interactive-command (system-message)
-  "Return SYSTEM-MESSAGE and current buffer for advice tests."
+  "Return SYSTEM-MESSAGE and current buffer for advice cases."
   (interactive (list gptel-system-prompt))
   (list system-message (current-buffer)))
 
 (defun mevedel-view-test--system-message-suffix (&optional cancel)
-  "Mirror the gptel system-message suffix behavior for advice tests."
+  "Mirror the gptel system-message suffix behavior when CANCEL is non-nil."
   (interactive
    (list (and (functionp gptel-system-prompt)
               (not (y-or-n-p
@@ -4054,9 +4056,9 @@ PROPS is the value for the `gptel' property."
           (should (= 1 calls))))))
 
   :doc "suppresses arbitrary major-mode hooks in render temp buffers"
-  (let ((called nil)
-        (hook (lambda ()
-                (setq called t))))
+  (let* ((called nil)
+         (hook (lambda ()
+                 (setq called t))))
     (unwind-protect
         (progn
           (add-hook 'emacs-lisp-mode-hook hook)
@@ -4412,13 +4414,11 @@ PROPS is the value for the `gptel' property."
   :doc "normalizes stale reasoning response prefixes during full rerender"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (let (reasoning-start reasoning-end prefix-start nil-start response-start
+      (let (reasoning-start nil-start response-start
             response-end)
         (setq reasoning-start (point))
         (insert "#+begin_reasoning\nThinking.\n#+end_reasoning\n")
-        (setq reasoning-end (point))
         (insert "\n")
-        (setq prefix-start (point))
         (insert "Whi")
         (setq nil-start (point))
         (insert "l")
@@ -7599,9 +7599,9 @@ state of its inner sections"
       (should (string-match-p "malformed" (cadar warnings)))))
   :doc "renderer signalling an error yields nil and emits a warning"
   (let* ((tool (mevedel-tool--create
-                :name "Boom"
-                :renderer (lambda (_name _args _result _data)
-                            (error "oops"))))
+	                :name "Boom"
+	                :renderer (lambda (_name _args _result _data)
+	                            (error "Oops"))))
          (warnings nil))
     (cl-letf (((symbol-function 'display-warning)
                (lambda (&rest args) (push args warnings))))
@@ -10137,8 +10137,8 @@ finds it during slash dispatch."
                  (lambda (&rest _) nil))
                 ((symbol-function 'mevedel-hooks-additional-context-string)
                  (lambda (&rest _) nil))
-                ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (error "gptel-send should not run"))))
+	                ((symbol-function 'gptel-send)
+	                 (lambda (&rest _) (error "Gptel-send should not run"))))
         (with-current-buffer view-buf
           (mevedel-view--interaction-rebuild)
           (mevedel-view-edit-last-queued-message)
@@ -10390,8 +10390,8 @@ finds it during slash dispatch."
                 (buffer-substring-no-properties
                  (point-min) mevedel-view--input-marker))))
 	      (with-current-buffer data-buf
-		(should (string-empty-p (buffer-string)))))))
-      (delete-directory root t))
+		(should (string-empty-p (buffer-string))))))
+      (delete-directory root t)))
 
   :doc "/plan prompts run UserPromptSubmit and materialize rewind forks"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
@@ -11614,8 +11614,8 @@ finds it during slash dispatch."
                  :parent-view parent))
           (with-current-buffer parent
             (mevedel-view-mode)
-            (cl-letf (((symbol-function 'display-buffer)
-                       (lambda (&rest _) (error "display failed")))
+	            (cl-letf (((symbol-function 'display-buffer)
+	                       (lambda (&rest _) (error "Display failed")))
                       ((symbol-function 'pop-to-buffer)
                        (lambda (buf &rest _)
                          (set-window-buffer (selected-window) buf)

@@ -89,8 +89,8 @@ Returns a read-only buffer in `diff-mode' containing the unified diff."
 (defun mevedel-test--create-overlay (buffer &optional start end text type-of)
   "Create a mevedel instruction overlay in BUFFER.
 
-Either provide START and END positions, or TEXT to search for. TYPE-OF
-specifies \\='reference or \\='directive (default). Returns the overlay."
+Either provide START and END positions, or TEXT to search for.  TYPE-OF
+specifies \\='reference or \\='directive (default).  Return the overlay."
   (when (and text (or start end))
     (user-error "Only provide either start and end or text"))
   (with-current-buffer buffer

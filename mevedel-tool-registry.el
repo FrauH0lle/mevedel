@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; Declarative tool registration system. Each tool is a mevedel-tool struct with
-;; behavioral metadata (read-only, destructive, permissions, groups). The
+;; Declarative tool registration system.  Each tool is a mevedel-tool struct with
+;; behavioral metadata (read-only, destructive, permissions, groups).  The
 ;; mevedel-define-tool macro creates both the mevedel-tool and the underlying
 ;; gptel-tool in one declaration.
 
@@ -53,8 +53,8 @@ Resolved through symlinks so data files (tools/, etc.) are reachable.")
 (cl-defstruct (mevedel-tool (:constructor mevedel-tool--create))
   "A mevedel tool with behavioral metadata.
 
-Parallel struct alongside `gptel-tool'. `mevedel-tool' holds behavioral
-metadata (permissions, groups, read-only status). The `gptel-tool' is
+Parallel struct alongside `gptel-tool'.  `mevedel-tool' holds behavioral
+metadata (permissions, groups, read-only status).  The `gptel-tool' is
 created as a side effect of registration and handles serialization."
   name              ; string: "Read", "Edit", "Bash"
   handler           ; function: the actual tool implementation
@@ -112,7 +112,7 @@ created as a side effect of registration and handles serialization."
 (defun mevedel-tool-get (name &optional category)
   "Look up a mevedel-tool by NAME, optionally scoped to CATEGORY.
 
-If CATEGORY is provided, look up by exact (CATEGORY NAME) key. If
+If CATEGORY is provided, look up by exact (CATEGORY NAME) key.  If
 CATEGORY is nil, search all entries for the first matching NAME."
   (if category
       (gethash (list category name) mevedel-tool--registry)
@@ -305,7 +305,7 @@ SPEC is one of:
   "Resolve SPECS and return `gptel-tool' structs.
 
 Convenience wrapper around `mevedel-tool-resolve' that extracts the
-`gptel-tool' back-references. Returns a plist (:active GPTEL-TOOLS
+`gptel-tool' back-references.  Returns a plist (:active GPTEL-TOOLS
 :deferred GPTEL-TOOLS)."
   (let ((resolved (mevedel-tool-resolve specs)))
     (list :active (mapcar #'mevedel-tool-gptel-tool (plist-get resolved :active))
@@ -318,11 +318,13 @@ Convenience wrapper around `mevedel-tool-resolve' that extracts the
 (defun mevedel-tool--args-to-gptel (args)
   "Convert mevedel ARGS spec to gptel plist format.
 
-Mevedel format:  ((name type :required \"desc\" [extras...]) ...)
-                  ((name type :optional \"desc\" [extras...]) ...)
+Mevedel format:
+  ((name type :required \"desc\" [extras...]) ...)
+  ((name type :optional \"desc\" [extras...]) ...)
 
-Gptel format:    ((:name \"name\" :type type :description \"desc\" [extras...]) ...)
-                  with :optional t for optional args.
+Gptel format:
+  ((:name \"name\" :type type :description \"desc\" [extras...]) ...)
+  with :optional t for optional args.
 
 Any trailing plist keys after the description (e.g. `:items',
 `:enum', `:properties') are passed through verbatim to gptel, which
@@ -497,8 +499,8 @@ handler."
 (defun mevedel-tool--validate-args (tool-name args arg-specs)
   "Validate ARGS against ARG-SPECS for TOOL-NAME.
 
-ARGS is a plist of argument values from the LLM. ARG-SPECS is the
-mevedel args format list. Returns nil on success, or an error string on
+ARGS is a plist of argument values from the LLM.  ARG-SPECS is the
+mevedel args format list.  Returns nil on success, or an error string on
 failure."
   (catch 'validation-error
     (dolist (spec arg-specs)
@@ -529,7 +531,7 @@ failure."
 (defun mevedel-tool--resolve-prompt (prompt)
   "Resolve PROMPT to a string.
 
-If PROMPT is a string, return it unchanged. If PROMPT is a function,
+If PROMPT is a string, return it unchanged.  If PROMPT is a function,
 call it with no arguments and return the result, which must be a string.
 Signals an error for any other type."
   (cond
@@ -773,10 +775,13 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
           max-result-size display-arg render-transform renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
-SOURCE must be a `gptel-tool' struct.  See `mevedel-define-tool'
-for the keyword meanings."
+SOURCE must be a `gptel-tool' struct.  CATEGORY-OVERRIDE,
+DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, GROUPS, READ-ONLY-P,
+DESTRUCTIVE-P, CHECK-PERMISSION, CHECK-PERMISSION-ASYNC, GET-PATH,
+GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
+RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
   (unless (gptel-tool-p source)
-    (error "mevedel-define-tool :wrap expects a gptel-tool, got %S" source))
+    (error "`mevedel-define-tool :wrap' expects a gptel-tool, got %S" source))
   (let* ((source-name (gptel-tool-name source))
          (source-category (gptel-tool-category source))
          (target-category (or category-override

@@ -3,20 +3,20 @@
 ;;; Commentary:
 
 ;; System reminders: mid-conversation guidance injected into the user
-;; message as `<system-reminder>' blocks. Reminders are data: each is a
+;; message as `<system-reminder>' blocks.  Reminders are data: each is a
 ;; struct with a trigger function, a content function, and optional
 ;; interval throttling.
 ;;
 ;; Reminders live on the session struct for main chat sessions, and on
-;; the agent struct (cloned per invocation) for sub-agents. A prompt
+;; the agent struct (cloned per invocation) for sub-agents.  A prompt
 ;; transform function prepends active reminders to the user's prompt
-;; before the request is sent. Turn counting is driven by a terminal FSM
+;; before the request is sent.  Turn counting is driven by a terminal FSM
 ;; handler in the request pipeline.
 
 ;;; Code:
 
-(eval-when-compile
-  (require 'cl-lib))
+(require 'cl-lib)
+(require 'text-property-search)
 
 (require 'mevedel-structs)
 
@@ -388,7 +388,7 @@ sessions rather than spamming every turn."
    :interval (or interval 5)))
 
 (defun mevedel-reminders-make-auto-mode (&optional interval)
-  "Create the `auto-mode' reminder.
+  "Create the `auto-mode' reminder with INTERVAL.
 Fires immediately after `/auto' enters trust-all mode, then repeats
 sparsely while that mode remains active."
   (mevedel-reminder-create
@@ -432,8 +432,8 @@ sparsely while that mode remains active."
       (buffer-string))))
 
 (defun mevedel-reminders-make-plan-mode (&optional interval)
-  "Create the `plan-mode' workflow reminder.
-The first firing carries the full workflow. Later firings are sparse
+  "Create the `plan-mode' workflow reminder with INTERVAL.
+The first firing carries the full workflow.  Later firings are sparse
 because reminder interval state is tracked on the reminder struct."
   (mevedel-reminder-create
    :type 'plan-mode
@@ -711,7 +711,8 @@ MAX-DIFF-LINES caps the unified diff size."
                 max-diff-lines))))))
 
 (defun mevedel-reminders--format-edited-files (changes max-diff-lines)
-  "Render CHANGES as a single reminder body string.
+  "Return edited-file reminder body for the change list.
+The argument `CHANGES' supplies the edited files.
 MAX-DIFF-LINES caps each file's diff size."
   (concat "Files you previously read or edited have been modified \
 outside of your tools since you last saw them. Review the changes \
@@ -889,7 +890,7 @@ sensitive runtime state.")
                 (mevedel-session-deferred-injected session))))
 
 (defun mevedel-reminders--tool-search-sentence (session names query)
-  "Return a ToolSearch sentence for NAMES with QUERY when still deferred."
+  "Return a ToolSearch sentence for SESSION NAMES with QUERY."
   (when (mevedel-reminders--deferred-tool-name-p session names)
     (format " If the tool is not callable yet, use `ToolSearch(query=\"%s\", load=true)'; after ToolSearch returns, call the loaded tool in your next tool call."
             query)))
