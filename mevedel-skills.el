@@ -20,20 +20,37 @@
 (require 'mevedel-permissions)
 (require 'mevedel-models)
 
-;; `project'
-(declare-function project-current "project" (&optional maybe-prompt directory))
-(declare-function project-root "project" (project))
+;; `gptel'
+(defvar gptel-post-tool-call-functions)
 
-;; `text-property-search'
-(declare-function text-property-search-backward "text-property-search"
-                  (property &optional value predicate not-current))
-(declare-function prop-match-end "text-property-search" (match))
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
+                  (tool callback args))
+(declare-function mevedel-pipeline--format-render-data-block
+                  "mevedel-pipeline" (render-data))
+
+;; `mevedel-reminders'
+(defvar mevedel-reminders--current-chat-buffer)
+
+;; `mevedel-review'
+(declare-function mevedel-review-transform-outcome
+                  "mevedel-review" (skill-name outcome))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 
-;; `mevedel-workspace'
-(declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
+;; `mevedel-tool-exec'
+(declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
+
+;; `mevedel-tool-plan'
+(declare-function mevedel-plan-mode-enter "mevedel-tool-plan"
+                  (&optional prompt))
+(declare-function mevedel-plan-mode-exit "mevedel-tool-plan"
+                  (&optional target-mode))
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tool-ui'
 ;; Use `t' for the arglist: cl-defun with &key keywords confuses the
@@ -42,24 +59,8 @@
 ;; only M" warnings.
 (declare-function mevedel-tools--task "mevedel-tool-ui" t t)
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
-                  (tool callback args))
-(declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
-
-;; `mevedel-tool-exec'
-(declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
-
-;; `mevedel-review'
-(declare-function mevedel-review-transform-outcome
-                  "mevedel-review" (skill-name outcome))
-
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-mode-enter "mevedel-tool-plan"
-                  (&optional prompt))
-(declare-function mevedel-plan-mode-exit "mevedel-tool-plan"
-                  (&optional target-mode))
+;; `mevedel-tools'
+(declare-function mevedel-tools--register-builtins "mevedel-tools" ())
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -68,18 +69,20 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
 
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
-(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
 
-;; `gptel'
-(defvar gptel-post-tool-call-functions)
+;; `project'
+(declare-function project-current "project" (&optional maybe-prompt directory))
+(declare-function project-root "project" (project))
 
 ;; `subr'
 (defvar read-eval)
 
-;; `mevedel-reminders'
-(defvar mevedel-reminders--current-chat-buffer)
+;; `text-property-search'
+(declare-function prop-match-end "text-property-search" (match))
+(declare-function text-property-search-backward "text-property-search"
+                  (property &optional value predicate not-current))
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
@@ -475,6 +478,12 @@ list of parsed mevedel permission rules.  A malformed entry aborts the whole
 skill load: this function signals `user-error' on the first bad
 entry, and `mevedel-skills--build-skill''s `condition-case' skips
 the offending skill with a warning naming SOURCE-FILE."
+  (when entries
+    ;; Skill discovery can happen before `mevedel-install' fills the
+    ;; registry, but `allowed-tools' parsing validates tool names there.
+    (require 'mevedel-tools)
+    (mevedel-tools--register-builtins)
+    (mevedel-skills--register))
   (mapcar (lambda (entry)
             (condition-case err
                 (mevedel-permission--parse-rule-string entry)
@@ -482,7 +491,7 @@ the offending skill with a warning naming SOURCE-FILE."
                (user-error
                 "Malformed allowed-tools entry %S in %s: %s"
                 entry source-file (error-message-string err)))))
-	          entries))
+          entries))
 
 (defun mevedel-skills--hooks-plist-to-rules (hooks)
   "Convert plist-shaped HOOKS frontmatter to hook rule alists.
@@ -3041,7 +3050,8 @@ distinct from `Agent :name' which matches subagent_type."
     ("init" . " [command] optional repository bootstrap focus")
     ("plugin" . " [command] list | enable | disable | hooks | install | update | reload")
     ("review" . " [command] picker; target args or custom instructions")
-    ("verify" . " [command] picker; target args or custom instructions"))
+    ("verify" . " [command] picker; target args or custom instructions")
+    ("worktree" . " [command] status | create"))
   "Root completion annotations for included slash commands.")
 
 (defun mevedel-cmd--tokens (_args)
@@ -3252,8 +3262,8 @@ Routes through the lifecycle-aware permission transition path."
 Each entry is a (NAME . HANDLER) pair.  HANDLER is a function
 accepting a single ARGS string (the text after the command name,
 trimmed), and is expected to execute immediately and report its own
-result.  `mevedel-plugins-slash-command' returns a string; the dispatch
-path shows that value with `message'.
+result.  If a handler returns a string, the dispatch path shows it with
+`message'.
 Handlers have access to the buffer-local `mevedel--session'.")
 
 
@@ -3505,7 +3515,6 @@ Returns:
         (unless after-prefix
           (mevedel-skills--ensure-fresh-line))
         (when-let* ((result (funcall (cdr local) args))
-                    ((equal name "plugin"))
                     ((stringp result)))
           (message "%s" result))
         'local)
@@ -3694,6 +3703,7 @@ table was created."
     ("skills" (mapcar #'car mevedel-skills--skills-command-candidates))
     ("model" (mevedel-skills--model-command-candidates))
     ("plugin" (mapcar #'car mevedel-skills--plugin-command-candidates))
+    ("worktree" '("status" "create"))
     ((or "review" "verify")
      (mapcar #'car mevedel-skills--validation-target-command-candidates))
     (_ nil)))
@@ -3705,6 +3715,7 @@ table was created."
     ("skills" (cdr (assoc candidate mevedel-skills--skills-command-candidates)))
     ("model" " model")
     ("plugin" (cdr (assoc candidate mevedel-skills--plugin-command-candidates)))
+    ("worktree" " command")
     ((or "review" "verify")
      (cdr (assoc candidate mevedel-skills--validation-target-command-candidates)))
     (_ nil)))

@@ -105,6 +105,14 @@ grants are in-memory only, do not grant the containing directory, do not
 apply to write tools, and are still lower precedence than explicit deny or
 ask rules and protected-path prompts.
 
+Local slash commands may own deterministic workflows outside the model tool
+pipeline. `/worktree status` and `/worktree create` run argv-safe local
+Git commands directly because the user explicitly typed the command in the
+mevedel UI. That does not grant the model any Bash permission. When the
+model uses the `git-worktree` skill and falls back to creating a worktree
+itself, creation happens through the normal Bash tool and this permission
+chain.
+
 ## Prompt queues
 
 Permission prompts are queued on the session, not displayed as

@@ -272,8 +272,12 @@ paths:
             (should (mevedel-skill-model-invocable-p skill))))
       (delete-directory dir t)))
 
-  :doc "bundled coordinator and remember skills are discoverable by default"
-  (let ((skills (mevedel-skills-scan nil nil)))
+  :doc "bundled coordinator, remember, and git-worktree skills are discoverable by default"
+  (mevedel-tool-clear-registry)
+  (let* ((skills (mevedel-skills-scan nil nil))
+         (worktree (cl-find "git-worktree" skills
+                            :key #'mevedel-skill-name :test #'equal))
+         (body (and worktree (mevedel-skill-load-body worktree))))
     (should (cl-find-if
              (lambda (s)
                (and (equal "coordinator" (mevedel-skill-name s))
@@ -285,7 +289,24 @@ paths:
                     (eq 'bundled (mevedel-skill-source s))
                     (mevedel-skill-user-invocable-p s)
                     (equal "[focus]" (mevedel-skill-argument-hint s))))
-             skills)))
+             skills))
+    (should worktree)
+    (should-not (cl-find "using-git-worktrees" skills
+                         :key #'mevedel-skill-name :test #'equal))
+    (should (eq 'bundled (mevedel-skill-source worktree)))
+    (should (mevedel-skill-model-invocable-p worktree))
+    (should-not (mevedel-skill-user-invocable-p worktree))
+    (should (equal '("Bash(git rev-parse:*)"
+                     "Bash(git status:*)"
+                     "Bash(git check-ignore:*)"
+                     "Bash(git worktree list:*)"
+                     "Bash(printf:*)")
+                   (mevedel-skill-allowed-tools worktree)))
+    (should (member '("Bash" :pattern "git rev-parse:*" :action allow)
+                    (mevedel-skill-allowed-tool-rules worktree)))
+    (should (string-match-p "best-effort and read-only" body))
+    (should (string-match-p "git worktree list --porcelain" body))
+    (should (string-match-p "You cannot invoke slash commands yourself" body)))
 
   :doc "bundled skills are suppressed when include-bundled is nil"
   (let* ((mevedel-skills-include-bundled nil)
@@ -3741,6 +3762,22 @@ spanning lines")))
           (should (equal '("commit:")
                          (mevedel-skills-test--capf-candidates
                           capf "com")))))))
+
+  :doc "worktree command completes status and create arguments"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands '(("worktree" . ignore))))
+        (insert "### /worktree c")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (equal '("create")
+                         (mevedel-skills-test--capf-candidates capf "c")))
+          (should (member "status"
+                          (mevedel-skills-test--capf-candidates capf)))
+          (should (equal " command" (funcall annot "create")))))))
 
   :doc "root completion inserts a real separator before ghost hints"
   (let* ((session (mevedel-skills-test--make-session))

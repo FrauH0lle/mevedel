@@ -213,6 +213,52 @@
 
 
 ;;
+;;; Local user turns
+
+(mevedel-deftest mevedel--insert-local-user-turn
+		 (:doc "inserts a model-visible user turn, mirrors it to the view, and does not send")
+		 (let ((data-buffer (generate-new-buffer " *mevedel-local-turn-data*"))
+		       (view-buffer (generate-new-buffer " *mevedel-local-turn-view*"))
+		       (displayed nil)
+		       (kind nil)
+		       (sent nil)
+		       (original-view-fn (and (fboundp 'mevedel-view--begin-external-turn)
+					      (symbol-function 'mevedel-view--begin-external-turn))))
+		   (unwind-protect
+		       (progn
+			 (fset 'mevedel-view--begin-external-turn
+			       (lambda (display-text _marker &optional turn-kind
+                                                     _hook-context _no-spinner)
+				 (setq displayed display-text
+				       kind turn-kind)))
+			 (cl-letf (((symbol-function 'gptel-send)
+				    (lambda (&rest _) (setq sent t))))
+			   (with-current-buffer data-buffer
+			     (org-mode)
+			     (setq-local gptel-response-separator "\n\n")
+			     (setq-local gptel-prompt-prefix-alist
+					 '((org-mode . "* User\n")))
+			     (setq-local mevedel--view-buffer view-buffer)
+			     (let ((marker (mevedel--insert-local-user-turn
+					    "Setup context" nil 'worktree)))
+			       (should (markerp marker))
+			       (should (string-match-p
+					"Setup context"
+					(buffer-substring-no-properties
+					 (point-min) (point-max)))))))
+			 (should (equal "Setup context" displayed))
+			 (should (eq 'worktree kind))
+			 (should-not sent))
+		     (if original-view-fn
+			 (fset 'mevedel-view--begin-external-turn original-view-fn)
+		       (fmakunbound 'mevedel-view--begin-external-turn))
+		     (when (buffer-live-p data-buffer)
+		       (kill-buffer data-buffer))
+		     (when (buffer-live-p view-buffer)
+		       (kill-buffer view-buffer)))))
+
+
+;;
 ;;; Working directory sessions
 
 (mevedel-deftest mevedel-session-working-directory

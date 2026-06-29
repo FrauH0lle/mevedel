@@ -8176,13 +8176,14 @@ marker at the end of the inserted block."
         (copy-marker (point) nil)))))
 
 (defun mevedel-view--begin-external-turn
-    (display-text data-turn-start &optional kind hook-context)
+    (display-text data-turn-start &optional kind hook-context no-spinner)
   "Begin a view turn initiated outside the editable input.
 
 DISPLAY-TEXT is shown as the user-side turn in the view.
 DATA-TURN-START is the data-buffer marker where the assistant
 response for this turn begins.  KIND may be `directive'.  HOOK-CONTEXT
-is model-visible hook context to summarize in the view."
+is model-visible hook context to summarize in the view.  When
+NO-SPINNER is non-nil, render only the local user turn."
   (mevedel-view--ensure-interactive-chat-view)
   (let ((turn-start (mevedel-view--insert-user-message
                      display-text kind hook-context)))
@@ -8209,9 +8210,10 @@ is model-visible hook context to summarize in the view."
                  front-sticky (read-only keymap)
                  rear-nonsticky (read-only keymap)))
               (setq turn-start (copy-marker (point) nil)))))))
-    (setq mevedel-view--in-flight-turn-start turn-start)
-    (setq mevedel-view--data-turn-start data-turn-start)
-    (mevedel-view--start-spinner)))
+    (unless no-spinner
+      (setq mevedel-view--in-flight-turn-start turn-start)
+      (setq mevedel-view--data-turn-start data-turn-start)
+      (mevedel-view--start-spinner))))
 
 (defun mevedel-view--external-prompt-drawer (data-turn-start)
   "Return the prompt drawer ending before DATA-TURN-START, if any."

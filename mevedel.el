@@ -64,6 +64,7 @@
 (require 'mevedel-review)
 (require 'mevedel-hooks)
 (require 'mevedel-chat)
+(require 'mevedel-worktree)
 
 ;; `gptel'
 (declare-function gptel--apply-preset "ext:gptel" (preset setter))
@@ -93,6 +94,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view-install-gptel-menu-advice "mevedel-view" ())
 (declare-function mevedel-view-uninstall-gptel-menu-advice "mevedel-view" ())
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
+(declare-function mevedel-worktree-uninstall-slash-command "mevedel-worktree" ())
 
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer "mevedel-chat"
@@ -577,14 +582,7 @@ matches WORKING-DIRECTORY are considered."
   (interactive)
 
   ;; Define custom tools
-  (mevedel-tool-web--register)
-  (mevedel-tool-fs--register)
-  (mevedel-tool-code--register)
-  (mevedel-tool-tutor--register)
-  (mevedel-tool-exec--register)
-  (mevedel-tool-ui--register)
-  (mevedel-tool-task--register)
-  (mevedel-tool-introspect--register)
+  (mevedel-tools--register-builtins)
   (mevedel-skills--register)
 
   ;; Define gptel presets
@@ -618,6 +616,7 @@ matches WORKING-DIRECTORY are considered."
   (mevedel-pipeline-install-tool-result-scrubber)
 
   ;; Install slash-command advice on `gptel-send'
+  (mevedel-worktree-install-slash-command)
   (mevedel-skills-install-slash-commands)
 
   ;; Install skill hot-reload hooks/watchers for active strategies
@@ -670,6 +669,7 @@ matches WORKING-DIRECTORY are considered."
     (mevedel-pipeline-uninstall-tool-result-scrubber))
 
   ;; Remove slash-command advice
+  (mevedel-worktree-uninstall-slash-command)
   (mevedel-skills-uninstall-slash-commands)
 
   ;; Remove skill hot-reload hooks/watchers and registry state

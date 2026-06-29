@@ -1,6 +1,10 @@
 # Issue tracker: Local Markdown
 
 Issues and PRDs for this repo live as markdown files in `.scratch/`.
+That directory is intentionally gitignored local agent state. If a PRD
+contains durable product or architecture decisions, promote those parts
+to maintained docs such as `docs/adr/`, `docs/deferred-tracker.md`, or
+the relevant area doc instead of committing `.scratch/`.
 
 ## Issue flow
 
@@ -21,6 +25,8 @@ flowchart TD
 - Implementation issues are `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`
 - Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
+- Do not commit `.scratch/` files; they are planning and coordination
+  state, not maintained project documentation
 
 ## When a skill says "publish to the issue tracker"
 

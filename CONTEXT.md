@@ -7,6 +7,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **mevedel** — An Emacs Lisp package for visual AI-assisted programming workflows inside Emacs.
 - **workspace** — The project context mevedel operates in, including repository roots, workspace configuration, persistent memory, and session state.
 - **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, background agents, and persistence metadata.
+- **worktree session** — A session whose working directory is a Git linked worktree while still belonging to the same mevedel workspace.
 - **instruction** — A user-authored overlay in source buffers that gives mevedel context or work to perform.
 - **reference** — An instruction that contributes context without asking the agent to act.
 - **directive** — An instruction that asks the agent to discuss, implement, revise, tutor, or process work.

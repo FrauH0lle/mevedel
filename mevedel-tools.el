@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Tool aggregator.  `require's every `mevedel-tool-*' module for its
-;; registration side effects, so downstream code only needs a single
-;; `(require 'mevedel-tools)' to pull in the full tool surface.
+;; Tool aggregator.  `require's every `mevedel-tool-*' module and exposes
+;; `mevedel-tools--register-builtins' so downstream code has one place to
+;; load and register the built-in tool surface.
 ;;
 ;; Also hosts the deferred-tool (ToolSearch) infrastructure that does
 ;; not yet belong to any single tool module: the polymorphic
@@ -78,6 +78,21 @@
 (declare-function mevedel-agent-exec--record-activity
                   "mevedel-agent-exec"
                   (invocation item &optional reserved))
+
+
+;;
+;;; Tool registration
+
+(defun mevedel-tools--register-builtins ()
+  "Register built-in non-skill tools with the mevedel registry."
+  (mevedel-tool-web--register)
+  (mevedel-tool-fs--register)
+  (mevedel-tool-code--register)
+  (mevedel-tool-tutor--register)
+  (mevedel-tool-exec--register)
+  (mevedel-tool-ui--register)
+  (mevedel-tool-task--register)
+  (mevedel-tool-introspect--register))
 
 
 ;;
