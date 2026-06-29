@@ -487,6 +487,150 @@ CWD is used for git merge-base resolution."
 
 
 ;;
+;;; Review packages
+
+(defun mevedel-review--git-output (cwd &rest args)
+  "Run git ARGS in CWD and return raw output, or nil on failure."
+  (condition-case nil
+      (with-temp-buffer
+        (let ((default-directory cwd))
+          (when (zerop (apply #'process-file "git" nil t nil args))
+            (buffer-string))))
+    (error nil)))
+
+(defun mevedel-review--repo-root (cwd)
+  "Return the Git repository root for CWD, or CWD if unavailable."
+  (file-name-as-directory
+   (expand-file-name
+    (or (mevedel-review--git-string cwd "rev-parse" "--show-toplevel")
+        cwd))))
+
+(defun mevedel-review--package-directory (cwd)
+  "Return review package directory for CWD."
+  (file-name-concat (mevedel-review--repo-root cwd)
+                    ".mevedel" "review-packages"))
+
+(defun mevedel-review--default-package-file (cwd target)
+  "Return a deterministic-ish review package path for TARGET in CWD."
+  (let* ((digest (substring (secure-hash 'sha1 (prin1-to-string target))
+                            0 8))
+         (stamp (format-time-string "%Y%m%d-%H%M%S")))
+    (file-name-concat
+     (mevedel-review--package-directory cwd)
+     (format "%s-%s.md" stamp digest))))
+
+(defun mevedel-review--insert-package-output (cwd title args &optional mode)
+  "Insert TITLE and output from git ARGS in CWD.
+MODE is the optional markdown fence language."
+  (insert (format "## %s\n\n" title))
+  (let ((output (apply #'mevedel-review--git-output cwd args)))
+    (if (or (null output) (string-empty-p output))
+        (insert "_No output._\n\n")
+      (when mode
+        (insert (format "```%s\n" mode)))
+      (insert output)
+      (unless (string-suffix-p "\n" output)
+        (insert "\n"))
+      (when mode
+        (insert "```\n"))
+      (insert "\n"))))
+
+(defun mevedel-review--write-range-package (cwd target)
+  "Insert review package sections for range TARGET in CWD."
+  (let* ((base (plist-get target :base))
+         (head (or (plist-get target :head) "HEAD"))
+         (range (format "%s..%s" base head)))
+    (insert "## Target\n\n")
+    (insert (format "- Type: range\n- Base: %s\n- Head: %s\n\n"
+                    base head))
+    (mevedel-review--insert-package-output
+     cwd "Commits" (list "log" "--oneline" range))
+    (mevedel-review--insert-package-output
+     cwd "Diff Stat" (list "diff" "--stat" base head) "")
+    (mevedel-review--insert-package-output
+     cwd "Diff" (list "diff" "--find-renames" "-U10" base head) "diff")))
+
+(defun mevedel-review--write-commit-package (cwd target)
+  "Insert review package sections for commit TARGET in CWD."
+  (let ((sha (plist-get target :sha)))
+    (insert "## Target\n\n")
+    (insert (format "- Type: commit\n- Commit: %s\n\n" sha))
+    (mevedel-review--insert-package-output
+     cwd "Commit" (list "show" "--stat" "--format=medium"
+                        "--patch" "--find-renames" "-U10" sha)
+     "diff")))
+
+(defun mevedel-review--write-uncommitted-package (cwd)
+  "Insert review package sections for uncommitted changes in CWD."
+  (insert "## Target\n\n")
+  (insert "- Type: uncommitted changes\n\n")
+  (mevedel-review--insert-package-output
+   cwd "Status" (list "status" "--short") "")
+  (mevedel-review--insert-package-output
+   cwd "Staged Diff Stat" (list "diff" "--cached" "--stat") "")
+  (mevedel-review--insert-package-output
+   cwd "Staged Diff" (list "diff" "--cached" "--find-renames" "-U10") "diff")
+  (mevedel-review--insert-package-output
+   cwd "Unstaged Diff Stat" (list "diff" "--stat") "")
+  (mevedel-review--insert-package-output
+   cwd "Unstaged Diff" (list "diff" "--find-renames" "-U10") "diff")
+  (mevedel-review--insert-package-output
+   cwd "Untracked Files" (list "ls-files" "--others" "--exclude-standard") ""))
+
+(defun mevedel-review--write-package (cwd target &optional output-file)
+  "Write a review package for TARGET in CWD and return its path."
+  (let* ((cwd (file-name-as-directory (expand-file-name cwd)))
+         (output-file (or output-file
+                          (mevedel-review--default-package-file cwd target))))
+    (make-directory (file-name-directory output-file) t)
+    (with-temp-file output-file
+      (insert (format "# Review package: %s\n\n"
+                      (or (plist-get target :type) "unknown")))
+      (insert (format "- Working directory: %s\n" cwd))
+      (insert (format "- Generated: %s\n\n"
+                      (format-time-string "%Y-%m-%d %H:%M:%S %z")))
+      (pcase (plist-get target :type)
+        ('range (mevedel-review--write-range-package cwd target))
+        ('commit (mevedel-review--write-commit-package cwd target))
+        ('uncommitted (mevedel-review--write-uncommitted-package cwd))
+        (_ (user-error "Unsupported review package target: %S" target))))
+    output-file))
+
+(defun mevedel-review--target-package-spec (target cwd)
+  "Return package target spec for TARGET in CWD, or nil."
+  (pcase (plist-get target :type)
+    ('uncommitted (list :type 'uncommitted))
+    ('commit (list :type 'commit
+                   :sha (plist-get target :sha)))
+    ('base-branch
+     (when-let* ((branch (plist-get target :branch))
+                 (merge-base (mevedel-review--git-string
+                              cwd "merge-base" "HEAD" branch)))
+       (list :type 'range :base merge-base :head "HEAD" :branch branch)))
+    ('range target)
+    (_ nil)))
+
+(defun mevedel-review--write-target-package (cwd target)
+  "Write TARGET's review package in CWD, returning the path or nil."
+  (condition-case nil
+      (when-let* ((spec (mevedel-review--target-package-spec target cwd)))
+        (mevedel-review--write-package cwd spec))
+    (error nil)))
+
+(defun mevedel-review--prompt-with-package (prompt package-file command)
+  "Return PROMPT augmented with PACKAGE-FILE instructions for COMMAND."
+  (let ((label (if (eq command 'verify)
+                   "Verify package file"
+                 "Review package file")))
+    (format (concat "%s\n\n%s: %s\n"
+                    "Read that file first. Do not rerun broad git commands "
+                    "unless the package is missing information needed for a "
+                    "specific finding; prefer targeted file reads or focused "
+                    "git commands.")
+            prompt label package-file)))
+
+
+;;
 ;;; Output parsing and rendering
 
 (defun mevedel-review--parse-json (text)
@@ -1040,9 +1184,14 @@ dispatched.  COMMAND defaults to `review'."
          (cwd (mevedel-review--cwd))
          (target (mevedel-review--target-from-instructions
                   instructions cwd command))
-         (prompt+hint (mevedel-review--prompt-and-hint command target cwd)))
+         (prompt+hint (mevedel-review--prompt-and-hint command target cwd))
+         (package-file (mevedel-review--write-target-package cwd target))
+         (prompt (if package-file
+                     (mevedel-review--prompt-with-package
+                      (car prompt+hint) package-file command)
+                   (car prompt+hint))))
     (mevedel-review--dispatch
-     (car prompt+hint) (cdr prompt+hint) cwd command)))
+     prompt (cdr prompt+hint) cwd command)))
 
 ;;;###autoload
 (defun mevedel-review (&optional instructions)

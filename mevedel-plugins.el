@@ -65,70 +65,6 @@ roots below it."
   enabled-p
   hooks-enabled-p)
 
-
-;;
-;;; Native plugin hooks
-
-(defconst mevedel-plugins--superpowers-tool-mapping
-  "Mevedel Tool Mapping
-
-- Read a file: Read
-- Create or edit a file: Write or Edit
-- Run shell: Bash
-- Search contents: Grep
-- Find files: Glob
-- Fetch URL: WebFetch
-- Search web: WebSearch
-- Invoke skill: Skill tool or /skill-name
-- Dispatch a subagent: Agent
-- Send message: SendMessage
-- Task tracking: TaskCreate, TaskUpdate, TaskList, TaskGet"
-  "Mevedel-native tool mapping for the Superpowers bootstrap.")
-
-(defun mevedel-plugins--superpowers-bootstrap-context (plugin)
-  "Return Superpowers bootstrap context for PLUGIN, or nil.
-The context is built from PLUGIN's bundled using-superpowers skill."
-  (let ((skill-file (file-name-concat
-                     (mevedel-plugin-root plugin)
-                     "skills" "using-superpowers" "SKILL.md")))
-    (when (file-readable-p skill-file)
-      (with-temp-buffer
-        (insert "<EXTREMELY-IMPORTANT>\n")
-        (insert "You have superpowers in mevedel. Use the bundled ")
-        (insert "using-superpowers skill instructions below, adapted ")
-        (insert "to mevedel's native tools.\n\n")
-        (insert-file-contents skill-file)
-        (goto-char (point-max))
-        (unless (bolp)
-          (insert "\n"))
-        (insert "\n")
-        (insert mevedel-plugins--superpowers-tool-mapping)
-        (insert "\n</EXTREMELY-IMPORTANT>\n")
-        (buffer-string)))))
-
-(defun mevedel-plugins-superpowers-bootstrap-hook (event)
-  "Return Superpowers bootstrap context for a `SessionStart' EVENT."
-  (let* ((handler (plist-get event :hook-handler))
-         (root (or (plist-get handler :plugin-root)
-                   (plist-get event :plugin-root)))
-         (name (or (plist-get handler :plugin-name)
-                   (plist-get event :plugin-name)
-                   "superpowers")))
-    (when root
-      (when-let* ((context
-                   (mevedel-plugins--superpowers-bootstrap-context
-                    (mevedel-plugin--create :name name :root root))))
-        (list :additional-context context)))))
-
-(defun mevedel-plugins-native-hook-rules (plugin)
-  "Return mevedel-native hook rules for PLUGIN, or nil."
-  (when (equal (mevedel-plugin-name plugin) "superpowers")
-    '((SessionStart
-       ((:matcher "startup|resume|clear"
-         :hooks ((:type elisp
-                  :function mevedel-plugins-superpowers-bootstrap-hook))))))))
-
-
 ;;
 ;;; Paths
 
@@ -393,26 +329,6 @@ Do not descend into a directory once it is recognized as a plugin root."
   "Return non-nil when hooks are enabled for PLUGIN."
   (mevedel-plugins--state-hooks-enabled-p (mevedel-plugin-name plugin)))
 
-(defun mevedel-plugins--current-session ()
-  "Return the current buffer's mevedel session, or nil."
-  (and (boundp 'mevedel--session) mevedel--session))
-
-(defun mevedel-plugins--enqueue-superpowers-bootstrap (plugin)
-  "Append PLUGIN's Superpowers bootstrap context to the current session."
-  (when (equal (mevedel-plugin-name plugin) "superpowers")
-    (when-let* ((session (mevedel-plugins--current-session))
-                (context (mevedel-plugins--superpowers-bootstrap-context plugin)))
-      (unless (member context (mevedel-session-hook-context-pending session))
-        (setf (mevedel-session-hook-context-pending session)
-              (append (mevedel-session-hook-context-pending session)
-                      (list context)))))))
-
-(defun mevedel-plugins--enqueue-enabled-superpowers-bootstrap ()
-  "Append enabled Superpowers bootstrap context to the current session."
-  (when-let* ((plugin (mevedel-plugins--find "superpowers"))
-              ((mevedel-plugins--hooks-enabled-p plugin)))
-    (mevedel-plugins--enqueue-superpowers-bootstrap plugin)))
-
 (defun mevedel-plugins--set-state (name key value)
   "Set plugin NAME state KEY to VALUE."
   (let* ((state (copy-tree (mevedel-plugins--read-state)))
@@ -455,9 +371,7 @@ Do not descend into a directory once it is recognized as a plugin root."
 (defun mevedel-plugins-enable-hooks (plugin-name)
   "Persist hooks as enabled for PLUGIN-NAME."
   (mevedel-plugins-enable plugin-name)
-  (mevedel-plugins--set-state plugin-name :hooks-enabled t)
-  (when-let* ((plugin (mevedel-plugins--find plugin-name)))
-    (mevedel-plugins--enqueue-superpowers-bootstrap plugin)))
+  (mevedel-plugins--set-state plugin-name :hooks-enabled t))
 
 (defun mevedel-plugins-disable-hooks (plugin-name)
   "Persist hooks as disabled for PLUGIN-NAME."
@@ -620,7 +534,6 @@ It receives DIRECTORY and ARGS, and returns (STATUS OUTPUT).")
 (defun mevedel-plugins--reload ()
   "Reload plugin-visible skills for the current session when possible."
   (let ((result (mevedel-plugins--refresh-current-session)))
-    (mevedel-plugins--enqueue-enabled-superpowers-bootstrap)
     (cond
      ((eq result t)
       "Plugin registry reloaded. Refreshed current session skills.")

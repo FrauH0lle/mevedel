@@ -231,7 +231,10 @@ the final summary.
 
 At dispatch time, `mevedel-review.el` keeps target/result semantics local
 and routes foreground agent execution through `mevedel-skills-invoke`.
-It supplies skill-scoped allow rules for read-only `git` Bash commands
+For concrete Git targets it writes a package under
+`.mevedel/review-packages/` and tells the reviewer or verifier to read
+that file before rerunning broad repository inspection. It supplies
+skill-scoped allow rules for read-only `git` Bash commands
 used to inspect diffs (`git diff`, `git status`, `git log`, `git show`,
 `git merge-base`, `git rev-parse`, `git ls-files`, and `git cat-file`),
 plus `head` as a pipe filter for bounded object inspection. Review adds a
