@@ -147,9 +147,10 @@ Recommended locations:
   shareable across projects on one machine.
 - Enabled plugin manifests may contribute hooks only after executable
   hooks have been explicitly enabled for that plugin with `/plugin hooks
-  NAME on` or `/plugin hooks enable NAME`. Mevedel reads the Codex
-  default `./hooks/hooks.json` when the manifest omits `hooks`, or the
-  manifest `hooks` field when present. That field must be a single path.
+  NAME on` or `/plugin hooks enable NAME` in the current workspace.
+  Mevedel reads the Codex default `./hooks/hooks.json` when the manifest
+  omits `hooks`, or the manifest `hooks` field when present. That field
+  must be a single path.
 - `<workspace>/.mevedel/hooks.el` and
   `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
   workspace.
@@ -232,8 +233,8 @@ receive compatibility environment variables:
 - `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`, and `MEVEDEL_PLUGIN_ROOT` point at
   the plugin root.
 - `PLUGIN_DATA`, `CLAUDE_PLUGIN_DATA`, and `MEVEDEL_PLUGIN_DATA` point at
-  `~/.mevedel/plugin-data/<plugin-name>` and are created before the
-  command starts.
+  `<workspace>/.mevedel/plugin-data/<plugin-name>` and are created before
+  the command starts.
 
 Superpowers is treated specially when its hooks are enabled: mevedel
 installs a native `SessionStart` Elisp hook that loads the bundled

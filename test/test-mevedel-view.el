@@ -9331,6 +9331,24 @@ state of its inner sections"
 ;;
 ;;; mevedel-view-send slash-fork integration
 
+(mevedel-deftest mevedel-view-send/local-slash-command ()
+  ,test
+  (test)
+  :doc "local slash command string results are shown"
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-slash-commands
+           (list (cons "fake" (lambda (_args) "fake result"))))
+          seen)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (setq seen (apply #'format fmt args)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "/fake")
+          (mevedel-view-send)
+          (should (equal "fake result" seen))
+          (should (string-empty-p (mevedel-view--input-text))))))))
+
 (defmacro mevedel-view-test--with-fork-skill (skill-form &rest body)
   "Wire data-buf with a session containing SKILL-FORM, then run BODY.
 Binds `data-buf', `view-buf', and `session' in scope.  The skill is

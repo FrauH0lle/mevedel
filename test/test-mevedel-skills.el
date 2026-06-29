@@ -8,6 +8,7 @@
 (require 'mevedel-workspace)
 (require 'mevedel-skills)
 (require 'mevedel-hooks)
+(require 'mevedel-plugins)
 (require 'mevedel-models)
 (require 'gptel)
 (require 'gptel-openai)
@@ -326,6 +327,8 @@ paths:
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-plugin-skills-" t)))
          (mevedel-user-dir user-dir)
+         (workspace (mevedel-skills-test--make-workspace
+                     (file-name-concat user-dir "workspace")))
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
@@ -337,7 +340,8 @@ paths:
            "name: from-plugin
 description: Plugin skill
 " "Body")
-          (let* ((skills (mevedel-skills-scan nil nil))
+          (mevedel-plugins-enable "demo" workspace)
+          (let* ((skills (mevedel-skills-scan nil nil workspace))
                  (skill (cl-find "demo:from-plugin" skills
                                  :key #'mevedel-skill-name :test #'equal)))
             (should skill)
@@ -354,6 +358,8 @@ description: Plugin skill
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-plugin-disabled-" t)))
          (mevedel-user-dir user-dir)
+         (workspace (mevedel-skills-test--make-workspace
+                     (file-name-concat user-dir "workspace")))
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
@@ -365,11 +371,9 @@ description: Plugin skill
            "name: disabled-skill
 description: Disabled plugin skill
 " "Body")
-          (with-temp-file (file-name-concat user-dir "plugins.el")
-            (prin1 '(("demo" :enabled nil :hooks-enabled nil))
-                   (current-buffer)))
           (should-not
-           (cl-find "demo:disabled-skill" (mevedel-skills-scan nil nil)
+           (cl-find "demo:disabled-skill"
+                    (mevedel-skills-scan nil nil workspace)
                     :key #'mevedel-skill-name :test #'equal)))
       (delete-directory user-dir t)))
 
@@ -431,6 +435,8 @@ description: Plugin skill
          (configured-skills (file-name-concat root "skills"))
          (mevedel-user-dir user-dir)
          (mevedel-skill-dirs (list configured-skills))
+         (workspace (mevedel-skills-test--make-workspace
+                     (file-name-concat root "workspace")))
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo" "{\"name\":\"demo\",\"skills\":\"plugin-skills\"}"))
@@ -447,7 +453,8 @@ description: Configured skill
            "name: shared
 description: Plugin skill
 " "Plugin body")
-          (let* ((skills (mevedel-skills-scan nil nil))
+          (mevedel-plugins-enable "demo" workspace)
+          (let* ((skills (mevedel-skills-scan nil nil workspace))
                  (configured (cl-find "shared" skills
                                       :key #'mevedel-skill-name
                                       :test #'equal))
@@ -471,6 +478,7 @@ description: Plugin skill
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
          (mevedel-skill-dirs '(".mevedel/skills"))
+         (workspace (mevedel-skills-test--make-workspace workspace-root))
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo" "{\"name\":\"demo\",\"skills\":\"plugin-skills\"}"))
@@ -487,7 +495,9 @@ description: Project skill
            "name: shared
 description: Plugin skill
 " "Plugin body")
-          (let* ((skills (mevedel-skills-scan workspace-root nil))
+          (mevedel-plugins-enable "demo" workspace)
+          (let* ((skills (mevedel-skills-scan
+                          workspace-root nil workspace))
                  (project (cl-find "shared" skills
                                    :key #'mevedel-skill-name
                                    :test #'equal))
@@ -508,6 +518,8 @@ description: Plugin skill
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
          (mevedel-skill-dirs nil)
+         (workspace (mevedel-skills-test--make-workspace
+                     (file-name-concat root "workspace")))
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo" "{\"name\":\"demo\",\"skills\":\"skills\"}"))
@@ -519,7 +531,8 @@ description: Plugin skill
            "name: coordinator
 description: Plugin coordinator
 " "Body")
-          (let* ((skills (mevedel-skills-scan nil nil))
+          (mevedel-plugins-enable "demo" workspace)
+          (let* ((skills (mevedel-skills-scan nil nil workspace))
                  (coordinator (cl-find "coordinator" skills
                                        :key #'mevedel-skill-name
                                        :test #'equal))
@@ -537,6 +550,8 @@ description: Plugin coordinator
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
          (mevedel-skill-dirs nil)
+         (workspace (mevedel-skills-test--make-workspace
+                     (file-name-concat root "workspace")))
          (plugin-a-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo-a" "{\"name\":\"alpha\",\"skills\":\"skills\"}"))
@@ -557,8 +572,10 @@ description: Alpha shared
            "name: shared
 description: Beta shared
 " "Body")
+          (mevedel-plugins-enable "alpha" workspace)
+          (mevedel-plugins-enable "beta" workspace)
           (let ((names (mapcar #'mevedel-skill-name
-                               (mevedel-skills-scan nil nil))))
+                               (mevedel-skills-scan nil nil workspace))))
             (should (member "alpha:shared" names))
             (should (member "beta:shared" names))
             (should-not (member "shared" names))))
@@ -1145,6 +1162,7 @@ description: Interview relentlessly about a plan
         (progn
           (mevedel-skills-test--reset-watchers)
           (make-directory plugin-skills t)
+          (mevedel-plugins-enable "demo" ws)
           (with-current-buffer buf
             (mevedel-skills-install session buf))
           (should (null (mevedel-session-skills session)))
@@ -3230,7 +3248,7 @@ spanning lines")))
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-skills--dispatch-slash-command)))
                 (should (equal "### " (buffer-string)))
-                (should (member "demo skills:on hooks:off" messages))))))
+                (should (member "demo skills:off hooks:off" messages))))))
       (delete-directory user-dir t)))
 
   :doc "`/clear' asks before clearing a non-materialized session"
@@ -3657,6 +3675,8 @@ spanning lines")))
           (should (string-match-p "default" (funcall annot "mode")))
           (should (string-match-p "list" (funcall annot "plugin")))
           (should (string-match-p "update" (funcall annot "plugin")))
+          (should (string-match-p "remove" (funcall annot "plugin")))
+          (should (string-match-p "uninstall" (funcall annot "plugin")))
           (should (string-match-p "reload" (funcall annot "plugin")))
           (should (string-match-p "target args"
                                   (funcall annot "review")))
@@ -3736,7 +3756,7 @@ spanning lines")))
                                         (funcall annot "demo")))))))
       (delete-directory user-dir t)))
 
-  :doc "plugin command completes installed plugin names for enable and disable"
+  :doc "plugin command completes installed plugin names for state and removal commands"
   (let* ((user-dir (file-name-as-directory
                     (make-temp-file "mevedel-skills-plugin-capf-" t)))
          (mevedel-user-dir user-dir)
@@ -3761,6 +3781,22 @@ spanning lines")))
                                 (mevedel-skills-test--capf-candidates capf))))
               (erase-buffer)
               (insert "### /plugin disable o")
+              (goto-char (point-max))
+              (let ((capf (mevedel-slash-capf)))
+                (should capf)
+                (should (equal '("other")
+                               (mevedel-skills-test--capf-candidates
+                                capf "o"))))
+              (erase-buffer)
+              (insert "### /plugin remove d")
+              (goto-char (point-max))
+              (let ((capf (mevedel-slash-capf)))
+                (should capf)
+                (should (equal '("demo")
+                               (mevedel-skills-test--capf-candidates
+                                capf "d"))))
+              (erase-buffer)
+              (insert "### /plugin uninstall o")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should capf)

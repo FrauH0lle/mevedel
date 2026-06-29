@@ -125,9 +125,11 @@
 ;; `mevedel-plugins'
 (declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
 (declare-function mevedel-plugin-skills-dir "mevedel-plugins" (cl-x) t)
-(declare-function mevedel-plugins-enabled "mevedel-plugins" ())
+(declare-function mevedel-plugins-enabled "mevedel-plugins"
+                  (&optional workspace))
 (declare-function mevedel-plugins-list "mevedel-plugins" ())
-(declare-function mevedel-plugins-skill-dirs "mevedel-plugins" ())
+(declare-function mevedel-plugins-skill-dirs "mevedel-plugins"
+                  (&optional workspace))
 (declare-function mevedel-plugins-slash-command "mevedel-plugins" (args))
 (autoload 'mevedel-plugins-slash-command "mevedel-plugins" nil nil)
 
@@ -675,16 +677,16 @@ relative and WORKSPACE-ROOT is nil."
               skill)
             skills))))
 
-(defun mevedel-skills--plugin-skill-dir-entries ()
-  "Return (PLUGIN-NAME . DIR) entries from enabled installed plugins."
+(defun mevedel-skills--plugin-skill-dir-entries (&optional workspace)
+  "Return (PLUGIN-NAME . DIR) entries from plugins enabled in WORKSPACE."
   (require 'mevedel-plugins)
   (mapcar (lambda (entry)
             (cons (cdr (cdr entry)) (car entry)))
-          (mevedel-plugins-skill-dirs)))
+          (mevedel-plugins-skill-dirs workspace)))
 
-(defun mevedel-skills--plugin-skill-dirs ()
-  "Return existing skill directories from enabled installed plugins."
-  (mapcar #'cdr (mevedel-skills--plugin-skill-dir-entries)))
+(defun mevedel-skills--plugin-skill-dirs (&optional workspace)
+  "Return existing skill directories from plugins enabled in WORKSPACE."
+  (mapcar #'cdr (mevedel-skills--plugin-skill-dir-entries workspace)))
 
 (defun mevedel-skills--namespace-plugin-skill (plugin-name skill)
   "Prefix plugin SKILL with PLUGIN-NAME for user-facing invocation."
@@ -804,7 +806,7 @@ left untouched."
      groups)
     deduped))
 
-(defun mevedel-skills-scan (&optional workspace-root dirs)
+(defun mevedel-skills-scan (&optional workspace-root dirs workspace)
   "Scan skill directories and return a list of `mevedel-skill' structs.
 
 DIRS defaults to `mevedel-skill-dirs'.  WORKSPACE-ROOT is used to
@@ -813,7 +815,7 @@ Unique names remain unqualified.  When user/project/bundled/managed
 sources collide, all colliding entries are exposed as `source:name'.
 Same-source duplicates keep the first entry.  After scanning
 user/project directories, mevedel's bundled skills directory is
-scanned, then enabled plugin skills are scanned last under
+scanned, then plugins enabled in WORKSPACE are scanned last under
 `plugin-name:skill-name' names.
 Plugin skills are scanned only when DIRS is omitted, preserving exact
 explicit scans for tests and internal callers."
@@ -833,7 +835,7 @@ explicit scans for tests and internal callers."
         (push skill result)))
     (when include-plugins
       (require 'mevedel-plugins)
-      (dolist (entry (mevedel-plugins-skill-dirs))
+      (dolist (entry (mevedel-plugins-skill-dirs workspace))
         (when-let* ((resolved (mevedel-skills--resolve-dir
                                entry workspace-root)))
           (dolist (skill (mevedel-skills--scan-resolved-dir
@@ -907,8 +909,8 @@ are refreshed to match the freshly scanned skill set."
          (buffer (or buffer (current-buffer)))
          (old-skills (mevedel-session-skills session))
          (skills (mevedel-skills--preserve-active-skills
-                  (mevedel-skills-scan root) old-skills))
-         (dirs (mevedel-skills--collect-roots root skills)))
+                  (mevedel-skills-scan root nil ws) old-skills))
+         (dirs (mevedel-skills--collect-roots root skills ws)))
     (setf (mevedel-session-skills session) skills)
     (when (buffer-live-p buffer)
       (mevedel-skills--register-buffer buffer dirs))
@@ -1057,7 +1059,7 @@ skill root."
                         result)))))
     result))
 
-(defun mevedel-skills--collect-roots (workspace-root skills)
+(defun mevedel-skills--collect-roots (workspace-root skills &optional workspace)
   "Return the list of directories to watch for SKILLS.
 Includes every resolved entry of `mevedel-skill-dirs' plus its
 existing subdirectories, enabled plugin skill directories, the nearest
@@ -1066,7 +1068,7 @@ that currently contains one of SKILLS' source files (leaves).  Bundled
 skills are intentionally excluded -- they only change when mevedel
 itself updates and would waste a watcher slot.  WORKSPACE-ROOT is used
 to resolve relative entries; relative entries are skipped when it is
-nil."
+nil.  Plugin roots are resolved from plugins enabled in WORKSPACE."
   (let ((dirs (make-hash-table :test #'equal)))
     (dolist (raw mevedel-skill-dirs)
       (when-let* ((resolved (mevedel-skills--resolve-dir raw workspace-root))
@@ -1078,7 +1080,7 @@ nil."
           (when-let* ((parent (mevedel-skills--nearest-existing-directory
                                dir)))
             (puthash parent t dirs)))))
-    (dolist (dir (mevedel-skills--plugin-skill-dirs))
+    (dolist (dir (mevedel-skills--plugin-skill-dirs workspace))
       (puthash dir t dirs)
       (dolist (subdir (mevedel-skills--existing-subdirectories dir))
         (puthash subdir t dirs)))
@@ -3058,6 +3060,8 @@ distinct from `Agent :name' which matches subagent_type."
     ("hooks" . " manage plugin hooks")
     ("install" . " install GitHub plugin")
     ("update" . " update installed plugin")
+    ("remove" . " remove installed plugin")
+    ("uninstall" . " remove installed plugin")
     ("reload" . " rescan current session plugin skills"))
   "Completion candidates and annotations for `/plugin'.")
 
@@ -3079,7 +3083,7 @@ distinct from `Agent :name' which matches subagent_type."
     ("clear" . " [command] no args; start a fresh segment")
     ("help" . " [command] no args; list commands and skills")
     ("init" . " [command] optional repository bootstrap focus")
-    ("plugin" . " [command] list | enable | disable | hooks | install | update | reload")
+    ("plugin" . " [command] list | enable | disable | hooks | install | update | remove | uninstall | reload")
     ("review" . " [command] picker; target args or custom instructions")
     ("verify" . " [command] picker; target args or custom instructions")
     ("worktree" . " [command] status | create"))
@@ -3753,7 +3757,8 @@ ARGS is the list of completed arguments before the argument being completed."
   (pcase arg-index
     (0 (mapcar #'car mevedel-skills--plugin-command-candidates))
     (1 (pcase args
-         ((or `("enable") `("disable") `("update"))
+         ((or `("enable") `("disable") `("update")
+              `("remove") `("uninstall"))
           (mevedel-skills--plugin-name-candidates))
          (`("hooks")
           (delete-dups
@@ -3796,7 +3801,8 @@ ARGS is the list of completed arguments before ARG-INDEX."
   (pcase arg-index
     (0 (cdr (assoc candidate mevedel-skills--plugin-command-candidates)))
     (1 (pcase args
-         ((or `("enable") `("disable") `("update"))
+         ((or `("enable") `("disable") `("update")
+              `("remove") `("uninstall"))
           " installed plugin")
          (`("hooks")
           (if (member candidate '("enable" "disable"))

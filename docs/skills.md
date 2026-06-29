@@ -41,10 +41,13 @@ are prefixed with the plugin name from the manifest, so
 `skills/brainstorming/SKILL.md` in the `superpowers` plugin appears as
 `superpowers:brainstorming` in slash completion, the Skill tool listing,
 and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
-unchanged. Installed plugins are scanned under `~/.mevedel/plugins/`,
+unchanged. Installed plugins live under `~/.mevedel/plugins/`,
 including GitHub installs below `github.com/OWNER/REPO`, and
 `mevedel-plugin-extra-roots` can point at additional local plugin roots
-or directories containing plugin roots.
+or directories containing plugin roots. Plugin activation is
+workspace-scoped: plugins are inactive by default in each project until
+enabled, and the state is stored in that workspace's
+`.mevedel/plugins.el`.
 
 Bundled skills currently include:
 
@@ -102,15 +105,21 @@ Plugin management:
 
 - `/plugin install OWNER/REPO` clones a GitHub plugin into
   `~/.mevedel/plugins/github.com/OWNER/REPO`; existing installs are left
-  untouched and should be updated with `/plugin update NAME`.
+  untouched and should be updated with `/plugin update NAME`. Install
+  does not enable the plugin in the current workspace.
 - `/plugin update NAME` runs `git pull --ff-only` in the installed plugin
   root found by manifest name.
+- `/plugin remove NAME` and `/plugin uninstall NAME` delete a
+  mevedel-managed installed plugin, the current workspace's persisted
+  state, and the current workspace's plugin data. Plugins discovered only
+  through `mevedel-plugin-extra-roots` must be removed manually.
 - `/plugin list` shows installed plugins, skill enablement, and hook
-  enablement.
+  enablement for the current workspace.
 - `/plugin enable NAME` and `/plugin disable NAME` toggle plugin skill
-  discovery. Disabling a plugin also disables its hooks.
+  discovery for the current workspace. Disabling a plugin also disables
+  its hooks in that workspace.
 - `/plugin hooks NAME on` / `/plugin hooks NAME off` toggle executable
-  plugin hooks. `/plugin hooks enable NAME` and
+  plugin hooks for the current workspace. `/plugin hooks enable NAME` and
   `/plugin hooks disable NAME` are accepted aliases.
 - `/plugin reload` refreshes plugin-visible skills in the current chat
   session when possible.
@@ -140,8 +149,9 @@ argument candidates based on the current argument position; `/mode`
 completes `default`, `accept-edits`, `plan`, `trust-all`, and the UI
 aliases `edit`, `edits`, and `auto`, while `/model` completes model names
 from the current gptel backend. `/plugin` completes subcommands, then
-installed plugin names for `enable`, `disable`, `update`, and supported
-`hooks` forms; `/plugin install` remains freeform. Skill names with
+installed plugin names for `enable`, `disable`, `update`, `remove`,
+`uninstall`, and supported `hooks` forms; `/plugin install` remains
+freeform. Skill names with
 prefixes, such as `superpowers:brainstorming`, are valid slash
 candidates.
 `/review` and `/verify` complete shared explicit target forms such as

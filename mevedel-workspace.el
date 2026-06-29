@@ -182,7 +182,8 @@ registry, creating one lazily if needed."
   '("/.mevedel/sessions/"
     "/.mevedel/tool-results/"
     "/.mevedel/input-history.el"
-    "/.mevedel/media/")
+    "/.mevedel/media/"
+    "/.mevedel/plugin-data/")
   "Root-anchored generated state entries for `.git/info/exclude'.")
 
 (defun mevedel-workspace--git-exclude-file (root)

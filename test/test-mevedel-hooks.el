@@ -327,7 +327,7 @@
                            (mapcar (lambda (handler)
                                      (plist-get handler :source))
                                    handlers))))
-          (mevedel-plugins-enable-hooks "demo")
+          (mevedel-plugins-enable-hooks "demo" workspace)
           (let* ((handlers (mevedel-hooks--matching-handlers
                             'PreToolUse
                             '(:tool-name "Bash")
@@ -342,12 +342,13 @@
                            (plist-get plugin-handler :plugin-name)))
             (should (equal plugin-root
                            (plist-get plugin-handler :plugin-root)))
-            (should (equal (file-name-concat user-dir "plugin-data" "demo")
+            (should (equal (file-name-concat root ".mevedel"
+                                             "plugin-data" "demo")
                            (plist-get plugin-handler :plugin-data)))
             (should (= 7 (plist-get plugin-handler :timeout)))
             (should (equal "plugin status"
                            (plist-get plugin-handler :status-message))))
-          (mevedel-plugins-disable-hooks "demo")
+          (mevedel-plugins-disable-hooks "demo" workspace)
           (let ((handlers (mevedel-hooks--matching-handlers
                            'PreToolUse
                            '(:tool-name "Bash")
@@ -379,7 +380,7 @@
                       "\"command\":\"echo default\"}]}]}}"))
             (mevedel-hooks-test--write-plugin-manifest
              default-root "{\"name\":\"default\"}")
-            (mevedel-plugins-enable-hooks "default"))
+            (mevedel-plugins-enable-hooks "default" workspace))
           (let ((path-root (file-name-as-directory
                             (file-name-concat user-dir "plugins" "path"))))
             (make-directory (file-name-concat path-root "hooks") t)
@@ -390,7 +391,7 @@
             (mevedel-hooks-test--write-plugin-manifest
              path-root
              "{\"name\":\"path\",\"hooks\":\"./hooks/a.json\"}")
-            (mevedel-plugins-enable-hooks "path"))
+            (mevedel-plugins-enable-hooks "path" workspace))
           (let* ((handlers (mevedel-hooks--matching-handlers
                             'PreToolUse
                             '(:tool-name "Bash")
@@ -433,7 +434,7 @@
             (should-not
              (mevedel-hooks--matching-handlers
               'SessionStart '(:source "startup") rules)))
-          (mevedel-plugins-enable-hooks "superpowers")
+          (mevedel-plugins-enable-hooks "superpowers" workspace)
           (let* ((rules (mevedel-hooks-effective-rules session workspace))
                  (handlers (mevedel-hooks--matching-handlers
                             'SessionStart '(:source "startup") rules)))
@@ -955,11 +956,13 @@
                     (make-temp-file "mevedel-hooks-plugin-env-user" t)))
          (plugin-root (file-name-as-directory
                        (file-name-concat user-dir "plugins" "repo")))
-         (data-dir (file-name-concat user-dir "plugin-data" "demo"))
          (script (file-name-concat plugin-root "env.sh"))
          (mevedel-user-dir user-dir)
          (process-environment (copy-sequence process-environment))
-         (session (mevedel-hooks-test--session root)))
+         (session (mevedel-hooks-test--session root))
+         (workspace (mevedel-session-workspace session))
+         (data-dir (file-name-concat root ".mevedel"
+                                     "plugin-data" "demo")))
     (unwind-protect
         (progn
           (mevedel-hooks-test--clear-plugin-env)
@@ -979,7 +982,7 @@
           (mevedel-hooks-test--write-plugin-manifest
            plugin-root
            "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
-          (mevedel-plugins-enable-hooks "demo")
+          (mevedel-plugins-enable-hooks "demo" workspace)
           (let ((decision
                  (mevedel-hooks-test--await
                   (lambda (cb)
@@ -998,7 +1001,7 @@
                                "|")
                     (plist-get decision :system-message)))
             (should (file-directory-p data-dir)))
-          (mevedel-plugins-disable "demo")
+          (mevedel-plugins-disable "demo" workspace)
           (let* ((clean-command
                   (concat
                    "if [ -n \"$PLUGIN_ROOT$CLAUDE_PLUGIN_ROOT"
