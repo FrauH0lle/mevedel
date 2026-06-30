@@ -259,6 +259,92 @@
 		     (delete-directory root t)
 		     (delete-directory user-dir t))))
 
+(mevedel-deftest mevedel-hooks-effective-rules/agents-hook-roots
+  (:doc "loads standalone agents hook roots in precedence order and trusts project agents files")
+  (let* ((root (make-temp-file "mevedel-hooks-agents-ws" t))
+         (home (make-temp-file "mevedel-hooks-agents-home" t))
+         (user-dir (file-name-as-directory
+                    (file-name-concat home ".mevedel")))
+         (workspace (mevedel-hooks-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat home ".agents" "plugins"))
+         (mevedel-hooks-require-project-trust t)
+         (process-environment (copy-sequence process-environment)))
+    (unwind-protect
+        (cl-labels
+            ((write-el
+              (dir command)
+              (make-directory dir t)
+              (with-temp-file (file-name-concat dir "hooks.el")
+                (prin1
+                 `((PreToolUse
+                    ((:matcher "Bash"
+                      :hooks ((:type command :command ,command))))))
+                 (current-buffer))))
+             (write-json
+              (dir command)
+              (make-directory dir t)
+              (with-temp-file (file-name-concat dir "hooks.json")
+                (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                        "\"hooks\":[{\"type\":\"command\",\"command\":\""
+                        command
+                        "\"}]}]}}")))
+             (commands
+              ()
+              (mapcar (lambda (handler)
+                        (plist-get handler :command))
+                      (mevedel-hooks--matching-handlers
+                       'PreToolUse
+                       '(:tool-name "Bash")
+                       (mevedel-hooks-effective-rules session workspace)))))
+          (setenv "HOME" home)
+          (let ((global-agents (file-name-concat home ".agents"))
+                (global-mevedel user-dir)
+                (project-agents (file-name-concat root ".agents"))
+                (project-mevedel (file-name-concat root ".mevedel"))
+                (plugin-root (file-name-as-directory
+                              (file-name-concat user-dir "plugins" "repo"))))
+            (write-el global-agents "echo global-agents-el")
+            (write-json global-agents "echo global-agents-json")
+            (write-el global-mevedel "echo global-mevedel-el")
+            (write-json global-mevedel "echo global-mevedel-json")
+            (make-directory (file-name-concat plugin-root "hooks") t)
+            (with-temp-file (file-name-concat plugin-root "hooks" "hooks.json")
+              (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                      "\"hooks\":[{\"type\":\"command\","
+                      "\"command\":\"echo plugin\"}]}]}}"))
+            (mevedel-hooks-test--write-plugin-manifest
+             plugin-root "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
+              (mevedel-plugins-enable "demo" workspace))
+            (write-el project-agents "echo project-agents-el")
+            (write-json project-agents "echo project-agents-json")
+            (write-el project-mevedel "echo project-mevedel-el")
+            (write-json project-mevedel "echo project-mevedel-json")
+            (should
+             (equal '("echo global-agents-el"
+                      "echo global-agents-json"
+                      "echo global-mevedel-el"
+                      "echo global-mevedel-json"
+                      "echo plugin")
+                    (commands)))
+            (mevedel-hooks-trust-project workspace)
+            (should
+             (equal '("echo global-agents-el"
+                      "echo global-agents-json"
+                      "echo global-mevedel-el"
+                      "echo global-mevedel-json"
+                      "echo plugin"
+                      "echo project-agents-el"
+                      "echo project-agents-json"
+                      "echo project-mevedel-el"
+                      "echo project-mevedel-json")
+                    (commands)))))
+      (delete-directory root t)
+      (delete-directory home t))))
+
 (mevedel-deftest mevedel-hooks-effective-rules/malformed-trust-db
   (:doc "ignores malformed trusted hook entries")
   (let* ((root (make-temp-file "mevedel-hooks-trust" t))
@@ -295,6 +381,8 @@
          (workspace (mevedel-hooks-test--workspace root))
          (session (mevedel-session-create "main" workspace root))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-hooks-require-project-trust t))
     (unwind-protect
         (progn
@@ -327,7 +415,9 @@
                            (mapcar (lambda (handler)
                                      (plist-get handler :source))
                                    handlers))))
-          (mevedel-plugins-enable-hooks "demo" workspace)
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (_prompt) t)))
+            (mevedel-plugins-enable "demo" workspace))
           (let* ((handlers (mevedel-hooks--matching-handlers
                             'PreToolUse
                             '(:tool-name "Bash")
@@ -368,7 +458,9 @@
                     (make-temp-file "mevedel-hooks-plugin-shapes-user" t)))
          (workspace (mevedel-hooks-test--workspace root))
          (session (mevedel-session-create "main" workspace root))
-         (mevedel-user-dir user-dir))
+         (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins")))
     (unwind-protect
         (progn
           (let ((default-root (file-name-as-directory
@@ -380,7 +472,9 @@
                       "\"command\":\"echo default\"}]}]}}"))
             (mevedel-hooks-test--write-plugin-manifest
              default-root "{\"name\":\"default\"}")
-            (mevedel-plugins-enable-hooks "default" workspace))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (_prompt) t)))
+              (mevedel-plugins-enable "default" workspace)))
           (let ((path-root (file-name-as-directory
                             (file-name-concat user-dir "plugins" "path"))))
             (make-directory (file-name-concat path-root "hooks") t)
@@ -391,7 +485,9 @@
             (mevedel-hooks-test--write-plugin-manifest
              path-root
              "{\"name\":\"path\",\"hooks\":\"./hooks/a.json\"}")
-            (mevedel-plugins-enable-hooks "path" workspace))
+            (cl-letf (((symbol-function 'yes-or-no-p)
+                       (lambda (_prompt) t)))
+              (mevedel-plugins-enable "path" workspace)))
           (let* ((handlers (mevedel-hooks--matching-handlers
                             'PreToolUse
                             '(:tool-name "Bash")
@@ -417,6 +513,8 @@
          (workspace (mevedel-hooks-test--workspace root))
          (session (mevedel-session-create "main" workspace root))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-hooks-require-project-trust t))
     (unwind-protect
         (progn
@@ -434,7 +532,9 @@
             (should-not
              (mevedel-hooks--matching-handlers
               'SessionStart '(:source "startup") rules)))
-          (mevedel-plugins-enable-hooks "superpowers" workspace)
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (_prompt) t)))
+            (mevedel-plugins-enable "superpowers" workspace))
           (let* ((rules (mevedel-hooks-effective-rules session workspace))
                  (handlers (mevedel-hooks--matching-handlers
                             'SessionStart '(:source "startup") rules)))
@@ -958,6 +1058,8 @@
                        (file-name-concat user-dir "plugins" "repo")))
          (script (file-name-concat plugin-root "env.sh"))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (process-environment (copy-sequence process-environment))
          (session (mevedel-hooks-test--session root))
          (workspace (mevedel-session-workspace session))
@@ -982,7 +1084,9 @@
           (mevedel-hooks-test--write-plugin-manifest
            plugin-root
            "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
-          (mevedel-plugins-enable-hooks "demo" workspace)
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (_prompt) t)))
+            (mevedel-plugins-enable "demo" workspace))
           (let ((decision
                  (mevedel-hooks-test--await
                   (lambda (cb)

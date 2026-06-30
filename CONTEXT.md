@@ -6,7 +6,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 
 - **mevedel** — An Emacs Lisp package for visual AI-assisted programming workflows inside Emacs.
 - **workspace** — The project context mevedel operates in, including repository roots, workspace configuration, persistent memory, and session state.
-- **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill or durable memory.
+- **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill, plugin, or durable memory.
 - **mevedel state** — Runtime data owned by mevedel, such as session persistence, tool artifacts, input history, and generated metadata.
 - **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, background agents, and persistence metadata.
 - **worktree session** — A session whose working directory is a Git linked worktree while still belonging to the same mevedel workspace.
@@ -18,6 +18,8 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by slash command or model-side `Skill` tool.
+- **plugin** — A reusable extension bundle discovered from a plugin manifest. A plugin may contribute skills, hooks, and other implemented extension components.
+- **plugin activation** — A workspace-scoped decision that makes a plugin's implemented components active for sessions in that workspace until disabled.
 - **agent** — A specialized sub-agent such as explorer, coordinator, verifier, or reviewer.
 - **task** — A tracked work item in the session task list, optionally with dependency links.
 - **persistent memory** — Durable user- or workspace-local memory included in future sessions.

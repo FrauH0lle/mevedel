@@ -344,6 +344,8 @@ paths:
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-plugin-skills-" t)))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (workspace (mevedel-skills-test--make-workspace
                      (file-name-concat user-dir "workspace")))
          (plugin-root
@@ -375,6 +377,8 @@ description: Plugin skill
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-plugin-disabled-" t)))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (workspace (mevedel-skills-test--make-workspace
                      (file-name-concat user-dir "workspace")))
          (plugin-root
@@ -401,6 +405,8 @@ description: Disabled plugin skill
          (user-dir (file-name-as-directory
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
            user-dir "repo" "{\"name\":\"demo\",\"skills\":\"plugin-skills\"}"))
@@ -451,6 +457,8 @@ description: Plugin skill
                     (file-name-concat root "user")))
          (configured-skills (file-name-concat root "skills"))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-skill-dirs (list configured-skills))
          (workspace (mevedel-skills-test--make-workspace
                      (file-name-concat root "workspace")))
@@ -494,6 +502,8 @@ description: Plugin skill
          (user-dir (file-name-as-directory
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-skill-dirs '(".mevedel/skills"))
          (workspace (mevedel-skills-test--make-workspace workspace-root))
          (plugin-root
@@ -534,6 +544,8 @@ description: Plugin skill
          (user-dir (file-name-as-directory
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-skill-dirs nil)
          (workspace (mevedel-skills-test--make-workspace
                      (file-name-concat root "workspace")))
@@ -566,6 +578,8 @@ description: Plugin coordinator
          (user-dir (file-name-as-directory
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-skill-dirs nil)
          (workspace (mevedel-skills-test--make-workspace
                      (file-name-concat root "workspace")))
@@ -1216,6 +1230,8 @@ description: Interview relentlessly about a plan
          (user-dir (file-name-as-directory
                     (file-name-concat root "user")))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-skill-dirs nil)
          (plugin-root
           (mevedel-skills-test--write-plugin-manifest
@@ -3384,11 +3400,13 @@ spanning lines")))
         (should called)
         (should (equal "### " (buffer-string))))))
 
-  :doc "`/plugin list' messages the plugin command result"
+  :doc "`/plugin list' opens the plugin management buffer"
   (let* ((session (mevedel-skills-test--make-session))
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-plugin-slash-" t)))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          messages)
     (unwind-protect
         (progn
@@ -3404,7 +3422,11 @@ spanning lines")))
                 (goto-char (point-max))
                 (should (eq 'local (mevedel-skills--dispatch-slash-command)))
                 (should (equal "### " (buffer-string)))
-                (should (member "demo skills:off hooks:off" messages))))))
+                (should-not messages)
+                (with-current-buffer mevedel-plugins-list-buffer-name
+                  (should (eq major-mode 'mevedel-plugins-list-mode))
+                  (should (string-match-p "demo enabled:off hooks:none"
+                                          (buffer-string))))))))
       (delete-directory user-dir t)))
 
   :doc "`/clear' asks before clearing a non-materialized session"
@@ -3886,6 +3908,8 @@ spanning lines")))
   (let* ((user-dir (file-name-as-directory
                     (make-temp-file "mevedel-skills-plugin-capf-" t)))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-plugin-extra-roots nil)
          (session (mevedel-skills-test--make-session)))
     (unwind-protect
@@ -3916,6 +3940,8 @@ spanning lines")))
   (let* ((user-dir (file-name-as-directory
                     (make-temp-file "mevedel-skills-plugin-capf-" t)))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-plugin-extra-roots nil)
          (session (mevedel-skills-test--make-session)))
     (unwind-protect
@@ -3965,6 +3991,8 @@ spanning lines")))
   (let* ((user-dir (file-name-as-directory
                     (make-temp-file "mevedel-skills-plugin-capf-" t)))
          (mevedel-user-dir user-dir)
+         (mevedel-plugin-install-directory
+          (file-name-concat user-dir ".agents" "plugins"))
          (mevedel-plugin-extra-roots nil)
          (session (mevedel-skills-test--make-session)))
     (unwind-protect
