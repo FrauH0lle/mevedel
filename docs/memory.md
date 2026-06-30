@@ -1,10 +1,10 @@
 # Persistent Memory
 
-mevedel gives each workspace a persistent memory directory at
-`.mevedel/memory/`. Memory is model-writable and persists across
-conversations, but it is intentionally conservative: it should preserve
-durable, non-obvious context that will change how future sessions
-behave.
+mevedel reads persistent memory from configured `.mevedel/memory/` and
+`.agents/memory/` roots, both workspace-local and user-global. Memory is
+model-writable and persists across conversations, but it is
+intentionally conservative: it should preserve durable, non-obvious
+context that will change how future sessions behave.
 
 ## Memory flow
 
@@ -22,7 +22,7 @@ flowchart TD
 ## Layout
 
 ```
-.mevedel/memory/
+.agents/memory/
   MEMORY.md             ; always-loaded index
   user-style.md         ; topic file
   release-context.md    ; topic file
@@ -30,9 +30,11 @@ flowchart TD
 ```
 
 `MEMORY.md` is an index, not a body store. It is the only memory file
-included directly in the normal system prompt. The first 200 lines are
-loaded and prefixed with a generated HTML comment describing the index
-file's last modification date:
+included directly in the normal system prompt. Each configured root may
+have its own `MEMORY.md`; the first 200 lines of every present index are
+loaded in configured order and prefixed with the root label plus a
+generated HTML comment describing the index file's last modification
+date:
 
 ```markdown
 <!-- Last updated: 2026-05-08 (today) -->
@@ -96,17 +98,24 @@ memory should not store:
 - Git history, recent changes, or who changed what.
 - Debugging recipes where the fix is already represented by code and
   commits.
-- Information already documented in `AGENTS.md`, `CLAUDE.md`, or project
-  docs.
+- Information already documented in `AGENTS.md` or project docs.
 - Session-specific task state, temporary tool output, live metrics, or
   speculative conclusions.
 - Secrets, tokens, credentials, or private data not required for future
   work.
 
-Saving is a two-step operation:
+Saving is a three-step operation:
 
-1. Create or update a topic file under `.mevedel/memory/`.
-2. Add or update the one-line pointer in `MEMORY.md`.
+1. Choose the correct memory root.
+2. Create or update a topic file under that root.
+3. Add or update the one-line pointer in that root's `MEMORY.md`.
+
+Update existing memories in place. For new memories, use global memory
+for cross-project user preferences or broad feedback, and local memory
+for project-specific feedback, project context, or local references.
+Prefer `.agents/memory/` for portable memories that other agent tools
+can share. Use `.mevedel/memory/` for mevedel-specific behavior or
+schema.
 
 When the user explicitly asks mevedel to remember something, the model
 should save it immediately if it fits the policy. If the request asks to
@@ -121,14 +130,14 @@ The persistent memory section is produced by `mevedel-system.el` from
 `prompts/system/memory-policy.md`.
 
 For normal sessions, memory is included after workspace configuration
-(`AGENTS.md` / `CLAUDE.md`) and before environment details. The prompt
-cache key includes both `MEMORY.md` metadata and the current date so the
-generated age annotation can refresh daily even when the file is
+(`AGENTS.md`) and before environment details. The prompt cache key
+includes configured memory index metadata and the current date so the
+generated age annotation can refresh daily even when the files are
 unchanged.
 
-If `MEMORY.md` does not exist, the prompt includes an empty-index notice
-that tells the model to create topic files and link them from
-`MEMORY.md`.
+If no configured `MEMORY.md` exists, the prompt includes an empty-index
+notice that tells the model to create topic files and link them from the
+chosen root's `MEMORY.md`.
 
 Agents can opt out. `mevedel-define-agent` supports
 `:include-memory nil`, and several utility agents disable memory so they
@@ -150,8 +159,9 @@ facts, cite them, compare against them, or mention them.
 
 The bundled `/remember [focus]` skill reviews the memory landscape and
 reports proposed cleanup, promotion, stale-memory, or ambiguity findings.
-It looks at `MEMORY.md`, linked topic files, other memory topic files,
-and applicable `AGENTS.md` / `CLAUDE.md` files.
+It looks at configured `MEMORY.md` indexes, linked topic files, other
+memory topic files, and applicable `AGENTS.md` / `AGENTS.local.md`
+files.
 
 The skill is report-only. It should not edit memory unless the user
 explicitly approves changes after seeing the report.

@@ -17,16 +17,16 @@ or kind of cleanup.
 
 Review these layers when present:
 
-- `.mevedel/memory/MEMORY.md`
-- Topic files linked from `.mevedel/memory/MEMORY.md`
-- Other `.md` files under `.mevedel/memory/`
-- `AGENTS.md` and `CLAUDE.md` files that apply to the current workspace
+- `MEMORY.md` in each configured memory root
+- Topic files linked from those memory indexes
+- Other `.md` files under configured memory roots
+- `AGENTS.md` and `AGENTS.local.md` files that apply to the current workspace
 
 ## Classification
 
 Classify each memory or instruction as one of:
 
-- **Promote**: belongs in `AGENTS.md`, `CLAUDE.md`, or project docs instead of
+- **Promote**: belongs in `AGENTS.md` or project docs instead of
   auto-memory because it is shared, durable project guidance.
 - **Keep in memory**: personal, contextual, or external-reference knowledge
   that is not derivable from current repo state.
@@ -39,6 +39,8 @@ Classify each memory or instruction as one of:
 ## Checks
 
 - Treat `MEMORY.md` as an index only. Topic bodies belong in separate files.
+- Prefer `.agents/memory/` for new portable memories and `.mevedel/memory/`
+  only for mevedel-specific memories.
 - Prefer current repo state over memory when they conflict.
 - Do not propose saving code structure, file paths, architecture summaries, or
   git history when they can be recovered by reading files or git.

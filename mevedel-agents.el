@@ -141,8 +141,8 @@ KEYS is a plist with the following recognized keys:
   :hooks          LIST      -- declarative hook rules scoped to this agent.
                                Local `Stop' entries are treated as
                                `SubagentStop'
-  :include-workspace-config BOOLEAN -- include AGENTS.md/CLAUDE.md
-  :include-memory BOOLEAN -- include `.mevedel/memory/MEMORY.md'
+  :include-workspace-config BOOLEAN -- include AGENTS.md
+  :include-memory BOOLEAN -- include configured memory indexes
   :include-environment BOOLEAN -- include environment section
 
 Creates a `mevedel-agent' struct and registers it in

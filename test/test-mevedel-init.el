@@ -49,6 +49,22 @@
                                      (file-name-concat root-dir
                                                        "AGENTS.local.md"))
                                     prompt))
+            (should (string-match-p (regexp-quote
+                                     (file-name-concat root-dir
+                                                       ".agents" "skills"))
+                                    prompt))
+            (should (string-match-p (regexp-quote
+                                     (file-name-concat root-dir
+                                                       ".agents" "memory"))
+                                    prompt))
+            (should (string-match-p (regexp-quote
+                                     (expand-file-name "~/.agents/skills"))
+                                    prompt))
+            (should (string-match-p (regexp-quote
+                                     (expand-file-name "~/.agents/memory"))
+                                    prompt))
+            (should-not (string-match-p "CLAUDE\\.md" prompt))
+            (should-not (string-match-p "\\.claude/skills" prompt))
             (should (string-match-p "User-provided focus: prefer hooks"
                                     prompt))))
       (kill-buffer data-buffer))))

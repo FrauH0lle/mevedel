@@ -52,8 +52,8 @@ Key features:
   sub-agent lifecycle automation.
 - Conversation compaction that rotates segments rather than mutating the live
   buffer, so older turns stay browsable on disk.
-- Per-project memory (`.mevedel/memory/MEMORY.md`) and project instruction files
-  (`AGENTS.md` / `CLAUDE.md`) for customizing LLM behavior.
+- Persistent memory (`.mevedel/memory/` and `.agents/memory/`) and project
+  instruction files (`AGENTS.md`) for customizing LLM behavior.
 - `@ref`, `@file`, `@agent`, and `@mcp` mention syntax in chat buffers.
 
 [output.webm](https://github.com/user-attachments/assets/738c9f8e-2798-466c-875e-5a77bc166a56)
@@ -193,7 +193,7 @@ mevedel assigns buffers to a project workspace which is used to determine in
 which folders the LLM is allowed to operate. When the LLM needs access to a
 directory outside the workspace root, it uses the `RequestAccess` tool which
 prompts the user for confirmation. The default allowed roots are the workspace
-root, Emacs' temporary directory, `.mevedel/memory/`, the configured plans
+root, Emacs' temporary directory, configured memory roots, the configured plans
 directory, and any roots granted for the session.
 
 | Command                       | Command Description                                                |
@@ -918,11 +918,12 @@ Useful commands:
 ## Skills
 
 A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
-discovered from `~/.claude/skills/`, `.claude/skills/`, and `.mevedel/skills/`,
-and from the directories listed in `mevedel-skill-dirs`. mevedel ships a few
-bundled skills under `skills/` (for example `coordinator`, `review`,
-`analyze-log`, and `remember`); user and project skills override bundled ones by
-name.
+discovered from `.mevedel/skills/`, `.agents/skills/`,
+`~/.mevedel/skills/`, `~/.agents/skills/`, and from the directories listed in
+`mevedel-skill-dirs`. Legacy `.claude/skills/` entries are ignored. mevedel
+ships a few bundled skills under `skills/` (for example `coordinator`,
+`review`, `analyze-log`, and `remember`); name conflicts are exposed with
+deterministic visible prefixes.
 
 A skill can:
 
@@ -1000,17 +1001,23 @@ summary prompt, and segment-rotation contract.
 
 ## Project Instructions and Memory
 
-mevedel checks the workspace root for an `AGENTS.md` or `CLAUDE.md` file. If
-found, its contents are appended to the system prompt as
-`## Workspace Configuration`, enabling per-project LLM behavior customization
-that can be checked into version control.
+mevedel checks the workspace root for an `AGENTS.md` file. If found, its
+contents are appended to the system prompt as `## Workspace Configuration`,
+enabling per-project LLM behavior customization that can be checked into
+version control. `AGENTS.local.md` is loaded after `AGENTS.md` for private
+checkout-specific guidance.
 
-In addition, the first 200 lines of `.mevedel/memory/MEMORY.md` (under the
-workspace root) are included in every system prompt. `MEMORY.md` is an index;
-durable memory bodies live in linked topic files with frontmatter that classifies
-them as user, feedback, project, or reference memories. The bundled `/remember`
-skill reviews memory and proposes cleanup or promotion changes. Both locations
-are independent of session sidecars.
+In addition, the first 200 lines of each configured memory index are included in
+every system prompt. The default memory roots are `.mevedel/memory/`,
+`.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
+`MEMORY.md` is an index; durable memory bodies live in linked topic files with
+frontmatter that classifies them as user, feedback, project, or reference
+memories. The bundled `/remember` skill reviews memory and proposes cleanup or
+promotion changes. Memory roots are independent of session sidecars.
+
+| Custom Variable | Variable Description |
+|-----------------|----------------------|
+| `mevedel-memory-dirs` | Directories scanned for persistent memory indexes. |
 
 ## @-Mentions
 
@@ -1048,7 +1055,7 @@ or external setup encrypts them.
 |------|---------|
 | `.mevedel/sessions/` | Persisted chat sessions, segments, sidecars, snapshots, permission logs, hook logs, and agent transcripts. |
 | `.mevedel/input-history.el` | Workspace chat input history. |
-| `.mevedel/memory/` | Memory index and topic files. |
+| `.mevedel/memory/`, `.agents/memory/` | Memory index and topic files. |
 | `.mevedel/permissions.el` | Persistent permission decisions. |
 | `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
 | `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |

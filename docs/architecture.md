@@ -69,26 +69,27 @@ Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `revise`; `tutor` inherits from `discuss`. System prompt assembled
 dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
-(AGENTS.md/CLAUDE.md plus optional AGENTS.local.md), persistent memory,
-then environment.
+(AGENTS.md plus optional AGENTS.local.md), persistent memory, then
+environment.
 
 `mevedel-system-build-prompt` checks each directory from workspace root
-to the session working directory, preferring `AGENTS.md` over
-`CLAUDE.md` in the same directory. `AGENTS.local.md`, when present, is
-loaded after the shared file in that same directory. Matching files are
-included from broadest to closest scope as `## Workspace Configuration`
-so deeper instructions override earlier ones.
+to the session working directory for `AGENTS.md`. `AGENTS.local.md`,
+when present, is loaded after the shared file in that same directory.
+Matching files are included from broadest to closest scope as
+`## Workspace Configuration` so deeper instructions override earlier
+ones.
 
 ## Persistent memory
 
-`.mevedel/memory/MEMORY.md` under workspace root is the always-loaded
-memory index; first 200 lines are included in every system prompt via
-`mevedel-system--memory-prompt`, with a last-updated age annotation.
-Durable memory bodies live in linked topic files under
-`.mevedel/memory/`, using `user`, `feedback`, `project`, or
-`reference` frontmatter. `MEMORY.md` should contain one-line links
-only. LLM-writable. See [`memory.md`](memory.md) for the full layout,
-save policy, staleness rules, and `/remember` review workflow.
+Memory indexes are read from configured `.mevedel/memory/` and
+`.agents/memory/` roots, both workspace-local and user-global. The first
+200 lines of each present `MEMORY.md` are included in every system
+prompt via `mevedel-system--memory-prompt`, with a last-updated age
+annotation. Durable memory bodies live in linked topic files under the
+same root, using `user`, `feedback`, `project`, or `reference`
+frontmatter. `MEMORY.md` should contain one-line links only.
+LLM-writable. See [`memory.md`](memory.md) for the full layout, save
+policy, staleness rules, and `/remember` review workflow.
 
 ## Chat buffer formatting
 

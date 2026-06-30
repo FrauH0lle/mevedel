@@ -32,9 +32,9 @@ top-level `Stop` remains reserved for the main assistant turn.
 
 Agent prompts are built from the agent's own prompt file plus selected
 system sections. `:include-workspace-config`, `:include-memory`, and
-`:include-environment` control whether AGENTS.md/CLAUDE.md, persistent
-memory, and environment details are appended. Utility agents can therefore
-avoid inheriting main-agent boilerplate while still receiving environment
+`:include-environment` control whether AGENTS.md, persistent memory, and
+environment details are appended. Utility agents can therefore avoid
+inheriting main-agent boilerplate while still receiving environment
 context.
 
 ## Invocation flow
@@ -122,9 +122,10 @@ user turn via `gptel--inject-prompt`. Polymorphic accessor
 
 Bundled at `skills/coordinator/SKILL.md` (discovered via
 `mevedel-skills--bundled-dir`). `context: fork` delegates to the
-coordinator agent. User/project skills in `~/.claude/skills/`,
-`.claude/skills/`, or `.mevedel/skills/` override bundled skills by
-name.
+coordinator agent. User/project skills in `.mevedel/skills/`,
+`.agents/skills/`, `~/.mevedel/skills/`, or `~/.agents/skills/` can
+coexist with bundled skills; collisions are exposed with generated
+visible names instead of overriding the bundled entry.
 
 The coordinator prompt includes a continue-vs-spawn table for deciding
 when to reuse a worker through `SendMessage` versus launching a fresh

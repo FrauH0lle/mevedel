@@ -169,16 +169,18 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "includes default roots and plans directory"
+  :doc "includes default roots, memory dirs, and plans directory"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/rootsproj/" "/tmp/rootsproj/" "rootsproj"))
          (mevedel-workspace-additional-roots nil)
+         (mevedel-memory-dirs '(".mevedel/memory/" ".agents/memory/"))
          (mevedel-plans-directory "/tmp/plans/"))
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
       (let ((roots (mevedel--all-allowed-roots)))
         (should (member "/tmp/rootsproj/" roots))
         (should (member "/tmp/rootsproj/.mevedel/memory/" roots))
+        (should (member "/tmp/rootsproj/.agents/memory/" roots))
         (should (member (file-name-as-directory
                          (expand-file-name temporary-file-directory))
                         roots))

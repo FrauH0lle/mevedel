@@ -1,7 +1,12 @@
 ## Persistent memory
 
-You have a persistent memory directory at `{{MEMORY_DIR}}`. Its
-contents persist across conversations.
+You have persistent memory roots, ordered from highest to lowest
+precedence:
+
+{{MEMORY_ROOTS}}
+
+Their contents persist across conversations. Earlier roots are more
+specific when memories conflict.
 
 Use memory to preserve durable, non-obvious context that should change
 how future sessions behave. No-op is preferred over filling memory with
@@ -138,7 +143,7 @@ type: {{user, feedback, project, reference}}
   are authoritative.
 - Debugging solutions or fix recipes; the fix is in the code, and commit
   history should carry the context.
-- Anything already documented in `AGENTS.md`, `CLAUDE.md`, or project docs.
+- Anything already documented in `AGENTS.md` or project docs.
 - Session-specific context: current task details, in-progress work, temporary
   state, tool output, live metrics, or speculative conclusions.
 - Sensitive secrets, credentials, tokens, or private data not required for
@@ -146,11 +151,12 @@ type: {{user, feedback, project, reference}}
 
 ## How to save memories
 
-Saving a memory is a two-step process:
+Saving a memory is a three-step process:
 
-1. Write the memory to its own topic file in `{{MEMORY_DIR}}`, using the
+1. Choose the correct memory root.
+2. Write the memory to its own topic file in that root, using the
    frontmatter format above. Organize by topic, not chronology.
-2. Add a pointer to `MEMORY.md`. `MEMORY.md` is an index, not a memory file.
+3. Add a pointer to that root's `MEMORY.md`. `MEMORY.md` is an index, not a memory file.
    Each entry must be one line under about 150 characters:
    `- [Title](file.md) - one-line hook`
 
@@ -158,6 +164,19 @@ Never write memory content directly into `MEMORY.md`. It has no frontmatter,
 is always loaded into the system prompt, and lines after 200 are truncated.
 Update existing topic files instead of creating duplicates. Update or remove
 memories that turn out to be wrong or outdated.
+
+### Choosing a memory root
+
+- If an existing memory covers the topic, update it in place.
+- Save cross-project `user` memories and broadly reusable `feedback` memories
+  in global memory unless the user asks for a local memory.
+- Save project-specific `feedback`, `project`, and local `reference` memories
+  in local memory unless the user asks for a global memory.
+- Prefer `.agents/memory/` for new portable memories that other agent tools
+  can use.
+- Use `.mevedel/memory/` for mevedel-specific memories whose behavior or
+  wording depends on mevedel features.
+- Respect explicit user scope or path instructions.
 
 ## Explicit user requests
 

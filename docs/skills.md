@@ -27,12 +27,18 @@ flowchart TD
 
 Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
-non-nil. The default search order is `~/.mevedel/skills/`,
-`~/.claude/skills/`, `.mevedel/skills/`, then `.claude/skills/`.
+non-nil. The default search order is `.mevedel/skills/`,
+`.agents/skills/`, `~/.mevedel/skills/`, then `~/.agents/skills/`.
+Legacy `.claude/skills/` entries are ignored even if left in a custom
+`mevedel-skill-dirs` value.
 Unique names stay unqualified. When non-plugin skills from different
-sources share a name, all colliding entries are exposed with deterministic
-source prefixes such as `project:review`, `user:review`, or
-`bundled:review`. Same-source duplicates keep the first entry.
+sources share a name, all colliding entries are exposed with the shortest
+deterministic prefix that disambiguates them, such as `mevedel:review`,
+`agents:review`, `local:review`, `global:review`, or
+`bundled:review`. If all four ordinary roots contain the same name, the
+visible names are `local-mevedel:review`, `local-agents:review`,
+`global-mevedel:review`, and `global-agents:review`. Same-source
+duplicates keep the first entry.
 
 Plugin skills are discovered from enabled `.codex-plugin/plugin.json`
 manifests. A manifest `skills` path is resolved relative to the plugin
@@ -55,7 +61,8 @@ Bundled skills currently include:
 - `review` — bundled forked code-review skill. The first-class
   `/review` command uses the same reviewer contract but dispatches its
   task directly so user/project skills named `review` cannot override the
-  review workflow.
+  review workflow. A skill named `review` remains selectable through its
+  generated visible name, for example `local:review` or `mevedel:review`.
 - `git-worktree` — model-only guidance for checking Git worktree
   isolation and mirroring the `/worktree` defaults when explicit
   model-driven fallback is needed.
@@ -63,10 +70,10 @@ Bundled skills currently include:
 - `remember` — user-invocable persistent-memory review and cleanup
   proposal helper.
 
-`remember` is intentionally report-only: it reviews `MEMORY.md`, memory
-topic files, and applicable workspace configuration, then proposes
-cleanup or promotion changes. It should not edit memory unless the user
-explicitly approves the report.
+`remember` is intentionally report-only: it reviews configured memory
+roots, topic files, and applicable workspace configuration, then
+proposes cleanup or promotion changes. It should not edit memory unless
+the user explicitly approves the report.
 
 Raw skill names come from frontmatter `name` when valid, otherwise the
 containing directory name. Raw names must match `[a-z0-9-]+`; visible
@@ -82,8 +89,8 @@ Local slash commands are handled before skill lookup. Built-ins include
 `/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`,
 `/worktree`, `/mode`, `/skills`, `/auto`, `/clear`, `/plugin`, and
 `/help`. `/init` sends the repository bootstrap prompt that helps create
-or improve `AGENTS.md`,
-`AGENTS.local.md`, project skills, and hooks. `/auto` toggles the current
+or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
+and mevedel hooks. `/auto` toggles the current
 session between `default` and `trust-all`, adding an `auto-mode` reminder
 while active and a one-shot `auto-mode-exit` reminder after it is turned
 off. `/mode auto` is the same as entering `trust-all`; `/mode edit`
