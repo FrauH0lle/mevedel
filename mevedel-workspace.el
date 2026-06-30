@@ -30,6 +30,9 @@
 ;; `mevedel-chat'
 (defvar mevedel-plans-directory)
 
+;; `mevedel-system'
+(defvar mevedel-memory-dirs)
+
 ;; `project'
 (declare-function project-current "project" (&optional maybe-prompt dir))
 (declare-function project-root "project" (project))
@@ -236,17 +239,26 @@ state can still be tracked."
 (defun mevedel--all-allowed-roots (&optional buffer)
   "Get all allowed roots for BUFFER's workspace.
 
-Returns a list containing the workspace root, default mevedel state roots,
+Returns a list containing the workspace root, configured memory roots,
 the system temporary directory, and any additional roots configured via
 `mevedel-workspace-additional-roots'."
   (let* ((workspace-root (mevedel-workspace-root (mevedel-workspace buffer)))
+         (memory-dirs (if (boundp 'mevedel-memory-dirs)
+                          mevedel-memory-dirs
+                        '(".mevedel/memory/" ".agents/memory/")))
          (roots (append
                  (list workspace-root
-                       (file-name-concat workspace-root ".mevedel" "memory/")
                        (with-current-buffer (or buffer (current-buffer))
                          temporary-file-directory)
                        (and (boundp 'mevedel-plans-directory)
                             mevedel-plans-directory))
+                 (mapcar
+                  (lambda (dir)
+                    (expand-file-name
+                     dir
+                     (unless (file-name-absolute-p dir)
+                       workspace-root)))
+                  memory-dirs)
                  (alist-get workspace-root mevedel-workspace-additional-roots
                             nil nil #'equal))))
     (delete-dups

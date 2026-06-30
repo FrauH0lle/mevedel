@@ -123,9 +123,12 @@
        ("WORKING_DIRECTORY" . ,cwd)
        ("TARGET_FILE" . ,(mevedel-init--path root "AGENTS.md"))
        ("LOCAL_TARGET_FILE" . ,(mevedel-init--path root "AGENTS.local.md"))
-       ("PROJECT_SKILLS_DIR" . ,(mevedel-init--path root ".mevedel" "skills"))
+       ("PROJECT_SKILLS_DIR" . ,(mevedel-init--path root ".agents" "skills"))
        ("USER_SKILLS_DIR" . ,(file-name-as-directory
-                              (expand-file-name "skills" mevedel-user-dir)))
+                              (expand-file-name "~/.agents/skills")))
+       ("PROJECT_MEMORY_DIR" . ,(mevedel-init--path root ".agents" "memory"))
+       ("USER_MEMORY_DIR" . ,(file-name-as-directory
+                              (expand-file-name "~/.agents/memory")))
        ("HOOKS_FILE" . ,(mevedel-init--path root ".mevedel" "hooks.json"))
        ("HOOKS_DIR" . ,(mevedel-init--path root ".mevedel" "hooks"))))))
 

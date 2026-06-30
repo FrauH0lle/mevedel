@@ -6,6 +6,8 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 
 - **mevedel** — An Emacs Lisp package for visual AI-assisted programming workflows inside Emacs.
 - **workspace** — The project context mevedel operates in, including repository roots, workspace configuration, persistent memory, and session state.
+- **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill or durable memory.
+- **mevedel state** — Runtime data owned by mevedel, such as session persistence, tool artifacts, input history, and generated metadata.
 - **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, background agents, and persistence metadata.
 - **worktree session** — A session whose working directory is a Git linked worktree while still belonging to the same mevedel workspace.
 - **instruction** — A user-authored overlay in source buffers that gives mevedel context or work to perform.
@@ -18,7 +20,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by slash command or model-side `Skill` tool.
 - **agent** — A specialized sub-agent such as explorer, coordinator, verifier, or reviewer.
 - **task** — A tracked work item in the session task list, optionally with dependency links.
-- **persistent memory** — Durable workspace-local memory stored under `.mevedel/memory/` and included in future sessions.
+- **persistent memory** — Durable user- or workspace-local memory included in future sessions.
 - **ADR** — An architecture decision record under `docs/adr/` for durable decisions that should constrain future design work.
 
 ## Consumer rules

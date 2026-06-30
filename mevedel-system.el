@@ -5,8 +5,8 @@
 ;; System prompt assembly.  The full prompt is composed from several
 ;; string constants (tone, task protocol, tool usage guidance,
 ;; delegation rules) plus dynamic sections built at request time:
-;; persistent memory (from `.mevedel/memory/MEMORY.md'), environment
-;; info, and the workspace-level AGENTS.md / CLAUDE.md if present.
+;; persistent memory, environment info, and the workspace-level
+;; AGENTS.md / AGENTS.local.md files if present.
 ;; A separate tutor-base-prompt drives the tutoring preset.
 ;;
 ;; Prompt sections are registered as named producers so static, keyed,
@@ -44,6 +44,19 @@
                     lib)))
     (file-name-directory (file-truename el-file)))
   "Directory containing the mevedel source files.")
+
+(defcustom mevedel-memory-dirs
+  '(".mevedel/memory/"
+    ".agents/memory/"
+    "~/.mevedel/memory/"
+    "~/.agents/memory/")
+  "Directories scanned for persistent memory indexes.
+
+Relative paths are resolved against the current workspace root.  The
+default order is local mevedel, local shared agents, global mevedel,
+then global shared agents."
+  :type '(repeat directory)
+  :group 'mevedel)
 
 (defun mevedel-system--prompt-path (relative-path)
   "Return the absolute prompt path for RELATIVE-PATH."
@@ -270,11 +283,42 @@ When NAME is nil, clear all prompt section cache entries."
                 :size (file-attribute-size attrs)))
       (list :missing expanded))))
 
-(defun mevedel-system--memory-file (workspace)
-  "Return WORKSPACE memory file path."
-  (file-name-concat
-   (mevedel-system--workspace-root workspace)
-   ".mevedel" "memory" "MEMORY.md"))
+(defun mevedel-system--memory-root (workspace dir)
+  "Return metadata plist for memory DIR in WORKSPACE."
+  (let* ((global (or (file-name-absolute-p dir)
+                     (string-prefix-p "~" dir)))
+         (path (directory-file-name
+                (expand-file-name (substitute-in-file-name dir))))
+         (family (cond
+                  ((string-match-p "\\(?:\\`\\|/\\)\\.mevedel/memory\\'" path)
+                   "mevedel")
+                  ((string-match-p "\\(?:\\`\\|/\\)\\.agents/memory\\'" path)
+                   "agents")))
+         (label (string-join
+                 (delq nil
+                       (list (if global "Global" "Local")
+                             family
+                             "memory"))
+                 " "))
+         (root (file-name-as-directory
+                (expand-file-name
+                 dir
+                 (and (not global)
+                      (mevedel-system--workspace-root workspace)))))
+         (file (file-name-concat root "MEMORY.md")))
+    (list :dir root
+          :file file
+          :label label)))
+
+(defun mevedel-system--memory-roots (workspace)
+  "Return configured memory root metadata for WORKSPACE."
+  (mapcar (lambda (dir) (mevedel-system--memory-root workspace dir))
+          mevedel-memory-dirs))
+
+(defun mevedel-system--memory-files (workspace)
+  "Return configured memory index files for WORKSPACE."
+  (mapcar (lambda (root) (plist-get root :file))
+          (mevedel-system--memory-roots workspace)))
 
 (defun mevedel-system--human-time-age (time)
   "Return a short human age string for TIME."
@@ -297,42 +341,66 @@ When NAME is nil, clear all prompt section cache entries."
             (format-time-string "%Y-%m-%d" mtime)
             (mevedel-system--human-time-age mtime))))
 
+(defun mevedel-system--read-memory-index (memory-file)
+  "Return the first 200 lines from MEMORY-FILE."
+  (string-join
+   (with-temp-buffer
+     (insert-file-contents memory-file)
+     (cl-loop repeat 200
+              unless (eobp)
+              collect (prog1 (buffer-substring-no-properties
+                              (line-beginning-position)
+                              (line-end-position))
+                        (forward-line 1))))
+   "\n"))
+
+(defun mevedel-system--memory-root-content (root)
+  "Return prompt content for memory ROOT, or nil when its index is absent."
+  (let ((file (plist-get root :file)))
+    (when (file-exists-p file)
+      (string-join
+       (list (format "### %s" (plist-get root :label))
+             (format "Directory: %s" (plist-get root :dir))
+             (mevedel-system--memory-updated-header file)
+             (mevedel-system--read-memory-index file))
+       "\n"))))
+
+(defun mevedel-system--memory-roots-description (workspace)
+  "Return configured memory roots for WORKSPACE as prompt text."
+  (mapconcat
+   (lambda (root)
+     (format "- %s: %s"
+             (plist-get root :label)
+             (plist-get root :dir)))
+   (mevedel-system--memory-roots workspace)
+   "\n"))
+
 (defun mevedel-system--memory-content (workspace)
-  "Return WORKSPACE memory index content, or an empty notice."
-  (let ((memory-file (mevedel-system--memory-file workspace)))
-    (if (file-exists-p memory-file)
-        (concat
-         (mevedel-system--memory-updated-header memory-file)
-         "\n"
-         (string-join
-          (with-temp-buffer
-            (insert-file-contents memory-file)
-            (cl-loop repeat 200
-                     unless (eobp)
-                     collect (prog1 (buffer-substring-no-properties
-                                     (line-beginning-position)
-                                     (line-end-position))
-                               (forward-line 1))))
-          "\n"))
-      "Your MEMORY.md index is currently empty. As you complete tasks, save
+  "Return merged WORKSPACE memory index content, or an empty notice."
+  (let ((sections (delq nil
+                        (mapcar #'mevedel-system--memory-root-content
+                                (mevedel-system--memory-roots workspace)))))
+    (if sections
+        (string-join sections "\n\n")
+      "Your memory indexes are currently empty. As you complete tasks, save
 durable memories in separate topic files and link them from MEMORY.md.
 Anything linked from MEMORY.md can be discovered in future conversations.")))
 
 (defconst mevedel-system--memory-prompt
   (lambda (&optional workspace)
-    (let ((root (mevedel-system--workspace-root workspace)))
-      (mevedel-system-render-prompt-file
-       "prompts/system/memory-policy.md"
-       `(("MEMORY_DIR" . ,(file-name-concat root ".mevedel" "memory"))
-         ("MEMORY_CONTENT" . ,(mevedel-system--memory-content workspace))))))
+    (mevedel-system-render-prompt-file
+     "prompts/system/memory-policy.md"
+     `(("MEMORY_ROOTS" . ,(mevedel-system--memory-roots-description
+                           workspace))
+       ("MEMORY_CONTENT" . ,(mevedel-system--memory-content workspace)))))
   "Function returning the dynamic persistent memory prompt.")
 
 (defun mevedel-system--memory-cache-key (context)
   "Return cache key for the memory prompt section in CONTEXT."
   (list
-   :file (mevedel-system--file-cache-key
-          (mevedel-system--memory-file
-           (mevedel-system-context-workspace context)))
+   :files (mapcar #'mevedel-system--file-cache-key
+                  (mevedel-system--memory-files
+                   (mevedel-system-context-workspace context)))
    :date (mevedel-system--current-date)))
 
 (defun mevedel-system--working-directory (workspace working-directory)
@@ -350,8 +418,8 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
   "Return layered workspace instruction files for WORKSPACE.
 
 Files are ordered from workspace root to WORKING-DIRECTORY.  Within a
-single directory, AGENTS.md wins over CLAUDE.md, and AGENTS.local.md is
-loaded after the shared file when present."
+single directory, AGENTS.local.md is loaded after AGENTS.md when
+present."
   (when-let* ((workspace-root (and workspace (mevedel-workspace-root workspace))))
     (let* ((root (file-name-as-directory (expand-file-name workspace-root)))
            (cwd (mevedel-system--working-directory workspace working-directory))
@@ -368,13 +436,10 @@ loaded after the shared file when present."
              (mapcar
               (lambda (dir)
                 (let* ((agents-md (expand-file-name "AGENTS.md" dir))
-                       (claude-md (expand-file-name "CLAUDE.md" dir))
-                       (local-md (expand-file-name "AGENTS.local.md" dir))
-                       (shared-md (cond
-                                   ((file-readable-p agents-md) agents-md)
-                                   ((file-readable-p claude-md) claude-md))))
+                       (local-md (expand-file-name "AGENTS.local.md" dir)))
                   (delq nil
-                        (list shared-md
+                        (list (and (file-readable-p agents-md)
+                                   agents-md)
                               (and (file-readable-p local-md)
                                    local-md)))))
               dirs)))))

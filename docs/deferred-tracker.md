@@ -274,7 +274,7 @@ inlining a paragraph.
 ### Cross-session mailbox
 
 - **Source:** `specs/13-coordinator.md` "Future work"
-- **What's owed:** Persistent mailbox (e.g., `~/.claude/teams/...`)
+- **What's owed:** Persistent mailbox (e.g., `~/.mevedel/teams/...`)
   for agents in different sessions to exchange messages.
 - **Why deferred:** In-process mailbox is sufficient for single-
   session coordinator; cross-session is its own design.

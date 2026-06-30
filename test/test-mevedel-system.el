@@ -67,7 +67,8 @@
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-sys-" t))))
+                      (make-temp-file "mevedel-sys-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/")))
    :after-each (delete-directory root-dir t))
   ,test
   (test)
@@ -109,16 +110,16 @@
       (should (< config-pos memory-pos))
       (should (< memory-pos env-pos))))
 
-  :doc "includes CLAUDE.md content when AGENTS.md is absent"
+  :doc "ignores CLAUDE.md when AGENTS.md is absent"
   (let* ((claude-md (file-name-concat root-dir "CLAUDE.md"))
          (ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj")))
     (write-region "Claude-specific guidance." nil claude-md)
     (let ((prompt (mevedel-system-build-prompt "BASE" ws)))
-      (should (string-match-p "## Workspace Configuration" prompt))
-      (should (string-match-p "Claude-specific guidance" prompt))))
+      (should-not (string-match-p "## Workspace Configuration" prompt))
+      (should-not (string-match-p "Claude-specific guidance" prompt))))
 
-  :doc "prefers AGENTS.md when both files exist"
+  :doc "uses AGENTS.md and ignores CLAUDE.md when both files exist"
   (let* ((agents-md (file-name-concat root-dir "AGENTS.md"))
          (claude-md (file-name-concat root-dir "CLAUDE.md"))
          (ws (mevedel-workspace-get-or-create
@@ -185,7 +186,7 @@
       (should (< root-local-pos module-shared-pos))
       (should (< module-shared-pos module-local-pos))))
 
-  :doc "prefers AGENTS.md over CLAUDE.md in each layered directory"
+  :doc "ignores CLAUDE.md in each layered directory"
   (let* ((module-dir (file-name-concat root-dir "packages" "web"))
          (root-claude (file-name-concat root-dir "CLAUDE.md"))
          (module-agents (file-name-concat module-dir "AGENTS.md"))
@@ -197,8 +198,8 @@
     (write-region "Module AGENTS guidance." nil module-agents)
     (write-region "Module Claude loses." nil module-claude)
     (let ((prompt (mevedel-system-build-prompt "BASE" ws module-dir)))
-      (should (string-match-p "Root Claude guidance\\." prompt))
       (should (string-match-p "Module AGENTS guidance\\." prompt))
+      (should-not (string-match-p "Root Claude guidance\\." prompt))
       (should-not (string-match-p "Module Claude loses\\." prompt))))
 
   :doc "omits Workspace Configuration when neither file exists"
@@ -219,7 +220,8 @@
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-agent-sys-" t))))
+                      (make-temp-file "mevedel-agent-sys-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/")))
    :after-each (delete-directory root-dir t))
   ,test
   (test)
@@ -261,7 +263,8 @@
 (mevedel-deftest mevedel-system--memory-content
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-memory-" t))))
+                      (make-temp-file "mevedel-memory-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/")))
    :after-each (progn
                  (mevedel-workspace-clear-registry)
                  (delete-directory root-dir t)))
@@ -271,7 +274,7 @@
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "sysproj"))
          (content (mevedel-system--memory-content ws)))
-    (should (string-match-p "MEMORY.md index is currently empty" content))
+    (should (string-match-p "memory indexes are currently empty" content))
     (should (string-match-p "separate topic files" content)))
 
   :doc "adds age metadata and truncates MEMORY.md to 200 lines"
@@ -285,16 +288,76 @@
         (insert (format "line-%03d\n" (1+ i)))))
     (let ((content (mevedel-system--memory-content ws)))
       (should (string-match-p
-               "\\`<!-- Last updated: [0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} (today) -->"
+               "<!-- Last updated: [0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\} (today) -->"
                content))
       (should (string-match-p "line-001" content))
       (should (string-match-p "line-200" content))
-      (should-not (string-match-p "line-201" content)))))
+      (should-not (string-match-p "line-201" content))))
+
+  :doc "merges existing memory indexes in configured order with labels"
+  (let* ((local-mevedel (file-name-concat root-dir ".mevedel" "memory"))
+         (local-agents (file-name-concat root-dir ".agents" "memory"))
+         (global-mevedel (file-name-concat root-dir "global-mevedel"))
+         (global-agents (file-name-concat root-dir "global-agents"))
+         (mevedel-memory-dirs
+          (list ".mevedel/memory/" ".agents/memory/"
+                global-mevedel global-agents))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj")))
+    (dolist (dir (list local-mevedel local-agents global-mevedel global-agents))
+      (make-directory dir t))
+    (write-region "local mevedel fact" nil
+                  (file-name-concat local-mevedel "MEMORY.md"))
+    (write-region "local agents fact" nil
+                  (file-name-concat local-agents "MEMORY.md"))
+    (write-region "global mevedel fact" nil
+                  (file-name-concat global-mevedel "MEMORY.md"))
+    (write-region "global agents fact" nil
+                  (file-name-concat global-agents "MEMORY.md"))
+    (let* ((content (mevedel-system--memory-content ws))
+           (local-mevedel-pos (string-match-p "local mevedel fact" content))
+           (local-agents-pos (string-match-p "local agents fact" content))
+           (global-mevedel-pos (string-match-p "global mevedel fact" content))
+           (global-agents-pos (string-match-p "global agents fact" content)))
+      (should (string-match-p "Local mevedel memory" content))
+      (should (string-match-p "Local agents memory" content))
+      (should (< local-mevedel-pos local-agents-pos))
+      (should (< local-agents-pos global-mevedel-pos))
+      (should (< global-mevedel-pos global-agents-pos)))))
+
+(mevedel-deftest mevedel-system--memory-prompt
+  (:before-each (mevedel-workspace-clear-registry)
+   :vars* ((root-dir (file-name-as-directory
+                      (make-temp-file "mevedel-memory-prompt-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/" ".agents/memory/")))
+   :after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (delete-directory root-dir t)))
+  ,test
+  (test)
+  :doc "includes memory root routing rules and configured roots"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (prompt (funcall mevedel-system--memory-prompt ws)))
+    (should (string-match-p (regexp-quote
+                             (file-name-concat root-dir
+                                               ".mevedel" "memory"))
+                            prompt))
+    (should (string-match-p (regexp-quote
+                             (file-name-concat root-dir
+                                               ".agents" "memory"))
+                            prompt))
+    (should (string-match-p "If an existing memory covers the topic" prompt))
+    (should (string-match-p "global memory unless the user asks" prompt))
+    (should (string-match-p "local memory unless the user asks" prompt))
+    (should (string-match-p "Prefer `.agents/memory/`" prompt))
+    (should (string-match-p "Use `.mevedel/memory/`" prompt))))
 
 (mevedel-deftest mevedel-system--memory-cache-key
   (:before-each (mevedel-workspace-clear-registry)
    :vars* ((root-dir (file-name-as-directory
-                      (make-temp-file "mevedel-memory-cache-" t))))
+                      (make-temp-file "mevedel-memory-cache-" t)))
+           (mevedel-memory-dirs '(".mevedel/memory/" ".agents/memory/")))
    :after-each (progn
                  (mevedel-workspace-clear-registry)
                  (delete-directory root-dir t)))
@@ -315,6 +378,7 @@
                (lambda () "2026-05-09")))
       (setq key-two (mevedel-system--memory-cache-key context)))
     (should-not (equal key-one key-two))
+    (should (= 2 (length (plist-get key-one :files))))
     (should (member :date key-one))))
 
 

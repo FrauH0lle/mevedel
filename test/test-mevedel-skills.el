@@ -167,6 +167,20 @@ argument-hint: \"[path]\"
             (should-not (mevedel-skill-body skill))))
       (delete-directory dir t)))
 
+  :doc "explicit legacy .claude skill directories are ignored"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-skills-legacy-" t))
+         (legacy-dir (file-name-concat root ".claude" "skills")))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           legacy-dir "legacy"
+           "name: legacy
+description: old
+" "Legacy body")
+          (should-not (mevedel-skills-scan root '(".claude/skills/"))))
+      (delete-directory root t)))
+
   :doc "project/user name conflicts are source-qualified"
   (let* ((mevedel-skills-include-bundled nil)
          (root (make-temp-file "mevedel-skills-project-" t))
@@ -187,15 +201,15 @@ description: From project
           (let* ((skills (mevedel-skills-scan
                           root (list user-dir ".mevedel/skills")))
                  (names (mapcar #'mevedel-skill-name skills))
-                 (project (cl-find "project:shared" skills
+                 (project (cl-find "local:shared" skills
                                    :key #'mevedel-skill-name
                                    :test #'equal))
-                 (user (cl-find "user:shared" skills
+                 (user (cl-find "global:shared" skills
                                 :key #'mevedel-skill-name
                                 :test #'equal)))
             (should (= 2 (length skills)))
-            (should (member "project:shared" names))
-            (should (member "user:shared" names))
+            (should (member "local:shared" names))
+            (should (member "global:shared" names))
             (should-not (member "shared" names))
             (should (equal "From project"
                            (mevedel-skill-description project)))
@@ -283,19 +297,22 @@ paths:
   (let* ((skills (mevedel-skills-scan nil nil))
          (worktree (cl-find "git-worktree" skills
                             :key #'mevedel-skill-name :test #'equal))
-         (body (and worktree (mevedel-skill-load-body worktree))))
+         (remember (cl-find "remember" skills
+                            :key #'mevedel-skill-name :test #'equal))
+         (body (and worktree (mevedel-skill-load-body worktree)))
+         (remember-body (and remember (mevedel-skill-load-body remember))))
     (should (cl-find-if
              (lambda (s)
                (and (equal "coordinator" (mevedel-skill-name s))
                     (eq 'bundled (mevedel-skill-source s))))
              skills))
-    (should (cl-find-if
-             (lambda (s)
-               (and (equal "remember" (mevedel-skill-name s))
-                    (eq 'bundled (mevedel-skill-source s))
-                    (mevedel-skill-user-invocable-p s)
-                    (equal "[focus]" (mevedel-skill-argument-hint s))))
-             skills))
+    (should remember)
+    (should (eq 'bundled (mevedel-skill-source remember)))
+    (should (mevedel-skill-user-invocable-p remember))
+    (should (equal "[focus]" (mevedel-skill-argument-hint remember)))
+    (should (string-match-p "each configured memory root" remember-body))
+    (should (string-match-p "\\.agents/memory/" remember-body))
+    (should-not (string-match-p "CLAUDE\\.md" remember-body))
     (should worktree)
     (should-not (cl-find "using-git-worktrees" skills
                          :key #'mevedel-skill-name :test #'equal))
@@ -950,7 +967,57 @@ display-name: Friendly Label
                   (list first second))))
     (should (= 1 (length skills)))
     (should (equal "shared" (mevedel-skill-name (car skills))))
-    (should (equal "first" (mevedel-skill-description (car skills))))))
+    (should (equal "first" (mevedel-skill-description (car skills)))))
+
+  :doc "family-only prefixes are used when family disambiguates"
+  (let* ((mevedel (mevedel-skill--create
+                   :name "shared" :source 'project :source-family 'mevedel))
+         (agents (mevedel-skill--create
+                  :name "shared" :source 'project :source-family 'agents))
+         (skills (mevedel-skills--qualify-conflicting-names
+                  (list mevedel agents))))
+    (should (equal '("mevedel:shared" "agents:shared")
+                   (mapcar #'mevedel-skill-name skills))))
+
+  :doc "scope-only prefixes are used when scope disambiguates"
+  (let* ((local (mevedel-skill--create
+                 :name "shared" :source 'project :source-family 'mevedel))
+         (global (mevedel-skill--create
+                  :name "shared" :source 'user :source-family 'mevedel))
+         (skills (mevedel-skills--qualify-conflicting-names
+                  (list local global))))
+    (should (equal '("local:shared" "global:shared")
+                   (mapcar #'mevedel-skill-name skills))))
+
+  :doc "full scope-family prefixes are used for four-way conflicts"
+  (let* ((local-mevedel
+          (mevedel-skill--create
+           :name "shared" :source 'project :source-family 'mevedel))
+         (local-agents
+          (mevedel-skill--create
+           :name "shared" :source 'project :source-family 'agents))
+         (global-mevedel
+          (mevedel-skill--create
+           :name "shared" :source 'user :source-family 'mevedel))
+         (global-agents
+          (mevedel-skill--create
+           :name "shared" :source 'user :source-family 'agents))
+         (skills (mevedel-skills--qualify-conflicting-names
+                  (list local-mevedel local-agents
+                        global-mevedel global-agents))))
+    (should (equal '("local-mevedel:shared" "local-agents:shared"
+                     "global-mevedel:shared" "global-agents:shared")
+                   (mapcar #'mevedel-skill-name skills))))
+
+  :doc "bundled conflicts keep all skills with unique prefixes"
+  (let* ((local (mevedel-skill--create
+                 :name "review" :source 'project :source-family 'mevedel))
+         (bundled (mevedel-skill--create
+                   :name "review" :source 'bundled))
+         (skills (mevedel-skills--qualify-conflicting-names
+                  (list local bundled))))
+    (should (equal '("mevedel:review" "bundled:review")
+                   (mapcar #'mevedel-skill-name skills)))))
 
 
 ;;
@@ -1071,11 +1138,11 @@ description: Review changed code
 (mevedel-deftest mevedel-skill-dirs ()
   ,test
   (test)
-  :doc "defaults prefer mevedel-native skill directories before Claude-compatible ones"
-  (should (equal '("~/.mevedel/skills/"
-                   "~/.claude/skills/"
-                   ".mevedel/skills/"
-                   ".claude/skills/")
+  :doc "defaults prefer local mevedel/agents dirs before global dirs"
+  (should (equal '(".mevedel/skills/"
+                   ".agents/skills/"
+                   "~/.mevedel/skills/"
+                   "~/.agents/skills/")
                  mevedel-skill-dirs)))
 
 
@@ -2835,6 +2902,45 @@ description: Yell
           (should (equal "YELL loudly" received)))
       (delete-directory dir t)))
 
+  :doc "model-side invocation uses visible prefixed names after conflicts"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (ws (mevedel-workspace--create
+              :type 'test :id "collision" :root "/tmp/collision"
+              :name "collision"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (local (mevedel-skill--create
+                 :name "shared"
+                 :source 'project
+                 :source-family 'mevedel
+                 :body "LOCAL $ARGUMENTS"))
+         (global (mevedel-skill--create
+                  :name "shared"
+                  :source 'user
+                  :source-family 'mevedel
+                  :body "GLOBAL $ARGUMENTS"))
+         received)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session)
+                (mevedel-skills--qualify-conflicting-names
+                 (list local global)))
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--invoke-handler
+             (lambda (r) (setq received r))
+             (list :name "local:shared" :arguments "now"))
+            (should (equal "LOCAL now" received))
+            (setq received nil)
+            (mevedel-skills--invoke-handler
+             (lambda (r) (setq received r))
+             (list :name "shared"))
+            (should (string-match-p "Unknown skill 'shared'" received))))
+      (delete-directory user-dir t)))
+
   :doc "disabled skill is rejected before model invocation"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
@@ -2913,6 +3019,40 @@ description: Yell
              nil))
           (should (eq refreshed session))
           (should (string-match-p "fresh: Fresh helper" received)))
+      (delete-directory user-dir t)))
+
+  :doc "returns prefixed visible names that can be used with Skill"
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (local (mevedel-skill--create
+                 :name "shared"
+                 :description "Local helper"
+                 :source 'project
+                 :source-family 'mevedel
+                 :active-p t
+                 :model-invocable-p t))
+         (global (mevedel-skill--create
+                  :name "shared"
+                  :description "Global helper"
+                  :source 'user
+                  :source-family 'mevedel
+                  :active-p t
+                  :model-invocable-p t))
+         received)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session)
+                (mevedel-skills--qualify-conflicting-names
+                 (list local global)))
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--list-handler
+             (lambda (r) (setq received r))
+             (list :query "shared")))
+          (should (string-match-p "local:shared: Local helper" received))
+          (should (string-match-p "global:shared: Global helper" received))
+          (should-not (string-match-p "\nshared: " received)))
       (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-skills--register
@@ -3067,6 +3207,22 @@ spanning lines")))
         (goto-char (point-max))
         (should (eq 'local (mevedel-skills--dispatch-slash-command)))
         (should (equal "hello" called))
+        (should (equal "### " (buffer-string))))))
+
+  :doc "local command wins over a same-named skill"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "review"
+                 :body "skill body"))
+         (called nil))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands
+             `(("review" . ,(lambda (args) (setq called args))))))
+        (insert "### /review HEAD")
+        (goto-char (point-max))
+        (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+        (should (equal "HEAD" called))
         (should (equal "### " (buffer-string))))))
 
   :doc "unknown slash command returns 'unknown without mutating the buffer"
@@ -4501,8 +4657,8 @@ spanning lines")))
            (project-pos (string-match-p "project-skill" body))
            (bundled-pos (string-match-p "bundled-skill" body)))
       (should (and user-pos project-pos bundled-pos))
-      (should (< user-pos project-pos))
-      (should (< project-pos bundled-pos)))))
+      (should (< project-pos user-pos))
+      (should (< user-pos bundled-pos)))))
 
 (mevedel-deftest mevedel-reminders-make-skills-listing/hot-reload
   (:before-each (mevedel-skills-test--reset-watchers)

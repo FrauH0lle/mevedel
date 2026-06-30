@@ -10,6 +10,8 @@ Project target: {{TARGET_FILE}}
 Personal target: {{LOCAL_TARGET_FILE}}
 Project skills: {{PROJECT_SKILLS_DIR}}
 User skills: {{USER_SKILLS_DIR}}
+Project memory: {{PROJECT_MEMORY_DIR}}
+User memory: {{USER_MEMORY_DIR}}
 Hooks file: {{HOOKS_FILE}}
 Hooks scripts: {{HOOKS_DIR}}
 User-provided focus: {{ARGUMENTS}}
@@ -52,11 +54,11 @@ Prioritize:
 
 - `README*`, package manifests, build files, lockfiles, workspace config
 - test, lint, format, typecheck, codegen, CI, pre-commit, release config
-- `AGENTS.md`, `AGENTS.local.md`, `CLAUDE.md`, `.cursor/rules/`,
+- `AGENTS.md`, `AGENTS.local.md`, `.cursor/rules/`,
   `.cursorrules`, `.github/copilot-instructions.md`, `.windsurfrules`,
   `.clinerules`, `opencode.json`, `.mcp.json`
-- existing `.mevedel/skills/`, `.mevedel/hooks.json`,
-  `.mevedel/hooks/`, `.claude/skills/`
+- existing `.agents/skills/`, `.agents/memory/`, `.mevedel/skills/`,
+  `.mevedel/memory/`, `.mevedel/hooks.json`, `.mevedel/hooks/`
 - `git worktree list`, when sibling worktrees may carry fresher local
   guidance
 
@@ -136,6 +138,11 @@ Each skill should have a `SKILL.md` with concise frontmatter and a body
 that tells the model when to use the workflow, what to inspect, what to
 produce, and which checks matter. Use `disable-model-invocation: true`
 when a skill is meant for explicit slash use only.
+
+For durable model memory, prefer project memory under
+`{{PROJECT_MEMORY_DIR}}` and user memory under `{{USER_MEMORY_DIR}}`
+when the guidance is portable across agent tools. Use `.mevedel/memory/`
+only for mevedel-specific memories.
 
 ## Phase 7: Write Hooks
 

@@ -163,18 +163,18 @@
 ;;; Customization
 
 (defcustom mevedel-skill-dirs
-  '("~/.mevedel/skills/"
-    "~/.claude/skills/"
-    ".mevedel/skills/"
-    ".claude/skills/")
+  '(".mevedel/skills/"
+    ".agents/skills/"
+    "~/.mevedel/skills/"
+    "~/.agents/skills/")
   "Directories scanned for SKILL.md files.
 
 Absolute paths and `~'-prefixed paths are scanned as-is and classified
 as `user' skills.  Relative paths are resolved against the current
-workspace root and classified as `project' skills.  Mevedel-native
-directories are scanned before Claude-compatible directories in the same
-scope.  Earlier directories take precedence when two skills share a
-name."
+workspace root and classified as `project' skills.  Default directories
+scan local mevedel resources, local shared agent resources, global
+mevedel resources, then global shared agent resources.  Legacy
+`.claude/skills' entries are ignored."
   :type '(repeat directory)
   :group 'mevedel)
 
@@ -216,7 +216,9 @@ WHEN-TO-USE is an optional longer trigger description (accepts both
 conflict).  BODY is the skill prompt text; populated lazily on first
 invocation.  SOURCE-FILE and SOURCE-DIR point at the SKILL.md and
 its containing directory.  SOURCE is a symbol tagging the origin
-\\=(`user', `project', `managed', `plugin', `bundled').
+scope/type \\=(`user', `project', `managed', `plugin', `bundled').
+SOURCE-FAMILY is `mevedel', `agents', or nil and distinguishes ordinary
+resource roots without changing SOURCE's existing scope meaning.
 USER-INVOCABLE-P and MODEL-INVOCABLE-P gate the `/name' menu and
 the skills listing reminder respectively.  CONTEXT is `inline'
 \\=(default) or `fork'.  AGENT names the agent type for fork
@@ -242,6 +244,7 @@ skills."
   source-file
   source-dir
   source
+  source-family
   (user-invocable-p t)
   (model-invocable-p t)
   (context 'inline)
@@ -593,12 +596,14 @@ warning when YAML parsing fails."
         :warning)
        nil))))
 
-(defun mevedel-skills--from-plist (name plist source-file source)
+(defun mevedel-skills--from-plist
+    (name plist source-file source &optional source-family)
   "Build a `mevedel-skill' from NAME and PLIST parsed from SOURCE-FILE.
-SOURCE is the origin tag symbol.  NAME is the resolved invocation
-identifier (already validated by the caller).  Description fallback
-from the body is the caller's responsibility -- anything in PLIST's
-`:description' wins over the fallback."
+SOURCE is the origin tag symbol.  SOURCE-FAMILY is `mevedel',
+`agents', or nil.  NAME is the resolved invocation identifier (already
+validated by the caller).  Description fallback from the body is the
+caller's responsibility -- anything in PLIST's `:description' wins over
+the fallback."
   (let* ((description (plist-get plist :description))
          (display-name (plist-get plist :display-name))
          ;; Prefer the Claude-compatible underscore key over the dash form.
@@ -624,6 +629,7 @@ from the body is the caller's responsibility -- anything in PLIST's
      :source-file source-file
      :source-dir (file-name-directory source-file)
      :source source
+     :source-family source-family
      :user-invocable-p (mevedel-skills--coerce-bool user-invocable t)
      :model-invocable-p (not (mevedel-skills--coerce-bool disable-model nil))
      :context context
@@ -646,6 +652,24 @@ from the body is the caller's responsibility -- anything in PLIST's
 ;;
 ;;; Discovery
 
+(defun mevedel-skills--source-family-from-dir (dir)
+  "Return the resource family implied by DIR, or nil."
+  (when (stringp dir)
+    (let ((path (directory-file-name
+                 (expand-file-name (substitute-in-file-name dir)))))
+      (cond
+       ((string-match-p "\\(?:\\`\\|/\\)\\.mevedel/skills\\'" path)
+        'mevedel)
+       ((string-match-p "\\(?:\\`\\|/\\)\\.agents/skills\\'" path)
+        'agents)))))
+
+(defun mevedel-skills--claude-skills-dir-p (dir)
+  "Return non-nil when DIR points at a legacy `.claude/skills' tree."
+  (when (stringp dir)
+    (string-match-p "\\(?:\\`\\|/\\)\\.claude/skills\\'"
+                    (directory-file-name
+                     (expand-file-name (substitute-in-file-name dir))))))
+
 (defun mevedel-skills--resolve-dir (dir workspace-root)
   "Resolve DIR against WORKSPACE-ROOT, returning (ABSOLUTE . SOURCE).
 SOURCE is `user' for absolute/`~'-prefixed paths and `project' for
@@ -656,12 +680,17 @@ relative and WORKSPACE-ROOT is nil."
     (when-let* ((resolved (mevedel-skills--resolve-dir
                            (car dir) workspace-root)))
       (cons (car resolved) (cdr dir))))
+   ((mevedel-skills--claude-skills-dir-p dir)
+    nil)
    ((file-name-absolute-p dir)
-    (cons (file-name-as-directory (expand-file-name dir)) 'user))
+    (let ((family (mevedel-skills--source-family-from-dir dir)))
+      (cons (file-name-as-directory (expand-file-name dir))
+            (if family (cons 'user family) 'user))))
    (workspace-root
-    (cons (file-name-as-directory
-           (expand-file-name dir workspace-root))
-          'project))))
+    (let ((family (mevedel-skills--source-family-from-dir dir)))
+      (cons (file-name-as-directory
+             (expand-file-name dir workspace-root))
+            (if family (cons 'project family) 'project))))))
 
 (defun mevedel-skills--scan-resolved-dir (dir source)
   "Scan DIR with SOURCE, applying plugin namespacing when requested."
@@ -669,8 +698,12 @@ relative and WORKSPACE-ROOT is nil."
                            (eq (car source) 'plugin)
                            (cdr source)))
          (source-tag (if (consp source) (car source) source))
+         (source-family (and (consp source)
+                             (memq (cdr source) '(mevedel agents))
+                             (cdr source)))
          skills)
-    (dolist (skill (mevedel-skills--scan-dir dir source-tag)
+    (dolist (skill (mevedel-skills--scan-dir
+                    dir source-tag source-family)
                    (nreverse skills))
       (push (if plugin-name
                 (mevedel-skills--namespace-plugin-skill plugin-name skill)
@@ -702,8 +735,10 @@ omits `description'."
   (let ((parsed (ignore-errors (gptel-agent-read-file skill-file))))
     (plist-get (cdr parsed) :system)))
 
-(defun mevedel-skills--build-skill (skill-file source)
+(defun mevedel-skills--build-skill
+    (skill-file source &optional source-family)
   "Build a `mevedel-skill' for SKILL-FILE with SOURCE origin tag.
+SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 Performs name resolution (frontmatter `:name' > directory name) and
 validation.  Returns nil with a warning when the skill is invalid
 \\(bad name, etc.).  Computes description fallback from the body when
@@ -731,11 +766,13 @@ frontmatter omits `description'."
             (when-let* ((body (mevedel-skills--load-body-string skill-file))
                         (fallback (mevedel-skills--first-paragraph body)))
               (setq plist (plist-put plist :description fallback))))
-          (mevedel-skills--from-plist raw-name plist skill-file source)))))))
+          (mevedel-skills--from-plist
+           raw-name plist skill-file source source-family)))))))
 
-(defun mevedel-skills--scan-dir (dir source)
+(defun mevedel-skills--scan-dir (dir source &optional source-family)
   "Return a list of `mevedel-skill' structs found under DIR.
 SOURCE is the origin tag applied to every skill scanned from DIR.
+SOURCE-FAMILY distinguishes `.mevedel' and `.agents' resource roots.
 Each SKILL.md is wrapped in `condition-case' so a single bad skill
 does not abort the whole scan."
   (when (file-directory-p dir)
@@ -743,7 +780,8 @@ does not abort the whole scan."
       (dolist (skill-file (directory-files-recursively
                            dir "\\`SKILL\\.md\\'" nil nil t))
         (let ((skill (condition-case err
-                         (mevedel-skills--build-skill skill-file source)
+                         (mevedel-skills--build-skill
+                          skill-file source source-family)
                        (error
                         (display-warning
                          'mevedel
@@ -756,19 +794,54 @@ does not abort the whole scan."
       (nreverse result))))
 
 (defconst mevedel-skills--source-prefixes
-  '((project . "project")
-    (user . "user")
+  '((project . "local")
+    (user . "global")
     (bundled . "bundled")
     (managed . "managed"))
   "Source prefixes used when non-plugin skill names collide.")
 
 (defun mevedel-skills--source-prefix (skill)
-  "Return the conflict prefix for SKILL, or nil for plugin skills."
+  "Return the fallback conflict prefix for SKILL, or nil for plugin skills."
   (let ((source (mevedel-skill-source skill)))
     (cond
      ((eq source 'plugin) nil)
      ((alist-get source mevedel-skills--source-prefixes))
      ((symbolp source) (symbol-name source)))))
+
+(defun mevedel-skills--ordinary-skill-p (skill)
+  "Return non-nil for user/project resource-root SKILL."
+  (memq (mevedel-skill-source skill) '(user project)))
+
+(defun mevedel-skills--conflict-prefix (skill group)
+  "Return the visible conflict prefix for SKILL in GROUP."
+  (cond
+   ((eq (mevedel-skill-source skill) 'plugin) nil)
+   ((not (mevedel-skills--ordinary-skill-p skill))
+    (mevedel-skills--source-prefix skill))
+   (t
+    (let* ((ordinary (cl-remove-if-not
+                      #'mevedel-skills--ordinary-skill-p group))
+           (scope-key (lambda (s)
+                        (pcase (mevedel-skill-source s)
+                          ('project "local")
+                          ('user "global"))))
+           (family-key (lambda (s)
+                         (pcase (mevedel-skill-source-family s)
+                           ('mevedel "mevedel")
+                           ('agents "agents"))))
+           (scope (funcall scope-key skill))
+           (family (funcall family-key skill)))
+      (or (and family
+               (cl-every family-key ordinary)
+               (= 1 (cl-count family ordinary
+                              :key family-key :test #'equal))
+               family)
+          (and scope
+               (= 1 (cl-count scope ordinary
+                              :key scope-key :test #'equal))
+               scope)
+          (and scope family (format "%s-%s" scope family))
+          (mevedel-skills--source-prefix skill))))))
 
 (defun mevedel-skills--qualified-name-p (name)
   "Return non-nil when NAME already has a visible prefix."
@@ -777,15 +850,16 @@ does not abort the whole scan."
 (defun mevedel-skills--qualify-conflicting-names (skills)
   "Return SKILLS with deterministic visible names.
 
-Unique non-plugin names stay unqualified.  Same-source duplicates keep
-the first entry.  Cross-source non-plugin conflicts are exposed as
-`source:name'.  Already-qualified names, including plugin skills, are
-left untouched."
+Unique non-plugin names stay unqualified.  Same-origin duplicates keep
+the first entry.  Cross-origin non-plugin conflicts are exposed with the
+shortest deterministic unique prefix.  Already-qualified names,
+including plugin skills, are left untouched."
   (let ((seen (make-hash-table :test #'equal))
         (groups (make-hash-table :test #'equal))
         deduped)
     (dolist (skill skills)
       (let ((key (list (mevedel-skill-source skill)
+                       (mevedel-skill-source-family skill)
                        (mevedel-skill-name skill))))
         (unless (gethash key seen)
           (puthash key t seen)
@@ -800,7 +874,8 @@ left untouched."
      (lambda (name group)
        (when (> (length group) 1)
          (dolist (skill group)
-           (when-let* ((prefix (mevedel-skills--source-prefix skill)))
+           (when-let* ((prefix (mevedel-skills--conflict-prefix
+                                skill group)))
              (setf (mevedel-skill-name skill)
                    (format "%s:%s" prefix name))))))
      groups)
@@ -809,8 +884,9 @@ left untouched."
 (defun mevedel-skills-scan (&optional workspace-root dirs workspace)
   "Scan skill directories and return a list of `mevedel-skill' structs.
 
-DIRS defaults to `mevedel-skill-dirs'.  WORKSPACE-ROOT is used to
-resolve relative entries; when nil, relative entries are skipped.
+DIRS defaults to `mevedel-skill-dirs'.  Legacy `.claude/skills'
+entries are ignored.  WORKSPACE-ROOT is used to resolve relative
+entries; when nil, relative entries are skipped.
 Unique names remain unqualified.  When user/project/bundled/managed
 sources collide, all colliding entries are exposed as `source:name'.
 Same-source duplicates keep the first entry.  After scanning
@@ -4029,11 +4105,32 @@ default cap is 1,536 chars across description + when_to_use combined."
   :group 'mevedel)
 
 (defconst mevedel-skills--source-priority
-  '(user project bundled managed plugin)
-  "Source-tag priority for skills-listing reminder ordering.
-User and project skills appear before bundled and plugin skills so a
-skill the user installed is more likely to appear when budget pressure
-drops trailing entries.")
+  '((project . mevedel)
+    (project . agents)
+    (user . mevedel)
+    (user . agents)
+    bundled
+    managed
+    plugin)
+  "Source priority for skills-listing reminder ordering.")
+
+(defun mevedel-skills--source-priority-key (skill)
+  "Return ordering key for SKILL in listing reminders."
+  (or (cl-position
+       (cond
+        ((and (mevedel-skills--ordinary-skill-p skill)
+              (mevedel-skill-source-family skill))
+         (cons (mevedel-skill-source skill)
+               (mevedel-skill-source-family skill)))
+        ((eq (mevedel-skill-source skill) 'project)
+         '(project . mevedel))
+        ((eq (mevedel-skill-source skill) 'user)
+         '(user . mevedel))
+        (t
+         (mevedel-skill-source skill)))
+       mevedel-skills--source-priority
+       :test #'equal)
+      most-positive-fixnum))
 
 (defconst mevedel-skills--dormant-note
   "Additional path-scoped skills may exist for this session and \
@@ -4078,9 +4175,8 @@ the rest of the listing."
 (defun mevedel-skills--listing-candidates (session)
   "Return SESSION's model-invocable, currently active skills.
 
-Sorted by `mevedel-skills--source-priority' (user > project >
-bundled > managed > plugin) so budget pressure drops bundled
-entries before user entries."
+Sorted by configured resource precedence so budget pressure drops
+global/bundled/plugin entries before local resource entries."
   (let ((candidates
          (cl-remove-if-not
           (lambda (s)
@@ -4090,17 +4186,8 @@ entries before user entries."
           (mevedel-session-skills session))))
     (cl-sort (copy-sequence candidates)
              (lambda (a b)
-               (let ((ai (or (cl-position
-                              a mevedel-skills--source-priority
-                              :test (lambda (sk tag)
-                                      (eq (mevedel-skill-source sk) tag)))
-                             most-positive-fixnum))
-                     (bi (or (cl-position
-                              b mevedel-skills--source-priority
-                              :test (lambda (sk tag)
-                                      (eq (mevedel-skill-source sk) tag)))
-                             most-positive-fixnum)))
-                 (< ai bi))))))
+               (< (mevedel-skills--source-priority-key a)
+                  (mevedel-skills--source-priority-key b))))))
 
 (defun mevedel-skills--session-has-dormant-skills-p (session)
   "Return non-nil when SESSION has model-invocable but inactive skills.
