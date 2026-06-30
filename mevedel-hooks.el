@@ -505,12 +505,22 @@ treated as `SubagentStop'."
                      (equal (plist-get entry :hash) hash))
             (setq trusted t))))))
 
+(defun mevedel-hooks--project-config-candidates (workspace)
+  "Return existing project hook files for WORKSPACE in load order."
+  (when workspace
+    (let (files)
+      (dolist (dir (list (file-name-concat
+                          (mevedel-workspace-root workspace) ".agents/")
+                         (mevedel-workspace-state-dir workspace))
+                    (nreverse files))
+        (dolist (file (mevedel-hooks--config-files-in-dir dir))
+          (push file files))))))
+
 (defun mevedel-hooks--project-config-files (workspace)
   "Return trusted project hook files for WORKSPACE."
   (when workspace
-    (let ((dir (mevedel-workspace-state-dir workspace))
-          files)
-      (dolist (file (mevedel-hooks--config-files-in-dir dir)
+    (let (files)
+      (dolist (file (mevedel-hooks--project-config-candidates workspace)
                     (nreverse files))
         (if (mevedel-hooks--project-file-trusted-p workspace file)
             (push file files)
@@ -521,7 +531,9 @@ treated as `SubagentStop'."
 
 (defun mevedel-hooks--user-config-files ()
   "Return user hook config files."
-  (mevedel-hooks--config-files-in-dir mevedel-user-dir))
+  (append (mevedel-hooks--config-files-in-dir
+           (expand-file-name "~/.agents/"))
+          (mevedel-hooks--config-files-in-dir mevedel-user-dir)))
 
 (defun mevedel-hooks--append-rule-layer (rules layer)
   "Append normalized hook rule LAYER to RULES."
@@ -666,8 +678,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                       (equal (plist-get old :workspace-id) workspace-id)))
                (mevedel-hooks--read-trust-db)))
           (count 0))
-      (dolist (file (mevedel-hooks--config-files-in-dir
-                     (mevedel-workspace-state-dir workspace)))
+      (dolist (file (mevedel-hooks--project-config-candidates workspace))
         (let ((entry (list :workspace-id workspace-id
                            :path (expand-file-name file)
                            :hash (mevedel-hooks--file-hash file))))

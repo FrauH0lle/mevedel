@@ -143,15 +143,16 @@ Lisp shape:
 Recommended locations:
 
 - `mevedel-hook-rules`: user defcustom, Emacs-local.
-- `~/.mevedel/hooks.el` and `~/.mevedel/hooks.json`: user files,
+- `~/.agents/hooks.el`, `~/.agents/hooks.json`,
+  `~/.mevedel/hooks.el`, and `~/.mevedel/hooks.json`: user files,
   shareable across projects on one machine.
-- Enabled plugin manifests may contribute hooks only after executable
-  hooks have been explicitly enabled for that plugin with `/plugin hooks
-  NAME on` or `/plugin hooks enable NAME` in the current workspace.
+- Activated plugin manifests may contribute hooks only after mevedel has
+  shown a concise consent summary for the plugin's executable hooks.
   Mevedel reads the Codex default `./hooks/hooks.json` when the manifest
   omits `hooks`, or the manifest `hooks` field when present. That field
   must be a single path.
-- `<workspace>/.mevedel/hooks.el` and
+- `<workspace>/.agents/hooks.el`, `<workspace>/.agents/hooks.json`,
+  `<workspace>/.mevedel/hooks.el`, and
   `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
   workspace.
 - Skill frontmatter `hooks`: scoped to an active skill invocation.  This
@@ -162,13 +163,17 @@ Recommended locations:
   agent.  A local `Stop` declaration is normalized to `SubagentStop`.
 - Session/request/invocation hook lists: transient programmatic layers.
 
+Hook handlers run from lower-precedence roots to higher-precedence roots
+so later rewrite fields preserve the package-wide resource precedence.
 Layers merge additively in this order: `mevedel-hook-rules`, user
-`hooks.el`, user `hooks.json`, enabled plugin hooks, trusted project
-`hooks.el`, trusted project `hooks.json`, session, request, and agent
-invocation.  Skill hooks are folded into the active request or agent
-invocation while the skill is active.  Deny
-decisions remain restrictive across all layers; allow decisions do not
-override existing explicit permission denies.
+`.agents/hooks.el`, user `.agents/hooks.json`, user
+`.mevedel/hooks.el`, user `.mevedel/hooks.json`, enabled plugin hooks,
+trusted project `.agents/hooks.el`, trusted project `.agents/hooks.json`,
+trusted project `.mevedel/hooks.el`, trusted project
+`.mevedel/hooks.json`, session, request, and agent invocation. Skill
+hooks are folded into the active request or agent invocation while the
+skill is active. Deny decisions remain restrictive across all layers;
+allow decisions do not override existing explicit permission denies.
 
 Within a file layer, `.el` runs before `.json` when both exist.  Ordering only
 matters for hooks that rewrite tool input or results, so this order is kept

@@ -47,13 +47,37 @@ are prefixed with the plugin name from the manifest, so
 `skills/brainstorming/SKILL.md` in the `superpowers` plugin appears as
 `superpowers:brainstorming` in slash completion, the Skill tool listing,
 and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
-unchanged. Installed plugins live under `~/.mevedel/plugins/`,
-including GitHub installs below `github.com/OWNER/REPO`, and
-`mevedel-plugin-extra-roots` can point at additional local plugin roots
-or directories containing plugin roots. Plugin activation is
-workspace-scoped: plugins are inactive by default in each project until
-enabled, and the state is stored in that workspace's
-`.mevedel/plugins.el`.
+unchanged. New installs live under `~/.agents/plugins/`, including
+GitHub installs below `github.com/OWNER/REPO`. Plugin roots are
+discovered from workspace `.mevedel/plugins/`, workspace
+`.agents/plugins/`, legacy global `~/.mevedel/plugins/`, global
+`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Plugin
+activation is workspace-scoped: plugins are inactive by default in each
+project until enabled, and the state is stored in that workspace's
+`.mevedel/plugins.el`. Activating a plugin enables all implemented plugin
+components for that workspace; plugins with executable hooks require a
+concise consent summary before those hooks are enabled. The summary shows
+the plugin identity/source, exposed skills, hook events, executable hook
+handlers, and workspace plugin data directory rather than dumping the full
+manifest.
+
+When multiple plugin roots contain the same manifest name, mevedel keeps
+the highest-precedence plugin and reports shadowed duplicates in
+`/plugin list`. Precedence is workspace `.mevedel/plugins/`, workspace
+`.agents/plugins/`, global `~/.mevedel/plugins/`, global
+`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Activation is
+bound to the plugin name and source root, so a higher-precedence plugin
+with the same name does not silently inherit enabled state from a
+different source. `/plugin list` reports the conflict so the user can
+consciously enable the winning source.
+
+Activation survives updates when the plugin name and source root stay the
+same. Executable hook consent is tied to a fingerprint of the hook surface;
+when an update changes hook files, events, commands, or functions, skills
+remain enabled but hooks require consent again before running.
+Plugin runtime data stays workspace-scoped and keyed by plugin name, so
+switching an activation between roots with the same manifest name reuses
+the same `<workspace>/.mevedel/plugin-data/<plugin-name>` directory.
 
 Bundled skills currently include:
 
@@ -111,25 +135,48 @@ Worktree isolation has split surfaces:
 Plugin management:
 
 - `/plugin install OWNER/REPO` clones a GitHub plugin into
-  `~/.mevedel/plugins/github.com/OWNER/REPO`; existing installs are left
-  untouched and should be updated with `/plugin update NAME`. Install
-  does not enable the plugin in the current workspace.
-- `/plugin update NAME` runs `git pull --ff-only` in the installed plugin
-  root found by manifest name.
+  `~/.agents/plugins/github.com/OWNER/REPO`; existing installs are left
+  untouched and should be updated with `/plugin update NAME`. Install is
+  always global and does not enable the plugin in the current workspace.
+- `/plugin update NAME` runs `git pull --ff-only` for global managed
+  installs under `~/.agents/plugins/` or legacy `~/.mevedel/plugins/`.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
-  mevedel-managed installed plugin, the current workspace's persisted
-  state, and the current workspace's plugin data. Plugins discovered only
-  through `mevedel-plugin-extra-roots` must be removed manually.
+  global managed installed plugin. If the current workspace activation
+  points at that source, mevedel clears that activation. Workspace plugin
+  data is not deleted by default because it is shared by plugin name
+  across source switches. Plugins discovered from workspace
+  `.agents/plugins/` or `mevedel-plugin-extra-roots` must be removed
+  manually. Use `/plugin disable NAME` for project-only deactivation.
 - `/plugin list` shows installed plugins, skill enablement, and hook
-  enablement for the current workspace.
-- `/plugin enable NAME` and `/plugin disable NAME` toggle plugin skill
-  discovery for the current workspace. Disabling a plugin also disables
-  its hooks in that workspace.
-- `/plugin hooks NAME on` / `/plugin hooks NAME off` toggle executable
-  plugin hooks for the current workspace. `/plugin hooks enable NAME` and
-  `/plugin hooks disable NAME` are accepted aliases.
+  enablement for the current workspace in a dedicated `*mevedel plugins*`
+  management buffer. The listing is not added to the chat transcript.
+  The buffer supports refresh, enable/switch, disable, hook override,
+  update, uninstall, detail, and quit keybindings backed by the same
+  command functions as the slash commands. Shadowed duplicate plugin
+  sources are shown under the winning plugin row; if an old activation
+  binding points at a shadowed source, the buffer marks it and offers the
+  enable/switch action for the winning source. Pressing `RET` on a plugin
+  row shows the full consent/detail summary. There is no separate
+  `/plugin show` command in this iteration.
+- `/plugin enable NAME` activates all implemented plugin components for
+  the current workspace. If the plugin contributes executable hooks,
+  mevedel shows a concise consent summary of the risky/executable surface
+  before enabling them.
+- `/plugin disable NAME` disables plugin skills and hooks in the current
+  workspace.
+- `/plugin hooks NAME off` disables executable plugin hooks while leaving
+  plugin skills enabled. `/plugin hooks NAME on` re-enables hooks for an
+  already-enabled plugin after the same consent summary. The
+  `/plugin hooks enable NAME` and `/plugin hooks disable NAME` forms are
+  accepted aliases. These are advanced/scriptable overrides; `/plugin
+  enable NAME` is the normal activation path.
 - `/plugin reload` refreshes plugin-visible skills in the current chat
   session when possible.
+
+Plugin mutations refresh the current session's visible plugin skills and
+hook state immediately when possible; users should not need to start a new
+session after enabling, disabling, installing, updating, or removing a
+plugin.
 
 Codex plugin manifest fields `apps` and `mcpServers` are not loaded
 today; mevedel does not start plugin apps or bundled MCP servers yet.
