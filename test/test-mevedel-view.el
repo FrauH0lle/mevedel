@@ -13,6 +13,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-menu)
 (require 'mevedel-transcript)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
@@ -2633,7 +2634,9 @@ PROPS is the value for the `gptel' property."
       (should (derived-mode-p 'mevedel-view-mode))
       (should-not buffer-read-only))
     (with-current-buffer data-buf
-      (should (eq mevedel--view-buffer view-buf))))
+      (should (eq mevedel--view-buffer view-buf))
+      (should (eq (local-key-binding (kbd "C-c C-m"))
+                  #'mevedel-menu))))
 
   :doc "view buffers are ephemeral and never offered for saving"
   (mevedel-view-test--with-buffers
