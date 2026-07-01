@@ -12,8 +12,14 @@
 
 ;; `gptel'
 (declare-function gptel--model-name "ext:gptel" (model))
+(declare-function gptel-backend-name "ext:gptel" (cl-x) t)
+(defvar gptel--known-backends)
+(defvar gptel-backend)
 (defvar gptel-model)
 (defvar gptel-tools)
+
+;; `gptel-request'
+(declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
 
 ;; `gptel-transient'
 (declare-function gptel-menu "ext:gptel-transient" ())
@@ -21,6 +27,12 @@
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-transition
+                  "mevedel-permissions"
+                  (mode &optional prompt display-text hook-context))
+(defvar mevedel-permission-mode)
 
 ;; `mevedel-plugins'
 (declare-function mevedel-plugins-enabled "mevedel-plugins"
@@ -47,7 +59,6 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
-(defvar mevedel-permission-mode)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--gptel-edit-directive-args
@@ -249,6 +260,20 @@
   "Return the top-level model row description."
   (format "Model   %s" (mevedel-menu--model-label)))
 
+(defun mevedel-menu--model-surface-description ()
+  "Return the model surface description."
+  (with-current-buffer (mevedel-menu--data-buffer)
+    (format "Current model: %s"
+            (cond
+             ((and (bound-and-true-p gptel-backend)
+                   (bound-and-true-p gptel-model))
+              (format "%s:%s"
+                      (gptel-backend-name gptel-backend)
+                      (gptel--model-name gptel-model)))
+             ((bound-and-true-p gptel-model)
+              (gptel--model-name gptel-model))
+             (t "none")))))
+
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
   (format "Tools   %d active" (mevedel-menu--active-tool-count)))
@@ -288,6 +313,57 @@
 
 
 ;;
+;;; Mode surface
+
+(defun mevedel-menu--set-mode (mode)
+  "Set the current session permission MODE."
+  (require 'mevedel-permissions)
+  (mevedel-menu--call-in-data #'mevedel-permission-mode-transition mode)
+  (force-mode-line-update t))
+
+
+;;
+;;; Model surface
+
+(defun mevedel-menu--model-candidates ()
+  "Return registered model candidates as (LABEL . PROVIDER) pairs."
+  (let (candidates)
+    (dolist (entry (and (boundp 'gptel--known-backends)
+                        gptel--known-backends))
+      (let ((backend (cdr entry)))
+        (dolist (model (and (fboundp 'gptel-backend-models)
+                            (gptel-backend-models backend)))
+          (push
+           (cons (format "%s:%s"
+                         (gptel-backend-name backend)
+                         (gptel--model-name model))
+                 (list :backend backend :model model))
+           candidates))))
+    (sort candidates (lambda (a b) (string< (car a) (car b))))))
+
+(defun mevedel-menu--set-model (provider)
+  "Set the current data buffer's gptel PROVIDER."
+  (let ((backend (plist-get provider :backend))
+        (model (plist-get provider :model)))
+    (with-current-buffer (mevedel-menu--data-buffer)
+      (setq-local gptel-backend backend)
+      (setq-local gptel-model model))
+    (force-mode-line-update t)
+    (message "mevedel: model set to %s:%s"
+             (gptel-backend-name backend)
+             (gptel--model-name model))))
+
+(defun mevedel-menu--select-model ()
+  "Select a registered backend/model pair for the current data buffer."
+  (interactive)
+  (let ((candidates (mevedel-menu--model-candidates)))
+    (unless candidates
+      (user-error "No registered gptel models"))
+    (let ((label (completing-read "Model: " candidates nil t)))
+      (mevedel-menu--set-model (cdr (assoc label candidates))))))
+
+
+;;
 ;;; Commands
 
 ;;;###autoload
@@ -305,7 +381,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (pcase area
     ('top
      (transient-setup 'mevedel-menu--top))
-    ((or 'mode 'model 'tools 'skills 'plugins 'worktree 'help)
+    ('mode
+     (transient-setup 'mevedel-menu--mode))
+    ('model
+     (transient-setup 'mevedel-menu--model))
+    ((or 'tools 'skills 'plugins 'worktree 'help)
      (setq mevedel-menu--surface-title
            (format "mevedel: %s" (capitalize (symbol-name area))))
      (transient-setup 'mevedel-menu--surface))
@@ -487,6 +567,36 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu--pair)
   (transient-setup 'mevedel-menu--top))
+
+(transient-define-prefix mevedel-menu--mode ()
+  "Permission mode cockpit surface."
+  [:description mevedel-menu--header
+   ["Mode"
+    ("d" "default      ask before write tools"
+     (lambda () (interactive) (mevedel-menu--set-mode 'default)))
+    ("e" "accept-edits auto-apply edit previews"
+     (lambda () (interactive) (mevedel-menu--set-mode 'accept-edits)))
+    ("p" "plan         read-only planning mode"
+     (lambda () (interactive) (mevedel-menu--set-mode 'plan)))
+    ("a" "trust-all    auto-allow tools"
+     (lambda () (interactive) (mevedel-menu--set-mode 'trust-all)))]
+   ["Navigation"
+    ("b" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--pair)
+  (transient-setup 'mevedel-menu--mode))
+
+(transient-define-prefix mevedel-menu--model ()
+  "Model cockpit surface."
+  [:description mevedel-menu--model-surface-description
+   ["Model"
+    ("RET" "Select model" mevedel-menu--select-model)
+    ("g" "gptel menu" mevedel-menu--open-gptel)]
+   ["Navigation"
+    ("b" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--pair)
+  (transient-setup 'mevedel-menu--model))
 
 (transient-define-prefix mevedel-menu--surface ()
   "Generic mevedel cockpit surface."

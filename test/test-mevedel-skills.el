@@ -3225,6 +3225,53 @@ spanning lines")))
         (should (equal "hello" called))
         (should (equal "### " (buffer-string))))))
 
+  :doc "blank mode slash command opens the mode cockpit surface"
+  (let ((session (mevedel-skills-test--make-session))
+        called)
+    (mevedel-skills-test--with-chat-buffer session
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (area) (setq called area))))
+        (insert "### /mode")
+        (goto-char (point-max))
+        (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+        (should (eq called 'mode))
+        (should (equal "### " (buffer-string))))))
+
+  :doc "mode slash command with an argument remains direct"
+  (let ((session (mevedel-skills-test--make-session))
+        called)
+    (mevedel-skills-test--with-chat-buffer session
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (area) (setq called area))))
+        (insert "### /mode accept-edits")
+        (goto-char (point-max))
+        (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+        (should-not called)
+        (should (eq 'accept-edits
+                    (mevedel-session-permission-mode session)))
+        (should (equal "### " (buffer-string))))))
+
+  :doc "blank model slash command opens the model cockpit surface"
+  (let ((session (mevedel-skills-test--make-session))
+        called)
+    (mevedel-skills-test--with-chat-buffer session
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (area) (setq called area))))
+        (insert "### /model")
+        (goto-char (point-max))
+        (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+        (should (eq called 'model))
+        (should (equal "### " (buffer-string))))))
+
+  :doc "model slash command with an argument remains direct"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### /model gpt-5.5")
+      (goto-char (point-max))
+      (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+      (should (eq 'gpt-5.5 gptel-model))
+      (should (equal "### " (buffer-string)))))
+
   :doc "local command wins over a same-named skill"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
@@ -4340,14 +4387,29 @@ spanning lines")))
   (test)
   :doc "with args sets buffer-local gptel-model to interned symbol"
   (with-temp-buffer
-    (let ((gptel-model 'default))
-      (mevedel-cmd--model "claude-opus-4-6")
-      (should (eq 'claude-opus-4-6 gptel-model))))
+    (setq-local gptel-model 'default)
+    (mevedel-cmd--model "claude-opus-4-6")
+    (should (eq 'claude-opus-4-6 gptel-model)))
+
+  :doc "with unresolved colon args preserves direct bare model behavior"
+  (with-temp-buffer
+    (setq-local gptel-model 'default)
+    (mevedel-cmd--model "llama3.1:8b")
+    (should (eq 'llama3.1:8b gptel-model)))
+
+  :doc "with provider args sets buffer-local backend and model"
+  (mevedel-skills-test--with-model-backends
+    (with-temp-buffer
+      (mevedel-cmd--model "Fast:fast-model")
+      (should (equal "Fast" (gptel-backend-name gptel-backend)))
+      (should (eq 'fast-model gptel-model))))
 
   :doc "with blank args does not change the model"
   (with-temp-buffer
     (let ((gptel-model 'keep))
-      (mevedel-cmd--model "")
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (_area) (user-error "No cockpit"))))
+        (mevedel-cmd--model ""))
       (should (eq 'keep gptel-model)))))
 
 (mevedel-deftest mevedel-cmd--mode ()
@@ -4411,7 +4473,9 @@ spanning lines")))
   :doc "blank args leaves the mode unchanged"
   (with-temp-buffer
     (setq-local mevedel-permission-mode 'accept-edits)
-    (mevedel-cmd--mode "")
+    (cl-letf (((symbol-function 'mevedel-menu-open)
+               (lambda (_area) (user-error "No cockpit"))))
+      (mevedel-cmd--mode ""))
     (should (eq 'accept-edits mevedel-permission-mode))))
 
 (mevedel-deftest mevedel-cmd--auto ()

@@ -6,6 +6,8 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'gptel)
+(require 'gptel-openai)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -20,6 +22,8 @@
 (require 'mevedel-workspace)
 
 ;; `gptel'
+(defvar gptel--known-backends)
+(defvar gptel-backend)
 (defvar gptel-model)
 (defvar gptel-system-prompt)
 (defvar gptel-tools)
@@ -32,6 +36,14 @@
 (defvar transient--original-buffer)
 (defvar transient--prefix)
 (defvar transient-post-exit-hook)
+
+(defmacro mevedel-menu-test--with-model-backends (&rest body)
+  "Run BODY with isolated gptel model backends."
+  (declare (indent 0) (debug t))
+  `(let ((gptel--known-backends nil))
+     (gptel-make-openai "Fast" :key "test" :models '(fast-model))
+     (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
+     ,@body))
 
 (defmacro mevedel-menu-test--with-buffers (&rest body)
   "Execute BODY with a paired data and view buffer."
@@ -106,7 +118,20 @@
           (mevedel-menu-open 'top)))
       (should (eq called-prefix 'mevedel-menu--top))))
 
-  :doc "opens requested named cockpit surfaces"
+  :doc "opens requested mode and model cockpit surfaces"
+  (mevedel-menu-test--with-buffers
+    (let (called-prefix)
+      (cl-letf (((symbol-function 'transient-setup)
+                 (lambda (prefix &rest _)
+                   (setq called-prefix prefix))))
+        (with-current-buffer view-buf
+          (dolist (area '((mode . mevedel-menu--mode)
+                          (model . mevedel-menu--model)))
+            (setq called-prefix nil)
+            (mevedel-menu-open (car area))
+            (should (eq called-prefix (cdr area))))))))
+
+  :doc "opens requested generic cockpit surfaces"
   (mevedel-menu-test--with-buffers
     (let (called-prefix titles)
       (cl-letf (((symbol-function 'transient-setup)
@@ -114,14 +139,10 @@
                    (setq called-prefix prefix)
                    (push mevedel-menu--surface-title titles))))
         (with-current-buffer view-buf
-          (dolist (area '(mode model tools))
-            (setq called-prefix nil)
-            (mevedel-menu-open area)
-            (should (eq called-prefix 'mevedel-menu--surface)))))
+          (mevedel-menu-open 'tools)
+          (should (eq called-prefix 'mevedel-menu--surface))))
       (should (equal (nreverse titles)
-                     '("mevedel: Mode"
-                       "mevedel: Model"
-                       "mevedel: Tools")))))
+                     '("mevedel: Tools")))))
 
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
@@ -210,6 +231,51 @@
              (lambda () "main")))
     (should (string= "Worktree main"
                      (mevedel-menu--worktree-description)))))
+
+(mevedel-deftest mevedel-menu--set-mode ()
+  ,test
+  (test)
+  :doc "mode setter updates the paired data buffer session"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-menu--set-mode 'accept-edits))
+    (with-current-buffer data-buf
+      (should (eq 'accept-edits
+                  (mevedel-session-permission-mode mevedel--session)))
+      (should (eq 'accept-edits mevedel-permission-mode)))))
+
+(mevedel-deftest mevedel-menu--model-surface-description ()
+  ,test
+  (test)
+  :doc "model surface description shows current backend and model"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (with-current-buffer data-buf
+        (setq-local gptel-backend (gptel-get-backend "Fast"))
+        (setq-local gptel-model 'fast-model))
+      (with-current-buffer view-buf
+        (should (string= "Current model: Fast:fast-model"
+                         (mevedel-menu--model-surface-description)))))))
+
+(mevedel-deftest mevedel-menu--select-model ()
+  ,test
+  (test)
+  :doc "model selector applies the chosen registered provider"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (&rest _) "Balanced:balanced-model")))
+        (with-current-buffer view-buf
+          (mevedel-menu--select-model)))
+      (with-current-buffer data-buf
+        (should (equal "Balanced" (gptel-backend-name gptel-backend)))
+        (should (eq 'balanced-model gptel-model)))))
+
+  :doc "model selector rejects an empty model registry"
+  (let ((gptel--known-backends nil))
+    (mevedel-menu-test--with-buffers
+      (with-current-buffer view-buf
+        (should-error (mevedel-menu--select-model) :type 'user-error)))))
 
 (mevedel-deftest mevedel-menu--send ()
   ,test
