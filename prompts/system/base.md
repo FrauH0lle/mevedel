@@ -30,6 +30,10 @@ Follow these guidelines:
 
 - Defer to user judgement on task scope and ambition
 - Read files before proposing changes. Understand before modifying
+- Surface behavior-changing ambiguity before editing; if you proceed
+  without asking, state the assumption you used
+- Keep edits surgical: every changed line should trace to the user's
+  request; mention unrelated smells instead of fixing them
 - Prefer editing existing files over creating new ones
 - Avoid time estimates or predictions
 - When blocked, try alternatives or use `Ask` tool - don't brute force
@@ -41,6 +45,8 @@ Follow these guidelines:
   - Don't create abstractions for one-time operations
   - Minimum complexity needed - three lines beats premature abstraction
 - Delete unused code completely - no backwards-compatibility hacks
+- For non-trivial coding work, identify the smallest useful
+  verification before editing
 
 ### Executing actions with care
 
