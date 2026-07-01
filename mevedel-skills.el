@@ -3315,43 +3315,118 @@ Routes through the lifecycle-aware permission transition path."
       name
     (user-error "Usage: /skills %s NAME" action)))
 
-(defun mevedel-cmd--skills--list (session)
-  "Message the skill list for SESSION."
-  (let ((skills (mevedel-session-skills session)))
-    (if (null skills)
-        (message "No skills available.")
-      (message
-       "Skills:\n%s"
-       (mapconcat
-        (lambda (skill)
-          (format "- %s [%s] %s%s"
-                  (mevedel-skill-name skill)
-                  (if (mevedel-skills--skill-enabled-p skill)
-                      "enabled"
-                    "disabled")
-                  (symbol-name (or (mevedel-skill-source skill) 'unknown))
-                  (let ((desc (mevedel-skill-description skill)))
-                    (if (and desc (not (string-empty-p desc)))
-                        (format " - %s" desc)
-                      ""))))
-        skills
-        "\n")))))
+(defconst mevedel-skills-list-buffer-name "*mevedel skills*"
+  "Name of the skill listing buffer.")
+
+(defvar-local mevedel-skills-list--session nil
+  "Session rendered in the current skill listing buffer.")
+
+(defun mevedel-skills--skill-status-label (skill)
+  "Return user-facing enabled status for SKILL."
+  (if (mevedel-skills--skill-enabled-p skill) "enabled" "disabled"))
+
+(defun mevedel-skills--skill-source-label (skill)
+  "Return user-facing source label for SKILL."
+  (let ((source (or (mevedel-skill-source skill) 'unknown))
+        (family (mevedel-skill-source-family skill)))
+    (if family
+        (format "%s/%s" source family)
+      (symbol-name source))))
+
+(defun mevedel-skills--skill-line (skill)
+  "Return one listing line for SKILL."
+  (format "%s [%s] source:%s%s"
+          (mevedel-skill-name skill)
+          (mevedel-skills--skill-status-label skill)
+          (mevedel-skills--skill-source-label skill)
+          (if-let* ((desc (mevedel-skill-description skill)))
+              (if (string-empty-p desc)
+                  ""
+                (format " - %s" desc))
+            "")))
+
+(defun mevedel-skills--skill-detail-text (skill)
+  "Return detail text for SKILL."
+  (format
+   "Skill %s [%s]\nSource: %s\nDescription: %s%s%s"
+   (mevedel-skill-name skill)
+   (mevedel-skills--skill-status-label skill)
+   (mevedel-skills--skill-source-label skill)
+   (or (mevedel-skill-description skill) "")
+   (if-let* ((when-to-use (mevedel-skill-when-to-use skill)))
+       (format "\nWhen to use: %s" when-to-use)
+     "")
+   (if-let* ((file (mevedel-skill-source-file skill)))
+       (format "\nFile: %s" file)
+     "")))
+
+(defun mevedel-skills-list-refresh ()
+  "Refresh the current skill listing buffer."
+  (interactive)
+  (let ((inhibit-read-only t)
+        (session (or mevedel-skills-list--session
+                     (bound-and-true-p mevedel--session))))
+    (unless session
+      (user-error "No mevedel session in this buffer"))
+    (setq mevedel-skills-list--session session)
+    (erase-buffer)
+    (insert (format "mevedel skills for %s\n\n"
+                    (mevedel-session-name session)))
+    (let ((skills (mevedel-session-skills session)))
+      (if skills
+          (dolist (skill skills)
+            (let ((start (point)))
+              (insert (mevedel-skills--skill-line skill) "\n")
+              (add-text-properties
+               start (point)
+               `(mevedel-skill ,skill
+                 mouse-face highlight))))
+        (insert "No skills available.\n")))
+    (goto-char (point-min))
+    (forward-line 2)))
+
+(defun mevedel-skills-list--skill-at-point ()
+  "Return the skill at point in a skill listing buffer."
+  (or (get-text-property (point) 'mevedel-skill)
+      (save-excursion
+        (beginning-of-line)
+        (get-text-property (point) 'mevedel-skill))
+      (user-error "No skill on this line")))
+
+(defun mevedel-skills-list-details ()
+  "Show details for the skill at point."
+  (interactive)
+  (let ((skill (mevedel-skills-list--skill-at-point)))
+    (with-help-window "*mevedel skill details*"
+      (princ (mevedel-skills--skill-detail-text skill)))))
+
+(defvar mevedel-skills-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'mevedel-skills-list-refresh)
+    (define-key map (kbd "RET") #'mevedel-skills-list-details)
+    map)
+  "Keymap for `mevedel-skills-list-mode'.")
+
+(define-derived-mode mevedel-skills-list-mode special-mode "mevedel-skills"
+  "Major mode for listing mevedel skills.")
+
+(defun mevedel-skills-list-open (&optional session)
+  "Open the skill listing buffer for SESSION."
+  (let ((session (or session
+                     (bound-and-true-p mevedel--session)
+                     (user-error "No mevedel session in this buffer")))
+        (buffer (get-buffer-create mevedel-skills-list-buffer-name)))
+    (with-current-buffer buffer
+      (mevedel-skills-list-mode)
+      (setq mevedel-skills-list--session session)
+      (mevedel-skills-list-refresh))
+    (display-buffer buffer)
+    buffer))
 
 (defun mevedel-cmd--skills--help (session name)
   "Message help for skill NAME in SESSION."
   (if-let* ((skill (mevedel-session-get-skill session name)))
-      (message
-       "Skill %s [%s]\nSource: %s\nDescription: %s%s%s"
-       (mevedel-skill-name skill)
-       (if (mevedel-skills--skill-enabled-p skill) "enabled" "disabled")
-       (symbol-name (or (mevedel-skill-source skill) 'unknown))
-       (or (mevedel-skill-description skill) "")
-       (if-let* ((when-to-use (mevedel-skill-when-to-use skill)))
-           (format "\nWhen to use: %s" when-to-use)
-         "")
-       (if-let* ((file (mevedel-skill-source-file skill)))
-           (format "\nFile: %s" file)
-         ""))
+      (message "%s" (mevedel-skills--skill-detail-text skill))
     (message "Unknown skill: %s" name)))
 
 (defun mevedel-cmd--skills (args)
@@ -3362,8 +3437,8 @@ Routes through the lifecycle-aware permission transition path."
          (action (or (car parts) "list"))
          (name (cadr parts)))
     (pcase action
-      ((or "list" "")
-       (mevedel-cmd--skills--list mevedel--session))
+      ("list"
+       (mevedel-skills-list-open mevedel--session))
       ("help"
        (mevedel-cmd--skills--help
         mevedel--session
