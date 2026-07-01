@@ -113,11 +113,16 @@
 (defvar gptel-response-separator)
 
 ;; `mevedel-models'
-(declare-function mevedel-model-parse-selector "mevedel-models" (value))
-(declare-function mevedel-model-resolve-selector
-                  "mevedel-models" (selector &optional noerror))
 (declare-function mevedel-model-apply-provider-to-info
                   "mevedel-models" (info provider))
+(declare-function mevedel-model-parse-selector "mevedel-models" (value))
+(declare-function mevedel-model-resolve-provider
+                  "mevedel-models" (spec &optional noerror))
+(declare-function mevedel-model-resolve-selector
+                  "mevedel-models" (selector &optional noerror))
+
+;; `mevedel-menu'
+(declare-function mevedel-menu-open "mevedel-menu" (area))
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
@@ -3170,14 +3175,34 @@ distinct from `Agent :name' which matches subagent_type."
   (message "Estimated tokens in this buffer: %d"
            (mevedel--estimate-tokens)))
 
+(defun mevedel-skills--open-menu-or-message (area format-string &rest args)
+  "Open cockpit AREA, or message FORMAT-STRING with ARGS."
+  (if (fboundp 'mevedel-menu-open)
+      (condition-case nil
+          (mevedel-menu-open area)
+        (user-error
+         (apply #'message format-string args)))
+    (apply #'message format-string args)))
+
 (defun mevedel-cmd--model (args)
   "Show or set the gptel model for the current chat buffer.
-With a non-empty ARGS string, set `gptel-model' to the interned symbol."
+With a non-empty ARGS string, set `gptel-model' to the interned symbol.
+A BACKEND:MODEL argument sets both buffer-local `gptel-backend' and
+`gptel-model'.  With no ARGS, open the model cockpit surface when the
+current buffer belongs to a live session pair."
   (if (and args (not (string-blank-p args)))
-      (let ((model (intern (string-trim args))))
-        (setq-local gptel-model model)
-        (message "Model set to %s" model))
-    (message "Current model: %s" gptel-model)))
+      (let ((trimmed (string-trim args)))
+        (if-let* ((provider (mevedel-model-resolve-provider trimmed t)))
+            (let ((backend (plist-get provider :backend))
+                  (model (plist-get provider :model)))
+              (setq-local gptel-backend backend)
+              (setq-local gptel-model model)
+              (message "Model set to %s" trimmed))
+          (let ((model (intern trimmed)))
+            (setq-local gptel-model model)
+            (message "Model set to %s" model))))
+    (mevedel-skills--open-menu-or-message
+     'model "Current model: %s" gptel-model)))
 
 (defun mevedel-cmd--compact (args)
   "Run `mevedel-compact' on the current chat buffer with ARGS."
@@ -3208,7 +3233,8 @@ Routes through the lifecycle-aware permission transition path."
       (let ((mode (mevedel-permission-mode-normalize args)))
         (mevedel-permission-mode-transition mode)
         (message "Permission mode set to %s" mode))
-    (message "Current permission mode: %s" mevedel-permission-mode)))
+    (mevedel-skills--open-menu-or-message
+     'mode "Current permission mode: %s" mevedel-permission-mode)))
 
 (defun mevedel-cmd--plan (args)
   "Enter Plan mode, optionally sending ARGS as the first prompt."
