@@ -123,6 +123,45 @@ Support
 
 - **gptel**, **gptel-agent**, **Emacs >=30.1**, **ediff**, **org-mode**
 
+## gptel and gptel-agent source rule
+
+mevedel is tightly coupled to gptel and also depends on gptel-agent. Before
+implementing or changing behavior that touches prompts, requests, callbacks,
+tool calls, presets, buffers, transcripts, session flow, agents, or
+coordination, consult gptel and gptel-agent source and reuse their existing
+APIs or patterns instead of duplicating them.
+
+Prefer a refreshed upstream checkout, because Eask dependency installs can get
+stale:
+
+```bash
+# First time
+mkdir -p .scratch/upstream
+git clone https://github.com/karthink/gptel .scratch/upstream/gptel
+git clone https://github.com/karthink/gptel-agent .scratch/upstream/gptel-agent
+
+# Refresh before consulting
+git -C .scratch/upstream/gptel pull --ff-only
+git -C .scratch/upstream/gptel-agent pull --ff-only
+```
+
+If you need to inspect the package currently visible to Eask/Emacs, refresh
+Eask first and load `find-func`. This answers "what is on this load-path", not
+"what is latest upstream":
+
+```bash
+# Optional refresh
+npx @emacs-eask/cli upgrade gptel gptel-agent
+
+# Locate installed source
+npx @emacs-eask/cli emacs --batch \
+  --eval '(require (quote find-func))' \
+  --eval '(let ((file (find-library-name "gptel"))) (princ file) (terpri))'
+npx @emacs-eask/cli emacs --batch \
+  --eval '(require (quote find-func))' \
+  --eval '(let ((file (find-library-name "gptel-agent"))) (princ file) (terpri))'
+```
+
 ## Development Commands
 
 ### Testing
