@@ -618,8 +618,6 @@
   ,test
   (test)
   :doc "returns user-facing strings for bad input"
-  (should (string-match-p "Usage:"
-                          (mevedel-plugins-test--slash session "")))
   (should (equal "Unknown plugin: missing."
                  (mevedel-plugins-test--slash session "enable missing")))
   (should (equal (concat "Invalid plugin target: use OWNER/REPO or a "
@@ -682,14 +680,15 @@
       (should (string-match-p "demo enabled:off hooks:off"
                               (mevedel-plugins-test--list-string workspace)))))
 
-  :doc "list opens the dedicated plugin management buffer"
+  :doc "blank and list forms open the dedicated plugin management buffer"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
-    (should-not (mevedel-plugins-test--slash session "list"))
-    (with-current-buffer mevedel-plugins-list-buffer-name
-      (should (eq major-mode 'mevedel-plugins-list-mode))
-      (should (string-match-p "demo enabled:off hooks:none"
-                              (buffer-string)))))
+    (dolist (args '("" "list"))
+      (should-not (mevedel-plugins-test--slash session args))
+      (with-current-buffer mevedel-plugins-list-buffer-name
+        (should (eq major-mode 'mevedel-plugins-list-mode))
+        (should (string-match-p "demo enabled:off hooks:none"
+                                (buffer-string))))))
 
   :doc "hook-only enable requires an enabled plugin"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))

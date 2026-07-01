@@ -1084,7 +1084,7 @@ Return a user-facing result string."
   (let ((parts (split-string (string-trim (or args "")) "[ \t\n]+" t))
         (workspace (mevedel-plugins--current-workspace)))
     (pcase parts
-      (`("list")
+      ((or `() `("list"))
        (mevedel-plugins-list-open workspace)
        nil)
       ((and (or `("enable" ,_)

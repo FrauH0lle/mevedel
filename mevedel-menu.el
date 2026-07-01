@@ -39,6 +39,8 @@
                   (&optional workspace))
 (declare-function mevedel-plugins-list "mevedel-plugins"
                   (&optional workspace))
+(declare-function mevedel-plugins-list-open "mevedel-plugins"
+                  (&optional workspace))
 
 ;; `mevedel-review'
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
@@ -47,6 +49,8 @@
 ;; `mevedel-skills'
 (declare-function mevedel-skills--skill-enabled-p "mevedel-skills"
                   (skill))
+(declare-function mevedel-skills-list-open "mevedel-skills"
+                  (&optional session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -362,7 +366,6 @@
     (let ((label (completing-read "Model: " candidates nil t)))
       (mevedel-menu--set-model (cdr (assoc label candidates))))))
 
-
 ;;
 ;;; Commands
 
@@ -385,7 +388,19 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      (transient-setup 'mevedel-menu--mode))
     ('model
      (transient-setup 'mevedel-menu--model))
-    ((or 'tools 'skills 'plugins 'worktree 'help)
+    ('skills
+     (require 'mevedel-skills)
+     (mevedel-menu--call-in-data
+      #'mevedel-skills-list-open
+      (mevedel-menu--session)))
+    ('plugins
+     (require 'mevedel-plugins)
+     (let* ((session (mevedel-menu--session))
+            (workspace (and session (mevedel-session-workspace session))))
+       (mevedel-menu--call-in-data
+        #'mevedel-plugins-list-open
+        workspace)))
+    ((or 'tools 'worktree 'help)
      (setq mevedel-menu--surface-title
            (format "mevedel: %s" (capitalize (symbol-name area))))
      (transient-setup 'mevedel-menu--surface))

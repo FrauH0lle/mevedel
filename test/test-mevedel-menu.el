@@ -17,6 +17,8 @@
           "helpers"))
 (require 'mevedel-menu)
 (require 'mevedel-mentions)
+(require 'mevedel-plugins)
+(require 'mevedel-skills)
 (require 'mevedel-structs)
 (require 'mevedel-view)
 (require 'mevedel-workspace)
@@ -130,6 +132,25 @@
             (setq called-prefix nil)
             (mevedel-menu-open (car area))
             (should (eq called-prefix (cdr area))))))))
+
+  :doc "opens requested skills and plugins management surfaces"
+  (mevedel-menu-test--with-buffers
+    (let (skills-session skills-buffer plugins-workspace plugins-buffer)
+      (cl-letf (((symbol-function 'mevedel-skills-list-open)
+                 (lambda (session)
+                   (setq skills-session session
+                         skills-buffer (current-buffer))))
+                ((symbol-function 'mevedel-plugins-list-open)
+                 (lambda (workspace)
+                   (setq plugins-workspace workspace
+                         plugins-buffer (current-buffer)))))
+        (with-current-buffer view-buf
+          (mevedel-menu-open 'skills)
+          (mevedel-menu-open 'plugins)))
+      (should (eq skills-session session))
+      (should (eq skills-buffer data-buf))
+      (should (eq plugins-workspace (mevedel-session-workspace session)))
+      (should (eq plugins-buffer data-buf))))
 
   :doc "opens requested generic cockpit surfaces"
   (mevedel-menu-test--with-buffers

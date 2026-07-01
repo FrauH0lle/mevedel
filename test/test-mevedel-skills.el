@@ -3272,6 +3272,40 @@ spanning lines")))
       (should (eq 'gpt-5.5 gptel-model))
       (should (equal "### " (buffer-string)))))
 
+  :doc "blank and list skills slash commands open the skills surface"
+  (let ((session (mevedel-skills-test--make-session))
+        called)
+    (dolist (command '("/skills" "/skills list"))
+      (setq called nil)
+      (mevedel-skills-test--with-chat-buffer session
+        (cl-letf (((symbol-function 'mevedel-skills-list-open)
+                   (lambda (surface-session)
+                     (setq called surface-session))))
+          (insert "### " command)
+          (goto-char (point-max))
+          (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+          (should (eq called session))
+          (should (equal "### " (buffer-string)))))))
+
+  :doc "skills mutation slash commands remain direct"
+  (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "visible")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (mevedel-skills-test--with-chat-buffer session
+            (cl-letf (((symbol-function 'mevedel-skills-list-open)
+                       (lambda (_session)
+                         (ert-fail "skills surface should not open"))))
+              (insert "### /skills disable visible")
+              (goto-char (point-max))
+              (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+              (should-not (mevedel-skills--skill-enabled-p skill))
+              (should (equal "### " (buffer-string))))))
+      (delete-directory user-dir t)))
+
   :doc "local command wins over a same-named skill"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
@@ -3447,34 +3481,30 @@ spanning lines")))
         (should called)
         (should (equal "### " (buffer-string))))))
 
-  :doc "`/plugin list' opens the plugin management buffer"
-  (let* ((session (mevedel-skills-test--make-session))
-         (user-dir (file-name-as-directory
-                    (make-temp-file "mevedel-plugin-slash-" t)))
-         (mevedel-user-dir user-dir)
-         (mevedel-plugin-install-directory
-          (file-name-concat user-dir ".agents" "plugins"))
-         messages)
-    (unwind-protect
-        (progn
-          (mevedel-skills-test--write-plugin-manifest
-           user-dir "repo" "{\"name\":\"demo\"}")
-          (mevedel-skills-test--with-chat-buffer session
-            (let ((mevedel-slash-commands mevedel-slash-commands))
-              (cl-letf (((symbol-function 'message)
-                         (lambda (fmt &rest args)
-                           (push (apply #'format-message fmt args) messages)
-                           nil)))
-                (insert "### /plugin list")
-                (goto-char (point-max))
-                (should (eq 'local (mevedel-skills--dispatch-slash-command)))
-                (should (equal "### " (buffer-string)))
-                (should-not messages)
-                (with-current-buffer mevedel-plugins-list-buffer-name
-                  (should (eq major-mode 'mevedel-plugins-list-mode))
-                  (should (string-match-p "demo enabled:off hooks:none"
-                                          (buffer-string))))))))
-      (delete-directory user-dir t)))
+  :doc "`/plugin' and `/plugin list' dispatch to the plugin surface"
+  (let ((session (mevedel-skills-test--make-session))
+        opened
+        messages)
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands mevedel-slash-commands))
+        (dolist (command '("/plugin" "/plugin list"))
+          (setq opened nil
+                messages nil)
+          (erase-buffer)
+          (cl-letf (((symbol-function 'mevedel-plugins-list-open)
+                     (lambda (workspace)
+                       (setq opened workspace)
+                       nil))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (push (apply #'format-message fmt args) messages)
+                       nil)))
+            (insert "### " command)
+            (goto-char (point-max))
+            (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+            (should (eq opened (mevedel-session-workspace session)))
+            (should-not messages)
+            (should (equal "### " (buffer-string))))))))
 
   :doc "`/clear' asks before clearing a non-materialized session"
   (let ((session (mevedel-skills-test--make-session))
@@ -3631,7 +3661,7 @@ spanning lines")))
 (mevedel-deftest mevedel-cmd--skills ()
   ,test
   (test)
-  :doc "list and help report session skills"
+  :doc "list opens the skills surface and help reports session skills"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
@@ -3649,8 +3679,11 @@ spanning lines")))
                        (lambda (fmt &rest args)
                          (setq message-text (apply #'format fmt args)))))
               (mevedel-cmd--skills "list")
-              (should (string-match-p "visible" message-text))
-              (should (string-match-p "enabled" message-text))
+              (with-current-buffer mevedel-skills-list-buffer-name
+                (should (eq major-mode 'mevedel-skills-list-mode))
+                (should (string-match-p
+                         "visible \\[enabled\\] source:project"
+                         (buffer-string))))
               (mevedel-cmd--skills "help visible")
               (should (string-match-p "Visible description"
                                       message-text)))))
@@ -3730,6 +3763,55 @@ spanning lines")))
           (should-not (mevedel-skills--disabled-names)))
       (delete-directory user-dir t)
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-skills-list-open ()
+  ,test
+  (test)
+  :doc "renders session skills and inspects the skill at point"
+  (let* ((user-dir (make-temp-file "mevedel-skills-list-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (session (mevedel-skills-test--make-session))
+         (source-file (make-temp-file "mevedel-skill-source-"))
+         (active (mevedel-skill--create
+                  :name "active" :description "Active description"
+                  :when-to-use "When active is useful"
+                  :source 'project :source-file source-file))
+         (disabled (mevedel-skill--create
+                    :name "disabled" :description "Disabled description"
+                    :source 'user)))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list active disabled))
+          (mevedel-skills--set-enabled disabled nil)
+          (let ((buffer (mevedel-skills-list-open session)))
+            (with-current-buffer buffer
+              (should (eq major-mode 'mevedel-skills-list-mode))
+              (should (eq mevedel-skills-list--session session))
+              (should (string-match-p
+                       "active \\[enabled\\] source:project"
+                       (buffer-string)))
+              (should (string-match-p
+                       "disabled \\[disabled\\] source:user"
+                       (buffer-string)))
+              (goto-char (point-min))
+              (forward-line 2)
+              (should (eq (mevedel-skills-list--skill-at-point)
+                          active))
+              (mevedel-skills-list-details))
+            (with-current-buffer "*mevedel skill details*"
+              (should (string-match-p "Active description"
+                                      (buffer-string)))
+              (should (string-match-p "When active is useful"
+                                      (buffer-string)))
+              (should (string-match-p (regexp-quote source-file)
+                                      (buffer-string))))))
+      (when (get-buffer mevedel-skills-list-buffer-name)
+        (kill-buffer mevedel-skills-list-buffer-name))
+      (when (get-buffer "*mevedel skill details*")
+        (kill-buffer "*mevedel skill details*"))
+      (when (file-exists-p source-file)
+        (delete-file source-file))
+      (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-skills--gptel-send-advice ()
   ,test
