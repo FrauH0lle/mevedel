@@ -2680,6 +2680,112 @@ PROPS is the value for the `gptel' property."
         (when (file-exists-p fake-file)
           (delete-file fake-file)))))
 
+(mevedel-deftest mevedel-view--status-strip-button ()
+  ,test
+  (test)
+  :doc "status strip button routes clicks to the requested cockpit area"
+  (let ((button (mevedel-view--status-strip-button
+                 "Mode" 'mode "Open mode cockpit"))
+        called)
+    (cl-letf (((symbol-function 'mevedel-menu-open)
+               (lambda (area) (setq called area))))
+      (let* ((map (get-text-property 0 'local-map button))
+             (command (lookup-key map [header-line mouse-1])))
+        (should (eq (get-text-property 0 'mevedel-view-cockpit-area button)
+                    'mode))
+        (should (string= button "Mode"))
+        (should command)
+        (funcall command nil)
+        (should (eq called 'mode))))))
+
+(mevedel-deftest mevedel-view--status-strip ()
+  ,test
+  (test)
+  :doc "status strip shows mevedel-owned session orientation instead of the data header"
+  (let* ((root (make-temp-file "mevedel-status-root-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project (format "status-%s" root) root "mevedel"))
+         (session (mevedel-session-create "main" workspace)))
+    (setf (mevedel-session-permission-mode session) 'plan)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local default-directory (file-name-as-directory root))
+            (setq-local header-line-format "GPTEL HEADER")
+            (setq-local mevedel--session session)
+            (setq-local gptel-model 'gpt-5.5)
+            (setq-local gptel-tools '(read edit)))
+          (with-current-buffer view-buf
+            (let ((line (mevedel-view--status-strip)))
+              (should (string-match-p "mevedel: main" line))
+              (should (string-match-p
+                       (regexp-quote
+                        (abbreviate-file-name
+                         (file-name-as-directory root)))
+                       line))
+              (should (string-match-p "plan" line))
+              (should (string-match-p "idle" line))
+              (should (string-match-p "\\[gpt-5\\.5\\]" line))
+              (should (string-match-p "\\[2 tools\\]" line))
+              (should-not (string-match-p "GPTEL HEADER" line)))))
+      (when (file-directory-p root)
+        (delete-directory root t))))
+
+  :doc "status strip routes click targets to cockpit surfaces"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((line (mevedel-view--status-strip))
+            called)
+        (cl-letf (((symbol-function 'mevedel-menu-open)
+                   (lambda (area) (setq called area))))
+          (dolist (area '(top mode model tools))
+            (let* ((pos (text-property-any
+                         0 (length line)
+                         'mevedel-view-cockpit-area area line))
+                   (map (and pos (get-text-property pos 'local-map line)))
+                   (command (and map
+                                 (lookup-key map [header-line mouse-1]))))
+              (should pos)
+              (should command)
+              (setq called nil)
+              (funcall command nil)
+              (should (eq called area))))))))
+
+  :doc "status strip clicks do not call gptel transients directly"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let* ((line (mevedel-view--status-strip))
+             (pos (text-property-any
+                   0 (length line)
+                   'mevedel-view-cockpit-area 'tools line))
+             (map (get-text-property pos 'local-map line))
+             (command (lookup-key map [header-line mouse-1]))
+             (gptel-called nil))
+        (cl-letf (((symbol-function 'gptel-menu)
+                   (lambda ()
+                     (interactive)
+                     (setq gptel-called t)))
+                  ((symbol-function 'mevedel-menu-open) #'ignore))
+          (funcall command nil)
+          (should-not gptel-called)))))
+
+  :doc "status strip keeps the raw data buffer header line"
+  (let ((data-buf (generate-new-buffer " *status-data*"))
+        (view-buf (generate-new-buffer " *status-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (org-mode)
+            (setq-local header-line-format "GPTEL HEADER"))
+          (mevedel-view--setup view-buf data-buf)
+          (with-current-buffer data-buf
+            (should (equal header-line-format "GPTEL HEADER")))
+          (with-current-buffer view-buf
+            (should (equal header-line-format
+                           '(:eval (mevedel-view--status-strip))))))
+      (when (buffer-live-p view-buf) (kill-buffer view-buf))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
 (mevedel-deftest mevedel-view--dnd-file-mentions
   (:doc "view drag/drop inserts @file mentions and records exact grants")
   ,test

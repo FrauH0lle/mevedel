@@ -33,29 +33,37 @@
 (declare-function cl-find "cl-seq" (cl-item cl-seq &rest cl-keys))
 
 ;; `gptel'
-(declare-function gptel-send "ext:gptel" (&optional arg))
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
-(declare-function gptel-curl--stream-insert-response "ext:gptel"
-                  (response info &optional raw))
+(declare-function gptel--suffix-system-message "ext:gptel-transient"
+                  (&optional cancel))
 (declare-function gptel-curl--stream-cleanup "ext:gptel-request"
                   (process status))
 (declare-function gptel-curl--stream-filter "ext:gptel-request"
                   (process output))
+(declare-function gptel-curl--stream-insert-response "ext:gptel"
+                  (response info &optional raw))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
+(declare-function gptel-send "ext:gptel" (&optional arg))
 (declare-function gptel-system-prompt "ext:gptel-transient" ())
 (declare-function gptel-tools "ext:gptel-transient" ())
-(declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
-(declare-function gptel--suffix-system-message "ext:gptel-transient"
-                  (&optional cancel))
+(defvar gptel--request-alist)
+(defvar gptel-model)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
-(defvar gptel--request-alist)
-(defvar mevedel-permission-mode)
+(defvar gptel-tools)
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
+(declare-function mevedel-menu-open "mevedel-menu" (area))
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-transition
+                  "mevedel-permissions"
+                  (mode &optional prompt display-text hook-context))
+(defvar mevedel-permission-mode)
 
 ;; `nadvice'
 (declare-function advice-eval-interactive-spec "nadvice" (spec))
@@ -122,9 +130,6 @@
                   "mevedel-tool-plan" (text))
 (declare-function mevedel-plan-mode-known-proposed-plan-p
                   "mevedel-tool-plan" (plan-markdown &optional session))
-(declare-function mevedel-permission-mode-transition
-                  "mevedel-permissions"
-                  (mode &optional prompt display-text hook-context))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (declare-function mevedel-workspace-ensure-generated-state-ignored
@@ -1936,7 +1941,7 @@ existing `mevedel--view-buffer' binding untouched."
     (setq header-line-format
           (if mevedel-view--agent-transcript-p
               '(:eval (mevedel-view--agent-transcript-header-line))
-            '(:eval (mevedel-view--proxy-header-line)))))
+            '(:eval (mevedel-view--status-strip)))))
   ;; Wire the reverse reference on the data buffer.  Live agent buffers
   ;; keep this pointing at the interactive parent view so their queued
   ;; permission/Ask/plan overlays remain visible while a read-only
@@ -2039,13 +2044,65 @@ Kills the associated view buffer."
       (mevedel-view--interaction-clear))
     (kill-buffer vb)))
 
-(defun mevedel-view--proxy-header-line ()
-  "Return the header-line string from the data buffer.
-Used as `:eval' form in the view buffer's `header-line-format'."
-  (when-let* ((db mevedel--data-buffer)
-              (_ (buffer-live-p db))
-              (fmt (buffer-local-value 'header-line-format db)))
-    (format-mode-line fmt nil nil db)))
+(defun mevedel-view--status-strip-button (label area help)
+  "Return clickable status strip LABEL for cockpit AREA with HELP."
+  (let* ((map (make-sparse-keymap))
+         (command (lambda (&optional _event)
+                    (interactive "e")
+                    (mevedel-menu-open area))))
+    (define-key map [header-line mouse-1] command)
+    (propertize label
+                'face 'link
+                'mouse-face 'highlight
+                'help-echo help
+                'local-map map
+                'mevedel-view-cockpit-area area)))
+
+(defun mevedel-view--status-strip ()
+  "Return a mevedel-owned clickable status strip for the view buffer."
+  (when (and (boundp 'mevedel--data-buffer)
+             (buffer-live-p mevedel--data-buffer))
+    (let* ((data-buffer mevedel--data-buffer)
+           (session (with-current-buffer data-buffer
+                      (and (boundp 'mevedel--session) mevedel--session)))
+           (workspace (and session (mevedel-session-workspace session)))
+           (session-name (or (and session (mevedel-session-name session))
+                             "unknown"))
+           (root (abbreviate-file-name
+                  (file-name-as-directory
+                   (or (and workspace (mevedel-workspace-root workspace))
+                       (with-current-buffer data-buffer default-directory)))))
+           (mode (car (mevedel-view--permission-mode-display
+                       (mevedel-view--effective-permission-mode))))
+           (state (with-current-buffer data-buffer
+                    (if (bound-and-true-p mevedel--current-request)
+                        "running"
+                      "idle")))
+           (model (with-current-buffer data-buffer
+                    (if (and (boundp 'gptel-model) gptel-model)
+                        (format "%s" gptel-model)
+                      "model none")))
+           (tools (with-current-buffer data-buffer
+                    (format "%d tools"
+                            (length (and (boundp 'gptel-tools)
+                                         gptel-tools))))))
+      (concat
+       (mevedel-view--status-strip-button
+        (format "mevedel: %s  %s" session-name root)
+        'top "Open session cockpit")
+       "   "
+       (mevedel-view--status-strip-button
+        mode 'mode "Open mode cockpit")
+       " · "
+       (propertize state 'face 'shadow)
+       "   "
+       (mevedel-view--status-strip-button
+        (format "[%s]" model)
+        'model "Open model cockpit")
+       " "
+       (mevedel-view--status-strip-button
+        (format "[%s]" tools)
+        'tools "Open tools cockpit")))))
 
 (defun mevedel-view--agent-terminal-status-p (status)
   "Return non-nil when STATUS names a terminal agent transcript state."
