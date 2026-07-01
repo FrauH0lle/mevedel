@@ -9,6 +9,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill, plugin, or durable memory.
 - **mevedel state** — Runtime data owned by mevedel, such as session persistence, tool artifacts, input history, and generated metadata.
 - **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, background agents, and persistence metadata.
+- **session cockpit** — The central user-facing control surface for one session, used to inspect session state and reach common workflow and configuration actions.
 - **worktree session** — A session whose working directory is a Git linked worktree while still belonging to the same mevedel workspace.
 - **instruction** — A user-authored overlay in source buffers that gives mevedel context or work to perform.
 - **reference** — An instruction that contributes context without asking the agent to act.

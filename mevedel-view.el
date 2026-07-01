@@ -54,6 +54,9 @@
 (defvar gptel--request-alist)
 (defvar mevedel-permission-mode)
 
+;; `mevedel-menu'
+(declare-function mevedel-menu "mevedel-menu" ())
+
 ;; `nadvice'
 (declare-function advice-eval-interactive-spec "nadvice" (spec))
 
@@ -1430,6 +1433,7 @@ transcript on click."
   :doc "Keymap for `mevedel-view-mode'."
   "C-c RET" #'mevedel-view-send
   "C-c C-k" #'mevedel-view-abort
+  "C-c C-m" #'mevedel-menu
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-u" #'mevedel-view-history-clear-input
   "C-c C-e" #'mevedel-view-edit-last-queued-message
@@ -1945,6 +1949,7 @@ existing `mevedel--view-buffer' binding untouched."
   (unless (plist-get options :preserve-data-view-buffer)
     (with-current-buffer data-buf
       (setq-local mevedel--view-buffer view-buf)
+      (local-set-key (kbd "C-c C-m") #'mevedel-menu)
       ;; Kill-buffer lifecycle: data killed -> kill view buffer
       (add-hook 'kill-buffer-hook #'mevedel-view--on-data-killed nil t))))
 
