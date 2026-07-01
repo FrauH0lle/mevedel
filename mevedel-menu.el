@@ -64,6 +64,9 @@
 (defvar transient--prefix)
 (defvar transient-post-exit-hook)
 
+(defvar mevedel-menu--surface-title "mevedel"
+  "Title displayed by the generic cockpit surface.")
+
 
 ;;
 ;;; Pair resolution
@@ -296,15 +299,18 @@
 ;;;###autoload
 (defun mevedel-menu-open (area)
   "Open session cockpit AREA.
-AREA is `top' for the main cockpit.  Other areas are reserved for
-dedicated cockpit surfaces."
+AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive (list 'top))
   (mevedel-menu--pair)
   (pcase area
     ('top
      (transient-setup 'mevedel-menu--top))
+    ((or 'mode 'model 'tools 'skills 'plugins 'worktree 'help)
+     (setq mevedel-menu--surface-title
+           (format "mevedel: %s" (capitalize (symbol-name area))))
+     (transient-setup 'mevedel-menu--surface))
     (_
-     (message "mevedel: %s cockpit surface is not implemented yet" area))))
+     (user-error "Unknown cockpit area: %s" area))))
 
 (defun mevedel-menu--send ()
   "Send the current composer from the view buffer."
@@ -481,6 +487,15 @@ dedicated cockpit surfaces."
   (interactive)
   (mevedel-menu--pair)
   (transient-setup 'mevedel-menu--top))
+
+(transient-define-prefix mevedel-menu--surface ()
+  "Generic mevedel cockpit surface."
+  [:description (lambda () mevedel-menu--surface-title)
+   ["Session"
+    ("b" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--pair)
+  (transient-setup 'mevedel-menu--surface))
 
 (provide 'mevedel-menu)
 

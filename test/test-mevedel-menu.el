@@ -106,6 +106,23 @@
           (mevedel-menu-open 'top)))
       (should (eq called-prefix 'mevedel-menu--top))))
 
+  :doc "opens requested named cockpit surfaces"
+  (mevedel-menu-test--with-buffers
+    (let (called-prefix titles)
+      (cl-letf (((symbol-function 'transient-setup)
+                 (lambda (prefix &rest _)
+                   (setq called-prefix prefix)
+                   (push mevedel-menu--surface-title titles))))
+        (with-current-buffer view-buf
+          (dolist (area '(mode model tools))
+            (setq called-prefix nil)
+            (mevedel-menu-open area)
+            (should (eq called-prefix 'mevedel-menu--surface)))))
+      (should (equal (nreverse titles)
+                     '("mevedel: Mode"
+                       "mevedel: Model"
+                       "mevedel: Tools")))))
+
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
     (should-error (mevedel-menu-open 'top) :type 'user-error)))
@@ -275,6 +292,24 @@
     (with-current-buffer data-buf
       (mevedel-menu--toggle-data-view))
     (should (eq (window-buffer (selected-window)) view-buf))))
+
+(mevedel-deftest mevedel-menu--surface ()
+  ,test
+  (test)
+  :doc "surface verifies a live pair before setup"
+  (mevedel-menu-test--with-buffers
+    (let (called-prefix)
+      (cl-letf (((symbol-function 'transient-setup)
+                 (lambda (prefix &rest _)
+                   (setq called-prefix prefix))))
+        (with-current-buffer view-buf
+          (call-interactively #'mevedel-menu--surface)))
+      (should (eq called-prefix 'mevedel-menu--surface))))
+
+  :doc "surface signals outside a live pair"
+  (with-temp-buffer
+    (should-error (call-interactively #'mevedel-menu--surface)
+                  :type 'user-error)))
 
 (mevedel-deftest mevedel-menu--open-gptel ()
   ,test
