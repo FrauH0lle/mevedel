@@ -292,8 +292,64 @@
   :doc "shows worktree description with branch label"
   (cl-letf (((symbol-function 'mevedel-menu--worktree-label)
              (lambda () "main")))
-    (should (string= "Worktree main"
-                     (mevedel-menu--worktree-description)))))
+    (should (string= "Worktree  main"
+                     (substring-no-properties
+                      (mevedel-menu--worktree-description))))))
+
+(mevedel-deftest mevedel-menu--top-descriptions ()
+  ,test
+  (test)
+  :doc "shows padded top-level state rows"
+  (mevedel-menu-test--with-buffers
+    (cl-letf (((symbol-function 'mevedel-menu--worktree-label)
+               (lambda () "main")))
+      (with-current-buffer view-buf
+        (should (string= "Mode      ask"
+                         (substring-no-properties
+                          (mevedel-menu--mode-description))))
+        (should (string= "Model     gpt-5.5"
+                         (substring-no-properties
+                          (mevedel-menu--model-description))))
+        (should (string= "Tools     2 active"
+                         (substring-no-properties
+                          (mevedel-menu--tools-description))))
+        (should (string-match-p
+                 (rx string-start "Skills" (+ space) (+ digit) "/" (+ digit)
+                     string-end)
+                 (substring-no-properties
+                  (mevedel-menu--skills-description))))
+        (should (string-match-p
+                 (rx string-start "Plugins" (+ space) (+ digit) "/" (+ digit)
+                     string-end)
+                 (substring-no-properties
+                  (mevedel-menu--plugins-description))))
+        (should (string= "Worktree  main"
+                         (substring-no-properties
+                          (mevedel-menu--worktree-description))))))))
+
+(mevedel-deftest mevedel-menu--mode-choice-description ()
+  ,test
+  (test)
+  :doc "marks the active mode without exposing internal mode names"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (should (string= "ask     current ask before write tools"
+                       (substring-no-properties
+                        (mevedel-menu--mode-default-description))))
+      (should (string= "edits           auto-apply edit previews"
+                       (substring-no-properties
+                        (mevedel-menu--mode-accept-edits-description))))))
+
+  :doc "updates the current marker when the session mode changes"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-menu--set-mode 'trust-all)
+      (should (string= "auto!   current auto-allow tools"
+                       (substring-no-properties
+                        (mevedel-menu--mode-trust-all-description))))
+      (should (string= "ask             ask before write tools"
+                       (substring-no-properties
+                        (mevedel-menu--mode-default-description)))))))
 
 (mevedel-deftest mevedel-menu-help--text ()
   ,test
@@ -331,7 +387,8 @@
         (setq-local gptel-model 'fast-model))
       (with-current-buffer view-buf
         (should (string= "Current model: Fast:fast-model"
-                         (mevedel-menu--model-surface-description)))))))
+                         (substring-no-properties
+                          (mevedel-menu--model-surface-description))))))))
 
 (mevedel-deftest mevedel-menu--select-model ()
   ,test

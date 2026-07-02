@@ -2120,7 +2120,8 @@ Kills the associated view buffer."
              (list
               (mevedel-view--status-strip-button
                mode 'mode "Open mode cockpit")
-              (propertize state 'face 'shadow)
+              (propertize state 'face (cond ((string= state "running") 'success)
+                                            (t 'shadow)))
               (mevedel-view--status-strip-button
                model 'model "Open model cockpit")
               (mevedel-view--status-strip-button

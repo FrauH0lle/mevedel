@@ -155,6 +155,22 @@
 ;;
 ;;; Labels
 
+(defun mevedel-menu--face (text face)
+  "Return TEXT propertized with FACE."
+  (propertize (format "%s" text) 'face face))
+
+(defun mevedel-menu--value (text &optional face)
+  "Return TEXT as a cockpit state value using FACE."
+  (mevedel-menu--face text (or face 'transient-value)))
+
+(defun mevedel-menu--inactive-value (text)
+  "Return TEXT as an inactive cockpit state value."
+  (mevedel-menu--face text 'transient-inactive-value))
+
+(defun mevedel-menu--state-description (label value &optional face)
+  "Return a padded cockpit row for LABEL and state VALUE."
+  (format "%-9s %s" label (mevedel-menu--value value face)))
+
 (defun mevedel-menu--mode-symbol (&optional session data-buffer)
   "Return the effective permission mode for SESSION and DATA-BUFFER."
   (or (and session (mevedel-session-permission-mode session))
@@ -252,58 +268,117 @@
   (let* ((data-buffer (mevedel-menu--data-buffer))
          (session (mevedel-menu--session data-buffer))
          (workspace (and session (mevedel-session-workspace session)))
-         (mode (mevedel-menu--mode-symbol session data-buffer)))
-    (format "mevedel: %s  %s   %s · %s"
-            (or (and session (mevedel-session-name session)) "unknown")
-            (mevedel-menu--root-label workspace)
-            (mevedel-menu--mode-label mode)
-            (mevedel-menu--request-state-label data-buffer))))
+         (mode (mevedel-menu--mode-symbol session data-buffer))
+         (request-state (mevedel-menu--request-state-label data-buffer)))
+    (concat
+     (mevedel-menu--face "mevedel:" 'transient-heading)
+     " "
+     (mevedel-menu--value
+      (or (and session (mevedel-session-name session)) "unknown"))
+     "  "
+     (mevedel-menu--value (mevedel-menu--root-label workspace))
+     "        "
+     (mevedel-menu--value (mevedel-menu--mode-label mode))
+     " · "
+     (mevedel-menu--value
+      request-state
+      (if (string= request-state "running") 'warning 'transient-value))
+     "\n")))
 
 (defun mevedel-menu--mode-description ()
   "Return the top-level mode row description."
-  (format "Mode    %s"
-          (mevedel-menu--mode-label
-           (mevedel-menu--mode-symbol
-            (mevedel-menu--session)
-            (mevedel-menu--data-buffer)))))
+  (mevedel-menu--state-description
+   "Mode"
+   (mevedel-menu--mode-label
+    (mevedel-menu--mode-symbol
+     (mevedel-menu--session)
+     (mevedel-menu--data-buffer)))))
 
 (defun mevedel-menu--model-description ()
   "Return the top-level model row description."
-  (format "Model   %s" (mevedel-menu--model-label)))
+  (let ((model (mevedel-menu--model-label)))
+    (format "%-9s %s"
+            "Model"
+            (if (string= model "none")
+                (mevedel-menu--inactive-value model)
+              (mevedel-menu--value model)))))
 
 (defun mevedel-menu--model-surface-description ()
   "Return the model surface description."
   (with-current-buffer (mevedel-menu--data-buffer)
-    (format "Current model: %s"
-            (cond
-             ((and (bound-and-true-p gptel-backend)
-                   (bound-and-true-p gptel-model))
-              (format "%s:%s"
-                      (gptel-backend-name gptel-backend)
-                      (gptel--model-name gptel-model)))
-             ((bound-and-true-p gptel-model)
-              (gptel--model-name gptel-model))
-             (t "none")))))
+    (let ((model (cond
+                  ((and (bound-and-true-p gptel-backend)
+                        (bound-and-true-p gptel-model))
+                   (format "%s:%s"
+                           (gptel-backend-name gptel-backend)
+                           (gptel--model-name gptel-model)))
+                  ((bound-and-true-p gptel-model)
+                   (gptel--model-name gptel-model))
+                  (t "none"))))
+      (concat (mevedel-menu--face "Current model: " 'transient-heading)
+              (if (string= model "none")
+                  (mevedel-menu--inactive-value model)
+                (mevedel-menu--value model))))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
-  (format "Tools   %d active" (mevedel-menu--active-tool-count)))
+  (mevedel-menu--state-description
+   "Tools"
+   (format "%d active" (mevedel-menu--active-tool-count))
+   'warning))
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
-  (format "Skills  %s"
-          (mevedel-menu--skill-count-label
-           (mevedel-menu--session))))
+  (mevedel-menu--state-description
+   "Skills"
+   (mevedel-menu--skill-count-label
+    (mevedel-menu--session))
+   'warning))
 
 (defun mevedel-menu--plugins-description ()
   "Return the top-level plugins row description."
   (let* ((session (mevedel-menu--session))
          (workspace (and session (mevedel-session-workspace session))))
-    (format "Plugins %s" (mevedel-menu--plugin-count-label workspace))))
+    (mevedel-menu--state-description
+     "Plugins" (mevedel-menu--plugin-count-label workspace) 'warning)))
 
 (defun mevedel-menu--worktree-description ()
   "Return the top-level worktree row description."
-  (format "Worktree %s" (mevedel-menu--worktree-label)))
+  (let ((worktree (mevedel-menu--worktree-label)))
+    (format "%-9s %s"
+            "Worktree"
+            (if (string= worktree "not-git")
+                (mevedel-menu--inactive-value worktree)
+              (mevedel-menu--value worktree)))))
+
+(defun mevedel-menu--mode-choice-description (mode detail)
+  "Return the MODE surface row with DETAIL and current-state marker."
+  (let* ((current (eq mode
+                      (mevedel-menu--mode-symbol
+                       (mevedel-menu--session)
+                       (mevedel-menu--data-buffer))))
+         (label (mevedel-menu--mode-label mode)))
+    (format "%-7s %-7s %s"
+            (if current (mevedel-menu--value label) label)
+            (if current (mevedel-menu--value "current" 'warning) "")
+            detail)))
+
+(defun mevedel-menu--mode-default-description ()
+  "Return the default mode row description."
+  (mevedel-menu--mode-choice-description 'default "ask before write tools"))
+
+(defun mevedel-menu--mode-accept-edits-description ()
+  "Return the accept-edits mode row description."
+  (mevedel-menu--mode-choice-description
+   'accept-edits "auto-apply edit previews"))
+
+(defun mevedel-menu--mode-plan-description ()
+  "Return the plan mode row description."
+  (mevedel-menu--mode-choice-description 'plan "read-only planning mode"))
+
+(defun mevedel-menu--mode-trust-all-description ()
+  "Return the trust-all mode row description."
+  (mevedel-menu--mode-choice-description 'trust-all "auto-allow tools"))
 
 
 ;;
@@ -630,6 +705,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   "Top-level mevedel session cockpit."
   [:description mevedel-menu--header
    ["Session"
+    :pad-keys t
     ("RET" "Send" mevedel-menu--send
      :inapt-if mevedel-menu--send-inapt-p)
     ("a" "Abort" mevedel-menu--abort
@@ -638,6 +714,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("r" "Review" mevedel-menu--review)
     ("v" "Verify" mevedel-menu--verify)]
    ["Configure"
+    :pad-keys t
     ("m" mevedel-menu--open-mode
      :description mevedel-menu--mode-description)
     ("M" mevedel-menu--open-model
@@ -649,6 +726,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("p" mevedel-menu--open-plugins
      :description mevedel-menu--plugins-description)]
    ["Inspect"
+    :pad-keys t
     ("d" "Toggle data view" mevedel-menu--toggle-data-view)
     ("g" "gptel menu" mevedel-menu--open-gptel)
     ("w" mevedel-menu--open-worktree
@@ -662,15 +740,17 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   "Permission mode cockpit surface."
   [:description mevedel-menu--header
    ["Mode"
-    ("d" "default      ask before write tools"
+    :pad-keys t
+    ("d" mevedel-menu--mode-default-description
      (lambda () (interactive) (mevedel-menu--set-mode 'default)))
-    ("e" "accept-edits auto-apply edit previews"
+    ("e" mevedel-menu--mode-accept-edits-description
      (lambda () (interactive) (mevedel-menu--set-mode 'accept-edits)))
-    ("p" "plan         read-only planning mode"
+    ("p" mevedel-menu--mode-plan-description
      (lambda () (interactive) (mevedel-menu--set-mode 'plan)))
-    ("a" "trust-all    auto-allow tools"
+    ("a" mevedel-menu--mode-trust-all-description
      (lambda () (interactive) (mevedel-menu--set-mode 'trust-all)))]
    ["Navigation"
+    :pad-keys t
     ("b" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--pair)
@@ -680,9 +760,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   "Model cockpit surface."
   [:description mevedel-menu--model-surface-description
    ["Model"
+    :pad-keys t
     ("RET" "Select model" mevedel-menu--select-model)
     ("g" "gptel menu" mevedel-menu--open-gptel)]
    ["Navigation"
+    :pad-keys t
     ("b" "Back" mevedel-menu)]]
   (interactive)
   (mevedel-menu--pair)
