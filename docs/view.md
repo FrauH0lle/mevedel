@@ -109,10 +109,15 @@ composer.
 ## Status Strip And Cockpit Routing
 
 The view buffer header line is mevedel-owned chrome. It shows session
-orientation, permission mode, request state, model, and active tool count.
-Clickable parts route to session cockpit surfaces such as top, mode, model,
-and tools. The view must not copy or proxy gptel's clickable data-buffer
-header line; gptel-owned header controls stay in the raw data buffer.
+orientation on the left as `SESSION  WORKSPACE-ROOT` and operational
+state on the right as `MODE · REQUEST-STATE · MODEL · TOOL-COUNT`.
+The workspace root uses Emacs path abbreviation normally, truncates to
+the final directory when space is tight, and disappears before the
+right-side state is dropped. Clickable parts route to session cockpit
+surfaces such as top, mode, model, and tools. The request state is
+plain status text. The view must not copy or proxy gptel's clickable
+data-buffer header line; gptel-owned header controls stay in the raw
+data buffer.
 
 The session cockpit is the normal control surface from the view. It resolves
 the live view/data pair once and routes each action to the owner buffer. The
@@ -225,7 +230,7 @@ limits.
 Idle session with no live status or queued controls:
 
 ```text
-mevedel:main@project
+main  ~/project/                                      ask · idle · gpt-5.5 · 20 tools
 
 > draft starts here
 ```
@@ -233,7 +238,7 @@ mevedel:main@project
 Active request with a pending tool live-tail row and queued follow-up:
 
 ```text
-mevedel:main@project
+main  ~/project/                                   ask · running · gpt-5.5 · 20 tools
 
 You
 Please inspect the view layout.
@@ -257,7 +262,7 @@ Working... · 42s
 Active tasks, agents, and an interaction prompt:
 
 ```text
-mevedel:main@project
+main  ~/project/                                   ask · running · gpt-5.5 · 20 tools
 
 You
 Implement the change.
@@ -284,7 +289,7 @@ Working... · 1m 08s · 1 agent running
 Busy session showing every view-owned zone at once:
 
 ```text
-mevedel:main@project
+main  ~/project/                                   ask · running · gpt-5.5 · 20 tools
 
 You
 Update the view docs and verify the spinner layout.

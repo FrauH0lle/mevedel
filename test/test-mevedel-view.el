@@ -2704,6 +2704,15 @@ PROPS is the value for the `gptel' property."
 (mevedel-deftest mevedel-view--status-strip ()
   ,test
   (test)
+  :doc "status strip root label truncates to the workspace tail, then disappears"
+  (let ((root "~/Projekte/mevedel/"))
+    (should (equal root
+                   (mevedel-view--status-strip-root-label root 24)))
+    (should (equal "…/mevedel/"
+                   (mevedel-view--status-strip-root-label root 10)))
+    (should (equal ""
+                   (mevedel-view--status-strip-root-label root 9))))
+
   :doc "status strip shows mevedel-owned session orientation instead of the data header"
   (let* ((root (make-temp-file "mevedel-status-root-" t))
          (workspace (mevedel-workspace-get-or-create
@@ -2720,16 +2729,18 @@ PROPS is the value for the `gptel' property."
             (setq-local gptel-tools '(read edit)))
           (with-current-buffer view-buf
             (let ((line (mevedel-view--status-strip)))
-              (should (string-match-p "mevedel: main" line))
+              (should (string-prefix-p "main  " line))
               (should (string-match-p
                        (regexp-quote
                         (abbreviate-file-name
                          (file-name-as-directory root)))
                        line))
-              (should (string-match-p "plan" line))
-              (should (string-match-p "idle" line))
-              (should (string-match-p "\\[gpt-5\\.5\\]" line))
-              (should (string-match-p "\\[2 tools\\]" line))
+              (should (string-match-p
+                       (regexp-quote "plan · idle · gpt-5.5 · 2 tools")
+                       line))
+              (should-not (string-match-p "mevedel:" line))
+              (should-not (string-match-p "\\[gpt-5\\.5\\]" line))
+              (should-not (string-match-p "\\[2 tools\\]" line))
               (should-not (string-match-p "GPTEL HEADER" line)))))
       (when (file-directory-p root)
         (delete-directory root t))))

@@ -2051,6 +2051,39 @@ Kills the associated view buffer."
                 'local-map map
                 'mevedel-view-cockpit-area area)))
 
+(defun mevedel-view--status-strip-width ()
+  "Return display columns available for the status strip."
+  (let* ((buffer (current-buffer))
+         (selected (selected-window))
+         (windows (get-buffer-window-list buffer nil t))
+         (width (cond
+                 ((eq (window-buffer selected) buffer)
+                  (window-body-width selected))
+                 (windows
+                  (apply #'min (mapcar #'window-body-width windows)))
+                 (t
+                  (window-body-width)))))
+    (max 20 (1- width))))
+
+(defun mevedel-view--status-strip-root-label (root max-width)
+  "Return ROOT shortened to fit MAX-WIDTH display columns."
+  (cond
+   ((<= max-width 0) "")
+   ((<= (string-width root) max-width) root)
+   (t
+    (let* ((base (file-name-nondirectory (directory-file-name root)))
+           (tail (concat "…/" base "/")))
+      (if (<= (string-width tail) max-width) tail "")))))
+
+(defun mevedel-view--status-strip-spacer (rhs)
+  "Return a spacer that right-aligns RHS in the header line."
+  (propertize
+   " " 'display
+   (if (and (fboundp 'string-pixel-width)
+            (display-graphic-p))
+       `(space :align-to (- right (,(string-pixel-width rhs))))
+     `(space :align-to (- right ,(string-width rhs))))))
+
 (defun mevedel-view--status-strip ()
   "Return a mevedel-owned clickable status strip for the view buffer."
   (when (and (boundp 'mevedel--data-buffer)
@@ -2075,27 +2108,41 @@ Kills the associated view buffer."
                     (if (and (boundp 'gptel-model) gptel-model)
                         (format "%s" gptel-model)
                       "model none")))
-           (tools (with-current-buffer data-buffer
-                    (format "%d tools"
-                            (length (and (boundp 'gptel-tools)
-                                         gptel-tools))))))
+           (tool-count (with-current-buffer data-buffer
+                         (length (and (boundp 'gptel-tools)
+                                      gptel-tools))))
+           (tools (format "%d tool%s"
+                          tool-count
+                          (if (= tool-count 1) "" "s")))
+           (rhs
+            (mapconcat
+             #'identity
+             (list
+              (mevedel-view--status-strip-button
+               mode 'mode "Open mode cockpit")
+              (propertize state 'face 'shadow)
+              (mevedel-view--status-strip-button
+               model 'model "Open model cockpit")
+              (mevedel-view--status-strip-button
+               tools 'tools "Open tools cockpit"))
+             " · "))
+           (root-max
+            (- (mevedel-view--status-strip-width)
+               (string-width session-name)
+               (string-width rhs)
+               3))
+           (root-label
+            (mevedel-view--status-strip-root-label root root-max))
+           (lhs
+            (if (string-empty-p root-label)
+                session-name
+              (format "%s  %s" session-name root-label))))
       (concat
        (mevedel-view--status-strip-button
-        (format "mevedel: %s  %s" session-name root)
+        lhs
         'top "Open session cockpit")
-       "   "
-       (mevedel-view--status-strip-button
-        mode 'mode "Open mode cockpit")
-       " · "
-       (propertize state 'face 'shadow)
-       "   "
-       (mevedel-view--status-strip-button
-        (format "[%s]" model)
-        'model "Open model cockpit")
-       " "
-       (mevedel-view--status-strip-button
-        (format "[%s]" tools)
-        'tools "Open tools cockpit")))))
+       (mevedel-view--status-strip-spacer rhs)
+       rhs))))
 
 (defun mevedel-view--agent-terminal-status-p (status)
   "Return non-nil when STATUS names a terminal agent transcript state."
