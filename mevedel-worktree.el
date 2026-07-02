@@ -9,12 +9,23 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'tabulated-list)
+  (require 'transient))
+
+(require 'transient)
 
 ;; `mevedel'
 (declare-function mevedel--default-session-name-for-directory
                   "mevedel" (workspace working-directory))
 (declare-function mevedel--display-chat-buffer "mevedel" (chat-buffer))
+(declare-function mevedel--sessions-in-working-directory
+                  "mevedel" (sessions working-directory))
+(declare-function mevedel--start-chat
+                  "mevedel"
+                  (workspace working-directory prompt-session
+                             &optional directory-scoped))
+(declare-function mevedel--workspace-sessions "mevedel" (workspace))
 
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer
@@ -24,6 +35,23 @@
                   "mevedel-chat"
                   (prompt &optional display-text kind hook-context
                           no-spinner))
+
+;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-data-buffer "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-open-tabulated
+                  "mevedel-cockpit"
+                  (buffer-name mode refresh view-buffer data-buffer
+                               origin-buffer &optional setup label))
+(declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-refresh-tabulated
+                  "mevedel-cockpit" (entries &optional selected-id))
+(declare-function mevedel-cockpit-require-owner
+                  "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-selected
+                  "mevedel-cockpit" (items id-function))
+
+;; `mevedel-menu'
+(declare-function mevedel-menu "mevedel-menu" ())
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
@@ -38,8 +66,22 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--data-buffer)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
+
+;; `tabulated-list'
+(declare-function tabulated-list-get-id "tabulated-list" ())
+(declare-function tabulated-list-init-header "tabulated-list" ())
+(declare-function tabulated-list-mode "tabulated-list" ())
+(defvar tabulated-list-entries)
+(defvar tabulated-list-format)
+(defvar tabulated-list-padding)
+(defvar tabulated-list-sort-key)
+
+;; `transient'
+(defvar transient--original-buffer)
 
 
 ;;
@@ -97,7 +139,17 @@
                            (replace-regexp-in-string
                             "\\`refs/heads/" "" branch)))))
        ((string= line "detached")
-        (setq current (plist-put current :detached t)))))
+        (setq current (plist-put current :detached t)))
+       ((string= line "bare")
+        (setq current (plist-put current :bare t)))
+       ((string-prefix-p "locked" line)
+        (setq current
+              (plist-put current :locked
+                         (string-trim (substring line 6)))))
+       ((string-prefix-p "prunable" line)
+        (setq current
+              (plist-put current :prunable
+                         (string-trim (substring line 8)))))))
     (when current
       (push current entries))
     (nreverse entries)))
@@ -260,31 +312,295 @@
 ;;; Surface
 
 (defconst mevedel-worktree-list-buffer-name "*mevedel worktree*"
-  "Name of the worktree cockpit buffer.")
+  "Name of the tabulated worktree list buffer.")
+
+(defconst mevedel-worktree-help-buffer-name "*mevedel worktree help*"
+  "Name of the worktree cockpit help buffer.")
 
 (defvar-local mevedel-worktree-list--data-buffer nil
-  "Data buffer rendered by the current worktree cockpit buffer.")
+  "Data buffer that owns the current worktree list buffer.")
+
+(defvar-local mevedel-worktree-list--items nil
+  "Worktree row items cached for the current list render.")
+
+(defvar-local mevedel-worktree-list--status nil
+  "Worktree status cached for the current list render.")
+
+(defun mevedel-worktree-status--data-buffer ()
+  "Return the data buffer that launched the worktree transient."
+  (or (and (boundp 'transient--original-buffer)
+           (buffer-live-p transient--original-buffer)
+           transient--original-buffer)
+      (current-buffer)))
+
+(defun mevedel-worktree--branch-head-label (branch head)
+  "Return compact branch or HEAD label from BRANCH and HEAD."
+  (cond
+   ((and branch (not (string-empty-p branch))) branch)
+   ((and head (not (string-empty-p head))) (format "detached at %s" head))
+   (t "unavailable")))
+
+(defun mevedel-worktree-status--description ()
+  "Return dynamic description for the worktree status transient."
+  (let* ((data-buffer (mevedel-worktree-status--data-buffer))
+         (status (with-current-buffer data-buffer
+                   (mevedel-worktree--collect-status)))
+         (session (plist-get status :session))
+         (worktrees (plist-get status :worktrees)))
+    (string-join
+     (list
+      (propertize "mevedel worktree" 'face 'transient-heading)
+      (format "Repo:       %s"
+              (or (plist-get status :repo-root)
+                  "not a Git repository"))
+      (format "Session:    %s"
+              (if session (mevedel-session-name session) "none"))
+      (format "Directory:  %s" (plist-get status :directory))
+      (format "Isolation:  %s"
+              (mevedel-worktree--isolation-label
+               (plist-get status :isolation)))
+      (format "Branch:     %s"
+              (mevedel-worktree--branch-head-label
+               (plist-get status :branch)
+               (plist-get status :head)))
+      (format ".worktrees: %s"
+              (mevedel-worktree--ignore-label
+               (plist-get status :ignore-state)))
+      (format "Dirty:      %s"
+              (if (plist-get status :dirty-p) "yes" "no"))
+      (format "Worktrees:  %d" (length worktrees)))
+     "\n")))
+
+(defun mevedel-worktree-status-create ()
+  "Create a worktree from the status transient."
+  (interactive)
+  (let (result)
+    (with-current-buffer (mevedel-worktree-status--data-buffer)
+      (setq result (mevedel-cmd--worktree "create")))
+    (when (stringp result)
+      (message "%s" result))
+    (with-current-buffer (mevedel-worktree-status--data-buffer)
+      (mevedel-worktree-status-open))
+    result))
+
+(defun mevedel-worktree-status-list ()
+  "Open the tabulated worktree list from the status transient."
+  (interactive)
+  (with-current-buffer (mevedel-worktree-status--data-buffer)
+    (mevedel-worktree-list-open)))
+
+(defun mevedel-worktree-status-refresh ()
+  "Refresh the worktree status transient."
+  (interactive)
+  (with-current-buffer (mevedel-worktree-status--data-buffer)
+    (mevedel-worktree-status-open)))
+
+(defun mevedel-worktree-status-help ()
+  "Open worktree status help."
+  (interactive)
+  (let ((help-window-select t))
+    (with-help-window mevedel-worktree-help-buffer-name
+      (princ "mevedel worktree cockpit
+
+Status keys
+c  Create a linked worktree session
+l  List Git worktrees
+g  Refresh status
+?  Show this help
+b  Back to the main session cockpit
+
+List keys
+RET  Show selected worktree details
+o    Open selected worktree session
+c    Create a linked worktree session
+g    Refresh list
+?    Show this help
+q    Back to the main session cockpit
+"))))
+
+(defun mevedel-worktree-status-back ()
+  "Return from worktree status to the main session cockpit."
+  (interactive)
+  (with-current-buffer (mevedel-worktree-status--data-buffer)
+    (require 'mevedel-menu)
+    (mevedel-menu)))
+
+(transient-define-prefix mevedel-worktree-status ()
+  "Transient worktree status cockpit."
+  [:description mevedel-worktree-status--description
+   ["Worktree"
+    :pad-keys t
+    ("c" "Create" mevedel-worktree-status-create)
+    ("l" "List" mevedel-worktree-status-list)
+    ("g" "Refresh" mevedel-worktree-status-refresh)
+    ("?" "Help" mevedel-worktree-status-help)
+    ("b" "Back" mevedel-worktree-status-back)]])
+
+(defun mevedel-worktree-status-open ()
+  "Open the transient worktree status cockpit."
+  (interactive)
+  (transient-setup 'mevedel-worktree-status))
 
 (defun mevedel-worktree-list--data-buffer ()
-  "Return the live data buffer for the current worktree surface."
-  (or (and (buffer-live-p mevedel-worktree-list--data-buffer)
+  "Return the live data buffer for the current worktree list."
+  (or (progn
+        (require 'mevedel-cockpit)
+        (mevedel-cockpit-data-buffer))
+      (and (buffer-live-p mevedel-worktree-list--data-buffer)
            mevedel-worktree-list--data-buffer)
       (user-error "No live mevedel data buffer for this worktree surface")))
 
+(defun mevedel-worktree-list--require-owner ()
+  "Signal a user error if this list's owning session is gone."
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-require-owner "worktree list"))
+
+(defun mevedel-worktree-list--status ()
+  "Return current worktree status from the owning data buffer."
+  (with-current-buffer (mevedel-worktree-list--data-buffer)
+    (mevedel-worktree--collect-status)))
+
+(defun mevedel-worktree-list--normalize-path (path)
+  "Return PATH as an absolute directory name."
+  (file-name-as-directory (expand-file-name path)))
+
+(defun mevedel-worktree-list--item-id (item)
+  "Return stable row id for worktree ITEM."
+  (plist-get item :path))
+
+(defun mevedel-worktree-list--branch-label (entry)
+  "Return the list branch label for worktree ENTRY."
+  (cond
+   ((plist-get entry :branch))
+   ((plist-get entry :detached)
+    (format "detached %s" (or (plist-get entry :head) "HEAD")))
+   ((plist-get entry :bare) "bare")
+   ((plist-get entry :head))
+   (t "unknown")))
+
+(defun mevedel-worktree-list--state-label (entry)
+  "Return the normalized state label for worktree ENTRY."
+  (cond
+   ((plist-get entry :locked) "locked")
+   ((plist-get entry :prunable) "prunable")
+   ((plist-get entry :bare) "bare")
+   ((plist-get entry :detached) "detached")
+   ((plist-get entry :branch) "branch")
+   (t "unknown")))
+
+(defun mevedel-worktree-list--current-label (current-p)
+  "Return the Current column label for CURRENT-P."
+  (if current-p "yes" ""))
+
+(defun mevedel-worktree-list--sessions (workspace path)
+  "Return live session names in WORKSPACE whose cwd is PATH."
+  (when workspace
+    (require 'mevedel)
+    (mapcar
+     #'car
+     (mevedel--sessions-in-working-directory
+      (mevedel--workspace-sessions workspace)
+      path))))
+
+(defun mevedel-worktree-list--item (status entry)
+  "Return a tabulated worktree item from STATUS and porcelain ENTRY."
+  (let* ((path (mevedel-worktree-list--normalize-path
+                (plist-get entry :path)))
+         (current (equal path
+                         (mevedel-worktree-list--normalize-path
+                          (plist-get status :directory))))
+         (workspace (plist-get status :workspace))
+         (sessions (mevedel-worktree-list--sessions workspace path)))
+    (list :path path
+          :branch (mevedel-worktree-list--branch-label entry)
+          :head (or (plist-get entry :head) "")
+          :current current
+          :state (mevedel-worktree-list--state-label entry)
+          :sessions sessions
+          :entry entry)))
+
+(defun mevedel-worktree-list--items (status)
+  "Return tabulated worktree items for STATUS."
+  (mapcar (lambda (entry)
+            (mevedel-worktree-list--item status entry))
+          (plist-get status :worktrees)))
+
+(defun mevedel-worktree-list--entry (item)
+  "Return a `tabulated-list-mode' row for worktree ITEM."
+  (list
+   (mevedel-worktree-list--item-id item)
+   (vector
+    (plist-get item :path)
+    (plist-get item :branch)
+    (plist-get item :head)
+    (mevedel-worktree-list--current-label (plist-get item :current))
+    (plist-get item :state)
+    (string-join (plist-get item :sessions) ", "))))
+
 (defun mevedel-worktree-list-refresh ()
-  "Refresh the worktree cockpit buffer."
+  "Refresh the tabulated worktree list."
   (interactive)
-  (let ((inhibit-read-only t)
-        (data-buffer (mevedel-worktree-list--data-buffer)))
-    (erase-buffer)
-    (insert "mevedel worktree\n")
-    (insert "Keys: g refresh/status, c create worktree\n\n")
-    (insert
-     (with-current-buffer data-buffer
-       (mevedel-worktree--format-status
-        (mevedel-worktree--collect-status))))
-    (goto-char (point-min))
-    (forward-line 3)))
+  (let* ((selected (tabulated-list-get-id))
+         (status (mevedel-worktree-list--status))
+         (items (mevedel-worktree-list--items status)))
+    (mevedel-worktree-list--require-owner)
+    (setq mevedel-worktree-list--status status
+          mevedel-worktree-list--items items)
+    (require 'mevedel-cockpit)
+    (mevedel-cockpit-refresh-tabulated
+     (mapcar #'mevedel-worktree-list--entry items)
+     selected)))
+
+(defun mevedel-worktree-list--selected-item ()
+  "Return the selected worktree item, or nil."
+  (mevedel-worktree-list--require-owner)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-selected mevedel-worktree-list--items
+                            #'mevedel-worktree-list--item-id))
+
+(defun mevedel-worktree-list--details-text (item)
+  "Return normalized details text for worktree ITEM."
+  (string-join
+   (list
+    (format "Worktree %s" (plist-get item :path))
+    (format "Path: %s" (plist-get item :path))
+    (format "Branch: %s" (plist-get item :branch))
+    (format "Head: %s" (or (plist-get item :head) ""))
+    (format "Current: %s"
+            (if (plist-get item :current) "yes" "no"))
+    (format "State: %s" (plist-get item :state))
+    (format "Sessions: %s"
+            (or (string-join (plist-get item :sessions) ", ") "")))
+   "\n"))
+
+(defun mevedel-worktree-list-details ()
+  "Show details for the selected worktree row."
+  (interactive)
+  (let ((item (or (mevedel-worktree-list--selected-item)
+                  (user-error "No worktree on this line")))
+        (help-window-select t))
+    (with-help-window "*mevedel worktree details*"
+      (princ (mevedel-worktree-list--details-text item)))))
+
+(defun mevedel-worktree-list-open-selected ()
+  "Open or switch to the selected worktree's mevedel session."
+  (interactive)
+  (let* ((item (or (mevedel-worktree-list--selected-item)
+                   (user-error "No worktree on this line")))
+         (data-buffer (mevedel-worktree-list--data-buffer))
+         (status mevedel-worktree-list--status)
+         (path (plist-get item :path))
+         workspace)
+    (with-current-buffer data-buffer
+      (setq workspace
+            (or (and (boundp 'mevedel--session)
+                     mevedel--session
+                     (mevedel-session-workspace mevedel--session))
+                (plist-get status :workspace))))
+    (unless workspace
+      (user-error "No mevedel workspace for selected worktree"))
+    (require 'mevedel)
+    (mevedel--start-chat workspace path nil t)))
 
 (defun mevedel-worktree-list-create ()
   "Create a worktree by delegating to `/worktree create'."
@@ -297,27 +613,66 @@
     (mevedel-worktree-list-refresh)
     result))
 
+(defun mevedel-worktree-list-help ()
+  "Open worktree list help."
+  (interactive)
+  (mevedel-worktree-status-help))
+
+(defun mevedel-worktree-list-quit ()
+  "Quit the worktree list and return to the main session cockpit."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-quit "worktree list"))
+
 (defvar mevedel-worktree-list-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "c") #'mevedel-worktree-list-create)
     (define-key map (kbd "g") #'mevedel-worktree-list-refresh)
+    (define-key map (kbd "o") #'mevedel-worktree-list-open-selected)
+    (define-key map (kbd "?") #'mevedel-worktree-list-help)
+    (define-key map (kbd "q") #'mevedel-worktree-list-quit)
+    (define-key map (kbd "RET") #'mevedel-worktree-list-details)
     map)
   "Keymap for `mevedel-worktree-list-mode'.")
 
-(define-derived-mode mevedel-worktree-list-mode special-mode
+(define-derived-mode mevedel-worktree-list-mode tabulated-list-mode
   "mevedel-worktree"
-  "Major mode for the worktree cockpit surface.")
+  "Major mode for the tabulated worktree list."
+  (setq tabulated-list-format
+        [("Path" 36 t)
+         ("Branch" 20 t)
+         ("Head" 10 t)
+         ("Current" 8 t)
+         ("State" 10 t)
+         ("Sessions" 0 t)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key '("Path" . nil))
+  (tabulated-list-init-header)
+  (hl-line-mode 1))
 
-(defun mevedel-worktree-list-open ()
-  "Open the worktree cockpit for the current data buffer."
-  (let ((data-buffer (current-buffer))
-        (buffer (get-buffer-create mevedel-worktree-list-buffer-name)))
-    (with-current-buffer buffer
-      (mevedel-worktree-list-mode)
-      (setq mevedel-worktree-list--data-buffer data-buffer)
-      (mevedel-worktree-list-refresh))
-    (display-buffer buffer)
-    buffer))
+(defun mevedel-worktree-list-open
+    (&optional view-buffer data-buffer origin-buffer)
+  "Open the tabulated worktree list for the current session.
+VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
+session pair when opened from a live mevedel session."
+  (require 'mevedel-cockpit)
+  (let* ((data-buffer (or data-buffer
+                          (bound-and-true-p mevedel--data-buffer)
+                          (current-buffer)))
+         (view-buffer (or view-buffer
+                          (bound-and-true-p mevedel--view-buffer)
+                          data-buffer))
+         (origin-buffer (or origin-buffer (current-buffer))))
+    (mevedel-cockpit-open-tabulated
+     mevedel-worktree-list-buffer-name
+     #'mevedel-worktree-list-mode
+     #'mevedel-worktree-list-refresh
+     view-buffer
+     data-buffer
+     origin-buffer
+     (lambda ()
+       (setq mevedel-worktree-list--data-buffer data-buffer))
+     "worktree list")))
 
 
 ;;
@@ -571,6 +926,9 @@ new session."
          (command (car tokens)))
     (cond
      ((or (null command) (string= command "status"))
+      (mevedel-worktree-status-open)
+      nil)
+     ((string= command "list")
       (mevedel-worktree-list-open)
       nil)
      ((string= command "create")

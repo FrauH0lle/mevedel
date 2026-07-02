@@ -3325,19 +3325,33 @@ spanning lines")))
           (should (eq called 'tools))
           (should (equal "### " (buffer-string)))))))
 
-  :doc "worktree slash command opens the worktree surface"
+  :doc "worktree slash commands open status and list surfaces"
   (let ((session (mevedel-skills-test--make-session))
-        surface-buffer)
+        status-buffer
+        list-buffer)
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands
              (cons '("worktree" . mevedel-cmd--worktree)
                    mevedel-slash-commands)))
-        (cl-letf (((symbol-function 'mevedel-worktree-list-open)
-                   (lambda () (setq surface-buffer (current-buffer)))))
-          (insert "### /worktree")
+        (cl-letf (((symbol-function 'mevedel-worktree-status-open)
+                   (lambda () (setq status-buffer (current-buffer))))
+                  ((symbol-function 'mevedel-worktree-list-open)
+                   (lambda () (setq list-buffer (current-buffer)))))
+          (dolist (command '("/worktree" "/worktree status"))
+            (setq status-buffer nil
+                  list-buffer nil)
+            (erase-buffer)
+            (insert "### " command)
+            (goto-char (point-max))
+            (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+            (should (eq status-buffer (current-buffer)))
+            (should-not list-buffer)
+            (should (equal "### " (buffer-string))))
+          (erase-buffer)
+          (insert "### /worktree list")
           (goto-char (point-max))
           (should (eq 'local (mevedel-skills--dispatch-slash-command)))
-          (should (eq surface-buffer (current-buffer)))
+          (should (eq list-buffer (current-buffer)))
           (should (equal "### " (buffer-string)))))))
 
   :doc "help slash command opens the help surface"

@@ -202,7 +202,7 @@
   :doc "opens requested worktree and help cockpit surfaces"
   (mevedel-menu-test--with-buffers
     (let (worktree-buffer help-opened)
-      (cl-letf (((symbol-function 'mevedel-worktree-list-open)
+      (cl-letf (((symbol-function 'mevedel-worktree-status-open)
                  (lambda () (setq worktree-buffer (current-buffer))))
                 ((symbol-function 'mevedel-menu-help-open)
                  (lambda () (setq help-opened t))))

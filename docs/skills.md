@@ -132,6 +132,8 @@ Worktree isolation has split surfaces:
 
 - `/worktree` and `/worktree status` open the worktree cockpit surface
   with read-only branch/worktree status and refresh/create keys.
+- `/worktree list` opens the tabulated worktree list for selection-oriented
+  actions on linked worktrees.
 - `/worktree create [NAME] [--for "purpose"] [--clean]`
   creates a new branch and linked checkout under `.worktrees/`, opens a
   fresh session there, and does not auto-send a model prompt.
