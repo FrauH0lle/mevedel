@@ -29,6 +29,11 @@
 (defvar-local mevedel-cockpit--origin-buffer nil
   "Buffer that launched the current cockpit surface.")
 
+(defun mevedel-cockpit-data-buffer ()
+  "Return the live data buffer that owns the current cockpit, or nil."
+  (and (buffer-live-p mevedel-cockpit--data-buffer)
+       mevedel-cockpit--data-buffer))
+
 (defun mevedel-cockpit-require-owner (&optional label)
   "Signal a user error unless the current cockpit has live owners.
 LABEL is a user-facing surface label used in the error message."

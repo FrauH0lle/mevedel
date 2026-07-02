@@ -50,7 +50,7 @@
 (declare-function mevedel-skills--skill-enabled-p "mevedel-skills"
                   (skill))
 (declare-function mevedel-skills-list-open "mevedel-skills"
-                  (&optional session))
+                  (&optional session view-buffer data-buffer origin-buffer))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -472,9 +472,16 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      (transient-setup 'mevedel-menu--model))
     ('skills
      (require 'mevedel-skills)
-     (mevedel-menu--call-in-data
-      #'mevedel-skills-list-open
-      (mevedel-menu--session)))
+     (let* ((origin (mevedel-menu--origin-buffer))
+            (view-buffer (mevedel-menu--view-buffer))
+            (data-buffer (mevedel-menu--data-buffer))
+            (session (mevedel-menu--session data-buffer)))
+       (mevedel-menu--call-in-data
+        #'mevedel-skills-list-open
+        session
+        view-buffer
+        data-buffer
+        origin)))
     ('plugins
      (require 'mevedel-plugins)
      (let* ((origin (mevedel-menu--origin-buffer))
