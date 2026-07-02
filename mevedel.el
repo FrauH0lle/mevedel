@@ -59,6 +59,7 @@
 (require 'mevedel-view-fragment)
 (require 'mevedel-reminders)
 (require 'mevedel-skills)
+(require 'mevedel-cockpit)
 (require 'mevedel-plugins)
 (require 'mevedel-init)
 (require 'mevedel-review)
