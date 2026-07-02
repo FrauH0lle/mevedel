@@ -2633,7 +2633,13 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer data-buf
       (should (eq mevedel--view-buffer view-buf))
       (should (eq (local-key-binding (kbd "C-c C-m"))
-                  #'mevedel-menu))))
+                  #'mevedel-menu))
+      (let ((data-map (current-local-map)))
+        (with-temp-buffer
+          (org-mode)
+          (should-not (eq data-map (current-local-map)))
+          (should-not (eq (lookup-key (current-local-map) (kbd "C-c C-m"))
+                          #'mevedel-menu))))))
 
   :doc "view buffers are ephemeral and never offered for saving"
   (mevedel-view-test--with-buffers
@@ -3630,6 +3636,13 @@ PROPS is the value for the `gptel' property."
   :doc "S-TAB is bound"
   (should (eq (lookup-key mevedel-view-mode-map (kbd "S-TAB"))
               #'mevedel-view-cycle-permission-mode)))
+
+(mevedel-deftest mevedel-view-mode-map ()
+  ,test
+  (test)
+  :doc "view mode binds the cockpit command"
+  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-m"))
+              #'mevedel-menu)))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")

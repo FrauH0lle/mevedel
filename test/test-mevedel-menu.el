@@ -173,6 +173,17 @@
       (should (eq worktree-buffer data-buf))
       (should help-opened)))
 
+  :doc "opens the requested gptel bridge area"
+  (mevedel-menu-test--with-buffers
+    (let (called-buffer)
+      (cl-letf (((symbol-function 'gptel-menu)
+                 (lambda ()
+                   (interactive)
+                   (setq called-buffer (current-buffer)))))
+        (with-current-buffer data-buf
+          (mevedel-menu-open 'gptel)))
+      (should (eq called-buffer data-buf))))
+
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
     (should-error (mevedel-menu-open 'top) :type 'user-error)))
@@ -608,13 +619,6 @@
       (setq-local mevedel--current-request t))
     (with-current-buffer view-buf
       (should-not (mevedel-menu--abort-inapt-p)))))
-
-(mevedel-deftest mevedel-view-mode-map ()
-  ,test
-  (test)
-  :doc "view mode binds the cockpit command"
-  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-m"))
-              #'mevedel-menu)))
 
 (provide 'test-mevedel-menu)
 
