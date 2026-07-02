@@ -3305,11 +3305,13 @@ Routes through the lifecycle-aware permission transition path."
                                  (mevedel-skills--slash-visible-skills
                                   mevedel--session)
                                  "  "))))
-    (message "Commands: %s%s"
-             locals
-             (if (and skills (not (string-empty-p skills)))
-                 (format "\nSkills: %s" skills)
-               ""))))
+    (mevedel-skills--open-menu-or-message
+     'help
+     "Commands: %s%s"
+     locals
+     (if (and skills (not (string-empty-p skills)))
+         (format "\nSkills: %s" skills)
+       ""))))
 
 (defun mevedel-cmd--skills--require-name (name action)
   "Return NAME or signal a usage error for ACTION."

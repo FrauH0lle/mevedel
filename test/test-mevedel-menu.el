@@ -23,6 +23,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-view)
 (require 'mevedel-workspace)
+(require 'mevedel-worktree)
 
 ;; `gptel'
 (defvar gptel--known-backends)
@@ -159,18 +160,18 @@
       (should (eq plugins-workspace (mevedel-session-workspace session)))
       (should (eq plugins-buffer data-buf))))
 
-  :doc "opens requested generic cockpit surfaces"
+  :doc "opens requested worktree and help cockpit surfaces"
   (mevedel-menu-test--with-buffers
-    (let (called-prefix titles)
-      (cl-letf (((symbol-function 'transient-setup)
-                 (lambda (prefix &rest _)
-                   (setq called-prefix prefix)
-                   (push mevedel-menu--surface-title titles))))
+    (let (worktree-buffer help-opened)
+      (cl-letf (((symbol-function 'mevedel-worktree-list-open)
+                 (lambda () (setq worktree-buffer (current-buffer))))
+                ((symbol-function 'mevedel-menu-help-open)
+                 (lambda () (setq help-opened t))))
         (with-current-buffer view-buf
           (mevedel-menu-open 'worktree)
-          (should (eq called-prefix 'mevedel-menu--surface))))
-      (should (equal (nreverse titles)
-                     '("mevedel: Worktree")))))
+          (mevedel-menu-open 'help)))
+      (should (eq worktree-buffer data-buf))
+      (should help-opened)))
 
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
@@ -259,6 +260,19 @@
              (lambda () "main")))
     (should (string= "Worktree main"
                      (mevedel-menu--worktree-description)))))
+
+(mevedel-deftest mevedel-menu-help--text ()
+  ,test
+  (test)
+  :doc "covers cockpit keys, slash routing, modes, and buffer ownership"
+  (let ((text (mevedel-menu-help--text)))
+    (dolist (needle '("Session cockpit keys"
+                      "Slash commands that open UI"
+                      "Direct slash commands"
+                      "/mode MODE, /model MODEL"
+                      "Modes"
+                      "View and data buffers"))
+      (should (string-match-p (regexp-quote needle) text)))))
 
 (mevedel-deftest mevedel-menu--set-mode ()
   ,test
@@ -387,23 +401,15 @@
       (mevedel-menu--toggle-data-view))
     (should (eq (window-buffer (selected-window)) view-buf))))
 
-(mevedel-deftest mevedel-menu--surface ()
+(mevedel-deftest mevedel-menu-help-open
+  (:after-each (when (get-buffer mevedel-menu-help-buffer-name)
+                 (kill-buffer mevedel-menu-help-buffer-name)))
   ,test
   (test)
-  :doc "surface verifies a live pair before setup"
-  (mevedel-menu-test--with-buffers
-    (let (called-prefix)
-      (cl-letf (((symbol-function 'transient-setup)
-                 (lambda (prefix &rest _)
-                   (setq called-prefix prefix))))
-        (with-current-buffer view-buf
-          (call-interactively #'mevedel-menu--surface)))
-      (should (eq called-prefix 'mevedel-menu--surface))))
-
-  :doc "surface signals outside a live pair"
-  (with-temp-buffer
-    (should-error (call-interactively #'mevedel-menu--surface)
-                  :type 'user-error)))
+  :doc "opens the help surface buffer"
+  (let ((buffer (mevedel-menu-help-open)))
+    (with-current-buffer buffer
+      (should (derived-mode-p 'special-mode)))))
 
 (mevedel-deftest mevedel-menu--open-gptel ()
   ,test
