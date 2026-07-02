@@ -21,6 +21,20 @@
 ;; `dired'
 (declare-function dired "dired" (dirname &optional switches))
 
+;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-goto-id "mevedel-cockpit" (id))
+(declare-function mevedel-cockpit-open-tabulated
+                  "mevedel-cockpit"
+                  (buffer-name mode refresh view-buffer data-buffer
+                               origin-buffer &optional setup label))
+(declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-refresh-tabulated
+                  "mevedel-cockpit" (entries &optional selected-id))
+(declare-function mevedel-cockpit-require-owner
+                  "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-selected
+                  "mevedel-cockpit" (items id-function))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks--read-config-file "mevedel-hooks" (file))
 
@@ -921,15 +935,6 @@ Workspace runtime data is retained."
 (defvar-local mevedel-plugins-list--plugins nil
   "Plugin cockpit items cached for the current render.")
 
-(defvar-local mevedel-plugins-list--view-buffer nil
-  "View buffer that owns the current plugin cockpit.")
-
-(defvar-local mevedel-plugins-list--data-buffer nil
-  "Data buffer that owns the current plugin cockpit.")
-
-(defvar-local mevedel-plugins-list--origin-buffer nil
-  "Buffer that launched the current plugin cockpit.")
-
 (defun mevedel-plugins--skill-count (plugin)
   "Return number of SKILL.md files exposed by PLUGIN."
   (if-let* ((dir (mevedel-plugin-skills-dir plugin))
@@ -1075,11 +1080,9 @@ Workspace runtime data is retained."
 
 (defun mevedel-plugins-list--selected-item ()
   "Return the selected plugin cockpit item, or nil."
-  (when-let* ((id (tabulated-list-get-id)))
-    (cl-find-if
-     (lambda (item)
-       (equal id (mevedel-plugins-list--item-id item)))
-     mevedel-plugins-list--plugins)))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-selected mevedel-plugins-list--plugins
+                            #'mevedel-plugins-list--item-id))
 
 (defun mevedel-plugins-list--plugin-at-point ()
   "Return the plugin at point, or signal a user error."
@@ -1127,23 +1130,8 @@ Workspace runtime data is retained."
 
 (defun mevedel-plugins-list--require-owner ()
   "Signal a user error if this cockpit's owning session is gone."
-  (unless (and (buffer-live-p mevedel-plugins-list--view-buffer)
-               (buffer-live-p mevedel-plugins-list--data-buffer))
-    (user-error "No live mevedel session for this plugin cockpit")))
-
-(defun mevedel-plugins-list--goto-id (id)
-  "Move point to tabulated row ID when possible."
-  (goto-char (point-min))
-  (catch 'found
-    (when id
-      (while (not (eobp))
-        (when (equal (tabulated-list-get-id) id)
-          (throw 'found t))
-        (forward-line 1)))
-    (goto-char (point-min))
-    (while (and (not (eobp))
-                (not (tabulated-list-get-id)))
-      (forward-line 1))))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-require-owner "plugin cockpit"))
 
 (defun mevedel-plugins-list-refresh ()
   "Refresh the current plugin management buffer."
@@ -1152,19 +1140,19 @@ Workspace runtime data is retained."
     (mevedel-plugins-list--require-owner)
     (setq mevedel-plugins-list--plugins
           (mevedel-plugins-list--items mevedel-plugins-list--workspace))
-    (setq tabulated-list-entries
-          (mapcar (lambda (plugin)
-                    (mevedel-plugins-list--entry
-                     plugin mevedel-plugins-list--workspace))
-                  mevedel-plugins-list--plugins))
-    (tabulated-list-print t)
-    (mevedel-plugins-list--goto-id selected)
-    (force-mode-line-update t)))
+    (require 'mevedel-cockpit)
+    (mevedel-cockpit-refresh-tabulated
+     (mapcar (lambda (plugin)
+               (mevedel-plugins-list--entry
+                plugin mevedel-plugins-list--workspace))
+             mevedel-plugins-list--plugins)
+     selected)))
 
 (defun mevedel-plugins-list--refresh-preserving (name)
   "Refresh the current plugin cockpit, preserving plugin NAME when possible."
   (mevedel-plugins-list-refresh)
-  (mevedel-plugins-list--goto-id name))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-goto-id name))
 
 (defun mevedel-plugins-list-toggle-enabled ()
   "Toggle activation for the plugin at point."
@@ -1373,30 +1361,11 @@ Slash equivalents
 /plugin reload, /plugin remove NAME, /plugin uninstall NAME
 "))))
 
-(defun mevedel-plugins-list--return-buffer ()
-  "Return the best live owner buffer for quitting this cockpit."
-  (or (and (buffer-live-p mevedel-plugins-list--origin-buffer)
-           mevedel-plugins-list--origin-buffer)
-      (and (buffer-live-p mevedel-plugins-list--view-buffer)
-           mevedel-plugins-list--view-buffer)
-      (and (buffer-live-p mevedel-plugins-list--data-buffer)
-           mevedel-plugins-list--data-buffer)))
-
 (defun mevedel-plugins-list-quit ()
   "Quit the plugin cockpit and return to the main session cockpit."
   (interactive)
-  (let ((buffer (current-buffer))
-        (return-buffer (mevedel-plugins-list--return-buffer)))
-    (when return-buffer
-      (when-let* ((window (display-buffer return-buffer)))
-        (select-window window)))
-    (when (buffer-live-p buffer)
-      (kill-buffer buffer))
-    (unless return-buffer
-      (user-error "No live mevedel session for this plugin cockpit"))
-    (with-current-buffer return-buffer
-      (require 'mevedel-menu)
-      (mevedel-menu))))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-quit "plugin cockpit"))
 
 (defvar mevedel-plugins-list-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1436,21 +1405,16 @@ Slash equivalents
   "Open the plugin management buffer for WORKSPACE.
 VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
 session pair when the cockpit is opened from a live mevedel session."
-  (unless (and (buffer-live-p view-buffer)
-               (buffer-live-p data-buffer))
-    (user-error "No live mevedel session for this plugin cockpit"))
-  (require 'tabulated-list)
-  (let ((buffer (get-buffer-create mevedel-plugins-list-buffer-name)))
-    (with-current-buffer buffer
-      (mevedel-plugins-list-mode)
-      (setq mevedel-plugins-list--workspace workspace
-            mevedel-plugins-list--view-buffer view-buffer
-            mevedel-plugins-list--data-buffer data-buffer
-            mevedel-plugins-list--origin-buffer origin-buffer)
-      (mevedel-plugins-list-refresh))
-    (when-let* ((window (display-buffer buffer)))
-      (select-window window))
-    buffer))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-open-tabulated
+   mevedel-plugins-list-buffer-name
+   #'mevedel-plugins-list-mode
+   #'mevedel-plugins-list-refresh
+   view-buffer
+   data-buffer
+   origin-buffer
+   (lambda () (setq mevedel-plugins-list--workspace workspace))
+   "plugin cockpit"))
 
 
 ;;
