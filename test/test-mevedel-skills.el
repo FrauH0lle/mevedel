@@ -19,6 +19,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-presets)
 (require 'mevedel-tools)
+(require 'mevedel-worktree)
 ;; Phase 7: shell injection routes through Bash tool's permission
 ;; check (`mevedel-tools--check-bash-permission').
 (require 'mevedel-tool-exec)
@@ -3308,6 +3309,33 @@ spanning lines")))
           (should (eq surface-session session))
           (should (eq surface-buffer (current-buffer)))
           (should (equal "### " (buffer-string)))))))
+
+  :doc "worktree slash command opens the worktree surface"
+  (let ((session (mevedel-skills-test--make-session))
+        surface-buffer)
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands
+             (cons '("worktree" . mevedel-cmd--worktree)
+                   mevedel-slash-commands)))
+        (cl-letf (((symbol-function 'mevedel-worktree-list-open)
+                   (lambda () (setq surface-buffer (current-buffer)))))
+          (insert "### /worktree")
+          (goto-char (point-max))
+          (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+          (should (eq surface-buffer (current-buffer)))
+          (should (equal "### " (buffer-string)))))))
+
+  :doc "help slash command opens the help surface"
+  (let ((session (mevedel-skills-test--make-session))
+        called)
+    (mevedel-skills-test--with-chat-buffer session
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (area) (setq called area))))
+        (insert "### /help")
+        (goto-char (point-max))
+        (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+        (should (eq called 'help))
+        (should (equal "### " (buffer-string))))))
 
   :doc "skills mutation slash commands remain direct"
   (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))

@@ -257,6 +257,70 @@
 
 
 ;;
+;;; Surface
+
+(defconst mevedel-worktree-list-buffer-name "*mevedel worktree*"
+  "Name of the worktree cockpit buffer.")
+
+(defvar-local mevedel-worktree-list--data-buffer nil
+  "Data buffer rendered by the current worktree cockpit buffer.")
+
+(defun mevedel-worktree-list--data-buffer ()
+  "Return the live data buffer for the current worktree surface."
+  (or (and (buffer-live-p mevedel-worktree-list--data-buffer)
+           mevedel-worktree-list--data-buffer)
+      (user-error "No live mevedel data buffer for this worktree surface")))
+
+(defun mevedel-worktree-list-refresh ()
+  "Refresh the worktree cockpit buffer."
+  (interactive)
+  (let ((inhibit-read-only t)
+        (data-buffer (mevedel-worktree-list--data-buffer)))
+    (erase-buffer)
+    (insert "mevedel worktree\n")
+    (insert "Keys: g refresh/status, c create worktree\n\n")
+    (insert
+     (with-current-buffer data-buffer
+       (mevedel-worktree--format-status
+        (mevedel-worktree--collect-status))))
+    (goto-char (point-min))
+    (forward-line 3)))
+
+(defun mevedel-worktree-list-create ()
+  "Create a worktree by delegating to `/worktree create'."
+  (interactive)
+  (let (result)
+    (with-current-buffer (mevedel-worktree-list--data-buffer)
+      (setq result (mevedel-cmd--worktree "create")))
+    (when (stringp result)
+      (message "%s" result))
+    (mevedel-worktree-list-refresh)
+    result))
+
+(defvar mevedel-worktree-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "c") #'mevedel-worktree-list-create)
+    (define-key map (kbd "g") #'mevedel-worktree-list-refresh)
+    map)
+  "Keymap for `mevedel-worktree-list-mode'.")
+
+(define-derived-mode mevedel-worktree-list-mode special-mode
+  "mevedel-worktree"
+  "Major mode for the worktree cockpit surface.")
+
+(defun mevedel-worktree-list-open ()
+  "Open the worktree cockpit for the current data buffer."
+  (let ((data-buffer (current-buffer))
+        (buffer (get-buffer-create mevedel-worktree-list-buffer-name)))
+    (with-current-buffer buffer
+      (mevedel-worktree-list-mode)
+      (setq mevedel-worktree-list--data-buffer data-buffer)
+      (mevedel-worktree-list-refresh))
+    (display-buffer buffer)
+    buffer))
+
+
+;;
 ;;; Create
 
 (defun mevedel-worktree--split-args (args)
@@ -507,8 +571,8 @@ new session."
          (command (car tokens)))
     (cond
      ((or (null command) (string= command "status"))
-      (mevedel-worktree--format-status
-       (mevedel-worktree--collect-status)))
+      (mevedel-worktree-list-open)
+      nil)
      ((string= command "create")
       (mevedel-worktree--create args))
      (t

@@ -100,7 +100,7 @@
 ;;
 ;;; Status
 
-(mevedel-deftest mevedel-cmd--worktree/status ()
+(mevedel-deftest mevedel-worktree--format-status ()
   ,test
   (test)
 
@@ -115,7 +115,8 @@
                        (or (cdr (assoc args responses))
                            (mevedel-worktree-test--base-response
                             root args)))))
-            (let ((out (mevedel-cmd--worktree "status")))
+            (let ((out (mevedel-worktree--format-status
+                        (mevedel-worktree--collect-status))))
               (should (string-match-p "Isolation: normal checkout" out))
               (should (string-match-p "Current session: main" out))
               (should (string-match-p
@@ -141,7 +142,8 @@
                               root args)))))
               (should (string-match-p
                        "Isolation: linked worktree"
-                       (mevedel-cmd--worktree ""))))))
+                       (mevedel-worktree--format-status
+                        (mevedel-worktree--collect-status)))))))
       (delete-directory root t)))
 
   :doc "reports submodule status"
@@ -159,7 +161,8 @@
                             root args)))))
             (should (string-match-p
                      "Isolation: submodule"
-                     (mevedel-cmd--worktree "status")))))
+                     (mevedel-worktree--format-status
+                      (mevedel-worktree--collect-status))))))
       (delete-directory root t)))
 
   :doc "reports non-Git status without blocking on active request"
@@ -178,8 +181,79 @@
                             root args)))))
             (should (string-match-p
                      "Isolation: not a Git repository"
-                     (mevedel-cmd--worktree "status")))))
+                     (mevedel-worktree--format-status
+                      (mevedel-worktree--collect-status))))))
       (delete-directory root t))))
+
+
+;;
+;;; Surface
+
+(mevedel-deftest mevedel-worktree-list-open
+  (:after-each (when (get-buffer mevedel-worktree-list-buffer-name)
+                 (kill-buffer mevedel-worktree-list-buffer-name)))
+  ,test
+  (test)
+
+  :doc "opens a refreshable status surface for the current data buffer"
+  (with-temp-buffer
+    (let ((data-buffer (current-buffer)))
+      (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+                 (lambda (&optional _context) :status))
+                ((symbol-function 'mevedel-worktree--format-status)
+                 (lambda (status)
+                   (should (eq status :status))
+                   "Worktree status\nBranch: main")))
+        (let ((buffer (mevedel-worktree-list-open)))
+          (with-current-buffer buffer
+            (should (derived-mode-p 'mevedel-worktree-list-mode))
+            (should (eq mevedel-worktree-list--data-buffer data-buffer))
+            (should (string-match-p
+                     "Keys: g refresh/status, c create worktree"
+                     (buffer-string)))
+            (should (string-match-p "Branch: main"
+                                    (buffer-string)))))))))
+
+(mevedel-deftest mevedel-worktree-list-create
+  (:after-each (when (get-buffer mevedel-worktree-list-buffer-name)
+                 (kill-buffer mevedel-worktree-list-buffer-name)))
+  ,test
+  (test)
+
+  :doc "delegates create to the existing worktree command in the data buffer"
+  (let* (called-buffer
+         called-args)
+    (with-temp-buffer
+      (let ((data-buffer (current-buffer))
+            (surface (get-buffer-create mevedel-worktree-list-buffer-name)))
+        (with-current-buffer surface
+          (mevedel-worktree-list-mode)
+          (setq mevedel-worktree-list--data-buffer data-buffer)
+          (cl-letf (((symbol-function 'mevedel-cmd--worktree)
+                     (lambda (args)
+                       (setq called-buffer (current-buffer)
+                             called-args args)
+                       "created"))
+                    ((symbol-function 'mevedel-worktree-list-refresh)
+                     #'ignore))
+            (should (string= "created"
+                             (mevedel-worktree-list-create)))))
+        (should (eq called-buffer data-buffer))
+        (should (equal "create" called-args))))))
+
+(mevedel-deftest mevedel-cmd--worktree/status-surface ()
+  ,test
+  (test)
+
+  :doc "routes blank and status commands to the worktree surface"
+  (with-temp-buffer
+    (let (opened-buffer)
+      (cl-letf (((symbol-function 'mevedel-worktree-list-open)
+                 (lambda () (setq opened-buffer (current-buffer)))))
+        (dolist (args '("" "status"))
+          (setq opened-buffer nil)
+          (should (null (mevedel-cmd--worktree args)))
+          (should (eq opened-buffer (current-buffer))))))))
 
 
 ;;

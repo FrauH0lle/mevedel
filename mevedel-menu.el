@@ -78,13 +78,16 @@
 (declare-function mevedel-view-send "mevedel-view" ())
 (defvar mevedel-view--gptel-return-view-buffer)
 
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-list-open "mevedel-worktree" ())
+
 ;; `transient'
 (defvar transient--original-buffer)
 (defvar transient--prefix)
 (defvar transient-post-exit-hook)
 
-(defvar mevedel-menu--surface-title "mevedel"
-  "Title displayed by the generic cockpit surface.")
+(defconst mevedel-menu-help-buffer-name "*mevedel help*"
+  "Name of the session cockpit help buffer.")
 
 
 ;;
@@ -407,10 +410,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ('tools
      (require 'mevedel-tools)
      (mevedel-menu--call-in-data #'mevedel-tools-list-open))
-    ((or 'worktree 'help)
-     (setq mevedel-menu--surface-title
-           (format "mevedel: %s" (capitalize (symbol-name area))))
-     (transient-setup 'mevedel-menu--surface))
+    ('worktree
+     (require 'mevedel-worktree)
+     (mevedel-menu--call-in-data #'mevedel-worktree-list-open))
+    ('help
+     (mevedel-menu-help-open))
     (_
      (user-error "Unknown cockpit area: %s" area))))
 
@@ -482,6 +486,56 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   "Open the help cockpit surface."
   (interactive)
   (mevedel-menu-open 'help))
+
+(defun mevedel-menu-help--text ()
+  "Return command-discovery text for the session cockpit."
+  (string-join
+   '("mevedel help"
+     ""
+     "Session cockpit keys"
+     "RET Send              a Abort"
+     "c Compact             r Review              v Verify"
+     "m Mode                M Model"
+     "t Tools               s Skills              p Plugins"
+     "d Toggle data view    g gptel menu          w Worktree"
+     "? Help"
+     ""
+     "Slash commands that open UI"
+     "/plugin, /plugin list       Plugins"
+     "/skills, /skills list       Skills"
+     "/mode                       Mode"
+     "/model                      Model"
+     "/tools, /tools list         Tools"
+     "/worktree, /worktree status Worktree"
+     "/help                       Help"
+     ""
+     "Direct slash commands"
+     "/plugin enable NAME, disable NAME, reload, update NAME"
+     "/plugin install TARGET, remove NAME, uninstall NAME, hooks ..."
+     "/skills enable NAME, disable NAME, help NAME"
+     "/mode MODE, /model MODEL"
+     "/worktree create [NAME] [--for \"purpose\"] [--clean]"
+     "/compact, /review, /verify, /plan ..., /auto, /clear, /init ..., /tokens"
+     ""
+     "Modes"
+     "default / ask       Ask before write tools."
+     "accept-edits        Auto-apply edit previews."
+     "plan                Read-only planning mode."
+     "trust-all / auto    Auto-allow tools."
+     ""
+     "View and data buffers"
+     "The view buffer owns the composer, compact transcript, and status strip."
+     "The data buffer owns raw gptel state, tools, model, and transcript data."
+     "The cockpit resolves the view/data pair once and routes actions to the owning buffer."
+     "The raw data buffer keeps gptel header behavior; g opens gptel-menu there.")
+   "\n"))
+
+(defun mevedel-menu-help-open ()
+  "Open the session cockpit help surface."
+  (with-help-window mevedel-menu-help-buffer-name
+    (princ (mevedel-menu-help--text))
+    (princ "\n"))
+  (get-buffer mevedel-menu-help-buffer-name))
 
 (defun mevedel-menu--gptel-bridge-active-p ()
   "Return non-nil while a view-launched gptel bridge is restoring."
@@ -576,15 +630,21 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("r" "Review" mevedel-menu--review)
     ("v" "Verify" mevedel-menu--verify)]
    ["Configure"
-    ("m" mevedel-menu--mode-description mevedel-menu--open-mode)
-    ("M" mevedel-menu--model-description mevedel-menu--open-model)
-    ("t" mevedel-menu--tools-description mevedel-menu--open-tools)
-    ("s" mevedel-menu--skills-description mevedel-menu--open-skills)
-    ("p" mevedel-menu--plugins-description mevedel-menu--open-plugins)]
+    ("m" mevedel-menu--open-mode
+     :description mevedel-menu--mode-description)
+    ("M" mevedel-menu--open-model
+     :description mevedel-menu--model-description)
+    ("t" mevedel-menu--open-tools
+     :description mevedel-menu--tools-description)
+    ("s" mevedel-menu--open-skills
+     :description mevedel-menu--skills-description)
+    ("p" mevedel-menu--open-plugins
+     :description mevedel-menu--plugins-description)]
    ["Inspect"
     ("d" "Toggle data view" mevedel-menu--toggle-data-view)
     ("g" "gptel menu" mevedel-menu--open-gptel)
-    ("w" mevedel-menu--worktree-description mevedel-menu--open-worktree)
+    ("w" mevedel-menu--open-worktree
+     :description mevedel-menu--worktree-description)
     ("?" "Help" mevedel-menu--open-help)]]
   (interactive)
   (mevedel-menu--pair)
@@ -619,15 +679,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu--pair)
   (transient-setup 'mevedel-menu--model))
-
-(transient-define-prefix mevedel-menu--surface ()
-  "Generic mevedel cockpit surface."
-  [:description (lambda () mevedel-menu--surface-title)
-   ["Session"
-    ("b" "Back" mevedel-menu)]]
-  (interactive)
-  (mevedel-menu--pair)
-  (transient-setup 'mevedel-menu--surface))
 
 (provide 'mevedel-menu)
 
