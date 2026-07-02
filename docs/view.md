@@ -106,6 +106,19 @@ prompt starts with a read-only blank separator line so status,
 interaction, and request-progress rows stay visually distinct from the
 composer.
 
+## Status Strip And Cockpit Routing
+
+The view buffer header line is mevedel-owned chrome. It shows session
+orientation, permission mode, request state, model, and active tool count.
+Clickable parts route to session cockpit surfaces such as top, mode, model,
+and tools. The view must not copy or proxy gptel's clickable data-buffer
+header line; gptel-owned header controls stay in the raw data buffer.
+
+The session cockpit is the normal control surface from the view. It resolves
+the live view/data pair once and routes each action to the owner buffer. The
+explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
+from the paired data buffer.
+
 ## Fragment-backed chrome
 
 `mevedel-view-fragment.el` provides private primitives for disposable,

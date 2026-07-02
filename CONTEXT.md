@@ -15,6 +15,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **reference** — An instruction that contributes context without asking the agent to act.
 - **directive** — An instruction that asks the agent to discuss, implement, revise, tutor, or process work.
 - **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
+- **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
