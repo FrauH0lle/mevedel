@@ -87,7 +87,7 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--register-builtins "mevedel-tools" ())
 (declare-function mevedel-tools-list-open "mevedel-tools"
-                  (&optional session data-buffer))
+                  (&optional session view-buffer data-buffer origin-buffer))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -3630,7 +3630,14 @@ session pair when the cockpit is opened from a live mevedel session."
     (if (member args '("" "list"))
         (progn
           (require 'mevedel-tools)
-          (mevedel-tools-list-open))
+          (if (fboundp 'mevedel-menu-open)
+              (condition-case nil
+                  (mevedel-menu-open 'tools)
+                (user-error
+                 (mevedel-tools-list-open mevedel--session nil
+                                          (current-buffer))))
+            (mevedel-tools-list-open mevedel--session nil
+                                     (current-buffer))))
       (message "Usage: /tools [list]"))))
 
 (defvar mevedel-slash-commands

@@ -3311,23 +3311,18 @@ spanning lines")))
 
   :doc "blank and list tools slash commands open the tools surface"
   (let ((session (mevedel-skills-test--make-session))
-        surface-session
-        surface-buffer)
+        called)
     (mevedel-skills-test--with-chat-buffer session
       (dolist (command '("/tools" "/tools list"))
-        (setq surface-session nil
-              surface-buffer nil)
+        (setq called nil)
         (erase-buffer)
-        (cl-letf (((symbol-function 'mevedel-tools-list-open)
-                   (lambda (&optional _session _data-buffer)
-                     (setq surface-session mevedel--session
-                           surface-buffer (current-buffer))
-                     nil)))
+        (cl-letf (((symbol-function 'mevedel-menu-open)
+                   (lambda (area)
+                     (setq called area))))
           (insert "### " command)
           (goto-char (point-max))
           (should (eq 'local (mevedel-skills--dispatch-slash-command)))
-          (should (eq surface-session session))
-          (should (eq surface-buffer (current-buffer)))
+          (should (eq called 'tools))
           (should (equal "### " (buffer-string)))))))
 
   :doc "worktree slash command opens the worktree surface"
