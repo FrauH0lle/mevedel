@@ -34,31 +34,29 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
 
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
-(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
-
 ;; `cl-extra'
 (declare-function cl-some "cl-extra" (cl-pred cl-seq &rest cl-rest))
 
+;; `gptel'
+(defvar gptel-tools)
+
 ;; `gptel-request'
-(declare-function gptel-get-tool "ext:gptel-request" (path))
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
-(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
-(declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
 (declare-function gptel--handle-tool-use "ext:gptel-request" (fsm))
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
+(declare-function gptel--parse-tools "ext:gptel-request" (backend tools))
 (declare-function gptel--process-tool-call
                   "ext:gptel-request" (fsm tool-spec tool-call result))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-get-tool "ext:gptel-request" (path))
+(declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
+(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-description "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel--ersatz-json-tool)
 
-;; `mevedel-tool-ui'
-(defvar mevedel-tools--agents-fsm)
-(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
-(declare-function mevedel-tools--agent-result-parse-id "mevedel-tool-ui"
-                  (text))
+;; `gptel-transient'
+(declare-function gptel-menu "ext:gptel-transient" ())
 
 ;; `mevedel-agent-exec' -- agent buffer back-pointer for parent-chain walks
 (defvar mevedel--agent-invocation)
@@ -79,6 +77,19 @@
 (declare-function mevedel-agent-exec--record-activity
                   "mevedel-agent-exec"
                   (invocation item &optional reserved))
+
+;; `mevedel-structs'
+(defvar mevedel--session)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
+
+;; `mevedel-tool-ui'
+(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
+(declare-function mevedel-tools--agent-result-parse-id "mevedel-tool-ui"
+                  (text))
+(defvar mevedel-tools--agents-fsm)
 
 
 ;;
@@ -532,6 +543,162 @@ otherwise queues them on the chat buffer's session."
                          (if load "\n\nTools loaded. They are available now; call them in your next tool call."
                            "\n\nCall ToolSearch again with load=true to activate these tools. Search by exact tool name when known (for example XrefReferences or Imenu), or by capability group such as xref, imenu, treesitter, elisp, or web."))
                result))))
+
+
+;;
+;;; Tools listing surface
+
+(defconst mevedel-tools-list-buffer-name "*mevedel tools*"
+  "Name of the tools listing buffer.")
+
+(defvar-local mevedel-tools-list--session nil
+  "Session rendered in the current tools listing buffer.")
+
+(defvar-local mevedel-tools-list--data-buffer nil
+  "Data buffer that owns `gptel-tools' for this tools listing buffer.")
+
+(defun mevedel-tools--insert-tool-line (tool)
+  "Insert one active or pending TOOL line."
+  (let ((category (gptel-tool-category tool))
+        (description (gptel-tool-description tool)))
+    (insert (format "- %s%s%s\n"
+                    (gptel-tool-name tool)
+                    (if category (format " [%s]" category) "")
+                    (if (and (stringp description)
+                             (not (string-empty-p description)))
+                        (format " - %s"
+                                (truncate-string-to-width
+                                 description 100 nil nil "..."))
+                      "")))))
+
+(defun mevedel-tools-list-refresh ()
+  "Refresh the current tools listing buffer."
+  (interactive)
+  (let* ((inhibit-read-only t)
+         (session (or mevedel-tools-list--session
+                      (bound-and-true-p mevedel--session)))
+         (data-buffer mevedel-tools-list--data-buffer)
+         (active (and (buffer-live-p data-buffer)
+                      (with-current-buffer data-buffer
+                        (and (boundp 'gptel-tools) gptel-tools))))
+         (deferred (and session (mevedel-session-deferred-set session)))
+         (pending (and session (mevedel-session-deferred-pending session)))
+         (loaded (and session (mevedel-session-deferred-injected session)))
+         (expired (and session (mevedel-session-deferred-expired session))))
+    (unless session
+      (user-error "No mevedel session in this buffer"))
+    (setq mevedel-tools-list--session session)
+    (erase-buffer)
+    (insert (format "mevedel tools for %s\n"
+                    (mevedel-session-name session)))
+    (insert (format "Default deferred TTL: %d turns\n"
+                    mevedel-deferred-tool-ttl))
+    (insert "Keys: g refresh, s search/load deferred, G gptel menu\n\n")
+    (insert (format "Active tools (%d)\n" (length active)))
+    (if active
+        (dolist (tool active) (mevedel-tools--insert-tool-line tool))
+      (insert "No active tools.\n"))
+    (insert "\n")
+    (insert (format "Deferred tools (%d)\n" (length deferred)))
+    (if deferred
+        (dolist (entry deferred)
+          (pcase-let ((`((,category ,name) . ,summary) entry))
+            (insert (format "- %s [%s]%s\n"
+                            name
+                            category
+                            (if (and (stringp summary)
+                                     (not (string-empty-p summary)))
+                                (format " - %s" summary)
+                              "")))))
+      (insert "No deferred tools.\n"))
+    (insert "\n")
+    (insert (format "Pending load (%d)\n" (length pending)))
+    (if pending
+        (dolist (tool pending) (mevedel-tools--insert-tool-line tool))
+      (insert "No tools pending load.\n"))
+    (insert "\n")
+    (insert (format "Loaded deferred tools (%d)\n" (length loaded)))
+    (if loaded
+        (dolist (entry loaded)
+          (let ((ttl (cdr entry)))
+            (insert (format "- %s (TTL %s turn%s)\n"
+                            (car entry)
+                            ttl
+                            (if (= ttl 1) "" "s")))))
+      (insert "No loaded deferred tools.\n"))
+    (insert "\n")
+    (insert (format "Expired previous turn (%d)\n" (length expired)))
+    (if expired
+        (dolist (name expired) (insert (format "- %s\n" name)))
+      (insert "No expired tools.\n"))
+    (goto-char (point-min))
+    (forward-line 4)))
+
+(defun mevedel-tools-list-search-load (&optional query)
+  "Search deferred tools by QUERY and queue matching tools for loading."
+  (interactive)
+  (let* ((session (or mevedel-tools-list--session
+                      (bound-and-true-p mevedel--session)
+                      (user-error "No mevedel session in this buffer")))
+         (data-buffer (or (and (buffer-live-p mevedel-tools-list--data-buffer)
+                               mevedel-tools-list--data-buffer)
+                          (user-error
+                           "No live mevedel data buffer for this tools surface")))
+         (candidates (delete-dups
+                      (mapcar #'cadar
+                              (mevedel-session-deferred-set session))))
+         (query (or query
+                    (completing-read
+                     "Search/load deferred tool: "
+                     candidates nil nil nil nil (car candidates))))
+         result)
+    (when (string-empty-p (string-trim query))
+      (user-error "Search query cannot be empty"))
+    (with-current-buffer data-buffer
+      (let ((mevedel--session session))
+        (mevedel-tools--tool-search
+         (lambda (text) (setq result text))
+         query t)))
+    (mevedel-tools-list-refresh)
+    (message "%s" result)
+    result))
+
+(defun mevedel-tools-list-open-gptel ()
+  "Open gptel-menu from the tools listing's data buffer."
+  (interactive)
+  (require 'gptel-transient)
+  (let ((data-buffer (or (and (buffer-live-p mevedel-tools-list--data-buffer)
+                              mevedel-tools-list--data-buffer)
+                         (user-error
+                          "No live mevedel data buffer for this tools surface"))))
+    (with-current-buffer data-buffer
+      (call-interactively #'gptel-menu))))
+
+(defvar mevedel-tools-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'mevedel-tools-list-refresh)
+    (define-key map (kbd "s") #'mevedel-tools-list-search-load)
+    (define-key map (kbd "G") #'mevedel-tools-list-open-gptel)
+    map)
+  "Keymap for `mevedel-tools-list-mode'.")
+
+(define-derived-mode mevedel-tools-list-mode special-mode "mevedel-tools"
+  "Major mode for listing mevedel tool state.")
+
+(defun mevedel-tools-list-open (&optional session data-buffer)
+  "Open the tools listing buffer for SESSION and DATA-BUFFER."
+  (let ((session (or session
+                     (bound-and-true-p mevedel--session)
+                     (user-error "No mevedel session in this buffer")))
+        (data-buffer (or data-buffer (current-buffer)))
+        (buffer (get-buffer-create mevedel-tools-list-buffer-name)))
+    (with-current-buffer buffer
+      (mevedel-tools-list-mode)
+      (setq mevedel-tools-list--session session
+            mevedel-tools-list--data-buffer data-buffer)
+      (mevedel-tools-list-refresh))
+    (display-buffer buffer)
+    buffer))
 
 
 ;;

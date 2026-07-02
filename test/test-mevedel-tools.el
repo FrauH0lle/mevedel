@@ -552,6 +552,133 @@ function returning the states entered by test handlers."
 
 
 ;;
+;;; Tools listing surface
+
+(mevedel-deftest mevedel-tools-list-open
+  (:after-each (progn
+                 (mevedel-tool-clear-registry)
+                 (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
+                       nil)
+                 (mevedel-workspace-clear-registry)
+                 (when (get-buffer mevedel-tools-list-buffer-name)
+                   (kill-buffer mevedel-tools-list-buffer-name))))
+  ,test
+  (test)
+
+  :doc "renders active, deferred, pending, loaded, and expired tool state"
+  (let* ((session (mevedel-tools-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-data*"))
+         (active-tool (mevedel-tools-test--make-fake-gptel-tool "Read"))
+         (pending-tool (mevedel-tools-test--make-fake-gptel-tool "Edit")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local gptel-tools (list active-tool)))
+          (setf (mevedel-session-deferred-set session)
+                '((("mevedel" "Edit") . "Replace text in a file")
+                  (("mevedel" "Imenu") . "List symbols in a file")))
+          (setf (mevedel-session-deferred-pending session)
+                (list pending-tool))
+          (setf (mevedel-session-deferred-injected session)
+                '(("XrefReferences" . 3)))
+          (setf (mevedel-session-deferred-expired session)
+                '("Treesitter"))
+          (let ((buffer (mevedel-tools-list-open session data-buffer)))
+            (with-current-buffer buffer
+              (should (eq major-mode 'mevedel-tools-list-mode))
+              (should (eq mevedel-tools-list--session session))
+              (should (eq mevedel-tools-list--data-buffer data-buffer))
+              (should (string-match-p "Active tools (1)" (buffer-string)))
+              (should (string-match-p "Read \\[mevedel\\]"
+                                      (buffer-string)))
+              (should (string-match-p "Deferred tools (2)"
+                                      (buffer-string)))
+              (should (string-match-p
+                       "Edit \\[mevedel\\] - Replace text in a file"
+                       (buffer-string)))
+              (should (string-match-p "Pending load (1)" (buffer-string)))
+              (should (string-match-p "Loaded deferred tools (1)"
+                                      (buffer-string)))
+              (should (string-match-p
+                       "XrefReferences (TTL 3 turns)"
+                       (buffer-string)))
+              (should (string-match-p "Expired previous turn (1)"
+                                      (buffer-string)))
+              (should (string-match-p "- Treesitter" (buffer-string))))))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
+(mevedel-deftest mevedel-tools-list-search-load
+  (:after-each (progn
+                 (mevedel-tool-clear-registry)
+                 (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
+                       nil)
+                 (mevedel-workspace-clear-registry)
+                 (when (get-buffer mevedel-tools-list-buffer-name)
+                   (kill-buffer mevedel-tools-list-buffer-name))))
+  ,test
+  (test)
+
+  :doc "search/load queues matching deferred tools and refreshes pending state"
+  (let* ((session (mevedel-tools-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-search*"))
+         (gtool (mevedel-tools-test--make-fake-gptel-tool "Edit"))
+         (tool (mevedel-tool--create
+                :name "Edit" :category "mevedel"
+                :gptel-tool gtool)))
+    (unwind-protect
+        (progn
+          (mevedel-tool-register tool)
+          (setf (alist-get "Edit"
+                           (alist-get "mevedel"
+                                      gptel--known-tools nil nil #'equal)
+                           nil nil #'equal)
+                gtool)
+          (with-current-buffer data-buffer
+            (setq-local gptel-tools nil))
+          (setf (mevedel-session-deferred-set session)
+                '((("mevedel" "Edit") . "Replace text in a file")))
+          (let ((buffer (mevedel-tools-list-open session data-buffer)))
+            (with-current-buffer buffer
+              (let ((result (mevedel-tools-list-search-load "edit")))
+                (should (string-match-p "available now" result)))
+              (should (= 1 (length (mevedel-session-deferred-pending
+                                    session))))
+              (should (string-match-p "Pending load (1)"
+                                      (buffer-string)))
+              (should (string-match-p "Edit \\[mevedel\\]"
+                                      (buffer-string))))))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
+(mevedel-deftest mevedel-tools-list-open-gptel
+  (:after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (when (get-buffer mevedel-tools-list-buffer-name)
+                   (kill-buffer mevedel-tools-list-buffer-name))))
+  ,test
+  (test)
+
+  :doc "gptel bridge command runs from the paired data buffer"
+  (let* ((session (mevedel-tools-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-gptel*"))
+         called-buffer)
+    (unwind-protect
+        (progn
+          (mevedel-tools-list-open session data-buffer)
+          (require 'gptel-transient)
+          (with-current-buffer mevedel-tools-list-buffer-name
+            (cl-letf (((symbol-function 'gptel-menu)
+                       (lambda ()
+                         (interactive)
+                         (setq called-buffer (current-buffer)))))
+              (mevedel-tools-list-open-gptel)))
+          (should (eq called-buffer data-buffer)))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
+
+;;
 ;;; WAIT handler -- TTL lifecycle
 
 (defun mevedel-tools-test--make-fsm-with-ctx (ctx)

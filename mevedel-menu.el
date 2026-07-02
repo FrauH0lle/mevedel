@@ -56,13 +56,17 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
+
+;; `mevedel-tools'
+(declare-function mevedel-tools-list-open "mevedel-tools"
+                  (&optional session data-buffer))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--gptel-edit-directive-args
@@ -400,7 +404,10 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (mevedel-menu--call-in-data
         #'mevedel-plugins-list-open
         workspace)))
-    ((or 'tools 'worktree 'help)
+    ('tools
+     (require 'mevedel-tools)
+     (mevedel-menu--call-in-data #'mevedel-tools-list-open))
+    ((or 'worktree 'help)
      (setq mevedel-menu--surface-title
            (format "mevedel: %s" (capitalize (symbol-name area))))
      (transient-setup 'mevedel-menu--surface))

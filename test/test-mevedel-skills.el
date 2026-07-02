@@ -18,6 +18,7 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-agents)
 (require 'mevedel-presets)
+(require 'mevedel-tools)
 ;; Phase 7: shell injection routes through Bash tool's permission
 ;; check (`mevedel-tools--check-bash-permission').
 (require 'mevedel-tool-exec)
@@ -3287,6 +3288,27 @@ spanning lines")))
           (should (eq called session))
           (should (equal "### " (buffer-string)))))))
 
+  :doc "blank and list tools slash commands open the tools surface"
+  (let ((session (mevedel-skills-test--make-session))
+        surface-session
+        surface-buffer)
+    (mevedel-skills-test--with-chat-buffer session
+      (dolist (command '("/tools" "/tools list"))
+        (setq surface-session nil
+              surface-buffer nil)
+        (erase-buffer)
+        (cl-letf (((symbol-function 'mevedel-tools-list-open)
+                   (lambda (&optional _session _data-buffer)
+                     (setq surface-session mevedel--session
+                           surface-buffer (current-buffer))
+                     nil)))
+          (insert "### " command)
+          (goto-char (point-max))
+          (should (eq 'local (mevedel-skills--dispatch-slash-command)))
+          (should (eq surface-session session))
+          (should (eq surface-buffer (current-buffer)))
+          (should (equal "### " (buffer-string)))))))
+
   :doc "skills mutation slash commands remain direct"
   (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
@@ -3763,6 +3785,21 @@ spanning lines")))
           (should-not (mevedel-skills--disabled-names)))
       (delete-directory user-dir t)
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-cmd--tools ()
+  ,test
+  (test)
+  :doc "unknown arguments report usage"
+  (let ((message-text nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq message-text (apply #'format fmt args)))))
+      (mevedel-cmd--tools "load Edit")
+      (should (string-match-p "Usage: /tools \\[list\\]" message-text))))
+
+  :doc "blank arguments require a session"
+  (with-temp-buffer
+    (should-error (mevedel-cmd--tools "") :type 'user-error)))
 
 (mevedel-deftest mevedel-skills-list-open ()
   ,test
