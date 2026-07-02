@@ -1945,6 +1945,8 @@ existing `mevedel--view-buffer' binding untouched."
   (unless (plist-get options :preserve-data-view-buffer)
     (with-current-buffer data-buf
       (setq-local mevedel--view-buffer view-buf)
+      (use-local-map
+       (copy-keymap (or (current-local-map) (make-sparse-keymap))))
       (local-set-key (kbd "C-c C-m") #'mevedel-menu)
       ;; Kill-buffer lifecycle: data killed -> kill view buffer
       (add-hook 'kill-buffer-hook #'mevedel-view--on-data-killed nil t))))

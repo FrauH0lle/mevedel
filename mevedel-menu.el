@@ -415,6 +415,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      (mevedel-menu--call-in-data #'mevedel-worktree-list-open))
     ('help
      (mevedel-menu-help-open))
+    ('gptel
+     (mevedel-menu--open-gptel))
     (_
      (user-error "Unknown cockpit area: %s" area))))
 

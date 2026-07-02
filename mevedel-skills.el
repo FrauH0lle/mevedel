@@ -3162,6 +3162,7 @@ distinct from `Agent :name' which matches subagent_type."
     ("plan" . " [command] optional first Plan-mode prompt")
     ("mode" . " [command] default | accept-edits | plan | trust-all")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
+    ("tools" . " [command] list")
     ("auto" . " [command] no args; toggle auto mode")
     ("clear" . " [command] no args; start a fresh segment")
     ("help" . " [command] no args; list commands and skills")
