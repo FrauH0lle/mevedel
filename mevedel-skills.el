@@ -71,6 +71,8 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--register-builtins "mevedel-tools" ())
+(declare-function mevedel-tools-list-open "mevedel-tools"
+                  (&optional session data-buffer))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -3460,6 +3462,15 @@ Routes through the lifecycle-aware permission transition path."
       (_
        (message "Usage: /skills [list|help NAME|enable NAME|disable NAME]")))))
 
+(defun mevedel-cmd--tools (args)
+  "Open the tools surface using ARGS."
+  (let ((args (string-trim (or args ""))))
+    (if (member args '("" "list"))
+        (progn
+          (require 'mevedel-tools)
+          (mevedel-tools-list-open))
+      (message "Usage: /tools [list]"))))
+
 (defvar mevedel-slash-commands
   '(("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
@@ -3467,6 +3478,7 @@ Routes through the lifecycle-aware permission transition path."
     ("plan"    . mevedel-cmd--plan)
     ("mode"    . mevedel-cmd--mode)
     ("skills"  . mevedel-cmd--skills)
+    ("tools"   . mevedel-cmd--tools)
     ("auto"    . mevedel-cmd--auto)
     ("clear"   . mevedel-cmd--clear)
     ("help"    . mevedel-cmd--help)

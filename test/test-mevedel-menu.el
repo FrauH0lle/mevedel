@@ -20,6 +20,7 @@
 (require 'mevedel-plugins)
 (require 'mevedel-skills)
 (require 'mevedel-structs)
+(require 'mevedel-tools)
 (require 'mevedel-view)
 (require 'mevedel-workspace)
 
@@ -133,10 +134,14 @@
             (mevedel-menu-open (car area))
             (should (eq called-prefix (cdr area))))))))
 
-  :doc "opens requested skills and plugins management surfaces"
+  :doc "opens requested tools, skills, and plugins management surfaces"
   (mevedel-menu-test--with-buffers
-    (let (skills-session skills-buffer plugins-workspace plugins-buffer)
-      (cl-letf (((symbol-function 'mevedel-skills-list-open)
+    (let (tools-buffer skills-session skills-buffer
+          plugins-workspace plugins-buffer)
+      (cl-letf (((symbol-function 'mevedel-tools-list-open)
+                 (lambda (&optional _session _data-buffer)
+                   (setq tools-buffer (current-buffer))))
+                ((symbol-function 'mevedel-skills-list-open)
                  (lambda (session)
                    (setq skills-session session
                          skills-buffer (current-buffer))))
@@ -145,8 +150,10 @@
                    (setq plugins-workspace workspace
                          plugins-buffer (current-buffer)))))
         (with-current-buffer view-buf
+          (mevedel-menu-open 'tools)
           (mevedel-menu-open 'skills)
           (mevedel-menu-open 'plugins)))
+      (should (eq tools-buffer data-buf))
       (should (eq skills-session session))
       (should (eq skills-buffer data-buf))
       (should (eq plugins-workspace (mevedel-session-workspace session)))
@@ -160,10 +167,10 @@
                    (setq called-prefix prefix)
                    (push mevedel-menu--surface-title titles))))
         (with-current-buffer view-buf
-          (mevedel-menu-open 'tools)
+          (mevedel-menu-open 'worktree)
           (should (eq called-prefix 'mevedel-menu--surface))))
       (should (equal (nreverse titles)
-                     '("mevedel: Tools")))))
+                     '("mevedel: Worktree")))))
 
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
