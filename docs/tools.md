@@ -52,6 +52,24 @@ newly loaded tool in its next tool call. Search terms can be exact tool
 names (`XrefReferences`, `Imenu`, `function_source`) or capability
 families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
 
+## Native Tools Surface
+
+The session cockpit `t Tools` row opens the native `*mevedel tools*` surface
+for the current main session. `/tools` and `/tools list` open the same
+surface. The buffer is read-only UI chrome, not transcript content.
+
+The tools surface shows active tools, deferred tools, temporarily loaded
+deferred tools, expired loaded tools, and the deferred-tool TTL. It also
+offers session-local lifecycle operations:
+
+- defer an active tool for the current session;
+- activate a deferred tool for the current session;
+- load a deferred tool temporarily, matching `ToolSearch(load=true)` behavior;
+- inspect loaded or expired deferred tools.
+
+Manual tool changes do not mutate presets or global configuration, and they
+do not rewrite already-running child agent tool state.
+
 Tool descriptions live in `tools/*.md` and are loaded via
 `mevedel-define-tool`'s `:prompt-file` keyword.
 

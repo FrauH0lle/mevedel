@@ -36,8 +36,6 @@
 (declare-function gptel--inject-prompt "ext:gptel-request"
                   (backend data new-prompt &optional position))
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
-(declare-function gptel--suffix-system-message "ext:gptel-transient"
-                  (&optional cancel))
 (declare-function gptel-curl--stream-cleanup "ext:gptel-request"
                   (process status))
 (declare-function gptel-curl--stream-filter "ext:gptel-request"
@@ -45,10 +43,7 @@
 (declare-function gptel-curl--stream-insert-response "ext:gptel"
                   (response info &optional raw))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
-(declare-function gptel-preset "ext:gptel-transient" (preset &optional setter))
 (declare-function gptel-send "ext:gptel" (&optional arg))
-(declare-function gptel-system-prompt "ext:gptel-transient" ())
-(declare-function gptel-tools "ext:gptel-transient" ())
 (defvar gptel--request-alist)
 (defvar gptel-model)
 (defvar gptel-prompt-prefix-alist)
@@ -65,11 +60,7 @@
                   (mode &optional prompt display-text hook-context))
 (defvar mevedel-permission-mode)
 
-;; `nadvice'
-(declare-function advice-eval-interactive-spec "nadvice" (spec))
-
 ;; `transient'
-(defvar transient--original-buffer)
 (defvar transient-post-exit-hook)
 
 ;; `mevedel-structs'
@@ -2300,10 +2291,10 @@ agent buffers are left alone."
 
 
 ;;
-;;; gptel transient proxy
+;;; gptel integration advice
 
-(defvar mevedel-view--gptel-transient-advice-installed nil
-  "Non-nil when mevedel's gptel transient proxy should be active.")
+(defvar mevedel-view--gptel-stream-advice-installed nil
+  "Non-nil when mevedel's gptel stream repair advice should be active.")
 
 (defconst mevedel-view--gptel-stream-filter-max-retries 100
   "Maximum deferred flush attempts for early gptel stream chunks.")
@@ -2540,38 +2531,6 @@ chunk and replay it once the request entry exists."
                    (concat pending output))
       (mevedel-view--schedule-gptel-stream-filter-flush process))))
 
-(defun mevedel-view--gptel-target-buffer ()
-  "Return the data buffer that should own the current gptel operation.
-Transient suffixes often execute with the selected view window current,
-while `transient--original-buffer' still points at the data buffer used
-to set up the menu.  Check both so nested gptel menus and edit buffers
-continue to read and write the authoritative gptel locals."
-  (or (mevedel-view--gptel-data-buffer (current-buffer))
-      (when (and (boundp 'transient--original-buffer)
-                 (buffer-live-p transient--original-buffer))
-        (mevedel-view--gptel-data-buffer transient--original-buffer))))
-
-(defun mevedel-view--gptel-origin-view-buffer ()
-  "Return the view buffer that launched the current gptel operation.
-This can be the current buffer itself, or a previously recorded view
-origin from an outer gptel transient command.  A raw data-buffer
-invocation must not infer its paired view as an origin."
-  (cond
-   ((and (derived-mode-p 'mevedel-view-mode)
-         (boundp 'mevedel--data-buffer)
-         mevedel--data-buffer
-         (buffer-live-p mevedel--data-buffer))
-    (current-buffer))
-   ((and mevedel-view--gptel-return-view-buffer
-         (buffer-live-p mevedel-view--gptel-return-view-buffer)
-         mevedel-view--gptel-return-data-buffer
-         (buffer-live-p mevedel-view--gptel-return-data-buffer)
-         (or (eq (current-buffer) mevedel-view--gptel-return-data-buffer)
-             (and (boundp 'transient--original-buffer)
-                  (eq transient--original-buffer
-                      mevedel-view--gptel-return-data-buffer))))
-    mevedel-view--gptel-return-view-buffer)))
-
 (defun mevedel-view--gptel-clear-return-state ()
   "Clear pending gptel transient view restoration state."
   (remove-hook 'transient-post-exit-hook
@@ -2632,7 +2591,8 @@ back on the view buffer."
 Some gptel suffixes, notably system-prompt editing, display their
 original buffer after closing.  Mevedel uses the data buffer as that
 original buffer for state correctness, but the selected user-facing
-window should return to the paired view."
+window should return to the paired view.  This is used by the explicit
+session cockpit gptel bridge."
   (let ((view-buffer mevedel-view--gptel-return-view-buffer)
         (data-buffer mevedel-view--gptel-return-data-buffer))
     (cond
@@ -2653,7 +2613,8 @@ window should return to the paired view."
 (defun mevedel-view--gptel-schedule-return-to-view (view-buffer data-buffer)
   "Schedule restoration of VIEW-BUFFER after gptel transient exit.
 DATA-BUFFER is the authoritative gptel buffer that may be displayed by
-gptel internals while closing nested menus."
+gptel internals while closing nested menus.  This is used by the explicit
+session cockpit gptel bridge."
   (when (and view-buffer data-buffer
              (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
@@ -2670,7 +2631,7 @@ gptel internals while closing nested menus."
               #'mevedel-view--gptel-return-to-view)))
 
 (defun mevedel-view--gptel-edit-directive-args (args)
-  "Return ARGS with a view-restoring `:callback' wrapper when needed."
+  "Return ARGS with a bridge-restoring `:callback' wrapper when needed."
   (if (not mevedel-view--gptel-return-view-buffer)
       args
     (let* ((leading (and args (not (keywordp (car args)))))
@@ -2693,48 +2654,6 @@ gptel internals while closing nested menus."
           (cons sym plist)
         plist))))
 
-(defun mevedel-view--gptel-target-interactive (spec)
-  "Evaluate interactive SPEC in the paired gptel data buffer.
-Used by `mevedel-view--gptel-target-advice' so interactive forms that
-read or mutate buffer-local gptel transient state see the same buffer as
-the eventual command body."
-  (let ((target (mevedel-view--gptel-target-buffer))
-        (view-buffer (mevedel-view--gptel-origin-view-buffer)))
-    (if target
-        (progn
-          (mevedel-view--gptel-schedule-return-to-view view-buffer target)
-          (with-current-buffer target
-            (advice-eval-interactive-spec spec)))
-      (advice-eval-interactive-spec spec))))
-
-(defun mevedel-view--gptel-target-advice (orig-fn &rest args)
-  "Run ORIG-FN with ARGS in the paired data buffer.
-gptel's transient commands read and write buffer-local state such as
-backend, model, preset, tools, system message, and context.  The view
-buffer does not own that state, so operations launched from the view
-must be evaluated in the data buffer."
-  (interactive #'mevedel-view--gptel-target-interactive)
-  (let ((target (mevedel-view--gptel-target-buffer))
-        (view-buffer (mevedel-view--gptel-origin-view-buffer)))
-    (if target
-        (progn
-          (mevedel-view--gptel-schedule-return-to-view view-buffer target)
-          (with-current-buffer target
-            (apply orig-fn args)))
-      (apply orig-fn args))))
-
-(defun mevedel-view--gptel-edit-directive-advice (orig-fn &rest args)
-  "Run ORIG-FN with ARGS using data-buffer state and view restore."
-  (let ((target (mevedel-view--gptel-target-buffer))
-        (view-buffer (mevedel-view--gptel-origin-view-buffer)))
-    (if target
-        (progn
-          (mevedel-view--gptel-schedule-return-to-view view-buffer target)
-          (with-current-buffer target
-            (apply orig-fn
-                   (mevedel-view--gptel-edit-directive-args args))))
-      (apply orig-fn args))))
-
 (defun mevedel-view--advice-add-if-bound (symbol where function)
   "Add advice FUNCTION to SYMBOL at WHERE when SYMBOL is fbound."
   (when (and (fboundp symbol)
@@ -2745,33 +2664,6 @@ must be evaluated in the data buffer."
   "Remove advice FUNCTION from SYMBOL when SYMBOL is fbound."
   (when (fboundp symbol)
     (advice-remove symbol function)))
-
-(defun mevedel-view--install-gptel-transient-advice ()
-  "Install gptel transient proxy advice for commands and helpers."
-  (dolist (symbol '(gptel-menu
-                    gptel-system-prompt
-                    gptel-tools
-                    gptel-preset
-                    gptel--suffix-system-message
-                    gptel--set-with-scope
-                    gptel-system-prompt--format
-                    gptel--format-preset-string))
-    (mevedel-view--advice-add-if-bound
-     symbol :around #'mevedel-view--gptel-target-advice))
-  ;; Older mevedel versions used the generic target advice here.  Remove it
-  ;; before installing the edit-specific callback wrapper so live reloads do
-  ;; not leave both layers active.
-  (mevedel-view--advice-remove-if-bound
-   'gptel--edit-directive
-   #'mevedel-view--gptel-target-advice)
-  (mevedel-view--advice-add-if-bound
-   'gptel--edit-directive
-   :around #'mevedel-view--gptel-edit-directive-advice))
-
-(defun mevedel-view--install-gptel-transient-advice-if-enabled ()
-  "Install gptel transient proxy advice when the feature is enabled."
-  (when mevedel-view--gptel-transient-advice-installed
-    (mevedel-view--install-gptel-transient-advice)))
 
 (defun mevedel-view--install-gptel-stream-advice ()
   "Install gptel stream marker repair advice."
@@ -2787,27 +2679,8 @@ must be evaluated in the data buffer."
 
 (defun mevedel-view--install-gptel-stream-advice-if-enabled ()
   "Install gptel stream marker repair advice when enabled."
-  (when mevedel-view--gptel-transient-advice-installed
+  (when mevedel-view--gptel-stream-advice-installed
     (mevedel-view--install-gptel-stream-advice)))
-
-(defun mevedel-view--uninstall-gptel-transient-advice ()
-  "Remove gptel transient proxy advice for commands and helpers."
-  (dolist (symbol '(gptel-menu
-                    gptel-system-prompt
-                    gptel-tools
-                    gptel-preset
-                    gptel--suffix-system-message
-                    gptel--set-with-scope
-                    gptel-system-prompt--format
-                    gptel--format-preset-string))
-    (mevedel-view--advice-remove-if-bound
-     symbol #'mevedel-view--gptel-target-advice))
-  (mevedel-view--advice-remove-if-bound
-   'gptel--edit-directive
-   #'mevedel-view--gptel-edit-directive-advice)
-  (mevedel-view--advice-remove-if-bound
-   'gptel--edit-directive
-   #'mevedel-view--gptel-target-advice))
 
 (defun mevedel-view--uninstall-gptel-stream-advice ()
   "Remove gptel stream marker repair advice."
@@ -2821,23 +2694,19 @@ must be evaluated in the data buffer."
    'gptel-curl--stream-filter
    #'mevedel-view--gptel-stream-filter-advice))
 
-(defun mevedel-view-install-gptel-menu-advice ()
-  "Install gptel view integration advice."
-  (setq mevedel-view--gptel-transient-advice-installed t)
-  (mevedel-view--install-gptel-transient-advice-if-enabled)
+(defun mevedel-view-install-gptel-stream-advice ()
+  "Install gptel view stream repair advice."
+  (setq mevedel-view--gptel-stream-advice-installed t)
   (mevedel-view--install-gptel-stream-advice-if-enabled)
-  (with-eval-after-load 'gptel-transient
-    (mevedel-view--install-gptel-transient-advice-if-enabled))
   (with-eval-after-load 'gptel
     (mevedel-view--install-gptel-stream-advice-if-enabled))
   (with-eval-after-load 'gptel-request
     (mevedel-view--install-gptel-stream-advice-if-enabled)))
 
-(defun mevedel-view-uninstall-gptel-menu-advice ()
-  "Remove gptel view integration advice."
-  (setq mevedel-view--gptel-transient-advice-installed nil)
+(defun mevedel-view-uninstall-gptel-stream-advice ()
+  "Remove gptel view stream repair advice."
+  (setq mevedel-view--gptel-stream-advice-installed nil)
   (mevedel-view--gptel-clear-return-state)
-  (mevedel-view--uninstall-gptel-transient-advice)
   (mevedel-view--uninstall-gptel-stream-advice))
 
 

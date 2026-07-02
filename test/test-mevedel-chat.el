@@ -71,7 +71,7 @@
 			      #'ignore)
 			     ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber)
 			      #'ignore)
-			     ((symbol-function 'mevedel-view-uninstall-gptel-menu-advice)
+			     ((symbol-function 'mevedel-view-uninstall-gptel-stream-advice)
 			      #'ignore))
 		     (mevedel-uninstall))
 		   (should called)))

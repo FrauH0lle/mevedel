@@ -111,8 +111,8 @@ buffer is dirty.
 
 Local slash commands are handled before skill lookup. Built-ins include
 `/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`,
-`/worktree`, `/mode`, `/skills`, `/auto`, `/clear`, `/plugin`, and
-`/help`. `/init` sends the repository bootstrap prompt that helps create
+`/worktree`, `/mode`, `/skills`, `/tools`, `/auto`, `/clear`, `/plugin`,
+and `/help`. `/init` sends the repository bootstrap prompt that helps create
 or improve `AGENTS.md`, `AGENTS.local.md`, `.agents` skills and memory,
 and mevedel hooks. `/auto` toggles the current
 session between `default` and `trust-all`, adding an `auto-mode` reminder
@@ -120,10 +120,19 @@ while active and a one-shot `auto-mode-exit` reminder after it is turned
 off. `/mode auto` is the same as entering `trust-all`; `/mode edit`
 and `/mode edits` are aliases for `accept-edits`.
 
+No-argument or list-style commands open the same session cockpit surfaces
+as their matching cockpit rows when a live view/data pair exists:
+`/plugin` and `/plugin list`, `/skills` and `/skills list`, `/mode`,
+`/model`, `/tools` and `/tools list`, `/worktree` and `/worktree status`,
+and `/help`. Outside a cockpit-capable session, commands fall back to the
+older message-style behavior where that still exists. Explicit mutation
+forms remain direct and scriptable.
+
 Worktree isolation has split surfaces:
 
-- `/worktree` is the deterministic human command. `/worktree status` is
-  read-only. `/worktree create [NAME] [--for "purpose"] [--clean]`
+- `/worktree` and `/worktree status` open the worktree cockpit surface
+  with read-only branch/worktree status and refresh/create keys.
+- `/worktree create [NAME] [--for "purpose"] [--clean]`
   creates a new branch and linked checkout under `.worktrees/`, opens a
   fresh session there, and does not auto-send a model prompt.
 - `git-worktree` is model-visible but not user-invocable. It embeds
@@ -147,8 +156,8 @@ Plugin management:
   across source switches. Plugins discovered from workspace
   `.agents/plugins/` or `mevedel-plugin-extra-roots` must be removed
   manually. Use `/plugin disable NAME` for project-only deactivation.
-- `/plugin list` shows installed plugins, skill enablement, and hook
-  enablement for the current workspace in a dedicated `*mevedel plugins*`
+- `/plugin` and `/plugin list` show installed plugins, skill enablement,
+  and hook enablement for the current workspace in a dedicated `*mevedel plugins*`
   management buffer. The listing is not added to the chat transcript.
   The buffer supports refresh, enable/switch, disable, hook override,
   update, uninstall, detail, and quit keybindings backed by the same
@@ -183,8 +192,8 @@ today; mevedel does not start plugin apps or bundled MCP servers yet.
 
 `/skills` manages visible skills:
 
-- `/skills` or `/skills list` lists session skills and whether each is
-  enabled.
+- `/skills` or `/skills list` opens the skills cockpit surface, listing
+  session skills and whether each is enabled.
 - `/skills help NAME` shows description, source, and file metadata.
 - `/skills enable NAME` removes NAME from the persisted disabled set.
 - `/skills disable NAME` persists NAME as disabled.

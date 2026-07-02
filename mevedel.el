@@ -97,8 +97,8 @@
 (declare-function mevedel-skills-uninstall-hot-reload "mevedel-skills" ())
 
 ;; `mevedel-view'
-(declare-function mevedel-view-install-gptel-menu-advice "mevedel-view" ())
-(declare-function mevedel-view-uninstall-gptel-menu-advice "mevedel-view" ())
+(declare-function mevedel-view-install-gptel-stream-advice "mevedel-view" ())
+(declare-function mevedel-view-uninstall-gptel-stream-advice "mevedel-view" ())
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
@@ -628,9 +628,9 @@ WORKING-DIRECTORY are considered."
   ;; Install skill hot-reload hooks/watchers for active strategies
   (mevedel-skills-install-hot-reload)
 
-  ;; Install view-specific gptel advice.
+  ;; Install view-specific gptel stream repair advice.
   (require 'mevedel-view)
-  (mevedel-view-install-gptel-menu-advice)
+  (mevedel-view-install-gptel-stream-advice)
 
   ;; Best-effort save of live sessions on Emacs exit.  The hook itself
   ;; is installed at `mevedel-session-persistence' file-load time so
@@ -681,9 +681,9 @@ WORKING-DIRECTORY are considered."
   ;; Remove skill hot-reload hooks/watchers and registry state
   (mevedel-skills-uninstall-hot-reload)
 
-  ;; Remove view-specific gptel advice
+  ;; Remove view-specific gptel stream repair advice
   (when (featurep 'mevedel-view)
-    (mevedel-view-uninstall-gptel-menu-advice))
+    (mevedel-view-uninstall-gptel-stream-advice))
 
   ;; Remove main-agent error termination advice
   (advice-remove 'gptel--handle-error #'mevedel--main-fsm-on-error)
