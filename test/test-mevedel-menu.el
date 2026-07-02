@@ -138,7 +138,8 @@
   :doc "opens requested tools, skills, and plugins management surfaces"
   (mevedel-menu-test--with-buffers
     (let (tools-buffer skills-session skills-buffer
-          plugins-workspace plugins-buffer)
+          plugins-workspace plugins-view plugins-data plugins-origin
+          plugins-buffer)
       (cl-letf (((symbol-function 'mevedel-tools-list-open)
                  (lambda (&optional _session _data-buffer)
                    (setq tools-buffer (current-buffer))))
@@ -147,8 +148,11 @@
                    (setq skills-session session
                          skills-buffer (current-buffer))))
                 ((symbol-function 'mevedel-plugins-list-open)
-                 (lambda (workspace)
+                 (lambda (workspace view-buffer data-buffer origin-buffer)
                    (setq plugins-workspace workspace
+                         plugins-view view-buffer
+                         plugins-data data-buffer
+                         plugins-origin origin-buffer
                          plugins-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-menu-open 'tools)
@@ -158,6 +162,25 @@
       (should (eq skills-session session))
       (should (eq skills-buffer data-buf))
       (should (eq plugins-workspace (mevedel-session-workspace session)))
+      (should (eq plugins-view view-buf))
+      (should (eq plugins-data data-buf))
+      (should (eq plugins-origin view-buf))
+      (should (eq plugins-buffer data-buf))))
+
+  :doc "opens plugins management surface from the paired data buffer"
+  (mevedel-menu-test--with-buffers
+    (let (plugins-view plugins-data plugins-origin plugins-buffer)
+      (cl-letf (((symbol-function 'mevedel-plugins-list-open)
+                 (lambda (_workspace view-buffer data-buffer origin-buffer)
+                   (setq plugins-view view-buffer
+                         plugins-data data-buffer
+                         plugins-origin origin-buffer
+                         plugins-buffer (current-buffer)))))
+        (with-current-buffer data-buf
+          (mevedel-menu-open 'plugins)))
+      (should (eq plugins-view view-buf))
+      (should (eq plugins-data data-buf))
+      (should (eq plugins-origin data-buf))
       (should (eq plugins-buffer data-buf))))
 
   :doc "opens requested worktree and help cockpit surfaces"

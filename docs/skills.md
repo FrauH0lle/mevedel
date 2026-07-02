@@ -149,6 +149,8 @@ Plugin management:
   always global and does not enable the plugin in the current workspace.
 - `/plugin update NAME` runs `git pull --ff-only` for global managed
   installs under `~/.agents/plugins/` or legacy `~/.mevedel/plugins/`.
+  If the update changes an enabled plugin's executable hook surface, the
+  update result reports that hook consent is pending.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
   global managed installed plugin. If the current workspace activation
   points at that source, mevedel clears that activation. Workspace plugin
@@ -156,17 +158,19 @@ Plugin management:
   across source switches. Plugins discovered from workspace
   `.agents/plugins/` or `mevedel-plugin-extra-roots` must be removed
   manually. Use `/plugin disable NAME` for project-only deactivation.
-- `/plugin` and `/plugin list` show installed plugins, skill enablement,
-  and hook enablement for the current workspace in a dedicated `*mevedel plugins*`
-  management buffer. The listing is not added to the chat transcript.
-  The buffer supports refresh, enable/switch, disable, hook override,
-  update, uninstall, detail, and quit keybindings backed by the same
-  command functions as the slash commands. Shadowed duplicate plugin
-  sources are shown under the winning plugin row; if an old activation
-  binding points at a shadowed source, the buffer marks it and offers the
-  enable/switch action for the winning source. Pressing `RET` on a plugin
-  row shows the full consent/detail summary. There is no separate
-  `/plugin show` command in this iteration.
+- `/plugin` and `/plugin list` open the session-owned plugin cockpit for
+  the current workspace in a dedicated `*mevedel plugins*` buffer. The
+  cockpit is a `tabulated-list-mode` table with one selected plugin at a
+  time; it is not added to the chat transcript. The buffer supports
+  refresh, adaptive enable/disable, hook override, install, update,
+  reload, uninstall, source-opening, detail, help, and back-to-cockpit
+  keybindings backed by the same command functions as the slash commands.
+  Shadowed duplicate plugin sources and pending hook consent are marked in
+  the table state column and explained in `RET` details. Malformed plugin
+  manifests are rendered as warning rows instead of being silently hidden.
+  If an old activation binding points at a shadowed source, the enable
+  action still routes through an explicit switch confirmation. There is no
+  separate `/plugin show` command in this iteration.
 - `/plugin enable NAME` activates all implemented plugin components for
   the current workspace. If the plugin contributes executable hooks,
   mevedel shows a concise consent summary of the risky/executable surface
@@ -185,7 +189,9 @@ Plugin management:
 Plugin mutations refresh the current session's visible plugin skills and
 hook state immediately when possible; users should not need to start a new
 session after enabling, disabling, installing, updating, or removing a
-plugin.
+plugin. Starting or resuming an interactive session reports enabled plugins
+whose hooks still need new consent; hooks remain withheld until consent is
+reviewed per plugin.
 
 Codex plugin manifest fields `apps` and `mcpServers` are not loaded
 today; mevedel does not start plugin apps or bundled MCP servers yet.

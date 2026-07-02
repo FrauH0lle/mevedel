@@ -148,6 +148,61 @@
 				 (should-not menu-called))
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel--chat-buffer-init-common
+		 (:doc "notifies about pending plugin hook consent during setup")
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-chat-init-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project
+				    :id root
+				    :root root
+				    :name "init"))
+			(session (mevedel-session-create "main" workspace root))
+			notified-workspace)
+		   (unwind-protect
+		       (with-temp-buffer
+			 (setq-local mevedel--session session)
+			 (require 'mevedel-session-persistence)
+			 (require 'mevedel-view)
+			 (cl-letf (((symbol-function
+				     'mevedel-reminders-install-defaults)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-plan-mode-restore-reminders)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-preset--build-handlers)
+				    #'identity)
+				   ((symbol-function
+				     'mevedel-tools--bwait-injected-table)
+				    #'identity)
+				   ((symbol-function
+				     'mevedel-session-persistence--install-gptel-save-state-advice)
+				    #'ignore)
+				   ((symbol-function 'mevedel-skills-install)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-skills-install-reminder)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-skills-install-activation-hook)
+				    #'ignore)
+				   ((symbol-function 'mevedel-view--ensure)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-plan-mode-restore-pending-approval)
+				    #'ignore)
+				   ((symbol-function 'mevedel--run-session-start-hooks)
+				    #'ignore)
+				   ((symbol-function
+				     'mevedel-plugins-notify-pending-consent)
+				    (lambda (workspace)
+				      (setq notified-workspace workspace))))
+			   (mevedel--chat-buffer-init-common
+			    (current-buffer) workspace))
+			 (should (eq notified-workspace workspace)))
+		     (delete-directory root t))))
+
 (mevedel-deftest mevedel-session-lifecycle-hooks
 		 (:doc "runs normal and declarative session lifecycle hooks")
 		 (let* ((root (file-name-as-directory

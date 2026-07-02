@@ -7,6 +7,7 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-menu)
 (require 'mevedel-plugins)
 (require 'helpers
          (file-name-concat
@@ -68,6 +69,25 @@
   "Return persisted test state plist for plugin NAME in WORKSPACE."
   (cdr (assoc name (mevedel-plugins-test--read-state workspace))))
 
+(defun mevedel-plugins-test--plugin-line (plugin &optional workspace)
+  "Return one compact state line for PLUGIN in WORKSPACE."
+  (let ((shadowed (mevedel-plugin-shadowed plugin)))
+    (format "%s%s enabled:%s hooks:%s events:%s skills:%d source:%s%s"
+            (mevedel-plugin-name plugin)
+            (if-let* ((version (mevedel-plugin-version plugin)))
+                (format " %s" version)
+              "")
+            (if (mevedel-plugins--enabled-p plugin workspace) "on" "off")
+            (mevedel-plugins--hooks-status plugin workspace)
+            (if-let* ((events (mevedel-plugins--hook-rule-events plugin)))
+                (string-join events ",")
+              "none")
+            (mevedel-plugins--skill-count plugin)
+            (mevedel-plugins--plugin-source-label plugin)
+            (if shadowed
+                (format " shadowed:%d" (length shadowed))
+              ""))))
+
 (defun mevedel-plugins-test--list-string (&optional workspace)
   "Return rendered plugin rows for WORKSPACE."
   (let ((plugins (mevedel-plugins-list workspace)))
@@ -75,7 +95,7 @@
         (mapconcat
          (lambda (plugin)
            (string-join
-            (cons (mevedel-plugins--plugin-line plugin workspace)
+            (cons (mevedel-plugins-test--plugin-line plugin workspace)
                   (mevedel-plugins--shadowed-lines plugin workspace))
             "\n"))
          plugins
@@ -83,6 +103,18 @@
       "No plugins installed.")))
 
 (defvar mevedel-plugins-test--read-eval-ran nil)
+(defvar mevedel-plugins-test--owner-buffers nil)
+
+(defun mevedel-plugins-test--list-open (workspace)
+  "Open the plugin cockpit for WORKSPACE with live owner buffers."
+  (let ((view-buffer (generate-new-buffer " *plugin-test-view*"))
+        (data-buffer (generate-new-buffer " *plugin-test-data*")))
+    (push view-buffer mevedel-plugins-test--owner-buffers)
+    (push data-buffer mevedel-plugins-test--owner-buffers)
+    (mevedel-plugins-list-open workspace
+                               view-buffer
+                               data-buffer
+                               view-buffer)))
 
 
 ;;
@@ -503,11 +535,20 @@
                  (when-let* ((buffer (get-buffer
                                       "*mevedel plugin details*")))
                    (kill-buffer buffer))
+                 (mapc (lambda (buffer)
+                         (when (buffer-live-p buffer)
+                           (kill-buffer buffer)))
+                       mevedel-plugins-test--owner-buffers)
+                 (setq mevedel-plugins-test--owner-buffers nil)
                  (delete-directory user-dir t)
                  (delete-directory workspace-root t)))
   ,test
   (test)
-  :doc "renders hook events, shadow rows, details, and keybindings"
+  :doc "selects the displayed plugin cockpit window"
+  (let ((buffer (mevedel-plugins-test--list-open workspace)))
+    (should (eq buffer (window-buffer (selected-window)))))
+
+  :doc "renders a tabulated plugin cockpit with details and keybindings"
   (let ((shadow-root (file-name-concat (mevedel-plugins-dir) "shadow"))
         (winning-root (mevedel-plugins-test--plugin-root user-dir "winner")))
     (mevedel-plugins-test--write-manifest shadow-root "{\"name\":\"demo\"}")
@@ -520,40 +561,90 @@
     (mevedel-plugins-test--write-manifest
      winning-root
      "{\"name\":\"demo\",\"version\":\"1.0\",\"hooks\":\"hooks/hooks.json\"}")
-    (mevedel-plugins-list-open workspace)
+    (mevedel-plugins-test--list-open workspace)
     (with-current-buffer mevedel-plugins-list-buffer-name
       (should (eq major-mode 'mevedel-plugins-list-mode))
+      (should hl-line-mode)
       (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "g"))
                   #'mevedel-plugins-list-refresh))
       (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "e"))
-                  #'mevedel-plugins-list-enable))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "d"))
-                  #'mevedel-plugins-list-disable))
+                  #'mevedel-plugins-list-toggle-enabled))
       (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "h"))
                   #'mevedel-plugins-list-toggle-hooks))
+      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "+"))
+                  #'mevedel-plugins-list-install))
       (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "u"))
                   #'mevedel-plugins-list-update))
+      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "r"))
+                  #'mevedel-plugins-list-reload))
       (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "x"))
                   #'mevedel-plugins-list-remove))
+      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "o"))
+                  #'mevedel-plugins-list-open-source))
+      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "?"))
+                  #'mevedel-plugins-list-help))
+      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "q"))
+                  #'mevedel-plugins-list-quit))
       (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "RET"))
                   #'mevedel-plugins-list-details))
-      (let ((rendered (buffer-string)))
-        (should (string-match-p "demo 1.0 enabled:off hooks:off events:PreToolUse"
-                                rendered))
-        (should (string-match-p "shadowed active:" rendered)))
-      (goto-char (point-min))
-      (forward-line 2)
+      (should (= 1 (length tabulated-list-entries)))
+      (pcase-let ((`(,_id ,row) (car tabulated-list-entries)))
+        (should (equal "*" (substring-no-properties (aref row 0))))
+        (should (equal "demo" (aref row 1)))
+        (should (equal "1.0" (aref row 2)))
+        (should (equal "off" (substring-no-properties (aref row 3))))
+        (should (equal "off" (substring-no-properties (aref row 4)))))
+      (should (equal "Enable plugin"
+                     (mevedel-plugins-list--activation-label)))
       (mevedel-plugins-list-details))
     (with-current-buffer "*mevedel plugin details*"
       (let ((details (buffer-string)))
+        (should (string-match-p "Name:     demo" details))
         (should (string-match-p "Version: 1.0" details))
+        (should (string-match-p "Events:   PreToolUse" details))
+        (should (string-match-p "Manifest:" details))
+        (should (string-match-p "Shadowed sources:" details))
+        (should (string-match-p "shadowed active:" details))
         (should (string-match-p "Handlers: command echo row" details))
         (should (string-match-p
                  (regexp-quote (mevedel-plugins-plugin-data-dir
                                 "demo" workspace))
                  details)))))
 
-  :doc "dispatches enable, disable, and hook override actions at point"
+  :doc "renders an empty plugin list without error"
+  (progn
+    (mevedel-plugins-test--list-open workspace)
+    (with-current-buffer mevedel-plugins-list-buffer-name
+      (should (eq major-mode 'mevedel-plugins-list-mode))
+      (should-not tabulated-list-entries)
+      (should (string-match-p "0/0 enabled"
+                              (mevedel-plugins-list--header-line)))))
+
+  :doc "renders malformed manifests as visible error rows"
+  (let ((root (mevedel-plugins-test--plugin-root user-dir "bad")))
+    (mevedel-plugins-test--write-manifest root "{\"name\":\"../x\"}")
+    (should-not (mevedel-plugins-list workspace))
+    (mevedel-plugins-test--list-open workspace)
+    (with-current-buffer mevedel-plugins-list-buffer-name
+      (should (= 1 (length tabulated-list-entries)))
+      (pcase-let ((`(,_id ,row) (car tabulated-list-entries)))
+        (should (equal "!" (substring-no-properties (aref row 0))))
+        (should (equal "../x" (substring-no-properties (aref row 1))))
+        (should (equal "error" (substring-no-properties (aref row 3))))
+        (should (string-match-p
+                 (regexp-quote (abbreviate-file-name root))
+                 (aref row 6))))
+      (mevedel-plugins-list-details))
+    (with-current-buffer "*mevedel plugin details*"
+      (let ((details (buffer-string)))
+        (should (string-match-p "Plugin metadata error" details))
+        (should (string-match-p "Unsafe plugin name: ../x" details))
+        (should (string-match-p (regexp-quote root) details)))))
+
+  :doc "opening the cockpit requires live owner buffers"
+  (should-error (mevedel-plugins-list-open workspace) :type 'user-error)
+
+  :doc "dispatches adaptive activation and hook override actions at point"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (make-directory (file-name-concat root "hooks") t)
     (with-temp-file (file-name-concat root "hooks" "hooks.json")
@@ -562,27 +653,37 @@
               "\"command\":\"echo action\"}]}]}}"))
     (mevedel-plugins-test--write-manifest
      root "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
-    (mevedel-plugins-list-open workspace)
+    (mevedel-plugins-test--list-open workspace)
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
       (with-current-buffer mevedel-plugins-list-buffer-name
-        (mevedel-plugins-list-enable)
-        (should (string-match-p "demo enabled:on hooks:on"
-                                (buffer-string)))
+        (mevedel-plugins-list-toggle-enabled)
+        (should (equal "Disable plugin"
+                       (mevedel-plugins-list--activation-label)))
+        (should (mevedel-plugins--enabled-p
+                 (mevedel-plugins--find
+                  "demo" mevedel-plugins-list--workspace)
+                 mevedel-plugins-list--workspace))
         (mevedel-plugins-list-toggle-hooks)
-        (should (string-match-p "demo enabled:on hooks:off"
-                                (buffer-string)))
+        (should (equal "off"
+                       (mevedel-plugins--hooks-status
+                        (mevedel-plugins--find
+                         "demo" mevedel-plugins-list--workspace)
+                        mevedel-plugins-list--workspace)))
         (mevedel-plugins-list-toggle-hooks)
-        (should (string-match-p "demo enabled:on hooks:on"
-                                (buffer-string)))
-        (mevedel-plugins-list-disable)
-        (should (string-match-p "demo enabled:off hooks:off"
-                                (buffer-string))))))
+        (should (equal "on"
+                       (mevedel-plugins--hooks-status
+                        (mevedel-plugins--find
+                         "demo" mevedel-plugins-list--workspace)
+                        mevedel-plugins-list--workspace)))
+        (mevedel-plugins-list-toggle-enabled)
+        (should (equal "Enable plugin"
+                       (mevedel-plugins-list--activation-label))))))
 
   :doc "dispatches update and remove actions at point"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))
         calls)
     (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
-    (mevedel-plugins-list-open workspace)
+    (mevedel-plugins-test--list-open workspace)
     (cl-letf ((mevedel-plugins-git-executor
                (lambda (directory args)
                  (push (list directory args) calls)
@@ -596,7 +697,148 @@
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
       (with-current-buffer mevedel-plugins-list-buffer-name
         (mevedel-plugins-list-remove)))
-    (should-not (file-exists-p root))))
+    (should-not (file-exists-p root)))
+
+  :doc "installs, refreshes, and selects the newly installed plugin"
+  (let (calls)
+    (mevedel-plugins-test--list-open workspace)
+    (cl-letf ((mevedel-plugins-git-executor
+               (lambda (directory args)
+                 (push (list directory args) calls)
+                 (let ((dest (car (last args))))
+                   (make-directory dest t)
+                   (mevedel-plugins-test--write-manifest
+                    dest "{\"name\":\"fresh\"}"))
+                 (list 0 ""))))
+      (with-current-buffer mevedel-plugins-list-buffer-name
+        (mevedel-plugins-list-install "owner/fresh")
+        (should (equal "fresh" (tabulated-list-get-id)))))
+    (should (= 1 (length calls))))
+
+  :doc "quits by killing the cockpit and returning from the origin buffer"
+  (let ((view-buffer (generate-new-buffer " *plugin-view*"))
+        (data-buffer (generate-new-buffer " *plugin-data*"))
+        called-buffer)
+    (unwind-protect
+        (progn
+          (mevedel-plugins-list-open workspace
+                                     view-buffer
+                                     data-buffer
+                                     data-buffer)
+          (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
+            (cl-letf (((symbol-function 'mevedel-menu)
+                       (lambda ()
+                         (interactive)
+                         (setq called-buffer (current-buffer)))))
+              (with-current-buffer plugin-buffer
+                (mevedel-plugins-list-quit)))
+            (should-not (buffer-live-p plugin-buffer))
+            (should (eq called-buffer data-buffer))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "quit falls back to view and then data when the origin is gone"
+  (let ((view-buffer (generate-new-buffer " *plugin-fallback-view*"))
+        (data-buffer (generate-new-buffer " *plugin-fallback-data*"))
+        called-buffer)
+    (unwind-protect
+        (progn
+          (mevedel-plugins-list-open workspace
+                                     view-buffer
+                                     data-buffer
+                                     data-buffer)
+          (kill-buffer data-buffer)
+          (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
+            (cl-letf (((symbol-function 'mevedel-menu)
+                       (lambda ()
+                         (interactive)
+                         (setq called-buffer (current-buffer)))))
+              (with-current-buffer plugin-buffer
+                (mevedel-plugins-list-quit)))
+            (should-not (buffer-live-p plugin-buffer))
+            (should (eq called-buffer view-buffer))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+  (let ((view-buffer (generate-new-buffer " *plugin-fallback-view*"))
+        (data-buffer (generate-new-buffer " *plugin-fallback-data*"))
+        called-buffer)
+    (unwind-protect
+        (progn
+          (mevedel-plugins-list-open workspace
+                                     view-buffer
+                                     data-buffer
+                                     view-buffer)
+          (kill-buffer view-buffer)
+          (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
+            (cl-letf (((symbol-function 'mevedel-menu)
+                       (lambda ()
+                         (interactive)
+                         (setq called-buffer (current-buffer)))))
+              (with-current-buffer plugin-buffer
+                (mevedel-plugins-list-quit)))
+            (should-not (buffer-live-p plugin-buffer))
+            (should (eq called-buffer data-buffer))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "refresh requires the full owning session pair"
+  (let ((view-buffer (generate-new-buffer " *plugin-partial-view*"))
+        (data-buffer (generate-new-buffer " *plugin-partial-data*")))
+    (unwind-protect
+        (progn
+          (mevedel-plugins-list-open workspace
+                                     view-buffer
+                                     data-buffer
+                                     view-buffer)
+          (kill-buffer data-buffer)
+          (with-current-buffer mevedel-plugins-list-buffer-name
+            (should-error (mevedel-plugins-list-refresh)
+                          :type 'user-error)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "mutation actions require live owners before side effects"
+  (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))
+        (view-buffer (generate-new-buffer " *plugin-action-view*"))
+        (data-buffer (generate-new-buffer " *plugin-action-data*"))
+        calls)
+    (unwind-protect
+        (progn
+          (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+          (mevedel-plugins-list-open workspace
+                                     view-buffer
+                                     data-buffer
+                                     view-buffer)
+          (kill-buffer data-buffer)
+          (cl-letf ((mevedel-plugins-git-executor
+                     (lambda (_directory _args)
+                       (push t calls)
+                       (list 0 ""))))
+            (with-current-buffer mevedel-plugins-list-buffer-name
+              (should-error (mevedel-plugins-list-toggle-enabled)
+                            :type 'user-error)
+              (should-error (mevedel-plugins-list-update)
+                            :type 'user-error)
+              (should-error (mevedel-plugins-list-install "owner/fresh")
+                            :type 'user-error)))
+          (should-not calls)
+          (should-not (mevedel-plugins-enabled workspace)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "kills the cockpit before reporting a dead owner"
+  (let ((view-buffer (generate-new-buffer " *plugin-dead-view*"))
+        (data-buffer (generate-new-buffer " *plugin-dead-data*")))
+    (mevedel-plugins-list-open workspace
+                               view-buffer
+                               data-buffer
+                               view-buffer)
+    (kill-buffer view-buffer)
+    (kill-buffer data-buffer)
+    (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
+      (with-current-buffer plugin-buffer
+        (should-error (mevedel-plugins-list-quit) :type 'user-error))
+      (should-not (buffer-live-p plugin-buffer)))))
 
 
 ;;
@@ -680,15 +922,18 @@
       (should (string-match-p "demo enabled:off hooks:off"
                               (mevedel-plugins-test--list-string workspace)))))
 
-  :doc "blank and list forms open the dedicated plugin management buffer"
-  (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
-    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
-    (dolist (args '("" "list"))
-      (should-not (mevedel-plugins-test--slash session args))
-      (with-current-buffer mevedel-plugins-list-buffer-name
-        (should (eq major-mode 'mevedel-plugins-list-mode))
-        (should (string-match-p "demo enabled:off hooks:none"
-                                (buffer-string))))))
+  :doc "blank and list forms route through the plugin cockpit"
+  (let (areas)
+    (cl-letf (((symbol-function 'mevedel-menu-open)
+               (lambda (area)
+                 (push area areas))))
+      (dolist (args '("" "list"))
+        (should-not (mevedel-plugins-test--slash session args))))
+    (should (equal '(plugins plugins) areas)))
+
+  :doc "blank and list forms require a live cockpit-capable buffer"
+  (with-temp-buffer
+    (should-error (mevedel-plugins-slash-command "") :type 'user-error))
 
   :doc "hook-only enable requires an enabled plugin"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
@@ -797,8 +1042,27 @@
                            "\"hooks\":[{\"type\":\"command\","
                            "\"command\":\"echo changed\"}]}]}}"))
                  (list 0 ""))))
-      (should (equal "Updated plugin demo."
+      (should (equal (concat "Updated plugin demo. "
+                             "Hook consent is pending; open /plugin "
+                             "to review.")
                      (mevedel-plugins-test--slash session "update demo")))
+      (should (equal (concat "plugin hook consent pending for demo; "
+                             "open /plugin to review")
+                     (mevedel-plugins-pending-consent-message workspace)))
+      (let (warnings messages)
+        (cl-letf (((symbol-function 'display-warning)
+                   (lambda (type message &optional level _buffer-name)
+                     (push (list type message level) warnings)))
+                  ((symbol-function 'message)
+                   (lambda (format-string &rest args)
+                     (push (apply #'format format-string args) messages))))
+          (should (mevedel-plugins-notify-pending-consent workspace)))
+        (should (equal 'mevedel (caar warnings)))
+        (should (string-match-p "plugin hook consent pending for demo"
+                                (cadar warnings)))
+        (should (member (concat "mevedel: plugin hook consent pending "
+                                "for demo; open /plugin to review")
+                        messages)))
       (should (string-match-p "demo enabled:on hooks:needs-consent"
                               (mevedel-plugins-test--list-string workspace)))))
 
