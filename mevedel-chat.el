@@ -81,6 +81,10 @@
                   (event event-plist callback
                          &optional session workspace request invocation))
 
+;; `mevedel-plugins'
+(declare-function mevedel-plugins-notify-pending-consent
+                  "mevedel-plugins" (&optional workspace))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--child-instructions "mevedel-overlays" (instruction))
 (declare-function mevedel--delete-instruction "mevedel-overlays" (instruction))
@@ -448,6 +452,8 @@ session struct."
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
     (mevedel-skills-install mevedel--session (current-buffer))
+    (require 'mevedel-plugins)
+    (mevedel-plugins-notify-pending-consent workspace)
     ;; Drop this buffer from the skill watcher registry on kill so any
     ;; orphaned `file-notify' watchers are torn down.
     (add-hook 'kill-buffer-hook

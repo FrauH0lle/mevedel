@@ -22,6 +22,8 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by slash command or model-side `Skill` tool.
 - **plugin** — A reusable extension bundle discovered from a plugin manifest. A plugin may contribute skills, hooks, and other implemented extension components.
 - **plugin activation** — A workspace-scoped decision that makes a plugin's implemented components active for sessions in that workspace until disabled.
+- **pending plugin hook consent** — A plugin activation state where plugin skills may remain active, but executable plugin hooks are withheld until the user reviews and approves the changed hook surface.
+- **plugin cockpit** — A session cockpit surface for inspecting installed plugins and managing one selected plugin at a time.
 - **agent** — A specialized sub-agent such as explorer, coordinator, verifier, or reviewer.
 - **task** — A tracked work item in the session task list, optionally with dependency links.
 - **persistent memory** — Durable user- or workspace-local memory included in future sessions.

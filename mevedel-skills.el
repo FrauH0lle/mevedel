@@ -3401,7 +3401,8 @@ Routes through the lifecycle-aware permission transition path."
 (defun mevedel-skills-list-details ()
   "Show details for the skill at point."
   (interactive)
-  (let ((skill (mevedel-skills-list--skill-at-point)))
+  (let ((skill (mevedel-skills-list--skill-at-point))
+        (help-window-select t))
     (with-help-window "*mevedel skill details*"
       (princ (mevedel-skills--skill-detail-text skill)))))
 

@@ -40,7 +40,7 @@
 (declare-function mevedel-plugins-list "mevedel-plugins"
                   (&optional workspace))
 (declare-function mevedel-plugins-list-open "mevedel-plugins"
-                  (&optional workspace))
+                  (&optional workspace view-buffer data-buffer origin-buffer))
 
 ;; `mevedel-review'
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
@@ -402,11 +402,17 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       (mevedel-menu--session)))
     ('plugins
      (require 'mevedel-plugins)
-     (let* ((session (mevedel-menu--session))
+     (let* ((origin (mevedel-menu--origin-buffer))
+            (view-buffer (mevedel-menu--view-buffer))
+            (data-buffer (mevedel-menu--data-buffer))
+            (session (mevedel-menu--session data-buffer))
             (workspace (and session (mevedel-session-workspace session))))
        (mevedel-menu--call-in-data
         #'mevedel-plugins-list-open
-        workspace)))
+        workspace
+        view-buffer
+        data-buffer
+        origin)))
     ('tools
      (require 'mevedel-tools)
      (mevedel-menu--call-in-data #'mevedel-tools-list-open))
