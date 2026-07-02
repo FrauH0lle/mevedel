@@ -80,6 +80,7 @@
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-list-open "mevedel-worktree" ())
+(declare-function mevedel-worktree-status-open "mevedel-worktree" ())
 
 ;; `transient'
 (defvar transient--original-buffer)
@@ -509,7 +510,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
         origin)))
     ('worktree
      (require 'mevedel-worktree)
-     (mevedel-menu--call-in-data #'mevedel-worktree-list-open))
+     (mevedel-menu--call-in-data #'mevedel-worktree-status-open))
     ('help
      (mevedel-menu-help-open))
     ('gptel
