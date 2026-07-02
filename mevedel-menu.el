@@ -66,7 +66,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools-list-open "mevedel-tools"
-                  (&optional session data-buffer))
+                  (&optional session view-buffer data-buffer origin-buffer))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--gptel-edit-directive-args
@@ -497,7 +497,16 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
         origin)))
     ('tools
      (require 'mevedel-tools)
-     (mevedel-menu--call-in-data #'mevedel-tools-list-open))
+     (let* ((origin (mevedel-menu--origin-buffer))
+            (view-buffer (mevedel-menu--view-buffer))
+            (data-buffer (mevedel-menu--data-buffer))
+            (session (mevedel-menu--session data-buffer)))
+       (mevedel-menu--call-in-data
+        #'mevedel-tools-list-open
+        session
+        view-buffer
+        data-buffer
+        origin)))
     ('worktree
      (require 'mevedel-worktree)
      (mevedel-menu--call-in-data #'mevedel-worktree-list-open))

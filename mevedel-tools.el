@@ -18,7 +18,8 @@
 (require 'cl-lib)
 
 (eval-when-compile
-  (require 'mevedel-tool-registry))
+  (require 'mevedel-tool-registry)
+  (require 'tabulated-list))
 
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
@@ -78,8 +79,24 @@
                   "mevedel-agent-exec"
                   (invocation item &optional reserved))
 
+;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-data-buffer "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-open-tabulated
+                  "mevedel-cockpit"
+                  (buffer-name mode refresh view-buffer data-buffer
+                               origin-buffer &optional setup label))
+(declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-refresh-tabulated
+                  "mevedel-cockpit" (entries &optional selected-id))
+(declare-function mevedel-cockpit-require-owner
+                  "mevedel-cockpit" (&optional label))
+(declare-function mevedel-cockpit-selected
+                  "mevedel-cockpit" (items id-function))
+
 ;; `mevedel-structs'
+(defvar mevedel--data-buffer)
 (defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
@@ -90,6 +107,15 @@
 (declare-function mevedel-tools--agent-result-parse-id "mevedel-tool-ui"
                   (text))
 (defvar mevedel-tools--agents-fsm)
+
+;; `tabulated-list'
+(declare-function tabulated-list-get-id "tabulated-list" ())
+(declare-function tabulated-list-init-header "tabulated-list" ())
+(declare-function tabulated-list-mode "tabulated-list" ())
+(defvar tabulated-list-entries)
+(defvar tabulated-list-format)
+(defvar tabulated-list-padding)
+(defvar tabulated-list-sort-key)
 
 
 ;;
@@ -551,96 +577,204 @@ otherwise queues them on the chat buffer's session."
 (defconst mevedel-tools-list-buffer-name "*mevedel tools*"
   "Name of the tools listing buffer.")
 
+(defconst mevedel-tools-help-buffer-name "*mevedel tools help*"
+  "Name of the tools cockpit help buffer.")
+
 (defvar-local mevedel-tools-list--session nil
   "Session rendered in the current tools listing buffer.")
 
 (defvar-local mevedel-tools-list--data-buffer nil
   "Data buffer that owns `gptel-tools' for this tools listing buffer.")
 
-(defun mevedel-tools--insert-tool-line (tool)
-  "Insert one active or pending TOOL line."
-  (let ((category (gptel-tool-category tool))
-        (description (gptel-tool-description tool)))
-    (insert (format "- %s%s%s\n"
-                    (gptel-tool-name tool)
-                    (if category (format " [%s]" category) "")
-                    (if (and (stringp description)
-                             (not (string-empty-p description)))
-                        (format " - %s"
-                                (truncate-string-to-width
-                                 description 100 nil nil "..."))
-                      "")))))
+(defvar-local mevedel-tools-list--items nil
+  "Tool row items cached for the current tools listing render.")
+
+(defun mevedel-tools-list--status-cell (state)
+  "Return the propertized table status cell for STATE."
+  (let ((label (symbol-name state)))
+    (propertize
+     label 'face
+     (pcase state
+       ('active 'success)
+       ('deferred 'shadow)
+       ('pending 'warning)
+       ('loaded 'font-lock-keyword-face)
+       ('expired 'error)
+       (_ 'default)))))
+
+(defun mevedel-tools-list--item-id (item)
+  "Return stable tabulated row id for ITEM."
+  (list (plist-get item :state)
+        (format "%s" (or (plist-get item :category) ""))
+        (plist-get item :name)))
+
+(defun mevedel-tools-list--tool-matches-item-p (tool item)
+  "Return non-nil when TOOL is represented by ITEM."
+  (and (equal (gptel-tool-name tool) (plist-get item :name))
+       (equal (format "%s" (or (gptel-tool-category tool) ""))
+              (format "%s" (or (plist-get item :category) "")))))
+
+(defun mevedel-tools-list--tool-item (state tool)
+  "Return a tools cockpit item for TOOL in STATE."
+  (let ((description (gptel-tool-description tool)))
+    (list :state state
+          :name (gptel-tool-name tool)
+          :category (or (gptel-tool-category tool) "")
+          :ttl ""
+          :description (if (stringp description) description "")
+          :tool tool)))
+
+(defun mevedel-tools-list--deferred-item (entry)
+  "Return a tools cockpit item for deferred ENTRY."
+  (pcase-let ((`((,category ,name) . ,summary) entry))
+    (list :state 'deferred
+          :name name
+          :category (or category "")
+          :ttl ""
+          :description (if (stringp summary) summary "")
+          :entry entry)))
+
+(defun mevedel-tools-list--loaded-item (entry)
+  "Return a tools cockpit item for loaded deferred ENTRY."
+  (list :state 'loaded
+        :name (car entry)
+        :category ""
+        :ttl (format "%s" (cdr entry))
+        :description "Temporarily loaded deferred tool"
+        :entry entry))
+
+(defun mevedel-tools-list--expired-item (name)
+  "Return a tools cockpit item for expired tool NAME."
+  (list :state 'expired
+        :name name
+        :category ""
+        :ttl ""
+        :description "Expired after its deferred-tool TTL elapsed"))
+
+(defun mevedel-tools-list--collect-items (session data-buffer)
+  "Return tabulated tools cockpit items for SESSION and DATA-BUFFER."
+  (let ((active (and (buffer-live-p data-buffer)
+                     (with-current-buffer data-buffer
+                       (and (boundp 'gptel-tools) gptel-tools))))
+        (deferred (and session (mevedel-session-deferred-set session)))
+        (pending (and session (mevedel-session-deferred-pending session)))
+        (loaded (and session (mevedel-session-deferred-injected session)))
+        (expired (and session (mevedel-session-deferred-expired session))))
+    (append
+     (mapcar (lambda (tool) (mevedel-tools-list--tool-item 'active tool))
+             active)
+     (mapcar #'mevedel-tools-list--deferred-item deferred)
+     (mapcar (lambda (tool) (mevedel-tools-list--tool-item 'pending tool))
+             pending)
+     (mapcar #'mevedel-tools-list--loaded-item loaded)
+     (mapcar #'mevedel-tools-list--expired-item expired))))
+
+(defun mevedel-tools-list--entry (item)
+  "Return a `tabulated-list-mode' row for ITEM."
+  (list
+   (mevedel-tools-list--item-id item)
+   (vector
+    (mevedel-tools-list--status-cell (plist-get item :state))
+    (plist-get item :name)
+    (format "%s" (or (plist-get item :category) ""))
+    (format "%s" (or (plist-get item :ttl) ""))
+    (or (plist-get item :description) ""))))
+
+(defun mevedel-tools-list--session-label ()
+  "Return the current tools cockpit session label."
+  (if mevedel-tools-list--session
+      (mevedel-session-name mevedel-tools-list--session)
+    "unknown"))
+
+(defun mevedel-tools-list--header-line ()
+  "Return the tools cockpit header line."
+  (let ((counts nil))
+    (dolist (item mevedel-tools-list--items)
+      (cl-incf (alist-get (plist-get item :state) counts 0)))
+    (format (concat "%s  %s  default TTL:%d  "
+                    "active:%d deferred:%d pending:%d loaded:%d "
+                    "expired:%d    RET details  d defer  a activate  "
+                    "l load  G gptel  g refresh  ? help  q back")
+            (propertize "mevedel: tools"
+                        'face 'font-lock-function-name-face)
+            (mevedel-tools-list--session-label)
+            mevedel-deferred-tool-ttl
+            (alist-get 'active counts 0)
+            (alist-get 'deferred counts 0)
+            (alist-get 'pending counts 0)
+            (alist-get 'loaded counts 0)
+            (alist-get 'expired counts 0))))
+
+(defun mevedel-tools-list--require-owner ()
+  "Signal a user error if this cockpit's owning session is gone."
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-require-owner "tools cockpit"))
+
+(defun mevedel-tools-list--owner-data-buffer ()
+  "Return the live data buffer for the current tools cockpit."
+  (or (progn
+        (require 'mevedel-cockpit)
+        (mevedel-cockpit-data-buffer))
+      (and (buffer-live-p mevedel-tools-list--data-buffer)
+           mevedel-tools-list--data-buffer)
+      (user-error "No live mevedel data buffer for this tools surface")))
 
 (defun mevedel-tools-list-refresh ()
   "Refresh the current tools listing buffer."
   (interactive)
-  (let* ((inhibit-read-only t)
+  (let* ((selected (tabulated-list-get-id))
          (session (or mevedel-tools-list--session
                       (bound-and-true-p mevedel--session)))
-         (data-buffer mevedel-tools-list--data-buffer)
-         (active (and (buffer-live-p data-buffer)
-                      (with-current-buffer data-buffer
-                        (and (boundp 'gptel-tools) gptel-tools))))
-         (deferred (and session (mevedel-session-deferred-set session)))
-         (pending (and session (mevedel-session-deferred-pending session)))
-         (loaded (and session (mevedel-session-deferred-injected session)))
-         (expired (and session (mevedel-session-deferred-expired session))))
+         (data-buffer (mevedel-tools-list--owner-data-buffer)))
+    (mevedel-tools-list--require-owner)
     (unless session
       (user-error "No mevedel session in this buffer"))
-    (setq mevedel-tools-list--session session)
-    (erase-buffer)
-    (insert (format "mevedel tools for %s\n"
-                    (mevedel-session-name session)))
-    (insert (format "Default deferred TTL: %d turns\n"
-                    mevedel-deferred-tool-ttl))
-    (insert "Keys: g refresh, d defer active, a activate deferred, "
-            "l load temporary, G gptel menu\n\n")
-    (insert (format "Active tools (%d)\n" (length active)))
-    (if active
-        (dolist (tool active) (mevedel-tools--insert-tool-line tool))
-      (insert "No active tools.\n"))
-    (insert "\n")
-    (insert (format "Deferred tools (%d)\n" (length deferred)))
-    (if deferred
-        (dolist (entry deferred)
-          (pcase-let ((`((,category ,name) . ,summary) entry))
-            (insert (format "- %s [%s]%s\n"
-                            name
-                            category
-                            (if (and (stringp summary)
-                                     (not (string-empty-p summary)))
-                                (format " - %s" summary)
-                              "")))))
-      (insert "No deferred tools.\n"))
-    (insert "\n")
-    (insert (format "Pending load (%d)\n" (length pending)))
-    (if pending
-        (dolist (tool pending) (mevedel-tools--insert-tool-line tool))
-      (insert "No tools pending load.\n"))
-    (insert "\n")
-    (insert (format "Loaded deferred tools (%d)\n" (length loaded)))
-    (if loaded
-        (dolist (entry loaded)
-          (let ((ttl (cdr entry)))
-            (insert (format "- %s (TTL %s turn%s)\n"
-                            (car entry)
-                            ttl
-                            (if (= ttl 1) "" "s")))))
-      (insert "No loaded deferred tools.\n"))
-    (insert "\n")
-    (insert (format "Expired previous turn (%d)\n" (length expired)))
-    (if expired
-        (dolist (name expired) (insert (format "- %s\n" name)))
-      (insert "No expired tools.\n"))
-    (goto-char (point-min))
-    (forward-line 4)))
+    (setq mevedel-tools-list--session session
+          mevedel-tools-list--data-buffer data-buffer
+          mevedel-tools-list--items
+          (mevedel-tools-list--collect-items session data-buffer))
+    (require 'mevedel-cockpit)
+    (mevedel-cockpit-refresh-tabulated
+     (mapcar #'mevedel-tools-list--entry mevedel-tools-list--items)
+     selected)))
+
+(defun mevedel-tools-list--selected-item ()
+  "Return the selected tools cockpit item, or nil."
+  (mevedel-tools-list--require-owner)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-selected mevedel-tools-list--items
+                            #'mevedel-tools-list--item-id))
+
+(defun mevedel-tools-list--selected-item-for-state (state)
+  "Return the selected tools cockpit item when its state is STATE."
+  (condition-case nil
+      (when-let* ((item (mevedel-tools-list--selected-item)))
+        (and (eq (plist-get item :state) state)
+             item))
+    (user-error nil)))
+
+(defun mevedel-tools-list--detail-text (item)
+  "Return detail text for tools cockpit ITEM."
+  (format (concat "Tool %s [%s]\nCategory: %s\nTTL: %s\n"
+          "Description: %s")
+          (plist-get item :name)
+          (symbol-name (plist-get item :state))
+          (or (plist-get item :category) "")
+          (or (plist-get item :ttl) "")
+          (or (plist-get item :description) "")))
+
+(defun mevedel-tools-list-details ()
+  "Show details for the tool row at point."
+  (interactive)
+  (let ((item (or (mevedel-tools-list--selected-item)
+                  (user-error "No tool on this line")))
+        (help-window-select t))
+    (with-help-window "*mevedel tool details*"
+      (princ (mevedel-tools-list--detail-text item)))))
 
 (defun mevedel-tools-list--main-data-buffer ()
   "Return the data buffer for session-local lifecycle changes."
-  (let ((data-buffer (or (and (buffer-live-p mevedel-tools-list--data-buffer)
-                              mevedel-tools-list--data-buffer)
-                         (user-error
-                          "No live mevedel data buffer for this tools surface"))))
+  (let ((data-buffer (mevedel-tools-list--owner-data-buffer)))
     (with-current-buffer data-buffer
       (when (and (boundp 'mevedel--agent-invocation)
                  (mevedel-agent-invocation-p mevedel--agent-invocation))
@@ -669,22 +803,41 @@ otherwise queues them on the chat buffer's session."
          (data-buffer (mevedel-tools-list--main-data-buffer))
          (active (with-current-buffer data-buffer
                    (and (boundp 'gptel-tools) gptel-tools)))
+         (selected (and (null name)
+                        (mevedel-tools-list--selected-item-for-state 'active)))
          (name (or name
+                   (plist-get selected :name)
                    (completing-read
                     "Defer active tool: "
                     (mapcar #'gptel-tool-name active) nil t)))
-         (tool (cl-find name active :key #'gptel-tool-name :test #'equal)))
+         (tool (if selected
+                   (cl-find-if
+                    (lambda (tool)
+                      (mevedel-tools-list--tool-matches-item-p tool selected))
+                    active)
+                 (cl-find name active :key #'gptel-tool-name :test #'equal))))
     (unless tool
       (user-error "No active tool named %s" name))
     (with-current-buffer data-buffer
-      (setq-local gptel-tools
-                  (cl-remove name gptel-tools
-                             :key #'gptel-tool-name :test #'equal)))
-    (setf (mevedel-session-deferred-set session)
-          (cons (cons (list (gptel-tool-category tool) name)
-                      (gptel-tool-description tool))
-                (cl-remove name (mevedel-session-deferred-set session)
-                           :key #'cadar :test #'equal)))
+      (setq-local
+       gptel-tools
+       (if selected
+           (cl-remove-if
+            (lambda (tool)
+              (mevedel-tools-list--tool-matches-item-p tool selected))
+            gptel-tools)
+         (cl-remove name gptel-tools
+                    :key #'gptel-tool-name :test #'equal))))
+    (let ((entry (cons (list (gptel-tool-category tool) name)
+                       (gptel-tool-description tool))))
+      (setf (mevedel-session-deferred-set session)
+            (cons entry
+                  (if selected
+                      (cl-remove (car entry)
+                                 (mevedel-session-deferred-set session)
+                                 :key #'car :test #'equal)
+                    (cl-remove name (mevedel-session-deferred-set session)
+                               :key #'cadar :test #'equal)))))
     (mevedel-tools-list--clear-runtime-state session name)
     (mevedel-tools-list-refresh)
     (message "mevedel: deferred %s for this session" name)))
@@ -697,19 +850,32 @@ otherwise queues them on the chat buffer's session."
                       (user-error "No mevedel session in this buffer")))
          (data-buffer (mevedel-tools-list--main-data-buffer))
          (deferred (mevedel-session-deferred-set session))
+         (selected (and (null name)
+                        (mevedel-tools-list--selected-item-for-state
+                         'deferred)))
          (name (or name
+                   (plist-get selected :name)
                    (completing-read
                     "Activate deferred tool: "
                     (mapcar #'cadar deferred) nil t)))
-         (entry (cl-find name deferred :key #'cadar :test #'equal))
+         (entry (or (plist-get selected :entry)
+                    (cl-find name deferred :key #'cadar :test #'equal)))
          (tool (and entry (ignore-errors (gptel-get-tool (car entry))))))
     (unless tool
       (user-error "No deferred tool named %s" name))
     (setf (mevedel-session-deferred-set session)
-          (cl-remove name deferred :key #'cadar :test #'equal))
+          (if selected
+              (cl-remove entry deferred :test #'equal)
+            (cl-remove name deferred :key #'cadar :test #'equal)))
     (mevedel-tools-list--clear-runtime-state session name)
     (with-current-buffer data-buffer
-      (unless (cl-find name gptel-tools :key #'gptel-tool-name :test #'equal)
+      (unless (if selected
+                  (cl-find-if
+                   (lambda (tool)
+                     (mevedel-tools-list--tool-matches-item-p tool selected))
+                   gptel-tools)
+                (cl-find name gptel-tools
+                         :key #'gptel-tool-name :test #'equal))
         (setq-local gptel-tools (cons tool gptel-tools))))
     (mevedel-tools-list-refresh)
     (message "mevedel: activated %s for this session" name)))
@@ -745,12 +911,40 @@ otherwise queues them on the chat buffer's session."
   "Open gptel-menu from the tools listing's data buffer."
   (interactive)
   (require 'gptel-transient)
-  (let ((data-buffer (or (and (buffer-live-p mevedel-tools-list--data-buffer)
-                              mevedel-tools-list--data-buffer)
-                         (user-error
-                          "No live mevedel data buffer for this tools surface"))))
+  (let ((data-buffer (mevedel-tools-list--owner-data-buffer)))
     (with-current-buffer data-buffer
       (call-interactively #'gptel-menu))))
+
+(defun mevedel-tools-list-help ()
+  "Open tools cockpit help."
+  (interactive)
+  (let ((help-window-select t))
+    (with-help-window mevedel-tools-help-buffer-name
+      (princ "mevedel tools cockpit
+
+Keys
+RET  Show selected tool details
+d    Defer selected active tool, or prompt for an active tool
+a    Activate selected deferred tool, or prompt for a deferred tool
+l    Search and load deferred tools temporarily
+G    Open gptel menu from the owning data buffer
+g    Refresh tools table
+?    Show this help
+q    Back to the main session cockpit
+
+Rows
+active    Available in the current tool payload
+deferred  Discoverable through ToolSearch
+pending   Queued for temporary load on the next payload update
+loaded    Temporarily loaded deferred tool with remaining TTL
+expired   Expired on the previous payload update
+"))))
+
+(defun mevedel-tools-list-quit ()
+  "Quit the tools cockpit and return to the main session cockpit."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-quit "tools cockpit"))
 
 (defvar mevedel-tools-list-mode-map
   (let ((map (make-sparse-keymap)))
@@ -759,26 +953,60 @@ otherwise queues them on the chat buffer's session."
     (define-key map (kbd "g") #'mevedel-tools-list-refresh)
     (define-key map (kbd "l") #'mevedel-tools-list-search-load)
     (define-key map (kbd "G") #'mevedel-tools-list-open-gptel)
+    (define-key map (kbd "?") #'mevedel-tools-list-help)
+    (define-key map (kbd "q") #'mevedel-tools-list-quit)
+    (define-key map (kbd "RET") #'mevedel-tools-list-details)
     map)
   "Keymap for `mevedel-tools-list-mode'.")
 
-(define-derived-mode mevedel-tools-list-mode special-mode "mevedel-tools"
-  "Major mode for listing mevedel tool state.")
+(define-derived-mode mevedel-tools-list-mode tabulated-list-mode
+  "mevedel-tools"
+  "Major mode for managing mevedel tool state."
+  (setq tabulated-list-format
+        [("State" 10 t)
+         ("Name" 24 t)
+         ("Category" 16 t)
+         ("TTL" 6 t)
+         ("Description" 0 t)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key '("Name" . nil))
+  (setq header-line-format '(:eval (mevedel-tools-list--header-line)))
+  (tabulated-list-init-header)
+  (hl-line-mode 1))
 
-(defun mevedel-tools-list-open (&optional session data-buffer)
-  "Open the tools listing buffer for SESSION and DATA-BUFFER."
-  (let ((session (or session
-                     (bound-and-true-p mevedel--session)
-                     (user-error "No mevedel session in this buffer")))
-        (data-buffer (or data-buffer (current-buffer)))
-        (buffer (get-buffer-create mevedel-tools-list-buffer-name)))
-    (with-current-buffer buffer
-      (mevedel-tools-list-mode)
-      (setq mevedel-tools-list--session session
-            mevedel-tools-list--data-buffer data-buffer)
-      (mevedel-tools-list-refresh))
-    (display-buffer buffer)
-    buffer))
+(defun mevedel-tools-list-open
+    (&optional session view-buffer data-buffer origin-buffer)
+  "Open the tools listing buffer for SESSION.
+VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
+session pair when the cockpit is opened from a live mevedel session.
+For compatibility, when VIEW-BUFFER is live and DATA-BUFFER is nil,
+VIEW-BUFFER is treated as the legacy data-buffer argument."
+  (require 'mevedel-cockpit)
+  (when (and (buffer-live-p view-buffer)
+             (null data-buffer))
+    (setq data-buffer view-buffer
+          view-buffer nil))
+  (let* ((session (or session
+                      (bound-and-true-p mevedel--session)
+                      (user-error "No mevedel session in this buffer")))
+         (data-buffer (or data-buffer
+                          (bound-and-true-p mevedel--data-buffer)
+                          (current-buffer)))
+         (view-buffer (or view-buffer
+                          (bound-and-true-p mevedel--view-buffer)
+                          data-buffer))
+         (origin-buffer (or origin-buffer (current-buffer))))
+    (mevedel-cockpit-open-tabulated
+     mevedel-tools-list-buffer-name
+     #'mevedel-tools-list-mode
+     #'mevedel-tools-list-refresh
+     view-buffer
+     data-buffer
+     origin-buffer
+     (lambda ()
+       (setq mevedel-tools-list--session session
+             mevedel-tools-list--data-buffer data-buffer))
+     "tools cockpit")))
 
 
 ;;
