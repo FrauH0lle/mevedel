@@ -593,7 +593,8 @@ otherwise queues them on the chat buffer's session."
                     (mevedel-session-name session)))
     (insert (format "Default deferred TTL: %d turns\n"
                     mevedel-deferred-tool-ttl))
-    (insert "Keys: g refresh, s search/load deferred, G gptel menu\n\n")
+    (insert "Keys: g refresh, d defer active, a activate deferred, "
+            "l load temporary, G gptel menu\n\n")
     (insert (format "Active tools (%d)\n" (length active)))
     (if active
         (dolist (tool active) (mevedel-tools--insert-tool-line tool))
@@ -634,16 +635,92 @@ otherwise queues them on the chat buffer's session."
     (goto-char (point-min))
     (forward-line 4)))
 
+(defun mevedel-tools-list--main-data-buffer ()
+  "Return the data buffer for session-local lifecycle changes."
+  (let ((data-buffer (or (and (buffer-live-p mevedel-tools-list--data-buffer)
+                              mevedel-tools-list--data-buffer)
+                         (user-error
+                          "No live mevedel data buffer for this tools surface"))))
+    (with-current-buffer data-buffer
+      (when (and (boundp 'mevedel--agent-invocation)
+                 (mevedel-agent-invocation-p mevedel--agent-invocation))
+        (user-error "Tool lifecycle actions are only supported for main sessions")))
+    data-buffer))
+
+(defun mevedel-tools-list--clear-runtime-state (session name)
+  "Forget pending and loaded deferred state for tool NAME in SESSION."
+  (setf (mevedel-session-deferred-pending session)
+        (cl-remove name (mevedel-session-deferred-pending session)
+                   :key #'gptel-tool-name :test #'equal))
+  (setf (mevedel-session-deferred-injected session)
+        (assoc-delete-all name (mevedel-session-deferred-injected session)
+                          #'equal))
+  (setf (mevedel-session-deferred-used session)
+        (remove name (mevedel-session-deferred-used session)))
+  (setf (mevedel-session-deferred-expired session)
+        (remove name (mevedel-session-deferred-expired session))))
+
+(defun mevedel-tools-list-defer-active (&optional name)
+  "Move active tool NAME into this session's deferred set."
+  (interactive)
+  (let* ((session (or mevedel-tools-list--session
+                      (bound-and-true-p mevedel--session)
+                      (user-error "No mevedel session in this buffer")))
+         (data-buffer (mevedel-tools-list--main-data-buffer))
+         (active (with-current-buffer data-buffer
+                   (and (boundp 'gptel-tools) gptel-tools)))
+         (name (or name
+                   (completing-read
+                    "Defer active tool: "
+                    (mapcar #'gptel-tool-name active) nil t)))
+         (tool (cl-find name active :key #'gptel-tool-name :test #'equal)))
+    (unless tool
+      (user-error "No active tool named %s" name))
+    (with-current-buffer data-buffer
+      (setq-local gptel-tools
+                  (cl-remove name gptel-tools
+                             :key #'gptel-tool-name :test #'equal)))
+    (setf (mevedel-session-deferred-set session)
+          (cons (cons (list (gptel-tool-category tool) name)
+                      (gptel-tool-description tool))
+                (cl-remove name (mevedel-session-deferred-set session)
+                           :key #'cadar :test #'equal)))
+    (mevedel-tools-list--clear-runtime-state session name)
+    (mevedel-tools-list-refresh)
+    (message "mevedel: deferred %s for this session" name)))
+
+(defun mevedel-tools-list-activate-deferred (&optional name)
+  "Move deferred tool NAME into this session's active tools."
+  (interactive)
+  (let* ((session (or mevedel-tools-list--session
+                      (bound-and-true-p mevedel--session)
+                      (user-error "No mevedel session in this buffer")))
+         (data-buffer (mevedel-tools-list--main-data-buffer))
+         (deferred (mevedel-session-deferred-set session))
+         (name (or name
+                   (completing-read
+                    "Activate deferred tool: "
+                    (mapcar #'cadar deferred) nil t)))
+         (entry (cl-find name deferred :key #'cadar :test #'equal))
+         (tool (and entry (ignore-errors (gptel-get-tool (car entry))))))
+    (unless tool
+      (user-error "No deferred tool named %s" name))
+    (setf (mevedel-session-deferred-set session)
+          (cl-remove name deferred :key #'cadar :test #'equal))
+    (mevedel-tools-list--clear-runtime-state session name)
+    (with-current-buffer data-buffer
+      (unless (cl-find name gptel-tools :key #'gptel-tool-name :test #'equal)
+        (setq-local gptel-tools (cons tool gptel-tools))))
+    (mevedel-tools-list-refresh)
+    (message "mevedel: activated %s for this session" name)))
+
 (defun mevedel-tools-list-search-load (&optional query)
   "Search deferred tools by QUERY and queue matching tools for loading."
   (interactive)
   (let* ((session (or mevedel-tools-list--session
                       (bound-and-true-p mevedel--session)
                       (user-error "No mevedel session in this buffer")))
-         (data-buffer (or (and (buffer-live-p mevedel-tools-list--data-buffer)
-                               mevedel-tools-list--data-buffer)
-                          (user-error
-                           "No live mevedel data buffer for this tools surface")))
+         (data-buffer (mevedel-tools-list--main-data-buffer))
          (candidates (delete-dups
                       (mapcar #'cadar
                               (mevedel-session-deferred-set session))))
@@ -655,7 +732,8 @@ otherwise queues them on the chat buffer's session."
     (when (string-empty-p (string-trim query))
       (user-error "Search query cannot be empty"))
     (with-current-buffer data-buffer
-      (let ((mevedel--session session))
+      (let ((mevedel--agent-invocation nil)
+            (mevedel--session session))
         (mevedel-tools--tool-search
          (lambda (text) (setq result text))
          query t)))
@@ -676,8 +754,10 @@ otherwise queues them on the chat buffer's session."
 
 (defvar mevedel-tools-list-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "a") #'mevedel-tools-list-activate-deferred)
+    (define-key map (kbd "d") #'mevedel-tools-list-defer-active)
     (define-key map (kbd "g") #'mevedel-tools-list-refresh)
-    (define-key map (kbd "s") #'mevedel-tools-list-search-load)
+    (define-key map (kbd "l") #'mevedel-tools-list-search-load)
     (define-key map (kbd "G") #'mevedel-tools-list-open-gptel)
     map)
   "Keymap for `mevedel-tools-list-mode'.")

@@ -608,6 +608,124 @@ function returning the states entered by test handlers."
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-tools-list--main-data-buffer
+  (:after-each (progn
+                 (mevedel-workspace-clear-registry)
+                 (setq mevedel-agent--registry nil)
+                 (when (get-buffer mevedel-tools-list-buffer-name)
+                   (kill-buffer mevedel-tools-list-buffer-name))))
+  ,test
+  (test)
+
+  :doc "rejects agent data buffers before lifecycle mutation"
+  (let* ((_ (mevedel-define-agent tool-child :description "child" :tools nil))
+         (agent (mevedel-agent-get "tool-child"))
+         (inv (mevedel-agent-invocation-create agent))
+         (session (mevedel-tools-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-child*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--agent-invocation inv))
+          (let ((buffer (mevedel-tools-list-open session data-buffer)))
+            (with-current-buffer buffer
+              (should-error (mevedel-tools-list--main-data-buffer)
+                            :type 'user-error))))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
+(mevedel-deftest mevedel-tools-list-defer-active
+  (:after-each (progn
+                 (mevedel-tool-clear-registry)
+                 (mevedel-workspace-clear-registry)
+                 (when (get-buffer mevedel-tools-list-buffer-name)
+                   (kill-buffer mevedel-tools-list-buffer-name))))
+  ,test
+  (test)
+
+  :doc "moves an active tool into only the current session's deferred set"
+  (let* ((session (mevedel-tools-test--make-session))
+         (other-session (mevedel-tools-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-defer*"))
+         (other-buffer (generate-new-buffer " *mt-tools-other*"))
+         (tool (mevedel-tools-test--make-fake-gptel-tool "Read"))
+         (known-before (copy-tree gptel--known-tools)))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local gptel-tools (list tool)))
+          (with-current-buffer other-buffer
+            (setq-local gptel-tools (list tool)))
+          (setf (mevedel-session-deferred-set other-session)
+                '((("mevedel" "Keep") . "keep")))
+          (let ((buffer (mevedel-tools-list-open session data-buffer)))
+            (with-current-buffer buffer
+              (mevedel-tools-list-defer-active "Read")
+              (should (string-match-p "Deferred tools (1)"
+                                      (buffer-string)))))
+          (with-current-buffer data-buffer
+            (should (null gptel-tools)))
+          (with-current-buffer other-buffer
+            (should (equal (list tool) gptel-tools)))
+          (should (equal "Read" (cadr (caar (mevedel-session-deferred-set
+                                             session)))))
+          (should (equal '((("mevedel" "Keep") . "keep"))
+                         (mevedel-session-deferred-set other-session)))
+          (should (equal known-before gptel--known-tools)))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer))
+      (when (buffer-live-p other-buffer)
+        (kill-buffer other-buffer)))))
+
+(mevedel-deftest mevedel-tools-list-activate-deferred
+  (:after-each (progn
+                 (mevedel-tool-clear-registry)
+                 (setf (alist-get "mevedel" gptel--known-tools nil t #'equal)
+                       nil)
+                 (mevedel-workspace-clear-registry)
+                 (when (get-buffer mevedel-tools-list-buffer-name)
+                   (kill-buffer mevedel-tools-list-buffer-name))))
+  ,test
+  (test)
+
+  :doc "moves a deferred tool into only the current session's active tools"
+  (let* ((session (mevedel-tools-test--make-session))
+         (other-session (mevedel-tools-test--make-session))
+         (data-buffer (generate-new-buffer " *mt-tools-activate*"))
+         (tool (mevedel-tools-test--make-fake-gptel-tool "Edit"))
+         known-before)
+    (unwind-protect
+        (progn
+          (setf (alist-get "Edit"
+                           (alist-get "mevedel"
+                                      gptel--known-tools nil nil #'equal)
+                           nil nil #'equal)
+                tool)
+          (setq known-before (copy-tree gptel--known-tools))
+          (with-current-buffer data-buffer
+            (setq-local gptel-tools nil))
+          (setf (mevedel-session-deferred-set session)
+                '((("mevedel" "Edit") . "Replace text in a file")))
+          (setf (mevedel-session-deferred-injected session) '(("Edit" . 2)))
+          (setf (mevedel-session-deferred-expired session) '("Edit"))
+          (setf (mevedel-session-deferred-set other-session)
+                '((("mevedel" "Edit") . "Other session copy")))
+          (let ((buffer (mevedel-tools-list-open session data-buffer)))
+            (with-current-buffer buffer
+              (mevedel-tools-list-activate-deferred "Edit")
+              (should (string-match-p "Active tools (1)"
+                                      (buffer-string)))))
+          (with-current-buffer data-buffer
+            (should (equal "Edit" (gptel-tool-name (car gptel-tools)))))
+          (should (null (mevedel-session-deferred-set session)))
+          (should (null (mevedel-session-deferred-injected session)))
+          (should (null (mevedel-session-deferred-expired session)))
+          (should (equal '((("mevedel" "Edit") . "Other session copy"))
+                         (mevedel-session-deferred-set other-session)))
+          (should (equal known-before gptel--known-tools)))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
 (mevedel-deftest mevedel-tools-list-search-load
   (:after-each (progn
                  (mevedel-tool-clear-registry)
@@ -625,7 +743,8 @@ function returning the states entered by test handlers."
          (gtool (mevedel-tools-test--make-fake-gptel-tool "Edit"))
          (tool (mevedel-tool--create
                 :name "Edit" :category "mevedel"
-                :gptel-tool gtool)))
+                :gptel-tool gtool))
+         known-before)
     (unwind-protect
         (progn
           (mevedel-tool-register tool)
@@ -634,6 +753,7 @@ function returning the states entered by test handlers."
                                       gptel--known-tools nil nil #'equal)
                            nil nil #'equal)
                 gtool)
+          (setq known-before (copy-tree gptel--known-tools))
           (with-current-buffer data-buffer
             (setq-local gptel-tools nil))
           (setf (mevedel-session-deferred-set session)
@@ -647,7 +767,8 @@ function returning the states entered by test handlers."
               (should (string-match-p "Pending load (1)"
                                       (buffer-string)))
               (should (string-match-p "Edit \\[mevedel\\]"
-                                      (buffer-string))))))
+                                      (buffer-string)))
+              (should (equal known-before gptel--known-tools)))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
