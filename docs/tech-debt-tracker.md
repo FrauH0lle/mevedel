@@ -57,28 +57,16 @@ the maintained docs, a design note, or a commit instead.
   affordance, but raw Markdown still renders as text.
 - **Added:** 2026-06-20
 
-### Header-line right-alignment hooks gptel internals
-
-- **Location:** `mevedel-chat.el:247` (`mevedel--token-header-segment`
-  setup inside `mevedel-chat-mode`)
-- **What's owed:** a less brittle way to right-align the token-count
-  and persistence segments in the gptel header line.
-- **Why deferred:** original author flagged it as fragile but couldn't
-  find a more robust approach; depends on gptel keeping its
-  `gptel--header-line-info` shape (`:eval` form whose `display` text
-  property carries `:align-to` with a known offset).
-- **Blast radius:** if gptel changes the header-line construction the
-  segment will mis-render or error at every redisplay.
-
 ### Own token estimation could be replaced by upstream gptel
 
-- **Location:** token-count machinery driving `mevedel--token-header-segment`
+- **Location:** `mevedel-compact.el`
+  (`mevedel--estimate-tokens` and token-baseline helpers)
 - **What's owed:** drop the in-tree estimation in favor of gptel's
   native token calculations (gptel commit `4b8894fd`).
 - **Why deferred:** gptel only recently added the feature; mevedel's
   homegrown chars/4 estimate predates it.
-- **Blast radius:** divergent estimates between mevedel's header
-  segment and gptel's own UI; small accuracy gap.
+- **Blast radius:** divergent estimates between mevedel's compaction
+  pressure checks and gptel's own UI; small accuracy gap.
 
 ### Diff preview overlays leak after multi-edit turns
 
