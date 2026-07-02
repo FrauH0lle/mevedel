@@ -101,6 +101,21 @@
                           :type 'user-error)))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
+(mevedel-deftest mevedel-cockpit-data-buffer ()
+  ,test
+  (test)
+
+  :doc "returns the live data owner for the current cockpit"
+  (let ((view-buffer (generate-new-buffer " *cockpit-data-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-data-data*")))
+    (unwind-protect
+        (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
+          (with-current-buffer buffer
+            (should (eq (mevedel-cockpit-data-buffer) data-buffer))
+            (kill-buffer data-buffer)
+            (should-not (mevedel-cockpit-data-buffer))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
 (mevedel-deftest mevedel-cockpit-goto-id ()
   ,test
   (test)

@@ -137,15 +137,19 @@
 
   :doc "opens requested tools, skills, and plugins management surfaces"
   (mevedel-menu-test--with-buffers
-    (let (tools-buffer skills-session skills-buffer
+    (let (tools-buffer skills-session skills-view skills-data skills-origin
+          skills-buffer
           plugins-workspace plugins-view plugins-data plugins-origin
           plugins-buffer)
       (cl-letf (((symbol-function 'mevedel-tools-list-open)
                  (lambda (&optional _session _data-buffer)
                    (setq tools-buffer (current-buffer))))
                 ((symbol-function 'mevedel-skills-list-open)
-                 (lambda (session)
+                 (lambda (session view-buffer data-buffer origin-buffer)
                    (setq skills-session session
+                         skills-view view-buffer
+                         skills-data data-buffer
+                         skills-origin origin-buffer
                          skills-buffer (current-buffer))))
                 ((symbol-function 'mevedel-plugins-list-open)
                  (lambda (workspace view-buffer data-buffer origin-buffer)
@@ -160,6 +164,9 @@
           (mevedel-menu-open 'plugins)))
       (should (eq tools-buffer data-buf))
       (should (eq skills-session session))
+      (should (eq skills-view view-buf))
+      (should (eq skills-data data-buf))
+      (should (eq skills-origin view-buf))
       (should (eq skills-buffer data-buf))
       (should (eq plugins-workspace (mevedel-session-workspace session)))
       (should (eq plugins-view view-buf))
