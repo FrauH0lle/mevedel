@@ -82,8 +82,8 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
-;; `mevedel-tools'
-(declare-function mevedel-tools-list-open "mevedel-tools"
+;; `mevedel-tools-list'
+(declare-function mevedel-tools-list-open "mevedel-tools-list"
                   (&optional context))
 
 ;; `mevedel-view'
@@ -474,7 +474,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (mevedel-cockpit-call-in-data
         context #'mevedel-plugins-list-open context))
       ('tools
-       (require 'mevedel-tools)
+       (require 'mevedel-tools-list)
        (mevedel-cockpit-call-in-data
         context #'mevedel-tools-list-open context))
       ('worktree

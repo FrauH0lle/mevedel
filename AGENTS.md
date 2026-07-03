@@ -112,6 +112,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-tutor.el       GetHints, RecordHint
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools
   mevedel-tools.el            tool aggregator + deferred-tool machinery
+  mevedel-tools-list.el       native tools cockpit list
 
 Support
   mevedel-file-state.el       LRU file cache

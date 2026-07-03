@@ -99,8 +99,6 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--register-builtins "mevedel-tools" ())
-(declare-function mevedel-tools-list-open "mevedel-tools"
-                  (&optional context))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -3618,11 +3616,9 @@ Slash equivalents
   "Open the tools surface using ARGS."
   (let ((args (string-trim (or args ""))))
     (if (member args '("" "list"))
-        (progn
-          (require 'mevedel-tools)
-          (if (fboundp 'mevedel-menu-open)
-              (mevedel-menu-open 'tools)
-            (user-error "No mevedel session cockpit here")))
+        (if (fboundp 'mevedel-menu-open)
+            (mevedel-menu-open 'tools)
+          (user-error "No mevedel session cockpit here"))
       (message "Usage: /tools [list]"))))
 
 (defvar mevedel-slash-commands
