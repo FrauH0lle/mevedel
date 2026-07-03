@@ -350,15 +350,32 @@ Shadowed entries are retained in the winner's `shadowed' slot."
             (string< (mevedel-plugin-name a)
                      (mevedel-plugin-name b))))))
 
+(defun mevedel-plugins--collect (&optional workspace)
+  "Return discovered plugin metadata for WORKSPACE."
+  (let (plugins errors)
+    (dolist (root (mevedel-plugins--plugin-roots workspace))
+      (let ((item (mevedel-plugins--read-manifest-result root workspace)))
+        (cond
+         ((mevedel-plugin-p item) (push item plugins))
+         ((mevedel-plugin-error-p item) (push item errors)))))
+    (let* ((winners (mevedel-plugins--select-duplicate-names
+                     (nreverse plugins)))
+           (errors (nreverse errors))
+           (enabled-count
+            (cl-count-if
+             (lambda (plugin)
+               (mevedel-plugins--enabled-p plugin workspace))
+             winners)))
+      (list :winners winners
+            :errors errors
+            :enabled-count enabled-count
+            :total-count (length winners)
+            :error-count (length errors)))))
+
 (defun mevedel-plugins-list (&optional workspace)
   "Return installed Codex-style plugins.
 State slots are resolved for WORKSPACE when provided."
-  (let (plugins)
-    (dolist (root (mevedel-plugins--plugin-roots workspace))
-      (when-let* ((plugin (mevedel-plugins--read-manifest
-                           root workspace)))
-        (push plugin plugins)))
-    (mevedel-plugins--select-duplicate-names (nreverse plugins))))
+  (plist-get (mevedel-plugins--collect workspace) :winners))
 
 (defun mevedel-plugins--item-name (item)
   "Return display name for plugin cockpit ITEM."
@@ -370,15 +387,9 @@ State slots are resolved for WORKSPACE when provided."
 (defun mevedel-plugins-list--items (&optional workspace)
   "Return plugin cockpit items for WORKSPACE.
 Items include usable plugin manifests and visible metadata errors."
-  (let (plugins errors)
-    (dolist (root (mevedel-plugins--plugin-roots workspace))
-      (let ((item (mevedel-plugins--read-manifest-result root workspace)))
-        (cond
-         ((mevedel-plugin-p item) (push item plugins))
-         ((mevedel-plugin-error-p item) (push item errors)))))
-    (sort (append (mevedel-plugins--select-duplicate-names
-                   (nreverse plugins))
-                  (nreverse errors))
+  (let ((collection (mevedel-plugins--collect workspace)))
+    (sort (append (plist-get collection :winners)
+                  (plist-get collection :errors))
           (lambda (a b)
             (string< (mevedel-plugins--item-name a)
                      (mevedel-plugins--item-name b))))))
@@ -548,16 +559,18 @@ Items include usable plugin manifests and visible metadata errors."
 (defun mevedel-plugins-enabled (&optional workspace)
   "Return installed plugins enabled in WORKSPACE."
   (let (enabled)
-    (dolist (plugin (mevedel-plugins-list workspace) (nreverse enabled))
+    (dolist (plugin (plist-get (mevedel-plugins--collect workspace) :winners)
+                    (nreverse enabled))
       (when (mevedel-plugins--enabled-p plugin workspace)
         (push plugin enabled)))))
 
 (defun mevedel-plugins-count-label (&optional workspace)
   "Return enabled/total plugin count label for WORKSPACE."
   (if workspace
-      (format "%d/%d"
-              (length (mevedel-plugins-enabled workspace))
-              (length (mevedel-plugins-list workspace)))
+      (let ((collection (mevedel-plugins--collect workspace)))
+        (format "%d/%d"
+                (plist-get collection :enabled-count)
+                (plist-get collection :total-count)))
     "0/0"))
 
 (defun mevedel-plugins-skill-dirs (&optional workspace)
