@@ -15,26 +15,24 @@
 
 (require 'transient)
 
-;; `mevedel'
-(declare-function mevedel--default-session-name-for-directory
-                  "mevedel" (workspace working-directory))
-(declare-function mevedel--display-chat-buffer "mevedel" (chat-buffer))
-(declare-function mevedel--sessions-in-working-directory
-                  "mevedel" (sessions working-directory))
-(declare-function mevedel--start-chat
-                  "mevedel"
-                  (workspace working-directory prompt-session
-                             &optional directory-scoped))
-(declare-function mevedel--workspace-sessions "mevedel" (workspace))
-
 ;; `mevedel-chat'
 (declare-function mevedel--chat-buffer
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
+(declare-function mevedel--default-session-name-for-directory
+                  "mevedel-chat" (workspace working-directory))
+(declare-function mevedel--display-chat-buffer "mevedel-chat" (chat-buffer))
 (declare-function mevedel--insert-local-user-turn
                   "mevedel-chat"
                   (prompt &optional display-text kind hook-context
                           no-spinner))
+(declare-function mevedel--sessions-in-working-directory
+                  "mevedel-chat" (sessions working-directory))
+(declare-function mevedel--start-chat
+                  "mevedel-chat"
+                  (workspace working-directory prompt-session
+                             &optional directory-scoped))
+(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -533,7 +531,7 @@ q    Back to the main session cockpit
 (defun mevedel-worktree-list--sessions (workspace path)
   "Return live session names in WORKSPACE whose cwd is PATH."
   (when workspace
-    (require 'mevedel)
+    (require 'mevedel-chat)
     (mapcar
      #'car
      (mevedel--sessions-in-working-directory
@@ -622,7 +620,7 @@ q    Back to the main session cockpit
          (workspace (mevedel-cockpit-context-workspace context)))
     (unless workspace
       (user-error "No mevedel workspace for selected worktree"))
-    (require 'mevedel)
+    (require 'mevedel-chat)
     (mevedel--start-chat workspace path nil t)))
 
 (defun mevedel-worktree-list-create ()
@@ -777,6 +775,7 @@ branch-name grammar before any mutating Git command runs."
 
 (defun mevedel-worktree--open-session (workspace worktree-directory)
   "Open a mevedel session for WORKSPACE at WORKTREE-DIRECTORY."
+  (require 'mevedel-chat)
   (let* ((session-name (mevedel--default-session-name-for-directory
                         workspace worktree-directory))
          (chat-buffer (mevedel--chat-buffer
