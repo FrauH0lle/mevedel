@@ -26,8 +26,9 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
-(defvar mevedel-user-dir)
+(defvar mevedel--session)
 (defvar mevedel--view-buffer)
+(defvar mevedel-user-dir)
 
 ;; `mevedel-reminders'
 (declare-function mevedel-session-ensure-reminder
@@ -263,6 +264,47 @@ they are responsible for."
   (or (mevedel-session-permission-mode session)
       (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
       'default))
+
+(defun mevedel-permission-mode-effective
+    (&optional session data-buffer surface-buffer)
+  "Return the effective permission mode for SESSION and DATA-BUFFER.
+SURFACE-BUFFER is the UI buffer whose local mode may override the data
+buffer's fallback mode.  When omitted, DATA-BUFFER is used; without a
+DATA-BUFFER, the current buffer is used."
+  (let* ((surface-buffer (or surface-buffer
+                             (and (buffer-live-p data-buffer) data-buffer)
+                             (current-buffer)))
+         (surface-mode
+          (and (buffer-live-p surface-buffer)
+               (buffer-local-value 'mevedel-permission-mode
+                                   surface-buffer)))
+         (surface-local
+          (and (buffer-live-p surface-buffer)
+               (local-variable-p 'mevedel-permission-mode surface-buffer)))
+         (global-mode (and (boundp 'mevedel-permission-mode)
+                           (default-toplevel-value
+                            'mevedel-permission-mode))))
+    (or (and session (mevedel-session-permission-mode session))
+        (and (buffer-live-p data-buffer)
+             (with-current-buffer data-buffer
+               (and (boundp 'mevedel--session)
+                    mevedel--session
+                    (mevedel-session-permission-mode mevedel--session))))
+        (and surface-local surface-mode)
+        (and (buffer-live-p data-buffer)
+             (with-current-buffer data-buffer
+               (and (boundp 'mevedel-permission-mode)
+                    mevedel-permission-mode)))
+        global-mode
+        'default)))
+
+(defun mevedel-permission-mode-label (&optional mode)
+  "Return the compact user-facing label for permission MODE."
+  (pcase (or mode 'default)
+    ('accept-edits "edits")
+    ('trust-all "auto!")
+    ('plan "plan")
+    (_ "ask")))
 
 (defun mevedel-permission-mode-apply-auto-lifecycle
     (previous-mode target-mode &optional session)

@@ -104,6 +104,14 @@
   (mevedel-tool-task--register)
   (mevedel-tool-introspect--register))
 
+(defun mevedel-tools-active-count (&optional buffer)
+  "Return the number of active gptel tools in BUFFER."
+  (let ((buffer (or buffer (current-buffer))))
+    (if (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (length (and (boundp 'gptel-tools) gptel-tools)))
+      0)))
+
 
 ;;
 ;;; Deferred Tool Loading (ToolSearch)

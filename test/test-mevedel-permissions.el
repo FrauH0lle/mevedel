@@ -665,6 +665,88 @@ must restore the prior value to avoid cross-test pollution."
        (set-default-toplevel-value 'mevedel-permission-mode
                                    mevedel-test--saved-mode))))
 
+(mevedel-deftest mevedel-permission-mode-effective ()
+  ,test
+  (test)
+  :doc "uses session mode before data-buffer and global fallbacks"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-effective-data*")))
+      (unwind-protect
+          (let ((session (mevedel-session--create
+                          :name "test" :permission-mode 'plan)))
+            (set-default-toplevel-value 'mevedel-permission-mode 'trust-all)
+            (with-current-buffer data-buf
+              (setq-local mevedel--session
+                          (mevedel-session--create
+                           :name "data" :permission-mode 'accept-edits)))
+            (should (eq (mevedel-permission-mode-effective session data-buf)
+                        'plan)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+  :doc "uses data-buffer session when no session is passed"
+  (let ((data-buf (generate-new-buffer " *mev-effective-data*")))
+    (unwind-protect
+        (with-current-buffer data-buf
+          (setq-local mevedel--session
+                      (mevedel-session--create
+                       :name "data" :permission-mode 'accept-edits))
+          (should (eq (mevedel-permission-mode-effective nil data-buf)
+                      'accept-edits)))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "uses data-buffer local mode before global fallback"
+  (mevedel-test--with-saved-permission-mode
+    (let ((data-buf (generate-new-buffer " *mev-effective-data*")))
+      (unwind-protect
+          (progn
+            (set-default-toplevel-value 'mevedel-permission-mode 'default)
+            (with-current-buffer data-buf
+              (setq-local mevedel-permission-mode 'trust-all))
+            (should (eq (mevedel-permission-mode-effective nil data-buf)
+                        'trust-all)))
+        (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
+
+  :doc "uses explicit surface buffer local mode before data-buffer fallback"
+  (let ((data-buf (generate-new-buffer " *mev-effective-data*"))
+        (surface-buf (generate-new-buffer " *mev-effective-surface*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buf
+            (setq-local mevedel-permission-mode 'default))
+          (with-current-buffer surface-buf
+            (setq-local mevedel-permission-mode 'trust-all))
+          (should (eq (mevedel-permission-mode-effective
+                       nil data-buf surface-buf)
+                      'trust-all)))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))
+      (when (buffer-live-p surface-buf) (kill-buffer surface-buf))))
+
+  :doc "ignores caller local mode when a data-buffer is explicit"
+  (let ((data-buf (generate-new-buffer " *mev-effective-data*")))
+    (unwind-protect
+        (with-temp-buffer
+          (with-current-buffer data-buf
+            (setq-local mevedel-permission-mode 'default))
+          (setq-local mevedel-permission-mode 'trust-all)
+          (should (eq (mevedel-permission-mode-effective nil data-buf)
+                      'default)))
+      (when (buffer-live-p data-buf) (kill-buffer data-buf))))
+
+  :doc "falls back to the global mode"
+  (mevedel-test--with-saved-permission-mode
+    (set-default-toplevel-value 'mevedel-permission-mode 'accept-edits)
+    (should (eq (mevedel-permission-mode-effective) 'accept-edits))))
+
+(mevedel-deftest mevedel-permission-mode-label ()
+  ,test
+  (test)
+  :doc "renders compact labels for permission modes"
+  (should (equal "ask" (mevedel-permission-mode-label 'default)))
+  (should (equal "edits" (mevedel-permission-mode-label 'accept-edits)))
+  (should (equal "auto!" (mevedel-permission-mode-label 'trust-all)))
+  (should (equal "plan" (mevedel-permission-mode-label 'plan)))
+  (should (equal "ask" (mevedel-permission-mode-label 'unknown))))
+
 (mevedel-deftest mevedel-permission-mode--set ()
   ,test
   (test)

@@ -425,6 +425,17 @@ SKILL.md (which may have changed)."
 Set at request start, cleared in the termination handler.  Tool functions
 access this through the buffer-local.")
 
+(defun mevedel-request-active-p (&optional buffer)
+  "Return non-nil when BUFFER has an active request."
+  (let ((buffer (or buffer (current-buffer))))
+    (and (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (bound-and-true-p mevedel--current-request)))))
+
+(defun mevedel-request-state-label (&optional buffer)
+  "Return BUFFER's compact request state label."
+  (if (mevedel-request-active-p buffer) "running" "idle"))
+
 
 ;;
 ;;; Request cancellers

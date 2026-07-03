@@ -253,29 +253,26 @@
   (test)
   :doc "shows the current branch"
   (mevedel-menu-test--with-buffers
-    (cl-letf (((symbol-function 'mevedel-menu--git-line)
-               (lambda (_directory &rest args)
-                 (pcase args
-                   ('("branch" "--show-current") "main")
-                   ('("rev-parse" "--short" "HEAD") "abc123")))))
+    (cl-letf (((symbol-function 'mevedel-worktree-status-summary)
+               (lambda (&optional _context)
+                 '(:state normal-checkout :label "main"))))
       (with-current-buffer view-buf
         (should (string= "main" (mevedel-menu--worktree-label))))))
 
   :doc "falls back to detached HEAD"
   (mevedel-menu-test--with-buffers
-    (cl-letf (((symbol-function 'mevedel-menu--git-line)
-               (lambda (_directory &rest args)
-                 (pcase args
-                   ('("branch" "--show-current") "")
-                   ('("rev-parse" "--short" "HEAD") "abc123")))))
+    (cl-letf (((symbol-function 'mevedel-worktree-status-summary)
+               (lambda (&optional _context)
+                 '(:state normal-checkout :label "detached abc123"))))
       (with-current-buffer view-buf
         (should (string= "detached abc123"
                          (mevedel-menu--worktree-label))))))
 
   :doc "reports non-Git directories"
   (mevedel-menu-test--with-buffers
-    (cl-letf (((symbol-function 'mevedel-menu--git-line)
-               (lambda (&rest _) nil)))
+    (cl-letf (((symbol-function 'mevedel-worktree-status-summary)
+               (lambda (&optional _context)
+                 '(:state not-git :label "not-git"))))
       (with-current-buffer view-buf
         (should (string= "not-git" (mevedel-menu--worktree-label)))))))
 
@@ -283,19 +280,23 @@
   ,test
   (test)
   :doc "shows worktree description with branch label"
-  (cl-letf (((symbol-function 'mevedel-menu--worktree-label)
-             (lambda () "main")))
-    (should (string= "Worktree  main"
-                     (substring-no-properties
-                      (mevedel-menu--worktree-description))))))
+  (mevedel-menu-test--with-buffers
+    (cl-letf (((symbol-function 'mevedel-worktree-status-summary)
+               (lambda (&optional _context)
+                 '(:state normal-checkout :label "main"))))
+      (with-current-buffer view-buf
+        (should (string= "Worktree  main"
+                         (substring-no-properties
+                          (mevedel-menu--worktree-description))))))))
 
 (mevedel-deftest mevedel-menu--top-descriptions ()
   ,test
   (test)
   :doc "shows padded top-level state rows"
   (mevedel-menu-test--with-buffers
-    (cl-letf (((symbol-function 'mevedel-menu--worktree-label)
-               (lambda () "main")))
+    (cl-letf (((symbol-function 'mevedel-worktree-status-summary)
+               (lambda (&optional _context)
+                 '(:state normal-checkout :label "main"))))
       (with-current-buffer view-buf
         (should (string= "Mode      ask"
                          (substring-no-properties
@@ -358,6 +359,20 @@
                       "Modes"
                       "View and data buffers"))
       (should (string-match-p (regexp-quote needle) text)))))
+
+(mevedel-deftest mevedel-menu--mode-symbol ()
+  ,test
+  (test)
+  :doc "uses the cockpit view as the permission surface"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel-permission-mode 'trust-all)
+      (should (eq (mevedel-menu--mode-symbol
+                   session data-buf view-buf)
+                  'trust-all))
+      (should (string= "Mode      auto!"
+                       (substring-no-properties
+                        (mevedel-menu--mode-description)))))))
 
 (mevedel-deftest mevedel-menu--set-mode ()
   ,test

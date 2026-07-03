@@ -19,6 +19,8 @@
 ;; `gptel'
 (declare-function gptel-backend-name "ext:gptel" (cl-x) t)
 (declare-function gptel--model-name "ext:gptel" (model))
+(defvar gptel-backend)
+(defvar gptel-model)
 
 
 ;;
@@ -216,6 +218,27 @@ non-nil, return nil instead of signaling for invalid selectors."
                                  (intern workload))
                                mevedel-model-workload-tiers)))
     (mevedel-model-tier-selector tier)))
+
+(defun mevedel-model-current-label (&optional buffer)
+  "Return BUFFER's current model label, or \"none\"."
+  (with-current-buffer (or buffer (current-buffer))
+    (cond
+     ((not (bound-and-true-p gptel-model)) "none")
+     ((fboundp 'gptel--model-name) (gptel--model-name gptel-model))
+     (t (format "%s" gptel-model)))))
+
+(defun mevedel-model-current-provider-label (&optional buffer)
+  "Return BUFFER's current backend:model label, or \"none\"."
+  (with-current-buffer (or buffer (current-buffer))
+    (cond
+     ((and (bound-and-true-p gptel-backend)
+           (bound-and-true-p gptel-model))
+      (format "%s:%s"
+              (gptel-backend-name gptel-backend)
+              (gptel--model-name gptel-model)))
+     ((bound-and-true-p gptel-model)
+      (mevedel-model-current-label))
+     (t "none"))))
 
 
 ;;

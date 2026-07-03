@@ -185,22 +185,27 @@
     (1 'not-ignored)
     (_ 'unknown)))
 
+(defun mevedel-worktree--context-directory (context)
+  "Return the normalized working directory for CONTEXT."
+  (let* ((context (or context (mevedel-worktree--current-context)))
+         (data-buffer (plist-get context :data-buffer))
+         (session (plist-get context :session)))
+    (file-name-as-directory
+     (expand-file-name
+      (or (plist-get context :directory)
+          (and session (mevedel-session-working-directory session))
+          (and (buffer-live-p data-buffer)
+               (with-current-buffer data-buffer
+                 default-directory))
+          default-directory)))))
+
 (defun mevedel-worktree--collect-status (&optional context)
   "Collect read-only worktree status for CONTEXT."
   (let* ((context (or context (mevedel-worktree--current-context)))
-         (data-buffer (plist-get context :data-buffer))
          (session (plist-get context :session))
          (workspace (or (plist-get context :workspace)
                         (and session (mevedel-session-workspace session))))
-         (directory (file-name-as-directory
-                     (expand-file-name
-                      (or (plist-get context :directory)
-                          (and session
-                               (mevedel-session-working-directory session))
-                          (and (buffer-live-p data-buffer)
-                               (with-current-buffer data-buffer
-                                 default-directory))
-                          default-directory))))
+         (directory (mevedel-worktree--context-directory context))
          (workspace-root (and workspace
                               (file-name-as-directory
                                (expand-file-name
@@ -347,6 +352,25 @@
    ((and branch (not (string-empty-p branch))) branch)
    ((and head (not (string-empty-p head))) (format "detached at %s" head))
    (t "unavailable")))
+
+(defun mevedel-worktree-status-summary (&optional context)
+  "Return a compact worktree status summary for CONTEXT."
+  (let* ((context (or context (mevedel-worktree--current-context)))
+         (directory (mevedel-worktree--context-directory context))
+         (inside (mevedel-worktree--git-success-output
+                  directory "rev-parse" "--is-inside-work-tree")))
+    (if (not (string= inside "true"))
+        '(:state not-git :label "not-git")
+      (let ((branch (mevedel-worktree--git-success-output
+                     directory "branch" "--show-current"))
+            (head (mevedel-worktree--git-success-output
+                   directory "rev-parse" "--short" "HEAD")))
+        (list :state 'git
+              :label (cond
+                      ((and branch (not (string-empty-p branch))) branch)
+                      ((and head (not (string-empty-p head)))
+                       (format "detached %s" head))
+                      (t "not-git")))))))
 
 (defun mevedel-worktree-status--description ()
   "Return dynamic description for the worktree status transient."

@@ -177,6 +177,24 @@
 ;;
 ;;; Request lifecycle
 
+(mevedel-deftest mevedel-request-active-p ()
+  ,test
+  (test)
+  :doc "reports whether a buffer has an active request"
+  (with-temp-buffer
+    (should-not (mevedel-request-active-p))
+    (setq-local mevedel--current-request t)
+    (should (mevedel-request-active-p))))
+
+(mevedel-deftest mevedel-request-state-label ()
+  ,test
+  (test)
+  :doc "reports idle without an active request and running with one"
+  (with-temp-buffer
+    (should (equal "idle" (mevedel-request-state-label)))
+    (setq-local mevedel--current-request t)
+    (should (equal "running" (mevedel-request-state-label)))))
+
 (mevedel-deftest mevedel-request-begin
   (:before-each (mevedel-workspace-clear-registry)
    :after-each

@@ -345,10 +345,19 @@
           (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
           (mevedel-plugins-enable "demo" workspace)
           (should (equal '("demo")
-                         (mapcar #'mevedel-plugin-name
-                                 (mevedel-plugins-enabled workspace))))
-          (should-not (mevedel-plugins-enabled other-workspace)))
+	                         (mapcar #'mevedel-plugin-name
+	                                 (mevedel-plugins-enabled workspace))))
+	          (should-not (mevedel-plugins-enabled other-workspace)))
       (delete-directory other-root t)))
+
+  :doc "reports enabled/total plugin count"
+  (let ((root-a (mevedel-plugins-test--plugin-root user-dir "repo-a"))
+        (root-b (mevedel-plugins-test--plugin-root user-dir "repo-b")))
+    (mevedel-plugins-test--write-manifest root-a "{\"name\":\"one\"}")
+    (mevedel-plugins-test--write-manifest root-b "{\"name\":\"two\"}")
+    (mevedel-plugins-enable "one" workspace)
+    (should (equal "1/2" (mevedel-plugins-count-label workspace)))
+    (should (equal "0/0" (mevedel-plugins-count-label nil))))
 
   :doc "does not move activation when a higher-precedence duplicate appears"
   (let* ((global-root (mevedel-plugins-test--plugin-root user-dir "repo"))

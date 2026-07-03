@@ -364,6 +364,43 @@
   (should (equal (mevedel-worktree--branch-head-label nil nil)
                  "unavailable")))
 
+(mevedel-deftest mevedel-worktree-status-summary ()
+  ,test
+  (test)
+
+  :doc "summarizes a branch checkout"
+  (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+             (lambda (&optional _context)
+               (ert-fail "summary should not collect full status")))
+            ((symbol-function 'mevedel-worktree--git-success-output)
+             (lambda (_directory &rest args)
+               (cond
+                ((equal args '("rev-parse" "--is-inside-work-tree"))
+                 "true")
+                ((equal args '("branch" "--show-current")) "main")
+                ((equal args '("rev-parse" "--short" "HEAD")) "abc123")))))
+    (should (equal '(:state git :label "main")
+                   (mevedel-worktree-status-summary '(:directory "/tmp")))))
+
+  :doc "summarizes a detached checkout with the menu's compact label"
+  (cl-letf (((symbol-function 'mevedel-worktree--git-success-output)
+             (lambda (_directory &rest args)
+               (cond
+                ((equal args '("rev-parse" "--is-inside-work-tree"))
+                 "true")
+                ((equal args '("branch" "--show-current")) "")
+                ((equal args '("rev-parse" "--short" "HEAD")) "abc123")))))
+    (should (equal '(:state git :label "detached abc123")
+                   (mevedel-worktree-status-summary '(:directory "/tmp")))))
+
+  :doc "summarizes non-Git directories"
+  (cl-letf (((symbol-function 'mevedel-worktree--git-success-output)
+             (lambda (_directory &rest args)
+               (when (equal args '("rev-parse" "--is-inside-work-tree"))
+                 nil))))
+    (should (equal '(:state not-git :label "not-git")
+                   (mevedel-worktree-status-summary '(:directory "/tmp"))))))
+
 (mevedel-deftest mevedel-worktree-status--description ()
   ,test
   (test)

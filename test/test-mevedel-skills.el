@@ -3889,6 +3889,24 @@ spanning lines")))
   (with-temp-buffer
     (should-error (mevedel-cmd--tools "") :type 'user-error)))
 
+(mevedel-deftest mevedel-skills-count-label
+  (:vars* ((user-dir (make-temp-file "mevedel-skills-count-" t))
+           (mevedel-user-dir (file-name-as-directory user-dir)))
+   :after-each (delete-directory user-dir t))
+  ,test
+  (test)
+
+  :doc "returns enabled/total skills for a session"
+  (let* ((session (mevedel-skills-test--make-session))
+         (enabled (mevedel-skill--create :name "enabled"))
+         (disabled (mevedel-skill--create :name "disabled")))
+    (setf (mevedel-session-skills session) (list enabled disabled))
+    (mevedel-skills--set-enabled disabled nil)
+    (should (equal "1/2" (mevedel-skills-count-label session))))
+
+  :doc "returns 0/0 without a session"
+  (should (equal "0/0" (mevedel-skills-count-label nil))))
+
 (mevedel-deftest mevedel-skills-list-open ()
   ,test
   (test)

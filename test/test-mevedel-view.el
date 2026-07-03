@@ -2744,8 +2744,16 @@ PROPS is the value for the `gptel' property."
               (should-not (string-match-p "\\[gpt-5\\.5\\]" line))
               (should-not (string-match-p "\\[2 tools\\]" line))
               (should-not (string-match-p "GPTEL HEADER" line)))))
-      (when (file-directory-p root)
-        (delete-directory root t))))
+	  (when (file-directory-p root)
+	    (delete-directory root t))))
+
+  :doc "status strip preserves the model none label"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((line (mevedel-view--status-strip)))
+        (should (string-match-p
+                 (regexp-quote "ask · idle · model none · 0 tools")
+                 line)))))
 
   :doc "status strip routes click targets to cockpit surfaces"
   (mevedel-view-test--with-buffers
