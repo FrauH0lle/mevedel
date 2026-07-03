@@ -16,6 +16,7 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-cockpit)
+(require 'mevedel-gptel-bridge)
 (require 'mevedel-menu)
 (require 'mevedel-mentions)
 (require 'mevedel-plugins)
@@ -31,17 +32,7 @@
 (defvar gptel--known-backends)
 (defvar gptel-backend)
 (defvar gptel-model)
-(defvar gptel-system-prompt)
 (defvar gptel-tools)
-
-;; `gptel-transient'
-(declare-function gptel--set-with-scope "ext:gptel-transient"
-                  (sym value &optional scope))
-
-;; `transient'
-(defvar transient--original-buffer)
-(defvar transient--prefix)
-(defvar transient-post-exit-hook)
 
 (defmacro mevedel-menu-test--with-model-backends (&rest body)
   "Run BODY with isolated gptel model backends."
@@ -64,8 +55,8 @@
           (view-buf (generate-new-buffer " *menu-view*")))
      (unwind-protect
          (progn
-           (mevedel-view--gptel-clear-return-state)
-           (mevedel-menu--cleanup-gptel-bridge-advice)
+           (mevedel-gptel-bridge--clear-return-state)
+           (mevedel-gptel-bridge--cleanup-advice)
            (with-current-buffer data-buf
              (org-mode)
              (setq-local default-directory (file-name-as-directory root))
@@ -75,8 +66,8 @@
              (setq-local gptel-tools '(read edit)))
            (mevedel-view--setup view-buf data-buf)
            ,@body)
-       (mevedel-view--gptel-clear-return-state)
-       (mevedel-menu--cleanup-gptel-bridge-advice)
+       (mevedel-gptel-bridge--clear-return-state)
+       (mevedel-gptel-bridge--cleanup-advice)
        (when (buffer-live-p view-buf) (kill-buffer view-buf))
        (when (buffer-live-p data-buf) (kill-buffer data-buf))
        (when (file-directory-p mevedel-user-dir)
@@ -217,14 +208,14 @@
 
   :doc "opens the requested gptel bridge area"
   (mevedel-menu-test--with-buffers
-    (let (called-buffer)
-      (cl-letf (((symbol-function 'gptel-menu)
-                 (lambda ()
-                   (interactive)
-                   (setq called-buffer (current-buffer)))))
+    (let (called-context)
+      (cl-letf (((symbol-function 'mevedel-gptel-bridge-open)
+                 (lambda (context)
+                   (setq called-context context))))
         (with-current-buffer data-buf
           (mevedel-menu-open 'gptel)))
-      (should (eq called-buffer data-buf))))
+      (should (eq (mevedel-cockpit-context-data-buffer called-context)
+                  data-buf))))
 
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
@@ -515,170 +506,18 @@
 (mevedel-deftest mevedel-menu--open-gptel ()
   ,test
   (test)
-  :doc "opens gptel-menu with gptel scoped setters owned by the data buffer"
+  :doc "delegates to the gptel bridge with the current cockpit context"
   (mevedel-menu-test--with-buffers
-    (let ((window (selected-window))
-          called-buffer
-          called-prompt
-          called-window-buffer)
-      (with-current-buffer data-buf
-        (setq-local gptel-system-prompt "data prompt")
-        (setq-local gptel-model 'data-model)
-        (setq-local gptel-tools '(data-tool)))
-      (with-current-buffer view-buf
-        (setq-local gptel-system-prompt "view prompt")
-        (setq-local gptel-model 'view-model)
-        (setq-local gptel-tools '(view-tool)))
-      (unwind-protect
-          (progn
-            (set-window-buffer window view-buf)
-            (cl-letf (((symbol-function 'gptel-menu)
-                       (lambda ()
-                         (interactive)
-                         (setq called-buffer (current-buffer)
-                               called-prompt gptel-system-prompt
-                               called-window-buffer
-                               (window-buffer (selected-window)))
-                         (with-current-buffer called-window-buffer
-                           (gptel--set-with-scope
-                            'gptel-system-prompt "bridge prompt" t)
-                           (gptel--set-with-scope
-                            'gptel-model 'bridge-model t)
-                           (gptel--set-with-scope
-                            'gptel-tools '(bridge-tool) t)))))
-              (with-current-buffer view-buf
-                (mevedel-menu--open-gptel)))
-            (mevedel-view--gptel-return-to-view))
-        (when (window-live-p window)
-          (set-window-buffer window view-buf)))
-      (should (eq called-buffer data-buf))
-      (should (eq called-window-buffer data-buf))
-      (should (equal called-prompt "data prompt"))
-      (with-current-buffer data-buf
-        (should (equal gptel-system-prompt "bridge prompt"))
-        (should (eq gptel-model 'bridge-model))
-        (should (equal gptel-tools '(bridge-tool))))
-      (with-current-buffer view-buf
-        (should (equal gptel-system-prompt "view prompt"))
-        (should (eq gptel-model 'view-model))
-        (should (equal gptel-tools '(view-tool))))))
-
-  :doc "restores the view window after gptel displays the data buffer"
-  (mevedel-menu-test--with-buffers
-    (let ((window (selected-window)))
-      (unwind-protect
-          (progn
-            (set-window-buffer window view-buf)
-            (cl-letf (((symbol-function 'gptel-menu)
-                       (lambda ()
-                         (interactive)
-                         (set-window-buffer window data-buf))))
-              (with-current-buffer view-buf
-                (mevedel-menu--open-gptel)))
-            (should (eq (window-buffer window) data-buf))
-            (should (memq #'mevedel-view--gptel-return-to-view
-                          transient-post-exit-hook))
-            (mevedel-view--gptel-return-to-view)
-            (should (eq (window-buffer window) view-buf)))
-        (when (window-live-p window)
-          (set-window-buffer window view-buf)))))
-
-  :doc "raw data-buffer bridge does not schedule view restoration"
-  (mevedel-menu-test--with-buffers
-    (cl-letf (((symbol-function 'gptel-menu) #'ignore))
-      (with-current-buffer data-buf
-        (mevedel-menu--open-gptel)))
-    (should-not mevedel-view--gptel-return-view-buffer)))
-
-(mevedel-deftest mevedel-menu--gptel-edit-directive-advice ()
-  ,test
-  (test)
-  :doc "wraps edit callbacks so nested gptel menus run in the data buffer"
-  (mevedel-menu-test--with-buffers
-    (let (callback callback-buffer callback-prompt)
-      (with-current-buffer data-buf
-        (setq-local gptel-system-prompt "data prompt"))
-      (with-current-buffer view-buf
-        (setq-local gptel-system-prompt "view prompt"))
-      (mevedel-view--gptel-schedule-return-to-view view-buf data-buf)
-      (mevedel-menu--gptel-edit-directive-advice
-       (lambda (&rest args)
-         (setq callback (plist-get (cdr args) :callback)))
-       'gptel-system-prompt
-       :callback
-       (lambda (_message)
-         (setq callback-buffer (current-buffer)
-               callback-prompt gptel-system-prompt)))
-      (should callback)
-      (with-temp-buffer
-        (setq-local gptel-system-prompt "prompt buffer")
-        (funcall callback "new prompt"))
-      (should (eq callback-buffer data-buf))
-      (should (equal callback-prompt "data prompt"))
-      (should-not (mevedel-menu--gptel-bridge-active-p))))
-
-  :doc "keeps bridge state when the callback opens another transient"
-  (mevedel-menu-test--with-buffers
-    (let (callback)
-      (mevedel-view--gptel-schedule-return-to-view view-buf data-buf)
-      (mevedel-menu--gptel-edit-directive-advice
-       (lambda (&rest args)
-         (setq callback (plist-get (cdr args) :callback)))
-       'gptel-system-prompt
-       :callback
-       (lambda (_message) nil))
-      (should callback)
-      (let ((transient--prefix t))
-        (funcall callback "new prompt"))
-      (should (mevedel-menu--gptel-bridge-active-p)))))
-
-(mevedel-deftest mevedel-menu--gptel-bridge-active-p ()
-  ,test
-  (test)
-  :doc "returns non-nil while view restoration is pending"
-  (mevedel-menu-test--with-buffers
-    (mevedel-view--gptel-schedule-return-to-view view-buf data-buf)
-    (should (mevedel-menu--gptel-bridge-active-p)))
-
-  :doc "returns nil after restoration state clears"
-  (mevedel-menu-test--with-buffers
-    (mevedel-view--gptel-clear-return-state)
-    (should-not (mevedel-menu--gptel-bridge-active-p))))
-
-(mevedel-deftest mevedel-menu--install-gptel-bridge-advice ()
-  ,test
-  (test)
-  :doc "installs temporary edit advice and cleanup hook"
-  (mevedel-menu-test--with-buffers
-    (mevedel-menu--install-gptel-bridge-advice)
-    (should (advice-member-p #'mevedel-menu--gptel-edit-directive-advice
-                             'gptel--edit-directive))
-    (should (memq #'mevedel-menu--cleanup-gptel-bridge-advice
-                  transient-post-exit-hook))))
-
-(mevedel-deftest mevedel-menu--cleanup-gptel-bridge-advice ()
-  ,test
-  (test)
-  :doc "keeps temporary advice while view restoration is pending"
-  (mevedel-menu-test--with-buffers
-    (mevedel-view--gptel-schedule-return-to-view view-buf data-buf)
-    (mevedel-menu--install-gptel-bridge-advice)
-    (mevedel-menu--cleanup-gptel-bridge-advice)
-    (should (advice-member-p #'mevedel-menu--gptel-edit-directive-advice
-                             'gptel--edit-directive))
-    (should (memq #'mevedel-menu--cleanup-gptel-bridge-advice
-                  transient-post-exit-hook)))
-
-  :doc "removes temporary advice after restoration clears"
-  (mevedel-menu-test--with-buffers
-    (mevedel-menu--install-gptel-bridge-advice)
-    (mevedel-view--gptel-clear-return-state)
-    (mevedel-menu--cleanup-gptel-bridge-advice)
-    (should-not
-     (advice-member-p #'mevedel-menu--gptel-edit-directive-advice
-                      'gptel--edit-directive))
-    (should-not (memq #'mevedel-menu--cleanup-gptel-bridge-advice
-                      transient-post-exit-hook))))
+    (let (called-context)
+      (cl-letf (((symbol-function 'mevedel-gptel-bridge-open)
+                 (lambda (context)
+                   (setq called-context context))))
+        (with-current-buffer view-buf
+          (mevedel-menu--open-gptel)))
+      (should (eq (mevedel-cockpit-context-view-buffer called-context)
+                  view-buf))
+      (should (eq (mevedel-cockpit-context-data-buffer called-context)
+                  data-buf)))))
 
 (mevedel-deftest mevedel-menu--send-inapt-p ()
   ,test

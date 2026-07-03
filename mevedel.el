@@ -64,6 +64,7 @@
 (require 'mevedel-plugins)
 (require 'mevedel-init)
 (require 'mevedel-review)
+(require 'mevedel-gptel-bridge)
 (require 'mevedel-menu)
 (require 'mevedel-hooks)
 (require 'mevedel-chat)

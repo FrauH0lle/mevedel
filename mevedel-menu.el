@@ -20,9 +20,6 @@
 ;; `gptel-request'
 (declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
 
-;; `gptel-transient'
-(declare-function gptel-menu "ext:gptel-transient" ())
-
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-call-in-data
                   "mevedel-cockpit" (context function &rest args))
@@ -44,6 +41,10 @@
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
+
+;; `mevedel-gptel-bridge'
+(declare-function mevedel-gptel-bridge-open
+                  "mevedel-gptel-bridge" (&optional context))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-current-label "mevedel-models"
@@ -93,11 +94,6 @@
                   (&optional context))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--gptel-edit-directive-args
-                  "mevedel-view" (args))
-(declare-function mevedel-view--gptel-return-to-view "mevedel-view" ())
-(declare-function mevedel-view--gptel-schedule-return-to-view
-                  "mevedel-view" (view-buffer data-buffer))
 (declare-function mevedel-view-abort "mevedel-view" ())
 (declare-function mevedel-view-next-display "mevedel-view" ())
 (declare-function mevedel-view-next-user-query "mevedel-view" ())
@@ -105,17 +101,11 @@
 (declare-function mevedel-view-previous-user-query "mevedel-view" ())
 (declare-function mevedel-view-send "mevedel-view" ())
 (declare-function mevedel-view-toggle-section "mevedel-view" ())
-(defvar mevedel-view--gptel-return-view-buffer)
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-status-summary "mevedel-worktree"
                   (&optional context))
 (declare-function mevedel-worktree-status-open "mevedel-worktree" ())
-
-;; `transient'
-(defvar transient--original-buffer)
-(defvar transient--prefix)
-(defvar transient-post-exit-hook)
 
 (defconst mevedel-menu-help-buffer-name "*mevedel help*"
   "Name of the session cockpit help buffer.")
@@ -559,82 +549,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     (princ "\n"))
   (get-buffer mevedel-menu-help-buffer-name))
 
-(defun mevedel-menu--gptel-bridge-active-p ()
-  "Return non-nil while a view-launched gptel bridge is restoring."
-  (and (boundp 'mevedel-view--gptel-return-view-buffer)
-       mevedel-view--gptel-return-view-buffer
-       (buffer-live-p mevedel-view--gptel-return-view-buffer)))
-
-(defun mevedel-menu--gptel-edit-directive-advice (orig-fn &rest args)
-  "Wrap gptel directive edit callback while the bridge is active."
-  (let* ((args (mevedel-view--gptel-edit-directive-args args))
-         (leading (and args (not (keywordp (car args)))))
-         (sym (and leading (car args)))
-         (plist (if leading (cdr args) args))
-         (callback (plist-get plist :callback)))
-    (when callback
-      (setq plist
-            (plist-put
-             (copy-sequence plist)
-             :callback
-             (lambda (message)
-               (unwind-protect
-                   (funcall callback message)
-                 (unless (bound-and-true-p transient--prefix)
-                   (mevedel-view--gptel-return-to-view)
-                   (mevedel-menu--cleanup-gptel-bridge-advice)))))))
-    (apply orig-fn (if leading (cons sym plist) plist))))
-
-(defun mevedel-menu--cleanup-gptel-bridge-advice ()
-  "Remove temporary gptel bridge advice after final transient exit."
-  (unless (mevedel-menu--gptel-bridge-active-p)
-    (remove-hook 'transient-post-exit-hook
-                 #'mevedel-menu--cleanup-gptel-bridge-advice)
-    (when (fboundp 'gptel--edit-directive)
-      (advice-remove 'gptel--edit-directive
-                     #'mevedel-menu--gptel-edit-directive-advice))))
-
-(defun mevedel-menu--install-gptel-bridge-advice ()
-  "Install temporary advice needed by the explicit gptel bridge."
-  (require 'gptel-transient)
-  (unless (advice-member-p #'mevedel-menu--gptel-edit-directive-advice
-                           'gptel--edit-directive)
-    (advice-add 'gptel--edit-directive
-                :around #'mevedel-menu--gptel-edit-directive-advice))
-  (add-hook 'transient-post-exit-hook
-            #'mevedel-menu--cleanup-gptel-bridge-advice 90))
-
 (defun mevedel-menu--open-gptel ()
   "Open the gptel bridge surface."
   (interactive)
-  (let* ((context (mevedel-menu--context))
-         (origin (or (mevedel-cockpit-context-origin-buffer context)
-                     (current-buffer)))
-         (view-buffer (mevedel-cockpit-context-view-buffer context))
-         (data-buffer (mevedel-cockpit-context-data-buffer context))
-         (view-origin-p (eq origin view-buffer))
-         (window (and view-origin-p
-                      (or (get-buffer-window view-buffer t)
-                          (selected-window)))))
-    (if view-origin-p
-        (let ((setup-ok nil))
-          (mevedel-view--gptel-schedule-return-to-view
-           view-buffer data-buffer)
-          (mevedel-menu--install-gptel-bridge-advice)
-          (unwind-protect
-              (progn
-                (when (window-live-p window)
-                  (set-window-buffer window data-buffer))
-                (with-selected-window
-                    (if (window-live-p window) window (selected-window))
-                  (with-current-buffer data-buffer
-                    (call-interactively #'gptel-menu)))
-                (setq setup-ok t))
-            (unless setup-ok
-              (mevedel-view--gptel-return-to-view)
-              (mevedel-menu--cleanup-gptel-bridge-advice))))
-      (with-current-buffer data-buffer
-        (call-interactively #'gptel-menu)))))
+  (require 'mevedel-gptel-bridge)
+  (mevedel-gptel-bridge-open (mevedel-menu--context)))
 
 
 ;;
