@@ -75,7 +75,12 @@
 (declare-function mevedel-view--gptel-schedule-return-to-view
                   "mevedel-view" (view-buffer data-buffer))
 (declare-function mevedel-view-abort "mevedel-view" ())
+(declare-function mevedel-view-next-display "mevedel-view" ())
+(declare-function mevedel-view-next-user-query "mevedel-view" ())
+(declare-function mevedel-view-previous-display "mevedel-view" ())
+(declare-function mevedel-view-previous-user-query "mevedel-view" ())
 (declare-function mevedel-view-send "mevedel-view" ())
+(declare-function mevedel-view-toggle-section "mevedel-view" ())
 (defvar mevedel-view--gptel-return-view-buffer)
 
 ;; `mevedel-worktree'
@@ -595,6 +600,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "Session cockpit keys"
      "RET Send              a Abort"
      "c Compact             r Review              v Verify"
+     "n Next display        b Previous display"
+     "N Next query          B Previous query       e Toggle section"
      "m Mode                M Model"
      "t Tools               s Skills              p Plugins"
      "d Toggle data view    g gptel menu          w Worktree"
@@ -730,6 +737,28 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("c" "Compact" mevedel-menu--compact)
     ("r" "Review" mevedel-menu--review)
     ("v" "Verify" mevedel-menu--verify)]
+   ["Navigate"
+    :pad-keys t
+    ("n" "Next display"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-next-display))
+     :transient t)
+    ("N" "Previous display"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-previous-display))
+     :transient t)
+    ("C-n" "Next query"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-next-user-query))
+     :transient t)
+    ("C-p" "Previous query"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-previous-user-query))
+     :transient t)
+    ("e" "Toggle section"
+     (lambda () (interactive)
+       (mevedel-menu--call-in-view #'mevedel-view-toggle-section))
+     :transient t)]
    ["Configure"
     :pad-keys t
     ("m" mevedel-menu--open-mode
