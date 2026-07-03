@@ -373,6 +373,8 @@
   :doc "covers cockpit keys, slash routing, modes, and buffer ownership"
   (let ((text (mevedel-menu-help--text)))
     (dolist (needle '("Session cockpit keys"
+                      "Next display"
+                      "Previous query"
                       "Slash commands that open UI"
                       "Direct slash commands"
                       "/mode MODE, /model MODEL"

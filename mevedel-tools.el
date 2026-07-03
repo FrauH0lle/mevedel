@@ -614,6 +614,16 @@ otherwise queues them on the chat buffer's session."
        (equal (format "%s" (or (gptel-tool-category tool) ""))
               (format "%s" (or (plist-get item :category) "")))))
 
+(defun mevedel-tools-list--description-cell (item)
+  "Return the compact table description for ITEM."
+  (let* ((text (or (plist-get item :summary)
+                   (plist-get item :description)
+                   ""))
+         (paragraph (car (split-string text "\n[ \t]*\n" t)))
+         (one-line (replace-regexp-in-string
+                    "[ \t\n\r]+" " " (or paragraph ""))))
+    (truncate-string-to-width (string-trim one-line) 96 nil nil "...")))
+
 (defun mevedel-tools-list--tool-item (state tool)
   "Return a tools cockpit item for TOOL in STATE."
   (let ((description (gptel-tool-description tool)))
@@ -678,7 +688,7 @@ otherwise queues them on the chat buffer's session."
     (plist-get item :name)
     (format "%s" (or (plist-get item :category) ""))
     (format "%s" (or (plist-get item :ttl) ""))
-    (or (plist-get item :description) ""))))
+    (mevedel-tools-list--description-cell item))))
 
 (defun mevedel-tools-list--session-label ()
   "Return the current tools cockpit session label."
@@ -755,8 +765,8 @@ otherwise queues them on the chat buffer's session."
 
 (defun mevedel-tools-list--detail-text (item)
   "Return detail text for tools cockpit ITEM."
-  (format (concat "Tool %s [%s]\nCategory: %s\nTTL: %s\n"
-          "Description: %s")
+  (format (concat "Tool %s [%s]\nCategory: %s\nTTL: %s\n\n"
+                  "Description:\n%s")
           (plist-get item :name)
           (symbol-name (plist-get item :state))
           (or (plist-get item :category) "")
@@ -977,9 +987,9 @@ expired   Expired on the previous payload update
 (defun mevedel-tools-list-open
     (&optional session view-buffer data-buffer origin-buffer)
   "Open the tools listing buffer for SESSION.
-VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
-session pair when the cockpit is opened from a live mevedel session.
-For compatibility, when VIEW-BUFFER is live and DATA-BUFFER is nil,
+VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning session
+pair when the cockpit is opened from a live mevedel session. For
+compatibility, when VIEW-BUFFER is live and DATA-BUFFER is nil,
 VIEW-BUFFER is treated as the legacy data-buffer argument."
   (require 'mevedel-cockpit)
   (when (and (buffer-live-p view-buffer)

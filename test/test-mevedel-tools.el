@@ -607,6 +607,22 @@ function returning the states entered by test handlers."
     (should-not (mevedel-tools-list--tool-matches-item-p
                  tool '(:category "cat-a" :name "Read")))))
 
+(mevedel-deftest mevedel-tools-list--description-cell ()
+  ,test
+  (test)
+
+  :doc "uses the first paragraph as a single-line table summary"
+  (should (equal
+           (mevedel-tools-list--description-cell
+            '(:description "First line\ncontinues here.\n\nFull details."))
+           "First line continues here."))
+
+  :doc "prefers an explicit summary"
+  (should (equal
+           (mevedel-tools-list--description-cell
+            '(:summary "Short summary" :description "Long details"))
+           "Short summary")))
+
 (mevedel-deftest mevedel-tools-list--tool-item ()
   ,test
   (test)
@@ -702,7 +718,14 @@ function returning the states entered by test handlers."
     (should (equal (aref cells 1) "Imenu"))
     (should (equal (aref cells 2) "mevedel"))
     (should (equal (aref cells 3) "3"))
-    (should (equal (aref cells 4) "List symbols"))))
+    (should (equal (aref cells 4) "List symbols")))
+
+  :doc "keeps multiline details out of the table cell"
+  (let* ((item '(:state active :name "Agent" :category "mevedel"
+                 :description "Launch agents.\n\nForeground details."))
+         (entry (mevedel-tools-list--entry item))
+         (cells (cadr entry)))
+    (should (equal (aref cells 4) "Launch agents."))))
 
 (mevedel-deftest mevedel-tools-list--session-label ()
   ,test
@@ -954,10 +977,11 @@ function returning the states entered by test handlers."
   :doc "formats selected row details"
   (let ((text (mevedel-tools-list--detail-text
                '(:state loaded :name "Imenu" :category "mevedel"
-                 :ttl "3" :description "List symbols"))))
+                 :ttl "3" :description "List symbols\n\nFull guidance"))))
     (should (string-match-p "Tool Imenu \\[loaded\\]" text))
     (should (string-match-p "Category: mevedel" text))
-    (should (string-match-p "TTL: 3" text))))
+    (should (string-match-p "TTL: 3" text))
+    (should (string-match-p "Full guidance" text))))
 
 (mevedel-deftest mevedel-tools-list-details
   (:after-each (mevedel-tools-test--cleanup-list))

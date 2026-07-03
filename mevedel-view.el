@@ -1429,7 +1429,7 @@ transcript on click."
   :doc "Keymap for `mevedel-view-mode'."
   "C-c RET" #'mevedel-view-send
   "C-c C-k" #'mevedel-view-abort
-  "C-c C-m" #'mevedel-menu
+  "C-c C-o" #'mevedel-menu
   "C-c C-l" #'mevedel-view-history-browse
   "C-c C-u" #'mevedel-view-history-clear-input
   "C-c C-e" #'mevedel-view-edit-last-queued-message
@@ -1947,7 +1947,7 @@ existing `mevedel--view-buffer' binding untouched."
       (setq-local mevedel--view-buffer view-buf)
       (use-local-map
        (copy-keymap (or (current-local-map) (make-sparse-keymap))))
-      (local-set-key (kbd "C-c C-m") #'mevedel-menu)
+      (local-set-key (kbd "C-c C-o") #'mevedel-menu)
       ;; Kill-buffer lifecycle: data killed -> kill view buffer
       (add-hook 'kill-buffer-hook #'mevedel-view--on-data-killed nil t))))
 
@@ -7616,6 +7616,42 @@ restore the turn with all inner section state intact.  Signals a
            (target (car (sort (delq nil (list fragment-pos turn-pos)) #'>))))
       (when target
         (goto-char target)))))
+
+(defun mevedel-view--user-query-positions (limit)
+  "Return visible user query header positions before LIMIT."
+  (let ((pos (point-min))
+        positions)
+    (while (< pos limit)
+      (when (eq (get-text-property pos 'mevedel-view-turn-role) 'user)
+        (push pos positions))
+      (setq pos
+            (or (next-single-property-change
+                 pos 'mevedel-view-turn-role nil limit)
+                limit)))
+    (nreverse positions)))
+
+(defun mevedel-view-next-user-query ()
+  "Move point to the next user query header."
+  (interactive)
+  (let* ((limit (mevedel-view--display-navigation-limit))
+         (origin (min (point) limit))
+         (target (cl-find-if
+                  (lambda (pos) (> pos origin))
+                  (mevedel-view--user-query-positions limit))))
+    (when target
+      (goto-char target))))
+
+(defun mevedel-view-previous-user-query ()
+  "Move point to the previous user query header."
+  (interactive)
+  (let* ((limit (mevedel-view--display-navigation-limit))
+         (origin (min (point) limit))
+         target)
+    (dolist (pos (mevedel-view--user-query-positions limit))
+      (when (< pos origin)
+        (setq target pos)))
+    (when target
+      (goto-char target))))
 
 (defun mevedel-view-next-turn ()
   "Move point to the next turn header."

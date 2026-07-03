@@ -2632,13 +2632,15 @@ PROPS is the value for the `gptel' property."
       (should-not buffer-read-only))
     (with-current-buffer data-buf
       (should (eq mevedel--view-buffer view-buf))
-      (should (eq (local-key-binding (kbd "C-c C-m"))
+      (should (eq (local-key-binding (kbd "C-c C-o"))
                   #'mevedel-menu))
+      (should-not (eq (local-key-binding (kbd "C-c C-m"))
+                      #'mevedel-menu))
       (let ((data-map (current-local-map)))
         (with-temp-buffer
           (org-mode)
           (should-not (eq data-map (current-local-map)))
-          (should-not (eq (lookup-key (current-local-map) (kbd "C-c C-m"))
+          (should-not (eq (lookup-key (current-local-map) (kbd "C-c C-o"))
                           #'mevedel-menu))))))
 
   :doc "view buffers are ephemeral and never offered for saving"
@@ -3652,8 +3654,47 @@ PROPS is the value for the `gptel' property."
   ,test
   (test)
   :doc "view mode binds the cockpit command"
-  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-m"))
-              #'mevedel-menu)))
+  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-o"))
+              #'mevedel-menu))
+  (should-not (eq (lookup-key mevedel-view-mode-map (kbd "C-c C-m"))
+                  #'mevedel-menu))
+  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-c RET"))
+              #'mevedel-view-send)))
+
+(mevedel-deftest mevedel-view-user-query-navigation ()
+  ,test
+  (test)
+  :doc "jumps between visible user query headers"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (let (first second)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--status-marker)
+          (setq first (point))
+          (insert (propertize "You\n"
+                              'mevedel-view-turn-role 'user))
+          (insert "first question\n")
+          (insert (propertize "Assistant\n"
+                              'mevedel-view-turn-role 'assistant))
+          (insert "answer\n")
+          (setq second (point))
+          (insert (propertize "You\n"
+                              'mevedel-view-turn-role 'user))
+          (insert "second question\n")
+          (set-marker mevedel-view--status-marker (point))
+          (set-marker mevedel-view--interaction-marker (point)))
+        (goto-char (point-min))
+        (mevedel-view-next-user-query)
+        (should (= (point) first))
+        (mevedel-view-next-user-query)
+        (should (= (point) second))
+        (mevedel-view-next-user-query)
+        (should (= (point) second))
+        (goto-char (+ second (length "You\ns")))
+        (mevedel-view-previous-user-query)
+        (should (= (point) second))
+        (mevedel-view-previous-user-query)
+        (should (= (point) first))))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")
