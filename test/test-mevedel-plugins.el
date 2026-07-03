@@ -310,6 +310,77 @@
       (delete-directory outside t))))
 
 
+(mevedel-deftest mevedel-plugins--collect
+  (:vars* ((user-dir (file-name-as-directory
+                      (make-temp-file "mevedel-plugins-collect-" t)))
+           (workspace-root (file-name-as-directory
+                            (make-temp-file "mevedel-plugins-collect-ws-" t)))
+           (workspace (mevedel-plugins-test--workspace workspace-root))
+           (mevedel-user-dir user-dir)
+           (mevedel-plugin-install-directory
+            (file-name-concat user-dir ".agents" "plugins"))
+           (mevedel-plugin-extra-roots nil))
+   :after-each (progn
+                 (delete-directory user-dir t)
+                 (delete-directory workspace-root t)))
+  ,test
+  (test)
+  :doc "`mevedel-plugins--collect' selects duplicate winners and keeps metadata errors separate"
+  (let ((root-a (mevedel-plugins-test--plugin-root user-dir "repo-a"))
+        (root-b (mevedel-plugins-test--plugin-root user-dir "repo-b"))
+        (bad-root (mevedel-plugins-test--plugin-root user-dir "bad"))
+        (broken-root (mevedel-plugins-test--plugin-root user-dir "broken")))
+    (mevedel-plugins-test--write-manifest root-a "{\"name\":\"demo\"}")
+    (mevedel-plugins-test--write-manifest root-b "{\"name\":\"demo\"}")
+    (mevedel-plugins-test--write-manifest bad-root "{\"name\":\"../x\"}")
+    (mevedel-plugins-test--write-manifest broken-root "{")
+    (let* ((collection (mevedel-plugins--collect workspace))
+           (winners (plist-get collection :winners))
+           (errors (plist-get collection :errors))
+           (plugin (car winners)))
+      (should (equal '("demo")
+                     (mapcar #'mevedel-plugin-name winners)))
+      (should (equal (file-name-as-directory (expand-file-name root-a))
+                     (mevedel-plugin-root plugin)))
+      (should (= 1 (length (mevedel-plugin-shadowed plugin))))
+      (should (= 2 (length errors)))
+      (should (= 2 (plist-get collection :error-count)))
+      (should (equal '("demo")
+                     (mapcar #'mevedel-plugin-name
+                             (mevedel-plugins-list workspace))))
+      (let ((items (mevedel-plugins-list--items workspace)))
+        (should (= 3 (length items)))
+        (should (cl-some #'mevedel-plugin-error-p items)))))
+
+  :doc "`mevedel-plugins--collect' counts winners only and enabled plugins by active source"
+  (let ((one-root (mevedel-plugins-test--plugin-root user-dir "repo-one"))
+        (two-root (mevedel-plugins-test--plugin-root user-dir "repo-two"))
+        (two-shadow (mevedel-plugins-test--plugin-root user-dir "repo-two-shadow"))
+        (bad-root (mevedel-plugins-test--plugin-root user-dir "bad"))
+        (local-one (file-name-concat
+                    workspace-root ".mevedel" "plugins" "repo-one")))
+    (mevedel-plugins-test--write-manifest one-root "{\"name\":\"one\"}")
+    (mevedel-plugins-test--write-manifest two-root "{\"name\":\"two\"}")
+    (mevedel-plugins-test--write-manifest two-shadow "{\"name\":\"two\"}")
+    (mevedel-plugins-test--write-manifest bad-root "{\"name\":\"../x\"}")
+    (mevedel-plugins-enable "one" workspace)
+    (let ((collection (mevedel-plugins--collect workspace)))
+      (should (= 1 (plist-get collection :enabled-count)))
+      (should (= 2 (plist-get collection :total-count)))
+      (should (= 1 (plist-get collection :error-count)))
+      (should (equal "1/2" (mevedel-plugins-count-label workspace)))
+      (should (equal '("one")
+                     (mapcar #'mevedel-plugin-name
+                             (mevedel-plugins-enabled workspace)))))
+    (mevedel-plugins-test--write-manifest local-one "{\"name\":\"one\"}")
+    (let ((collection (mevedel-plugins--collect workspace)))
+      (should (= 0 (plist-get collection :enabled-count)))
+      (should (= 2 (plist-get collection :total-count)))
+      (should (= 1 (plist-get collection :error-count)))
+      (should (equal "0/2" (mevedel-plugins-count-label workspace)))
+      (should-not (mevedel-plugins-enabled workspace)))))
+
+
 ;;
 ;;; State
 
