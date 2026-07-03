@@ -52,6 +52,8 @@
                   "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-details
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-key-help-text
+                  "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-quit
                   "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-surface-refresh
@@ -432,23 +434,18 @@
 
 (defun mevedel-worktree--help-text (&optional _context)
   "Return worktree cockpit help text."
-  "mevedel worktree cockpit
-
-Status keys
-c  Create a linked worktree session
-l  List Git worktrees
-g  Refresh status
-?  Show this help
-b  Back to the main session cockpit
-
-List keys
-RET  Show selected worktree details
-o    Open selected worktree session
-c    Create a linked worktree session
-g    Refresh list
-?    Show this help
-q    Back to the main session cockpit
-")
+  (require 'mevedel-cockpit)
+  (concat
+   "mevedel worktree cockpit\n\n"
+   "Status keys\n"
+   "c  Create a linked worktree session\n"
+   "l  List Git worktrees\n"
+   "g  Refresh status\n"
+   "?  Show this help\n"
+   "b  Back to the main session cockpit\n\n"
+   "List keys\n"
+   (mevedel-cockpit-surface-key-help-text mevedel-worktree-list--surface)
+   "\n"))
 
 (defun mevedel-worktree-status-help ()
   "Open worktree status help."
@@ -663,8 +660,10 @@ q    Back to the main session cockpit
     :details-buffer "*mevedel worktree details*"
     :help-function mevedel-worktree--help-text
     :help-buffer ,mevedel-worktree-help-buffer-name
-    :keys (("c" . mevedel-worktree-list-create)
-           ("o" . mevedel-worktree-list-open-selected)))
+    :keys (("c" "Create a linked worktree session"
+            mevedel-worktree-list-create)
+           ("o" "Open selected worktree session"
+            mevedel-worktree-list-open-selected)))
   "Cockpit surface spec for the worktree list.")
 
 (define-derived-mode mevedel-worktree-list-mode tabulated-list-mode

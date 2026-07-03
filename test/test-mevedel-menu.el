@@ -339,17 +339,20 @@
 (mevedel-deftest mevedel-menu-help--text ()
   ,test
   (test)
-  :doc "covers cockpit keys, slash routing, modes, and buffer ownership"
+  :doc "covers command discovery without duplicating transient keys"
   (let ((text (mevedel-menu-help--text)))
-    (dolist (needle '("Session cockpit keys"
-                      "Next display"
-                      "Previous query"
+    (dolist (needle '("Session cockpit"
+                      "transient menu is the live key reference"
                       "Slash commands that open UI"
                       "Direct slash commands"
                       "/mode MODE, /model MODEL"
                       "Modes"
                       "View and data buffers"))
-      (should (string-match-p (regexp-quote needle) text)))))
+      (should (string-match-p (regexp-quote needle) text)))
+    (dolist (stale '("N Next query"
+                     "B Previous query"
+                     "b Previous display"))
+      (should-not (string-match-p (regexp-quote stale) text)))))
 
 (mevedel-deftest mevedel-menu--mode-symbol ()
   ,test

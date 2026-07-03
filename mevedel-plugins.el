@@ -37,6 +37,8 @@
                   "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-details
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-key-help-text
+                  "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-quit
                   "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-surface-refresh
@@ -1355,29 +1357,22 @@ Workspace runtime data is retained."
   (require 'mevedel-cockpit)
   (mevedel-cockpit-surface-details))
 
-(defconst mevedel-plugins-list--help-text
-  "mevedel plugin cockpit
-
-Keys
-RET  Show selected plugin details
-e    Enable or disable selected plugin
-h    Toggle hooks for selected plugin
-+    Install GitHub plugin by OWNER/REPO
-u    Update selected plugin
-r    Reload plugin-visible session skills
-g    Refresh plugin table
-x    Remove selected managed plugin
-o    Open selected plugin source in Dired
-?    Show this help
-q    Back to the main session cockpit
-
-Slash equivalents
-/plugin enable NAME, /plugin disable NAME
-/plugin hooks NAME on, /plugin hooks NAME off
-/plugin install OWNER/REPO, /plugin update NAME
-/plugin reload, /plugin remove NAME, /plugin uninstall NAME
-"
-  "Help text for the plugin cockpit.")
+(defun mevedel-plugins-list--help-text (&optional _context)
+  "Return help text for the plugin cockpit."
+  (string-join
+   (list
+    "mevedel plugin cockpit"
+    ""
+    "Keys"
+    (mevedel-cockpit-surface-key-help-text mevedel-plugins-list--surface)
+    ""
+    "Slash equivalents"
+    "/plugin enable NAME, /plugin disable NAME"
+    "/plugin hooks NAME on, /plugin hooks NAME off"
+    "/plugin install OWNER/REPO, /plugin update NAME"
+    "/plugin reload, /plugin remove NAME, /plugin uninstall NAME"
+    "")
+   "\n"))
 
 (defun mevedel-plugins-list-help ()
   "Open plugin cockpit help."
@@ -1385,7 +1380,7 @@ Slash equivalents
   (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-plugins-help-buffer-name
-   mevedel-plugins-list--help-text))
+   (mevedel-plugins-list--help-text)))
 
 (defun mevedel-plugins-list-quit ()
   "Quit the plugin cockpit and return to the main session cockpit."
@@ -1420,14 +1415,21 @@ Slash equivalents
     :details mevedel-plugins-list--details-text
     :details-buffer "*mevedel plugin details*"
     :help-buffer ,mevedel-plugins-help-buffer-name
-    :help-text ,mevedel-plugins-list--help-text
-    :keys (("e" . mevedel-plugins-list-toggle-enabled)
-           ("h" . mevedel-plugins-list-toggle-hooks)
-           ("+" . mevedel-plugins-list-install)
-           ("u" . mevedel-plugins-list-update)
-           ("r" . mevedel-plugins-list-reload)
-           ("x" . mevedel-plugins-list-remove)
-           ("o" . mevedel-plugins-list-open-source)))
+    :help-function mevedel-plugins-list--help-text
+    :keys (("e" "Enable or disable selected plugin"
+            mevedel-plugins-list-toggle-enabled)
+           ("h" "Toggle hooks for selected plugin"
+            mevedel-plugins-list-toggle-hooks)
+           ("+" "Install GitHub plugin by OWNER/REPO"
+            mevedel-plugins-list-install)
+           ("u" "Update selected plugin"
+            mevedel-plugins-list-update)
+           ("r" "Reload plugin-visible session skills"
+            mevedel-plugins-list-reload)
+           ("x" "Remove selected managed plugin"
+            mevedel-plugins-list-remove)
+           ("o" "Open selected plugin source in Dired"
+            mevedel-plugins-list-open-source)))
   "Cockpit surface spec for the plugin list.")
 
 (define-derived-mode mevedel-plugins-list-mode tabulated-list-mode

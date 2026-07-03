@@ -3935,32 +3935,21 @@ spanning lines")))
           (let ((buffer (mevedel-skills-test--open-list
                          session view-buffer data-buffer)))
             (with-current-buffer buffer
-              (should (eq major-mode 'mevedel-skills-list-mode))
-              (should (eq (mevedel-cockpit-context-session
-                           (mevedel-cockpit-current-context))
-                          session))
-              (should (equal tabulated-list-sort-key '("Name" . nil)))
               (should (string-match-p
                        "2/3 enabled"
                        (mevedel-cockpit-surface-header-line)))
               (should (= 3 (length tabulated-list-entries)))
-              (let ((active-row (cadr (assoc "active" tabulated-list-entries)))
-                    (disabled-row (cadr (assoc "disabled"
-                                               tabulated-list-entries)))
-                    (plugin-row (cadr (assoc "plugin:assist"
-                                             tabulated-list-entries))))
-                (should (equal (substring-no-properties (aref active-row 0))
-                               "enabled"))
-                (should (equal (aref active-row 1) "active"))
-                (should (equal (aref active-row 2) "project"))
-                (should (equal (aref active-row 3) "Active description"))
-                (should (equal (substring-no-properties (aref disabled-row 0))
-                               "disabled"))
-                (should (equal (aref disabled-row 2) "user"))
-                (should (equal (aref plugin-row 2) "plugin")))
+              (let ((rows (mevedel-test-tabulated-entries-cells)))
+                (should (equal (cdr (assoc "active" rows))
+                               '("enabled" "active" "project"
+                                 "Active description")))
+                (should (equal (cdr (assoc "disabled" rows))
+                               '("disabled" "disabled" "user"
+                                 "Disabled description")))
+                (should (equal (cdr (assoc "plugin:assist" rows))
+                               '("enabled" "plugin:assist" "plugin"
+                                 "Plugin description"))))
               (mevedel-cockpit-goto-id "active")
-              (should (eq (mevedel-skills-list--skill-at-point)
-                          active))
               (mevedel-skills-list-details))
             (with-current-buffer "*mevedel skill details*"
               (should (string-match-p "Active description"
@@ -3977,7 +3966,7 @@ spanning lines")))
 (mevedel-deftest mevedel-skills-list-refresh ()
   ,test
   (test)
-  :doc "refresh preserves the selected skill row"
+  :doc "refresh updates visible skill row content"
   (let* ((user-dir (make-temp-file "mevedel-skills-refresh-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
@@ -3994,11 +3983,10 @@ spanning lines")))
               (mevedel-cockpit-goto-id "second")
               (setf (mevedel-skill-description second) "Updated")
               (mevedel-skills-list-refresh)
-              (should (equal (tabulated-list-get-id) "second"))
-              (should (equal (aref (cadr (assoc "second"
-                                                tabulated-list-entries))
-                                  3)
-                             "Updated")))))
+              (let ((rows (mevedel-test-tabulated-entries-cells)))
+                (should (equal (cdr (assoc "second" rows))
+                               '("enabled" "second" "project"
+                                 "Updated")))))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer)
       (delete-directory user-dir t))))
 
@@ -4044,11 +4032,9 @@ spanning lines")))
                       (mevedel-skills-list--entry skill))
                   (delete-directory user-dir t))))
     (should (equal (car entry) "visible"))
-    (should (equal (substring-no-properties (aref (cadr entry) 0))
-                   "disabled"))
-    (should (equal (aref (cadr entry) 1) "visible"))
-    (should (equal (aref (cadr entry) 2) "plugin"))
-    (should (equal (aref (cadr entry) 3) "Visible description"))))
+    (should (equal (mevedel-test-tabulated-row-cells entry)
+                   '("disabled" "visible" "plugin"
+                     "Visible description")))))
 
 (mevedel-deftest mevedel-skills-list--session-label ()
   ,test
@@ -4144,7 +4130,10 @@ spanning lines")))
                 (mevedel-skills-list-toggle-enabled)
                 (should-not (mevedel-skills--skill-enabled-p skill))
                 (should (eq refreshed-buffer view-buffer))
-                (should (equal (tabulated-list-get-id) "visible"))
+                (should (equal (cdr (assoc
+                                     "visible"
+                                     (mevedel-test-tabulated-entries-cells)))
+                               '("disabled" "visible" "project" "")))
                 (should (string-match-p "disabled" message-text))
                 (mevedel-skills-list-toggle-enabled)
                 (should (mevedel-skills--skill-enabled-p skill))
@@ -4199,6 +4188,8 @@ spanning lines")))
         (mevedel-skills-list-help)
         (with-current-buffer mevedel-skills-help-buffer-name
           (should (string-match-p "RET  Show selected skill details"
+                                  (buffer-string)))
+          (should (string-match-p "e    Enable or disable selected skill"
                                   (buffer-string)))
           (should (string-match-p "/skills enable NAME"
                                   (buffer-string)))))

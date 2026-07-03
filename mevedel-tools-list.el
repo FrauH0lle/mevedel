@@ -48,6 +48,8 @@
                   "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-details
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-key-help-text
+                  "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-refresh
                   "mevedel-cockpit" (&optional selected-id))
 (declare-function mevedel-cockpit-surface-selected
@@ -409,27 +411,23 @@
     (with-current-buffer data-buffer
       (call-interactively #'gptel-menu))))
 
-(defconst mevedel-tools-list--help-text
-  "mevedel tools cockpit
-
-Keys
-RET  Show selected tool details
-d    Defer selected active tool, or prompt for an active tool
-a    Activate selected deferred tool, or prompt for a deferred tool
-l    Search and load deferred tools temporarily
-G    Open gptel menu from the owning data buffer
-g    Refresh tools table
-?    Show this help
-q    Back to the main session cockpit
-
-Rows
-active    Available in the current tool payload
-deferred  Discoverable through ToolSearch
-pending   Queued for temporary load on the next payload update
-loaded    Temporarily loaded deferred tool with remaining TTL
-expired   Expired on the previous payload update
-"
-  "Help text for the tools cockpit.")
+(defun mevedel-tools-list--help-text (&optional _context)
+  "Return help text for the tools cockpit."
+  (string-join
+   (list
+    "mevedel tools cockpit"
+    ""
+    "Keys"
+    (mevedel-cockpit-surface-key-help-text mevedel-tools-list--surface)
+    ""
+    "Rows"
+    "active    Available in the current tool payload"
+    "deferred  Discoverable through ToolSearch"
+    "pending   Queued for temporary load on the next payload update"
+    "loaded    Temporarily loaded deferred tool with remaining TTL"
+    "expired   Expired on the previous payload update"
+    "")
+   "\n"))
 
 (defun mevedel-tools-list-help ()
   "Open tools cockpit help."
@@ -437,7 +435,7 @@ expired   Expired on the previous payload update
   (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-tools-help-buffer-name
-   mevedel-tools-list--help-text))
+   (mevedel-tools-list--help-text)))
 
 (defun mevedel-tools-list-quit ()
   "Quit the tools cockpit and return to the main session cockpit."
@@ -463,11 +461,15 @@ expired   Expired on the previous payload update
     :details mevedel-tools-list--detail-text
     :details-buffer "*mevedel tool details*"
     :help-buffer ,mevedel-tools-help-buffer-name
-    :help-text ,mevedel-tools-list--help-text
-    :keys (("a" . mevedel-tools-list-activate-deferred)
-           ("d" . mevedel-tools-list-defer-active)
-           ("l" . mevedel-tools-list-search-load)
-           ("G" . mevedel-tools-list-open-gptel)))
+    :help-function mevedel-tools-list--help-text
+    :keys (("a" "Activate selected deferred tool, or prompt for a deferred tool"
+            mevedel-tools-list-activate-deferred)
+           ("d" "Defer selected active tool, or prompt for an active tool"
+            mevedel-tools-list-defer-active)
+           ("l" "Search and load deferred tools temporarily"
+            mevedel-tools-list-search-load)
+           ("G" "Open gptel menu from the owning data buffer"
+            mevedel-tools-list-open-gptel)))
   "Cockpit surface spec for the tools list.")
 
 (define-derived-mode mevedel-tools-list-mode tabulated-list-mode

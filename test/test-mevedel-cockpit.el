@@ -85,7 +85,8 @@
     :details-buffer "*mevedel cockpit test details*"
     :help-buffer "*mevedel cockpit test help*"
     :help-text "test help"
-    :keys (("x" . ignore)))
+    :keys (("x" . ignore)
+           ("y" "Run described test key" ignore)))
   "Surface spec used by cockpit tests.")
 
 (defun mevedel-cockpit-test--surface (&optional setup require-session)
@@ -143,6 +144,8 @@
             (should (eq (lookup-key (current-local-map) (kbd "RET"))
                         #'mevedel-cockpit-surface-details))
             (should (eq (lookup-key (current-local-map) (kbd "x"))
+                        #'ignore))
+            (should (eq (lookup-key (current-local-map) (kbd "y"))
                         #'ignore))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
 
@@ -357,6 +360,18 @@
           (with-current-buffer "*mevedel cockpit test help*"
             (should (string-match-p "test help" (buffer-string)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit-surface-key-help-text ()
+  ,test
+  (test)
+
+  :doc "renders default and described surface keys"
+  (let ((text (mevedel-cockpit-surface-key-help-text
+               mevedel-cockpit-test--surface-spec)))
+    (should (string-match-p "RET  Show selected test item details" text))
+    (should (string-match-p "g    Refresh table" text))
+    (should (string-match-p "y    Run described test key" text))
+    (should-not (string-match-p "x    " text))))
 
 (mevedel-deftest mevedel-cockpit--return-buffer ()
   ,test

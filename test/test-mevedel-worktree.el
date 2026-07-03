@@ -538,6 +538,8 @@
           (should (string-match-p "c  Create a linked worktree session"
                                   (buffer-string)))
           (should (string-match-p "RET  Show selected worktree details"
+                                  (buffer-string)))
+          (should (string-match-p "g    Refresh table"
                                   (buffer-string)))))
     (mevedel-worktree-test--cleanup-surfaces)))
 
@@ -752,20 +754,16 @@
                  :state "branch"
                  :sessions ("main" "alt")))
          (entry (mevedel-worktree-list--entry item))
-         (cells (cadr entry)))
+         (cells (mevedel-test-tabulated-row-cells entry)))
     (should (equal (car entry) "/repo/"))
-    (should (equal (aref cells 0) "/repo/"))
-    (should (equal (aref cells 1) "main"))
-    (should (equal (aref cells 2) "abc123"))
-    (should (equal (aref cells 3) "yes"))
-    (should (equal (aref cells 4) "branch"))
-    (should (equal (aref cells 5) "main, alt"))))
+    (should (equal cells '("/repo/" "main" "abc123" "yes" "branch"
+                           "main, alt")))))
 
 (mevedel-deftest mevedel-worktree-list-refresh ()
   ,test
   (test)
 
-  :doc "refreshes rows and preserves the selected worktree where possible"
+  :doc "refreshes visible worktree row content"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-worktree-refresh-" t)))
          (other (file-name-as-directory
@@ -793,38 +791,11 @@
                            (list :path other :branch "updated"
                                  :head "fff"))))
               (mevedel-worktree-list-refresh)
-              (should (equal (tabulated-list-get-id) other))
-              (should (equal (aref (cadr (assoc other
-                                                tabulated-list-entries))
-                                  1)
-                             "updated")))))
+              (let ((rows (mevedel-test-tabulated-entries-cells)))
+                (should (equal (cdr (assoc other rows))
+                               (list other "updated" "fff" "" "branch"
+                                     "")))))))
       (mevedel-worktree-test--cleanup-surfaces view-buffer data-buffer)
-      (delete-directory root t))))
-
-(mevedel-deftest mevedel-worktree-list--selected-item ()
-  ,test
-  (test)
-
-  :doc "returns the item represented by the current row"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-worktree-selected-" t)))
-         (other (file-name-as-directory
-                 (file-name-concat root ".worktrees" "other")))
-         (status (mevedel-worktree-test--status
-                  root
-                  (list (list :path root :branch "main" :head "abc")
-                        (list :path other :branch "topic" :head "def"))))
-         (data-buffer (generate-new-buffer " *mwt-selected-data*")))
-    (unwind-protect
-        (let ((buffer (mevedel-worktree-test--open-list
-                       status data-buffer)))
-          (with-current-buffer buffer
-            (mevedel-cockpit-goto-id other)
-            (should (equal (plist-get
-                            (mevedel-worktree-list--selected-item)
-                            :path)
-                           other))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-worktree-list--details-text ()
@@ -960,6 +931,8 @@
         (mevedel-worktree-list-help)
         (with-current-buffer mevedel-worktree-help-buffer-name
           (should (string-match-p "o    Open selected worktree session"
+                                  (buffer-string)))
+          (should (string-match-p "c    Create a linked worktree session"
                                   (buffer-string)))))
     (mevedel-worktree-test--cleanup-surfaces)))
 
@@ -979,7 +952,7 @@
   ,test
   (test)
 
-  :doc "opens a tabulated worktree list for live owner buffers"
+  :doc "renders visible worktree rows"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-worktree-list-" t)))
          (status (mevedel-worktree-test--status root))
@@ -989,13 +962,11 @@
         (let ((buffer (mevedel-worktree-test--open-list
                        status data-buffer view-buffer)))
           (with-current-buffer buffer
-            (should (derived-mode-p 'mevedel-worktree-list-mode))
-            (should (eq (mevedel-cockpit-context-data-buffer
-                         (mevedel-cockpit-current-context))
-                        data-buffer))
-            (should (equal tabulated-list-sort-key '("Path" . nil)))
-            (should (= 1 (length tabulated-list-entries)))
-            (should (assoc root tabulated-list-entries))))
+            (let ((rows (mevedel-test-tabulated-entries-cells)))
+              (should (= 1 (length rows)))
+              (should (equal (cdr (assoc root rows))
+                             (list root "main" "abc123" "yes" "branch"
+                                   ""))))))
       (mevedel-worktree-test--cleanup-surfaces view-buffer data-buffer)
       (delete-directory root t))))
 

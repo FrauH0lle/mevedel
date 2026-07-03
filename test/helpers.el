@@ -6,6 +6,8 @@
 
 (require 'cl-lib)
 
+(defvar tabulated-list-entries)
+
 
 ;;
 ;;; Test macro
@@ -344,6 +346,25 @@ See also:
 
 ;;
 ;;; Test Functions
+
+(defun mevedel-test-tabulated-row-cells (row)
+  "Return ROW's displayed cells as plain strings.
+ROW may be a `tabulated-list-entries' entry or its cell vector."
+  (let ((cells (if (vectorp row) row (cadr row))))
+    (mapcar
+     (lambda (cell)
+       (cond
+        ((stringp cell) (substring-no-properties cell))
+        ((null cell) "")
+        (t (substring-no-properties (format "%s" cell)))))
+     (append cells nil))))
+
+(defun mevedel-test-tabulated-entries-cells (&optional entries)
+  "Return ENTRIES as an alist of row ids to plain cell strings."
+  (mapcar
+   (lambda (entry)
+     (cons (car entry) (mevedel-test-tabulated-row-cells entry)))
+   (or entries tabulated-list-entries)))
 
 (defun mevedel-test-same-items-p (expected actual &rest cl-keys)
   "Verify that EXPECTED and ACTUAL have the same items.
