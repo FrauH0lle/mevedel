@@ -16,7 +16,6 @@
 (defvar gptel--known-backends)
 (defvar gptel-backend)
 (defvar gptel-model)
-(defvar gptel-tools)
 
 ;; `gptel-request'
 (declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
@@ -46,16 +45,24 @@
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
 
+;; `mevedel-models'
+(declare-function mevedel-model-current-label "mevedel-models"
+                  (&optional buffer))
+(declare-function mevedel-model-current-provider-label "mevedel-models"
+                  (&optional buffer))
+
 ;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-effective "mevedel-permissions"
+                  (&optional session data-buffer surface-buffer))
+(declare-function mevedel-permission-mode-label "mevedel-permissions"
+                  (&optional mode))
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-plugins'
-(declare-function mevedel-plugins-enabled "mevedel-plugins"
-                  (&optional workspace))
-(declare-function mevedel-plugins-list "mevedel-plugins"
+(declare-function mevedel-plugins-count-label "mevedel-plugins"
                   (&optional workspace))
 (declare-function mevedel-plugins-list-open "mevedel-plugins"
                   (&optional context))
@@ -65,22 +72,21 @@
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
 
 ;; `mevedel-skills'
-(declare-function mevedel-skills--skill-enabled-p "mevedel-skills"
-                  (skill))
+(declare-function mevedel-skills-count-label "mevedel-skills" (session))
 (declare-function mevedel-skills-list-open "mevedel-skills"
                   (&optional context))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-active-p "mevedel-structs"
+                  (&optional buffer))
+(declare-function mevedel-request-state-label "mevedel-structs"
+                  (&optional buffer))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--current-request)
-(defvar mevedel--data-buffer)
-(defvar mevedel--session)
-(defvar mevedel--view-buffer)
+
+;; `mevedel-tools'
+(declare-function mevedel-tools-active-count "mevedel-tools"
+                  (&optional buffer))
 
 ;; `mevedel-tools-list'
 (declare-function mevedel-tools-list-open "mevedel-tools-list"
@@ -102,7 +108,7 @@
 (defvar mevedel-view--gptel-return-view-buffer)
 
 ;; `mevedel-worktree'
-(declare-function mevedel-worktree-list-open "mevedel-worktree"
+(declare-function mevedel-worktree-status-summary "mevedel-worktree"
                   (&optional context))
 (declare-function mevedel-worktree-status-open "mevedel-worktree" ())
 
@@ -147,64 +153,41 @@
   "Return a padded cockpit row for LABEL and state VALUE."
   (format "%-9s %s" label (mevedel-menu--value value face)))
 
-(defun mevedel-menu--mode-symbol (&optional session data-buffer)
-  "Return the effective permission mode for SESSION and DATA-BUFFER."
-  (let* ((context (unless (or session data-buffer) (mevedel-menu--context)))
-         (session (or session
-                      (and context
-                           (mevedel-cockpit-context-session context))))
-         (data-buffer (or data-buffer
-                          (and context
-                               (mevedel-cockpit-context-data-buffer
-                                context)))))
-    (or (and session (mevedel-session-permission-mode session))
-        (with-current-buffer data-buffer
-          (and (boundp 'mevedel-permission-mode) mevedel-permission-mode))
-        'default)))
+(defun mevedel-menu--mode-symbol (&optional session data-buffer surface-buffer)
+  "Return the effective permission mode for the cockpit context."
+  (require 'mevedel-permissions)
+  (let ((context (unless (and session data-buffer surface-buffer)
+                   (condition-case nil
+                       (mevedel-menu--context)
+                     (user-error nil)))))
+    (setq session
+          (or session
+              (and context (mevedel-cockpit-context-session context))))
+    (setq data-buffer
+          (or data-buffer
+              (and context (mevedel-cockpit-context-data-buffer context))))
+    (setq surface-buffer
+          (or surface-buffer
+              (and context (mevedel-cockpit-context-view-buffer context))
+              data-buffer))
+    (mevedel-permission-mode-effective session data-buffer surface-buffer)))
 
 (defun mevedel-menu--mode-label (&optional mode)
   "Return the cockpit label for permission MODE."
-  (pcase (or mode 'default)
-    ('accept-edits "edits")
-    ('trust-all "auto!")
-    ('plan "plan")
-    (_ "ask")))
+  (require 'mevedel-permissions)
+  (mevedel-permission-mode-label mode))
 
 (defun mevedel-menu--model-label ()
   "Return the current model label."
-  (with-current-buffer
-      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
-    (cond
-     ((not (bound-and-true-p gptel-model)) "none")
-     ((fboundp 'gptel--model-name) (gptel--model-name gptel-model))
-     (t (format "%s" gptel-model)))))
+  (require 'mevedel-models)
+  (mevedel-model-current-label
+   (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
 (defun mevedel-menu--active-tool-count ()
   "Return the number of active gptel tools in the data buffer."
-  (with-current-buffer
-      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
-    (length (and (boundp 'gptel-tools) gptel-tools))))
-
-(defun mevedel-menu--skill-count-label (session)
-  "Return enabled/total skill count label for SESSION."
-  (let ((enabled 0)
-        (total 0))
-    (dolist (skill (and session (mevedel-session-skills session)))
-      (setq total (1+ total))
-      (when (or (not (fboundp 'mevedel-skills--skill-enabled-p))
-                (mevedel-skills--skill-enabled-p skill))
-        (setq enabled (1+ enabled))))
-    (format "%d/%d" enabled total)))
-
-(defun mevedel-menu--plugin-count-label (workspace)
-  "Return enabled/total plugin count label for WORKSPACE."
-  (if (and workspace
-           (fboundp 'mevedel-plugins-list)
-           (fboundp 'mevedel-plugins-enabled))
-      (format "%d/%d"
-              (length (mevedel-plugins-enabled workspace))
-              (length (mevedel-plugins-list workspace)))
-    "0/0"))
+  (require 'mevedel-tools)
+  (mevedel-tools-active-count
+   (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
 (defun mevedel-menu--root-label (workspace)
   "Return a compact root label for WORKSPACE."
@@ -212,43 +195,11 @@
       (abbreviate-file-name (mevedel-workspace-root workspace))
     "unknown"))
 
-(defun mevedel-menu--working-directory (session data-buffer)
-  "Return the effective working directory for SESSION and DATA-BUFFER."
-  (file-name-as-directory
-   (or (and session (mevedel-session-working-directory session))
-       (with-current-buffer data-buffer default-directory))))
-
-(defun mevedel-menu--git-line (directory &rest args)
-  "Return trimmed Git output for ARGS in DIRECTORY, or nil on failure."
-  (with-temp-buffer
-    (let ((default-directory (file-name-as-directory
-                              (expand-file-name directory))))
-      (condition-case nil
-          (when (eq 0 (apply #'process-file
-                             "git" nil (list t nil) nil args))
-            (string-trim
-             (buffer-substring-no-properties (point-min) (point-max))))
-        (file-missing nil)))))
-
 (defun mevedel-menu--worktree-label ()
   "Return the current branch or detached HEAD label."
-  (let* ((context (mevedel-menu--context))
-         (data-buffer (mevedel-cockpit-context-data-buffer context))
-         (session (mevedel-cockpit-context-session context))
-         (directory (mevedel-menu--working-directory session data-buffer))
-         (branch (mevedel-menu--git-line directory
-                                         "branch" "--show-current"))
-         (head (mevedel-menu--git-line directory
-                                       "rev-parse" "--short" "HEAD")))
-    (cond
-     ((and branch (not (string-empty-p branch))) branch)
-     ((and head (not (string-empty-p head))) (format "detached %s" head))
-     (t "not-git"))))
-
-(defun mevedel-menu--request-state-label (data-buffer)
-  "Return the request state label for DATA-BUFFER."
-  (with-current-buffer data-buffer
-    (if (bound-and-true-p mevedel--current-request) "running" "idle")))
+  (require 'mevedel-worktree)
+  (plist-get (mevedel-worktree-status-summary (mevedel-menu--context))
+             :label))
 
 (defun mevedel-menu--header ()
   "Return the cockpit header string."
@@ -256,8 +207,10 @@
          (data-buffer (mevedel-cockpit-context-data-buffer context))
          (session (mevedel-cockpit-context-session context))
          (workspace (mevedel-cockpit-context-workspace context))
-         (mode (mevedel-menu--mode-symbol session data-buffer))
-         (request-state (mevedel-menu--request-state-label data-buffer)))
+         (mode (mevedel-menu--mode-symbol
+                session data-buffer
+                (mevedel-cockpit-context-view-buffer context)))
+         (request-state (mevedel-request-state-label data-buffer)))
     (concat
      (mevedel-menu--face "mevedel:" 'transient-heading)
      " "
@@ -281,7 +234,8 @@
      (mevedel-menu--mode-label
       (mevedel-menu--mode-symbol
        (mevedel-cockpit-context-session context)
-       (mevedel-cockpit-context-data-buffer context))))))
+       (mevedel-cockpit-context-data-buffer context)
+       (mevedel-cockpit-context-view-buffer context))))))
 
 (defun mevedel-menu--model-description ()
   "Return the top-level model row description."
@@ -294,21 +248,14 @@
 
 (defun mevedel-menu--model-surface-description ()
   "Return the model surface description."
-  (with-current-buffer
-      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
-    (let ((model (cond
-                  ((and (bound-and-true-p gptel-backend)
-                        (bound-and-true-p gptel-model))
-                   (format "%s:%s"
-                           (gptel-backend-name gptel-backend)
-                           (gptel--model-name gptel-model)))
-                  ((bound-and-true-p gptel-model)
-                   (gptel--model-name gptel-model))
-                  (t "none"))))
-      (concat (mevedel-menu--face "Current model: " 'transient-heading)
-              (if (string= model "none")
-                  (mevedel-menu--inactive-value model)
-                (mevedel-menu--value model))))))
+  (require 'mevedel-models)
+  (let ((model (mevedel-model-current-provider-label
+                (mevedel-cockpit-context-data-buffer
+                 (mevedel-menu--context)))))
+    (concat (mevedel-menu--face "Current model: " 'transient-heading)
+            (if (string= model "none")
+                (mevedel-menu--inactive-value model)
+              (mevedel-menu--value model)))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
@@ -319,19 +266,20 @@
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
+  (require 'mevedel-skills)
   (let ((context (mevedel-menu--context)))
     (mevedel-menu--state-description
      "Skills"
-     (mevedel-menu--skill-count-label
-      (mevedel-cockpit-context-session context))
+     (mevedel-skills-count-label (mevedel-cockpit-context-session context))
      'warning)))
 
 (defun mevedel-menu--plugins-description ()
   "Return the top-level plugins row description."
+  (require 'mevedel-plugins)
   (let ((workspace (mevedel-cockpit-context-workspace
                     (mevedel-menu--context))))
     (mevedel-menu--state-description
-     "Plugins" (mevedel-menu--plugin-count-label workspace) 'warning)))
+     "Plugins" (mevedel-plugins-count-label workspace) 'warning)))
 
 (defun mevedel-menu--worktree-description ()
   "Return the top-level worktree row description."
@@ -348,7 +296,8 @@
          (current (eq mode
                       (mevedel-menu--mode-symbol
                        (mevedel-cockpit-context-session context)
-                       (mevedel-cockpit-context-data-buffer context))))
+                       (mevedel-cockpit-context-data-buffer context)
+                       (mevedel-cockpit-context-view-buffer context))))
          (label (mevedel-menu--mode-label mode)))
     (format "%-7s %-7s %s"
             (if current (mevedel-menu--value label) label)
@@ -378,9 +327,8 @@
 
 (defun mevedel-menu--request-active-p ()
   "Return non-nil when the current session has an active request."
-  (with-current-buffer
-      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
-    (bound-and-true-p mevedel--current-request)))
+  (mevedel-request-active-p
+   (mevedel-cockpit-context-data-buffer (mevedel-menu--context))))
 
 (defun mevedel-menu--send-inapt-p ()
   "Return non-nil when sending should be inapt."

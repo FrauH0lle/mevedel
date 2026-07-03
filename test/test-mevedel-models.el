@@ -101,6 +101,41 @@
   (let ((mevedel-model-workload-tiers '((explorer . fast))))
     (should-not (mevedel-model-workload-default-selector 'guardian))))
 
+(mevedel-deftest mevedel-model-current-label ()
+  ,test
+  (test)
+
+  :doc "returns none when no current model is set"
+  (with-temp-buffer
+    (should (equal "none" (mevedel-model-current-label))))
+
+  :doc "returns the current model name"
+  (with-temp-buffer
+    (setq-local gptel-model 'fast-model)
+    (should (equal "fast-model" (mevedel-model-current-label)))))
+
+(mevedel-deftest mevedel-model-current-provider-label ()
+  ,test
+  (test)
+
+  :doc "returns none when no model is set"
+  (with-temp-buffer
+    (should (equal "none" (mevedel-model-current-provider-label))))
+
+  :doc "returns backend:model when both are set"
+  (mevedel-models-test--with-backends
+    (with-temp-buffer
+      (setq-local gptel-backend (gptel-get-backend "Fast"))
+      (setq-local gptel-model 'fast-model)
+      (should (equal "Fast:fast-model"
+                     (mevedel-model-current-provider-label)))))
+
+  :doc "falls back to the model label without a backend"
+  (with-temp-buffer
+    (setq-local gptel-model 'balanced-model)
+    (should (equal "balanced-model"
+                   (mevedel-model-current-provider-label)))))
+
 (mevedel-deftest mevedel-model-parse-selector ()
   ,test
   (test)

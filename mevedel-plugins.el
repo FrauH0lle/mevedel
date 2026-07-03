@@ -552,6 +552,14 @@ Items include usable plugin manifests and visible metadata errors."
       (when (mevedel-plugins--enabled-p plugin workspace)
         (push plugin enabled)))))
 
+(defun mevedel-plugins-count-label (&optional workspace)
+  "Return enabled/total plugin count label for WORKSPACE."
+  (if workspace
+      (format "%d/%d"
+              (length (mevedel-plugins-enabled workspace))
+              (length (mevedel-plugins-list workspace)))
+    "0/0"))
+
 (defun mevedel-plugins-skill-dirs (&optional workspace)
   "Return enabled plugin skill directories as source-tagged entries.
 Only plugins enabled in WORKSPACE are returned."

@@ -52,6 +52,25 @@
 ;;
 ;;; Polymorphic deferred accessors
 
+(mevedel-deftest mevedel-tools-active-count ()
+  ,test
+  (test)
+
+  :doc "returns zero when no tools are active"
+  (with-temp-buffer
+    (should (= 0 (mevedel-tools-active-count))))
+
+  :doc "counts active gptel tools in the target buffer"
+  (let ((buf (generate-new-buffer " *mev-tools-count*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local gptel-tools
+                        (list (mevedel-tools-test--make-fake-gptel-tool "Read")
+                              (mevedel-tools-test--make-fake-gptel-tool "Edit"))))
+          (should (= 2 (mevedel-tools-active-count buf))))
+      (when (buffer-live-p buf) (kill-buffer buf)))))
+
 (mevedel-deftest mevedel-tools--ctx-deferred-set
   (:after-each (mevedel-workspace-clear-registry))
   ,test

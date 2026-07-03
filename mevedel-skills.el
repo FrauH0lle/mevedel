@@ -3375,6 +3375,16 @@ Routes through the lifecycle-aware permission transition path."
         (format "%s/%s" source family)
       (symbol-name source))))
 
+(defun mevedel-skills-count-label (session)
+  "Return enabled/total skill count label for SESSION."
+  (let ((enabled 0)
+        (total 0))
+    (dolist (skill (and session (mevedel-session-skills session)))
+      (setq total (1+ total))
+      (when (mevedel-skills--skill-enabled-p skill)
+        (setq enabled (1+ enabled))))
+    (format "%d/%d" enabled total)))
+
 (defun mevedel-skills-list--item-id (skill)
   "Return stable tabulated row id for SKILL."
   (mevedel-skill-name skill))

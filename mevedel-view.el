@@ -45,16 +45,22 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel--request-alist)
-(defvar gptel-model)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
-(defvar gptel-tools)
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
+;; `mevedel-models'
+(declare-function mevedel-model-current-label "mevedel-models"
+                  (&optional buffer))
+
 ;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-effective "mevedel-permissions"
+                  (&optional session data-buffer surface-buffer))
+(declare-function mevedel-permission-mode-label "mevedel-permissions"
+                  (&optional mode))
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
@@ -63,50 +69,73 @@
 ;; `transient'
 (defvar transient-post-exit-hook)
 
+;; `mevedel-chat'
+(declare-function mevedel-abort "mevedel-chat" (&optional buf))
+
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue--render-head
+                  "mevedel-permission-queue" (&optional session))
+(declare-function mevedel-permission-queue-abort-all
+                  "mevedel-permission-queue" (&optional session))
+
 ;; `mevedel-structs'
-(defvar mevedel--data-buffer)
-(defvar mevedel--view-buffer)
-(defvar mevedel--session)
-(defvar mevedel--workspace)
-(defvar mevedel--current-request)
-(defvar mevedel--agent-invocation nil)
-(defvar mevedel--current-directive-uuid)
-(defvar mevedel--compaction-in-flight nil)
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-state-label "mevedel-structs"
+                  (&optional buffer))
+(declare-function mevedel-session-activate-dropped-file-grants
+                  "mevedel-structs" (session paths))
+(declare-function mevedel-session-add-dropped-file-grant
+                  "mevedel-structs" (session path))
+(declare-function mevedel-session-agent-transcripts
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-clear-dropped-file-grants
+                  "mevedel-structs" (session))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-queue
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pop-dropped-file-grants
+                  "mevedel-structs" (session paths))
+(declare-function mevedel-session-queued-user-messages
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-set-queued-user-messages
+                  "mevedel-structs" (session queue))
+(declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-add-dropped-file-grant
-                  "mevedel-structs" (session path))
-(declare-function mevedel-session-pop-dropped-file-grants
-                  "mevedel-structs" (session paths))
-(declare-function mevedel-session-clear-dropped-file-grants
-                  "mevedel-structs" (session))
-(declare-function mevedel-session-activate-dropped-file-grants
-                  "mevedel-structs" (session paths))
-(declare-function mevedel-session-set-queued-user-messages
-                  "mevedel-structs" (session queue))
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-permission-queue-abort-all
-                  "mevedel-permission-queue" (&optional session))
-(declare-function mevedel-permission-queue--render-head
-                  "mevedel-permission-queue" (&optional session))
-(declare-function mevedel-plan-queue-abort-all
-                  "mevedel-tool-plan" (&optional session))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+(defvar mevedel--agent-invocation nil)
+(defvar mevedel--compaction-in-flight nil)
+(defvar mevedel--current-directive-uuid)
+(defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
+(defvar mevedel--workspace)
+
+;; `mevedel-tool-plan'
+(declare-function mevedel-plan-mode-extract-proposed-plan
+                  "mevedel-tool-plan" (text))
+(declare-function mevedel-plan-mode-known-proposed-plan-p
+                  "mevedel-tool-plan" (plan-markdown &optional session))
+(declare-function mevedel-plan-mode-strip-proposed-plans
+                  "mevedel-tool-plan" (text))
 (declare-function mevedel-plan-queue--render-head
                   "mevedel-tool-plan" (&optional session))
+(declare-function mevedel-plan-queue-abort-all
+                  "mevedel-tool-plan" (&optional session))
+
+;; `mevedel-tool-task'
 (declare-function mevedel-tool-task--delete-overlay
                   "mevedel-tool-task" (session))
 (declare-function mevedel-tool-task--display-string
@@ -115,17 +144,14 @@
                   "mevedel-tool-task" (session))
 (declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
 (defvar mevedel-tool-task--overlay-keymap)
-(declare-function mevedel-plan-mode-strip-proposed-plans
-                  "mevedel-tool-plan" (text))
-(declare-function mevedel-plan-mode-extract-proposed-plan
-                  "mevedel-tool-plan" (text))
-(declare-function mevedel-plan-mode-known-proposed-plan-p
-                  "mevedel-tool-plan" (plan-markdown &optional session))
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+
+;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
-(declare-function mevedel-abort "mevedel-chat" (&optional buf))
+
+;; `mevedel-tools'
+(declare-function mevedel-tools-active-count "mevedel-tools"
+                  (&optional buffer))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
@@ -614,29 +640,24 @@ override globally or via `display-buffer-alist'."
 
 (defun mevedel-view--effective-permission-mode ()
   "Return the permission mode to apply to the current view buffer."
-  (or (and (boundp 'mevedel--session)
-           mevedel--session
-           (mevedel-session-permission-mode mevedel--session))
-      (and (boundp 'mevedel--data-buffer)
-           (buffer-live-p mevedel--data-buffer)
-           (buffer-local-value 'mevedel--session mevedel--data-buffer)
-           (mevedel-session-permission-mode
-            (buffer-local-value 'mevedel--session mevedel--data-buffer)))
-      (and (boundp 'mevedel-permission-mode)
-           mevedel-permission-mode)
-      'default))
+  (require 'mevedel-permissions)
+  (mevedel-permission-mode-effective
+   (and (boundp 'mevedel--session) mevedel--session)
+   (and (boundp 'mevedel--data-buffer)
+        (buffer-live-p mevedel--data-buffer)
+        mevedel--data-buffer)
+   (current-buffer)))
 
 (defun mevedel-view--permission-mode-display (mode)
   "Return (LABEL FACE) for permission MODE."
-  (pcase mode
-    ('plan
-     '("plan" mevedel-view-permission-mode-plan))
-    ('accept-edits
-     '("edits" mevedel-view-permission-mode-accept-edits))
-    ('trust-all
-     '("auto!" mevedel-view-permission-mode-trust-all))
-    (_
-     '("ask" mevedel-view-permission-mode-default))))
+  (require 'mevedel-permissions)
+  (list
+   (mevedel-permission-mode-label mode)
+   (pcase mode
+     ('plan 'mevedel-view-permission-mode-plan)
+     ('accept-edits 'mevedel-view-permission-mode-accept-edits)
+     ('trust-all 'mevedel-view-permission-mode-trust-all)
+     (_ 'mevedel-view-permission-mode-default))))
 
 (defconst mevedel-view--permission-mode-cycle
   '(default accept-edits trust-all plan)
@@ -2088,6 +2109,8 @@ Kills the associated view buffer."
   "Return a mevedel-owned clickable status strip for the view buffer."
   (when (and (boundp 'mevedel--data-buffer)
              (buffer-live-p mevedel--data-buffer))
+    (require 'mevedel-models)
+    (require 'mevedel-tools)
     (let* ((data-buffer mevedel--data-buffer)
            (session (with-current-buffer data-buffer
                       (and (boundp 'mevedel--session) mevedel--session)))
@@ -2100,17 +2123,12 @@ Kills the associated view buffer."
                        (with-current-buffer data-buffer default-directory)))))
            (mode (car (mevedel-view--permission-mode-display
                        (mevedel-view--effective-permission-mode))))
-           (state (with-current-buffer data-buffer
-                    (if (bound-and-true-p mevedel--current-request)
-                        "running"
-                      "idle")))
-           (model (with-current-buffer data-buffer
-                    (if (and (boundp 'gptel-model) gptel-model)
-                        (format "%s" gptel-model)
-                      "model none")))
-           (tool-count (with-current-buffer data-buffer
-                         (length (and (boundp 'gptel-tools)
-                                      gptel-tools))))
+           (state (mevedel-request-state-label data-buffer))
+           (model-label (mevedel-model-current-label data-buffer))
+           (model (if (string= model-label "none")
+                      "model none"
+                    model-label))
+           (tool-count (mevedel-tools-active-count data-buffer))
            (tools (format "%d tool%s"
                           tool-count
                           (if (= tool-count 1) "" "s")))
