@@ -305,6 +305,43 @@ item is selected."
                      (user-error nil))))
       (funcall function mevedel-cockpit--items context))))
 
+(defun mevedel-cockpit--key-command (binding)
+  "Return BINDING's command.
+BINDING may be (KEY . COMMAND) or (KEY LABEL COMMAND)."
+  (if (and (consp (cdr binding))
+           (stringp (cadr binding)))
+      (nth 2 binding)
+    (cdr binding)))
+
+(defun mevedel-cockpit--key-help-label (binding)
+  "Return BINDING's help label, or nil."
+  (and (consp (cdr binding))
+       (stringp (cadr binding))
+       (cadr binding)))
+
+(defun mevedel-cockpit-surface-key-help-text (&optional surface)
+  "Return formatted key help lines for SURFACE.
+SURFACE defaults to the current cockpit surface.  Surface key entries without
+a help label are still valid bindings, but are omitted from generated help."
+  (let* ((surface (or surface (mevedel-cockpit--current-surface)))
+         (row-label (or (plist-get surface :row-label) "item"))
+         (keys (append
+                (list
+                 (list "RET" (format "Show selected %s details" row-label))
+                 '("g" "Refresh table")
+                 '("?" "Show this help")
+                 '("q" "Back to the main session cockpit"))
+                (plist-get surface :keys))))
+    (mapconcat
+     #'identity
+     (delq nil
+           (mapcar
+            (lambda (binding)
+              (when-let* ((label (mevedel-cockpit--key-help-label binding)))
+                (format "%-4s %s" (car binding) label)))
+            keys))
+     "\n")))
+
 (defun mevedel-cockpit--make-surface-keymap (keys)
   "Return a cockpit keymap with default commands and extra KEYS."
   (let ((map (make-sparse-keymap)))
@@ -313,7 +350,8 @@ item is selected."
     (define-key map (kbd "q") #'mevedel-cockpit-surface-quit)
     (define-key map (kbd "RET") #'mevedel-cockpit-surface-details)
     (dolist (binding keys)
-      (define-key map (kbd (car binding)) (cdr binding)))
+      (define-key map (kbd (car binding))
+                  (mevedel-cockpit--key-command binding)))
     map))
 
 (defun mevedel-cockpit-setup-tabulated-surface (surface)

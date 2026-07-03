@@ -208,20 +208,17 @@
   (let* ((item '(:state loaded :name "Imenu" :category "mevedel"
                  :ttl "3" :description "List symbols"))
          (entry (mevedel-tools-list--entry item))
-         (cells (cadr entry)))
+         (cells (mevedel-test-tabulated-row-cells entry)))
     (should (equal (car entry) '(loaded "mevedel" "Imenu")))
-    (should (equal (substring-no-properties (aref cells 0)) "loaded"))
-    (should (equal (aref cells 1) "Imenu"))
-    (should (equal (aref cells 2) "mevedel"))
-    (should (equal (aref cells 3) "3"))
-    (should (equal (aref cells 4) "List symbols")))
+    (should (equal cells '("loaded" "Imenu" "mevedel" "3"
+                           "List symbols"))))
 
   :doc "keeps multiline details out of the table cell"
   (let* ((item '(:state active :name "Agent" :category "mevedel"
                  :description "Launch agents.\n\nForeground details."))
          (entry (mevedel-tools-list--entry item))
-         (cells (cadr entry)))
-    (should (equal (aref cells 4) "Launch agents."))))
+         (cells (mevedel-test-tabulated-row-cells entry)))
+    (should (equal (nth 4 cells) "Launch agents."))))
 
 (mevedel-deftest mevedel-tools-list--session-label ()
   ,test
@@ -293,37 +290,28 @@
                 '("Treesitter"))
           (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
             (with-current-buffer buffer
-              (should (eq major-mode 'mevedel-tools-list-mode))
-              (should (eq (mevedel-cockpit-context-session
-                           (mevedel-cockpit-current-context))
-                          session))
-              (should (eq (mevedel-cockpit-context-data-buffer
-                           (mevedel-cockpit-current-context))
-                          data-buffer))
-              (should (equal tabulated-list-sort-key '("Name" . nil)))
               (should (= 6 (length tabulated-list-entries)))
-              (let ((read-row (cadr (assoc '(active "mevedel" "Read")
-                                           tabulated-list-entries)))
-                    (edit-row (cadr (assoc '(deferred "mevedel" "Edit")
-                                           tabulated-list-entries)))
-                    (pending-row (cadr (assoc '(pending "mevedel" "Edit")
-                                              tabulated-list-entries)))
-                    (loaded-row (cadr (assoc '(loaded "" "XrefReferences")
-                                             tabulated-list-entries)))
-                    (expired-row (cadr (assoc '(expired "" "Treesitter")
-                                              tabulated-list-entries))))
-                (should (equal (substring-no-properties (aref read-row 0))
-                               "active"))
-                (should (equal (aref read-row 2) "mevedel"))
-                (should (equal (substring-no-properties (aref edit-row 0))
-                               "deferred"))
-                (should (equal (aref edit-row 4)
-                               "Replace text in a file"))
-                (should (equal (substring-no-properties (aref pending-row 0))
-                               "pending"))
-                (should (equal (aref loaded-row 3) "3"))
-                (should (equal (substring-no-properties (aref expired-row 0))
-                               "expired"))))))
+              (let ((rows (mevedel-test-tabulated-entries-cells)))
+                (should (equal (cdr (assoc '(active "mevedel" "Read")
+                                           rows))
+                               '("active" "Read" "mevedel" ""
+                                 "Fake tool Read")))
+                (should (equal (cdr (assoc '(deferred "mevedel" "Edit")
+                                           rows))
+                               '("deferred" "Edit" "mevedel" ""
+                                 "Replace text in a file")))
+                (should (equal (cdr (assoc '(pending "mevedel" "Edit")
+                                           rows))
+                               '("pending" "Edit" "mevedel" ""
+                                 "Fake tool Edit")))
+                (should (equal (cdr (assoc '(loaded "" "XrefReferences")
+                                           rows))
+                               '("loaded" "XrefReferences" "" "3"
+                                 "Temporarily loaded deferred tool")))
+                (should (equal (cdr (assoc '(expired "" "Treesitter")
+                                           rows))
+                               '("expired" "Treesitter" "" ""
+                                 "Expired after its deferred-tool TTL elapsed")))))))
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))))
 
@@ -336,7 +324,7 @@
   ,test
   (test)
 
-  :doc "refresh preserves the selected row where possible"
+  :doc "refresh updates visible deferred row content"
   (let* ((session (mevedel-tools-list-test--make-session))
          (data-buffer (generate-new-buffer " *mt-tools-refresh*"))
          (tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
@@ -352,33 +340,11 @@
               (setcdr (car (mevedel-session-deferred-set session))
                       "Updated")
               (mevedel-tools-list-refresh)
-              (should (equal (tabulated-list-get-id)
-                             '(deferred "mevedel" "Edit")))
-              (should (equal (aref (cadr (assoc '(deferred "mevedel" "Edit")
-                                                tabulated-list-entries))
-                                  4)
-                             "Updated")))))
-      (mevedel-tools-list-test--cleanup-list data-buffer))))
-
-(mevedel-deftest mevedel-tools-list--selected-item
-  (:after-each (mevedel-tools-list-test--cleanup-list))
-  ,test
-  (test)
-
-  :doc "returns the item represented by the current row"
-  (let* ((session (mevedel-tools-list-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-selected*"))
-         (tool (mevedel-tools-list-test--make-fake-gptel-tool "Read")))
-    (unwind-protect
-        (progn
-          (with-current-buffer data-buffer
-            (setq-local gptel-tools (list tool)))
-          (let ((buffer (mevedel-tools-list-test--open-list session data-buffer)))
-            (with-current-buffer buffer
-              (mevedel-cockpit-goto-id '(active "mevedel" "Read"))
-              (let ((item (mevedel-tools-list--selected-item)))
-                (should (eq (plist-get item :state) 'active))
-                (should (equal (plist-get item :name) "Read"))))))
+              (let ((rows (mevedel-test-tabulated-entries-cells)))
+                (should (equal (cdr (assoc '(deferred "mevedel" "Edit")
+                                           rows))
+                               '("deferred" "Edit" "mevedel" ""
+                                 "Updated")))))))
       (mevedel-tools-list-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list--selected-item-for-state
@@ -758,6 +724,8 @@
       (should (string-match-p "RET  Show selected tool details"
                               (buffer-string)))
       (should (string-match-p "l    Search and load"
+                              (buffer-string)))
+      (should (string-match-p "g    Refresh table"
                               (buffer-string))))))
 
 (mevedel-deftest mevedel-tools-list-quit

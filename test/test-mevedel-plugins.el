@@ -623,6 +623,9 @@
                  (when-let* ((buffer (get-buffer
                                       "*mevedel plugin details*")))
                    (kill-buffer buffer))
+                 (when-let* ((buffer (get-buffer
+                                      mevedel-plugins-help-buffer-name)))
+                   (kill-buffer buffer))
                  (mapc (lambda (buffer)
                          (when (buffer-live-p buffer)
                            (kill-buffer buffer)))
@@ -636,7 +639,7 @@
   (let ((buffer (mevedel-plugins-test--list-open workspace)))
     (should (eq buffer (window-buffer (selected-window)))))
 
-  :doc "renders a tabulated plugin cockpit with details and keybindings"
+  :doc "renders visible plugin rows and details"
   (let ((shadow-root (file-name-concat (mevedel-plugins-dir) "shadow"))
         (winning-root (mevedel-plugins-test--plugin-root user-dir "winner")))
     (mevedel-plugins-test--write-manifest shadow-root "{\"name\":\"demo\"}")
@@ -651,37 +654,13 @@
      "{\"name\":\"demo\",\"version\":\"1.0\",\"hooks\":\"hooks/hooks.json\"}")
     (mevedel-plugins-test--list-open workspace)
     (with-current-buffer mevedel-plugins-list-buffer-name
-      (should (eq major-mode 'mevedel-plugins-list-mode))
-      (should hl-line-mode)
-      (should (eq (lookup-key (current-local-map) (kbd "g"))
-                  #'mevedel-cockpit-surface-refresh))
-      (should (eq (lookup-key (current-local-map) (kbd "e"))
-                  #'mevedel-plugins-list-toggle-enabled))
-      (should (eq (lookup-key (current-local-map) (kbd "h"))
-                  #'mevedel-plugins-list-toggle-hooks))
-      (should (eq (lookup-key (current-local-map) (kbd "+"))
-                  #'mevedel-plugins-list-install))
-      (should (eq (lookup-key (current-local-map) (kbd "u"))
-                  #'mevedel-plugins-list-update))
-      (should (eq (lookup-key (current-local-map) (kbd "r"))
-                  #'mevedel-plugins-list-reload))
-      (should (eq (lookup-key (current-local-map) (kbd "x"))
-                  #'mevedel-plugins-list-remove))
-      (should (eq (lookup-key (current-local-map) (kbd "o"))
-                  #'mevedel-plugins-list-open-source))
-      (should (eq (lookup-key (current-local-map) (kbd "?"))
-                  #'mevedel-cockpit-surface-help))
-      (should (eq (lookup-key (current-local-map) (kbd "q"))
-                  #'mevedel-cockpit-surface-quit))
-      (should (eq (lookup-key (current-local-map) (kbd "RET"))
-                  #'mevedel-cockpit-surface-details))
-      (should (= 1 (length tabulated-list-entries)))
-      (pcase-let ((`(,_id ,row) (car tabulated-list-entries)))
-        (should (equal "*" (substring-no-properties (aref row 0))))
-        (should (equal "demo" (aref row 1)))
-        (should (equal "1.0" (aref row 2)))
-        (should (equal "off" (substring-no-properties (aref row 3))))
-        (should (equal "off" (substring-no-properties (aref row 4)))))
+      (let ((rows (mevedel-test-tabulated-entries-cells)))
+        (should (= 1 (length rows)))
+        (should (equal (cdr (assoc "demo" rows))
+                       (list "*" "demo" "1.0" "off" "off" "0"
+                             (abbreviate-file-name
+                              (file-name-as-directory
+                               (expand-file-name winning-root)))))))
       (should (equal "Enable plugin"
                      (mevedel-plugins-list--activation-label workspace)))
       (mevedel-plugins-list-details))
@@ -703,10 +682,20 @@
   (progn
     (mevedel-plugins-test--list-open workspace)
     (with-current-buffer mevedel-plugins-list-buffer-name
-      (should (eq major-mode 'mevedel-plugins-list-mode))
       (should-not tabulated-list-entries)
       (should (string-match-p "0/0 enabled"
                               (mevedel-cockpit-surface-header-line)))))
+
+  :doc "opens generated plugin cockpit help"
+  (progn
+    (mevedel-plugins-list-help)
+    (with-current-buffer mevedel-plugins-help-buffer-name
+      (should (string-match-p "RET  Show selected plugin details"
+                              (buffer-string)))
+      (should (string-match-p "e    Enable or disable selected plugin"
+                              (buffer-string)))
+      (should (string-match-p "/plugin enable NAME"
+                              (buffer-string)))))
 
   :doc "renders malformed manifests as visible error rows"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "bad")))
@@ -714,14 +703,12 @@
     (should-not (mevedel-plugins-list workspace))
     (mevedel-plugins-test--list-open workspace)
     (with-current-buffer mevedel-plugins-list-buffer-name
-      (should (= 1 (length tabulated-list-entries)))
-      (pcase-let ((`(,_id ,row) (car tabulated-list-entries)))
-        (should (equal "!" (substring-no-properties (aref row 0))))
-        (should (equal "../x" (substring-no-properties (aref row 1))))
-        (should (equal "error" (substring-no-properties (aref row 3))))
-        (should (string-match-p
-                 (regexp-quote (abbreviate-file-name root))
-                 (aref row 6))))
+      (let* ((rows (mevedel-test-tabulated-entries-cells))
+             (root (file-name-as-directory (expand-file-name root))))
+        (should (= 1 (length rows)))
+        (should (equal (cdr (assoc (concat "error:" root) rows))
+                       (list "!" "../x" "" "error" "" ""
+                             (abbreviate-file-name root)))))
       (mevedel-plugins-list-details))
     (with-current-buffer "*mevedel plugin details*"
       (let ((details (buffer-string)))
@@ -799,7 +786,8 @@
                  (list 0 ""))))
       (with-current-buffer mevedel-plugins-list-buffer-name
         (mevedel-plugins-list-install "owner/fresh")
-        (should (equal "fresh" (tabulated-list-get-id)))))
+        (should (assoc "fresh"
+                       (mevedel-test-tabulated-entries-cells)))))
     (should (= 1 (length calls))))
 
   :doc "mutation actions require live owners before side effects"

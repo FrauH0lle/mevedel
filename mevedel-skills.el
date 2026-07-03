@@ -52,6 +52,8 @@
                   "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-surface-help
                   "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-key-help-text
+                  "mevedel-cockpit" (&optional surface))
 (declare-function mevedel-cockpit-surface-quit
                   "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-surface-refresh
@@ -3495,22 +3497,16 @@ Routes through the lifecycle-aware permission transition path."
                   (or file dir "unknown")))
     (find-file target)))
 
-(defconst mevedel-skills-list--help-text
-  "mevedel skills cockpit
-
-Keys
-RET  Show selected skill details
-e    Enable or disable selected skill
-o    Open selected skill source
-g    Refresh skills table
-?    Show this help
-q    Back to the main session cockpit
-
-Slash equivalents
-/skills help NAME
-/skills enable NAME, /skills disable NAME
-"
-  "Help text for the skills cockpit.")
+(defun mevedel-skills-list--help-text (&optional _context)
+  "Return help text for the skills cockpit."
+  (concat
+   "mevedel skills cockpit\n\n"
+   "Keys\n"
+   (mevedel-cockpit-surface-key-help-text mevedel-skills-list--surface)
+   "\n\n"
+   "Slash equivalents\n"
+   "/skills help NAME\n"
+   "/skills enable NAME, /skills disable NAME\n"))
 
 (defun mevedel-skills-list-help ()
   "Open skills cockpit help."
@@ -3518,7 +3514,7 @@ Slash equivalents
   (require 'mevedel-cockpit)
   (mevedel-cockpit-show-help
    mevedel-skills-help-buffer-name
-   mevedel-skills-list--help-text))
+   (mevedel-skills-list--help-text)))
 
 (defun mevedel-skills-list-quit ()
   "Quit the skills cockpit and return to the main session cockpit."
@@ -3543,9 +3539,11 @@ Slash equivalents
     :details mevedel-skills--skill-detail-text
     :details-buffer "*mevedel skill details*"
     :help-buffer ,mevedel-skills-help-buffer-name
-    :help-text ,mevedel-skills-list--help-text
-    :keys (("e" . mevedel-skills-list-toggle-enabled)
-           ("o" . mevedel-skills-list-open-source)))
+    :help-function mevedel-skills-list--help-text
+    :keys (("e" "Enable or disable selected skill"
+            mevedel-skills-list-toggle-enabled)
+           ("o" "Open selected skill source"
+            mevedel-skills-list-open-source)))
   "Cockpit surface spec for the skill list.")
 
 (define-derived-mode mevedel-skills-list-mode tabulated-list-mode

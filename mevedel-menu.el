@@ -502,15 +502,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (string-join
    '("mevedel help"
      ""
-     "Session cockpit keys"
-     "RET Send              a Abort"
-     "c Compact             r Review              v Verify"
-     "n Next display        b Previous display"
-     "N Next query          B Previous query       e Toggle section"
-     "m Mode                M Model"
-     "t Tools               s Skills              p Plugins"
-     "d Toggle data view    g gptel menu          w Worktree"
-     "? Help"
+     "Session cockpit"
+     "The transient menu is the live key reference for session commands."
      ""
      "Slash commands that open UI"
      "/plugin, /plugin list       Plugins"
@@ -539,7 +532,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "The view buffer owns the composer, compact transcript, and status strip."
      "The data buffer owns raw gptel state, tools, model, and transcript data."
      "The cockpit resolves the view/data pair once and routes actions to the owning buffer."
-     "The raw data buffer keeps gptel header behavior; g opens gptel-menu there.")
+     "The raw data buffer keeps gptel header behavior for the gptel menu.")
    "\n"))
 
 (defun mevedel-menu-help-open ()
