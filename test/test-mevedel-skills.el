@@ -3924,7 +3924,7 @@ spanning lines")))
               (should (equal tabulated-list-sort-key '("Name" . nil)))
               (should (string-match-p
                        "2/3 enabled"
-                       (mevedel-skills-list--header-line)))
+                       (mevedel-cockpit-surface-header-line)))
               (should (= 3 (length tabulated-list-entries)))
               (let ((active-row (cadr (assoc "active" tabulated-list-entries)))
                     (disabled-row (cadr (assoc "disabled"
@@ -4046,7 +4046,8 @@ spanning lines")))
         (let ((buffer (mevedel-skills-test--open-list
                        session view-buffer data-buffer)))
           (with-current-buffer buffer
-            (should (equal (mevedel-skills-list--session-label)
+            (should (equal (mevedel-skills-list--session-label
+                            (mevedel-cockpit-surface-context))
                            "named"))))
       (mevedel-skills-test--cleanup-list view-buffer data-buffer))))
 
@@ -4061,31 +4062,14 @@ spanning lines")))
     (unwind-protect
         (with-temp-buffer
           (mevedel-skills-list-mode)
-          (setq mevedel-skills-list--skills (list enabled disabled))
           (mevedel-skills--set-enabled disabled nil)
-          (let ((line (mevedel-skills-list--header-line)))
+          (let ((line (mevedel-skills-list--header-line
+                       (list enabled disabled)
+                       nil)))
             (should (string-match-p "1/2 enabled" line))
             (should (string-match-p "RET details" line))
             (should (string-match-p "q back" line))))
       (delete-directory user-dir t))))
-
-(mevedel-deftest mevedel-skills-list--require-owner ()
-  ,test
-  (test)
-  :doc "requires live cockpit owner buffers"
-  (let ((view-buffer (generate-new-buffer " *skills-owner-view*"))
-        (data-buffer (generate-new-buffer " *skills-owner-data*")))
-    (unwind-protect
-        (let ((buffer (mevedel-skills-test--open-list
-                       (mevedel-skills-test--make-session)
-                       view-buffer
-                       data-buffer)))
-          (with-current-buffer buffer
-            (should (mevedel-skills-list--require-owner))
-            (kill-buffer data-buffer)
-            (should-error (mevedel-skills-list--require-owner)
-                          :type 'user-error)))
-      (mevedel-skills-test--cleanup-list view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-skills--list-message-text ()
   ,test

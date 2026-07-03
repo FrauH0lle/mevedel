@@ -745,7 +745,9 @@ function returning the states entered by test handlers."
     (unwind-protect
         (let ((buffer (mevedel-tools-test--open-list session data-buffer)))
           (with-current-buffer buffer
-            (should (equal (mevedel-tools-list--session-label) "main"))))
+            (should (equal (mevedel-tools-list--session-label
+                            (mevedel-cockpit-surface-context))
+                           "main"))))
       (mevedel-tools-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list--header-line ()
@@ -755,13 +757,13 @@ function returning the states entered by test handlers."
   :doc "summarizes row counts and key hints"
   (with-temp-buffer
     (mevedel-tools-list-mode)
-    (setq mevedel-tools-list--items
-          '((:state active :name "Read")
-            (:state deferred :name "Edit")
-            (:state pending :name "Imenu")
-            (:state loaded :name "XrefReferences")
-            (:state expired :name "Treesitter")))
-    (let ((line (mevedel-tools-list--header-line)))
+    (let ((line (mevedel-tools-list--header-line
+                 '((:state active :name "Read")
+                   (:state deferred :name "Edit")
+                   (:state pending :name "Imenu")
+                   (:state loaded :name "XrefReferences")
+                   (:state expired :name "Treesitter"))
+                 nil)))
       (should (string-match-p
                (format "default TTL:%d" mevedel-deferred-tool-ttl)
                line))

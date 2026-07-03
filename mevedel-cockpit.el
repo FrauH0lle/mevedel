@@ -2,9 +2,9 @@
 
 ;;; Commentary:
 
-;; Small helpers for session-owned tabulated cockpit surfaces.  Resource
-;; modules still own their rows, actions, keymaps, and details; this module
-;; only keeps the repeated `tabulated-list-mode' shell behavior in one place.
+;; Shared ownership and tabulated surface machinery for session-owned cockpit
+;; buffers.  Resource modules provide domain-specific item collection,
+;; rendering, and actions; this module owns the common surface lifecycle.
 
 ;;; Code:
 
@@ -31,6 +31,15 @@
 
 (defvar-local mevedel-cockpit--context nil
   "Context plist that owns the current cockpit surface.")
+
+(defvar-local mevedel-cockpit--surface nil
+  "Surface plist that describes the current tabulated cockpit.")
+
+(defvar-local mevedel-cockpit--items nil
+  "Items cached for the current tabulated cockpit render.")
+
+(defvar-local mevedel-cockpit--row-items nil
+  "Hash table mapping rendered row ids to cached items.")
 
 (defun mevedel-cockpit--buffer-session (buffer)
   "Return BUFFER's local session, or nil."
@@ -176,23 +185,150 @@ LABEL is used in the owner error."
                 (not (tabulated-list-get-id)))
       (forward-line 1))))
 
-(defun mevedel-cockpit-refresh-tabulated (entries &optional selected-id)
-  "Render tabulated ENTRIES, preserving SELECTED-ID or current row."
+(defun mevedel-cockpit--current-surface ()
+  "Return the current cockpit surface plist."
+  (or mevedel-cockpit--surface
+      (user-error "No cockpit surface here")))
+
+(defun mevedel-cockpit--surface-label (&optional surface)
+  "Return SURFACE's user-facing label."
+  (or (plist-get (or surface (mevedel-cockpit--current-surface)) :label)
+      "cockpit surface"))
+
+(defun mevedel-cockpit-surface-context (&optional surface)
+  "Return the checked cockpit context for SURFACE."
+  (let* ((surface (or surface (mevedel-cockpit--current-surface)))
+         (label (mevedel-cockpit--surface-label surface))
+         (context (mevedel-cockpit-current-context)))
+    (mevedel-cockpit-require-owner label context)
+    (when (and (plist-get surface :require-session)
+               (not (mevedel-cockpit-context-session context)))
+      (user-error "No mevedel session in this buffer"))
+    context))
+
+(defun mevedel-cockpit-surface-items ()
+  "Return the current cockpit surface's cached items."
+  mevedel-cockpit--items)
+
+(defun mevedel-cockpit--row-entry (surface item context)
+  "Return ITEM's tabulated row for SURFACE and CONTEXT."
+  (let ((entry-function (plist-get surface :entry)))
+    (unless entry-function
+      (error "Cockpit surface has no entry function"))
+    (let ((entry (funcall entry-function item context)))
+      (puthash (car entry) item mevedel-cockpit--row-items)
+      entry)))
+
+(defun mevedel-cockpit-surface-refresh (&optional selected-id)
+  "Refresh the current tabulated cockpit, preserving SELECTED-ID."
+  (interactive)
   (require 'tabulated-list)
-  (let ((selected (or selected-id (tabulated-list-get-id))))
-    (setq tabulated-list-entries entries)
+  (let* ((surface (mevedel-cockpit--current-surface))
+         (context (mevedel-cockpit-surface-context surface))
+         (collect-function (plist-get surface :collect))
+         (selected (or selected-id (tabulated-list-get-id))))
+    (unless collect-function
+      (error "Cockpit surface has no collect function"))
+    (setq mevedel-cockpit--items (funcall collect-function context)
+          mevedel-cockpit--row-items (make-hash-table :test #'equal)
+          tabulated-list-entries
+          (mapcar
+           (lambda (item)
+             (mevedel-cockpit--row-entry surface item context))
+           mevedel-cockpit--items))
     (tabulated-list-print t)
     (mevedel-cockpit-goto-id selected)
-    (force-mode-line-update t)))
+    (force-mode-line-update t)
+    mevedel-cockpit--items))
 
-(defun mevedel-cockpit-selected (items id-function)
-  "Return selected item from ITEMS using ID-FUNCTION to match row id."
+(defun mevedel-cockpit-surface-selected (&optional no-error)
+  "Return the selected cockpit surface item.
+When NO-ERROR is non-nil, return nil instead of signaling when no row
+item is selected."
   (require 'tabulated-list)
-  (when-let* ((id (tabulated-list-get-id)))
-    (cl-find-if
-     (lambda (item)
-       (equal id (funcall id-function item)))
-     items)))
+  (mevedel-cockpit-surface-context)
+  (let* ((surface (mevedel-cockpit--current-surface))
+         (row-label (or (plist-get surface :row-label) "item"))
+         (id (tabulated-list-get-id))
+         (sentinel (list nil))
+         (item (and id
+                    mevedel-cockpit--row-items
+                    (gethash id mevedel-cockpit--row-items sentinel))))
+    (cond
+     ((and item (not (eq item sentinel))) item)
+     (no-error nil)
+     (t (user-error "No %s on this line" row-label)))))
+
+(defun mevedel-cockpit-show-help (buffer text)
+  "Show TEXT in help BUFFER."
+  (let ((help-window-select t))
+    (with-help-window buffer
+      (princ text))))
+
+(defun mevedel-cockpit-surface-help ()
+  "Open help for the current cockpit surface."
+  (interactive)
+  (let* ((surface (mevedel-cockpit--current-surface))
+         (context (condition-case nil
+                      (mevedel-cockpit-current-context)
+                    (user-error nil)))
+         (function (plist-get surface :help-function))
+         (text (or (and function (funcall function context))
+                   (plist-get surface :help-text)))
+         (buffer (or (plist-get surface :help-buffer)
+                     "*mevedel cockpit help*")))
+    (unless text
+      (user-error "No help for this %s"
+                  (mevedel-cockpit--surface-label surface)))
+    (mevedel-cockpit-show-help buffer text)))
+
+(defun mevedel-cockpit-surface-details ()
+  "Open details for the selected cockpit surface item."
+  (interactive)
+  (let* ((surface (mevedel-cockpit--current-surface))
+         (context (mevedel-cockpit-surface-context surface))
+         (function (plist-get surface :details))
+         (buffer (or (plist-get surface :details-buffer)
+                     "*mevedel cockpit details*"))
+         (item (mevedel-cockpit-surface-selected)))
+    (unless function
+      (user-error "No details for this %s"
+                  (mevedel-cockpit--surface-label surface)))
+    (mevedel-cockpit-show-help buffer (funcall function item context))))
+
+(defun mevedel-cockpit-surface-header-line ()
+  "Return the header line for the current cockpit surface."
+  (when-let* ((surface mevedel-cockpit--surface)
+              (function (plist-get surface :header)))
+    (let ((context (condition-case nil
+                       (mevedel-cockpit-current-context)
+                     (user-error nil))))
+      (funcall function mevedel-cockpit--items context))))
+
+(defun mevedel-cockpit--make-surface-keymap (keys)
+  "Return a cockpit keymap with default commands and extra KEYS."
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'mevedel-cockpit-surface-refresh)
+    (define-key map (kbd "?") #'mevedel-cockpit-surface-help)
+    (define-key map (kbd "q") #'mevedel-cockpit-surface-quit)
+    (define-key map (kbd "RET") #'mevedel-cockpit-surface-details)
+    (dolist (binding keys)
+      (define-key map (kbd (car binding)) (cdr binding)))
+    map))
+
+(defun mevedel-cockpit-setup-tabulated-surface (surface)
+  "Initialize the current tabulated buffer from SURFACE."
+  (require 'tabulated-list)
+  (setq mevedel-cockpit--surface surface
+        tabulated-list-format (plist-get surface :format)
+        tabulated-list-padding (or (plist-get surface :padding) 2)
+        tabulated-list-sort-key (plist-get surface :sort-key))
+  (when (plist-get surface :header)
+    (setq header-line-format '(:eval (mevedel-cockpit-surface-header-line))))
+  (use-local-map
+   (mevedel-cockpit--make-surface-keymap (plist-get surface :keys)))
+  (tabulated-list-init-header)
+  (hl-line-mode 1))
 
 (defun mevedel-cockpit-quit (&optional label)
   "Kill the current cockpit and return to the main session cockpit.
@@ -212,21 +348,27 @@ LABEL is a user-facing surface label used in the dead-owner error."
       (require 'mevedel-menu)
       (mevedel-menu))))
 
-(defun mevedel-cockpit-open-tabulated
-    (buffer-name mode refresh context &optional setup label)
-  "Open a session-owned tabulated cockpit buffer.
-BUFFER-NAME is created or reused, MODE initializes the buffer, REFRESH
-renders rows, and SETUP runs after CONTEXT is recorded.  LABEL is a
-user-facing surface label used in owner errors."
-  (setq context (mevedel-cockpit--require-open-context context label))
+(defun mevedel-cockpit-surface-quit ()
+  "Quit the current cockpit surface."
+  (interactive)
+  (mevedel-cockpit-quit (mevedel-cockpit--surface-label)))
+
+(defun mevedel-cockpit-open-surface (surface &optional context)
+  "Open tabulated cockpit SURFACE for CONTEXT."
+  (let ((label (mevedel-cockpit--surface-label surface)))
+    (setq context (mevedel-cockpit--require-open-context context label))
+    (when (and (plist-get surface :require-session)
+               (not (mevedel-cockpit-context-session context)))
+      (user-error "No mevedel session in this buffer")))
   (require 'tabulated-list)
-  (let ((buffer (get-buffer-create buffer-name)))
+  (let ((buffer (get-buffer-create (plist-get surface :buffer-name))))
     (with-current-buffer buffer
-      (funcall mode)
+      (funcall (plist-get surface :mode))
+      (setq mevedel-cockpit--surface surface)
       (setq mevedel-cockpit--context context)
-      (when setup
-        (funcall setup))
-      (funcall refresh))
+      (when-let* ((setup (plist-get surface :setup)))
+        (funcall setup context))
+      (mevedel-cockpit-surface-refresh))
     (when-let* ((window (display-buffer buffer)))
       (select-window window))
     buffer))

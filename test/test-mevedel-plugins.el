@@ -7,6 +7,7 @@
 (eval-when-compile
   (require 'cl-lib))
 
+(require 'mevedel-cockpit)
 (require 'mevedel-menu)
 (require 'mevedel-plugins)
 (require 'helpers
@@ -572,28 +573,28 @@
     (with-current-buffer mevedel-plugins-list-buffer-name
       (should (eq major-mode 'mevedel-plugins-list-mode))
       (should hl-line-mode)
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "g"))
-                  #'mevedel-plugins-list-refresh))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "e"))
+      (should (eq (lookup-key (current-local-map) (kbd "g"))
+                  #'mevedel-cockpit-surface-refresh))
+      (should (eq (lookup-key (current-local-map) (kbd "e"))
                   #'mevedel-plugins-list-toggle-enabled))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "h"))
+      (should (eq (lookup-key (current-local-map) (kbd "h"))
                   #'mevedel-plugins-list-toggle-hooks))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "+"))
+      (should (eq (lookup-key (current-local-map) (kbd "+"))
                   #'mevedel-plugins-list-install))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "u"))
+      (should (eq (lookup-key (current-local-map) (kbd "u"))
                   #'mevedel-plugins-list-update))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "r"))
+      (should (eq (lookup-key (current-local-map) (kbd "r"))
                   #'mevedel-plugins-list-reload))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "x"))
+      (should (eq (lookup-key (current-local-map) (kbd "x"))
                   #'mevedel-plugins-list-remove))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "o"))
+      (should (eq (lookup-key (current-local-map) (kbd "o"))
                   #'mevedel-plugins-list-open-source))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "?"))
-                  #'mevedel-plugins-list-help))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "q"))
-                  #'mevedel-plugins-list-quit))
-      (should (eq (lookup-key mevedel-plugins-list-mode-map (kbd "RET"))
-                  #'mevedel-plugins-list-details))
+      (should (eq (lookup-key (current-local-map) (kbd "?"))
+                  #'mevedel-cockpit-surface-help))
+      (should (eq (lookup-key (current-local-map) (kbd "q"))
+                  #'mevedel-cockpit-surface-quit))
+      (should (eq (lookup-key (current-local-map) (kbd "RET"))
+                  #'mevedel-cockpit-surface-details))
       (should (= 1 (length tabulated-list-entries)))
       (pcase-let ((`(,_id ,row) (car tabulated-list-entries)))
         (should (equal "*" (substring-no-properties (aref row 0))))
@@ -602,7 +603,7 @@
         (should (equal "off" (substring-no-properties (aref row 3))))
         (should (equal "off" (substring-no-properties (aref row 4)))))
       (should (equal "Enable plugin"
-                     (mevedel-plugins-list--activation-label)))
+                     (mevedel-plugins-list--activation-label workspace)))
       (mevedel-plugins-list-details))
     (with-current-buffer "*mevedel plugin details*"
       (let ((details (buffer-string)))
@@ -625,7 +626,7 @@
       (should (eq major-mode 'mevedel-plugins-list-mode))
       (should-not tabulated-list-entries)
       (should (string-match-p "0/0 enabled"
-                              (mevedel-plugins-list--header-line)))))
+                              (mevedel-cockpit-surface-header-line)))))
 
   :doc "renders malformed manifests as visible error rows"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "bad")))
@@ -660,28 +661,30 @@
     (mevedel-plugins-test--list-open workspace)
     (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
       (with-current-buffer mevedel-plugins-list-buffer-name
-        (mevedel-plugins-list-toggle-enabled)
-        (should (equal "Disable plugin"
-                       (mevedel-plugins-list--activation-label)))
-        (should (mevedel-plugins--enabled-p
-                 (mevedel-plugins--find
-                  "demo" (mevedel-plugins-list--workspace))
-                 (mevedel-plugins-list--workspace)))
-        (mevedel-plugins-list-toggle-hooks)
-        (should (equal "off"
-                       (mevedel-plugins--hooks-status
-                        (mevedel-plugins--find
-                         "demo" (mevedel-plugins-list--workspace))
-                        (mevedel-plugins-list--workspace))))
-        (mevedel-plugins-list-toggle-hooks)
-        (should (equal "on"
-                       (mevedel-plugins--hooks-status
-                        (mevedel-plugins--find
-                         "demo" (mevedel-plugins-list--workspace))
-                        (mevedel-plugins-list--workspace))))
-        (mevedel-plugins-list-toggle-enabled)
-        (should (equal "Enable plugin"
-                       (mevedel-plugins-list--activation-label))))))
+        (let ((list-workspace
+               (mevedel-plugins-list--workspace
+                (mevedel-cockpit-surface-context))))
+          (mevedel-plugins-list-toggle-enabled)
+          (should (equal "Disable plugin"
+                         (mevedel-plugins-list--activation-label
+                          list-workspace)))
+          (should (mevedel-plugins--enabled-p
+                   (mevedel-plugins--find "demo" list-workspace)
+                   list-workspace))
+          (mevedel-plugins-list-toggle-hooks)
+          (should (equal "off"
+                         (mevedel-plugins--hooks-status
+                          (mevedel-plugins--find "demo" list-workspace)
+                          list-workspace)))
+          (mevedel-plugins-list-toggle-hooks)
+          (should (equal "on"
+                         (mevedel-plugins--hooks-status
+                          (mevedel-plugins--find "demo" list-workspace)
+                          list-workspace)))
+          (mevedel-plugins-list-toggle-enabled)
+          (should (equal "Enable plugin"
+                         (mevedel-plugins-list--activation-label
+                          list-workspace)))))))
 
   :doc "dispatches update and remove actions at point"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))

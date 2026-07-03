@@ -45,16 +45,21 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
-(declare-function mevedel-cockpit-open-tabulated
-                  "mevedel-cockpit"
-                  (buffer-name mode refresh context &optional setup label))
+(declare-function mevedel-cockpit-open-surface
+                  "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
-(declare-function mevedel-cockpit-refresh-tabulated
-                  "mevedel-cockpit" (entries &optional selected-id))
-(declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label context))
-(declare-function mevedel-cockpit-selected
-                  "mevedel-cockpit" (items id-function))
+(declare-function mevedel-cockpit-setup-tabulated-surface
+                  "mevedel-cockpit" (surface))
+(declare-function mevedel-cockpit-surface-context
+                  "mevedel-cockpit" (&optional surface))
+(declare-function mevedel-cockpit-surface-details
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-quit
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-refresh
+                  "mevedel-cockpit" (&optional selected-id))
+(declare-function mevedel-cockpit-surface-selected
+                  "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -329,12 +334,6 @@
 (defconst mevedel-worktree-help-buffer-name "*mevedel worktree help*"
   "Name of the worktree cockpit help buffer.")
 
-(defvar-local mevedel-worktree-list--items nil
-  "Worktree row items cached for the current list render.")
-
-(defvar-local mevedel-worktree-list--status nil
-  "Worktree status cached for the current list render.")
-
 (defun mevedel-worktree-status--data-buffer (&optional context)
   "Return the data buffer that launched the worktree transient."
   (require 'mevedel-cockpit)
@@ -409,12 +408,9 @@
   (with-current-buffer (mevedel-worktree-status--data-buffer)
     (mevedel-worktree-status-open)))
 
-(defun mevedel-worktree-status-help ()
-  "Open worktree status help."
-  (interactive)
-  (let ((help-window-select t))
-    (with-help-window mevedel-worktree-help-buffer-name
-      (princ "mevedel worktree cockpit
+(defun mevedel-worktree--help-text (&optional _context)
+  "Return worktree cockpit help text."
+  "mevedel worktree cockpit
 
 Status keys
 c  Create a linked worktree session
@@ -430,7 +426,14 @@ c    Create a linked worktree session
 g    Refresh list
 ?    Show this help
 q    Back to the main session cockpit
-"))))
+")
+
+(defun mevedel-worktree-status-help ()
+  "Open worktree status help."
+  (interactive)
+  (let ((help-window-select t))
+    (with-help-window mevedel-worktree-help-buffer-name
+      (princ (mevedel-worktree--help-text)))))
 
 (defun mevedel-worktree-status-back ()
   "Return from worktree status to the main session cockpit."
@@ -455,25 +458,19 @@ q    Back to the main session cockpit
   (interactive)
   (transient-setup 'mevedel-worktree-status))
 
-(defun mevedel-worktree-list--require-owner ()
-  "Signal a user error if this list's owning session is gone."
-  (require 'mevedel-cockpit)
-  (mevedel-cockpit-require-owner "worktree list"))
-
 (defun mevedel-worktree-list--context ()
   "Return the current worktree list context."
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-current-context))
+  (mevedel-cockpit-surface-context))
 
 (defun mevedel-worktree-list--context-data-buffer (&optional context)
   "Return the current worktree list data buffer."
   (let ((context (or context (mevedel-worktree-list--context))))
-    (mevedel-cockpit-require-owner "worktree list" context)
     (mevedel-cockpit-context-data-buffer context)))
 
-(defun mevedel-worktree-list--status ()
-  "Return current worktree status from the owning data buffer."
-  (let ((context (mevedel-worktree-list--context)))
+(defun mevedel-worktree-list--status (&optional context)
+  "Return current worktree status from CONTEXT's data buffer."
+  (let ((context (or context (mevedel-worktree-list--context))))
     (with-current-buffer (mevedel-worktree-list--context-data-buffer context)
       (mevedel-worktree--collect-status context))))
 
@@ -542,7 +539,7 @@ q    Back to the main session cockpit
             (mevedel-worktree-list--item status entry))
           (plist-get status :worktrees)))
 
-(defun mevedel-worktree-list--entry (item)
+(defun mevedel-worktree-list--entry (item &optional _context)
   "Return a `tabulated-list-mode' row for worktree ITEM."
   (list
    (mevedel-worktree-list--item-id item)
@@ -554,28 +551,23 @@ q    Back to the main session cockpit
     (plist-get item :state)
     (string-join (plist-get item :sessions) ", "))))
 
+(defun mevedel-worktree-list--collect (context)
+  "Return worktree list items for CONTEXT."
+  (mevedel-worktree-list--items
+   (mevedel-worktree-list--status context)))
+
 (defun mevedel-worktree-list-refresh ()
   "Refresh the tabulated worktree list."
   (interactive)
-  (let* ((selected (tabulated-list-get-id))
-         (status (mevedel-worktree-list--status))
-         (items (mevedel-worktree-list--items status)))
-    (mevedel-worktree-list--require-owner)
-    (setq mevedel-worktree-list--status status
-          mevedel-worktree-list--items items)
-    (require 'mevedel-cockpit)
-    (mevedel-cockpit-refresh-tabulated
-     (mapcar #'mevedel-worktree-list--entry items)
-     selected)))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-worktree-list--selected-item ()
   "Return the selected worktree item, or nil."
-  (mevedel-worktree-list--require-owner)
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-selected mevedel-worktree-list--items
-                            #'mevedel-worktree-list--item-id))
+  (mevedel-cockpit-surface-selected t))
 
-(defun mevedel-worktree-list--details-text (item)
+(defun mevedel-worktree-list--details-text (item &optional _context)
   "Return normalized details text for worktree ITEM."
   (string-join
    (list
@@ -593,11 +585,8 @@ q    Back to the main session cockpit
 (defun mevedel-worktree-list-details ()
   "Show details for the selected worktree row."
   (interactive)
-  (let ((item (or (mevedel-worktree-list--selected-item)
-                  (user-error "No worktree on this line")))
-        (help-window-select t))
-    (with-help-window "*mevedel worktree details*"
-      (princ (mevedel-worktree-list--details-text item)))))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-details))
 
 (defun mevedel-worktree-list-open-selected ()
   "Open or switch to the selected worktree's mevedel session."
@@ -634,43 +623,40 @@ q    Back to the main session cockpit
   (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "worktree list"))
 
-(defvar mevedel-worktree-list-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "c") #'mevedel-worktree-list-create)
-    (define-key map (kbd "g") #'mevedel-worktree-list-refresh)
-    (define-key map (kbd "o") #'mevedel-worktree-list-open-selected)
-    (define-key map (kbd "?") #'mevedel-worktree-list-help)
-    (define-key map (kbd "q") #'mevedel-worktree-list-quit)
-    (define-key map (kbd "RET") #'mevedel-worktree-list-details)
-    map)
-  "Keymap for `mevedel-worktree-list-mode'.")
+(defconst mevedel-worktree-list--surface
+  `(:buffer-name ,mevedel-worktree-list-buffer-name
+    :label "worktree list"
+    :row-label "worktree"
+    :mode mevedel-worktree-list-mode
+    :format [("Path" 36 t)
+             ("Branch" 20 t)
+             ("Head" 10 t)
+             ("Current" 8 t)
+             ("State" 10 t)
+             ("Sessions" 0 t)]
+    :sort-key ("Path" . nil)
+    :collect mevedel-worktree-list--collect
+    :entry mevedel-worktree-list--entry
+    :details mevedel-worktree-list--details-text
+    :details-buffer "*mevedel worktree details*"
+    :help-function mevedel-worktree--help-text
+    :help-buffer ,mevedel-worktree-help-buffer-name
+    :keys (("c" . mevedel-worktree-list-create)
+           ("o" . mevedel-worktree-list-open-selected)))
+  "Cockpit surface spec for the worktree list.")
 
 (define-derived-mode mevedel-worktree-list-mode tabulated-list-mode
   "mevedel-worktree"
   "Major mode for the tabulated worktree list."
-  (setq tabulated-list-format
-        [("Path" 36 t)
-         ("Branch" 20 t)
-         ("Head" 10 t)
-         ("Current" 8 t)
-         ("State" 10 t)
-         ("Sessions" 0 t)])
-  (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key '("Path" . nil))
-  (tabulated-list-init-header)
-  (hl-line-mode 1))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-setup-tabulated-surface
+   mevedel-worktree-list--surface))
 
 (defun mevedel-worktree-list-open (&optional context)
   "Open the tabulated worktree list for CONTEXT."
   (require 'mevedel-cockpit)
   (let ((context (or context (mevedel-cockpit-current-context))))
-    (mevedel-cockpit-open-tabulated
-     mevedel-worktree-list-buffer-name
-     #'mevedel-worktree-list-mode
-     #'mevedel-worktree-list-refresh
-     context
-     nil
-     "worktree list")))
+    (mevedel-cockpit-open-surface mevedel-worktree-list--surface context)))
 
 
 ;;
