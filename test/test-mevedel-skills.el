@@ -3117,7 +3117,12 @@ maps to \"### \"."
   (with-current-buffer data-buffer
     (setq-local mevedel--session session)
     (setq-local mevedel--view-buffer view-buffer)
-    (mevedel-skills-list-open session view-buffer data-buffer data-buffer)))
+    (mevedel-skills-list-open
+     (list :view-buffer view-buffer
+           :data-buffer data-buffer
+           :origin-buffer data-buffer
+           :session session
+           :workspace (mevedel-session-workspace session)))))
 
 (defun mevedel-skills-test--cleanup-list (&rest buffers)
   "Kill skills cockpit test buffers and BUFFERS."
@@ -3913,7 +3918,9 @@ spanning lines")))
                          session view-buffer data-buffer)))
             (with-current-buffer buffer
               (should (eq major-mode 'mevedel-skills-list-mode))
-              (should (eq mevedel-skills-list--session session))
+              (should (eq (mevedel-cockpit-context-session
+                           (mevedel-cockpit-current-context))
+                          session))
               (should (equal tabulated-list-sort-key '("Name" . nil)))
               (should (string-match-p
                        "2/3 enabled"
@@ -4029,12 +4036,19 @@ spanning lines")))
   ,test
   (test)
   :doc "returns the rendered session name or unknown"
-  (let ((session (mevedel-skills-test--make-session "named")))
+  (let ((session (mevedel-skills-test--make-session "named"))
+        (view-buffer (generate-new-buffer " *skills-label-view*"))
+        (data-buffer (generate-new-buffer " *skills-label-data*")))
     (with-temp-buffer
       (mevedel-skills-list-mode)
-      (should (equal (mevedel-skills-list--session-label) "unknown"))
-      (setq mevedel-skills-list--session session)
-      (should (equal (mevedel-skills-list--session-label) "named")))))
+      (should (equal (mevedel-skills-list--session-label) "unknown")))
+    (unwind-protect
+        (let ((buffer (mevedel-skills-test--open-list
+                       session view-buffer data-buffer)))
+          (with-current-buffer buffer
+            (should (equal (mevedel-skills-list--session-label)
+                           "named"))))
+      (mevedel-skills-test--cleanup-list view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-skills-list--header-line ()
   ,test
@@ -4042,14 +4056,12 @@ spanning lines")))
   :doc "summarizes the session skill count and key hints"
   (let* ((user-dir (make-temp-file "mevedel-skills-header-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (session (mevedel-skills-test--make-session))
          (enabled (mevedel-skill--create :name "enabled"))
          (disabled (mevedel-skill--create :name "disabled")))
     (unwind-protect
         (with-temp-buffer
           (mevedel-skills-list-mode)
-          (setq mevedel-skills-list--session session
-                mevedel-skills-list--skills (list enabled disabled))
+          (setq mevedel-skills-list--skills (list enabled disabled))
           (mevedel-skills--set-enabled disabled nil)
           (let ((line (mevedel-skills-list--header-line)))
             (should (string-match-p "1/2 enabled" line))

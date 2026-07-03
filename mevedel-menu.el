@@ -24,6 +24,24 @@
 ;; `gptel-transient'
 (declare-function gptel-menu "ext:gptel-transient" ())
 
+;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-call-in-data
+                  "mevedel-cockpit" (context function &rest args))
+(declare-function mevedel-cockpit-call-in-view
+                  "mevedel-cockpit" (context function &rest args))
+(declare-function mevedel-cockpit-context-data-buffer
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-origin-buffer
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-session
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-view-buffer
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-workspace
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context
+                  "mevedel-cockpit" ())
+
 ;; `mevedel-compact'
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
@@ -40,7 +58,7 @@
 (declare-function mevedel-plugins-list "mevedel-plugins"
                   (&optional workspace))
 (declare-function mevedel-plugins-list-open "mevedel-plugins"
-                  (&optional workspace view-buffer data-buffer origin-buffer))
+                  (&optional context))
 
 ;; `mevedel-review'
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
@@ -50,7 +68,7 @@
 (declare-function mevedel-skills--skill-enabled-p "mevedel-skills"
                   (skill))
 (declare-function mevedel-skills-list-open "mevedel-skills"
-                  (&optional session view-buffer data-buffer origin-buffer))
+                  (&optional context))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -66,7 +84,7 @@
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools-list-open "mevedel-tools"
-                  (&optional session view-buffer data-buffer origin-buffer))
+                  (&optional context))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--gptel-edit-directive-args
@@ -84,7 +102,8 @@
 (defvar mevedel-view--gptel-return-view-buffer)
 
 ;; `mevedel-worktree'
-(declare-function mevedel-worktree-list-open "mevedel-worktree" ())
+(declare-function mevedel-worktree-list-open "mevedel-worktree"
+                  (&optional context))
 (declare-function mevedel-worktree-status-open "mevedel-worktree" ())
 
 ;; `transient'
@@ -97,65 +116,16 @@
 
 
 ;;
-;;; Pair resolution
+;;; Context resolution
 
-(defun mevedel-menu--pair-for-buffer (buffer)
-  "Return (VIEW-BUFFER . DATA-BUFFER) for BUFFER, or nil."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (cond
-       ((and (derived-mode-p 'mevedel-view-mode)
-             (boundp 'mevedel--data-buffer)
-             mevedel--data-buffer
-             (buffer-live-p mevedel--data-buffer))
-        (cons buffer mevedel--data-buffer))
-       ((and (boundp 'mevedel--view-buffer)
-             mevedel--view-buffer
-             (buffer-live-p mevedel--view-buffer)
-             (with-current-buffer mevedel--view-buffer
-               (and (derived-mode-p 'mevedel-view-mode)
-                    (eq mevedel--data-buffer buffer))))
-        (cons mevedel--view-buffer buffer))))))
-
-(defun mevedel-menu--origin-buffer ()
-  "Return the buffer that launched the current cockpit command."
-  (cond
-   ((mevedel-menu--pair-for-buffer (current-buffer))
-    (current-buffer))
-   ((and (boundp 'transient--original-buffer)
-         (buffer-live-p transient--original-buffer)
-         (mevedel-menu--pair-for-buffer transient--original-buffer))
-    transient--original-buffer)))
-
-(defun mevedel-menu--pair ()
-  "Return the current cockpit's (VIEW-BUFFER . DATA-BUFFER) pair."
-  (if-let* ((origin (mevedel-menu--origin-buffer))
-            (pair (mevedel-menu--pair-for-buffer origin)))
-      pair
-    (user-error "No mevedel session cockpit here")))
-
-(defun mevedel-menu--view-buffer ()
-  "Return the current cockpit's view buffer."
-  (car (mevedel-menu--pair)))
-
-(defun mevedel-menu--data-buffer ()
-  "Return the current cockpit's data buffer."
-  (cdr (mevedel-menu--pair)))
-
-(defun mevedel-menu--session (&optional data-buffer)
-  "Return DATA-BUFFER's session."
-  (with-current-buffer (or data-buffer (mevedel-menu--data-buffer))
-    (and (boundp 'mevedel--session) mevedel--session)))
-
-(defun mevedel-menu--call-in-view (function &rest args)
-  "Call FUNCTION with ARGS in the current cockpit's view buffer."
-  (with-current-buffer (mevedel-menu--view-buffer)
-    (apply function args)))
-
-(defun mevedel-menu--call-in-data (function &rest args)
-  "Call FUNCTION with ARGS in the current cockpit's data buffer."
-  (with-current-buffer (mevedel-menu--data-buffer)
-    (apply function args)))
+(defun mevedel-menu--context ()
+  "Return the current live cockpit context."
+  (require 'mevedel-cockpit)
+  (let ((context (mevedel-cockpit-current-context)))
+    (unless (and (mevedel-cockpit-context-view-buffer context)
+                 (mevedel-cockpit-context-data-buffer context))
+      (user-error "No mevedel session cockpit here"))
+    context))
 
 
 ;;
@@ -179,10 +149,18 @@
 
 (defun mevedel-menu--mode-symbol (&optional session data-buffer)
   "Return the effective permission mode for SESSION and DATA-BUFFER."
-  (or (and session (mevedel-session-permission-mode session))
-      (with-current-buffer (or data-buffer (mevedel-menu--data-buffer))
-        (and (boundp 'mevedel-permission-mode) mevedel-permission-mode))
-      'default))
+  (let* ((context (unless (or session data-buffer) (mevedel-menu--context)))
+         (session (or session
+                      (and context
+                           (mevedel-cockpit-context-session context))))
+         (data-buffer (or data-buffer
+                          (and context
+                               (mevedel-cockpit-context-data-buffer
+                                context)))))
+    (or (and session (mevedel-session-permission-mode session))
+        (with-current-buffer data-buffer
+          (and (boundp 'mevedel-permission-mode) mevedel-permission-mode))
+        'default)))
 
 (defun mevedel-menu--mode-label (&optional mode)
   "Return the cockpit label for permission MODE."
@@ -194,7 +172,8 @@
 
 (defun mevedel-menu--model-label ()
   "Return the current model label."
-  (with-current-buffer (mevedel-menu--data-buffer)
+  (with-current-buffer
+      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
     (cond
      ((not (bound-and-true-p gptel-model)) "none")
      ((fboundp 'gptel--model-name) (gptel--model-name gptel-model))
@@ -202,7 +181,8 @@
 
 (defun mevedel-menu--active-tool-count ()
   "Return the number of active gptel tools in the data buffer."
-  (with-current-buffer (mevedel-menu--data-buffer)
+  (with-current-buffer
+      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
     (length (and (boundp 'gptel-tools) gptel-tools))))
 
 (defun mevedel-menu--skill-count-label (session)
@@ -252,8 +232,9 @@
 
 (defun mevedel-menu--worktree-label ()
   "Return the current branch or detached HEAD label."
-  (let* ((data-buffer (mevedel-menu--data-buffer))
-         (session (mevedel-menu--session data-buffer))
+  (let* ((context (mevedel-menu--context))
+         (data-buffer (mevedel-cockpit-context-data-buffer context))
+         (session (mevedel-cockpit-context-session context))
          (directory (mevedel-menu--working-directory session data-buffer))
          (branch (mevedel-menu--git-line directory
                                          "branch" "--show-current"))
@@ -271,9 +252,10 @@
 
 (defun mevedel-menu--header ()
   "Return the cockpit header string."
-  (let* ((data-buffer (mevedel-menu--data-buffer))
-         (session (mevedel-menu--session data-buffer))
-         (workspace (and session (mevedel-session-workspace session)))
+  (let* ((context (mevedel-menu--context))
+         (data-buffer (mevedel-cockpit-context-data-buffer context))
+         (session (mevedel-cockpit-context-session context))
+         (workspace (mevedel-cockpit-context-workspace context))
          (mode (mevedel-menu--mode-symbol session data-buffer))
          (request-state (mevedel-menu--request-state-label data-buffer)))
     (concat
@@ -293,12 +275,13 @@
 
 (defun mevedel-menu--mode-description ()
   "Return the top-level mode row description."
-  (mevedel-menu--state-description
-   "Mode"
-   (mevedel-menu--mode-label
-    (mevedel-menu--mode-symbol
-     (mevedel-menu--session)
-     (mevedel-menu--data-buffer)))))
+  (let ((context (mevedel-menu--context)))
+    (mevedel-menu--state-description
+     "Mode"
+     (mevedel-menu--mode-label
+      (mevedel-menu--mode-symbol
+       (mevedel-cockpit-context-session context)
+       (mevedel-cockpit-context-data-buffer context))))))
 
 (defun mevedel-menu--model-description ()
   "Return the top-level model row description."
@@ -311,7 +294,8 @@
 
 (defun mevedel-menu--model-surface-description ()
   "Return the model surface description."
-  (with-current-buffer (mevedel-menu--data-buffer)
+  (with-current-buffer
+      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
     (let ((model (cond
                   ((and (bound-and-true-p gptel-backend)
                         (bound-and-true-p gptel-model))
@@ -335,16 +319,17 @@
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
-  (mevedel-menu--state-description
-   "Skills"
-   (mevedel-menu--skill-count-label
-    (mevedel-menu--session))
-   'warning))
+  (let ((context (mevedel-menu--context)))
+    (mevedel-menu--state-description
+     "Skills"
+     (mevedel-menu--skill-count-label
+      (mevedel-cockpit-context-session context))
+     'warning)))
 
 (defun mevedel-menu--plugins-description ()
   "Return the top-level plugins row description."
-  (let* ((session (mevedel-menu--session))
-         (workspace (and session (mevedel-session-workspace session))))
+  (let ((workspace (mevedel-cockpit-context-workspace
+                    (mevedel-menu--context))))
     (mevedel-menu--state-description
      "Plugins" (mevedel-menu--plugin-count-label workspace) 'warning)))
 
@@ -359,10 +344,11 @@
 
 (defun mevedel-menu--mode-choice-description (mode detail)
   "Return the MODE surface row with DETAIL and current-state marker."
-  (let* ((current (eq mode
+  (let* ((context (mevedel-menu--context))
+         (current (eq mode
                       (mevedel-menu--mode-symbol
-                       (mevedel-menu--session)
-                       (mevedel-menu--data-buffer))))
+                       (mevedel-cockpit-context-session context)
+                       (mevedel-cockpit-context-data-buffer context))))
          (label (mevedel-menu--mode-label mode)))
     (format "%-7s %-7s %s"
             (if current (mevedel-menu--value label) label)
@@ -392,7 +378,8 @@
 
 (defun mevedel-menu--request-active-p ()
   "Return non-nil when the current session has an active request."
-  (with-current-buffer (mevedel-menu--data-buffer)
+  (with-current-buffer
+      (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
     (bound-and-true-p mevedel--current-request)))
 
 (defun mevedel-menu--send-inapt-p ()
@@ -410,7 +397,8 @@
 (defun mevedel-menu--set-mode (mode)
   "Set the current session permission MODE."
   (require 'mevedel-permissions)
-  (mevedel-menu--call-in-data #'mevedel-permission-mode-transition mode)
+  (mevedel-cockpit-call-in-data
+   (mevedel-menu--context) #'mevedel-permission-mode-transition mode)
   (force-mode-line-update t))
 
 
@@ -437,7 +425,8 @@
   "Set the current data buffer's gptel PROVIDER."
   (let ((backend (plist-get provider :backend))
         (model (plist-get provider :model)))
-    (with-current-buffer (mevedel-menu--data-buffer)
+    (with-current-buffer
+        (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
       (setq-local gptel-backend backend)
       (setq-local gptel-model model))
     (force-mode-line-update t)
@@ -468,93 +457,71 @@
   "Open session cockpit AREA.
 AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive (list 'top))
-  (mevedel-menu--pair)
-  (pcase area
-    ('top
-     (transient-setup 'mevedel-menu--top))
-    ('mode
-     (transient-setup 'mevedel-menu--mode))
-    ('model
-     (transient-setup 'mevedel-menu--model))
-    ('skills
-     (require 'mevedel-skills)
-     (let* ((origin (mevedel-menu--origin-buffer))
-            (view-buffer (mevedel-menu--view-buffer))
-            (data-buffer (mevedel-menu--data-buffer))
-            (session (mevedel-menu--session data-buffer)))
-       (mevedel-menu--call-in-data
-        #'mevedel-skills-list-open
-        session
-        view-buffer
-        data-buffer
-        origin)))
-    ('plugins
-     (require 'mevedel-plugins)
-     (let* ((origin (mevedel-menu--origin-buffer))
-            (view-buffer (mevedel-menu--view-buffer))
-            (data-buffer (mevedel-menu--data-buffer))
-            (session (mevedel-menu--session data-buffer))
-            (workspace (and session (mevedel-session-workspace session))))
-       (mevedel-menu--call-in-data
-        #'mevedel-plugins-list-open
-        workspace
-        view-buffer
-        data-buffer
-        origin)))
-    ('tools
-     (require 'mevedel-tools)
-     (let* ((origin (mevedel-menu--origin-buffer))
-            (view-buffer (mevedel-menu--view-buffer))
-            (data-buffer (mevedel-menu--data-buffer))
-            (session (mevedel-menu--session data-buffer)))
-       (mevedel-menu--call-in-data
-        #'mevedel-tools-list-open
-        session
-        view-buffer
-        data-buffer
-        origin)))
-    ('worktree
-     (require 'mevedel-worktree)
-     (mevedel-menu--call-in-data #'mevedel-worktree-status-open))
-    ('help
-     (mevedel-menu-help-open))
-    ('gptel
-     (mevedel-menu--open-gptel))
-    (_
-     (user-error "Unknown cockpit area: %s" area))))
+  (let ((context (mevedel-menu--context)))
+    (pcase area
+      ('top
+       (transient-setup 'mevedel-menu--top))
+      ('mode
+       (transient-setup 'mevedel-menu--mode))
+      ('model
+       (transient-setup 'mevedel-menu--model))
+      ('skills
+       (require 'mevedel-skills)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-skills-list-open context))
+      ('plugins
+       (require 'mevedel-plugins)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-plugins-list-open context))
+      ('tools
+       (require 'mevedel-tools)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-tools-list-open context))
+      ('worktree
+       (require 'mevedel-worktree)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-worktree-status-open))
+      ('help
+       (mevedel-menu-help-open))
+      ('gptel
+       (mevedel-menu--open-gptel))
+      (_
+       (user-error "Unknown cockpit area: %s" area)))))
 
 (defun mevedel-menu--send ()
   "Send the current composer from the view buffer."
   (interactive)
-  (mevedel-menu--call-in-view #'mevedel-view-send))
+  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-view-send))
 
 (defun mevedel-menu--abort ()
   "Abort the active request from the view buffer."
   (interactive)
-  (mevedel-menu--call-in-view #'mevedel-view-abort))
+  (mevedel-cockpit-call-in-view (mevedel-menu--context) #'mevedel-view-abort))
 
 (defun mevedel-menu--compact ()
   "Compact the current data buffer."
   (interactive)
-  (mevedel-menu--call-in-data #'mevedel-compact))
+  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-compact))
 
 (defun mevedel-menu--review ()
   "Run the review picker from the data buffer."
   (interactive)
-  (mevedel-menu--call-in-data #'mevedel-review))
+  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-review))
 
 (defun mevedel-menu--verify ()
   "Run the verify picker from the data buffer."
   (interactive)
-  (mevedel-menu--call-in-data #'mevedel-verify))
+  (mevedel-cockpit-call-in-data (mevedel-menu--context) #'mevedel-verify))
 
 (defun mevedel-menu--toggle-data-view ()
   "Toggle between the view buffer and raw data buffer."
   (interactive)
-  (let* ((origin (or (mevedel-menu--origin-buffer)
-                     (user-error "No mevedel session cockpit here")))
-         (pair (mevedel-menu--pair-for-buffer origin))
-         (target (if (eq origin (cdr pair)) (car pair) (cdr pair))))
+  (let* ((context (mevedel-menu--context))
+         (origin (or (mevedel-cockpit-context-origin-buffer context)
+                     (current-buffer)))
+         (view-buffer (mevedel-cockpit-context-view-buffer context))
+         (data-buffer (mevedel-cockpit-context-data-buffer context))
+         (target (if (eq origin data-buffer) view-buffer data-buffer)))
     (switch-to-buffer target)))
 
 (defun mevedel-menu--open-mode ()
@@ -692,11 +659,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 (defun mevedel-menu--open-gptel ()
   "Open the gptel bridge surface."
   (interactive)
-  (let* ((origin (or (mevedel-menu--origin-buffer)
-                     (user-error "No mevedel session cockpit here")))
-         (pair (mevedel-menu--pair-for-buffer origin))
-         (view-buffer (car pair))
-         (data-buffer (cdr pair))
+  (let* ((context (mevedel-menu--context))
+         (origin (or (mevedel-cockpit-context-origin-buffer context)
+                     (current-buffer)))
+         (view-buffer (mevedel-cockpit-context-view-buffer context))
+         (data-buffer (mevedel-cockpit-context-data-buffer context))
          (view-origin-p (eq origin view-buffer))
          (window (and view-origin-p
                       (or (get-buffer-window view-buffer t)
@@ -741,23 +708,28 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     :pad-keys t
     ("n" "Next display"
      (lambda () (interactive)
-       (mevedel-menu--call-in-view #'mevedel-view-next-display))
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-next-display))
      :transient t)
     ("N" "Previous display"
      (lambda () (interactive)
-       (mevedel-menu--call-in-view #'mevedel-view-previous-display))
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-previous-display))
      :transient t)
     ("C-n" "Next query"
      (lambda () (interactive)
-       (mevedel-menu--call-in-view #'mevedel-view-next-user-query))
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-next-user-query))
      :transient t)
     ("C-p" "Previous query"
      (lambda () (interactive)
-       (mevedel-menu--call-in-view #'mevedel-view-previous-user-query))
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-previous-user-query))
      :transient t)
     ("e" "Toggle section"
      (lambda () (interactive)
-       (mevedel-menu--call-in-view #'mevedel-view-toggle-section))
+       (mevedel-cockpit-call-in-view
+        (mevedel-menu--context) #'mevedel-view-toggle-section))
      :transient t)]
    ["Configure"
     :pad-keys t
@@ -779,7 +751,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      :description mevedel-menu--worktree-description)
     ("?" "Help" mevedel-menu--open-help)]]
   (interactive)
-  (mevedel-menu--pair)
+  (mevedel-menu--context)
   (transient-setup 'mevedel-menu--top))
 
 (transient-define-prefix mevedel-menu--mode ()
@@ -799,7 +771,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     :pad-keys t
     ("b" "Back" mevedel-menu)]]
   (interactive)
-  (mevedel-menu--pair)
+  (mevedel-menu--context)
   (transient-setup 'mevedel-menu--mode))
 
 (transient-define-prefix mevedel-menu--model ()
@@ -813,7 +785,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     :pad-keys t
     ("b" "Back" mevedel-menu)]]
   (interactive)
-  (mevedel-menu--pair)
+  (mevedel-menu--context)
   (transient-setup 'mevedel-menu--model))
 
 (provide 'mevedel-menu)

@@ -80,16 +80,20 @@
                   (invocation item &optional reserved))
 
 ;; `mevedel-cockpit'
-(declare-function mevedel-cockpit-data-buffer "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-context-data-buffer
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-session
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context
+                  "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-open-tabulated
                   "mevedel-cockpit"
-                  (buffer-name mode refresh view-buffer data-buffer
-                               origin-buffer &optional setup label))
+                  (buffer-name mode refresh context &optional setup label))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
 (declare-function mevedel-cockpit-refresh-tabulated
                   "mevedel-cockpit" (entries &optional selected-id))
 (declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label))
+                  "mevedel-cockpit" (&optional label context))
 (declare-function mevedel-cockpit-selected
                   "mevedel-cockpit" (items id-function))
 
@@ -580,12 +584,6 @@ otherwise queues them on the chat buffer's session."
 (defconst mevedel-tools-help-buffer-name "*mevedel tools help*"
   "Name of the tools cockpit help buffer.")
 
-(defvar-local mevedel-tools-list--session nil
-  "Session rendered in the current tools listing buffer.")
-
-(defvar-local mevedel-tools-list--data-buffer nil
-  "Data buffer that owns `gptel-tools' for this tools listing buffer.")
-
 (defvar-local mevedel-tools-list--items nil
   "Tool row items cached for the current tools listing render.")
 
@@ -692,8 +690,12 @@ otherwise queues them on the chat buffer's session."
 
 (defun mevedel-tools-list--session-label ()
   "Return the current tools cockpit session label."
-  (if mevedel-tools-list--session
-      (mevedel-session-name mevedel-tools-list--session)
+  (if-let* ((session (condition-case nil
+                         (progn
+                           (require 'mevedel-cockpit)
+                           (mevedel-cockpit-context-session))
+                       (user-error nil))))
+      (mevedel-session-name session)
     "unknown"))
 
 (defun mevedel-tools-list--header-line ()
@@ -720,28 +722,28 @@ otherwise queues them on the chat buffer's session."
   (require 'mevedel-cockpit)
   (mevedel-cockpit-require-owner "tools cockpit"))
 
-(defun mevedel-tools-list--owner-data-buffer ()
-  "Return the live data buffer for the current tools cockpit."
-  (or (progn
-        (require 'mevedel-cockpit)
-        (mevedel-cockpit-data-buffer))
-      (and (buffer-live-p mevedel-tools-list--data-buffer)
-           mevedel-tools-list--data-buffer)
-      (user-error "No live mevedel data buffer for this tools surface")))
+(defun mevedel-tools-list--context ()
+  "Return the current tools cockpit context."
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-current-context))
+
+(defun mevedel-tools-list--context-data-buffer ()
+  "Return the current tools cockpit data buffer."
+  (let ((context (mevedel-tools-list--context)))
+    (mevedel-cockpit-require-owner "tools cockpit" context)
+    (mevedel-cockpit-context-data-buffer context)))
 
 (defun mevedel-tools-list-refresh ()
   "Refresh the current tools listing buffer."
   (interactive)
   (let* ((selected (tabulated-list-get-id))
-         (session (or mevedel-tools-list--session
-                      (bound-and-true-p mevedel--session)))
-         (data-buffer (mevedel-tools-list--owner-data-buffer)))
-    (mevedel-tools-list--require-owner)
+         (context (mevedel-tools-list--context))
+         (session (mevedel-cockpit-context-session context))
+         (data-buffer (mevedel-cockpit-context-data-buffer context)))
+    (mevedel-cockpit-require-owner "tools cockpit" context)
     (unless session
       (user-error "No mevedel session in this buffer"))
-    (setq mevedel-tools-list--session session
-          mevedel-tools-list--data-buffer data-buffer
-          mevedel-tools-list--items
+    (setq mevedel-tools-list--items
           (mevedel-tools-list--collect-items session data-buffer))
     (require 'mevedel-cockpit)
     (mevedel-cockpit-refresh-tabulated
@@ -784,7 +786,7 @@ otherwise queues them on the chat buffer's session."
 
 (defun mevedel-tools-list--main-data-buffer ()
   "Return the data buffer for session-local lifecycle changes."
-  (let ((data-buffer (mevedel-tools-list--owner-data-buffer)))
+  (let ((data-buffer (mevedel-tools-list--context-data-buffer)))
     (with-current-buffer data-buffer
       (when (and (boundp 'mevedel--agent-invocation)
                  (mevedel-agent-invocation-p mevedel--agent-invocation))
@@ -807,8 +809,8 @@ otherwise queues them on the chat buffer's session."
 (defun mevedel-tools-list-defer-active (&optional name)
   "Move active tool NAME into this session's deferred set."
   (interactive)
-  (let* ((session (or mevedel-tools-list--session
-                      (bound-and-true-p mevedel--session)
+  (let* ((context (mevedel-tools-list--context))
+         (session (or (mevedel-cockpit-context-session context)
                       (user-error "No mevedel session in this buffer")))
          (data-buffer (mevedel-tools-list--main-data-buffer))
          (active (with-current-buffer data-buffer
@@ -855,8 +857,8 @@ otherwise queues them on the chat buffer's session."
 (defun mevedel-tools-list-activate-deferred (&optional name)
   "Move deferred tool NAME into this session's active tools."
   (interactive)
-  (let* ((session (or mevedel-tools-list--session
-                      (bound-and-true-p mevedel--session)
+  (let* ((context (mevedel-tools-list--context))
+         (session (or (mevedel-cockpit-context-session context)
                       (user-error "No mevedel session in this buffer")))
          (data-buffer (mevedel-tools-list--main-data-buffer))
          (deferred (mevedel-session-deferred-set session))
@@ -893,8 +895,8 @@ otherwise queues them on the chat buffer's session."
 (defun mevedel-tools-list-search-load (&optional query)
   "Search deferred tools by QUERY and queue matching tools for loading."
   (interactive)
-  (let* ((session (or mevedel-tools-list--session
-                      (bound-and-true-p mevedel--session)
+  (let* ((context (mevedel-tools-list--context))
+         (session (or (mevedel-cockpit-context-session context)
                       (user-error "No mevedel session in this buffer")))
          (data-buffer (mevedel-tools-list--main-data-buffer))
          (candidates (delete-dups
@@ -921,7 +923,7 @@ otherwise queues them on the chat buffer's session."
   "Open gptel-menu from the tools listing's data buffer."
   (interactive)
   (require 'gptel-transient)
-  (let ((data-buffer (mevedel-tools-list--owner-data-buffer)))
+  (let ((data-buffer (mevedel-tools-list--context-data-buffer)))
     (with-current-buffer data-buffer
       (call-interactively #'gptel-menu))))
 
@@ -984,38 +986,18 @@ expired   Expired on the previous payload update
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
-(defun mevedel-tools-list-open
-    (&optional session view-buffer data-buffer origin-buffer)
-  "Open the tools listing buffer for SESSION.
-VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning session
-pair when the cockpit is opened from a live mevedel session. For
-compatibility, when VIEW-BUFFER is live and DATA-BUFFER is nil,
-VIEW-BUFFER is treated as the legacy data-buffer argument."
+(defun mevedel-tools-list-open (&optional context)
+  "Open the tools listing buffer for CONTEXT."
   (require 'mevedel-cockpit)
-  (when (and (buffer-live-p view-buffer)
-             (null data-buffer))
-    (setq data-buffer view-buffer
-          view-buffer nil))
-  (let* ((session (or session
-                      (bound-and-true-p mevedel--session)
-                      (user-error "No mevedel session in this buffer")))
-         (data-buffer (or data-buffer
-                          (bound-and-true-p mevedel--data-buffer)
-                          (current-buffer)))
-         (view-buffer (or view-buffer
-                          (bound-and-true-p mevedel--view-buffer)
-                          data-buffer))
-         (origin-buffer (or origin-buffer (current-buffer))))
+  (let ((context (or context (mevedel-cockpit-current-context))))
+    (unless (mevedel-cockpit-context-session context)
+      (user-error "No mevedel session in this buffer"))
     (mevedel-cockpit-open-tabulated
      mevedel-tools-list-buffer-name
      #'mevedel-tools-list-mode
      #'mevedel-tools-list-refresh
-     view-buffer
-     data-buffer
-     origin-buffer
-     (lambda ()
-       (setq mevedel-tools-list--session session
-             mevedel-tools-list--data-buffer data-buffer))
+     context
+     nil
      "tools cockpit")))
 
 

@@ -37,16 +37,22 @@
                           no-spinner))
 
 ;; `mevedel-cockpit'
-(declare-function mevedel-cockpit-data-buffer "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-context-data-buffer
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-session
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-workspace
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context
+                  "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-open-tabulated
                   "mevedel-cockpit"
-                  (buffer-name mode refresh view-buffer data-buffer
-                               origin-buffer &optional setup label))
+                  (buffer-name mode refresh context &optional setup label))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
 (declare-function mevedel-cockpit-refresh-tabulated
                   "mevedel-cockpit" (entries &optional selected-id))
 (declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label))
+                  "mevedel-cockpit" (&optional label context))
 (declare-function mevedel-cockpit-selected
                   "mevedel-cockpit" (items id-function))
 
@@ -79,9 +85,6 @@
 (defvar tabulated-list-format)
 (defvar tabulated-list-padding)
 (defvar tabulated-list-sort-key)
-
-;; `transient'
-(defvar transient--original-buffer)
 
 
 ;;
@@ -180,10 +183,19 @@
 (defun mevedel-worktree--collect-status (&optional context)
   "Collect read-only worktree status for CONTEXT."
   (let* ((context (or context (mevedel-worktree--current-context)))
+         (data-buffer (plist-get context :data-buffer))
          (session (plist-get context :session))
-         (workspace (plist-get context :workspace))
+         (workspace (or (plist-get context :workspace)
+                        (and session (mevedel-session-workspace session))))
          (directory (file-name-as-directory
-                     (expand-file-name (plist-get context :directory))))
+                     (expand-file-name
+                      (or (plist-get context :directory)
+                          (and session
+                               (mevedel-session-working-directory session))
+                          (and (buffer-live-p data-buffer)
+                               (with-current-buffer data-buffer
+                                 default-directory))
+                          default-directory))))
          (workspace-root (and workspace
                               (file-name-as-directory
                                (expand-file-name
@@ -317,21 +329,18 @@
 (defconst mevedel-worktree-help-buffer-name "*mevedel worktree help*"
   "Name of the worktree cockpit help buffer.")
 
-(defvar-local mevedel-worktree-list--data-buffer nil
-  "Data buffer that owns the current worktree list buffer.")
-
 (defvar-local mevedel-worktree-list--items nil
   "Worktree row items cached for the current list render.")
 
 (defvar-local mevedel-worktree-list--status nil
   "Worktree status cached for the current list render.")
 
-(defun mevedel-worktree-status--data-buffer ()
+(defun mevedel-worktree-status--data-buffer (&optional context)
   "Return the data buffer that launched the worktree transient."
-  (or (and (boundp 'transient--original-buffer)
-           (buffer-live-p transient--original-buffer)
-           transient--original-buffer)
-      (current-buffer)))
+  (require 'mevedel-cockpit)
+  (or (mevedel-cockpit-context-data-buffer
+       (or context (mevedel-cockpit-current-context)))
+      (user-error "No live mevedel session for this worktree status")))
 
 (defun mevedel-worktree--branch-head-label (branch head)
   "Return compact branch or HEAD label from BRANCH and HEAD."
@@ -342,9 +351,11 @@
 
 (defun mevedel-worktree-status--description ()
   "Return dynamic description for the worktree status transient."
-  (let* ((data-buffer (mevedel-worktree-status--data-buffer))
+  (require 'mevedel-cockpit)
+  (let* ((context (mevedel-cockpit-current-context))
+         (data-buffer (mevedel-worktree-status--data-buffer context))
          (status (with-current-buffer data-buffer
-                   (mevedel-worktree--collect-status)))
+                   (mevedel-worktree--collect-status context)))
          (session (plist-get status :session))
          (worktrees (plist-get status :worktrees)))
     (string-join
@@ -386,8 +397,11 @@
 (defun mevedel-worktree-status-list ()
   "Open the tabulated worktree list from the status transient."
   (interactive)
-  (with-current-buffer (mevedel-worktree-status--data-buffer)
-    (mevedel-worktree-list-open)))
+  (require 'mevedel-cockpit)
+  (let* ((context (mevedel-cockpit-current-context))
+         (data-buffer (mevedel-worktree-status--data-buffer context)))
+    (with-current-buffer data-buffer
+      (mevedel-worktree-list-open context))))
 
 (defun mevedel-worktree-status-refresh ()
   "Refresh the worktree status transient."
@@ -441,24 +455,27 @@ q    Back to the main session cockpit
   (interactive)
   (transient-setup 'mevedel-worktree-status))
 
-(defun mevedel-worktree-list--data-buffer ()
-  "Return the live data buffer for the current worktree list."
-  (or (progn
-        (require 'mevedel-cockpit)
-        (mevedel-cockpit-data-buffer))
-      (and (buffer-live-p mevedel-worktree-list--data-buffer)
-           mevedel-worktree-list--data-buffer)
-      (user-error "No live mevedel data buffer for this worktree surface")))
-
 (defun mevedel-worktree-list--require-owner ()
   "Signal a user error if this list's owning session is gone."
   (require 'mevedel-cockpit)
   (mevedel-cockpit-require-owner "worktree list"))
 
+(defun mevedel-worktree-list--context ()
+  "Return the current worktree list context."
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-current-context))
+
+(defun mevedel-worktree-list--context-data-buffer (&optional context)
+  "Return the current worktree list data buffer."
+  (let ((context (or context (mevedel-worktree-list--context))))
+    (mevedel-cockpit-require-owner "worktree list" context)
+    (mevedel-cockpit-context-data-buffer context)))
+
 (defun mevedel-worktree-list--status ()
   "Return current worktree status from the owning data buffer."
-  (with-current-buffer (mevedel-worktree-list--data-buffer)
-    (mevedel-worktree--collect-status)))
+  (let ((context (mevedel-worktree-list--context)))
+    (with-current-buffer (mevedel-worktree-list--context-data-buffer context)
+      (mevedel-worktree--collect-status context))))
 
 (defun mevedel-worktree-list--normalize-path (path)
   "Return PATH as an absolute directory name."
@@ -587,16 +604,9 @@ q    Back to the main session cockpit
   (interactive)
   (let* ((item (or (mevedel-worktree-list--selected-item)
                    (user-error "No worktree on this line")))
-         (data-buffer (mevedel-worktree-list--data-buffer))
-         (status mevedel-worktree-list--status)
+         (context (mevedel-worktree-list--context))
          (path (plist-get item :path))
-         workspace)
-    (with-current-buffer data-buffer
-      (setq workspace
-            (or (and (boundp 'mevedel--session)
-                     mevedel--session
-                     (mevedel-session-workspace mevedel--session))
-                (plist-get status :workspace))))
+         (workspace (mevedel-cockpit-context-workspace context)))
     (unless workspace
       (user-error "No mevedel workspace for selected worktree"))
     (require 'mevedel)
@@ -606,7 +616,7 @@ q    Back to the main session cockpit
   "Create a worktree by delegating to `/worktree create'."
   (interactive)
   (let (result)
-    (with-current-buffer (mevedel-worktree-list--data-buffer)
+    (with-current-buffer (mevedel-worktree-list--context-data-buffer)
       (setq result (mevedel-cmd--worktree "create")))
     (when (stringp result)
       (message "%s" result))
@@ -650,28 +660,16 @@ q    Back to the main session cockpit
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
-(defun mevedel-worktree-list-open
-    (&optional view-buffer data-buffer origin-buffer)
-  "Open the tabulated worktree list for the current session.
-VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
-session pair when opened from a live mevedel session."
+(defun mevedel-worktree-list-open (&optional context)
+  "Open the tabulated worktree list for CONTEXT."
   (require 'mevedel-cockpit)
-  (let* ((data-buffer (or data-buffer
-                          (bound-and-true-p mevedel--data-buffer)
-                          (current-buffer)))
-         (view-buffer (or view-buffer
-                          (bound-and-true-p mevedel--view-buffer)
-                          data-buffer))
-         (origin-buffer (or origin-buffer (current-buffer))))
+  (let ((context (or context (mevedel-cockpit-current-context))))
     (mevedel-cockpit-open-tabulated
      mevedel-worktree-list-buffer-name
      #'mevedel-worktree-list-mode
      #'mevedel-worktree-list-refresh
-     view-buffer
-     data-buffer
-     origin-buffer
-     (lambda ()
-       (setq mevedel-worktree-list--data-buffer data-buffer))
+     context
+     nil
      "worktree list")))
 
 

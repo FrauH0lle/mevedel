@@ -20,6 +20,10 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+;; `mevedel-cockpit'
+(defvar mevedel-cockpit--context)
+
+;; `mevedel-skills'
 (defvar mevedel-slash-commands)
 
 (defun mevedel-worktree-test--workspace (root)
@@ -109,6 +113,23 @@
                           :head "abc123"
                           :branch "main"))))))
 
+(defun mevedel-worktree-test--context
+    (status data-buffer &optional view-buffer origin-buffer)
+  "Return a cockpit context for STATUS owned by DATA-BUFFER."
+  (list :view-buffer (or view-buffer data-buffer)
+        :data-buffer data-buffer
+        :origin-buffer (or origin-buffer data-buffer)
+        :session (plist-get status :session)
+        :workspace (plist-get status :workspace)))
+
+(defun mevedel-worktree-test--install-context
+    (status data-buffer &optional view-buffer origin-buffer)
+  "Install a cockpit context for STATUS in DATA-BUFFER."
+  (with-current-buffer data-buffer
+    (setq-local mevedel-cockpit--context
+                (mevedel-worktree-test--context
+                 status data-buffer view-buffer origin-buffer))))
+
 (defun mevedel-worktree-test--open-list
     (status data-buffer &optional view-buffer)
   "Open a worktree list for STATUS owned by DATA-BUFFER."
@@ -123,7 +144,9 @@
                      (if (equal path (plist-get status :directory))
                          '("main")
                        '("side"))))))
-        (mevedel-worktree-list-open view-buffer data-buffer data-buffer)))))
+        (mevedel-worktree-list-open
+         (mevedel-worktree-test--context
+          status data-buffer view-buffer data-buffer))))))
 
 
 ;;
@@ -267,6 +290,34 @@
                       (mevedel-worktree--collect-status))))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-worktree--collect-status ()
+  ,test
+  (test)
+
+  :doc "uses explicit cockpit context for session, workspace, and directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-context-status-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (session (mevedel-session-create "main" workspace root))
+         (data-buffer (generate-new-buffer " *mwt-context-status*"))
+         (context (list :data-buffer data-buffer
+                        :session session
+                        :workspace workspace)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat root ".git") t)
+          (with-current-buffer data-buffer
+            (setq-local default-directory root))
+          (cl-letf (((symbol-function 'mevedel-worktree--git-result)
+                     (lambda (_dir &rest args)
+                       (mevedel-worktree-test--base-response root args))))
+            (let ((status (mevedel-worktree--collect-status context)))
+              (should (eq (plist-get status :session) session))
+              (should (eq (plist-get status :workspace) workspace))
+              (should (equal (plist-get status :directory) root)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))))
+
 
 ;;
 ;;; Surface
@@ -275,19 +326,31 @@
   ,test
   (test)
 
-  :doc "uses the transient original buffer when it is live"
-  (let ((data-buffer (generate-new-buffer " *mwt-status-data*")))
+  :doc "uses the cockpit context from the transient original buffer"
+  (let* ((root (make-temp-file "mevedel-worktree-status-data-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-data*")))
     (unwind-protect
-        (with-temp-buffer
-          (let ((transient--original-buffer data-buffer))
-            (should (eq (mevedel-worktree-status--data-buffer)
-                        data-buffer))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer)))
+        (progn
+          (mevedel-worktree-test--install-context status data-buffer)
+          (with-temp-buffer
+            (let ((transient--original-buffer data-buffer))
+              (should (eq (mevedel-worktree-status--data-buffer)
+                          data-buffer)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t)))
 
-  :doc "falls back to the current buffer outside transient commands"
-  (with-temp-buffer
-    (should (eq (mevedel-worktree-status--data-buffer)
-                (current-buffer)))))
+  :doc "uses the current buffer's cockpit context outside transient commands"
+  (let* ((root (make-temp-file "mevedel-worktree-status-current-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-current*")))
+    (unwind-protect
+        (with-current-buffer data-buffer
+          (mevedel-worktree-test--install-context status data-buffer)
+          (should (eq (mevedel-worktree-status--data-buffer)
+                      data-buffer)))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-worktree--branch-head-label ()
   ,test
@@ -310,50 +373,70 @@
                 (make-temp-file "mevedel-worktree-desc-" t)))
          (workspace (mevedel-worktree-test--workspace root))
          (session (mevedel-session-create "main" workspace root))
-         (status (plist-put (mevedel-worktree-test--status root)
-                            :session session)))
-    (unwind-protect
-        (with-temp-buffer
-          (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
-                     (lambda (&optional _context) status)))
-            (let ((description (mevedel-worktree-status--description)))
-              (should (string-match-p "mevedel worktree" description))
-              (should (string-match-p "Repo:" description))
-              (should (string-match-p "Session:    main" description))
-              (should (string-match-p "Directory:" description))
-              (should (string-match-p "Isolation:  normal checkout"
-                                      description))
-              (should (string-match-p "Branch:     main" description))
-              (should (string-match-p ".worktrees: ignored" description))
-              (should (string-match-p "Dirty:      no" description))
-              (should (string-match-p "Worktrees:  1" description)))))
-      (delete-directory root t))))
+         (status (plist-put
+                  (plist-put (mevedel-worktree-test--status root)
+                             :session session)
+                  :workspace workspace))
+         called-buffer
+         called-context)
+    (let ((data-buffer (generate-new-buffer " *mwt-desc-data*")))
+      (unwind-protect
+          (progn
+            (mevedel-worktree-test--install-context status data-buffer)
+            (with-current-buffer data-buffer
+              (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+                         (lambda (&optional context)
+                           (setq called-buffer (current-buffer)
+                                 called-context context)
+                           status)))
+                (let ((description (mevedel-worktree-status--description)))
+                  (should (string-match-p "mevedel worktree" description))
+                  (should (string-match-p "Repo:" description))
+                  (should (string-match-p "Session:    main" description))
+                  (should (string-match-p "Directory:" description))
+                  (should (string-match-p "Isolation:  normal checkout"
+                                          description))
+                  (should (string-match-p "Branch:     main" description))
+                  (should (string-match-p ".worktrees: ignored" description))
+                  (should (string-match-p "Dirty:      no" description))
+                  (should (string-match-p "Worktrees:  1" description)))))
+            (should (eq called-buffer data-buffer))
+            (should (eq (plist-get called-context :session) session))
+            (should (eq (plist-get called-context :workspace) workspace)))
+        (mevedel-worktree-test--cleanup-surfaces data-buffer)
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-worktree-status-create ()
   ,test
   (test)
 
   :doc "delegates create in the data buffer and reopens status"
-  (let ((data-buffer (generate-new-buffer " *mwt-status-create*"))
-        called-buffer
-        called-args
-        reopened
-        message-text)
+  (let* ((root (make-temp-file "mevedel-worktree-status-create-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-create*"))
+         called-buffer
+         called-args
+         reopened
+         message-text)
     (unwind-protect
-        (with-current-buffer data-buffer
-          (let ((transient--original-buffer data-buffer))
-            (cl-letf (((symbol-function 'mevedel-cmd--worktree)
-                       (lambda (args)
-                         (setq called-buffer (current-buffer)
-                               called-args args)
-                         "created"))
-                      ((symbol-function 'mevedel-worktree-status-open)
-                       (lambda () (setq reopened (current-buffer))))
-                      ((symbol-function 'message)
-                       (lambda (fmt &rest args)
-                         (setq message-text (apply #'format fmt args)))))
-              (should (equal (mevedel-worktree-status-create) "created")))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer))
+        (progn
+          (mevedel-worktree-test--install-context status data-buffer)
+          (with-current-buffer data-buffer
+            (let ((transient--original-buffer data-buffer))
+              (cl-letf (((symbol-function 'mevedel-cmd--worktree)
+                         (lambda (args)
+                           (setq called-buffer (current-buffer)
+                                 called-args args)
+                           "created"))
+                        ((symbol-function 'mevedel-worktree-status-open)
+                         (lambda () (setq reopened (current-buffer))))
+                        ((symbol-function 'message)
+                         (lambda (fmt &rest args)
+                           (setq message-text (apply #'format fmt args)))))
+                (should (equal (mevedel-worktree-status-create)
+                               "created"))))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))
     (should (eq called-buffer data-buffer))
     (should (equal called-args "create"))
     (should (eq reopened data-buffer))
@@ -364,31 +447,46 @@
   (test)
 
   :doc "opens the list from the transient data buffer"
-  (let ((data-buffer (generate-new-buffer " *mwt-status-list*"))
-        called-buffer)
+  (let* ((root (make-temp-file "mevedel-worktree-status-list-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-list*"))
+         called-buffer
+         called-context)
     (unwind-protect
-        (with-current-buffer data-buffer
-          (let ((transient--original-buffer data-buffer))
-            (cl-letf (((symbol-function 'mevedel-worktree-list-open)
-                       (lambda () (setq called-buffer (current-buffer)))))
-              (mevedel-worktree-status-list))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer))
-    (should (eq called-buffer data-buffer))))
+        (progn
+          (mevedel-worktree-test--install-context status data-buffer)
+          (with-current-buffer data-buffer
+            (let ((transient--original-buffer data-buffer))
+              (cl-letf (((symbol-function 'mevedel-worktree-list-open)
+                         (lambda (&optional context)
+                           (setq called-buffer (current-buffer)
+                                 called-context context))))
+                (mevedel-worktree-status-list)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))
+    (should (eq called-buffer data-buffer))
+    (should (equal called-context
+                   (mevedel-worktree-test--context status data-buffer)))))
 
 (mevedel-deftest mevedel-worktree-status-refresh ()
   ,test
   (test)
 
   :doc "reopens the status transient from the data buffer"
-  (let ((data-buffer (generate-new-buffer " *mwt-status-refresh*"))
-        called-buffer)
+  (let* ((root (make-temp-file "mevedel-worktree-status-refresh-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-refresh*"))
+         called-buffer)
     (unwind-protect
-        (with-current-buffer data-buffer
-          (let ((transient--original-buffer data-buffer))
-            (cl-letf (((symbol-function 'mevedel-worktree-status-open)
-                       (lambda () (setq called-buffer (current-buffer)))))
-              (mevedel-worktree-status-refresh))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer))
+        (progn
+          (mevedel-worktree-test--install-context status data-buffer)
+          (with-current-buffer data-buffer
+            (let ((transient--original-buffer data-buffer))
+              (cl-letf (((symbol-function 'mevedel-worktree-status-open)
+                         (lambda () (setq called-buffer (current-buffer)))))
+                (mevedel-worktree-status-refresh)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))
     (should (eq called-buffer data-buffer))))
 
 (mevedel-deftest mevedel-worktree-status-help ()
@@ -411,15 +509,20 @@
   (test)
 
   :doc "returns to the main menu from the data buffer"
-  (let ((data-buffer (generate-new-buffer " *mwt-status-back*"))
-        called-buffer)
+  (let* ((root (make-temp-file "mevedel-worktree-status-back-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-back*"))
+         called-buffer)
     (unwind-protect
-        (with-current-buffer data-buffer
-          (let ((transient--original-buffer data-buffer))
-            (cl-letf (((symbol-function 'mevedel-menu)
-                       (lambda () (setq called-buffer (current-buffer)))))
-              (mevedel-worktree-status-back))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer))
+        (progn
+          (mevedel-worktree-test--install-context status data-buffer)
+          (with-current-buffer data-buffer
+            (let ((transient--original-buffer data-buffer))
+              (cl-letf (((symbol-function 'mevedel-menu)
+                         (lambda () (setq called-buffer (current-buffer)))))
+                (mevedel-worktree-status-back)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))
     (should (eq called-buffer data-buffer))))
 
 (mevedel-deftest mevedel-worktree-status-open ()
@@ -434,78 +537,37 @@
       (mevedel-worktree-status-open))
     (should (eq called-prefix 'mevedel-worktree-status))))
 
-(mevedel-deftest mevedel-worktree-list--data-buffer ()
-  ,test
-  (test)
-
-  :doc "returns the cockpit data buffer before the legacy fallback"
-  (let ((view-buffer (generate-new-buffer " *mwt-owner-view*"))
-        (data-buffer (generate-new-buffer " *mwt-owner-data*"))
-        (legacy-buffer (generate-new-buffer " *mwt-owner-legacy*")))
-    (unwind-protect
-        (let ((buffer
-               (cl-letf (((symbol-function 'mevedel-worktree-list-refresh)
-                          #'ignore))
-                 (mevedel-worktree-list-open
-                  view-buffer data-buffer data-buffer))))
-          (with-current-buffer buffer
-            (setq mevedel-worktree-list--data-buffer legacy-buffer)
-            (should (eq (mevedel-worktree-list--data-buffer)
-                        data-buffer))))
-      (mevedel-worktree-test--cleanup-surfaces
-       view-buffer data-buffer legacy-buffer)))
-
-  :doc "falls back to the legacy worktree data buffer"
-  (let ((legacy-buffer (generate-new-buffer " *mwt-owner-fallback*")))
-    (unwind-protect
-        (with-temp-buffer
-          (setq mevedel-worktree-list--data-buffer legacy-buffer)
-          (should (eq (mevedel-worktree-list--data-buffer)
-                      legacy-buffer)))
-      (mevedel-worktree-test--cleanup-surfaces legacy-buffer)))
-
-  :doc "signals when no data buffer is live"
-  (with-temp-buffer
-    (should-error (mevedel-worktree-list--data-buffer)
-                  :type 'user-error)))
-
-(mevedel-deftest mevedel-worktree-list--require-owner ()
-  ,test
-  (test)
-
-  :doc "requires live cockpit owner buffers"
-  (let* ((root (make-temp-file "mevedel-worktree-owner-" t))
-         (status (mevedel-worktree-test--status root))
-         (view-buffer (generate-new-buffer " *mwt-require-view*"))
-         (data-buffer (generate-new-buffer " *mwt-require-data*")))
-    (unwind-protect
-        (let ((buffer (mevedel-worktree-test--open-list
-                       status data-buffer view-buffer)))
-          (with-current-buffer buffer
-            (should (mevedel-worktree-list--require-owner))
-            (kill-buffer data-buffer)
-            (should-error (mevedel-worktree-list--require-owner)
-                          :type 'user-error)))
-      (mevedel-worktree-test--cleanup-surfaces view-buffer data-buffer)
-      (delete-directory root t))))
-
 (mevedel-deftest mevedel-worktree-list--status ()
   ,test
   (test)
 
   :doc "collects status in the owning data buffer"
-  (let ((data-buffer (generate-new-buffer " *mwt-status-owner*"))
-        called-buffer)
+  (let* ((root (make-temp-file "mevedel-worktree-status-owner-" t))
+         (status (mevedel-worktree-test--status root))
+         (data-buffer (generate-new-buffer " *mwt-status-owner*"))
+         (surface (get-buffer-create mevedel-worktree-list-buffer-name))
+         called-buffer
+         called-context)
     (unwind-protect
-        (with-temp-buffer
-          (setq mevedel-worktree-list--data-buffer data-buffer)
+        (with-current-buffer surface
+          (mevedel-worktree-list-mode)
+          (setq-local mevedel-cockpit--context
+                      (mevedel-worktree-test--context
+                       status data-buffer data-buffer data-buffer))
           (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
-                     (lambda (&optional _context)
+                     (lambda (&optional context)
                        (setq called-buffer (current-buffer))
+                       (setq called-context context)
                        :status)))
             (should (eq (mevedel-worktree-list--status) :status))))
-      (mevedel-worktree-test--cleanup-surfaces data-buffer))
-    (should (eq called-buffer data-buffer))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (when (buffer-live-p surface)
+        (kill-buffer surface))
+      (delete-directory root t))
+    (should (eq called-buffer data-buffer))
+    (should (equal called-context
+                   (mevedel-worktree-test--context
+                    status data-buffer data-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-worktree-list--normalize-path ()
   ,test
@@ -683,7 +745,8 @@
                   ((symbol-function 'mevedel-worktree-list--sessions)
                    (lambda (&rest _) nil)))
           (let ((buffer (mevedel-worktree-list-open
-                         view-buffer data-buffer data-buffer)))
+                         (mevedel-worktree-test--context
+                          status data-buffer view-buffer data-buffer))))
             (with-current-buffer buffer
               (mevedel-cockpit-goto-id other)
               (setq status
@@ -834,7 +897,10 @@
             (surface (get-buffer-create mevedel-worktree-list-buffer-name)))
         (with-current-buffer surface
           (mevedel-worktree-list-mode)
-          (setq mevedel-worktree-list--data-buffer data-buffer)
+          (setq-local mevedel-cockpit--context
+                      (mevedel-worktree-test--context
+                       (mevedel-worktree-test--status default-directory)
+                       data-buffer data-buffer data-buffer))
           (cl-letf (((symbol-function 'mevedel-cmd--worktree)
                      (lambda (args)
                        (setq called-buffer (current-buffer)
@@ -887,7 +953,9 @@
                        status data-buffer view-buffer)))
           (with-current-buffer buffer
             (should (derived-mode-p 'mevedel-worktree-list-mode))
-            (should (eq mevedel-worktree-list--data-buffer data-buffer))
+            (should (eq (mevedel-cockpit-context-data-buffer
+                         (mevedel-cockpit-current-context))
+                        data-buffer))
             (should (equal tabulated-list-sort-key '("Path" . nil)))
             (should (= 1 (length tabulated-list-entries)))
             (should (assoc root tabulated-list-entries))))

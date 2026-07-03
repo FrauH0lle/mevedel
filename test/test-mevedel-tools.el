@@ -68,7 +68,12 @@
     (with-current-buffer data-buffer
       (setq-local mevedel--session session)
       (setq-local mevedel--view-buffer view-buffer)
-      (mevedel-tools-list-open session view-buffer data-buffer data-buffer))))
+      (mevedel-tools-list-open
+       (list :view-buffer view-buffer
+             :data-buffer data-buffer
+             :origin-buffer data-buffer
+             :session session
+             :workspace (mevedel-session-workspace session))))))
 
 
 ;;
@@ -732,84 +737,38 @@ function returning the states entered by test handlers."
   (test)
 
   :doc "returns the rendered session name or unknown"
-  (let ((session (mevedel-tools-test--make-session)))
+  (let ((session (mevedel-tools-test--make-session))
+        (data-buffer (generate-new-buffer " *mt-tools-label*")))
     (with-temp-buffer
       (mevedel-tools-list-mode)
-      (should (equal (mevedel-tools-list--session-label) "unknown"))
-      (setq mevedel-tools-list--session session)
-      (should (equal (mevedel-tools-list--session-label) "main")))))
+      (should (equal (mevedel-tools-list--session-label) "unknown")))
+    (unwind-protect
+        (let ((buffer (mevedel-tools-test--open-list session data-buffer)))
+          (with-current-buffer buffer
+            (should (equal (mevedel-tools-list--session-label) "main"))))
+      (mevedel-tools-test--cleanup-list data-buffer))))
 
 (mevedel-deftest mevedel-tools-list--header-line ()
   ,test
   (test)
 
   :doc "summarizes row counts and key hints"
-  (let ((session (mevedel-tools-test--make-session)))
-    (with-temp-buffer
-      (mevedel-tools-list-mode)
-      (setq mevedel-tools-list--session session
-            mevedel-tools-list--items
-            '((:state active :name "Read")
-              (:state deferred :name "Edit")
-              (:state pending :name "Imenu")
-              (:state loaded :name "XrefReferences")
-              (:state expired :name "Treesitter")))
-      (let ((line (mevedel-tools-list--header-line)))
-        (should (string-match-p
-                 (format "default TTL:%d" mevedel-deferred-tool-ttl)
-                 line))
-        (should (string-match-p "active:1" line))
-        (should (string-match-p "deferred:1" line))
-        (should (string-match-p "RET details" line))
-        (should (string-match-p "q back" line))))))
-
-(mevedel-deftest mevedel-tools-list--require-owner
-  (:after-each (mevedel-tools-test--cleanup-list))
-  ,test
-  (test)
-
-  :doc "requires live cockpit owner buffers"
-  (let ((session (mevedel-tools-test--make-session))
-        (data-buffer (generate-new-buffer " *mt-tools-owner*")))
-    (unwind-protect
-        (let ((buffer (mevedel-tools-test--open-list session data-buffer)))
-          (with-current-buffer buffer
-            (should (mevedel-tools-list--require-owner))
-            (kill-buffer data-buffer)
-            (should-error (mevedel-tools-list--require-owner)
-                          :type 'user-error)))
-      (mevedel-tools-test--cleanup-list data-buffer))))
-
-(mevedel-deftest mevedel-tools-list--owner-data-buffer
-  (:after-each (mevedel-tools-test--cleanup-list))
-  ,test
-  (test)
-
-  :doc "returns the cockpit data buffer before the legacy local fallback"
-  (let ((session (mevedel-tools-test--make-session))
-        (data-buffer (generate-new-buffer " *mt-tools-owner-data*"))
-        (legacy-buffer (generate-new-buffer " *mt-tools-owner-legacy*")))
-    (unwind-protect
-        (let ((buffer (mevedel-tools-test--open-list session data-buffer)))
-          (with-current-buffer buffer
-            (setq mevedel-tools-list--data-buffer legacy-buffer)
-            (should (eq (mevedel-tools-list--owner-data-buffer)
-                        data-buffer))))
-      (mevedel-tools-test--cleanup-list data-buffer legacy-buffer)))
-
-  :doc "falls back to the legacy tools data buffer"
-  (let ((legacy-buffer (generate-new-buffer " *mt-tools-owner-fallback*")))
-    (unwind-protect
-        (with-temp-buffer
-          (setq mevedel-tools-list--data-buffer legacy-buffer)
-          (should (eq (mevedel-tools-list--owner-data-buffer)
-                      legacy-buffer)))
-      (mevedel-tools-test--cleanup-list legacy-buffer)))
-
-  :doc "signals when no data buffer is live"
   (with-temp-buffer
-    (should-error (mevedel-tools-list--owner-data-buffer)
-                  :type 'user-error)))
+    (mevedel-tools-list-mode)
+    (setq mevedel-tools-list--items
+          '((:state active :name "Read")
+            (:state deferred :name "Edit")
+            (:state pending :name "Imenu")
+            (:state loaded :name "XrefReferences")
+            (:state expired :name "Treesitter")))
+    (let ((line (mevedel-tools-list--header-line)))
+      (should (string-match-p
+               (format "default TTL:%d" mevedel-deferred-tool-ttl)
+               line))
+      (should (string-match-p "active:1" line))
+      (should (string-match-p "deferred:1" line))
+      (should (string-match-p "RET details" line))
+      (should (string-match-p "q back" line)))))
 
 (mevedel-deftest mevedel-tools-list-open
   (:after-each (progn
@@ -842,8 +801,12 @@ function returning the states entered by test handlers."
           (let ((buffer (mevedel-tools-test--open-list session data-buffer)))
             (with-current-buffer buffer
               (should (eq major-mode 'mevedel-tools-list-mode))
-              (should (eq mevedel-tools-list--session session))
-              (should (eq mevedel-tools-list--data-buffer data-buffer))
+              (should (eq (mevedel-cockpit-context-session
+                           (mevedel-cockpit-current-context))
+                          session))
+              (should (eq (mevedel-cockpit-context-data-buffer
+                           (mevedel-cockpit-current-context))
+                          data-buffer))
               (should (equal tabulated-list-sort-key '("Name" . nil)))
               (should (= 6 (length tabulated-list-entries)))
               (let ((read-row (cadr (assoc '(active "mevedel" "Read")
@@ -871,14 +834,9 @@ function returning the states entered by test handlers."
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer))))
 
-  :doc "legacy second argument is still treated as data buffer"
-  (let* ((session (mevedel-tools-test--make-session))
-         (data-buffer (generate-new-buffer " *mt-tools-legacy*")))
-    (unwind-protect
-        (let ((buffer (mevedel-tools-list-open session data-buffer)))
-          (with-current-buffer buffer
-            (should (eq mevedel-tools-list--data-buffer data-buffer))))
-      (mevedel-tools-test--cleanup-list data-buffer))))
+  :doc "rejects opening without a cockpit context"
+  (with-temp-buffer
+    (should-error (mevedel-tools-list-open) :type 'user-error)))
 
 (mevedel-deftest mevedel-tools-list-refresh
   (:after-each (mevedel-tools-test--cleanup-list))

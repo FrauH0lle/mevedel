@@ -15,6 +15,7 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+(require 'mevedel-cockpit)
 (require 'mevedel-menu)
 (require 'mevedel-mentions)
 (require 'mevedel-plugins)
@@ -137,66 +138,67 @@
 
   :doc "opens requested tools, skills, and plugins management surfaces"
   (mevedel-menu-test--with-buffers
-    (let (tools-session tools-view tools-data tools-origin tools-buffer
-          skills-session skills-view skills-data skills-origin
-          skills-buffer
-          plugins-workspace plugins-view plugins-data plugins-origin
-          plugins-buffer)
+    (let (tools-context tools-buffer
+          skills-context skills-buffer
+          plugins-context plugins-buffer)
       (cl-letf (((symbol-function 'mevedel-tools-list-open)
-                 (lambda (session view-buffer data-buffer origin-buffer)
-                   (setq tools-session session
-                         tools-view view-buffer
-                         tools-data data-buffer
-                         tools-origin origin-buffer
+                 (lambda (context)
+                   (setq tools-context context
                          tools-buffer (current-buffer))))
                 ((symbol-function 'mevedel-skills-list-open)
-                 (lambda (session view-buffer data-buffer origin-buffer)
-                   (setq skills-session session
-                         skills-view view-buffer
-                         skills-data data-buffer
-                         skills-origin origin-buffer
+                 (lambda (context)
+                   (setq skills-context context
                          skills-buffer (current-buffer))))
                 ((symbol-function 'mevedel-plugins-list-open)
-                 (lambda (workspace view-buffer data-buffer origin-buffer)
-                   (setq plugins-workspace workspace
-                         plugins-view view-buffer
-                         plugins-data data-buffer
-                         plugins-origin origin-buffer
+                 (lambda (context)
+                   (setq plugins-context context
                          plugins-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-menu-open 'tools)
           (mevedel-menu-open 'skills)
           (mevedel-menu-open 'plugins)))
-      (should (eq tools-session session))
-      (should (eq tools-view view-buf))
-      (should (eq tools-data data-buf))
-      (should (eq tools-origin view-buf))
+      (should (eq (mevedel-cockpit-context-session tools-context) session))
+      (should (eq (mevedel-cockpit-context-view-buffer tools-context)
+                  view-buf))
+      (should (eq (mevedel-cockpit-context-data-buffer tools-context)
+                  data-buf))
+      (should (eq (mevedel-cockpit-context-origin-buffer tools-context)
+                  view-buf))
       (should (eq tools-buffer data-buf))
-      (should (eq skills-session session))
-      (should (eq skills-view view-buf))
-      (should (eq skills-data data-buf))
-      (should (eq skills-origin view-buf))
+      (should (eq (mevedel-cockpit-context-session skills-context)
+                  session))
+      (should (eq (mevedel-cockpit-context-view-buffer skills-context)
+                  view-buf))
+      (should (eq (mevedel-cockpit-context-data-buffer skills-context)
+                  data-buf))
+      (should (eq (mevedel-cockpit-context-origin-buffer skills-context)
+                  view-buf))
       (should (eq skills-buffer data-buf))
-      (should (eq plugins-workspace (mevedel-session-workspace session)))
-      (should (eq plugins-view view-buf))
-      (should (eq plugins-data data-buf))
-      (should (eq plugins-origin view-buf))
+      (should (eq (mevedel-cockpit-context-workspace plugins-context)
+                  (mevedel-session-workspace session)))
+      (should (eq (mevedel-cockpit-context-view-buffer plugins-context)
+                  view-buf))
+      (should (eq (mevedel-cockpit-context-data-buffer plugins-context)
+                  data-buf))
+      (should (eq (mevedel-cockpit-context-origin-buffer plugins-context)
+                  view-buf))
       (should (eq plugins-buffer data-buf))))
 
   :doc "opens plugins management surface from the paired data buffer"
   (mevedel-menu-test--with-buffers
-    (let (plugins-view plugins-data plugins-origin plugins-buffer)
+    (let (plugins-context plugins-buffer)
       (cl-letf (((symbol-function 'mevedel-plugins-list-open)
-                 (lambda (_workspace view-buffer data-buffer origin-buffer)
-                   (setq plugins-view view-buffer
-                         plugins-data data-buffer
-                         plugins-origin origin-buffer
+                 (lambda (context)
+                   (setq plugins-context context
                          plugins-buffer (current-buffer)))))
         (with-current-buffer data-buf
           (mevedel-menu-open 'plugins)))
-      (should (eq plugins-view view-buf))
-      (should (eq plugins-data data-buf))
-      (should (eq plugins-origin data-buf))
+      (should (eq (mevedel-cockpit-context-view-buffer plugins-context)
+                  view-buf))
+      (should (eq (mevedel-cockpit-context-data-buffer plugins-context)
+                  data-buf))
+      (should (eq (mevedel-cockpit-context-origin-buffer plugins-context)
+                  data-buf))
       (should (eq plugins-buffer data-buf))))
 
   :doc "opens requested worktree and help cockpit surfaces"
@@ -226,32 +228,6 @@
   :doc "signals outside a live view/data pair"
   (with-temp-buffer
     (should-error (mevedel-menu-open 'top) :type 'user-error)))
-
-(mevedel-deftest mevedel-menu--pair ()
-  ,test
-  (test)
-  :doc "resolves from view buffer"
-  (mevedel-menu-test--with-buffers
-    (with-current-buffer view-buf
-      (should (equal (mevedel-menu--pair)
-                     (cons view-buf data-buf)))))
-
-  :doc "resolves from data buffer"
-  (mevedel-menu-test--with-buffers
-    (with-current-buffer data-buf
-      (should (equal (mevedel-menu--pair)
-                     (cons view-buf data-buf)))))
-
-  :doc "resolves from transient original buffer"
-  (mevedel-menu-test--with-buffers
-    (let ((transient--original-buffer view-buf))
-      (with-temp-buffer
-        (should (equal (mevedel-menu--pair)
-                       (cons view-buf data-buf))))))
-
-  :doc "rejects unrelated buffers"
-  (with-temp-buffer
-    (should-error (mevedel-menu--pair) :type 'user-error)))
 
 (mevedel-deftest mevedel-menu--header ()
   ,test

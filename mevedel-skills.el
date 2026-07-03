@@ -33,16 +33,20 @@
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 
 ;; `mevedel-cockpit'
-(declare-function mevedel-cockpit-data-buffer "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-context-data-buffer
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-context-session
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context
+                  "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-open-tabulated
                   "mevedel-cockpit"
-                  (buffer-name mode refresh view-buffer data-buffer
-                               origin-buffer &optional setup label))
+                  (buffer-name mode refresh context &optional setup label))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
 (declare-function mevedel-cockpit-refresh-tabulated
                   "mevedel-cockpit" (entries &optional selected-id))
 (declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label))
+                  "mevedel-cockpit" (&optional label context))
 (declare-function mevedel-cockpit-selected
                   "mevedel-cockpit" (items id-function))
 
@@ -87,7 +91,7 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--register-builtins "mevedel-tools" ())
 (declare-function mevedel-tools-list-open "mevedel-tools"
-                  (&optional session view-buffer data-buffer origin-buffer))
+                  (&optional context))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -3352,9 +3356,6 @@ Routes through the lifecycle-aware permission transition path."
 (defconst mevedel-skills-help-buffer-name "*mevedel skills help*"
   "Name of the skills cockpit help buffer.")
 
-(defvar-local mevedel-skills-list--session nil
-  "Session rendered in the current skill listing buffer.")
-
 (defvar-local mevedel-skills-list--skills nil
   "Skills cached for the current skill listing render.")
 
@@ -3410,8 +3411,12 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-skills-list--session-label ()
   "Return the current skills cockpit session label."
-  (if mevedel-skills-list--session
-      (mevedel-session-name mevedel-skills-list--session)
+  (if-let* ((session (condition-case nil
+                         (progn
+                           (require 'mevedel-cockpit)
+                           (mevedel-cockpit-context-session))
+                       (user-error nil))))
+      (mevedel-session-name session)
     "unknown"))
 
 (defun mevedel-skills-list--header-line ()
@@ -3431,21 +3436,25 @@ Routes through the lifecycle-aware permission transition path."
   (require 'mevedel-cockpit)
   (mevedel-cockpit-require-owner "skills cockpit"))
 
+(defun mevedel-skills-list--context ()
+  "Return the current skills cockpit context."
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-current-context))
+
 (defun mevedel-skills-list-refresh ()
   "Refresh the current skill listing buffer."
   (interactive)
   (let ((selected (tabulated-list-get-id))
-        (session (or mevedel-skills-list--session
-                     (bound-and-true-p mevedel--session))))
-    (mevedel-skills-list--require-owner)
-    (unless session
-      (user-error "No mevedel session in this buffer"))
-    (setq mevedel-skills-list--session session)
-    (setq mevedel-skills-list--skills (mevedel-session-skills session))
-    (require 'mevedel-cockpit)
-    (mevedel-cockpit-refresh-tabulated
-     (mapcar #'mevedel-skills-list--entry mevedel-skills-list--skills)
-     selected)))
+        (context (mevedel-skills-list--context)))
+    (mevedel-cockpit-require-owner "skills cockpit" context)
+    (let ((session (mevedel-cockpit-context-session context)))
+      (unless session
+        (user-error "No mevedel session in this buffer"))
+      (setq mevedel-skills-list--skills (mevedel-session-skills session))
+      (require 'mevedel-cockpit)
+      (mevedel-cockpit-refresh-tabulated
+       (mapcar #'mevedel-skills-list--entry mevedel-skills-list--skills)
+       selected))))
 
 (defun mevedel-skills-list--skill-at-point ()
   "Return the skill at point in a skill listing buffer."
@@ -3471,9 +3480,8 @@ Routes through the lifecycle-aware permission transition path."
          (name (mevedel-skill-name skill))
          (enable (not (mevedel-skills--skill-enabled-p skill))))
     (mevedel-skills--set-enabled skill enable)
-    (when-let* ((data-buffer (progn
-                               (require 'mevedel-cockpit)
-                               (mevedel-cockpit-data-buffer))))
+    (when-let* ((data-buffer (mevedel-cockpit-context-data-buffer
+                              (mevedel-skills-list--context))))
       (with-current-buffer data-buffer
         (mevedel-skills--refresh-view-input-prompt)))
     (mevedel-skills-list-refresh)
@@ -3546,23 +3554,18 @@ Slash equivalents
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
-(defun mevedel-skills-list-open
-    (&optional session view-buffer data-buffer origin-buffer)
-  "Open the skill listing buffer for SESSION.
-VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
-session pair when the cockpit is opened from a live mevedel session."
+(defun mevedel-skills-list-open (&optional context)
+  "Open the skill listing buffer for CONTEXT."
   (require 'mevedel-cockpit)
-  (let ((session (or session
-                     (bound-and-true-p mevedel--session)
-                     (user-error "No mevedel session in this buffer"))))
+  (let ((context (or context (mevedel-cockpit-current-context))))
+    (unless (mevedel-cockpit-context-session context)
+      (user-error "No mevedel session in this buffer"))
     (mevedel-cockpit-open-tabulated
      mevedel-skills-list-buffer-name
      #'mevedel-skills-list-mode
      #'mevedel-skills-list-refresh
-     view-buffer
-     data-buffer
-     (or origin-buffer (current-buffer))
-     (lambda () (setq mevedel-skills-list--session session))
+     context
+     nil
      "skills cockpit")))
 
 (defun mevedel-skills--list-message-text (session)
@@ -3631,13 +3634,8 @@ session pair when the cockpit is opened from a live mevedel session."
         (progn
           (require 'mevedel-tools)
           (if (fboundp 'mevedel-menu-open)
-              (condition-case nil
-                  (mevedel-menu-open 'tools)
-                (user-error
-                 (mevedel-tools-list-open mevedel--session nil
-                                          (current-buffer))))
-            (mevedel-tools-list-open mevedel--session nil
-                                     (current-buffer))))
+              (mevedel-menu-open 'tools)
+            (user-error "No mevedel session cockpit here")))
       (message "Usage: /tools [list]"))))
 
 (defvar mevedel-slash-commands
