@@ -139,15 +139,19 @@ tool calls, presets, buffers, transcripts, session flow, agents, or
 coordination, consult gptel and gptel-agent source and reuse their existing
 APIs or patterns instead of duplicating them.
 
-Prefer a refreshed upstream checkout, because Eask dependency installs can get
-stale:
+Ensure the repositories are cloned:
 
 ```bash
 # First time
 mkdir -p .scratch/upstream
 git clone https://github.com/karthink/gptel .scratch/upstream/gptel
 git clone https://github.com/karthink/gptel-agent .scratch/upstream/gptel-agent
+```
 
+Prefer a refreshed upstream checkout, because Eask dependency installs can get
+stale:
+
+```bash
 # Refresh before consulting
 git -C .scratch/upstream/gptel pull --ff-only
 git -C .scratch/upstream/gptel-agent pull --ff-only
