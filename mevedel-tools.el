@@ -86,16 +86,23 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
-(declare-function mevedel-cockpit-open-tabulated
-                  "mevedel-cockpit"
-                  (buffer-name mode refresh context &optional setup label))
+(declare-function mevedel-cockpit-open-surface
+                  "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
-(declare-function mevedel-cockpit-refresh-tabulated
-                  "mevedel-cockpit" (entries &optional selected-id))
-(declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label context))
-(declare-function mevedel-cockpit-selected
-                  "mevedel-cockpit" (items id-function))
+(declare-function mevedel-cockpit-setup-tabulated-surface
+                  "mevedel-cockpit" (surface))
+(declare-function mevedel-cockpit-show-help
+                  "mevedel-cockpit" (buffer text))
+(declare-function mevedel-cockpit-surface-context
+                  "mevedel-cockpit" (&optional surface))
+(declare-function mevedel-cockpit-surface-details
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-quit
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-refresh
+                  "mevedel-cockpit" (&optional selected-id))
+(declare-function mevedel-cockpit-surface-selected
+                  "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-structs'
 (defvar mevedel--data-buffer)
@@ -584,9 +591,6 @@ otherwise queues them on the chat buffer's session."
 (defconst mevedel-tools-help-buffer-name "*mevedel tools help*"
   "Name of the tools cockpit help buffer.")
 
-(defvar-local mevedel-tools-list--items nil
-  "Tool row items cached for the current tools listing render.")
-
 (defun mevedel-tools-list--status-cell (state)
   "Return the propertized table status cell for STATE."
   (let ((label (symbol-name state)))
@@ -677,7 +681,7 @@ otherwise queues them on the chat buffer's session."
      (mapcar #'mevedel-tools-list--loaded-item loaded)
      (mapcar #'mevedel-tools-list--expired-item expired))))
 
-(defun mevedel-tools-list--entry (item)
+(defun mevedel-tools-list--entry (item &optional _context)
   "Return a `tabulated-list-mode' row for ITEM."
   (list
    (mevedel-tools-list--item-id item)
@@ -688,20 +692,17 @@ otherwise queues them on the chat buffer's session."
     (format "%s" (or (plist-get item :ttl) ""))
     (mevedel-tools-list--description-cell item))))
 
-(defun mevedel-tools-list--session-label ()
-  "Return the current tools cockpit session label."
-  (if-let* ((session (condition-case nil
-                         (progn
-                           (require 'mevedel-cockpit)
-                           (mevedel-cockpit-context-session))
-                       (user-error nil))))
+(defun mevedel-tools-list--session-label (&optional context)
+  "Return CONTEXT's tools cockpit session label."
+  (if-let* ((session (and context
+                          (mevedel-cockpit-context-session context))))
       (mevedel-session-name session)
     "unknown"))
 
-(defun mevedel-tools-list--header-line ()
-  "Return the tools cockpit header line."
+(defun mevedel-tools-list--header-line (&optional items context)
+  "Return the tools cockpit header line for ITEMS and CONTEXT."
   (let ((counts nil))
-    (dolist (item mevedel-tools-list--items)
+    (dolist (item items)
       (cl-incf (alist-get (plist-get item :state) counts 0)))
     (format (concat "%s  %s  default TTL:%d  "
                     "active:%d deferred:%d pending:%d loaded:%d "
@@ -709,7 +710,7 @@ otherwise queues them on the chat buffer's session."
                     "l load  G gptel  g refresh  ? help  q back")
             (propertize "mevedel: tools"
                         'face 'font-lock-function-name-face)
-            (mevedel-tools-list--session-label)
+            (mevedel-tools-list--session-label context)
             mevedel-deferred-tool-ttl
             (alist-get 'active counts 0)
             (alist-get 'deferred counts 0)
@@ -717,45 +718,32 @@ otherwise queues them on the chat buffer's session."
             (alist-get 'loaded counts 0)
             (alist-get 'expired counts 0))))
 
-(defun mevedel-tools-list--require-owner ()
-  "Signal a user error if this cockpit's owning session is gone."
-  (require 'mevedel-cockpit)
-  (mevedel-cockpit-require-owner "tools cockpit"))
-
 (defun mevedel-tools-list--context ()
   "Return the current tools cockpit context."
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-current-context))
+  (mevedel-cockpit-surface-context))
 
 (defun mevedel-tools-list--context-data-buffer ()
   "Return the current tools cockpit data buffer."
-  (let ((context (mevedel-tools-list--context)))
-    (mevedel-cockpit-require-owner "tools cockpit" context)
-    (mevedel-cockpit-context-data-buffer context)))
+  (mevedel-cockpit-context-data-buffer (mevedel-tools-list--context)))
+
+(defun mevedel-tools-list--collect (context)
+  "Return tools cockpit items for CONTEXT."
+  (let ((session (or (mevedel-cockpit-context-session context)
+                     (user-error "No mevedel session in this buffer")))
+        (data-buffer (mevedel-cockpit-context-data-buffer context)))
+    (mevedel-tools-list--collect-items session data-buffer)))
 
 (defun mevedel-tools-list-refresh ()
   "Refresh the current tools listing buffer."
   (interactive)
-  (let* ((selected (tabulated-list-get-id))
-         (context (mevedel-tools-list--context))
-         (session (mevedel-cockpit-context-session context))
-         (data-buffer (mevedel-cockpit-context-data-buffer context)))
-    (mevedel-cockpit-require-owner "tools cockpit" context)
-    (unless session
-      (user-error "No mevedel session in this buffer"))
-    (setq mevedel-tools-list--items
-          (mevedel-tools-list--collect-items session data-buffer))
-    (require 'mevedel-cockpit)
-    (mevedel-cockpit-refresh-tabulated
-     (mapcar #'mevedel-tools-list--entry mevedel-tools-list--items)
-     selected)))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-tools-list--selected-item ()
   "Return the selected tools cockpit item, or nil."
-  (mevedel-tools-list--require-owner)
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-selected mevedel-tools-list--items
-                            #'mevedel-tools-list--item-id))
+  (mevedel-cockpit-surface-selected t))
 
 (defun mevedel-tools-list--selected-item-for-state (state)
   "Return the selected tools cockpit item when its state is STATE."
@@ -765,7 +753,7 @@ otherwise queues them on the chat buffer's session."
              item))
     (user-error nil)))
 
-(defun mevedel-tools-list--detail-text (item)
+(defun mevedel-tools-list--detail-text (item &optional _context)
   "Return detail text for tools cockpit ITEM."
   (format (concat "Tool %s [%s]\nCategory: %s\nTTL: %s\n\n"
                   "Description:\n%s")
@@ -778,11 +766,8 @@ otherwise queues them on the chat buffer's session."
 (defun mevedel-tools-list-details ()
   "Show details for the tool row at point."
   (interactive)
-  (let ((item (or (mevedel-tools-list--selected-item)
-                  (user-error "No tool on this line")))
-        (help-window-select t))
-    (with-help-window "*mevedel tool details*"
-      (princ (mevedel-tools-list--detail-text item)))))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-details))
 
 (defun mevedel-tools-list--main-data-buffer ()
   "Return the data buffer for session-local lifecycle changes."
@@ -927,12 +912,8 @@ otherwise queues them on the chat buffer's session."
     (with-current-buffer data-buffer
       (call-interactively #'gptel-menu))))
 
-(defun mevedel-tools-list-help ()
-  "Open tools cockpit help."
-  (interactive)
-  (let ((help-window-select t))
-    (with-help-window mevedel-tools-help-buffer-name
-      (princ "mevedel tools cockpit
+(defconst mevedel-tools-list--help-text
+  "mevedel tools cockpit
 
 Keys
 RET  Show selected tool details
@@ -950,7 +931,16 @@ deferred  Discoverable through ToolSearch
 pending   Queued for temporary load on the next payload update
 loaded    Temporarily loaded deferred tool with remaining TTL
 expired   Expired on the previous payload update
-"))))
+"
+  "Help text for the tools cockpit.")
+
+(defun mevedel-tools-list-help ()
+  "Open tools cockpit help."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-show-help
+   mevedel-tools-help-buffer-name
+   mevedel-tools-list--help-text))
 
 (defun mevedel-tools-list-quit ()
   "Quit the tools cockpit and return to the main session cockpit."
@@ -958,33 +948,37 @@ expired   Expired on the previous payload update
   (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "tools cockpit"))
 
-(defvar mevedel-tools-list-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "a") #'mevedel-tools-list-activate-deferred)
-    (define-key map (kbd "d") #'mevedel-tools-list-defer-active)
-    (define-key map (kbd "g") #'mevedel-tools-list-refresh)
-    (define-key map (kbd "l") #'mevedel-tools-list-search-load)
-    (define-key map (kbd "G") #'mevedel-tools-list-open-gptel)
-    (define-key map (kbd "?") #'mevedel-tools-list-help)
-    (define-key map (kbd "q") #'mevedel-tools-list-quit)
-    (define-key map (kbd "RET") #'mevedel-tools-list-details)
-    map)
-  "Keymap for `mevedel-tools-list-mode'.")
+(defconst mevedel-tools-list--surface
+  `(:buffer-name ,mevedel-tools-list-buffer-name
+    :label "tools cockpit"
+    :row-label "tool"
+    :mode mevedel-tools-list-mode
+    :format [("State" 10 t)
+             ("Name" 24 t)
+             ("Category" 16 t)
+             ("TTL" 6 t)
+             ("Description" 0 t)]
+    :sort-key ("Name" . nil)
+    :require-session t
+    :collect mevedel-tools-list--collect
+    :entry mevedel-tools-list--entry
+    :header mevedel-tools-list--header-line
+    :details mevedel-tools-list--detail-text
+    :details-buffer "*mevedel tool details*"
+    :help-buffer ,mevedel-tools-help-buffer-name
+    :help-text ,mevedel-tools-list--help-text
+    :keys (("a" . mevedel-tools-list-activate-deferred)
+           ("d" . mevedel-tools-list-defer-active)
+           ("l" . mevedel-tools-list-search-load)
+           ("G" . mevedel-tools-list-open-gptel)))
+  "Cockpit surface spec for the tools list.")
 
 (define-derived-mode mevedel-tools-list-mode tabulated-list-mode
   "mevedel-tools"
   "Major mode for managing mevedel tool state."
-  (setq tabulated-list-format
-        [("State" 10 t)
-         ("Name" 24 t)
-         ("Category" 16 t)
-         ("TTL" 6 t)
-         ("Description" 0 t)])
-  (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key '("Name" . nil))
-  (setq header-line-format '(:eval (mevedel-tools-list--header-line)))
-  (tabulated-list-init-header)
-  (hl-line-mode 1))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-setup-tabulated-surface
+   mevedel-tools-list--surface))
 
 (defun mevedel-tools-list-open (&optional context)
   "Open the tools listing buffer for CONTEXT."
@@ -992,13 +986,7 @@ expired   Expired on the previous payload update
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit-context-session context)
       (user-error "No mevedel session in this buffer"))
-    (mevedel-cockpit-open-tabulated
-     mevedel-tools-list-buffer-name
-     #'mevedel-tools-list-mode
-     #'mevedel-tools-list-refresh
-     context
-     nil
-     "tools cockpit")))
+    (mevedel-cockpit-open-surface mevedel-tools-list--surface context)))
 
 
 ;;

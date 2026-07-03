@@ -39,16 +39,25 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-current-context
                   "mevedel-cockpit" ())
-(declare-function mevedel-cockpit-open-tabulated
-                  "mevedel-cockpit"
-                  (buffer-name mode refresh context &optional setup label))
+(declare-function mevedel-cockpit-open-surface
+                  "mevedel-cockpit" (surface &optional context))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
-(declare-function mevedel-cockpit-refresh-tabulated
-                  "mevedel-cockpit" (entries &optional selected-id))
-(declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label context))
-(declare-function mevedel-cockpit-selected
-                  "mevedel-cockpit" (items id-function))
+(declare-function mevedel-cockpit-setup-tabulated-surface
+                  "mevedel-cockpit" (surface))
+(declare-function mevedel-cockpit-show-help
+                  "mevedel-cockpit" (buffer text))
+(declare-function mevedel-cockpit-surface-context
+                  "mevedel-cockpit" (&optional surface))
+(declare-function mevedel-cockpit-surface-details
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-help
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-quit
+                  "mevedel-cockpit" ())
+(declare-function mevedel-cockpit-surface-refresh
+                  "mevedel-cockpit" (&optional selected-id))
+(declare-function mevedel-cockpit-surface-selected
+                  "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
@@ -3356,9 +3365,6 @@ Routes through the lifecycle-aware permission transition path."
 (defconst mevedel-skills-help-buffer-name "*mevedel skills help*"
   "Name of the skills cockpit help buffer.")
 
-(defvar-local mevedel-skills-list--skills nil
-  "Skills cached for the current skill listing render.")
-
 (defun mevedel-skills--skill-status-label (skill)
   "Return user-facing enabled status for SKILL."
   (if (mevedel-skills--skill-enabled-p skill) "enabled" "disabled"))
@@ -3384,7 +3390,7 @@ Routes through the lifecycle-aware permission transition path."
                     'success
                   'shadow))))
 
-(defun mevedel-skills-list--entry (skill)
+(defun mevedel-skills-list--entry (skill &optional _context)
   "Return a `tabulated-list-mode' row for SKILL."
   (list
    (mevedel-skills-list--item-id skill)
@@ -3394,7 +3400,7 @@ Routes through the lifecycle-aware permission transition path."
     (mevedel-skills--skill-source-label skill)
     (or (mevedel-skill-description skill) ""))))
 
-(defun mevedel-skills--skill-detail-text (skill)
+(defun mevedel-skills--skill-detail-text (skill &optional _context)
   "Return detail text for SKILL."
   (format
    "Skill %s [%s]\nSource: %s\nDescription: %s%s%s"
@@ -3409,69 +3415,47 @@ Routes through the lifecycle-aware permission transition path."
        (format "\nFile: %s" file)
      "")))
 
-(defun mevedel-skills-list--session-label ()
-  "Return the current skills cockpit session label."
-  (if-let* ((session (condition-case nil
-                         (progn
-                           (require 'mevedel-cockpit)
-                           (mevedel-cockpit-context-session))
-                       (user-error nil))))
+(defun mevedel-skills-list--session-label (&optional context)
+  "Return CONTEXT's skills cockpit session label."
+  (if-let* ((session (and context
+                          (mevedel-cockpit-context-session context))))
       (mevedel-session-name session)
     "unknown"))
 
-(defun mevedel-skills-list--header-line ()
-  "Return the skills cockpit header line."
-  (let ((total (length mevedel-skills-list--skills))
-        (enabled (cl-count-if #'mevedel-skills--skill-enabled-p
-                              mevedel-skills-list--skills)))
+(defun mevedel-skills-list--header-line (&optional items context)
+  "Return the skills cockpit header line for ITEMS and CONTEXT."
+  (let* ((total (length items))
+         (enabled (cl-count-if #'mevedel-skills--skill-enabled-p
+                               items)))
     (format "%s  %s  %d/%d enabled    RET details  e toggle  o source  g refresh  ? help  q back"
             (propertize "mevedel: skills"
                         'face 'font-lock-function-name-face)
-            (mevedel-skills-list--session-label)
+            (mevedel-skills-list--session-label context)
             enabled
             total)))
 
-(defun mevedel-skills-list--require-owner ()
-  "Signal a user error if this cockpit's owning session is gone."
-  (require 'mevedel-cockpit)
-  (mevedel-cockpit-require-owner "skills cockpit"))
-
-(defun mevedel-skills-list--context ()
-  "Return the current skills cockpit context."
-  (require 'mevedel-cockpit)
-  (mevedel-cockpit-current-context))
+(defun mevedel-skills-list--collect (context)
+  "Return skill cockpit items for CONTEXT."
+  (or (mevedel-cockpit-context-session context)
+      (user-error "No mevedel session in this buffer"))
+  (mevedel-session-skills (mevedel-cockpit-context-session context)))
 
 (defun mevedel-skills-list-refresh ()
   "Refresh the current skill listing buffer."
   (interactive)
-  (let ((selected (tabulated-list-get-id))
-        (context (mevedel-skills-list--context)))
-    (mevedel-cockpit-require-owner "skills cockpit" context)
-    (let ((session (mevedel-cockpit-context-session context)))
-      (unless session
-        (user-error "No mevedel session in this buffer"))
-      (setq mevedel-skills-list--skills (mevedel-session-skills session))
-      (require 'mevedel-cockpit)
-      (mevedel-cockpit-refresh-tabulated
-       (mapcar #'mevedel-skills-list--entry mevedel-skills-list--skills)
-       selected))))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-refresh))
 
 (defun mevedel-skills-list--skill-at-point ()
   "Return the skill at point in a skill listing buffer."
-  (mevedel-skills-list--require-owner)
-  (or (progn
-        (require 'mevedel-cockpit)
-        (mevedel-cockpit-selected mevedel-skills-list--skills
-                                  #'mevedel-skills-list--item-id))
-      (user-error "No skill on this line")))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-selected))
 
 (defun mevedel-skills-list-details ()
   "Show details for the skill at point."
   (interactive)
-  (let ((skill (mevedel-skills-list--skill-at-point))
-        (help-window-select t))
-    (with-help-window "*mevedel skill details*"
-      (princ (mevedel-skills--skill-detail-text skill)))))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-surface-details))
 
 (defun mevedel-skills-list-toggle-enabled ()
   "Toggle enabled state for the skill at point."
@@ -3481,7 +3465,7 @@ Routes through the lifecycle-aware permission transition path."
          (enable (not (mevedel-skills--skill-enabled-p skill))))
     (mevedel-skills--set-enabled skill enable)
     (when-let* ((data-buffer (mevedel-cockpit-context-data-buffer
-                              (mevedel-skills-list--context))))
+                              (mevedel-cockpit-surface-context))))
       (with-current-buffer data-buffer
         (mevedel-skills--refresh-view-input-prompt)))
     (mevedel-skills-list-refresh)
@@ -3503,12 +3487,8 @@ Routes through the lifecycle-aware permission transition path."
                   (or file dir "unknown")))
     (find-file target)))
 
-(defun mevedel-skills-list-help ()
-  "Open skills cockpit help."
-  (interactive)
-  (let ((help-window-select t))
-    (with-help-window mevedel-skills-help-buffer-name
-      (princ "mevedel skills cockpit
+(defconst mevedel-skills-list--help-text
+  "mevedel skills cockpit
 
 Keys
 RET  Show selected skill details
@@ -3521,7 +3501,16 @@ q    Back to the main session cockpit
 Slash equivalents
 /skills help NAME
 /skills enable NAME, /skills disable NAME
-"))))
+"
+  "Help text for the skills cockpit.")
+
+(defun mevedel-skills-list-help ()
+  "Open skills cockpit help."
+  (interactive)
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-show-help
+   mevedel-skills-help-buffer-name
+   mevedel-skills-list--help-text))
 
 (defun mevedel-skills-list-quit ()
   "Quit the skills cockpit and return to the main session cockpit."
@@ -3529,30 +3518,34 @@ Slash equivalents
   (require 'mevedel-cockpit)
   (mevedel-cockpit-quit "skills cockpit"))
 
-(defvar mevedel-skills-list-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "g") #'mevedel-skills-list-refresh)
-    (define-key map (kbd "e") #'mevedel-skills-list-toggle-enabled)
-    (define-key map (kbd "o") #'mevedel-skills-list-open-source)
-    (define-key map (kbd "?") #'mevedel-skills-list-help)
-    (define-key map (kbd "q") #'mevedel-skills-list-quit)
-    (define-key map (kbd "RET") #'mevedel-skills-list-details)
-    map)
-  "Keymap for `mevedel-skills-list-mode'.")
+(defconst mevedel-skills-list--surface
+  `(:buffer-name ,mevedel-skills-list-buffer-name
+    :label "skills cockpit"
+    :row-label "skill"
+    :mode mevedel-skills-list-mode
+    :format [("State" 9 t)
+             ("Name" 24 t)
+             ("Source" 18 t)
+             ("Description" 0 t)]
+    :sort-key ("Name" . nil)
+    :require-session t
+    :collect mevedel-skills-list--collect
+    :entry mevedel-skills-list--entry
+    :header mevedel-skills-list--header-line
+    :details mevedel-skills--skill-detail-text
+    :details-buffer "*mevedel skill details*"
+    :help-buffer ,mevedel-skills-help-buffer-name
+    :help-text ,mevedel-skills-list--help-text
+    :keys (("e" . mevedel-skills-list-toggle-enabled)
+           ("o" . mevedel-skills-list-open-source)))
+  "Cockpit surface spec for the skill list.")
 
 (define-derived-mode mevedel-skills-list-mode tabulated-list-mode
   "mevedel-skills"
   "Major mode for managing mevedel skills."
-  (setq tabulated-list-format
-        [("State" 9 t)
-         ("Name" 24 t)
-         ("Source" 18 t)
-         ("Description" 0 t)])
-  (setq tabulated-list-padding 2)
-  (setq tabulated-list-sort-key '("Name" . nil))
-  (setq header-line-format '(:eval (mevedel-skills-list--header-line)))
-  (tabulated-list-init-header)
-  (hl-line-mode 1))
+  (require 'mevedel-cockpit)
+  (mevedel-cockpit-setup-tabulated-surface
+   mevedel-skills-list--surface))
 
 (defun mevedel-skills-list-open (&optional context)
   "Open the skill listing buffer for CONTEXT."
@@ -3560,13 +3553,7 @@ Slash equivalents
   (let ((context (or context (mevedel-cockpit-current-context))))
     (unless (mevedel-cockpit-context-session context)
       (user-error "No mevedel session in this buffer"))
-    (mevedel-cockpit-open-tabulated
-     mevedel-skills-list-buffer-name
-     #'mevedel-skills-list-mode
-     #'mevedel-skills-list-refresh
-     context
-     nil
-     "skills cockpit")))
+    (mevedel-cockpit-open-surface mevedel-skills-list--surface context)))
 
 (defun mevedel-skills--list-message-text (session)
   "Return fallback `/skills list' message text for SESSION."

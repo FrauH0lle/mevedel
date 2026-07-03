@@ -23,8 +23,8 @@
 (defconst mevedel-cockpit-test-buffer-name "*mevedel cockpit test*"
   "Name of the test cockpit buffer.")
 
-(defvar-local mevedel-cockpit-test--entries nil
-  "Tabulated test entries.")
+(defvar-local mevedel-cockpit-test--items nil
+  "Test surface items.")
 
 (defun mevedel-cockpit-test--workspace ()
   "Return a test workspace."
@@ -52,18 +52,59 @@
 (define-derived-mode mevedel-cockpit-test-mode tabulated-list-mode
   "mevedel-cockpit-test"
   "Test mode for `mevedel-cockpit'."
-  (setq tabulated-list-format [("Name" 12 t)])
-  (setq tabulated-list-sort-key '("Name" . nil))
-  (tabulated-list-init-header))
+  (mevedel-cockpit-setup-tabulated-surface
+   (mevedel-cockpit-test--surface)))
 
-(defun mevedel-cockpit-test--refresh ()
-  "Refresh test cockpit rows."
-  (mevedel-cockpit-refresh-tabulated mevedel-cockpit-test--entries))
+(defun mevedel-cockpit-test--collect (_context)
+  "Return the test surface items."
+  mevedel-cockpit-test--items)
+
+(defun mevedel-cockpit-test--entry (item _context)
+  "Return a tabulated row for ITEM."
+  (list item (vector item)))
+
+(defun mevedel-cockpit-test--header (items _context)
+  "Return a test header for ITEMS."
+  (format "test header: %d" (length items)))
+
+(defun mevedel-cockpit-test--details (item _context)
+  "Return detail text for ITEM."
+  (format "details for %s" item))
+
+(defconst mevedel-cockpit-test--surface-spec
+  `(:buffer-name ,mevedel-cockpit-test-buffer-name
+    :label "test cockpit"
+    :row-label "test item"
+    :mode mevedel-cockpit-test-mode
+    :format [("Name" 12 t)]
+    :sort-key ("Name" . nil)
+    :collect mevedel-cockpit-test--collect
+    :entry mevedel-cockpit-test--entry
+    :header mevedel-cockpit-test--header
+    :details mevedel-cockpit-test--details
+    :details-buffer "*mevedel cockpit test details*"
+    :help-buffer "*mevedel cockpit test help*"
+    :help-text "test help"
+    :keys (("x" . ignore)))
+  "Surface spec used by cockpit tests.")
+
+(defun mevedel-cockpit-test--surface (&optional setup require-session)
+  "Return a test surface with SETUP and REQUIRE-SESSION."
+  (let ((surface (copy-sequence mevedel-cockpit-test--surface-spec)))
+    (when setup
+      (setq surface (plist-put surface :setup setup)))
+    (when require-session
+      (setq surface (plist-put surface :require-session t)))
+    surface))
 
 (defun mevedel-cockpit-test--cleanup (&rest buffers)
   "Kill the test cockpit buffer and any live BUFFERS."
   (when (get-buffer mevedel-cockpit-test-buffer-name)
     (kill-buffer mevedel-cockpit-test-buffer-name))
+  (when (get-buffer "*mevedel cockpit test details*")
+    (kill-buffer "*mevedel cockpit test details*"))
+  (when (get-buffer "*mevedel cockpit test help*")
+    (kill-buffer "*mevedel cockpit test help*"))
   (dolist (buffer buffers)
     (when (buffer-live-p buffer)
       (kill-buffer buffer))))
@@ -71,31 +112,38 @@
 (defun mevedel-cockpit-test--open
     (view-buffer data-buffer &optional origin-buffer entries)
   "Open the test cockpit owned by VIEW-BUFFER and DATA-BUFFER."
-  (mevedel-cockpit-open-tabulated
-   mevedel-cockpit-test-buffer-name
-   #'mevedel-cockpit-test-mode
-   #'mevedel-cockpit-test--refresh
+  (mevedel-cockpit-open-surface
+   (mevedel-cockpit-test--surface
+    (lambda (_context)
+      (setq mevedel-cockpit-test--items
+            (or entries '("a" "b")))))
    (mevedel-cockpit-test--context
-    view-buffer data-buffer (or origin-buffer view-buffer))
-   (lambda ()
-     (setq mevedel-cockpit-test--entries
-           (or entries
-               '(("a" ["a"])
-                 ("b" ["b"])))))
-   "test cockpit"))
+    view-buffer data-buffer (or origin-buffer view-buffer))))
 
-(mevedel-deftest mevedel-cockpit-open-tabulated ()
+(mevedel-deftest mevedel-cockpit-open-surface ()
   ,test
   (test)
 
-  :doc "opens a tabulated cockpit with live owners"
+  :doc "opens a tabulated cockpit with live owners and generic keys"
   (let ((view-buffer (generate-new-buffer " *cockpit-view*"))
         (data-buffer (generate-new-buffer " *cockpit-data*")))
     (unwind-protect
         (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
           (with-current-buffer buffer
             (should (eq major-mode 'mevedel-cockpit-test-mode))
-            (should (= 2 (length tabulated-list-entries)))))
+            (should (= 2 (length tabulated-list-entries)))
+            (should (equal "test header: 2"
+                           (mevedel-cockpit-surface-header-line)))
+            (should (eq (lookup-key (current-local-map) (kbd "g"))
+                        #'mevedel-cockpit-surface-refresh))
+            (should (eq (lookup-key (current-local-map) (kbd "?"))
+                        #'mevedel-cockpit-surface-help))
+            (should (eq (lookup-key (current-local-map) (kbd "q"))
+                        #'mevedel-cockpit-surface-quit))
+            (should (eq (lookup-key (current-local-map) (kbd "RET"))
+                        #'mevedel-cockpit-surface-details))
+            (should (eq (lookup-key (current-local-map) (kbd "x"))
+                        #'ignore))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
 
   :doc "rejects dead owners before opening"
@@ -105,16 +153,23 @@
         (progn
           (kill-buffer data-buffer)
           (should-error
-           (mevedel-cockpit-open-tabulated
-            mevedel-cockpit-test-buffer-name
-            #'mevedel-cockpit-test-mode
-            #'mevedel-cockpit-test--refresh
+           (mevedel-cockpit-open-surface
+            (mevedel-cockpit-test--surface)
             (list :view-buffer view-buffer
                   :data-buffer data-buffer
-                  :origin-buffer view-buffer)
-            nil
-            "test cockpit")
+                  :origin-buffer view-buffer))
            :type 'user-error))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+
+  :doc "rejects missing sessions when the surface requires one"
+  (let ((view-buffer (generate-new-buffer " *cockpit-session-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-session-data*")))
+    (unwind-protect
+        (should-error
+         (mevedel-cockpit-open-surface
+          (mevedel-cockpit-test--surface nil t)
+          (mevedel-cockpit-test--context view-buffer data-buffer))
+         :type 'user-error)
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-cockpit-current-context ()
@@ -173,16 +228,12 @@
          (view-buffer (generate-new-buffer " *cockpit-context-view*"))
          (data-buffer (generate-new-buffer " *cockpit-context-data*")))
     (unwind-protect
-        (let ((buffer (mevedel-cockpit-open-tabulated
-                       mevedel-cockpit-test-buffer-name
-                       #'mevedel-cockpit-test-mode
-                       #'mevedel-cockpit-test--refresh
+        (let ((buffer (mevedel-cockpit-open-surface
+                       (mevedel-cockpit-test--surface
+                        (lambda (_context)
+                          (setq mevedel-cockpit-test--items '("a"))))
                        (mevedel-cockpit-test--context
-                        view-buffer data-buffer data-buffer session)
-                       (lambda ()
-                         (setq mevedel-cockpit-test--entries
-                               '(("a" ["a"]))))
-                       "test cockpit")))
+                        view-buffer data-buffer data-buffer session))))
           (with-current-buffer buffer
             (let ((context (mevedel-cockpit-current-context)))
               (should (eq (mevedel-cockpit-context-view-buffer context)
@@ -244,7 +295,7 @@
             (should (equal "a" (tabulated-list-get-id)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
-(mevedel-deftest mevedel-cockpit-refresh-tabulated ()
+(mevedel-deftest mevedel-cockpit-surface-refresh ()
   ,test
   (test)
 
@@ -255,14 +306,12 @@
         (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
           (with-current-buffer buffer
             (mevedel-cockpit-goto-id "b")
-            (setq mevedel-cockpit-test--entries
-                  '(("b" ["bee"])
-                    ("c" ["cee"])))
-            (mevedel-cockpit-test--refresh)
+            (setq mevedel-cockpit-test--items '("b" "c"))
+            (mevedel-cockpit-surface-refresh)
             (should (equal "b" (tabulated-list-get-id)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
-(mevedel-deftest mevedel-cockpit-selected ()
+(mevedel-deftest mevedel-cockpit-surface-selected ()
   ,test
   (test)
 
@@ -273,10 +322,40 @@
         (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
           (with-current-buffer buffer
             (mevedel-cockpit-goto-id "b")
-            (should (equal "b"
-                           (mevedel-cockpit-selected
-                            '("a" "b")
-                            #'identity)))))
+            (should (equal "b" (mevedel-cockpit-surface-selected)))
+            (mevedel-cockpit-goto-id "missing")
+            (should (equal "a" (tabulated-list-get-id)))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit-surface-details ()
+  ,test
+  (test)
+
+  :doc "renders details for the selected row through the surface spec"
+  (let ((view-buffer (generate-new-buffer " *cockpit-details-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-details-data*")))
+    (unwind-protect
+        (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
+          (with-current-buffer buffer
+            (mevedel-cockpit-goto-id "b")
+            (mevedel-cockpit-surface-details))
+          (with-current-buffer "*mevedel cockpit test details*"
+            (should (string-match-p "details for b" (buffer-string)))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit-surface-help ()
+  ,test
+  (test)
+
+  :doc "renders help through the surface spec"
+  (let ((view-buffer (generate-new-buffer " *cockpit-help-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-help-data*")))
+    (unwind-protect
+        (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
+          (with-current-buffer buffer
+            (mevedel-cockpit-surface-help))
+          (with-current-buffer "*mevedel cockpit test help*"
+            (should (string-match-p "test help" (buffer-string)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-cockpit--return-buffer ()
