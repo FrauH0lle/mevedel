@@ -22,6 +22,7 @@
 (require 'mevedel-skills)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
+(require 'mevedel-tools-list)
 (require 'mevedel-view)
 (require 'mevedel-workspace)
 (require 'mevedel-worktree)
