@@ -22,16 +22,19 @@
 (declare-function dired "dired" (dirname &optional switches))
 
 ;; `mevedel-cockpit'
+(declare-function mevedel-cockpit-context-workspace
+                  "mevedel-cockpit" (&optional context))
+(declare-function mevedel-cockpit-current-context
+                  "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-goto-id "mevedel-cockpit" (id))
 (declare-function mevedel-cockpit-open-tabulated
                   "mevedel-cockpit"
-                  (buffer-name mode refresh view-buffer data-buffer
-                               origin-buffer &optional setup label))
+                  (buffer-name mode refresh context &optional setup label))
 (declare-function mevedel-cockpit-quit "mevedel-cockpit" (&optional label))
 (declare-function mevedel-cockpit-refresh-tabulated
                   "mevedel-cockpit" (entries &optional selected-id))
 (declare-function mevedel-cockpit-require-owner
-                  "mevedel-cockpit" (&optional label))
+                  "mevedel-cockpit" (&optional label context))
 (declare-function mevedel-cockpit-selected
                   "mevedel-cockpit" (items id-function))
 
@@ -929,9 +932,6 @@ Workspace runtime data is retained."
 (defconst mevedel-plugins-help-buffer-name "*mevedel plugin help*"
   "Name of the plugin cockpit help buffer.")
 
-(defvar-local mevedel-plugins-list--workspace nil
-  "Workspace rendered in the current plugin management buffer.")
-
 (defvar-local mevedel-plugins-list--plugins nil
   "Plugin cockpit items cached for the current render.")
 
@@ -1071,11 +1071,19 @@ Workspace runtime data is retained."
              (number-to-string (mevedel-plugins--skill-count plugin))
              (mevedel-plugins--plugin-source-label plugin))))))
 
+(defun mevedel-plugins-list--workspace ()
+  "Return the current plugin cockpit workspace."
+  (condition-case nil
+      (progn
+        (require 'mevedel-cockpit)
+        (mevedel-cockpit-context-workspace))
+    (user-error nil)))
+
 (defun mevedel-plugins-list--root-label ()
   "Return the current plugin cockpit workspace root label."
-  (if mevedel-plugins-list--workspace
+  (if-let* ((workspace (mevedel-plugins-list--workspace)))
       (abbreviate-file-name
-       (mevedel-workspace-root mevedel-plugins-list--workspace))
+       (mevedel-workspace-root workspace))
     "no workspace"))
 
 (defun mevedel-plugins-list--selected-item ()
@@ -1102,10 +1110,11 @@ Workspace runtime data is retained."
 
 (defun mevedel-plugins-list--activation-label ()
   "Return the adaptive activation action label for point."
-  (if-let* ((plugin (mevedel-plugins-list--selected-item))
+  (if-let* ((workspace (mevedel-plugins-list--workspace))
+            (plugin (mevedel-plugins-list--selected-item))
             ((mevedel-plugin-p plugin)))
       (if (mevedel-plugins--enabled-p
-           plugin mevedel-plugins-list--workspace)
+           plugin workspace)
           "Disable plugin"
         "Enable plugin")
     "Toggle plugin"))
@@ -1113,12 +1122,13 @@ Workspace runtime data is retained."
 (defun mevedel-plugins-list--header-line ()
   "Return the plugin cockpit header line."
   (let ((total 0)
-        (enabled 0))
+        (enabled 0)
+        (workspace (mevedel-plugins-list--workspace)))
     (dolist (item mevedel-plugins-list--plugins)
       (when (mevedel-plugin-p item)
         (setq total (1+ total))
         (when (mevedel-plugins--enabled-p
-               item mevedel-plugins-list--workspace)
+               item workspace)
           (setq enabled (1+ enabled)))))
     (format "%s  %s  %d/%d enabled    RET details  e %s  h hooks  + install  u update  r reload  g refresh  x remove  o source  ? help  q back"
             (propertize "mevedel: plugins"
@@ -1136,15 +1146,16 @@ Workspace runtime data is retained."
 (defun mevedel-plugins-list-refresh ()
   "Refresh the current plugin management buffer."
   (interactive)
-  (let ((selected (tabulated-list-get-id)))
+  (let ((selected (tabulated-list-get-id))
+        (workspace (mevedel-plugins-list--workspace)))
     (mevedel-plugins-list--require-owner)
     (setq mevedel-plugins-list--plugins
-          (mevedel-plugins-list--items mevedel-plugins-list--workspace))
+          (mevedel-plugins-list--items workspace))
     (require 'mevedel-cockpit)
     (mevedel-cockpit-refresh-tabulated
      (mapcar (lambda (plugin)
                (mevedel-plugins-list--entry
-                plugin mevedel-plugins-list--workspace))
+                plugin workspace))
              mevedel-plugins-list--plugins)
      selected)))
 
@@ -1158,12 +1169,13 @@ Workspace runtime data is retained."
   "Toggle activation for the plugin at point."
   (interactive)
   (let* ((plugin (mevedel-plugins-list--plugin-at-point))
+         (workspace (mevedel-plugins-list--workspace))
          (name (mevedel-plugin-name plugin)))
-    (if (mevedel-plugins--enabled-p plugin mevedel-plugins-list--workspace)
+    (if (mevedel-plugins--enabled-p plugin workspace)
         (progn
-          (mevedel-plugins-disable name mevedel-plugins-list--workspace)
+          (mevedel-plugins-disable name workspace)
           (message "mevedel: disabled plugin %s" name))
-      (if (mevedel-plugins-enable name mevedel-plugins-list--workspace)
+      (if (mevedel-plugins-enable name workspace)
           (message "mevedel: enabled plugin %s" name)
         (message "mevedel: enable cancelled for plugin %s" name)))
     (mevedel-plugins--refresh-current-session)
@@ -1173,20 +1185,21 @@ Workspace runtime data is retained."
   "Toggle hooks for the plugin at point."
   (interactive)
   (let* ((selected (mevedel-plugins-list--plugin-at-point))
+         (workspace (mevedel-plugins-list--workspace))
          (name (mevedel-plugin-name selected)))
     (cond
      ((not (mevedel-plugin-hooks selected))
       (message "mevedel: plugin %s declares no hooks" name))
      ((not (mevedel-plugins--enabled-p
-            selected mevedel-plugins-list--workspace))
+            selected workspace))
       (message "mevedel: plugin %s is not enabled" name))
      ((mevedel-plugins--hooks-enabled-p
-       selected mevedel-plugins-list--workspace)
+       selected workspace)
       (mevedel-plugins-disable-hooks
-       name mevedel-plugins-list--workspace)
+       name workspace)
       (message "mevedel: disabled hooks for plugin %s" name))
      ((mevedel-plugins-enable-hooks
-       name mevedel-plugins-list--workspace)
+       name workspace)
       (message "mevedel: enabled hooks for plugin %s" name))
      (t
       (message "mevedel: hook enable cancelled for plugin %s" name)))
@@ -1197,9 +1210,10 @@ Workspace runtime data is retained."
   "Update the plugin at point."
   (interactive)
   (let* ((name (mevedel-plugins-list--selected-name))
+         (workspace (mevedel-plugins-list--workspace))
          (message (mevedel-plugins--update
                    name
-                   mevedel-plugins-list--workspace)))
+                   workspace)))
     (mevedel-plugins--refresh-current-session)
     (mevedel-plugins-list--refresh-preserving name)
     (message "%s" message)))
@@ -1208,9 +1222,10 @@ Workspace runtime data is retained."
   "Remove the plugin at point."
   (interactive)
   (let* ((name (mevedel-plugins-list--selected-name))
+         (workspace (mevedel-plugins-list--workspace))
          (message (mevedel-plugins--remove
                    name
-                   mevedel-plugins-list--workspace)))
+                   workspace)))
     (mevedel-plugins--refresh-current-session)
     (mevedel-plugins-list--refresh-preserving name)
     (message "%s" message)))
@@ -1324,7 +1339,7 @@ Workspace runtime data is retained."
   "Show details for the plugin at point."
   (interactive)
   (mevedel-plugins-list--require-owner)
-  (let ((workspace mevedel-plugins-list--workspace)
+  (let ((workspace (mevedel-plugins-list--workspace))
         (item (or (mevedel-plugins-list--selected-item)
                   (user-error "No plugin on this line")))
         (help-window-select t))
@@ -1400,21 +1415,17 @@ Slash equivalents
   (tabulated-list-init-header)
   (hl-line-mode 1))
 
-(defun mevedel-plugins-list-open
-    (&optional workspace view-buffer data-buffer origin-buffer)
-  "Open the plugin management buffer for WORKSPACE.
-VIEW-BUFFER, DATA-BUFFER, and ORIGIN-BUFFER record the owning
-session pair when the cockpit is opened from a live mevedel session."
+(defun mevedel-plugins-list-open (&optional context)
+  "Open the plugin management buffer for CONTEXT."
   (require 'mevedel-cockpit)
-  (mevedel-cockpit-open-tabulated
-   mevedel-plugins-list-buffer-name
-   #'mevedel-plugins-list-mode
-   #'mevedel-plugins-list-refresh
-   view-buffer
-   data-buffer
-   origin-buffer
-   (lambda () (setq mevedel-plugins-list--workspace workspace))
-   "plugin cockpit"))
+  (let ((context (or context (mevedel-cockpit-current-context))))
+    (mevedel-cockpit-open-tabulated
+     mevedel-plugins-list-buffer-name
+     #'mevedel-plugins-list-mode
+     #'mevedel-plugins-list-refresh
+     context
+     nil
+     "plugin cockpit")))
 
 
 ;;

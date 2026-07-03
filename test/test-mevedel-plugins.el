@@ -105,16 +105,23 @@
 (defvar mevedel-plugins-test--read-eval-ran nil)
 (defvar mevedel-plugins-test--owner-buffers nil)
 
+(defun mevedel-plugins-test--context
+    (workspace view-buffer data-buffer &optional origin-buffer)
+  "Return a plugin cockpit context for WORKSPACE."
+  (list :view-buffer view-buffer
+        :data-buffer data-buffer
+        :origin-buffer (or origin-buffer view-buffer)
+        :workspace workspace))
+
 (defun mevedel-plugins-test--list-open (workspace)
   "Open the plugin cockpit for WORKSPACE with live owner buffers."
   (let ((view-buffer (generate-new-buffer " *plugin-test-view*"))
         (data-buffer (generate-new-buffer " *plugin-test-data*")))
     (push view-buffer mevedel-plugins-test--owner-buffers)
     (push data-buffer mevedel-plugins-test--owner-buffers)
-    (mevedel-plugins-list-open workspace
-                               view-buffer
-                               data-buffer
-                               view-buffer)))
+    (mevedel-plugins-list-open
+     (mevedel-plugins-test--context
+      workspace view-buffer data-buffer view-buffer))))
 
 
 ;;
@@ -641,9 +648,6 @@
         (should (string-match-p "Unsafe plugin name: ../x" details))
         (should (string-match-p (regexp-quote root) details)))))
 
-  :doc "opening the cockpit requires live owner buffers"
-  (should-error (mevedel-plugins-list-open workspace) :type 'user-error)
-
   :doc "dispatches adaptive activation and hook override actions at point"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))
     (make-directory (file-name-concat root "hooks") t)
@@ -661,20 +665,20 @@
                        (mevedel-plugins-list--activation-label)))
         (should (mevedel-plugins--enabled-p
                  (mevedel-plugins--find
-                  "demo" mevedel-plugins-list--workspace)
-                 mevedel-plugins-list--workspace))
+                  "demo" (mevedel-plugins-list--workspace))
+                 (mevedel-plugins-list--workspace)))
         (mevedel-plugins-list-toggle-hooks)
         (should (equal "off"
                        (mevedel-plugins--hooks-status
                         (mevedel-plugins--find
-                         "demo" mevedel-plugins-list--workspace)
-                        mevedel-plugins-list--workspace)))
+                         "demo" (mevedel-plugins-list--workspace))
+                        (mevedel-plugins-list--workspace))))
         (mevedel-plugins-list-toggle-hooks)
         (should (equal "on"
                        (mevedel-plugins--hooks-status
                         (mevedel-plugins--find
-                         "demo" mevedel-plugins-list--workspace)
-                        mevedel-plugins-list--workspace)))
+                         "demo" (mevedel-plugins-list--workspace))
+                        (mevedel-plugins-list--workspace))))
         (mevedel-plugins-list-toggle-enabled)
         (should (equal "Enable plugin"
                        (mevedel-plugins-list--activation-label))))))
@@ -715,88 +719,6 @@
         (should (equal "fresh" (tabulated-list-get-id)))))
     (should (= 1 (length calls))))
 
-  :doc "quits by killing the cockpit and returning from the origin buffer"
-  (let ((view-buffer (generate-new-buffer " *plugin-view*"))
-        (data-buffer (generate-new-buffer " *plugin-data*"))
-        called-buffer)
-    (unwind-protect
-        (progn
-          (mevedel-plugins-list-open workspace
-                                     view-buffer
-                                     data-buffer
-                                     data-buffer)
-          (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
-            (cl-letf (((symbol-function 'mevedel-menu)
-                       (lambda ()
-                         (interactive)
-                         (setq called-buffer (current-buffer)))))
-              (with-current-buffer plugin-buffer
-                (mevedel-plugins-list-quit)))
-            (should-not (buffer-live-p plugin-buffer))
-            (should (eq called-buffer data-buffer))))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
-
-  :doc "quit falls back to view and then data when the origin is gone"
-  (let ((view-buffer (generate-new-buffer " *plugin-fallback-view*"))
-        (data-buffer (generate-new-buffer " *plugin-fallback-data*"))
-        called-buffer)
-    (unwind-protect
-        (progn
-          (mevedel-plugins-list-open workspace
-                                     view-buffer
-                                     data-buffer
-                                     data-buffer)
-          (kill-buffer data-buffer)
-          (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
-            (cl-letf (((symbol-function 'mevedel-menu)
-                       (lambda ()
-                         (interactive)
-                         (setq called-buffer (current-buffer)))))
-              (with-current-buffer plugin-buffer
-                (mevedel-plugins-list-quit)))
-            (should-not (buffer-live-p plugin-buffer))
-            (should (eq called-buffer view-buffer))))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
-  (let ((view-buffer (generate-new-buffer " *plugin-fallback-view*"))
-        (data-buffer (generate-new-buffer " *plugin-fallback-data*"))
-        called-buffer)
-    (unwind-protect
-        (progn
-          (mevedel-plugins-list-open workspace
-                                     view-buffer
-                                     data-buffer
-                                     view-buffer)
-          (kill-buffer view-buffer)
-          (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
-            (cl-letf (((symbol-function 'mevedel-menu)
-                       (lambda ()
-                         (interactive)
-                         (setq called-buffer (current-buffer)))))
-              (with-current-buffer plugin-buffer
-                (mevedel-plugins-list-quit)))
-            (should-not (buffer-live-p plugin-buffer))
-            (should (eq called-buffer data-buffer))))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
-
-  :doc "refresh requires the full owning session pair"
-  (let ((view-buffer (generate-new-buffer " *plugin-partial-view*"))
-        (data-buffer (generate-new-buffer " *plugin-partial-data*")))
-    (unwind-protect
-        (progn
-          (mevedel-plugins-list-open workspace
-                                     view-buffer
-                                     data-buffer
-                                     view-buffer)
-          (kill-buffer data-buffer)
-          (with-current-buffer mevedel-plugins-list-buffer-name
-            (should-error (mevedel-plugins-list-refresh)
-                          :type 'user-error)))
-      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
-
   :doc "mutation actions require live owners before side effects"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo"))
         (view-buffer (generate-new-buffer " *plugin-action-view*"))
@@ -805,10 +727,9 @@
     (unwind-protect
         (progn
           (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
-          (mevedel-plugins-list-open workspace
-                                     view-buffer
-                                     data-buffer
-                                     view-buffer)
+          (mevedel-plugins-list-open
+           (mevedel-plugins-test--context
+            workspace view-buffer data-buffer view-buffer))
           (kill-buffer data-buffer)
           (cl-letf ((mevedel-plugins-git-executor
                      (lambda (_directory _args)
@@ -824,21 +745,7 @@
           (should-not calls)
           (should-not (mevedel-plugins-enabled workspace)))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
-
-  :doc "kills the cockpit before reporting a dead owner"
-  (let ((view-buffer (generate-new-buffer " *plugin-dead-view*"))
-        (data-buffer (generate-new-buffer " *plugin-dead-data*")))
-    (mevedel-plugins-list-open workspace
-                               view-buffer
-                               data-buffer
-                               view-buffer)
-    (kill-buffer view-buffer)
-    (kill-buffer data-buffer)
-    (let ((plugin-buffer (get-buffer mevedel-plugins-list-buffer-name)))
-      (with-current-buffer plugin-buffer
-        (should-error (mevedel-plugins-list-quit) :type 'user-error))
-      (should-not (buffer-live-p plugin-buffer)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
 
 ;;

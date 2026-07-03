@@ -9,6 +9,8 @@
 
 (require 'mevedel-cockpit)
 (require 'mevedel-menu)
+(require 'mevedel-structs)
+(require 'mevedel-view)
 (require 'tabulated-list)
 (require 'helpers
          (file-name-concat
@@ -23,6 +25,29 @@
 
 (defvar-local mevedel-cockpit-test--entries nil
   "Tabulated test entries.")
+
+(defun mevedel-cockpit-test--workspace ()
+  "Return a test workspace."
+  (mevedel-workspace--create
+   :type 'test :id "cockpit" :root "/tmp/cockpit" :name "cockpit"))
+
+(defun mevedel-cockpit-test--setup-pair (view-buffer data-buffer &optional session)
+  "Wire VIEW-BUFFER and DATA-BUFFER as a cockpit pair."
+  (with-current-buffer data-buffer
+    (setq-local mevedel--session session)
+    (setq-local mevedel--view-buffer view-buffer))
+  (with-current-buffer view-buffer
+    (mevedel-view-mode)
+    (setq-local mevedel--data-buffer data-buffer)
+    (setq-local mevedel--session session)))
+
+(defun mevedel-cockpit-test--context
+    (view-buffer data-buffer &optional origin-buffer session)
+  "Return a cockpit context for VIEW-BUFFER and DATA-BUFFER."
+  (mevedel-cockpit-test--setup-pair view-buffer data-buffer session)
+  (let ((context (copy-sequence
+                  (mevedel-cockpit-context-for-buffer view-buffer))))
+    (plist-put context :origin-buffer (or origin-buffer view-buffer))))
 
 (define-derived-mode mevedel-cockpit-test-mode tabulated-list-mode
   "mevedel-cockpit-test"
@@ -50,9 +75,8 @@
    mevedel-cockpit-test-buffer-name
    #'mevedel-cockpit-test-mode
    #'mevedel-cockpit-test--refresh
-   view-buffer
-   data-buffer
-   (or origin-buffer view-buffer)
+   (mevedel-cockpit-test--context
+    view-buffer data-buffer (or origin-buffer view-buffer))
    (lambda ()
      (setq mevedel-cockpit-test--entries
            (or entries
@@ -81,8 +105,96 @@
         (progn
           (kill-buffer data-buffer)
           (should-error
-           (mevedel-cockpit-test--open view-buffer data-buffer)
+           (mevedel-cockpit-open-tabulated
+            mevedel-cockpit-test-buffer-name
+            #'mevedel-cockpit-test-mode
+            #'mevedel-cockpit-test--refresh
+            (list :view-buffer view-buffer
+                  :data-buffer data-buffer
+                  :origin-buffer view-buffer)
+            nil
+            "test cockpit")
            :type 'user-error))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
+
+(mevedel-deftest mevedel-cockpit-current-context ()
+  ,test
+  (test)
+
+  :doc "resolves a full context from a view buffer"
+  (let* ((workspace (mevedel-cockpit-test--workspace))
+         (session (mevedel-session-create "main" workspace))
+         (view-buffer (generate-new-buffer " *cockpit-context-view*"))
+         (data-buffer (generate-new-buffer " *cockpit-context-data*")))
+    (unwind-protect
+        (progn
+          (mevedel-cockpit-test--setup-pair
+           view-buffer data-buffer session)
+          (with-current-buffer view-buffer
+            (let ((context (mevedel-cockpit-current-context)))
+              (should (eq (mevedel-cockpit-context-view-buffer context)
+                          view-buffer))
+              (should (eq (mevedel-cockpit-context-data-buffer context)
+                          data-buffer))
+              (should (eq (mevedel-cockpit-context-origin-buffer context)
+                          view-buffer))
+              (should (eq (mevedel-cockpit-context-session context)
+                          session))
+              (should (eq (mevedel-cockpit-context-workspace context)
+                          workspace)))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+
+  :doc "resolves a full context from a data buffer"
+  (let* ((workspace (mevedel-cockpit-test--workspace))
+         (session (mevedel-session-create "main" workspace))
+         (view-buffer (generate-new-buffer " *cockpit-context-view*"))
+         (data-buffer (generate-new-buffer " *cockpit-context-data*")))
+    (unwind-protect
+        (progn
+          (mevedel-cockpit-test--setup-pair
+           view-buffer data-buffer session)
+          (with-current-buffer data-buffer
+            (let ((context (mevedel-cockpit-current-context)))
+              (should (eq (mevedel-cockpit-context-view-buffer context)
+                          view-buffer))
+              (should (eq (mevedel-cockpit-context-data-buffer context)
+                          data-buffer))
+              (should (eq (mevedel-cockpit-context-origin-buffer context)
+                          data-buffer))
+              (should (eq (mevedel-cockpit-context-session context)
+                          session))
+              (should (eq (mevedel-cockpit-context-workspace context)
+                          workspace)))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+
+  :doc "resolves the stored context from a tabulated cockpit buffer"
+  (let* ((workspace (mevedel-cockpit-test--workspace))
+         (session (mevedel-session-create "main" workspace))
+         (view-buffer (generate-new-buffer " *cockpit-context-view*"))
+         (data-buffer (generate-new-buffer " *cockpit-context-data*")))
+    (unwind-protect
+        (let ((buffer (mevedel-cockpit-open-tabulated
+                       mevedel-cockpit-test-buffer-name
+                       #'mevedel-cockpit-test-mode
+                       #'mevedel-cockpit-test--refresh
+                       (mevedel-cockpit-test--context
+                        view-buffer data-buffer data-buffer session)
+                       (lambda ()
+                         (setq mevedel-cockpit-test--entries
+                               '(("a" ["a"]))))
+                       "test cockpit")))
+          (with-current-buffer buffer
+            (let ((context (mevedel-cockpit-current-context)))
+              (should (eq (mevedel-cockpit-context-view-buffer context)
+                          view-buffer))
+              (should (eq (mevedel-cockpit-context-data-buffer context)
+                          data-buffer))
+              (should (eq (mevedel-cockpit-context-origin-buffer context)
+                          data-buffer))
+              (should (eq (mevedel-cockpit-context-session context)
+                          session))
+              (should (eq (mevedel-cockpit-context-workspace context)
+                          workspace)))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-cockpit-require-owner ()
@@ -192,22 +304,35 @@
   ,test
   (test)
 
-  :doc "kills the cockpit and returns through the best live owner"
-  (let ((view-buffer (generate-new-buffer " *cockpit-quit-view*"))
-        (data-buffer (generate-new-buffer " *cockpit-quit-data*"))
-        called-buffer)
-    (unwind-protect
-        (let ((buffer (mevedel-cockpit-test--open
-                       view-buffer data-buffer view-buffer nil)))
-          (cl-letf (((symbol-function 'mevedel-menu)
-                     (lambda ()
-                       (interactive)
-                       (setq called-buffer (current-buffer)))))
-            (with-current-buffer buffer
-              (mevedel-cockpit-quit "test cockpit")))
-          (should-not (buffer-live-p buffer))
-          (should (eq called-buffer view-buffer)))
-      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+  :doc "kills the cockpit and returns through origin, view, then data"
+  (dolist (case '((origin)
+                  (view kill-origin)
+                  (data kill-origin kill-view)))
+    (let ((view-buffer (generate-new-buffer " *cockpit-quit-view*"))
+          (data-buffer (generate-new-buffer " *cockpit-quit-data*"))
+          (origin-buffer (generate-new-buffer " *cockpit-quit-origin*"))
+          called-buffer)
+      (unwind-protect
+          (let ((buffer (mevedel-cockpit-test--open
+                         view-buffer data-buffer origin-buffer nil)))
+            (when (memq 'kill-origin case)
+              (kill-buffer origin-buffer))
+            (when (memq 'kill-view case)
+              (kill-buffer view-buffer))
+            (cl-letf (((symbol-function 'mevedel-menu)
+                       (lambda ()
+                         (interactive)
+                         (setq called-buffer (current-buffer)))))
+              (with-current-buffer buffer
+                (mevedel-cockpit-quit "test cockpit")))
+            (should-not (buffer-live-p buffer))
+            (should (eq called-buffer
+                        (pcase (car case)
+                          ('origin origin-buffer)
+                          ('view view-buffer)
+                          ('data data-buffer)))))
+        (mevedel-cockpit-test--cleanup
+         view-buffer data-buffer origin-buffer))))
 
   :doc "quit kills the cockpit before reporting dead owners"
   (let ((view-buffer (generate-new-buffer " *cockpit-dead-view*"))
