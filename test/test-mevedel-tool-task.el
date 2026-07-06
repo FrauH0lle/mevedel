@@ -1014,6 +1014,54 @@
 
 
 ;;
+;;; Tool result renderers
+
+(mevedel-deftest mevedel-tool-task--render-mutation
+  (:doc "`mevedel-tool-task--render-mutation' renders task writes as collapsed cards")
+  ,test
+  (test)
+  :doc "renders multi-task creates with a count and id range"
+  (let* ((result "Created 3 tasks:\n#1 [pending] first\n#2 [in_progress] second\n#3 [pending] third")
+         (rendering
+          (mevedel-tool-task--render-mutation "TaskCreate" nil result nil)))
+    (should (equal "TaskCreate: 3 created · #1–#3"
+                   (plist-get rendering :header)))
+    (should (equal result (plist-get rendering :body)))
+    (should-not (plist-get rendering :body-mode))
+    (should-not (plist-get rendering :status))
+    (should (plist-get rendering :initially-collapsed-p))
+    (should-not (plist-member rendering :expandable-p)))
+
+  :doc "renders single-task creates with the created task id"
+  (let* ((result "Created 1 task:\n#7 [pending] only")
+         (rendering
+          (mevedel-tool-task--render-mutation "TaskCreate" nil result nil)))
+    (should (equal "TaskCreate: 1 created · #7"
+                   (plist-get rendering :header)))
+    (should (equal result (plist-get rendering :body)))
+    (should (plist-get rendering :initially-collapsed-p)))
+
+  :doc "renders updates with the updated id and status"
+  (let* ((result "Updated task:\n#2 [completed] Validate parsed values")
+         (rendering
+          (mevedel-tool-task--render-mutation "TaskUpdate" nil result nil)))
+    (should (equal "TaskUpdate: #2 updated · completed"
+                   (plist-get rendering :header)))
+    (should (equal result (plist-get rendering :body)))
+    (should (plist-get rendering :initially-collapsed-p)))
+
+  :doc "uses the first result line and error status for errors"
+  (let* ((result "Error: No task with id 99")
+         (rendering
+          (mevedel-tool-task--render-mutation "TaskUpdate" nil result nil)))
+    (should (equal "TaskUpdate: Error: No task with id 99"
+                   (plist-get rendering :header)))
+    (should (eq 'error (plist-get rendering :status)))
+    (should (equal result (plist-get rendering :body)))
+    (should (plist-get rendering :initially-collapsed-p))))
+
+
+;;
 ;;; View rendering
 
 (mevedel-deftest mevedel-tool-task--display-overlay

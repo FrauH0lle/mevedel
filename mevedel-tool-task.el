@@ -1406,6 +1406,42 @@ feedback string when :note has a value, otherwise nil."
           :status (mevedel-tool-task--result-status result)
           :expandable-p nil)))
 
+(defun mevedel-tool-task--render-mutation (name _args result _render-data)
+  "Return collapsible mutation renderer for NAME and RESULT."
+  (when (stringp result)
+    (let* ((tool-name (or name "Task"))
+           (status (mevedel-tool-task--result-status result))
+           (fallback (format "%s: %s"
+                             tool-name
+                             (mevedel-tool-task--first-result-line result)))
+           (task-lines
+            (cl-loop for line in (split-string result "\n" t)
+                     for trimmed = (string-trim-left line)
+                     when (string-match
+                           "\\`#\\([0-9]+\\) \\[\\([^]]+\\)\\]" trimmed)
+                     collect (cons (string-to-number (match-string 1 trimmed))
+                                   (match-string 2 trimmed))))
+           (first (car task-lines))
+           (last-id (caar (last task-lines)))
+           (header
+            (cond
+             (status fallback)
+             ((and (equal name "TaskCreate") first)
+              (format "%s: %d created · %s"
+                      tool-name (length task-lines)
+                      (if (= (car first) last-id)
+                          (format "#%d" (car first))
+                        (format "#%d–#%d" (car first) last-id))))
+             ((and (equal name "TaskUpdate") first)
+              (format "%s: #%d updated · %s"
+                      tool-name (car first) (cdr first)))
+             (t fallback))))
+      (list :header header
+            :body result
+            :body-mode nil
+            :status status
+            :initially-collapsed-p t))))
+
 (defun mevedel-tool-task--render-list (name args result _render-data)
   "Return rendering plist for TaskList NAME, ARGS, and RESULT."
   (when (stringp result)
@@ -1457,7 +1493,7 @@ feedback string when :note has a value, otherwise nil."
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (util)
-    :renderer #'mevedel-tool-task--render-event)
+    :renderer #'mevedel-tool-task--render-mutation)
 
   (mevedel-define-tool
     :name "TaskUpdate"
@@ -1488,7 +1524,7 @@ feedback string when :note has a value, otherwise nil."
                       "Owner for note. Omit for the current caller, pass an empty string for Main."))
     :read-only-p t
     :groups (util)
-    :renderer #'mevedel-tool-task--render-event)
+    :renderer #'mevedel-tool-task--render-mutation)
 
   (mevedel-define-tool
     :name "TaskNote"
