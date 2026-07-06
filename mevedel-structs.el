@@ -105,13 +105,25 @@ the table."
 Keyed by (TYPE . ID) cons cells.  Workspaces are created lazily on first
 chat buffer creation and cached here.")
 
+(defun mevedel-workspace--normalize-root (root)
+  "Return ROOT expanded for workspace filesystem paths."
+  (if (stringp root)
+      (expand-file-name root)
+    root))
+
 (defun mevedel-workspace-get-or-create (type id root name)
   "Return the workspace for TYPE and ID, creating it if needed.
 
 ROOT is the absolute project root path.  NAME is the display name.  If a
 workspace already exists for this TYPE and ID, return it (ignoring ROOT
 and NAME arguments)."
-  (let ((key (cons type id)))
+  (let* ((id (if (and (eq type 'project)
+                      (stringp id)
+                      (file-name-absolute-p id))
+                 (mevedel-workspace--normalize-root id)
+               id))
+         (root (mevedel-workspace--normalize-root root))
+         (key (cons type id)))
     (or (gethash key mevedel-workspace--registry)
         (puthash key
                  (mevedel-workspace--create
@@ -137,7 +149,9 @@ Intended for testing and cleanup."
 
 (defun mevedel-workspace-state-dir (workspace)
   "Return the .mevedel/ directory for WORKSPACE."
-  (file-name-concat (mevedel-workspace-root workspace) ".mevedel/"))
+  (file-name-concat
+   (mevedel-workspace--normalize-root (mevedel-workspace-root workspace))
+   ".mevedel/"))
 
 (defun mevedel-workspace-find-state-file (workspace filename)
   "Find FILENAME in WORKSPACE's state dir, falling back to global.

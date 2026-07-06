@@ -73,7 +73,32 @@
               'project "/tmp/p1/" "/tmp/p1/" "p1-project"))
         (ws2 (mevedel-workspace-get-or-create
               'file "/tmp/p1/" "/tmp/p1/" "p1-file")))
-    (should-not (eq ws1 ws2))))
+    (should-not (eq ws1 ws2)))
+
+  :doc "normalizes tilde project roots"
+  (let* ((root "~/mevedel-workspace-root/")
+         (expected (expand-file-name root))
+         (ws (mevedel-workspace-get-or-create
+              'project root root "home-root")))
+    (should (equal expected (mevedel-workspace-id ws)))
+    (should (equal expected (mevedel-workspace-root ws))))
+
+  :doc "deduplicates project root aliases after expansion"
+  (let* ((root "~/mevedel-workspace-root/")
+         (expanded (expand-file-name root))
+         (ws1 (mevedel-workspace-get-or-create
+               'project root root "home-root"))
+         (ws2 (mevedel-workspace-get-or-create
+               'project expanded expanded "expanded-root")))
+    (should (eq ws1 ws2)))
+
+  :doc "keeps non-project identifiers opaque"
+  (let* ((root "~/mevedel-file-root/")
+         (ws (mevedel-workspace-get-or-create
+              'file "relative-id" root "file-root")))
+    (should (equal "relative-id" (mevedel-workspace-id ws)))
+    (should (equal (expand-file-name root)
+                   (mevedel-workspace-root ws)))))
 
 (mevedel-deftest mevedel-workspace-clear-registry
   (:doc "`mevedel-workspace-clear-registry' removes all entries")
@@ -88,8 +113,17 @@
 
 (mevedel-deftest mevedel-workspace-state-dir
   (:doc "`mevedel-workspace-state-dir' returns .mevedel/ under root")
+  ,test
+  (test)
+  :doc "returns .mevedel under root"
   (let ((ws (mevedel-workspace--create :root "/tmp/project/")))
     (should (equal "/tmp/project/.mevedel/"
+                   (mevedel-workspace-state-dir ws))))
+
+  :doc "expands legacy tilde roots"
+  (let* ((root "~/mevedel-legacy-root/")
+         (ws (mevedel-workspace--create :root root)))
+    (should (equal (file-name-concat (expand-file-name root) ".mevedel/")
                    (mevedel-workspace-state-dir ws)))))
 
 (mevedel-deftest mevedel-workspace-find-state-file

@@ -175,6 +175,14 @@ TOOL-PROP."
     (should (eq 'project (mevedel-workspace-type recovered)))
     (should (equal "xyz" (mevedel-workspace-id recovered)))
     (should (equal "/tmp/q" (mevedel-workspace-root recovered))))
+  :doc "expands legacy tilde project paths"
+  (mevedel-workspace-clear-registry)
+  (let* ((root "~/mevedel-session-root/")
+         (expected (expand-file-name root))
+         (plist (list :type 'project :id root :root root :name "home-root"))
+         (recovered (mevedel-session-persistence--workspace-from-plist plist)))
+    (should (equal expected (mevedel-workspace-id recovered)))
+    (should (equal expected (mevedel-workspace-root recovered))))
   :doc "returns nil for nil plist"
   (should (null (mevedel-session-persistence--workspace-from-plist nil))))
 

@@ -601,6 +601,11 @@
                    (mevedel-plugins-plugin-root "demo")))
     (should (equal (file-name-concat workspace-root ".mevedel"
                                      "plugin-data" "demo")
+                   (mevedel-plugins-plugin-data-dir "demo" workspace))))
+  (let* ((root "~/mevedel-plugins-ws/")
+         (workspace (mevedel-plugins-test--workspace root)))
+    (should (equal (file-name-concat (expand-file-name root) ".mevedel"
+                                     "plugin-data" "demo")
                    (mevedel-plugins-plugin-data-dir "demo" workspace)))))
 
 
