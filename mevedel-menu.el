@@ -537,10 +537,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
 
 (defun mevedel-menu-help-open ()
   "Open the session cockpit help surface."
-  (with-help-window mevedel-menu-help-buffer-name
-    (princ (mevedel-menu-help--text))
-    (princ "\n"))
-  (get-buffer mevedel-menu-help-buffer-name))
+    (let ((help-window-select t))
+      (with-help-window mevedel-menu-help-buffer-name
+        (princ (mevedel-menu-help--text))
+        (princ "\n"))
+      (get-buffer mevedel-menu-help-buffer-name)))
 
 (defun mevedel-menu--open-gptel ()
   "Open the gptel bridge surface."
