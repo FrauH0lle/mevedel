@@ -39,7 +39,7 @@ Key features:
   with background dispatch and inter-agent messaging.
 - Conversational Plan mode (`/plan` or `/mode plan`) for read-only planning,
   explicit approval, and persisted plan artifacts before implementation.
-- Skills (`SKILL.md` packages) for reusable slash commands and prompt bundles,
+- Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, rewind to any prior prompt,
   fork-on-next-send, and workspace input history.
@@ -727,7 +727,7 @@ Available events:
 |-----------------------|-----------------------------------------------|-------------------|---------------------------------------|
 | `SessionStart`        | session creation or resume                    | source            | add session context                   |
 | `UserPromptSubmit`    | before a view prompt is sent                  | none              | block, rewrite, or add context        |
-| `UserPromptExpansion` | before a slash/inline skill prompt is sent    | none              | block, rewrite, or add context        |
+| `UserPromptExpansion` | before a user-invoked skill prompt is sent    | none              | block, rewrite, or add context        |
 | `PreToolUse`          | after validation, before permission           | tool name         | block, ask, rewrite args, add context |
 | `PermissionRequest`   | before a permission prompt                    | tool name         | allow, deny, or force ask             |
 | `PermissionDenied`    | after a tool is denied                        | tool name         | explain or log the denial             |
@@ -840,7 +840,7 @@ Example user-level Elisp hook:
               "Project policy: before reporting completion, mention which tests ran.")))
 ```
 
-Example expansion hook for slash skills:
+Example expansion hook for user-invoked skills:
 
 ```emacs-lisp
 (add-hook 'mevedel-user-prompt-expansion-functions
@@ -927,7 +927,7 @@ deterministic visible prefixes.
 
 A skill can:
 
-- Be invoked as a slash command in the chat input (`/<skill-name>`) or as a
+- Be invoked in the chat input (`$<skill-name>`) or as a
   model-side `Skill` tool call.
 - Inline its body into the current request, or fork into a sub-agent (with
   `context: fork` and an optional `agent: <name>`).
@@ -936,12 +936,12 @@ A skill can:
   metadata; it is parsed and stored, but currently inert until gptel exposes a
   reasoning-effort control.
 
-Slash invocations may block chat input while async preparation or a foreground
+User skill invocations may block chat input while async preparation or a foreground
 fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
 `/compact`, `/mode`, `/auto`, `/plan`, `/init`, `/review`, and `/verify`.
-Project and user skills add more slash commands by name.
+Project and user skills add `$<skill-name>` invocations by name.
 
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model and
 effort metadata, and whether a skill runs inline or in a forked agent. Skill
@@ -1012,7 +1012,7 @@ every system prompt. The default memory roots are `.mevedel/memory/`,
 `.agents/memory/`, `~/.mevedel/memory/`, and `~/.agents/memory/`.
 `MEMORY.md` is an index; durable memory bodies live in linked topic files with
 frontmatter that classifies them as user, feedback, project, or reference
-memories. The bundled `/remember` skill reviews memory and proposes cleanup or
+memories. The bundled `$remember` skill reviews memory and proposes cleanup or
 promotion changes. Memory roots are independent of session sidecars.
 
 | Custom Variable | Variable Description |
@@ -1080,8 +1080,8 @@ The maintained detail docs live in [`docs/`](docs/):
   keybindings.
 - [`docs/mentions.md`](docs/mentions.md) — `@ref`, `@file`, `@agent`, and
   `@mcp` expansion.
-- [`docs/skills.md`](docs/skills.md) — `SKILL.md` discovery, slash commands,
-  model-side `Skill`, permissions, and forked skills.
+- [`docs/skills.md`](docs/skills.md) — `SKILL.md` discovery, local slash
+  commands, `$skill` invocation, model-side `Skill`, permissions, and forked skills.
 - [`docs/hooks.md`](docs/hooks.md) — hook configuration, trust model, events,
   dry runs, and logs.
 - [`docs/sessions.md`](docs/sessions.md) — persisted session layout, resume,

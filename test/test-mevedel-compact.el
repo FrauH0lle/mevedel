@@ -1500,7 +1500,7 @@
          (session (mevedel-session-create "main" ws))
          (rec1 (mevedel-skill-invocation-record--create
                 :name "grill-me" :args "spec 22"
-                :trigger 'user-slash :turn 3
+                :trigger 'user-skill :turn 3
                 :source-path "/skills/grill-me/SKILL.md"
                 :prepared-body "Body 1"))
          (rec2 (mevedel-skill-invocation-record--create
@@ -1510,10 +1510,10 @@
                 :prepared-body "Body 2")))
     (setf (mevedel-session-invoked-skills session) (list rec1 rec2))
     (let ((section (mevedel--compact-skills-section session)))
-      (should (string-match-p "/grill-me spec 22" section))
-      (should (string-match-p "user-slash" section))
+      (should (string-match-p "\\$grill-me spec 22" section))
+      (should (string-match-p "user-skill" section))
       (should (string-match-p "turn: 3" section))
-      (should (string-match-p "/review-spec" section))
+      (should (string-match-p "\\$review-spec" section))
       (should (string-match-p "model-skill" section)))))
 
 (provide 'test-mevedel-compact)

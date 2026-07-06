@@ -13,6 +13,25 @@
           "helpers"))
 (require 'mevedel-transcript)
 
+(mevedel-deftest mevedel-transcript-prompt-transform-start ()
+  ,test
+  (test)
+  :doc "returns the prompt after leading system reminders"
+  (with-temp-buffer
+    (insert "<system-reminder>\nremember\n</system-reminder>\n\n")
+    (let ((prompt-start (point)))
+      (insert "User prompt")
+      (should (= prompt-start
+                 (mevedel-transcript-prompt-transform-start)))))
+
+  :doc "skips trailing ignored render data when locating prompt start"
+  (with-temp-buffer
+    (let ((prompt-start (point)))
+      (insert (propertize "User prompt" 'gptel 'prompt))
+      (insert (propertize "\n<render-data />" 'gptel 'ignore))
+      (should (= prompt-start
+                 (mevedel-transcript-prompt-transform-start))))))
+
 (mevedel-deftest mevedel-transcript--extract-segments/basic ()
   ,test
   (test)

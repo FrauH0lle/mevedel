@@ -157,7 +157,7 @@ facts, cite them, compare against them, or mention them.
 
 ## Review Skill
 
-The bundled `/remember [focus]` skill reviews the memory landscape and
+The bundled `$remember [focus]` skill reviews the memory landscape and
 reports proposed cleanup, promotion, stale-memory, or ambiguity findings.
 It looks at configured `MEMORY.md` indexes, linked topic files, other
 memory topic files, and applicable `AGENTS.md` / `AGENTS.local.md`

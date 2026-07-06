@@ -16,12 +16,19 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'text-property-search)
-
 (require 'mevedel-structs)
 
-;; `mevedel-structs'
-(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+;; `flycheck'
+(declare-function flycheck-error-level "ext:flycheck" (err) t)
+(declare-function flycheck-error-line "ext:flycheck" (err) t)
+(declare-function flycheck-error-message "ext:flycheck" (err) t)
+(declare-function flycheck-overlay-errors-in "ext:flycheck" (beg end))
+
+;; `flymake'
+(declare-function flymake-diagnostic-beg "flymake" (diag))
+(declare-function flymake-diagnostic-text "flymake" (diag))
+(declare-function flymake-diagnostic-type "flymake" (diag))
+(declare-function flymake-diagnostics "flymake" (&optional beg end))
 
 ;; `gptel'
 (defvar gptel-prompt-transform-functions)
@@ -29,42 +36,12 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
-;; Current prompt-transform context.
-(defvar mevedel-reminders--current-chat-buffer nil
-  "Chat buffer whose reminders are currently being collected.
-Bound dynamically by `mevedel-reminders--transform' so reminder
-triggers can distinguish the real chat buffer from gptel's temporary
-prompt buffer.")
-
-;; `mevedel-permissions'
-(defvar mevedel-permission-mode)
-
-;; `mevedel-compact'
-(declare-function mevedel--estimate-tokens "mevedel-compact" ())
-(declare-function mevedel--compact-threshold-tokens "mevedel-compact" ())
-(declare-function mevedel--compact-usable-tokens "mevedel-compact" ())
-(declare-function mevedel--compact-auto-eligible-p "mevedel-compact" ())
-(defvar mevedel-compact-auto)
+;; `imenu'
+(declare-function imenu--make-index-alist "imenu" (&optional noerror))
+(defvar imenu--index-alist)
 
 ;; `mevedel-agent-exec'
 (defvar mevedel-agent-exec--agents)
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
-
-;; `mevedel-file-state'
-(declare-function mevedel-file-cache-detect-external-changes
-                  "mevedel-file-state" (cache))
-(declare-function mevedel-file-cache-consume-external-changes
-                  "mevedel-file-state" (cache changes))
-
-;; `mevedel-tool-fs'
-(declare-function mevedel-tools--generate-diff
-                  "mevedel-tool-fs" (original modified filepath))
-
-;; `mevedel-tool-task'
-(declare-function mevedel-tool-task-format-active-groups-for-reminder
-                  "mevedel-tool-task" (session))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent
@@ -75,42 +52,67 @@ prompt buffer.")
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-deferred-expired
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-set-deferred-expired
-                  "mevedel-agents" (invocation value))
 (declare-function mevedel-agent-invocation-deferred-set
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-set-deferred-expired
+                  "mevedel-agents" (invocation value))
 (declare-function mevedel-agent-invocation-turn-count
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
-;; `flymake'
-(declare-function flymake-diagnostics "flymake" (&optional beg end))
-(declare-function flymake-diagnostic-beg "flymake" (diag))
-(declare-function flymake-diagnostic-type "flymake" (diag))
-(declare-function flymake-diagnostic-text "flymake" (diag))
+;; `mevedel-compact'
+(declare-function mevedel--compact-auto-eligible-p "mevedel-compact" ())
+(declare-function mevedel--compact-threshold-tokens "mevedel-compact" ())
+(declare-function mevedel--compact-usable-tokens "mevedel-compact" ())
+(declare-function mevedel--estimate-tokens "mevedel-compact" ())
+(defvar mevedel-compact-auto)
 
-;; `flycheck'
-(declare-function flycheck-overlay-errors-in "ext:flycheck" (beg end))
-(declare-function flycheck-error-line "ext:flycheck" (err) t)
-(declare-function flycheck-error-level "ext:flycheck" (err) t)
-(declare-function flycheck-error-message "ext:flycheck" (err) t)
+;; `mevedel-file-state'
+(declare-function mevedel-file-cache-consume-external-changes
+                  "mevedel-file-state" (cache changes))
+(declare-function mevedel-file-cache-detect-external-changes
+                  "mevedel-file-state" (cache))
+
+;; `mevedel-permissions'
+(defvar mevedel-permission-mode)
+
+;; `mevedel-structs'
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+
+;; `mevedel-tool-fs'
+(declare-function mevedel-tools--generate-diff
+                  "mevedel-tool-fs" (original modified filepath))
+
+;; `mevedel-tool-task'
+(declare-function mevedel-tool-task-format-active-groups-for-reminder
+                  "mevedel-tool-task" (session))
+
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-prompt-transform-start
+                  "mevedel-transcript" ())
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
+
+;; `treesit'
+(declare-function treesit-available-p "treesit" ())
+(declare-function treesit-parser-list "treesit" (&optional buffer language))
 
 ;; `xref'
 (declare-function xref-find-backend "xref" ())
 (defvar tags-file-name)
 (defvar tags-table-list)
 
-;; `imenu'
-(declare-function imenu--make-index-alist "imenu" (&optional noerror))
-(defvar imenu--index-alist)
-
-;; `treesit'
-(declare-function treesit-available-p "treesit" ())
-(declare-function treesit-parser-list "treesit" (&optional buffer language))
+;; Current prompt-transform context.
+(defvar mevedel-reminders--current-chat-buffer nil
+  "Chat buffer whose reminders are currently being collected.
+Bound dynamically by `mevedel-reminders--transform' so reminder
+triggers can distinguish the real chat buffer from gptel's temporary
+prompt buffer.")
 
 
 ;;
@@ -331,9 +333,10 @@ prompt text."
               ((buffer-live-p chat-buffer))
               (session (buffer-local-value 'mevedel--session chat-buffer)))
     (let ((mevedel-reminders--current-chat-buffer chat-buffer))
+      (require 'mevedel-transcript)
       (when-let* ((contexts (mevedel-session-hook-context-pending session)))
         (setf (mevedel-session-hook-context-pending session) nil)
-        (text-property-search-backward 'gptel nil t)
+        (goto-char (mevedel-transcript-prompt-transform-start))
         (let ((start (point)))
           (insert "\n<hook-context>\n"
                   (mapconcat (lambda (item) (format "%s" item))
@@ -347,7 +350,7 @@ prompt text."
                            (mevedel-session-reminders session)
                            (mevedel-session-turn-count session)
                            session)))
-        (text-property-search-backward 'gptel nil t)
+        (goto-char (mevedel-transcript-prompt-transform-start))
         (let ((start (point)))
           (insert "\n" (string-join blocks "\n") "\n")
           (remove-text-properties

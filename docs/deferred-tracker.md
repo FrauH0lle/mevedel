@@ -55,6 +55,24 @@ inlining a paragraph.
 
 ## View rendering
 
+### Atomic mention bindings
+
+- **Source:** Codex comparison during `$skill` syntax design.
+- **What's owed:** Add optional hidden bindings for completed mentions so
+  visible composer text such as `$to-prd`, `@ref:api`, or `@mcp:server:uri`
+  can carry an exact resolved target. A live draft can use text properties as
+  handles, but queued prompts, blocked retries, and history recall need a
+  persisted sidecar such as `(:text ... :mentions ...)`.
+- **Why deferred:** Inline `$skill` invocation can be handled by raw text
+  scanning for now. Full bindings touch composer editing, completion,
+  queued-message restore, input history persistence, and mention expansion.
+- **Status check:** Composer text is read mostly with
+  `buffer-substring-no-properties`; `@file`/`@ref` expansion reparses visible
+  text, and input history persists plain strings.
+- **Blast radius:** Ambiguous or restored mentions resolve by visible text
+  only. Completion cannot yet preserve exact identity for duplicate names,
+  renamed targets, or non-file resources across retries/history recall.
+
 ### Bottom-only streaming autoscroll
 
 - **Source:** comparison with `shell-maker.el` streaming window heuristic

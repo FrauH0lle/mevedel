@@ -31,11 +31,15 @@ means "when this sub-agent stops" and is normalized to `SubagentStop`;
 top-level `Stop` remains reserved for the main assistant turn.
 
 Agent prompts are built from the agent's own prompt file plus selected
-system sections. `:include-workspace-config`, `:include-memory`, and
-`:include-environment` control whether AGENTS.md, persistent memory, and
-environment details are appended. Utility agents can therefore avoid
-inheriting main-agent boilerplate while still receiving environment
-context.
+system sections. `:include-workspace-config`, `:include-memory`,
+and `:include-environment` control whether AGENTS.md, persistent memory,
+and environment details are appended. The skills prompt section is
+derived from the resolved agent tool set: agents with `Skill` or
+`ListSkills` receive the model-facing active skill roster. Utility agents
+can therefore avoid inheriting main-agent boilerplate while still
+receiving environment context. Built-in policy currently gives explorer
+agents `Skill` and `ListSkills` plus the skills prompt section;
+coordinator, verifier, and reviewer agents remain skill-free.
 
 ## Invocation flow
 
@@ -138,10 +142,10 @@ research with vague wording.
 `mevedel-review` / `/review` and `mevedel-verify` / `/verify` run
 dedicated foreground validation tasks. They share a target picker for
 uncommitted changes, diff against a base branch merge-base, a specific
-commit, the last commit, or custom instructions. Unlike ordinary slash
+commit, the last commit, or custom instructions. Unlike ordinary user
 skills, this path is first-class: it ignores user/project skills named
 `review`, routes foreground execution through the shared fork skill
-dispatch path, and shares target CAPF for explicit slash forms such as
+dispatch path, and shares target CAPF for explicit target forms such as
 `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`.
 
 `/review` dispatches the `reviewer` agent and parses its Codex-style JSON

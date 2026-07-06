@@ -32,6 +32,21 @@
 ;;
 ;;; Helper
 
+(mevedel-deftest mevedel-mentions-replace-with-placeholder ()
+  ,test
+  (test)
+  :doc "preserves the replaced region's gptel property"
+  (with-temp-buffer
+    (insert (propertize "Use @ref:1 here" 'gptel 'prompt))
+    (goto-char (point-min))
+    (search-forward "@ref:1")
+    (mevedel-mentions-replace-with-placeholder
+     (match-beginning 0) (match-end 0) "[ref:1]")
+    (goto-char (point-min))
+    (search-forward "[ref:1]")
+    (should (eq 'prompt
+                (get-text-property (match-beginning 0) 'gptel)))))
+
 (defun mevedel-test--make-ref-buffer (content text)
   "Create a live file-visiting buffer with CONTENT and a reference on TEXT.
 Returns (buffer . overlay)."

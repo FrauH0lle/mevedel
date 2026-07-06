@@ -121,7 +121,8 @@
 ;; `mevedel-system'
 (declare-function mevedel-system-build-prompt
                   "mevedel-system"
-                  (base-prompt &optional workspace working-directory))
+                  (base-prompt &optional workspace working-directory
+                               session refresh-buffer))
 (defvar mevedel-system--base-prompt)
 (defvar mevedel-system--tutor-base-prompt)
 
@@ -250,7 +251,9 @@ Unlike `gptel-make-preset', this macro:
             (:deferred elisp))
     :agents (explorer coordinator verifier)
     :system (lambda ()
-              (mevedel-system-build-prompt mevedel-system--base-prompt)))
+              (mevedel-system-build-prompt
+               mevedel-system--base-prompt nil nil
+               mevedel--session (current-buffer))))
 
   ;; Full editing preset for implementation
   (mevedel-define-preset implement
@@ -262,7 +265,9 @@ Unlike `gptel-make-preset', this macro:
             (:deferred elisp))
     :agents (explorer coordinator verifier)
     :system (lambda ()
-              (mevedel-system-build-prompt mevedel-system--base-prompt)))
+              (mevedel-system-build-prompt
+               mevedel-system--base-prompt nil nil
+               mevedel--session (current-buffer))))
 
   ;; Revision preset with previous patch context
   (mevedel-define-preset revise
@@ -286,7 +291,9 @@ Unlike `gptel-make-preset', this macro:
             (:deferred elisp))
     :agents (explorer coordinator verifier)
     :system (lambda ()
-              (mevedel-system-build-prompt mevedel-system--tutor-base-prompt))))
+              (mevedel-system-build-prompt
+               mevedel-system--tutor-base-prompt nil nil
+               mevedel--session (current-buffer)))))
 
 ;;
 ;;; Request-time preset setup
@@ -458,8 +465,8 @@ alist with mevedel-specific handlers added:
                               (mevedel-request-begin
                                mevedel--session
                                mevedel--current-directive-uuid)
-                              ;; Drain pending stash from
-                              ;; slash-dispatched skill invocation.
+                              ;; Drain pending stash from user skill
+                              ;; invocation.
                               (when (and (boundp 'mevedel--current-request)
                                          mevedel--current-request)
                                 (mevedel-skills--drain-pending-context

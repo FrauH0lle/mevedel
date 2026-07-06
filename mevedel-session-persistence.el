@@ -378,6 +378,7 @@ The resulting plist is round-trippable via
    :permission-rules       (mevedel-session-permission-rules session)
    :last-observed-date     (mevedel-session-last-observed-date session)
    :agent-types-snapshot   (mevedel-session-agent-types-snapshot session)
+   :skills-snapshot        (mevedel-session-skills-snapshot session)
    :additional-roots       additional-roots
    :tasks                  (mapcar #'mevedel-session-persistence--task-to-plist
                                    (mevedel-session-tasks session))
@@ -441,6 +442,10 @@ are dropped via the hygiene filter."
                      :agent-types-snapshot
                      (if (plist-member plist :agent-types-snapshot)
                          (plist-get plist :agent-types-snapshot)
+                       :uninitialized)
+                     :skills-snapshot
+                     (if (plist-member plist :skills-snapshot)
+                         (plist-get plist :skills-snapshot)
                        :uninitialized)
                      :last-task-write-turn
                      (plist-get plist :last-task-write-turn)
@@ -2897,6 +2902,7 @@ WORKSPACE is the current workspace (resolved by the caller)."
      :session-id      dir-name
      :last-observed-date (format-time-string "%F")
      :agent-types-snapshot :uninitialized
+     :skills-snapshot :uninitialized
      :save-path       (file-name-as-directory session-dir)
      :current-segment (if (> highest 0) highest 1)
      :created-at      now

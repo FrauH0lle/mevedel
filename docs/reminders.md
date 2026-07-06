@@ -110,6 +110,20 @@ guidance in the rejection reminder.
 - **Agent listing delta:**
   `mevedel-reminders-make-agent-listing-delta` compares the current
   visible agent roster to the session's `agent-types-snapshot`.
+- **Skill listing delta:**
+  `mevedel-reminders-make-skills-delta` compares the current active,
+  enabled, model-invocable skill roster to the session's
+  `skills-snapshot`. The first snapshot is silent; later changes list
+  added skills with descriptions and removed skills by name.
+- **Skill roster budget:**
+  `mevedel-reminders-make-skills-roster-budget` fires when the
+  prompt-context skill roster first becomes truncated or omitted, or when
+  that budget status changes. The prompt section itself still carries the
+  roster budget note; this reminder is only the event-shaped nudge.
+- **Path-scoped skill activation:** tool activity that touches a matching
+  path can activate dormant enabled path-scoped skills. When activated
+  skills are model-invocable, a pending event names the triggering path
+  and a capped list of newly active skills.
 - **Hook outcome:** hooks record blocking and system-message outcomes
   through `mevedel-hooks-record-session-reminder`, consumed by
   `pending-events`; additional hook context still uses

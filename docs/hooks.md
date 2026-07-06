@@ -96,7 +96,7 @@ boundaries:
 | --- | --- | --- | --- |
 | `SessionStart` | chat session creation/resume | source (`startup`, `resume`) | add context only |
 | `UserPromptSubmit` | before a view-submitted user prompt is sent | none | block, add context |
-| `UserPromptExpansion` | before a user slash skill expansion reaches the model | none | block, add context, rewrite prompt |
+| `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
 | `PermissionRequest` | before a generic permission prompt is shown | tool name | allow, deny, ask |
 | `PermissionDenied` | after a tool is denied | tool name | add feedback/context only |
@@ -291,7 +291,7 @@ Prompt events add:
 - `:display-text`: optional view-facing text used when the actual prompt is
   generated from another source, such as an inline skill invocation
 - `:skill-name` and `:arguments` for `UserPromptExpansion` when the prompt
-  came from a slash skill
+  came from a `$skill` invocation
 
 Compaction events add:
 
@@ -393,13 +393,18 @@ can be expanded to see the event name and injected text.
 Internal flows that construct their own requests, such as directive
 processing and plan execution, do not currently fire this event.
 
-`UserPromptExpansion` runs for user slash skill expansion after the skill
+`UserPromptExpansion` runs for user `$skill` expansion after the skill
 body has been prepared and before it is installed as the prompt sent to
-the model.  This includes inline slash skills and foreground `context:
-fork` slash skills.  A blocking decision stops the expansion and clears
-the pending skill-scoped context for that invocation.  `:updated-input`
-replaces the expanded prompt; `:additional-context` is appended inside a
-`<hook-context>` block.  Model-side Skill calls do not fire this event.
+the model.  This includes inline user skill invocations and foreground
+`context: fork` user skill invocations.  Multiple inline attachments fire once
+per deduped attached skill in first-occurrence order.  A blocking decision
+stops the whole send and clears the pending skill-scoped context for that
+invocation.
+`:updated-input`
+replaces the expanded prompt for leading command-style invocation, but for
+inline attachments replaces only that skill's hidden body.  `:additional-context`
+is appended inside a `<hook-context>` block.  Model-side Skill calls do not fire
+this event.
 
 `PreCompact` runs after the compaction range and prompt have been prepared
 but before the compaction request is sent.  A blocking decision stops the
@@ -428,7 +433,7 @@ feedback.
 
 `Stop` runs after a successful top-level assistant turn, before the
 request-scoped hook layers are cleared.  This includes direct foreground
-fork slash skill completions, which finalize the parent turn without a
+fork user skill completions, which finalize the parent turn without a
 normal gptel DONE transition.  `StopFailure` runs for top-level error and
 abort terminals and includes `:terminal-reason` when available.  Both
 events are observational: blocking decisions are logged but do not change

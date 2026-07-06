@@ -18,6 +18,7 @@
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
 (require 'mevedel-hooks)
+(require 'mevedel-skills)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
 (require 'helpers
@@ -465,7 +466,45 @@ fire-count and payload."
 				   (should-not gptel-org-branching-context)))
 			     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
 			     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
-			     (delete-directory root t))))
+			     (delete-directory root t)))
+
+                         :doc "installs path-scoped skill activation in agent buffers"
+                         (let* ((root (file-name-as-directory
+                                       (make-temp-file "mevedel-agent-parent-" t)))
+                                (workspace (mevedel-workspace--create
+                                            :type 'project
+                                            :id root
+                                            :root root
+                                            :name "agent"))
+                                (session (mevedel-session-create
+                                          "main" workspace root))
+                                (parent-buf
+                                 (generate-new-buffer " *mev-agent-parent*"))
+                                (agent (mevedel-agent--create
+                                        :name "explorer"))
+                                (inv (mevedel-agent-invocation--create
+                                      :agent agent
+                                      :agent-id "explorer--skills"))
+                                agent-buf)
+                           (unwind-protect
+                               (progn
+                                 (with-current-buffer parent-buf
+                                   (setq-local mevedel--session session)
+                                   (setq-local mevedel--workspace workspace))
+                                 (cl-letf (((symbol-function 'gptel-mode)
+                                            #'ignore))
+                                   (setq agent-buf
+                                         (mevedel-agent-exec--allocate-agent-buffer
+                                          inv parent-buf)))
+                                 (with-current-buffer agent-buf
+                                   (should (memq
+                                            #'mevedel-skills--post-tool-activate
+                                            gptel-post-tool-call-functions))))
+                             (when (buffer-live-p agent-buf)
+                               (kill-buffer agent-buf))
+                             (when (buffer-live-p parent-buf)
+                               (kill-buffer parent-buf))
+                             (delete-directory root t))))
 
 (mevedel-deftest mevedel-agent-exec--apply-request-locals ()
 		 ,test

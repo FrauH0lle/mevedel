@@ -69,8 +69,8 @@ Direct via `gptel-request` and `gptel-fsm`. Tools registered in
 `revise`; `tutor` inherits from `discuss`. System prompt assembled
 dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
-(AGENTS.md plus optional AGENTS.local.md), persistent memory, then
-environment.
+(AGENTS.md plus optional AGENTS.local.md), persistent memory,
+environment, then the dynamic skill roster.
 
 `mevedel-system-build-prompt` checks each directory from workspace root
 to the session working directory for `AGENTS.md`. `AGENTS.local.md`,
@@ -89,7 +89,7 @@ annotation. Durable memory bodies live in linked topic files under the
 same root, using `user`, `feedback`, `project`, or `reference`
 frontmatter. `MEMORY.md` should contain one-line links only.
 LLM-writable. See [`memory.md`](memory.md) for the full layout, save
-policy, staleness rules, and `/remember` review workflow.
+policy, staleness rules, and `$remember` review workflow.
 
 ## Chat buffer formatting
 

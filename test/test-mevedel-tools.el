@@ -15,6 +15,7 @@
 (require 'mevedel-agents)
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skills)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-ui)
@@ -48,6 +49,17 @@
    :description (format "Fake tool %s" name)
    :args nil
    :category (or category "mevedel")))
+
+(defun mevedel-tools-test--register-agent-tools ()
+  "Register the built-in tool surface needed by bundled agents."
+  (mevedel-tool-fs--register)
+  (mevedel-tool-code--register)
+  (mevedel-tool-exec--register)
+  (mevedel-tool-ui--register)
+  (mevedel-tool-task--register)
+  (mevedel-tool-web--register)
+  (mevedel-tool-introspect--register)
+  (mevedel-skills--register))
 
 ;;
 ;;; Polymorphic deferred accessors
@@ -293,6 +305,32 @@ function returning the states entered by test handlers."
                      "ToolSearch(query=\"ExpiredImenu\", load=true)"
                      result)))
           (should (equal '(TRET) (funcall transitions))))
+      (kill-buffer buf)))
+
+  :doc "unknown deferred tool is settled before upstream generic fallback"
+  (let* ((session (mevedel-tools-test--make-session))
+         (tool-use (list (list :name "Imenu"
+                               :args '(:file_path "mevedel-tools.el")
+                               :id "call_before")))
+         (fixture (mevedel-tools-test--make-tool-use-fsm
+                   tool-use nil session))
+         (buf (plist-get fixture :buffer))
+         (fsm (plist-get fixture :fsm))
+         (orig-result nil))
+    (unwind-protect
+        (let ((inhibit-message t))
+          (setf (mevedel-session-deferred-set session)
+                '((("mevedel" "Imenu") . "File outline")))
+          (mevedel-tools--handle-tool-use-advice
+           (lambda (_fsm)
+             (setq orig-result
+                   (mevedel-tools-test--tool-use-result fsm "Imenu")))
+           fsm)
+          (should (string-match-p "Tool Imenu is not currently loaded"
+                                  orig-result))
+          (should (string-match-p
+                   "ToolSearch(query=\\\"Imenu\\\", load=true)"
+                   orig-result)))
       (kill-buffer buf)))
 
   :doc "truly unknown tool returns generic guidance and transitions"
@@ -1183,13 +1221,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                        ;; be registered.  The task now rejects unknown
                        ;; agent types up front, so agents must be
                        ;; re-registered per subtest as well.
-                       (mevedel-tool-fs--register)
-                       (mevedel-tool-code--register)
-                       (mevedel-tool-exec--register)
-                       (mevedel-tool-ui--register)
-                       (mevedel-tool-task--register)
-                       (mevedel-tool-web--register)
-                       (mevedel-tool-introspect--register)
+                       (mevedel-tools-test--register-agent-tools)
                        (load-file (locate-library "mevedel-agents")))
    :after-each (progn (mevedel-workspace-clear-registry)
                       (setq mevedel-agent--registry nil)
@@ -1579,13 +1611,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 (mevedel-deftest mevedel-tools--task-bwait
   (:before-each (progn (mevedel-tool-clear-registry)
-                       (mevedel-tool-fs--register)
-                       (mevedel-tool-code--register)
-                       (mevedel-tool-exec--register)
-                       (mevedel-tool-ui--register)
-                       (mevedel-tool-task--register)
-                       (mevedel-tool-web--register)
-                       (mevedel-tool-introspect--register)
+                       (mevedel-tools-test--register-agent-tools)
                        (load-file (locate-library "mevedel-agents")))
    :after-each (progn (mevedel-workspace-clear-registry)
                       (setq mevedel-agent--registry nil)
@@ -1762,12 +1788,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 (mevedel-deftest mevedel-tools--task-foreground-stash
   (:before-each (progn (mevedel-tool-clear-registry)
-                       (mevedel-tool-fs--register)
-                       (mevedel-tool-code--register)
-                       (mevedel-tool-exec--register)
-                       (mevedel-tool-ui--register)
-                       (mevedel-tool-task--register)
-                       (mevedel-tool-web--register)
+                       (mevedel-tools-test--register-agent-tools)
                        (load-file (locate-library "mevedel-agents")))
    :after-each (progn (mevedel-workspace-clear-registry)
                       (mevedel-tool-clear-registry)
@@ -1981,13 +2002,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 (mevedel-deftest mevedel-tools--bwait-watchdog-expire
   (:before-each (progn (mevedel-tool-clear-registry)
-                       (mevedel-tool-fs--register)
-                       (mevedel-tool-code--register)
-                       (mevedel-tool-exec--register)
-                       (mevedel-tool-ui--register)
-                       (mevedel-tool-task--register)
-                       (mevedel-tool-web--register)
-                       (mevedel-tool-introspect--register)
+                       (mevedel-tools-test--register-agent-tools)
                        (load-file (locate-library "mevedel-agents")))
    :after-each (progn (mevedel-workspace-clear-registry)
                       (setq mevedel-agent--registry nil)
@@ -2555,13 +2570,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 (mevedel-deftest mevedel-tools--task-bg-callback-hardening
   (:before-each (progn (mevedel-tool-clear-registry)
-                       (mevedel-tool-fs--register)
-                       (mevedel-tool-code--register)
-                       (mevedel-tool-exec--register)
-                       (mevedel-tool-ui--register)
-                       (mevedel-tool-task--register)
-                       (mevedel-tool-web--register)
-                       (mevedel-tool-introspect--register)
+                       (mevedel-tools-test--register-agent-tools)
                        (load-file (locate-library "mevedel-agents")))
    :after-each (progn (mevedel-workspace-clear-registry)
                       (setq mevedel-agent--registry nil)

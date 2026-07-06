@@ -39,6 +39,32 @@ refresh).  Skip past it so the rendered view starts at real content."
           (point))
       pos)))
 
+(defun mevedel-transcript--after-leading-system-reminders ()
+  "Return first position after leading system-reminder blocks."
+  (save-excursion
+    (goto-char (point-min))
+    (while (looking-at "<system-reminder>\n")
+      (if (search-forward "\n</system-reminder>" nil t)
+          (when (looking-at "\n\n")
+            (forward-char 2))
+        (goto-char (point-max))))
+    (point)))
+
+(defun mevedel-transcript-prompt-transform-start ()
+  "Return the start of the last user prompt in a transform buffer."
+  (let ((pos (point-max)))
+    (while (and (> pos (point-min))
+                (eq (get-text-property (1- pos) 'gptel) 'ignore))
+      (setq pos (or (previous-single-property-change
+                     (1- pos) 'gptel nil (point-min))
+                    (point-min))))
+    (if-let* ((boundary (and (> pos (point-min))
+                             (previous-single-property-change
+                              (1- pos) 'gptel nil (point-min))))
+              ((> boundary (point-min))))
+        boundary
+      (mevedel-transcript--after-leading-system-reminders))))
+
 (defun mevedel-transcript--classify-gptel-prop (prop)
   "Classify a `gptel' text property value PROP into a segment type symbol."
   (pcase prop

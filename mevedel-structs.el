@@ -189,6 +189,7 @@ workspace."
   reminders         ; list of active mevedel-reminder structs
   last-observed-date ; YYYY-MM-DD string last advertised to the model
   agent-types-snapshot ; alist or :uninitialized: last advertised agents
+  skills-snapshot   ; alist or :uninitialized: last advertised skill roster
   pending-reminders ; transient FIFO of model-visible reminder bodies
   specialist-nudge-state ; transient plist: nudge family -> (:count N :turn T)
   deferred-set      ; alist: (CATEGORY NAME) -> SHORT-DESCRIPTION
@@ -318,6 +319,7 @@ workspace root and is kept stable for the lifetime of the session."
    :mentions-shown (make-hash-table :test #'equal)
    :last-observed-date (format-time-string "%F")
    :agent-types-snapshot :uninitialized
+   :skills-snapshot :uninitialized
    :turn-count 0))
 
 (defun mevedel-session-set-queued-user-messages (session queue)
@@ -416,7 +418,7 @@ Created at request start, cleared in the termination handler."
 compaction/replay.
 
 NAME is the skill identifier.  ARGS is the raw argument string
-passed to the skill.  TRIGGER is `user-slash', `model-skill', or
+passed to the skill.  TRIGGER is `user-skill', `model-skill', or
 `internal'.  TURN is the session turn-count when the skill was
 invoked.  SOURCE-PATH is the absolute path of the SKILL.md that was
 loaded.  PREPARED-BODY is the post-substitution, post-shell-expansion

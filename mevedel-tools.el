@@ -316,12 +316,12 @@ call.  Nil outside tool dispatch.")
   "Dyn-bind `mevedel-tools--current-fsm' around ORIG-FUN.
 Used as an `:around' advice on `gptel--handle-tool-use' so that tool
 handlers (via the pipeline) can recover the FSM that triggered them
-without threading it through every call site.  After ORIG-FUN returns,
-settle unknown tool calls with normal error tool-results so gptel does
-not strand the FSM with unresolved tool-use entries."
+without threading it through every call site.  Settle unknown tool calls
+before ORIG-FUN so mevedel can preserve deferred-tool guidance before
+gptel's generic unknown-tool fallback consumes those calls."
   (let ((mevedel-tools--current-fsm fsm))
-    (prog1 (funcall orig-fun fsm)
-      (mevedel-tools--settle-unknown-tool-calls fsm))))
+    (mevedel-tools--settle-unknown-tool-calls fsm)
+    (funcall orig-fun fsm)))
 
 (advice-add 'gptel--handle-tool-use :around
             #'mevedel-tools--handle-tool-use-advice)

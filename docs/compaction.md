@@ -181,7 +181,7 @@ This is important because older segment contents are no longer present
 in the model-visible prompt except through the previous summary.
 
 Skill invocation records from the session are appended to the prompt so
-summaries can preserve slash/model-side skill usage.
+summaries can preserve user-side and model-side skill usage.
 
 ## Tail preservation
 

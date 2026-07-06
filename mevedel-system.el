@@ -24,15 +24,19 @@
 ;; `gptel-agent'
 (declare-function gptel-agent-read-file "ext:gptel-agent" (agent-file &optional templates metadata-only))
 
+;; `mevedel-skills'
+(declare-function mevedel-skills-prompt-section
+                  "mevedel-skills" (session &optional buffer))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-p "mevedel-structs" (cl-x))
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
 ;; `mevedel-utilities'
 (declare-function mevedel--environment-info-string "mevedel-utilities"
                   (&optional workspace working-directory))
-
-;; `mevedel-structs'
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--session)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -133,7 +137,9 @@ share the same template behavior as native `gptel-agent' definitions."
   "Request-time context passed to prompt section producers."
   base-prompt
   workspace
-  working-directory)
+  working-directory
+  session
+  refresh-buffer)
 
 (cl-defstruct (mevedel-system-prompt-section
                (:constructor mevedel-system-prompt-section--create))
@@ -403,15 +409,15 @@ Anything linked from MEMORY.md can be discovered in future conversations.")))
                    (mevedel-system-context-workspace context)))
    :date (mevedel-system--current-date)))
 
-(defun mevedel-system--working-directory (workspace working-directory)
+(defun mevedel-system--working-directory
+    (workspace working-directory &optional session)
   "Return effective WORKING-DIRECTORY for WORKSPACE."
   (file-name-as-directory
    (expand-file-name
     (or working-directory
-        (and (boundp 'mevedel--session)
-             mevedel--session
-             (eq workspace (mevedel-session-workspace mevedel--session))
-             (mevedel-session-working-directory mevedel--session))
+        (and (mevedel-session-p session)
+             (eq workspace (mevedel-session-workspace session))
+             (mevedel-session-working-directory session))
         (mevedel-system--workspace-root workspace)))))
 
 (defun mevedel-system--workspace-config-files (workspace &optional working-directory)
@@ -487,6 +493,44 @@ present."
           (mevedel--environment-info-string workspace working-directory)
           "\n</env>"))
 
+(defun mevedel-system--session-matches-context-p (session context)
+  "Return non-nil when SESSION matches CONTEXT's workspace and cwd."
+  (let* ((workspace (mevedel-system-context-workspace context))
+         (session-workspace (mevedel-session-workspace session))
+         (context-root (and workspace
+                            (file-name-as-directory
+                             (expand-file-name
+                              (mevedel-workspace-root workspace)))))
+         (session-root (and session-workspace
+                            (file-name-as-directory
+                             (expand-file-name
+                              (mevedel-workspace-root session-workspace)))))
+         (context-dir (file-name-as-directory
+                       (expand-file-name
+                        (mevedel-system-context-working-directory context))))
+         (session-dir (file-name-as-directory
+                       (expand-file-name
+                        (mevedel-session-working-directory session)))))
+    (and (or (null workspace)
+             (eq workspace session-workspace)
+             (equal context-root session-root))
+         (equal context-dir session-dir))))
+
+(defun mevedel-system--context-session (context)
+  "Return the mevedel session that should provide dynamic prompt context."
+  (let ((session (mevedel-system-context-session context)))
+    (and (mevedel-session-p session)
+         (mevedel-system--session-matches-context-p session context)
+         session)))
+
+(defun mevedel-system--skills-prompt (context)
+  "Return dynamic skills prompt text for CONTEXT, or nil."
+  (when (require 'mevedel-skills nil t)
+    (when-let* ((session (mevedel-system--context-session context)))
+      (mevedel-skills-prompt-section
+       session
+       (mevedel-system-context-refresh-buffer context)))))
+
 (defun mevedel-system--join-parts (&rest parts)
   "Join nonblank prompt PARTS with stable section spacing."
   (string-join
@@ -498,15 +542,19 @@ present."
                  parts))
    "\n\n"))
 
-(defun mevedel-system--make-context (base-prompt workspace working-directory)
-  "Return normalized context for BASE-PROMPT, WORKSPACE, and WORKING-DIRECTORY."
+(defun mevedel-system--make-context
+    (base-prompt workspace working-directory &optional session refresh-buffer)
+  "Return normalized prompt context."
   (let* ((workspace (or workspace (mevedel-workspace)))
          (working-directory
-          (mevedel-system--working-directory workspace working-directory)))
+          (mevedel-system--working-directory
+           workspace working-directory session)))
     (mevedel-system-context--create
      :base-prompt base-prompt
      :workspace workspace
-     :working-directory working-directory)))
+     :working-directory working-directory
+     :session session
+     :refresh-buffer refresh-buffer)))
 
 (mevedel-define-prompt-section base
   :order 10
@@ -540,31 +588,38 @@ present."
                (mevedel-system-context-workspace context)
                (mevedel-system-context-working-directory context))))
 
+(mevedel-define-prompt-section skills
+  :order 50
+  :producer #'mevedel-system--skills-prompt)
+
 
 ;;
 ;;; System prompt builder
 
 (defun mevedel-system-render-sections
-    (base-prompt &optional workspace working-directory)
+    (base-prompt &optional workspace working-directory session refresh-buffer)
   "Return rendered prompt sections for BASE-PROMPT.
 
 WORKSPACE and WORKING-DIRECTORY are normalized the same way as
 `mevedel-system-build-prompt'."
   (let ((context (mevedel-system--make-context
-                  base-prompt workspace working-directory)))
+                  base-prompt workspace working-directory
+                  session refresh-buffer)))
     (mapcar
      (lambda (section)
        (mevedel-system--render-section section context))
      (mevedel-system--prompt-sections-sorted))))
 
 (defun mevedel-system-render-named-sections
-    (base-prompt section-names &optional workspace working-directory)
+    (base-prompt section-names &optional workspace working-directory
+                 session refresh-buffer)
   "Return rendered prompt SECTION-NAMES for BASE-PROMPT.
 
 SECTION-NAMES is a list of prompt section symbols.  Sections are still
 rendered in their registered order; unknown names are ignored."
   (let ((context (mevedel-system--make-context
-                  base-prompt workspace working-directory))
+                  base-prompt workspace working-directory
+                  session refresh-buffer))
         (wanted (copy-sequence section-names)))
     (delq nil
           (mapcar
@@ -573,36 +628,41 @@ rendered in their registered order; unknown names are ignored."
                (mevedel-system--render-section section context)))
            (mevedel-system--prompt-sections-sorted)))))
 
-(defun mevedel-system-build-prompt (base-prompt &optional workspace working-directory)
+(defun mevedel-system-build-prompt
+    (base-prompt &optional workspace working-directory session refresh-buffer)
   "Build the full request-time system prompt from BASE-PROMPT.
 
 WORKSPACE specifies the workspace context for configuration, memory, and
 environment sections.  If nil, use the current buffer's workspace.
 WORKING-DIRECTORY specifies the session cwd for layered instructions and
-environment data.
+environment data.  SESSION and REFRESH-BUFFER provide session-scoped
+dynamic prompt sections such as skills.
 Static content is emitted first and dynamic content last to improve
 provider prefix-cache reuse."
   (apply #'mevedel-system--join-parts
          (mevedel-system-render-sections
-          base-prompt workspace working-directory)))
+          base-prompt workspace working-directory session refresh-buffer)))
 
 (cl-defun mevedel-system-build-agent-prompt
     (base-prompt &key workspace working-directory
-                 (workspace-config t) (memory t) (environment t))
+                 session refresh-buffer
+                 (workspace-config t) (memory t) (environment t) skills)
   "Build a system prompt for an agent from BASE-PROMPT.
 
 The agent prompt is always emitted as the `base' section.  The keyword
-flags WORKSPACE-CONFIG, MEMORY, and ENVIRONMENT control whether the
-normal dynamic sections are appended for WORKSPACE and WORKING-DIRECTORY.
-This lets utility agents keep a narrow identity prompt while still
-receiving environment details."
+flags WORKSPACE-CONFIG, MEMORY, ENVIRONMENT, and SKILLS control whether
+the normal dynamic sections are appended for WORKSPACE and
+WORKING-DIRECTORY.  This lets utility agents keep a narrow identity
+prompt while still receiving environment details."
   (let ((sections (append '(base)
                           (when workspace-config '(workspace-config))
                           (when memory '(memory))
-                          (when environment '(environment)))))
+                          (when environment '(environment))
+                          (when skills '(skills)))))
     (apply #'mevedel-system--join-parts
            (mevedel-system-render-named-sections
-            base-prompt sections workspace working-directory))))
+            base-prompt sections workspace working-directory
+            session refresh-buffer))))
 
 (provide 'mevedel-system)
 ;;; mevedel-system.el ends here

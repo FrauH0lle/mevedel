@@ -10,6 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-structs)
+(require 'mevedel-skills)
 (require 'mevedel-workspace)
 (require 'mevedel-utilities)
 (require 'mevedel-system)
@@ -109,6 +110,43 @@
       (should (< base-pos config-pos))
       (should (< config-pos memory-pos))
       (should (< memory-pos env-pos))))
+
+  :doc "appends active skills after environment when a session exposes them"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "review-spec"
+                 :description "Review a spec"
+                 :active-p t
+                 :model-invocable-p t)))
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (let* ((prompt (mevedel-system-build-prompt
+                      "BASE" ws nil session (current-buffer)))
+             (env-pos (string-match-p "## Environment" prompt))
+             (skills-pos (string-match-p "## Skills" prompt)))
+        (should (string-match-p "^- review-spec: Review a spec$" prompt))
+        (should (string-match-p "Skill(name=\\.\\.\\.)" prompt))
+        (should (and env-pos skills-pos))
+        (should (< env-pos skills-pos)))))
+
+  :doc "omits active skills when session cwd differs from prompt context"
+  (let* ((subdir (file-name-concat root-dir "sub"))
+         (ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (session (mevedel-session-create "main" ws subdir))
+         (skill (mevedel-skill--create
+                 :name "review-spec"
+                 :description "Review a spec"
+                 :active-p t
+                 :model-invocable-p t)))
+    (make-directory subdir t)
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (let ((prompt (mevedel-system-build-prompt
+                     "BASE" ws root-dir session (current-buffer))))
+        (should-not (string-match-p "## Skills" prompt)))))
 
   :doc "ignores CLAUDE.md when AGENTS.md is absent"
   (let* ((claude-md (file-name-concat root-dir "CLAUDE.md"))
@@ -242,7 +280,38 @@
       (should (string-match-p "AGENT BASE" prompt))
       (should (string-match-p "## Environment" prompt))
       (should-not (string-match-p "Workspace guidance" prompt))
-      (should-not (string-match-p "Remembered fact" prompt)))))
+      (should-not (string-match-p "Remembered fact" prompt))))
+
+  :doc "can include the parent session skills roster for skill-capable agents"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project root-dir root-dir "sysproj"))
+         (session (mevedel-session-create "main" ws))
+         (skill (mevedel-skill--create
+                 :name "domain-modeling"
+                 :description "Sharpen terminology"
+                 :active-p t
+                 :model-invocable-p t)))
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (let ((prompt (mevedel-system-build-agent-prompt
+                     "AGENT BASE" :workspace ws
+                     :session session
+                     :refresh-buffer (current-buffer)
+                     :workspace-config nil
+                     :memory nil
+                     :environment nil
+                     :skills t)))
+        (should (string-match-p "AGENT BASE" prompt))
+        (should (string-match-p "^- domain-modeling: Sharpen terminology$"
+                                prompt))))
+    (with-temp-buffer
+      (let ((prompt (mevedel-system-build-agent-prompt
+                     "AGENT BASE" :workspace ws
+                     :session session
+                     :workspace-config nil
+                     :memory nil
+                     :environment nil)))
+        (should-not (string-match-p "## Skills" prompt))))))
 
 
 ;;
