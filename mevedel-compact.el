@@ -722,7 +722,7 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
             (records (mevedel-session-invoked-skills session)))
       (mapconcat
        (lambda (rec)
-         (format "- /%s%s (trigger: %s, turn: %s)"
+         (format "- $%s%s (trigger: %s, turn: %s)"
                  (mevedel-skill-invocation-record-name rec)
                  (let ((args (mevedel-skill-invocation-record-args rec)))
                    (if (and args (not (string-empty-p args)))

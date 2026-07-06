@@ -1873,7 +1873,7 @@ PROPS is the value for the `gptel' property."
                        (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Full hidden prompt" expanded)))))
 
-  :doc "renders inline slash skills as compact invocation with collapsed prompt"
+  :doc "renders inline skills as compact invocation with collapsed prompt"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -1887,14 +1887,14 @@ PROPS is the value for the `gptel' property."
                   :name "emacs-context-snapshot"
                   :arguments "Say hi!"
                   :display-text
-                  "/emacs-context-snapshot\nSay hi!")))
+                  "$emacs-context-snapshot\nSay hi!")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p
-                 "/emacs-context-snapshot\nSay hi!"
+                 "\\$emacs-context-snapshot\nSay hi!"
                  text))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "You are helping with this user request"
@@ -1907,7 +1907,7 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "You are helping with this user request"
                                 expanded)))))
 
-  :doc "renders nil-property inline slash skill metadata as compact invocation"
+  :doc "renders nil-property inline skill metadata as compact invocation"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -1917,13 +1917,13 @@ PROPS is the value for the `gptel' property."
        '(:kind inline-skill
                :name "green-loop"
                :arguments "current changes"
-               :display-text "/green-loop current changes")))
+               :display-text "$green-loop current changes")))
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "/green-loop current changes" text))
+        (should (string-match-p "\\$green-loop current changes" text))
         (should (string-match-p "Prompt" text))
         (should-not (string-match-p "# Green Loop" text))
         (should-not (string-match-p "Run the loop" text))
@@ -1936,7 +1936,7 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "# Green Loop" expanded))
         (should (string-match-p "Run the loop" expanded)))))
 
-  :doc "request summary before inline slash skill does not absorb user turn"
+  :doc "request summary before inline skill does not absorb user turn"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Previous answer.\n" 'response)
     (mevedel-view-test--insert-data
@@ -1954,7 +1954,7 @@ PROPS is the value for the `gptel' property."
       '(:kind inline-skill
               :name "green-loop"
               :arguments "current changes"
-              :display-text "/green-loop current changes"))
+              :display-text "$green-loop current changes"))
      'ignore)
     (mevedel-view-test--insert-data data-buf "Restarting checks.\n" 'response)
     (with-current-buffer view-buf
@@ -1963,12 +1963,12 @@ PROPS is the value for the `gptel' property."
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Previous answer" text))
         (should (string-match-p "Worked for 2m" text))
-        (should (string-match-p "You\n/green-loop current changes" text))
+        (should (string-match-p "You\n\\$green-loop current changes" text))
         (should (string-match-p "Restarting checks" text))
         (should-not (string-match-p "# Green Loop" text))
         (should-not (string-match-p "mevedel-render-data" text)))))
 
-  :doc "expanded inline slash prompt omits saved org property drawer"
+  :doc "expanded inline skill prompt omits saved org property drawer"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -1982,7 +1982,7 @@ PROPS is the value for the `gptel' property."
                   :name "green-loop"
                   :arguments "commits a b"
                   :display-text
-                  "/green-loop\ncommits a b")))
+                  "$green-loop\ncommits a b")))
         (put-text-property start (point) 'gptel 'ignore)))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -3627,7 +3627,7 @@ PROPS is the value for the `gptel' property."
      (clrhash mevedel-skills--mtime-cache)))
   ,test
   (test)
-  :doc "view slash completion refreshes after skill saves"
+  :doc "view skill completion refreshes after skill saves"
   (let* ((mevedel-skills-include-bundled nil)
          (mevedel-skills-check-for-modifications '(check-on-save))
          (root (make-temp-file "mevedel-view-skills-" t))
@@ -3647,7 +3647,7 @@ PROPS is the value for the `gptel' property."
             (mevedel-skills-install session data-buf))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/")
+            (insert "$")
             (let ((capf (mevedel-view-slash-capf)))
               (should (member "alpha"
                               (mevedel-view-test--capf-candidates capf)))
@@ -3726,7 +3726,7 @@ PROPS is the value for the `gptel' property."
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/rem")
+            (insert "$rem")
             (let* ((capf (mevedel-view-slash-capf))
                    (exit (and capf (plist-get (nthcdr 3 capf)
                                               :exit-function))))
@@ -3738,7 +3738,7 @@ PROPS is the value for the `gptel' property."
                        "\\[focus\\]"
                        (mevedel-view-test--skill-hint-string)))
               (insert "d")
-              (should (equal "/remember d"
+              (should (equal "$remember d"
                              (mevedel-view--input-text))))))
       (delete-directory root t))))
 
@@ -3763,12 +3763,12 @@ PROPS is the value for the `gptel' property."
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/green-loop")
+            (insert "$green-loop")
             (mevedel-view--refresh-skill-argument-hint)
             (should (string-match-p
                      "What change should be validated"
                      (mevedel-view-test--skill-hint-string)))
-            (should (equal "/green-loop" (mevedel-view--input-text)))
+            (should (equal "$green-loop" (mevedel-view--input-text)))
             (insert " current changes")
             (mevedel-view--refresh-skill-argument-hint)
             (should-not (mevedel-view-test--skill-hint-string))))
@@ -3792,7 +3792,7 @@ PROPS is the value for the `gptel' property."
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/deploy-api")
+            (insert "$deploy-api")
             (mevedel-view--refresh-skill-argument-hint)
             (should (string-match-p
                      "\\[service\\] \\[environment\\]"
@@ -3825,7 +3825,7 @@ PROPS is the value for the `gptel' property."
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/green-loop")
+            (insert "$green-loop")
             (mevedel-view--refresh-skill-argument-hint)
             (should (mevedel-view-test--skill-hint-string))
             (mevedel-view--clear-input)
@@ -9218,11 +9218,37 @@ state of its inner sections"
           (should (equal "fake result" seen))
           (should (string-empty-p (mevedel-view--input-text))))))))
 
+(mevedel-deftest mevedel-view-send/dollar-text ()
+  ,test
+  (test)
+  :doc "unknown dollar-prefixed input sends as normal prompt text"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vd" :root "/tmp/vd" :name "vd"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           send-called)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$PATH is relevant")
+          (mevedel-view-send)
+          (should (string-empty-p (mevedel-view--input-text)))))
+      (should send-called)
+      (with-current-buffer data-buf
+        (should (string-match-p "\\$PATH is relevant"
+                                (buffer-string)))))))
+
 (defmacro mevedel-view-test--with-fork-skill (skill-form &rest body)
   "Wire data-buf with a session containing SKILL-FORM, then run BODY.
 Binds `data-buf', `view-buf', and `session' in scope.  The skill is
 attached via `mevedel-session-skills' so `mevedel-session-get-skill'
-finds it during slash dispatch."
+finds it during `$' skill dispatch."
   (declare (indent 1) (debug t))
   `(mevedel-view-test--with-buffers
      (let* ((ws (mevedel-workspace--create
@@ -9240,8 +9266,8 @@ finds it during slash dispatch."
 (mevedel-deftest mevedel-view-send/skill-fork ()
   ,test
   (test)
-  :doc "fork slash blocks input, captures the callback, and inserts the result"
-  ;; Drive `mevedel-view-send' for a /myfork dispatch with a fork
+  :doc "fork skill blocks input, captures the callback, and inserts the result"
+  ;; Drive `mevedel-view-send' for a $myfork dispatch with a fork
   ;; skill installed on the session.  We mock `mevedel-skills-invoke'
   ;; to capture the callback so we can verify (a) the view-side spinner
   ;; and turn marker get armed before invocation returns, (b) the input
@@ -9269,7 +9295,7 @@ finds it during slash dispatch."
                  (lambda (&rest args) (setq status-called args))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "/myfork run a thing")
+          (insert "$myfork run a thing")
           (mevedel-view-send)
 
           ;; The view armed the in-flight turn marker and spinner.
@@ -9281,7 +9307,7 @@ finds it during slash dispatch."
           ;; the input region.
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "/myfork run a thing" text))))
+            (should (string-match-p "\\$myfork run a thing" text))))
         (with-current-buffer data-buf
           (should mevedel--current-request))
 
@@ -9290,7 +9316,7 @@ finds it during slash dispatch."
         (should (equal "myfork"
                        (mevedel-skill-name (plist-get captured-args :skill))))
         (should (equal "run a thing" (plist-get captured-args :args)))
-        (should (eq 'user-slash
+        (should (eq 'user-skill
                     (plist-get (plist-get captured-args :kwargs) :trigger)))
 
         ;; Fire the callback with a fork outcome; expect the data buffer
@@ -9337,7 +9363,7 @@ finds it during slash dispatch."
                  (lambda (&rest _))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "/myfork run")
+          (insert "$myfork run")
           (mevedel-view-send))
         (with-current-buffer data-buf
           (should mevedel--current-request))
@@ -9357,7 +9383,7 @@ finds it during slash dispatch."
 (mevedel-deftest mevedel-view-send/skill-inline ()
   ,test
   (test)
-  :doc "inline slash skill forwards expanded body with render-data side channel"
+  :doc "inline skill forwards expanded body with render-data side channel"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "myskill"
@@ -9369,11 +9395,11 @@ finds it during slash dispatch."
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "/myskill hello")
+          (insert "$myskill hello")
           (mevedel-view-send)
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "/myskill hello" text))
+            (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
             (should-not (string-match-p "Expanded hello" text))))
         (with-current-buffer view-buf
@@ -9402,7 +9428,7 @@ finds it during slash dispatch."
           (mevedel-view--full-rerender)
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "/myskill hello" text))
+            (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
             (should-not (string-match-p "Expanded hello" text)))
           (goto-char (point-min))
@@ -9410,7 +9436,57 @@ finds it during slash dispatch."
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "Expanded hello" expanded))))))))
+            (should (string-match-p "Expanded hello" expanded)))))))
+
+  :doc "inline attachment failure rolls back echoed prompt"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded"
+       :context 'inline
+       :user-invocable-p t)
+    (let ((path (make-temp-file "mevedel-inline-rollback-"))
+          send-called
+          message-text)
+      (unwind-protect
+          (cl-letf (((symbol-function 'gptel-send)
+                     (lambda (&rest args)
+                       (apply #'mevedel-skills--gptel-send-advice
+                              (lambda (&rest _)
+                                (setq send-called t))
+                              args)))
+                    ((symbol-function 'mevedel-skills-invoke)
+                     (lambda (_skill _args callback &rest _)
+                       (funcall callback
+                                '(:status error
+                                  :reason blocked
+                                  :message "blocked"))))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args)
+                       (setq message-text (apply #'format fmt args)))))
+            (mevedel-session-add-dropped-file-grant session path)
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert (format "Please use $myskill @file:%s" path))
+              (mevedel-view-send)
+              (should-not send-called)
+              (should (equal (format "Please use $myskill @file:%s" path)
+                             (mevedel-view--input-text)))
+              (should-not (mevedel-view-history--entries))
+              (should-not (mevedel-view--request-progress-visible-p))
+              (let ((history (buffer-substring-no-properties
+                              (point-min) mevedel-view--input-marker)))
+                (should-not (string-match-p "Please use \\$myskill"
+                                            history))))
+            (with-current-buffer data-buf
+              (should-not (string-match-p "Please use \\$myskill"
+                                          (buffer-string))))
+            (should (equal (list (expand-file-name path))
+                           (mevedel-session-dropped-file-grants session)))
+            (should-not (mevedel-session-active-dropped-file-grants session))
+            (should (string-match-p "Inline skill failed: blocked"
+                                    message-text)))
+        (delete-file path)))))
 
 (mevedel-deftest mevedel-view--forward-input-now ()
   ,test
@@ -9472,6 +9548,48 @@ finds it during slash dispatch."
                       :input)))
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
+
+  :doc "queued inline skill waits for request-time transforms"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "alpha"
+       :body "Alpha body"
+       :context 'inline
+       :user-invocable-p t)
+    (let* ((data (list :messages
+                       (vector (list :role "user"
+                                     :content "active turn"))))
+           position
+           fsm)
+      (with-current-buffer data-buf
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session))
+        (setq position (copy-marker (point-max) nil)))
+      (cl-letf (((symbol-function
+                  'mevedel-view--schedule-late-queued-user-message-drain)
+                 (lambda () nil)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "please use $alpha")
+          (mevedel-view-send)))
+      (let ((entry (car (mevedel-session-queued-user-messages session))))
+        (should entry)
+        (should-not (plist-get entry :requires-request-transform))
+        (should (mevedel-view--queued-user-message-requires-transform-p
+                 entry session)))
+      (setq fsm
+            (gptel-make-fsm
+             :info (list :buffer data-buf
+                         :backend nil
+                         :data data
+                         :position position)))
+      (mevedel-view--handle-queued-user-message-inject fsm)
+      (should (= 1 (length (mevedel-session-queued-user-messages session))))
+      (should (= 1 (length (plist-get data :messages))))
+      (with-current-buffer data-buf
+        (should-not (string-match-p "queued-user-message"
+                                    (buffer-string))))))
 
   :doc "queued message stays visible across incremental in-flight rendering"
   (mevedel-view-test--with-buffers
@@ -9748,6 +9866,34 @@ finds it during slash dispatch."
         (mevedel-view--drain-queued-user-message-batch data-buf))
       (should-not sent)
       (should (= 1 (length (mevedel-session-queued-user-messages session))))
+      (with-current-buffer data-buf
+        (should-not (string-match-p "queued-user-message-batch"
+                                    (buffer-string))))))
+
+  :doc "fallback drain keeps queued entry when inline fork skill blocks"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "forker"
+       :body "ignored"
+       :context 'fork
+       :agent "general-purpose"
+       :user-invocable-p t)
+    (let (sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request nil))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "please use $forker"
+                        :display-text "please use $forker"
+                        :model-input "please use $forker")))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq sent t))))
+        (mevedel-view--drain-queued-user-message-batch data-buf))
+      (should-not sent)
+      (should (= 1 (length (mevedel-session-queued-user-messages session))))
+      (with-current-buffer view-buf
+        (should (string-empty-p (mevedel-view--input-text))))
       (with-current-buffer data-buf
         (should-not (string-match-p "queued-user-message-batch"
                                     (buffer-string))))))
@@ -10346,7 +10492,7 @@ finds it during slash dispatch."
                    (setq send-called t))))
 	(with-current-buffer view-buf
 	  (goto-char (mevedel-view--input-start))
-	  (insert "/myskill blocked")
+	  (insert "$myskill blocked")
 	  (mevedel-view-send)
 	          (should-not send-called)
 	          (should-not (mevedel-view-history--entries)))
@@ -10355,7 +10501,7 @@ finds it during slash dispatch."
 	          (should-not (bound-and-true-p
 	                       mevedel-skills--pending-request-context))))))
 
-  :doc "inline slash hooks see expanded body and can rewrite it"
+  :doc "inline skill hooks see expanded body and can rewrite it"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "myskill"
@@ -10375,7 +10521,7 @@ finds it during slash dispatch."
                    (setq send-called t))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "/myskill hello")
+          (insert "$myskill hello")
           (mevedel-view-send))
 	        (should send-called)
 	        (should (string-match-p "Expanded hello"
@@ -10387,7 +10533,7 @@ finds it during slash dispatch."
 	            (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "Expanded hello" text)))))))
 
-  :doc "inline slash Prompt omits hook context in immediate render"
+  :doc "inline skill Prompt omits hook context in immediate render"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "myskill"
@@ -10406,12 +10552,12 @@ finds it during slash dispatch."
                    (setq send-called t))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "/myskill hello")
+          (insert "$myskill hello")
           (mevedel-view-send)
           (should send-called)
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "/myskill hello" text))
+            (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
             (should (string-match-p "hook context added" text))
             (should-not (string-match-p "rewritten prompt" text))
@@ -10428,7 +10574,7 @@ finds it during slash dispatch."
           (should (string-match-p "rewritten prompt" text))
           (should (string-match-p "model-only context" text))))))
 
-  :doc "rewritten fork slash prompt sends as normal prompt without invoking skill"
+  :doc "rewritten fork skill prompt sends as normal prompt without invoking skill"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "myfork"
@@ -10452,14 +10598,14 @@ finds it during slash dispatch."
                    (setq send-called t))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "/myfork original")
+          (insert "$myfork original")
           (mevedel-view-send))
         (should send-called)
         (should-not invoke-called)
         (with-current-buffer data-buf
           (let ((text (buffer-string)))
             (should (string-match-p "rewritten prompt" text))
-            (should-not (string-match-p "/myfork original" text)))))))
+            (should-not (string-match-p "\\$myfork original" text)))))))
 
   :doc "malformed UserPromptSubmit decisions are ignored"
   (let* ((root (make-temp-file "mevedel-view-hooks-malformed" t))

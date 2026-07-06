@@ -758,7 +758,7 @@ fails."
             (mevedel-review--indent-results results))))
 
 (defun mevedel-review-command-skill-p (skill)
-  "Return non-nil when SKILL is the bundled `/review' command skill."
+  "Return non-nil when SKILL backs the local `/review' command."
   (and (mevedel-skill-p skill)
        (equal "review" (mevedel-skill-name skill))
        (eq 'fork (mevedel-skill-context skill))
@@ -1029,7 +1029,7 @@ dispatched.  COMMAND defaults to `review'."
                          (eq (plist-get outcome :status) 'ok))
                     (mevedel-review--mark-command-outcome outcome)
                   outcome)))
-     :trigger 'user-slash
+     :trigger 'user-skill
      :description (or hint (mevedel-review--command-description command))
      :additional-context submit-context
      :on-invocation progress-callback

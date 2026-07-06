@@ -447,7 +447,8 @@
       (should (equal "test-analyst" (mevedel-agent-name agent)))
       (should (equal "A test agent" (mevedel-agent-description agent)))
       (should (equal '(read code) (mevedel-agent-tools agent)))
-      (should (eq #'ignore (mevedel-agent-system-prompt agent)))
+      (should (functionp (mevedel-agent-system-prompt agent)))
+      (should-not (funcall (mevedel-agent-system-prompt agent)))
       (should (= 20 (mevedel-agent-max-turns agent)))))
 
   :doc "mevedel-agent-get accepts symbol or string"

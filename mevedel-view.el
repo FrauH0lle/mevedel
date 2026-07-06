@@ -108,7 +108,6 @@
 (declare-function mevedel-session-set-queued-user-messages
                   "mevedel-structs" (session queue))
 (declare-function mevedel-session-skills "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -247,26 +246,35 @@
                   "mevedel-pipeline" (string))
 
 ;; `mevedel-skills'
+(declare-function mevedel-session-get-skill "mevedel-skills" (session name))
+(declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skill-user-invocable-p "mevedel-skills" (cl-x) t)
+(declare-function mevedel-skills--clear-pending-inline-attachments
+                  "mevedel-skills" ())
+(declare-function mevedel-skills--inline-skill-mentions
+                  "mevedel-skills" (text session))
+(declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
+(declare-function mevedel-skills--parse-skill-line "mevedel-skills" (text))
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
+(declare-function mevedel-skills--prepare-inline-attachments-for-text
+                  "mevedel-skills" (text session callback))
 (declare-function mevedel-skills--remaining-argument-hint
                   "mevedel-skills" (skill arguments))
+(declare-function mevedel-skills--slash-annotation
+                  "mevedel-skills" (name buffer session local-commands))
 (declare-function mevedel-skills--slash-capf
                   "mevedel-skills" (buffer session local-commands
                                             &optional input-start))
-(declare-function mevedel-skills--slash-annotation
-                  "mevedel-skills" (name buffer session local-commands))
 (declare-function mevedel-skills--slash-completion-table
                   "mevedel-skills" (buffer session local-commands))
-(declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
-(declare-function mevedel-skills-inline-display-text
-                  "mevedel-skills" (name arguments))
+(declare-function mevedel-skills--stage-inline-attachments
+                  "mevedel-skills" (attachments))
 (declare-function mevedel-skills-format-inline-render-data
                   "mevedel-skills" (skill arguments))
+(declare-function mevedel-skills-inline-display-text
+                  "mevedel-skills" (name arguments))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
-(declare-function mevedel-session-get-skill "mevedel-skills" (session name))
-(declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-user-invocable-p "mevedel-skills" (cl-x) t)
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-review'
@@ -5130,11 +5138,11 @@ behave normally."
          :state (mevedel-view--debug-state data-buf start end))
         (mevedel-view--stop-spinner-timer)
         (when (markerp mevedel-view--in-flight-turn-start)
-          (set-marker mevedel-view--in-flight-turn-start nil)
-          (setq mevedel-view--in-flight-turn-start nil))
+          (set-marker mevedel-view--in-flight-turn-start nil))
+        (setq mevedel-view--in-flight-turn-start nil)
         (when (markerp mevedel-view--data-turn-start)
-          (set-marker mevedel-view--data-turn-start nil)
-          (setq mevedel-view--data-turn-start nil)))))
+          (set-marker mevedel-view--data-turn-start nil))
+        (setq mevedel-view--data-turn-start nil))))
   ;; gptel inspects hook return values for control plists.  Rendering
   ;; is side-effect-only; never leak propertized UI strings upward.
   nil)
@@ -8310,19 +8318,66 @@ before this feature still works."
   (when (and session paths)
     (mevedel-session-activate-dropped-file-grants session paths)))
 
-(defun mevedel-view--queued-user-message-requires-transform-p (entry)
+(defun mevedel-view--prepare-inline-attachments-before-send
+    (input display-text callback &optional on-block)
+  "Prepare inline `$skill' attachments in INPUT before prompt echo.
+CALLBACK receives the possibly augmented model input and the display
+text to render in the view."
+  (let ((session (mevedel-view--session))
+        (view-buffer (current-buffer))
+        (data-buffer mevedel--data-buffer))
+    (if (not (and session (buffer-live-p data-buffer)))
+        (funcall callback input display-text)
+      (cl-labels
+          ((finish (outcome)
+             (when (buffer-live-p view-buffer)
+               (with-current-buffer view-buffer
+                 (pcase (plist-get outcome :status)
+                   ('ok
+                    (let ((render-data
+                           (and (buffer-live-p data-buffer)
+                                (with-current-buffer data-buffer
+                                  (mevedel-skills--stage-inline-attachments
+                                   (plist-get outcome :attachments))))))
+                      (when render-data
+                        (funcall callback
+                                 (concat input render-data)
+                                 (or display-text input)))))
+                   (_
+                    (when (buffer-live-p data-buffer)
+                      (with-current-buffer data-buffer
+                        (mevedel-skills--clear-pending-inline-attachments)))
+                    (message "Inline skill failed: %s"
+                             (or (plist-get outcome :message)
+                                 "unknown error"))
+                    (when on-block
+                      (funcall on-block))))))))
+        (pcase (with-current-buffer data-buffer
+                 (mevedel-skills--prepare-inline-attachments-for-text
+                  input session #'finish))
+          ('skill nil)
+          ('unknown
+           (when on-block
+             (funcall on-block)))
+          (_
+           (funcall callback input display-text)))))))
+
+(defun mevedel-view--queued-user-message-requires-transform-p
+    (entry &optional session)
   "Return non-nil when queued ENTRY must go through prompt transforms."
   (or (plist-get entry :requires-request-transform)
-      (string-match-p "@\\(?:ref\\|file\\|agent\\|mcp\\):"
-                      (mevedel-view--queued-user-message-model-input entry))))
+      (let ((input (mevedel-view--queued-user-message-model-input entry)))
+        (or (string-match-p "@\\(?:ref\\|file\\|agent\\|mcp\\):" input)
+            (and session
+                 (mevedel-skills--inline-skill-mentions input session))))))
 
-(defun mevedel-view--queued-user-messages-require-transform-p (queue)
+(defun mevedel-view--queued-user-messages-require-transform-p
+    (queue &optional session)
   "Return non-nil when any queued entry in QUEUE needs transforms."
-  (catch 'found
-    (dolist (entry queue)
-      (when (mevedel-view--queued-user-message-requires-transform-p entry)
-        (throw 'found t)))
-    nil))
+  (cl-some
+   (lambda (entry)
+     (mevedel-view--queued-user-message-requires-transform-p entry session))
+   queue))
 
 (defun mevedel-view--queued-user-message-dropped-file-grants (queue)
   "Return deduplicated dropped-file grants recorded in queued QUEUE."
@@ -8502,7 +8557,7 @@ The following user message batch arrived while your previous request was already
                                 (mevedel-view--input-start)))
               ((>= (point) input-start))
               (text (buffer-substring-no-properties input-start (point-max)))
-              (parsed (mevedel-skills--parse-slash-line text))
+              (parsed (mevedel-skills--parse-skill-line text))
               (name (nth 0 parsed))
               (skill (mevedel-session-get-skill session name))
               ((mevedel-skill-user-invocable-p skill)))
@@ -8548,9 +8603,9 @@ The following user message batch arrived while your previous request was already
   (mevedel-view--refresh-skill-argument-hint))
 
 (defun mevedel-view-slash-capf ()
-  "Completion-at-point for slash input in the view composer.
-Offers local slash commands and session skills at the initial `/name',
-plus command argument completion for commands with finite choices."
+  "Completion-at-point for slash commands and `$' skills in the composer.
+Offers local slash commands at `/name', session skills at `$name',
+and command argument completion for commands with finite choices."
   (when (and mevedel--data-buffer
              (buffer-live-p mevedel--data-buffer)
              (>= (point) (mevedel-view--input-start)))
@@ -8562,7 +8617,7 @@ plus command argument completion for commands with finite choices."
 
 (defun mevedel-view--start-fork-skill-turn
     (input display-text &optional hook-context)
-  "Render and record a slash fork INPUT without calling `gptel-send'.
+  "Render and record a fork skill INPUT without calling `gptel-send'.
 
 DISPLAY-TEXT is shown in the view for the user turn.  INPUT is written
 to the data buffer as the authoritative user prompt.  The data-turn
@@ -8629,8 +8684,8 @@ in the view when present."
 
 (defun mevedel-view--send-fork-skill
     (input name args skill display-text view-buffer data-buffer)
-  "Run hooks and dispatch fork SKILL from slash INPUT.
-NAME and ARGS identify the slash invocation; DISPLAY-TEXT is shown in the view.
+  "Run hooks and dispatch fork SKILL from user INPUT.
+NAME and ARGS identify the user invocation; DISPLAY-TEXT is shown in the view.
 VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   (mevedel-view--run-prompt-submit-hook
    input display-text
@@ -8657,13 +8712,13 @@ VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
             (lambda (outcome)
               (mevedel-view--finish-fork-skill-outcome
                name outcome view-buffer data-buffer skill))
-            :trigger 'user-slash
+            :trigger 'user-skill
             :additional-context hook-context)))))))
 
 (defun mevedel-view--finish-inline-skill-outcome
     (input name args skill display-text outcome view-buffer data-buffer)
   "Handle inline skill OUTCOME and then run `UserPromptSubmit'.
-INPUT, NAME, ARGS, SKILL, and DISPLAY-TEXT describe the slash invocation.
+INPUT, NAME, ARGS, SKILL, and DISPLAY-TEXT describe the user invocation.
 VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   (when (and (buffer-live-p view-buffer)
              (buffer-live-p data-buffer))
@@ -8708,7 +8763,7 @@ VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
 (defun mevedel-view--send-inline-skill
     (input name args skill display-text view-buffer data-buffer)
   "Expand inline SKILL, then run prompt hooks on the model-visible body.
-INPUT, NAME, ARGS, and DISPLAY-TEXT describe the slash invocation.
+INPUT, NAME, ARGS, and DISPLAY-TEXT describe the user invocation.
 VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   (with-current-buffer data-buffer
     (mevedel-skills-invoke
@@ -8716,15 +8771,15 @@ VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
      (lambda (outcome)
        (mevedel-view--finish-inline-skill-outcome
         input name args skill display-text outcome view-buffer data-buffer))
-     :trigger 'user-slash)))
+     :trigger 'user-skill)))
 
 (defun mevedel-view--send-skill (input name args skill)
-  "Dispatch slash skill NAME with ARGS from INPUT."
+  "Dispatch user skill NAME with ARGS from INPUT."
   (let* ((fork-p (eq (mevedel-skill-context skill) 'fork))
          (view-buffer (current-buffer))
          (data-buffer mevedel--data-buffer)
          (display-text (if fork-p
-                           (concat "/" name (when args (concat " " args)))
+                           (concat "$" name (when args (concat " " args)))
                          (mevedel-skills-inline-display-text name args))))
     (if fork-p
         (mevedel-view--send-fork-skill
@@ -8736,8 +8791,8 @@ VIEW-BUFFER and DATA-BUFFER are the paired session buffers."
   "Send the current composer text to the LLM via the data buffer.
 Extracts text from the input zone, renders it in the history region,
 forwards it to the data buffer, and calls `gptel-send'.  When the
-input starts with a `/command', dispatches it as a slash command or
-skill instead of forwarding to the LLM.
+input starts with a `/command' or known `$skill', dispatches it instead
+of forwarding to the LLM.
 
 If the data buffer is in rewind preview
 state (`mevedel-session--fork-pending' is set), materialize the fork
@@ -8761,44 +8816,49 @@ fork."
   (let ((input (mevedel-view--input-text)))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
-    (let ((parsed (mevedel-skills--parse-slash-line input)))
+    (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
+           (skill-parsed (mevedel-skills--parse-skill-line input))
+           (skill (and skill-parsed
+                       (with-current-buffer mevedel--data-buffer
+                         (and (bound-and-true-p mevedel--session)
+                              (mevedel-session-get-skill
+                               mevedel--session (nth 0 skill-parsed)))))))
       (if (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
-          (if parsed
+          (if (or slash-parsed skill)
               (user-error "A request is already active -- wait or abort first")
             (mevedel-view--queue-user-message input))
-        (if (not parsed)
+        (cond
+         (slash-parsed
+          (let* ((name (nth 0 slash-parsed))
+                 (args (nth 1 slash-parsed))
+                 (local (assoc name mevedel-slash-commands)))
+            (cond
+             ((and local
+                   (string= name "plan")
+                   args
+                   (not (string-blank-p args)))
+              (mevedel-view--send-local-plan input args))
+             (local
+              (let ((result (with-current-buffer mevedel--data-buffer
+                              (funcall (cdr local) args))))
+                ;; Most local slash commands don't send a turn.  A command may
+                ;; return this sentinel when it took ownership of the input.
+                (unless (eq result 'mevedel-view-sent)
+                  (when (stringp result)
+                    (message "%s" result))
+                  (mevedel-view-history-add input)
+                  (mevedel-view--clear-input))))
+             (t
+              (message "Unknown slash command: /%s" name)))))
+         (skill
+          (mevedel-view--send-skill
+           input (nth 0 skill-parsed) (nth 1 skill-parsed) skill))
+         (t
           (mevedel-view--forward-input
            input nil
            (lambda ()
              (mevedel-view-history-add input)
-             (mevedel-view--fork-if-pending)))
-        (let* ((name (nth 0 parsed))
-               (args (nth 1 parsed))
-               (local (assoc name mevedel-slash-commands))
-               (skill (with-current-buffer mevedel--data-buffer
-                        (and (bound-and-true-p mevedel--session)
-                             (mevedel-session-get-skill
-                              mevedel--session name)))))
-                  (cond
-                   ((and local
-                         (string= name "plan")
-                         args
-                         (not (string-blank-p args)))
-                    (mevedel-view--send-local-plan input args))
-                   (local
-                    (let ((result (with-current-buffer mevedel--data-buffer
-                                    (funcall (cdr local) args))))
-              ;; Most local slash commands don't send a turn.  A command may
-              ;; return this sentinel when it took ownership of the input.
-              (unless (eq result 'mevedel-view-sent)
-                (when (stringp result)
-                  (message "%s" result))
-                (mevedel-view-history-add input)
-                (mevedel-view--clear-input))))
-           (skill
-            (mevedel-view--send-skill input name args skill))
-           (t
-            (message "Unknown slash command: /%s" name))))))))
+             (mevedel-view--fork-if-pending))))))))
   ;; Ensure point ends up in the input zone.
   (goto-char (point-max)))
 
@@ -8924,24 +8984,28 @@ the in-flight assistant turn as tool calls complete:
 the input zone (where the assistant turn will be rendered);
 `mevedel-view--data-turn-start' points into the data buffer just
 after the forwarded prompt, where the LLM's response will begin."
-  (if prompt-checked
-      (progn
-        (when before-send
-          (funcall before-send))
-        (mevedel-view--forward-input-now
-         input (or display-text input) hook-context))
-    (mevedel-view--run-prompt-submit-hook
-     input display-text
-     (lambda (hook-input context)
-       (when before-send
-         (funcall before-send))
-       (mevedel-view--forward-input-now
-        (if context
-            (concat hook-input "\n\n" context)
-          hook-input)
-        (or display-text hook-input)
-        context))
-     on-block)))
+  (cl-labels
+      ((send-now (model-input view-text context)
+         (mevedel-view--prepare-inline-attachments-before-send
+          model-input view-text
+          (lambda (prepared-input prepared-display)
+            (when before-send
+              (funcall before-send))
+            (mevedel-view--forward-input-now
+             prepared-input prepared-display context))
+          on-block)))
+    (if prompt-checked
+        (send-now input (or display-text input) hook-context)
+      (mevedel-view--run-prompt-submit-hook
+       input display-text
+       (lambda (hook-input context)
+         (send-now
+          (if context
+              (concat hook-input "\n\n" context)
+            hook-input)
+          (or display-text hook-input)
+          context))
+       on-block))))
 
 (defun mevedel-view--forward-input-now
     (input &optional display-text hook-context)
@@ -8961,7 +9025,8 @@ HOOK-CONTEXT is summarized in the view when present."
          (dropped-file-grants
           (mevedel-view--pop-dropped-file-grants-for-input
            input session)))
-    (let (data-turn-start prompt-summary-source)
+    (let (data-turn-start
+          prompt-summary-source)
       ;; Forward to the data buffer first so immediate inline-skill
       ;; Prompt handles can expand through the same source-backed fold
       ;; path as a full rerender.
@@ -9091,8 +9156,9 @@ HTTP request, then commits the batch by clearing the editable queue."
               (queue (mevedel-session-queued-user-messages session))
               ((not (mevedel-view--queued-user-message-auto-drain-blocked-p
                      session)))
-              ((not (mevedel-view--queued-user-messages-require-transform-p
-                     queue)))
+              ((not (with-current-buffer data-buffer
+                      (mevedel-view--queued-user-messages-require-transform-p
+                       queue session))))
               ((not (mevedel-view--agent-fsm-p info data-buffer)))
               (data (plist-get info :data)))
     (let ((block (mevedel-view--queued-user-message-batch-block queue)))
@@ -9134,12 +9200,17 @@ HTTP request, then commits the batch by clearing the editable queue."
                     (dropped-file-grants
                      (mevedel-view--queued-user-message-dropped-file-grants
                       queue)))
-                (mevedel-view--set-queued-user-messages nil session)
-                (mevedel-view--interaction-rebuild)
-                (mevedel-view--fork-if-pending)
-                (mevedel-view--activate-dropped-file-grants
-                 dropped-file-grants session)
-                (mevedel-view--forward-input-now block block)))))))))
+                (mevedel-view--forward-input
+                 block block
+                 (lambda ()
+                   (mevedel-view--set-queued-user-messages nil session)
+                   (mevedel-view--interaction-rebuild)
+                   (mevedel-view--fork-if-pending)
+                   (mevedel-view--activate-dropped-file-grants
+                    dropped-file-grants session))
+                 t
+                 (lambda ()
+                   (mevedel-view--interaction-rebuild)))))))))))
 
 (defun mevedel-view--run-queued-user-message-drain (data-buffer)
   "Run queued user-message batch drain for DATA-BUFFER if it is live."

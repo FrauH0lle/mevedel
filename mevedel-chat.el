@@ -449,7 +449,7 @@ session struct."
     ;; Tool-boundary hooks cancel the pending timer and render
     ;; immediately, so this never delays tool-call feedback.
     (add-hook 'gptel-post-stream-hook #'mevedel-view--schedule-stream-render nil t)
-    ;; Install slash-command / skill completion-at-point
+    ;; Install slash-command and $skill completion-at-point.
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
     (mevedel-skills-install mevedel--session (current-buffer))
@@ -459,7 +459,7 @@ session struct."
     ;; orphaned `file-notify' watchers are torn down.
     (add-hook 'kill-buffer-hook
               #'mevedel-skills--release-on-kill nil t)
-    ;; Register the skills-listing reminder on the session
+    ;; Register skill event reminders on the session.
     (mevedel-skills-install-reminder mevedel--session)
     ;; Activate conditional skills when a tool touches a matching file
     (mevedel-skills-install-activation-hook)

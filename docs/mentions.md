@@ -8,6 +8,11 @@ Expansion runs as a gptel prompt transform (priority -90) via
 `[kind:KEY -- STATUS]` placeholder with full content injected as a
 `<system-reminder>` block above the user prompt.
 
+Inline `$skill` attachment scanning lives next to this transform and reuses
+the same placeholder plus `<system-reminder>` output path, but keeps a
+separate parser because `$skill` quote, escape, and Markdown-code rules differ
+from `@` mentions.
+
 ## Mention kinds
 
 - **@ref:N** / **@ref:{tag query}** — refs by ID or tag

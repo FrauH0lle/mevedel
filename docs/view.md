@@ -346,11 +346,12 @@ sessions in the same project share prompt recall. Read-only or
 non-persistent sessions keep history in memory only. Rewind keeps the
 current buffer-local ring.
 
-The input zone installs slash completion and display-only skill
-argument hints. Root slash completion offers local commands and
-user-invocable skills and inserts a real space after a completed root
-name. Command argument completion is available for commands with useful
-candidate sets, such as `/mode` and `/model`. Skill hints are rendered
+The input zone installs slash command completion, `$` skill completion,
+and display-only skill argument hints. Root slash completion offers local
+commands; root `$` completion offers user-invocable skills. Both insert a
+real space after a completed root name. Command argument completion is
+available for commands with useful candidate sets, such as `/mode` and
+`/model`. Skill hints are rendered
 as a zero-width overlay near point from `argument-hint` or remaining
 `arguments` names. They are not buffer text and are never sent to the
 model.

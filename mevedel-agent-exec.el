@@ -182,6 +182,9 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
 
+;; `mevedel-skills'
+(declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
+
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task--display-overlay "mevedel-tool-task" ())
 (declare-function mevedel-tool-task-finalize-owner
@@ -375,6 +378,8 @@ falling back to legacy prompt-only path" err)
       (when parent-agent-specs
         (setq-local mevedel-agent-exec--agents parent-agent-specs))
       (setq-local mevedel--agent-invocation invocation)
+      (when (require 'mevedel-skills nil t)
+        (mevedel-skills-install-activation-hook))
       ;; bump the invocation's call-count on each
       ;; tool dispatch so the parent's running-handle badge reads
       ;; [running * N calls] rather than the zero-suppressed

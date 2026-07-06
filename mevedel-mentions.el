@@ -14,76 +14,99 @@
 
 (require 'mevedel-overlays)
 
-;; `mevedel-overlays'
-(declare-function mevedel--instruction-activate-buffer "mevedel-overlays" (&optional buffer))
-
-;; `mevedel-persistence'
-(declare-function mevedel--restore-file-instructions "mevedel-persistence" (file &optional message))
-
-;; `mevedel-utilities'
-(declare-function mevedel--overlay-region-info "mevedel-utilities" (overlay))
-(declare-function mevedel--delimiting-markdown-backticks "mevedel-utilities" (str))
-(declare-function mevedel--markdown-enquote "mevedel-utilities" (text))
-
-;; `mevedel-workspace'
-(declare-function mevedel--all-allowed-roots "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-
-;; `mevedel-structs'
-(declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
-(declare-function mevedel-session-turn-count "mevedel-structs" (session))
-(declare-function mevedel-session-permission-rules "mevedel-structs" (session))
-(declare-function mevedel-session-permission-mode "mevedel-structs" (session))
-(declare-function mevedel-session-workspace "mevedel-structs" (session))
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--session)
-
-;; `mevedel-permissions'
-(declare-function mevedel-check-permission "mevedel-permissions" (tool-name &rest args))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
-
-;; `mevedel-tool-fs'
-(declare-function mevedel-tool-fs--media-mime-type "mevedel-tool-fs" (filename))
-(declare-function mevedel-tool-fs--pdf-media-p "mevedel-tool-fs" (filename))
-(declare-function mevedel-tool-fs--large-pdf-p "mevedel-tool-fs" (path))
-(declare-function mevedel-tool-fs--format-large-pdf-reminder
-                  "mevedel-tool-fs" (path))
-(declare-function mevedel-tool-fs--slurp-file-contents "mevedel-tool-fs" (path &optional offset limit))
-(declare-function mevedel-tool-fs--list-directory "mevedel-tool-fs" (path &optional max-entries))
-(defvar mevedel-tool-fs--media-max-bytes)
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-get "mevedel-agents" (name))
-(declare-function mevedel-agent-name "mevedel-agents" (agent))
-(declare-function mevedel-agent-description "mevedel-agents" (agent))
-(defvar mevedel-agent--registry)
+;; `gptel'
+(declare-function gptel--model-capable-p "ext:gptel-request" (cap &optional model))
+(declare-function gptel--model-mime-capable-p "ext:gptel-request" (mime &optional model))
+(declare-function gptel-fsm-info "gptel" (fsm))
+(defvar gptel-context)
+(defvar gptel-use-context)
 
 ;; `mcp' / `mcp-hub' (optional dependency)
 (declare-function mcp-hub-get-servers "mcp-hub" ())
 (declare-function mcp-read-resource "mcp" (connection uri))
 (defvar mcp-server-connections)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-description "mevedel-agents" (agent))
+(declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-name "mevedel-agents" (agent))
+(defvar mevedel-agent--registry)
+
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
 
-;; `gptel'
-(declare-function gptel-fsm-info "gptel" (fsm))
-(declare-function gptel--model-capable-p "ext:gptel-request" (cap &optional model))
-(declare-function gptel--model-mime-capable-p "ext:gptel-request" (mime &optional model))
-(defvar gptel-context)
-(defvar gptel-use-context)
+;; `mevedel-overlays'
+(declare-function mevedel--instruction-activate-buffer
+                  "mevedel-overlays" (&optional buffer))
 
-;; `text-property-search'
-(declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
+;; `mevedel-permissions'
+(declare-function mevedel-check-permission
+                  "mevedel-permissions" (tool-name &rest args))
+
+;; `mevedel-persistence'
+(declare-function mevedel--restore-file-instructions
+                  "mevedel-persistence" (file &optional message))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-mentions-shown "mevedel-structs" (session))
+(declare-function mevedel-session-permission-mode "mevedel-structs" (session))
+(declare-function mevedel-session-permission-rules "mevedel-structs" (session))
+(declare-function mevedel-session-turn-count "mevedel-structs" (session))
+(declare-function mevedel-session-workspace "mevedel-structs" (session))
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+
+;; `mevedel-tool-fs'
+(declare-function mevedel-tool-fs--format-large-pdf-reminder
+                  "mevedel-tool-fs" (path))
+(declare-function mevedel-tool-fs--large-pdf-p "mevedel-tool-fs" (path))
+(declare-function mevedel-tool-fs--list-directory
+                  "mevedel-tool-fs" (path &optional max-entries))
+(declare-function mevedel-tool-fs--media-mime-type
+                  "mevedel-tool-fs" (filename))
+(declare-function mevedel-tool-fs--pdf-media-p "mevedel-tool-fs" (filename))
+(declare-function mevedel-tool-fs--slurp-file-contents
+                  "mevedel-tool-fs" (path &optional offset limit))
+(defvar mevedel-tool-fs--media-max-bytes)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-get
+                  "mevedel-tool-registry" (name &optional category))
+
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-prompt-transform-start
+                  "mevedel-transcript" ())
+
+;; `mevedel-utilities'
+(declare-function mevedel--delimiting-markdown-backticks
+                  "mevedel-utilities" (str))
+(declare-function mevedel--markdown-enquote "mevedel-utilities" (text))
+(declare-function mevedel--overlay-region-info
+                  "mevedel-utilities" (overlay))
+
+;; `mevedel-workspace'
+(declare-function mevedel--all-allowed-roots
+                  "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 
 ;;
 ;;; Reference resolution
+
+(defun mevedel-mentions-replace-with-placeholder (start end placeholder)
+  "Replace START..END with PLACEHOLDER, preserving prompt ownership.
+When the replaced region is marked with a `gptel' text property, copy
+that property to PLACEHOLDER so later prompt transforms keep the same
+user-prompt boundary."
+  (let ((gptel-prop (get-text-property start 'gptel)))
+    (delete-region start end)
+    (goto-char start)
+    (insert (if gptel-prop
+                (propertize placeholder 'gptel gptel-prop)
+              placeholder))))
 
 (defun mevedel--resolve-ref-by-id (id)
   "Look up reference by numeric ID.
@@ -672,9 +695,8 @@ points back at the chat buffer that owns the session.  Dispatches per
                              (or (null key)
                                  (and (not seen-key-p)
                                       (not already-sent-same))))))
-                  (delete-region match-beg match-end)
-                  (goto-char match-beg)
-                  (insert placeholder)
+                  (mevedel-mentions-replace-with-placeholder
+                   match-beg match-end placeholder)
                   (when media-context
                     (apply #'mevedel-mentions--add-media-context
                            media-context))
@@ -691,7 +713,7 @@ points back at the chat buffer that owns the session.  Dispatches per
                                  (and (plist-get item :reminder)
                                       item))
                                new-items))))
-      (text-property-search-backward 'gptel nil t)
+      (goto-char (mevedel-transcript-prompt-transform-start))
       (save-excursion
         (dolist (item (nreverse reminder-items))
           (let ((start (point)))

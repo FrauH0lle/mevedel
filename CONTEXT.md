@@ -21,7 +21,9 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
-- **skill** — A reusable prompt package discovered from configured skill directories and invoked by slash command or model-side `Skill` tool.
+- **skill** — A reusable prompt package discovered from configured skill directories and invoked by `$skill` syntax or model-side `Skill` tool.
+- **skill roster** — The model-facing list of active skill names and descriptions, including only enough metadata for the model to decide whether to invoke a skill.
+- **skill lookup** — A model-facing search over enabled model-invocable skills, including dormant path-scoped skills that are not present in the active skill roster.
 - **plugin** — A reusable extension bundle discovered from a plugin manifest. A plugin may contribute skills, hooks, and other implemented extension components.
 - **plugin activation** — A workspace-scoped decision that makes a plugin's implemented components active for sessions in that workspace until disabled.
 - **pending plugin hook consent** — A plugin activation state where plugin skills may remain active, but executable plugin hooks are withheld until the user reviews and approves the changed hook surface.
@@ -34,5 +36,5 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 ## Consumer rules
 
 - Prefer these terms in issue titles, plans, tests, and architecture discussions.
-- If a term is missing or ambiguous, ask or use `/grill-with-docs` to resolve it before adding competing vocabulary.
+- If a term is missing or ambiguous, ask or use `$grill-with-docs` to resolve it before adding competing vocabulary.
 - Keep implementation module maps and detailed architecture in `AGENTS.md` and `docs/`; keep this file as a glossary.

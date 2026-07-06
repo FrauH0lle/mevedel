@@ -96,6 +96,8 @@
 ;; `mevedel-skills'
 (declare-function mevedel-skills--transform-apply-model-override
                   "mevedel-skills" (fsm))
+(declare-function mevedel-skills--transform-expand-inline-attachments
+                  "mevedel-skills" (fsm))
 (declare-function mevedel-skills-install-hot-reload "mevedel-skills" ())
 (declare-function mevedel-skills-uninstall-hot-reload "mevedel-skills" ())
 
@@ -513,6 +515,10 @@ always prompt for the session name."
   ;; Expand @ref/@file mentions early in the gptel transform chain
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions -90)
 
+  ;; Add prepared inline `$skill' attachments through the same hidden context path
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel-skills--transform-expand-inline-attachments -89)
+
   ;; Inject system reminders after mention expansion but before the request fires
   (add-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform -80)
 
@@ -567,6 +573,10 @@ always prompt for the session name."
 
   ;; Remove mention expansion from gptel
   (remove-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions)
+
+  ;; Remove inline skill attachment expansion from gptel
+  (remove-hook 'gptel-prompt-transform-functions
+               #'mevedel-skills--transform-expand-inline-attachments)
 
   ;; Remove skill model override transform
   (remove-hook 'gptel-prompt-transform-functions

@@ -60,16 +60,19 @@
 (declare-function mevedel-reminders-make-verifier-read-only
                   "mevedel-reminders" ())
 
+;; `mevedel-structs'
+(declare-function mevedel-session-working-directory
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+
 ;; `mevedel-system'
-(defvar mevedel-system--tone-prompt)
 (declare-function mevedel-system-build-agent-prompt
                   "mevedel-system"
                   (base-prompt &rest keys))
-(declare-function mevedel-system-build-prompt
-                  "mevedel-system"
-                  (base-prompt &optional workspace working-directory))
 (declare-function mevedel-system-render-agent-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
+(defvar mevedel-system--tone-prompt)
 
 
 ;;
@@ -120,6 +123,17 @@ the built-in set stays stable; user extras are appended."
   (alist-get (if (symbolp name) (symbol-name name) name)
              mevedel-agent--registry nil nil #'equal))
 
+(defun mevedel-agent-skill-tool-capable-p (agent)
+  "Return non-nil when AGENT's resolved active tools include skills."
+  (when agent
+    (let* ((specs (mevedel-agent--effective-specs agent))
+           (resolved
+            (ignore-errors (mevedel-tool-resolve specs))))
+      (cl-some (lambda (tool)
+                 (member (mevedel-tool-name tool)
+                         '("Skill" "ListSkills")))
+               (plist-get resolved :active)))))
+
 (defmacro mevedel-define-agent (name &rest keys)
   "Define a mevedel agent NAME with declarative KEYS.
 
@@ -151,6 +165,7 @@ Creates a `mevedel-agent' struct and registers it in
   (let* ((name-str (symbol-name name))
          (prompt-file (plist-get keys :prompt-file))
          (explicit-sp (plist-get keys :system-prompt))
+         (tool-specs (plist-get keys :tools))
          (_ (when (and prompt-file explicit-sp)
               (error "Cannot combine :prompt-file and :system-prompt for agent %s"
                      name-str)))
@@ -185,12 +200,49 @@ Creates a `mevedel-agent' struct and registers it in
                              mevedel-system--tone-prompt)))
                 :workspace-config ,include-workspace-config
                 :memory ,include-memory
-                :environment ,include-environment)))
+                :environment ,include-environment
+                :workspace (and mevedel--session
+                                (mevedel-session-workspace mevedel--session))
+                :working-directory
+                (and mevedel--session
+                     (mevedel-session-working-directory mevedel--session))
+                :session mevedel--session
+                :refresh-buffer (current-buffer)
+                :skills (mevedel-agent-skill-tool-capable-p
+                         (mevedel-agent-get ,name-str)))))
+           (explicit-sp
+            `(lambda ()
+               (let ((prompt ,explicit-sp))
+                 (let ((body (cond
+                              ((functionp prompt) (funcall prompt))
+                              ((stringp prompt) prompt)
+                              (t (error "Invalid agent system prompt: %S"
+                                        prompt)))))
+                   (if (mevedel-agent-skill-tool-capable-p
+                        (mevedel-agent-get ,name-str))
+                       (progn
+                         (require 'mevedel-system)
+                         (mevedel-system-build-agent-prompt
+                          body
+                          :workspace-config ,include-workspace-config
+                          :memory ,include-memory
+                          :environment ,include-environment
+                          :workspace
+                          (and mevedel--session
+                               (mevedel-session-workspace mevedel--session))
+                          :working-directory
+                          (and mevedel--session
+                               (mevedel-session-working-directory
+                                mevedel--session))
+                          :session mevedel--session
+                          :refresh-buffer (current-buffer)
+                          :skills t))
+                     body)))))
            (t explicit-sp))))
     `(let ((agent (mevedel-agent--create
                    :name ,name-str
                    :description ,(plist-get keys :description)
-                   :tools ',(plist-get keys :tools)
+                   :tools ',tool-specs
                    :system-prompt ,system-prompt-form
                    :max-turns ,(plist-get keys :max-turns)
                    :reminders ,(plist-get keys :reminders)
@@ -402,6 +454,7 @@ needed, web research.  Caller specifies the thoroughness level
 modifies files."
   :tools (read (:tool "Bash")
           (:tool "Ask") (:tool "RequestAccess")
+          (:tool "Skill") (:tool "ListSkills")
           (:tool "ToolSearch")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")

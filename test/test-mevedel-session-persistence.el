@@ -107,6 +107,8 @@ TOOL-PROP."
                  :updated-at "2026-04-23T18:20:00+0200")
             ("main" :note "Agent status" :updated-turn 4
              :updated-at "2026-04-23T18:21:00+0200")))
+    (setf (mevedel-session-skills-snapshot session)
+          '(("alpha" . "Alpha helper")))
     (setf (mevedel-session-session-id session) "main-2026-04-23T14-30-a9f2")
     (setf (mevedel-session-save-path session)
           (file-name-as-directory
@@ -300,6 +302,8 @@ TOOL-PROP."
           (should (equal "Ship Y" (plist-get plist :latest-user-message)))
           (should (equal '(("alt" . "/tmp/alt"))
                          (plist-get plist :additional-roots)))
+          (should (equal '(("alpha" . "Alpha helper"))
+                         (plist-get plist :skills-snapshot)))
           (should (= 3 (length (plist-get plist :permission-rules))))
           (should (= 2 (length (plist-get plist :tasks))))
           (should (plist-get plist :workspace))
@@ -340,6 +344,8 @@ TOOL-PROP."
           (should (eq 'default (mevedel-session-permission-mode session)))
           (should (= 5 (mevedel-session-turn-count session)))
           (should (= 4 (mevedel-session-last-task-write-turn session)))
+          (should (equal '(("alpha" . "Alpha helper"))
+                         (mevedel-session-skills-snapshot session)))
           (should (equal '((nil :note "Main status" :updated-turn 4
                                 :updated-at "2026-04-23T18:20:00+0200")
                            ("main" :note "Agent status" :updated-turn 4

@@ -1,9 +1,9 @@
 # Skills
 
 Skills are reusable prompt packages loaded from `SKILL.md` files.
-`mevedel-skills.el` owns discovery, slash completion, model-visible
-Skill tool invocation, context activation, hot reload, and skill listing
-reminders.
+`mevedel-skills.el` owns discovery, command/skill completion, model-visible
+Skill tool invocation, context activation, hot reload, prompt roster rendering,
+and event-shaped skill reminders.
 
 ## Skill flow
 
@@ -12,7 +12,7 @@ flowchart TD
     A[Scan skill directories] --> B[Parse SKILL.md frontmatter]
     B --> C[Register visible skills]
     C --> D{Invocation source}
-    D -- Slash --> E[Local command or skill invoke]
+    D -- $skill --> E[User skill invoke]
     D -- Model tool --> F[Skill tool invoke]
     E --> G[Prepare body and arguments]
     F --> G
@@ -45,7 +45,7 @@ manifests. A manifest `skills` path is resolved relative to the plugin
 root and scanned with source `plugin`. User-facing plugin skill names
 are prefixed with the plugin name from the manifest, so
 `skills/brainstorming/SKILL.md` in the `superpowers` plugin appears as
-`superpowers:brainstorming` in slash completion, the Skill tool listing,
+`superpowers:brainstorming` in `$` completion, the Skill tool listing,
 and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
 unchanged. New installs live under `~/.agents/plugins/`, including
 GitHub installs below `github.com/OWNER/REPO`. Plugin roots are
@@ -109,7 +109,7 @@ buffer is dirty.
 
 ## Local Slash Commands
 
-Local slash commands are handled before skill lookup. Built-ins include
+Local slash commands are separate from `$skill` lookup. Built-ins include
 `/tokens`, `/model`, `/compact`, `/init`, `/review`, `/verify`,
 `/worktree`, `/mode`, `/skills`, `/tools`, `/auto`, `/clear`, `/plugin`,
 and `/help`. `/init` sends the repository bootstrap prompt that helps create
@@ -207,24 +207,26 @@ today; mevedel does not start plugin apps or bundled MCP servers yet.
 - `/skills disable NAME` persists NAME as disabled.
 
 Disabled skills stay on the session for inspection, but they are omitted
-from slash completion, rejected by `Skill(name=...)`, and omitted from
-model-facing skill discovery. The disabled set is stored in
-`skills-state.el` under `mevedel-user-dir`.
+from `$` completion, rejected by explicit `$skill` invocation and
+`Skill(name=...)`, and omitted from model-facing skill discovery. The
+disabled set is stored in `skills-state.el` under `mevedel-user-dir`.
 
-Slash completion offers local command names and user-invocable skill
-names at the start of the composer, with annotations for every included
-slash command. Completing a root slash name inserts a real argument
-separator so display-only skill hints cannot make `/skill [arg]` look
-typed when the buffer only contains `/skill`. Commands can also expose
-argument candidates based on the current argument position; `/mode`
-completes `default`, `accept-edits`, `plan`, `trust-all`, and the UI
-aliases `edit`, `edits`, and `auto`, while `/model` completes model names
-from the current gptel backend. `/plugin` completes subcommands, then
-installed plugin names for `enable`, `disable`, `update`, `remove`,
-`uninstall`, and supported `hooks` forms; `/plugin install` remains
-freeform. Skill names with
-prefixes, such as `superpowers:brainstorming`, are valid slash
-candidates.
+Completion offers local command names at leading `/` and user-invocable
+skill names at leading `$` in the composer, with annotations for every
+included slash command and every visible skill. Inline `$` completion
+offers only user-invocable `context: inline` skills; leading `$`
+completion may offer user-invocable inline and fork skills. Completing a
+root name inserts a real argument separator so display-only skill hints
+cannot make `$skill [arg]` look typed when the buffer only contains
+`$skill`.
+Commands can also expose argument candidates based on the current
+argument position; `/mode` completes `default`, `accept-edits`, `plan`,
+`trust-all`, and the UI aliases `edit`, `edits`, and `auto`, while
+`/model` completes model names from the current gptel backend. `/plugin`
+completes subcommands, then installed plugin names for `enable`,
+`disable`, `update`, `remove`, `uninstall`, and supported `hooks` forms;
+`/plugin install` remains freeform. Skill names with prefixes, such as
+`superpowers:brainstorming`, are valid `$` candidates.
 `/review` and `/verify` complete shared explicit target forms such as
 `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`. With no arguments
 they open the target picker; unknown free-form arguments remain custom
@@ -234,8 +236,7 @@ instructions.
 
 Current fields include:
 
-- `name`, `display-name`, `description`, `when_to_use` /
-  `when-to-use`
+- `name`, `display-name`, `description`
 - `argument-hint`, `arguments`
 - `user-invocable`, `disable-model-invocation`
 - `allowed-tools`
@@ -245,13 +246,16 @@ Current fields include:
 - `shell`
 - `hooks` (skill-scoped hooks active during invocation)
 
-`paths` gates model-listing visibility only. Explicit slash or
+`description` follows the Agent Skills convention: it should describe both
+what the skill does and when the model should use it.
+
+`paths` gates model-listing visibility only. Explicit `$skill` or
 model-side invocation by name can still run the skill subject to the
 user/model invocation gates.
 
 ## Invocation
 
-`mevedel-skills-invoke` is the unified internal entry point for slash,
+`mevedel-skills-invoke` is the unified internal entry point for `$skill`,
 model-side Skill tool, and internal invocation.
 
 - `context: inline` prepares the body and injects or returns it in the
@@ -261,25 +265,66 @@ model-side Skill tool, and internal invocation.
   registered agent, that agent is used; otherwise mevedel synthesizes an
   agent that inherits the parent context.
 
-Slash invocation may block chat input while async preparation or a
+Leading `$skill [args]` uses command-style invocation when `$` is the
+first non-whitespace character: the skill receives the remaining prompt
+text as arguments. Inline `$skill` mentions elsewhere in the prompt use
+attachment-style invocation: mevedel prepares the named skill and keeps
+the original user prompt as the prompt body. Multiple inline mentions are
+prepared in first-occurrence text order with empty skill arguments;
+duplicate mentions of the same canonical skill are injected once. Unknown
+`$foo` text remains a normal prompt. A `$foo` mention that names a known
+but disabled skill blocks the send with guidance to enable it via
+`/skills enable foo` or escape it as literal text.
+Leading and inline explicit user skill invocations install the same
+skill-scoped permission rules, hooks, model override, and parsed effort
+state; only prompt body handling differs.
+Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, and `$foo` inside Markdown
+inline code spans or fenced code blocks stay literal text for inline
+detection.
+
+Inline attachment-style `$skill` is resolved by mevedel itself before the
+model request. It injects additive hidden skill context through the same
+`<system-reminder>` prompt-transform path used by `@file` and `@ref`
+mentions; the scanner is colocated with the mention transform but uses a
+separate `$skill` parser. It does not ask or nudge the model to call
+`Skill(name=...)`.
+The transcript keeps the user's original prompt text, while the
+model-visible prompt replaces recognized inline mentions with compact
+placeholders such as `[skill:to-prd -- attached]`.
+Inline attachment-style invocation only accepts `context: inline` skills.
+If a known user-invocable `context: fork` skill appears inline, mevedel
+blocks the send with a clear message telling the user to invoke it as
+leading `$skill ...` or escape, quote, or code-span it for literal text.
+Leading command-style `$skill` can still dispatch fork skills.
+
+`$skill` invocation may block chat input while async preparation or a
 foreground fork completes. Model-side Skill blocks the parent tool call.
-The companion `ListSkills` tool returns active, model-invocable, enabled
-skills with descriptions. It accepts an optional `query` string for
-case-insensitive search, so reminders can stay short without hiding the
-full skill roster from the model.
+The companion `ListSkills` tool mirrors the active, model-invocable,
+enabled roster when called without a query. With a `query` string it
+searches all enabled model-invocable skills, including dormant path-scoped
+skills, and marks dormant matches in the result.
 
-Inline slash invocations keep the expanded body in the data buffer, then
-append an ignored `<!-- mevedel-render-data -->` side-channel block with
-the original skill name and arguments. The view buffer renders that as a
-compact slash invocation user turn plus a collapsed `Prompt` section
-containing the full expanded body.
+Leading command-style `$skill` invocations that replace the prompt keep the
+expanded body in the data buffer, then append an ignored
+`<!-- mevedel-render-data -->` side-channel block with the original skill name
+and arguments. The view buffer renders that as a compact `$skill` invocation
+user turn plus a collapsed `Prompt` section containing the full expanded body.
+Inline attachment-style invocations instead persist the original user text
+plus render metadata naming the attached skills; transformed placeholders and
+hidden reminder bodies are request-time only.
 
-User slash skill invocations fire `UserPromptExpansion` after body
+User `$skill` invocations fire `UserPromptExpansion` after body
 preparation and before the expanded prompt reaches the model. This covers
-both inline slash skills and foreground `context: fork` slash skills.
+both inline user skill invocations and foreground `context: fork` user
+skill invocations. Multiple inline attachments fire once per deduped
+attached skill in first-occurrence order. If any hook blocks, the whole
+send is blocked.
 Hooks can block the expansion, replace the expanded prompt with
 `:updated-input`, or append `<hook-context>` with `:additional-context`.
-When a slash expansion is blocked, pending skill-scoped permission/model
+For inline attachments, `:updated-input` replaces only that skill's hidden
+body; for leading command-style invocation it keeps the existing behavior of
+replacing the expanded prompt.
+When a user skill expansion is blocked, pending skill-scoped permission/model
 and hook context is cleared instead of leaking into the next request.
 Model-side Skill calls do not fire this event.
 
@@ -288,8 +333,8 @@ Model-side Skill calls do not fire this event.
 `/review` / `M-x mevedel-review` and `/verify` / `M-x mevedel-verify` are
 local commands, not ordinary skill resolution. They share a target picker
 for uncommitted changes, a base branch, a specific commit, the last
-commit, or custom instructions. Inline slash arguments can name explicit
-target forms such as `current`, `HEAD`, `branch:<name>`, and
+commit, or custom instructions. Inline `/review` and `/verify` arguments
+can name explicit target forms such as `current`, `HEAD`, `branch:<name>`, and
 `commit:<rev>`; other non-empty arguments remain custom instructions.
 
 `/review` runs a dedicated foreground reviewer task with the registered
@@ -345,7 +390,7 @@ those rules on the active request while the skill is preparing or running.
 Fork skills install them on the sub-agent invocation. For fork skills, a
 frontmatter `Stop` declaration is scoped to that child invocation and is
 normalized to `SubagentStop`; top-level `Stop` remains a main-turn event.
-Successful foreground fork slash skills also complete the parent turn and
+Successful foreground fork user skills also complete the parent turn and
 fire the top-level `Stop` hook before request-scoped layers are cleared.
 
 ## Model And Effort

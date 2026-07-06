@@ -7,6 +7,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-skills)
+(require 'mevedel-mentions)
+(require 'mevedel-file-state)
 (require 'mevedel-cockpit)
 (require 'mevedel-hooks)
 (require 'mevedel-plugins)
@@ -746,40 +748,6 @@ shell: fish
             (should (eq 'bash (mevedel-skill-shell weird)))))
       (delete-directory dir t)))
 
-  :doc "when_to_use wins over when-to-use on conflict"
-  (let* ((mevedel-skills-include-bundled nil)
-         (dir (make-temp-file "mevedel-skills-test-" t)))
-    (unwind-protect
-        (progn
-          (mevedel-skills-test--write-skill
-           dir "wtu-snake"
-           "description: ok
-when_to_use: snake form
-" "Body")
-          (mevedel-skills-test--write-skill
-           dir "wtu-dash"
-           "description: ok
-when-to-use: dash form
-" "Body")
-          (mevedel-skills-test--write-skill
-           dir "wtu-conflict"
-           "description: ok
-when_to_use: snake wins
-when-to-use: dash loses
-" "Body")
-          (let* ((skills (mevedel-skills-scan dir '(".")))
-                 (snake (cl-find "wtu-snake" skills
-                                 :key #'mevedel-skill-name :test #'equal))
-                 (dash (cl-find "wtu-dash" skills
-                                :key #'mevedel-skill-name :test #'equal))
-                 (conflict (cl-find "wtu-conflict" skills
-                                    :key #'mevedel-skill-name :test #'equal)))
-            (should (equal "snake form" (mevedel-skill-when-to-use snake)))
-            (should (equal "dash form" (mevedel-skill-when-to-use dash)))
-            (should (equal "snake wins"
-                           (mevedel-skill-when-to-use conflict)))))
-      (delete-directory dir t)))
-
   :doc "invalid YAML in frontmatter logs a warning and skips the skill"
   ;; Invalid YAML skips the skill and logs a warning.
   (let* ((mevedel-skills-include-bundled nil)
@@ -1324,7 +1292,7 @@ paths:
          (request (mevedel-request--create :session session))
          (rules '(("Bash" :pattern "echo *" :action allow)))
          (records (list (mevedel-skill-invocation-record--create
-                         :name "demo" :args "x" :trigger 'user-slash
+                         :name "demo" :args "x" :trigger 'user-skill
                          :turn 1 :source-path "/tmp/demo/SKILL.md"
                          :prepared-body "Hello"))))
     (with-temp-buffer
@@ -2171,7 +2139,7 @@ allowed-tools:
               (setq-local mevedel--session session)
               (mevedel-skills-invoke
                skill nil (lambda (o) (setq outcome o))
-               :trigger 'user-slash)
+               :trigger 'user-skill)
               (while (null outcome)
                 (accept-process-output nil 0.01)))
             (should (eq 'ok (plist-get outcome :status)))
@@ -2353,7 +2321,7 @@ allowed-tools:
     (should (eq 'inline (plist-get outcome :kind)))
     (should (equal "YELL loudly" (plist-get outcome :body))))
 
-  :doc "user-slash trigger installs the pending stash"
+  :doc "user-skill trigger installs the pending stash"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
@@ -2373,7 +2341,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-slash)
+       :trigger 'user-skill)
       (let ((stash mevedel-skills--pending-request-context))
         (should (equal (mevedel-model-tier-selector 'fast)
                        (plist-get stash :model)))
@@ -2382,7 +2350,7 @@ allowed-tools:
         (should (= 1 (length (plist-get stash :invoked-skills))))))
 	    (should (eq 'ok (plist-get outcome :status))))
 
-  :doc "UserPromptExpansion can rewrite user-slash inline skill output"
+  :doc "UserPromptExpansion can rewrite user-skill inline skill output"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-expansion" :root "/tmp/slash-expansion"
               :name "slash-expansion"
@@ -2405,13 +2373,13 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-slash))
+       :trigger 'user-skill))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal
              "Expanded by hook\n\n<hook-context>\nexpansion context\n</hook-context>"
              (plist-get outcome :body))))
 
-  :doc "malformed UserPromptExpansion decision does not abort inline slash skill"
+  :doc "malformed UserPromptExpansion decision does not abort user skill"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-expansion-malformed"
               :root "/tmp/slash-expansion-malformed"
@@ -2435,12 +2403,12 @@ allowed-tools:
         (mevedel-skills-invoke
          skill nil
          (lambda (o) (setq outcome o))
-         :trigger 'user-slash)
+         :trigger 'user-skill)
         (should mevedel-skills--pending-request-context)))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal "Original body" (plist-get outcome :body))))
 
-  :doc "UserPromptExpansion can block user-slash inline skill output"
+  :doc "UserPromptExpansion can block user-skill inline skill output"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-expansion-block"
               :root "/tmp/slash-expansion-block"
@@ -2464,13 +2432,13 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-slash)
+       :trigger 'user-skill)
       (should-not mevedel-skills--pending-request-context))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'hook-blocked (plist-get outcome :reason)))
     (should (equal "blocked expansion" (plist-get outcome :message))))
 
-  :doc "user-slash preparation failure clears the pending stash"
+  :doc "user-skill preparation failure clears the pending stash"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-fail" :root "/tmp/slash-fail"
               :name "slash-fail"
@@ -2495,7 +2463,7 @@ allowed-tools:
         (mevedel-skills-invoke
          skill nil
          (lambda (o) (setq outcome o))
-         :trigger 'user-slash)
+         :trigger 'user-skill)
         (should (null mevedel-skills--pending-request-context))
         (should-not (bound-and-true-p mevedel--current-request))))
     (should (eq 'error (plist-get outcome :status)))
@@ -2527,7 +2495,24 @@ allowed-tools:
     (should (equal '(("Bash" :pattern "ls" :action allow))
                    (mevedel-request-skill-permission-rules request))))
 
-  :doc "user-invocable: false rejects user-slash trigger"
+  :doc "disabled user skill tells the user how to enable or escape it"
+  (let ((skill (mevedel-skill--create
+                :name "hidden"
+                :body "X"))
+        outcome)
+    (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+               (lambda (_) nil)))
+      (mevedel-skills-invoke
+       skill nil
+       (lambda (o) (setq outcome o))
+       :trigger 'user-skill))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'disabled (plist-get outcome :reason)))
+    (should (string-match-p "/skills enable hidden"
+                            (plist-get outcome :message)))
+    (should (string-search "\\$hidden" (plist-get outcome :message))))
+
+  :doc "user-invocable: false rejects user-skill trigger"
   (let ((skill (mevedel-skill--create
                 :name "internal-only"
                 :body "X"
@@ -2536,7 +2521,7 @@ allowed-tools:
     (mevedel-skills-invoke
      skill nil
      (lambda (o) (setq outcome o))
-     :trigger 'user-slash)
+     :trigger 'user-skill)
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'disabled (plist-get outcome :reason))))
 
@@ -2728,7 +2713,7 @@ allowed-tools:
         (should (eq 'agent-transcript
                     (plist-get (plist-get outcome :render-data) :kind))))))
 
-  :doc "user-slash trigger direct-dispatches and returns fork outcome"
+  :doc "user-skill trigger direct-dispatches and returns fork outcome"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
                  :name "demo" :context 'fork :agent "explorer"
@@ -2742,7 +2727,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill "the task"
        (lambda (o) (setq outcome o))
-       :trigger 'user-slash))
+       :trigger 'user-skill))
     (should (eq 'ok (plist-get outcome :status)))
     (should (eq 'fork (plist-get outcome :kind)))
     (should (equal "agent finished" (plist-get outcome :result))))
@@ -2761,7 +2746,7 @@ allowed-tools:
                  (funcall cb "agent finished"))))
       (mevedel-skills-invoke
        skill nil #'ignore
-       :trigger 'user-slash
+       :trigger 'user-skill
        :additional-context "<hook-context>ctx</hook-context>"))
   (should (string-match-p "Task body" captured-prompt))
   (should (string-match-p "<hook-context>ctx</hook-context>"
@@ -2785,7 +2770,7 @@ allowed-tools:
                  (funcall cb "agent finished"))))
       (mevedel-skills-invoke
        skill nil #'ignore
-       :trigger 'user-slash
+       :trigger 'user-skill
        :description "target hint"
        :on-invocation progress-callback))
     (should (equal "target hint" captured-description))
@@ -2805,13 +2790,13 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-slash))
+       :trigger 'user-skill))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'agent-dispatch-failed (plist-get outcome :reason)))
     (should (string-match-p "SubagentStart hook stopped sub-agent"
                             (plist-get outcome :message))))
 
-  :doc "user-slash fork hooks are active during body injection"
+  :doc "user-skill fork hooks are active during body injection"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (hooks '((PreToolUse
                    (:matcher "Bash"
@@ -2838,7 +2823,7 @@ allowed-tools:
 	                   (error "Should not dispatch"))))
         (mevedel-skills-invoke
          skill nil #'ignore
-         :trigger 'user-slash)))
+         :trigger 'user-skill)))
     (should (equal hooks saw-hooks)))
 
   :doc "unknown agent yields :reason unknown-agent"
@@ -3015,7 +3000,16 @@ description: Yell
           (should (string-match-p "alpha: Alpha helper" received))
           (should-not (string-match-p "beta" received))
           (should-not (string-match-p "internal" received))
-          (should-not (string-match-p "dormant" received)))
+          (should-not (string-match-p "dormant" received))
+          (setq received nil)
+          (with-temp-buffer
+            (setq mevedel--session session)
+            (mevedel-skills--list-handler
+             (lambda (r) (setq received r))
+             (list :query "Dormant")))
+          (should (string-match-p "dormant \\[dormant path-scoped\\]: Dormant"
+                                  received))
+          (should-not (string-match-p "internal" received)))
       (delete-directory user-dir t)))
 
   :doc "refreshes session skills before listing"
@@ -3150,17 +3144,12 @@ maps to \"### \"."
   (should (equal '("model" "gpt-4" 0)
                  (mevedel-skills--parse-slash-line "/model gpt-4")))
 
-  :doc "plugin-prefixed skill names parse as commands"
+  :doc "colon-qualified names parse as commands"
   (should (equal '("superpowers:brainstorming" "now" 0)
                  (mevedel-skills--parse-slash-line
                   "/superpowers:brainstorming now")))
 
   :doc "additional lines after the command are appended to ARGS"
-  ;; Skill commands (`/coordinator', `/grill-me', ...) take a
-  ;; prompt body as ARGS, and prompt bodies are naturally
-  ;; multi-line.  Truncating at the first newline produced
-  ;; "args contain only the first line" -- the LLM saw a
-  ;; truncated task description and could not act on it.
   (should (equal '("coordinator"
                    "Launch three background explorer agents:\n  (a) ...\n  (b) ..."
                    0)
@@ -3192,6 +3181,259 @@ spanning lines")))
   :doc "leading newlines count toward the offset"
   (should (equal '("help" "" 3)
                  (mevedel-skills--parse-slash-line "\n\n\n/help"))))
+
+(mevedel-deftest mevedel-skills--parse-skill-line ()
+  ,test
+  (test)
+  :doc "plain `$skill' parses to (name \"\" 0)"
+  (should (equal '("greet" "" 0)
+                 (mevedel-skills--parse-skill-line "$greet")))
+
+  :doc "`$skill args' parses to (name args 0)"
+  (should (equal '("greet" "world" 0)
+                 (mevedel-skills--parse-skill-line "$greet world")))
+
+  :doc "plugin-prefixed skill names parse as one skill name"
+  (should (equal '("superpowers:brainstorming" "now" 0)
+                 (mevedel-skills--parse-skill-line
+                  "$superpowers:brainstorming now")))
+
+  :doc "additional lines after the skill name are appended to ARGS"
+  (should (equal '("coordinator"
+                   "Launch three background explorer agents:\n  (a) ...\n  (b) ..."
+                   0)
+                 (mevedel-skills--parse-skill-line
+                  "$coordinator Launch three background explorer agents:
+  (a) ...
+  (b) ...")))
+
+  :doc "multi-line ARGS work even when no first-line arguments"
+  (should (equal '("coordinator"
+                   "Multi-line task body\nspanning lines"
+                   0)
+                 (mevedel-skills--parse-skill-line
+                  "$coordinator
+Multi-line task body
+spanning lines")))
+
+  :doc "text not starting with `$' returns nil"
+  (should (null (mevedel-skills--parse-skill-line "hello $greet")))
+  (should (null (mevedel-skills--parse-skill-line "/greet")))
+
+  :doc "non-identifier skill names are rejected"
+  (should (null (mevedel-skills--parse-skill-line "$hi!")))
+  (should (null (mevedel-skills--parse-skill-line "$")))
+
+  :doc "leading whitespace is reported via offset"
+  (should (equal '("greet" "" 3)
+                 (mevedel-skills--parse-skill-line "   $greet"))))
+
+(mevedel-deftest mevedel-skills--inline-skill-mentions ()
+  ,test
+  (test)
+  :doc "finds inline skills, dedupes, and skips literal forms"
+  (let* ((session (mevedel-skills-test--make-session))
+         (alpha (mevedel-skill--create :name "alpha" :body "A"))
+         (beta (mevedel-skill--create :name "beta" :body "B")))
+    (setf (mevedel-session-skills session) (list alpha beta))
+    (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+               (lambda (&rest _) nil)))
+      (let ((mentions
+             (mevedel-skills--inline-skill-mentions
+              "Use $alpha, \"$beta\", '$beta', \\$beta, `$beta`, $alpha, and $beta."
+              session)))
+        (should (equal '("alpha" "beta")
+                       (mapcar (lambda (item) (plist-get item :name))
+                               mentions))))))
+
+  :doc "single-backtick code spans and quoted phrases stay literal"
+  (let* ((session (mevedel-skills-test--make-session))
+         (alpha (mevedel-skill--create :name "alpha" :body "A"))
+         (beta (mevedel-skill--create :name "beta" :body "B")))
+    (setf (mevedel-session-skills session) (list alpha beta))
+    (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+               (lambda (&rest _) nil)))
+      (should-not
+       (mevedel-skills--inline-skill-mentions
+        "Use `$beta` here and say \"please $alpha\"." session))
+      (should-not
+       (mevedel-skills--inline-skill-mentions
+        "Use '$beta.' here and \"please $alpha.\"." session))))
+
+  :doc "leading command-style skill is not an inline mention"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "alpha" :body "A")))
+    (setf (mevedel-session-skills session) (list skill))
+    (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+               (lambda (&rest _) nil)))
+      (should-not
+       (mevedel-skills--inline-skill-mentions "$alpha run this"
+                                              session))))
+
+  :doc "inline mention scan ignores unknown dollar text"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "alpha" :body "A")))
+    (setf (mevedel-session-skills session) (list skill))
+    (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+               (lambda (&rest _) nil)))
+      (should-not
+       (mevedel-skills--inline-skill-mentions
+        "Keep $PATH literal" session))
+      (should
+       (mevedel-skills--inline-skill-mentions
+        "Use $alpha here" session))))
+
+  :doc "known fork skill blocks inline attachment"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "review" :body "R" :context 'fork)))
+    (setf (mevedel-session-skills session) (list skill))
+    (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+               (lambda (&rest _) nil)))
+      (let ((result (mevedel-skills--inline-skill-mentions
+                     "Please use $review here" session)))
+        (should (eq 'fork-inline (plist-get result :error))))))
+
+  :doc "known disabled skill blocks inline attachment"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "disabled" :body "D")))
+    (setf (mevedel-session-skills session) (list skill))
+    (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+               (lambda (&rest _) nil))
+              ((symbol-function 'mevedel-skills--skill-enabled-p)
+               (lambda (_skill) nil)))
+      (let ((result (mevedel-skills--inline-skill-mentions
+                     "Please use $disabled here" session)))
+        (should (eq 'disabled (plist-get result :error)))))))
+
+(mevedel-deftest mevedel-skills--dispatch-inline-attachments ()
+  ,test
+  (test)
+  :doc "prepares distinct inline skills, appends metadata, and continues"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "alpha" :body "Alpha body")))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (setq-local mevedel-skills--pending-request-context nil)
+      (insert "Please use $alpha and $alpha here")
+      (let (continued)
+        (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+                   (lambda (&rest _) nil)))
+          (should (eq 'skill
+                      (mevedel-skills--dispatch-inline-attachments
+                       (lambda () (setq continued t))))))
+        (should continued)
+        (should (= 1 (length mevedel-skills--pending-inline-attachments)))
+        (should (equal "Alpha body"
+                       (plist-get
+                        (car mevedel-skills--pending-inline-attachments)
+                        :body)))
+        (should (string-search "inline-skill-attachments"
+                               (buffer-string)))
+        (should (= 1 (length (plist-get
+                              mevedel-skills--pending-request-context
+                              :invoked-skills))))))))
+
+(mevedel-deftest mevedel-skills--transform-expand-inline-attachments ()
+  ,test
+  (test)
+  :doc "replaces live mentions with placeholders and injects reminders"
+  (let* ((session (mevedel-skills-test--make-session))
+         (chat (generate-new-buffer " *mevedel-inline-skill-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel-skills--pending-inline-attachments
+                        (list (list :name "alpha" :body "Alpha body")
+                              (list :name "beta" :body "Beta body"))))
+          (with-temp-buffer
+            (insert (propertize
+                     "Use $alpha and \"$alpha\", `$beta`, then $beta."
+                     'gptel 'prompt))
+            (mevedel-skills--transform-expand-inline-attachments fsm)
+            (let ((text (buffer-string)))
+              (should (string-match-p
+                       "\\[skill:alpha -- attached\\]" text))
+              (should (string-match-p
+                       "\\[skill:beta -- attached\\]" text))
+              (should (string-match-p (regexp-quote "\"$alpha\"") text))
+              (should (string-match-p (regexp-quote "`$beta`") text))
+              (should (string-match-p "Alpha body" text))
+              (should (string-match-p "Beta body" text))
+              (should (string-match-p "<system-reminder>" text)))
+            (goto-char (point-min))
+            (search-forward "Use [skill:alpha -- attached]")
+            (let ((prompt-start (match-beginning 0)))
+              (should (= prompt-start
+                         (mevedel-transcript-prompt-transform-start))))
+            (should (eq 'prompt
+                        (get-text-property
+                         (+ (match-beginning 0) (length "Use "))
+                         'gptel))))
+          (with-current-buffer chat
+            (should-not mevedel-skills--pending-inline-attachments)))
+      (kill-buffer chat)))
+
+  :doc "coexists with earlier mention expansion reminders"
+  (let* ((root (make-temp-file "mevedel-inline-skill-mentions-" t))
+         (file (file-name-concat root "notes.txt"))
+         (ws (mevedel-skills-test--make-workspace root))
+         (session (mevedel-session-create "main" ws))
+         (chat (generate-new-buffer " *mevedel-inline-skill-mention-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "Mention body\n"))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel-skills--pending-inline-attachments
+                        (list (list :name "alpha" :body "Alpha body"))))
+          (with-temp-buffer
+            (insert (propertize
+                     (format "Read @file:%s and use $alpha." file)
+                     'gptel 'prompt))
+            (mevedel--transform-expand-mentions fsm)
+            (mevedel-skills--transform-expand-inline-attachments fsm)
+            (let ((text (buffer-string)))
+              (should (string-match-p
+                       "\\[file:.* -- contents attached above\\]" text))
+              (should (string-match-p
+                       "\\[skill:alpha -- attached\\]" text))
+              (should (string-match-p "Mention body" text))
+              (should (string-match-p "Alpha body" text))
+              (should (= 2 (how-many "<system-reminder>"
+                                      (point-min) (point-max))))))
+	      (kill-buffer chat)
+	      (delete-directory root t))))
+
+  :doc "does not rewrite earlier system-reminder bodies"
+  (let* ((session (mevedel-skills-test--make-session))
+         (chat (generate-new-buffer " *mevedel-inline-skill-reminder-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel-skills--pending-inline-attachments
+                        (list (list :name "alpha" :body "Alpha body"))))
+          (with-temp-buffer
+            (insert "<system-reminder>\n"
+                    "Reminder text keeps $alpha literal.\n"
+                    "</system-reminder>\n\n"
+                    "User prompt uses $alpha.")
+            (mevedel-skills--transform-expand-inline-attachments fsm)
+            (let ((text (buffer-string)))
+              (should (string-match-p
+                       (regexp-quote "Reminder text keeps $alpha literal.")
+                       text))
+              (should (= 1 (how-many "\\[skill:alpha -- attached\\]"
+                                      (point-min) (point-max))))
+              (should (string-match-p "Alpha body" text)))))
+      (kill-buffer chat))))
 
 (mevedel-deftest mevedel-skills--current-prompt-region ()
   ,test
@@ -3422,7 +3664,7 @@ spanning lines")))
       (goto-char (point-max))
       (should (null (mevedel-skills--dispatch-slash-command)))))
 
-  :doc "skill expansion inserts prepared body and returns 'skill"
+  :doc "slash syntax no longer invokes same-named skills"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "greet"
@@ -3432,7 +3674,23 @@ spanning lines")))
       (let ((mevedel-slash-commands nil))
         (insert "### /greet world")
         (goto-char (point-max))
-        (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
+        (should (eq 'unknown (mevedel-skills--dispatch-slash-command)))
+        (should (equal "### /greet world" (buffer-string)))))))
+
+(mevedel-deftest mevedel-skills--dispatch-skill-command ()
+  ,test
+  (test)
+  :doc "skill expansion inserts prepared body and returns 'skill"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "greet"
+                 :body "Hello $0!")))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### $greet world")
+        (goto-char (point-max))
+        (should (eq 'skill (mevedel-skills--dispatch-skill-command)))
         (should (equal "### Hello world!"
                        (mevedel-pipeline--strip-render-data-blocks
                         (buffer-string))))
@@ -3440,9 +3698,9 @@ spanning lines")))
                                (buffer-string))))))
 
   :doc "user-invocable: false skill returns 'unknown and aborts the send"
-  ;; User-slash invocation of a skill marked `user-invocable: false'
+  ;; User invocation of a skill marked `user-invocable: false'
   ;; must message and abort.  Returning `unknown' makes the surrounding
-  ;; advice skip gptel-send so the literal `/internal-only' text is not sent.
+  ;; advice skip gptel-send so the literal `$internal-only' text is not sent.
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "internal-only"
@@ -3451,13 +3709,21 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /internal-only")
+        (insert "### $internal-only")
         (goto-char (point-max))
-        (should (eq 'unknown (mevedel-skills--dispatch-slash-command)))
+        (should (eq 'unknown (mevedel-skills--dispatch-skill-command)))
         ;; Buffer left untouched.
-        (should (equal "### /internal-only" (buffer-string))))))
+        (should (equal "### $internal-only" (buffer-string))))))
 
-  :doc "fork-context slash skill dispatches directly and inserts result"
+  :doc "unknown dollar command is left for normal sending"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### $PATH is useful context")
+      (goto-char (point-max))
+      (should (null (mevedel-skills--dispatch-skill-command)))
+      (should (equal "### $PATH is useful context" (buffer-string)))))
+
+  :doc "fork-context skill dispatches directly and inserts result"
   (let* ((session (mevedel-skills-test--make-session))
          (agent (mevedel-agent--create :name "coordinator"))
          (skill (mevedel-skill--create
@@ -3490,11 +3756,11 @@ spanning lines")))
                   ((symbol-function 'gptel--update-status)
                    (lambda (&rest args) (setq status-called args))))
           (let ((gptel-response-separator "\n\n"))
-            (insert "### /coordinator do the thing")
+            (insert "### $coordinator do the thing")
             (goto-char (point-max))
-            (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
+            (should (eq 'skill (mevedel-skills--dispatch-skill-command)))
             (let ((buf (buffer-string)))
-              (should (string-match-p "/coordinator do the thing" buf))
+              (should (string-match-p "\\$coordinator do the thing" buf))
               (should (string-match-p "agent finished" buf))
               (should-not (string-match-p "Use the `coordinator` agent" buf))
               (should-not (string-match-p "should-not-appear" buf)))
@@ -3504,6 +3770,27 @@ spanning lines")))
             (should (equal '(Stop completed t) stop-called))
             (should (equal '(" Ready" success) status-called)))))))
 
+  :doc "no-prefix chat: skill body is placed on a fresh line with blank separator"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "greet"
+                 :body "Hello $0!")))
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (let ((mevedel-slash-commands nil))
+        (insert "Old response")
+        (put-text-property (point-min) (point-max) 'gptel 'response)
+        (insert "\n$greet world")
+        (goto-char (point-max))
+        (should (eq 'skill (mevedel-skills--dispatch-skill-command)))
+        (should (equal "Old response\n\nHello world!"
+                       (mevedel-pipeline--strip-render-data-blocks
+                        (buffer-string))))))))
+
+(mevedel-deftest mevedel-skills--dispatch-slash-command/layout ()
+  ,test
+  (test)
   :doc "no-prefix chat: response followed by /cmd adds a blank line before cursor"
   (let ((session (mevedel-skills-test--make-session))
         (called nil))
@@ -3519,24 +3806,6 @@ spanning lines")))
         (should called)
         (should (equal "Old response\n\n" (buffer-string)))
         (should (= (point) (point-max))))))
-
-  :doc "no-prefix chat: skill body is placed on a fresh line with blank separator"
-  (let* ((session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create
-                 :name "greet"
-                 :body "Hello $0!")))
-    (setf (mevedel-session-skills session) (list skill))
-    (with-temp-buffer
-      (setq mevedel--session session)
-      (let ((mevedel-slash-commands nil))
-        (insert "Old response")
-        (put-text-property (point-min) (point-max) 'gptel 'response)
-        (insert "\n/greet world")
-        (goto-char (point-max))
-        (should (eq 'skill (mevedel-skills--dispatch-slash-command)))
-        (should (equal "Old response\n\nHello world!"
-                       (mevedel-pipeline--strip-render-data-blocks
-                        (buffer-string)))))))
 
   :doc "no-prefix chat: blank lines above the slash command are preserved"
   (let ((session (mevedel-skills-test--make-session))
@@ -3919,7 +4188,6 @@ spanning lines")))
          (source-file (make-temp-file "mevedel-skill-source-"))
          (active (mevedel-skill--create
                   :name "active" :description "Active description"
-                  :when-to-use "When active is useful"
                   :source 'project :source-file source-file))
          (disabled (mevedel-skill--create
                     :name "disabled" :description "Disabled description"
@@ -3953,8 +4221,6 @@ spanning lines")))
               (mevedel-skills-list-details))
             (with-current-buffer "*mevedel skill details*"
               (should (string-match-p "Active description"
-                                      (buffer-string)))
-              (should (string-match-p "When active is useful"
                                       (buffer-string)))
               (should (string-match-p (regexp-quote source-file)
                                       (buffer-string)))))))
@@ -4250,18 +4516,28 @@ spanning lines")))
          (lambda (&rest _) (setq orig-called t)))
         (should-not orig-called))))
 
-  :doc "expanded skill lets the send proceed"
+  :doc "expanded `$' skill lets the send proceed"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create :name "hi" :body "Hi!"))
          (orig-called nil))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /hi")
+        (insert "### $hi")
         (goto-char (point-max))
         (mevedel-skills--gptel-send-advice
          (lambda (&rest _) (setq orig-called t)))
         (should orig-called))))
+
+  :doc "unknown dollar-prefixed text still sends normally"
+  (let ((session (mevedel-skills-test--make-session))
+        (orig-called nil))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### $PATH can be mentioned")
+      (goto-char (point-max))
+      (mevedel-skills--gptel-send-advice
+       (lambda (&rest _) (setq orig-called t)))
+      (should orig-called)))
 
   :doc "plain text always lets the send proceed"
   (let ((session (mevedel-skills-test--make-session))
@@ -4291,8 +4567,11 @@ spanning lines")))
       ;; Simulate a leaked stash (e.g., from a prior failed dispatch).
       (setq-local mevedel-skills--pending-request-context
                   '(:permission-rules nil :model haiku))
+      (setq-local mevedel-skills--pending-inline-attachments
+                  (list (list :name "alpha")))
       (mevedel-skills--gptel-send-advice (lambda (&rest _) nil))
-      (should (null mevedel-skills--pending-request-context))))
+      (should (null mevedel-skills--pending-request-context))
+      (should (null mevedel-skills--pending-inline-attachments))))
 
   :doc "stash leaks cleared even when orig-fn signals an error"
   (let ((session (mevedel-skills-test--make-session)))
@@ -4301,10 +4580,13 @@ spanning lines")))
       (goto-char (point-max))
       (setq-local mevedel-skills--pending-request-context
                   '(:permission-rules nil :model haiku))
-	      (ignore-errors
-	        (mevedel-skills--gptel-send-advice
-	         (lambda (&rest _) (error "Boom"))))
-      (should (null mevedel-skills--pending-request-context)))))
+      (setq-local mevedel-skills--pending-inline-attachments
+                  (list (list :name "alpha")))
+      (ignore-errors
+        (mevedel-skills--gptel-send-advice
+         (lambda (&rest _) (error "Boom"))))
+      (should (null mevedel-skills--pending-request-context))
+      (should (null mevedel-skills--pending-inline-attachments)))))
 
 (mevedel-deftest mevedel-slash-capf ()
   ,test
@@ -4327,7 +4609,7 @@ spanning lines")))
         (should (member "plugin" cands))
         (should (string-match-p "list" (funcall annot "plugin"))))))
 
-  :doc "returns local commands and session skills as candidates"
+  :doc "slash root returns local commands only"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create :name "simplify")))
     (setf (mevedel-session-skills session) (list skill))
@@ -4344,19 +4626,78 @@ spanning lines")))
           (should capf)
           (should (member "help" cands))
           (should (member "tokens" cands))
-          (should (member "simplify" cands))
+          (should-not (member "simplify" cands))
           (should (equal " [command] no args; list commands and skills"
-                         (funcall annot "help")))
+                         (funcall annot "help")))))))
+
+  :doc "dollar root returns session skills only"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "simplify")))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands '(("help" . ignore)
+                                      ("tokens" . ignore))))
+        (insert "### $")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (cands (and capf
+                           (mevedel-skills-test--capf-candidates capf)))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (member "simplify" cands))
+          (should-not (member "help" cands))
+          (should-not (member "tokens" cands))
           (should (equal " [skill]" (funcall annot "simplify")))))))
 
-  :doc "plugin-prefixed skill candidates complete as one slash name"
+  :doc "dollar root includes inline and fork skills"
+  (let* ((session (mevedel-skills-test--make-session))
+         (inline (mevedel-skill--create
+                  :name "summarize"
+                  :context 'inline))
+         (fork (mevedel-skill--create
+                :name "review"
+                :context 'fork)))
+    (setf (mevedel-session-skills session) (list inline fork))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### $")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (cands (and capf
+                           (mevedel-skills-test--capf-candidates capf))))
+          (should capf)
+          (should (member "summarize" cands))
+          (should (member "review" cands))))))
+
+  :doc "inline dollar completion offers inline skills only"
+  (let* ((session (mevedel-skills-test--make-session))
+         (inline (mevedel-skill--create
+                  :name "summarize"
+                  :context 'inline))
+         (fork (mevedel-skill--create
+                :name "review"
+                :context 'fork)))
+    (setf (mevedel-session-skills session) (list inline fork))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands nil))
+        (insert "### Please use $")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (cands (and capf
+                           (mevedel-skills-test--capf-candidates capf))))
+          (should capf)
+          (should (member "summarize" cands))
+          (should-not (member "review" cands))))))
+
+  :doc "plugin-prefixed skill candidates complete as one dollar name"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "superpowers:brainstorming")))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /superpowers:b")
+        (insert "### $superpowers:b")
         (goto-char (point-max))
         (let ((capf (mevedel-slash-capf)))
           (should capf)
@@ -4672,13 +5013,13 @@ spanning lines")))
 
   :doc "root completion inserts a real separator before ghost hints"
   (let* ((session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create
-                 :name "remember"
-                 :argument-names '("focus"))))
+        (skill (mevedel-skill--create
+                :name "remember"
+                :argument-names '("focus"))))
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /rem")
+        (insert "### $rem")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (exit (and capf (plist-get (nthcdr 3 capf)
@@ -4687,7 +5028,7 @@ spanning lines")))
           (insert "remember")
           (funcall exit "remember" 'finished)
           (insert "d")
-          (should (equal "### /remember d"
+          (should (equal "### $remember d"
                          (buffer-substring-no-properties
                           (point-min) (point-max))))))))
 
@@ -4706,7 +5047,7 @@ spanning lines")))
     (should (null (mevedel-slash-capf))))
 
   :doc "user-invocable: false skills are omitted from completion"
-  ;; User-invocable false skills are not shown in slash completion.
+  ;; User-invocable false skills are not shown in `$' completion.
   (let* ((session (mevedel-skills-test--make-session))
          (visible (mevedel-skill--create :name "visible"))
          (hidden (mevedel-skill--create :name "hidden"
@@ -4714,7 +5055,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list visible hidden))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /")
+        (insert "### $")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (cands (and capf
@@ -4734,7 +5075,7 @@ spanning lines")))
           (mevedel-skills--set-enabled "hidden" nil)
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands nil))
-              (insert "### /")
+              (insert "### $")
               (goto-char (point-max))
               (let* ((capf (mevedel-slash-capf))
                      (cands (and capf
@@ -4754,7 +5095,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list active dormant))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /")
+        (insert "### $")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -4773,7 +5114,7 @@ spanning lines")))
     (setf (mevedel-session-skills session) (list with-hint with-args))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
-        (insert "### /")
+        (insert "### $")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
@@ -4802,7 +5143,7 @@ spanning lines")))
                          gptel-prompt-prefix-alist)))
               (setq-local mevedel--session session)
               (mevedel-skills-install session buf)
-              (insert "### /")
+              (insert "### $")
               (goto-char (point-max))
               (let ((capf (mevedel-slash-capf)))
                 (should (member "alpha"
@@ -5030,7 +5371,7 @@ spanning lines")))
 
 
 ;;
-;;; Phase D — skills listing reminder and conditional activation
+;;; Phase D — skills prompt roster and conditional activation
 
 (mevedel-deftest mevedel-skills--listing-describe ()
   ,test
@@ -5051,19 +5392,9 @@ spanning lines")))
     (should (= 20 (length entry)))
     (should (string-suffix-p "..." entry)))
 
-  :doc "when_to_use suffix appended after the description"
-  ;; Entry format: `- name: desc - when_to_use'.
-  (let ((skill (mevedel-skill--create
-                :name "demo" :description "Do a thing"
-                :when-to-use "when the user asks for a thing")))
-    (should (equal "- demo: Do a thing - when the user asks for a thing"
-                   (mevedel-skills--listing-describe skill))))
-
-  :doc "empty when_to_use does not introduce a trailing dash"
-  (let ((skill (mevedel-skill--create
-                :name "demo" :description "Body"
-                :when-to-use "")))
-    (should (equal "- demo: Body"
+  :doc "empty descriptions still produce a stable entry"
+  (let ((skill (mevedel-skill--create :name "demo")))
+    (should (equal "- demo: "
                    (mevedel-skills--listing-describe skill)))))
 
 (mevedel-deftest mevedel-skills--listing-candidates ()
@@ -5115,137 +5446,208 @@ spanning lines")))
 (mevedel-deftest mevedel-skills--format-listing ()
   ,test
   (test)
-  :doc "includes header and one line per skill"
+  :doc "includes roster header and one line per skill"
   (let* ((skills (list (mevedel-skill--create :name "s1" :description "d1")
                        (mevedel-skill--create :name "s2" :description "d2")))
          (listing (mevedel-skills--format-listing skills)))
-    (should (string-match-p "for use with the Skill tool" listing))
-    (should (string-match-p "ListSkills" listing))
+    (should (string-match-p "### Available skills" listing))
     (should (string-match-p "^- s1: d1$" listing))
     (should (string-match-p "^- s2: d2$" listing)))
 
-  :doc "budget limits the number of entries emitted"
-  (let* ((mevedel-skills-listing-budget 0.0001)
+  :doc "budget shortens descriptions before omitting skill names"
+  (let* ((mevedel-compact-context-limit 25)
+         (mevedel-skills-listing-budget 1.0)
          (mevedel-skills-listing-max-entry-chars 250)
-         (skills (list (mevedel-skill--create :name "s1" :description "d1")
-                       (mevedel-skill--create :name "s2" :description "d2")
-                       (mevedel-skill--create :name "s3" :description "d3")))
-         (listing (mevedel-skills--format-listing skills)))
-    (should (string-match-p "^- s1: d1$" listing))
-    (should-not (string-match-p "^- s3: d3$" listing))))
+         (long "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+         (skills (list (mevedel-skill--create :name "s1" :description long)
+                       (mevedel-skill--create :name "s2" :description long)
+                       (mevedel-skill--create :name "s3" :description long)))
+         (result (mevedel-skills--format-listing-result skills))
+         (listing (plist-get result :text)))
+    (should (string-match-p "^- s1: " listing))
+    (should (string-match-p "^- s2: " listing))
+    (should (string-match-p "^- s3: " listing))
+    (should (string-match-p "descriptions were shortened" listing))
+    (should (eq 'truncated (plist-get result :status)))
+    (should (<= (length listing) (mevedel-skills--listing-budget-chars))))
 
-(mevedel-deftest mevedel-reminders-make-skills-listing ()
+  :doc "omits whole entries only when name-only roster does not fit"
+  (let* ((mevedel-compact-context-limit 25)
+         (mevedel-skills-listing-budget 1.0)
+         (skills (mapcar
+                  (lambda (name)
+                    (mevedel-skill--create :name name :description "d"))
+                  '("skill-0001" "skill-0002" "skill-0003" "skill-0004"
+                    "skill-0005" "skill-0006" "skill-0007" "skill-0008")))
+         (result (mevedel-skills--format-listing-result skills))
+         (listing (plist-get result :text)))
+    (should (string-match-p "skill-0001" listing))
+    (should (string-match-p "skills omitted" listing))
+    (should (eq 'omitted (plist-get result :status)))
+    (should (<= (length listing) (mevedel-skills--listing-budget-chars)))))
+
+(mevedel-deftest mevedel-reminders-make-skills-roster-budget ()
   ,test
   (test)
-  :doc "returns a firing reminder when model-invocable, active skills exist"
+  :doc "fires once when roster descriptions are shortened"
+  (let* ((mevedel-compact-context-limit 25)
+         (mevedel-skills-listing-budget 1.0)
+         (mevedel-skills-listing-max-entry-chars 250)
+         (session (mevedel-skills-test--make-session))
+         (long "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+         (reminder (mevedel-reminders-make-skills-roster-budget)))
+    (setf (mevedel-session-skills session)
+          (list (mevedel-skill--create
+                 :name "s1" :description long
+                 :active-p t :model-invocable-p t)
+                (mevedel-skill--create
+                 :name "s2" :description long
+                 :active-p t :model-invocable-p t)))
+    (should (funcall (mevedel-reminder-trigger reminder) session))
+    (let ((body (funcall (mevedel-reminder-content reminder) session)))
+      (should (string-match-p "shortened some descriptions" body))
+      (should (string-match-p "ListSkills(query)" body)))
+    (should-not (funcall (mevedel-reminder-trigger reminder) session)))
+
+  :doc "reports omitted entries when names alone do not fit"
+  (let* ((mevedel-compact-context-limit 25)
+         (mevedel-skills-listing-budget 1.0)
+         (session (mevedel-skills-test--make-session))
+         (reminder (mevedel-reminders-make-skills-roster-budget)))
+    (setf (mevedel-session-skills session)
+          (mapcar
+           (lambda (name)
+             (mevedel-skill--create
+              :name name :description "d"
+              :active-p t :model-invocable-p t))
+           '("skill-0001" "skill-0002" "skill-0003" "skill-0004"
+             "skill-0005" "skill-0006" "skill-0007" "skill-0008")))
+    (should (funcall (mevedel-reminder-trigger reminder) session))
+    (should (string-match-p
+             "omitted some active skills"
+             (funcall (mevedel-reminder-content reminder) session)))))
+
+(mevedel-deftest mevedel-skills-prompt-section ()
+  ,test
+  (test)
+  :doc "renders canonical active model-invocable skills and concise contract"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r" :root "/tmp/r" :name "r"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
-         (reminder (mevedel-reminders-make-skills-listing)))
-    (should (eq 'skills-listing (mevedel-reminder-type reminder)))
-    ;; No skills yet: trigger returns nil.
-    (should-not (funcall (mevedel-reminder-trigger reminder) session))
+         (section nil))
     (setf (mevedel-session-skills session)
           (list (mevedel-skill--create
                  :name "simplify"
+                 :display-name "Pretty Simplifier"
                  :description "Review code"
+                 :source-file "/tmp/r/.mevedel/skills/simplify/SKILL.md"
                  :active-p t
-                 :model-invocable-p t)))
-    (should (funcall (mevedel-reminder-trigger reminder) session))
-    (let ((body (funcall (mevedel-reminder-content reminder) session)))
-      (should (string-match-p "simplify: Review code" body))))
+                 :model-invocable-p t)
+                (mevedel-skill--create
+                 :name "plugin:flow"
+                 :description "Plugin flow"
+                 :active-p t
+                 :model-invocable-p t)
+                (mevedel-skill--create
+                 :name "hidden"
+                 :description "Hidden"
+                 :active-p t
+                 :model-invocable-p nil)
+                (mevedel-skill--create
+                 :name "dormant"
+                 :description "Dormant"
+                 :active-p nil
+                 :model-invocable-p t
+                 :path-patterns '("*.el"))))
+    (setq section (mevedel-skills-prompt-section session))
+    (should (string-match-p "## Skills" section))
+    (should (string-match-p "^- simplify: Review code$" section))
+    (should (string-match-p "^- plugin:flow: Plugin flow$" section))
+    (should (string-match-p "\\$SkillName" section))
+    (should (string-match-p "Skill(name=\\.\\.\\.)" section))
+    (should (string-match-p "ListSkills(query)" section))
+    (should (string-match-p "minimal applicable skill set" section))
+    (should (string-match-p "Quoted, escaped, or Markdown-code" section))
+    (should-not (string-match-p "Pretty Simplifier" section))
+    (should-not (string-match-p "SKILL\\.md" section))
+    (should-not (string-match-p "hidden" section))
+    (should-not (string-match-p "dormant" section)))
 
-  :doc "disabled-only skills do not cause firing"
-  ;; When all skills are model-invocable=nil, the listing has nothing
-  ;; to say.
+  :doc "omits section when no active model-invocable skills exist"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r2" :root "/tmp/r2" :name "r2"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (reminder (mevedel-reminders-make-skills-listing)))
+         (session (mevedel-session-create "main" ws)))
     (setf (mevedel-session-skills session)
           (list (mevedel-skill--create
                  :name "disabled" :description "d"
                  :model-invocable-p nil :active-p t)))
-    (should-not (funcall (mevedel-reminder-trigger reminder) session)))
+    (should-not (mevedel-skills-prompt-section session))))
 
-  :doc "dormant model-invocable skills cause firing for the dormant note"
-  ;; When the only model-invocable skills are dormant (path-scoped, not
-  ;; yet activated), the reminder still fires so it can append the fixed
-  ;; dormant-skill note telling the model that direct-by-name invocation
-  ;; works.
+(mevedel-deftest mevedel-reminders-make-skills-delta ()
+  ,test
+  (test)
+  :doc "initial snapshot is silent, later additions are reported once"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r3" :root "/tmp/r3" :name "r3"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
-         (reminder (mevedel-reminders-make-skills-listing)))
+         (reminder (mevedel-reminders-make-skills-delta)))
     (setf (mevedel-session-skills session)
           (list (mevedel-skill--create
-                 :name "dormant" :description "d"
-                 :model-invocable-p t :active-p nil
-                 :path-patterns '("*.el"))))
+                 :name "alpha" :description "Alpha"
+                 :active-p t :model-invocable-p t)))
+    (should-not (funcall (mevedel-reminder-trigger reminder) session))
+    (should (equal '(("alpha" . "Alpha"))
+                   (mevedel-session-skills-snapshot session)))
+    (setf (mevedel-session-skills session)
+          (append (mevedel-session-skills session)
+                  (list (mevedel-skill--create
+                         :name "beta" :description "Beta"
+                         :active-p t :model-invocable-p t))))
     (should (funcall (mevedel-reminder-trigger reminder) session))
     (let ((body (funcall (mevedel-reminder-content reminder) session)))
-      (should (string-match-p "Additional path-scoped skills" body))
-      ;; The dormant skill itself is NOT listed (active-p nil).
-      (should-not (string-match-p "dormant: d" body))))
+      (should (string-match-p "Available skills changed" body))
+      (should (string-match-p "Added skills:" body))
+      (should (string-match-p "beta: Beta" body)))
+    (should-not (funcall (mevedel-reminder-trigger reminder) session)))
 
-  :doc "listing entry includes when_to_use when set"
-  ;; Entry format: `- name: description - when_to_use'.
+  :doc "removed skills are listed by name only"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "r4" :root "/tmp/r4" :name "r4"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
-         (reminder (mevedel-reminders-make-skills-listing)))
-    (setf (mevedel-session-skills session)
-          (list (mevedel-skill--create
-                 :name "demo" :description "Do a thing"
-                 :when-to-use "when the user asks for a thing"
-                 :active-p t :model-invocable-p t)))
+         (reminder (mevedel-reminders-make-skills-delta)))
+    (setf (mevedel-session-skills-snapshot session)
+          '(("gone" . "Old description")))
+    (should (funcall (mevedel-reminder-trigger reminder) session))
     (let ((body (funcall (mevedel-reminder-content reminder) session)))
-      (should (string-match-p
-               "demo: Do a thing - when the user asks for a thing"
-               body))))
+      (should (string-match-p "Removed skills:" body))
+      (should (string-match-p "  - gone" body))
+      (should-not (string-match-p "Old description" body))))
 
-  :doc "listing ordering: user > project > bundled"
-  ;; Listing precedence.
-  (let* ((ws (mevedel-workspace--create
-              :type 'test :id "r5" :root "/tmp/r5" :name "r5"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (reminder (mevedel-reminders-make-skills-listing)))
-    (setf (mevedel-session-skills session)
-          ;; Insert in the OPPOSITE order to verify sorting actually
-          ;; reorders rather than relying on insertion order.
-          (list (mevedel-skill--create
-                 :name "bundled-skill" :description "B"
-                 :source 'bundled :active-p t :model-invocable-p t)
-                (mevedel-skill--create
-                 :name "project-skill" :description "P"
-                 :source 'project :active-p t :model-invocable-p t)
-                (mevedel-skill--create
-                 :name "user-skill" :description "U"
-                 :source 'user :active-p t :model-invocable-p t)))
-    (let* ((body (funcall (mevedel-reminder-content reminder) session))
-           (user-pos (string-match-p "user-skill" body))
-           (project-pos (string-match-p "project-skill" body))
-           (bundled-pos (string-match-p "bundled-skill" body)))
-      (should (and user-pos project-pos bundled-pos))
-      (should (< project-pos user-pos))
-      (should (< user-pos bundled-pos)))))
+  :doc "overflow uses compact ListSkills suffix"
+  (let* ((added (mapcar (lambda (index)
+                          (cons (format "added-%02d" index) "A"))
+                        (number-sequence 1 12)))
+         (removed (mapcar (lambda (index)
+                            (cons (format "removed-%02d" index) "R"))
+                          (number-sequence 1 11)))
+         (body (mevedel-skills--format-delta added removed)))
+    (should (string-match-p "and 2 more; use ListSkills(query)" body))
+    (should (string-match-p "and 1 more; use ListSkills(query)" body))
+    (should-not (string-match-p "omitted; use ListSkills" body))))
 
-(mevedel-deftest mevedel-reminders-make-skills-listing/hot-reload
+(mevedel-deftest mevedel-reminders-make-skills-delta/hot-reload
   (:before-each (mevedel-skills-test--reset-watchers)
    :after-each (mevedel-skills-test--reset-watchers))
   ,test
@@ -5260,7 +5662,7 @@ spanning lines")))
          (ws (mevedel-skills-test--make-workspace root))
          (session (mevedel-session-create "main" ws))
          (buf (generate-new-buffer " *mevedel-test-reminder-hot*"))
-         (reminder (mevedel-reminders-make-skills-listing)))
+         (reminder (mevedel-reminders-make-skills-delta)))
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
@@ -5269,6 +5671,8 @@ spanning lines")))
             (setq-local mevedel--session session)
             (mevedel-skills-install session buf))
           (should (= 1 (length (mevedel-session-skills session))))
+          (setf (mevedel-session-skills-snapshot session)
+                (mevedel-skills--skill-snapshot session))
           (mevedel-skills-test--write-skill
            root "beta" "name: beta\ndescription: B\n")
           (mevedel-skills--mark-buffer-dirty buf)
@@ -5330,26 +5734,52 @@ spanning lines")))
   ,test
   (test)
   :doc "activates conditional skills using the tool's get-path slot"
-  (let* ((ws (mevedel-workspace--create
+  (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
+         (mevedel-user-dir (file-name-as-directory user-dir))
+         (ws (mevedel-workspace--create
               :type 'test :id "p" :root "/tmp/p" :name "p"
               :file-cache (mevedel-file-cache--create
                            :table (make-hash-table :test #'equal)
                            :order nil :total-bytes 0)))
          (session (mevedel-session-create "main" ws))
          (skill (mevedel-skill--create
-                 :name "elisp" :path-patterns '("*.el") :active-p nil))
+                 :name "elisp" :path-patterns '("*.el") :active-p nil
+                 :model-invocable-p t))
+         (user-only (mevedel-skill--create
+                     :name "user-only" :path-patterns '("*.el")
+                     :active-p nil :model-invocable-p nil))
+         (disabled (mevedel-skill--create
+                    :name "disabled" :path-patterns '("*.el")
+                    :active-p nil :model-invocable-p t))
          (fake-tool (mevedel-tool--create
                      :name "Read"
                      :handler #'ignore
                      :get-path (lambda (args) (plist-get args :path)))))
-    (setf (mevedel-session-skills session) (list skill))
-    (cl-letf (((symbol-function 'mevedel-tool-get)
-               (lambda (_name &optional _cat) fake-tool)))
-      (with-temp-buffer
-        (setq mevedel--session session)
-        (mevedel-skills--post-tool-activate
-         (list :name "Read" :args '(:path "lib/foo.el")))
-        (should (mevedel-skill-active-p skill))))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session)
+                (list skill user-only disabled))
+          (mevedel-skills--set-enabled "disabled" nil)
+          (cl-letf (((symbol-function 'mevedel-tool-get)
+                     (lambda (_name &optional _cat) fake-tool)))
+            (with-temp-buffer
+              (setq mevedel--session session)
+              (mevedel-skills--post-tool-activate
+               (list :name "Read" :args '(:path "lib/foo.el")))
+              (should (mevedel-skill-active-p skill))
+              (should (mevedel-skill-active-p user-only))
+              (should-not (mevedel-skill-active-p disabled))
+              (should (= 1 (length (mevedel-session-pending-reminders
+                                    session))))
+              (let ((reminder (car (mevedel-session-pending-reminders
+                                    session))))
+                (should (string-match-p "lib/foo\\.el" reminder))
+                (should (string-match-p "elisp" reminder))
+                (should-not (string-match-p "user-only" reminder))
+                (should-not (string-match-p "disabled" reminder)))
+              (should (equal '(("elisp" . ""))
+                             (mevedel-session-skills-snapshot session))))))
+      (delete-directory user-dir t))))
 
 
 
