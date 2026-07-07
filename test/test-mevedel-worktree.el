@@ -73,6 +73,36 @@
      (t
       (mevedel-worktree-test--git-result "")))))
 
+(defun mevedel-worktree-test--git-ok (directory &rest args)
+  "Run Git ARGS in DIRECTORY and signal on failure."
+  (let ((result (apply #'mevedel-worktree--git-result directory args)))
+    (unless (eq 0 (plist-get result :exit))
+      (error "Git failed: %s" (plist-get result :output)))
+    result))
+
+(defun mevedel-worktree-test--init-repo (root)
+  "Initialize a real Git repository rooted at ROOT."
+  (mevedel-worktree-test--git-ok root "init")
+  (mevedel-worktree-test--git-ok root "config" "user.email"
+                                  "mevedel@example.invalid")
+  (mevedel-worktree-test--git-ok root "config" "user.name" "Mevedel Test")
+  (with-temp-file (file-name-concat root "file.txt")
+    (insert "base\n"))
+  (mevedel-worktree-test--git-ok root "add" "file.txt")
+  (mevedel-worktree-test--git-ok root "commit" "-m" "init"))
+
+(defun mevedel-worktree-test--open-real-list
+    (root workspace data-buffer)
+  "Open a worktree list backed by real Git state under ROOT."
+  (with-current-buffer data-buffer
+    (setq-local default-directory root))
+  (mevedel-worktree-list-open
+   (list :view-buffer data-buffer
+         :data-buffer data-buffer
+         :origin-buffer data-buffer
+         :session nil
+         :workspace workspace)))
+
 (defmacro mevedel-worktree-test--with-session (root &rest body)
   "Run BODY in a temp buffer with a mevedel session rooted at ROOT."
   (declare (indent 1))
@@ -921,6 +951,212 @@
         (should (eq called-buffer data-buffer))
         (should (equal "create" called-args))))))
 
+(mevedel-deftest mevedel-worktree-list--delete
+  (:after-each (mevedel-worktree-test--cleanup-surfaces))
+  ,test
+  (test)
+
+  :doc "removes a clean selected .worktrees checkout and leaves its branch"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-delete-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (path (file-name-as-directory
+                (file-name-concat root ".worktrees" "foo")))
+         (data-buffer (generate-new-buffer " *mwt-delete-data*"))
+         prompt message-text)
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--init-repo root)
+          (make-directory (file-name-concat root ".worktrees") t)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "worktree/foo" path)
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (question)
+                       (setq prompt question)
+                       t))
+                    ((symbol-function 'message)
+                     (lambda (format-string &rest args)
+                       (setq message-text
+                             (apply #'format format-string args)))))
+            (let ((buffer (mevedel-worktree-test--open-real-list
+                           root workspace data-buffer)))
+              (with-current-buffer buffer
+                (mevedel-cockpit-goto-id path)
+                (mevedel-worktree-list--delete nil))))
+          (should-not (file-exists-p path))
+          (mevedel-worktree-test--git-ok
+           root "show-ref" "--verify" "refs/heads/worktree/foo")
+          (should (string-match-p (regexp-quote path) prompt))
+          (should (string-match-p "branch worktree/foo was left intact"
+                                  message-text)))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t)))
+
+  :doc "refuses dirty worktrees before removing"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-dirty-delete-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (path (file-name-as-directory
+                (file-name-concat root ".worktrees" "dirty")))
+         (data-buffer (generate-new-buffer " *mwt-dirty-delete-data*")))
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--init-repo root)
+          (make-directory (file-name-concat root ".worktrees") t)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "worktree/dirty" path)
+          (with-temp-file (file-name-concat path "dirty.txt")
+            (insert "dirty\n"))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _)
+                       (error "Should not prompt"))))
+            (let ((buffer (mevedel-worktree-test--open-real-list
+                           root workspace data-buffer)))
+              (with-current-buffer buffer
+                (mevedel-cockpit-goto-id path)
+                (should-error (mevedel-worktree-list--delete nil)
+                              :type 'user-error)))
+            (should (file-exists-p path))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t)))
+
+  :doc "force-removes a selected dirty .worktrees checkout"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-force-delete-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (path (file-name-as-directory
+                (file-name-concat root ".worktrees" "force")))
+         (data-buffer (generate-new-buffer " *mwt-force-delete-data*"))
+         prompt)
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--init-repo root)
+          (make-directory (file-name-concat root ".worktrees") t)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "worktree/force" path)
+          (with-temp-file (file-name-concat path "dirty.txt")
+            (insert "dirty\n"))
+          (cl-letf (((symbol-function 'yes-or-no-p)
+                     (lambda (question)
+                       (setq prompt question)
+                       t))
+                    ((symbol-function 'message)
+                     #'ignore))
+            (let ((buffer (mevedel-worktree-test--open-real-list
+                           root workspace data-buffer)))
+              (with-current-buffer buffer
+                (mevedel-cockpit-goto-id path)
+                (mevedel-worktree-list--delete t))))
+          (should-not (file-exists-p path))
+          (should (string-match-p "discard uncommitted changes" prompt))
+          (mevedel-worktree-test--git-ok
+           root "show-ref" "--verify" "refs/heads/worktree/force"))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t)))
+
+  :doc "refuses unsafe real worktree rows before removing"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-refuse-delete-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (worktrees-root (file-name-concat root ".worktrees"))
+         (locked (file-name-as-directory
+                  (file-name-concat worktrees-root "locked")))
+         (live (file-name-as-directory
+                (file-name-concat worktrees-root "live")))
+         (outside (file-name-as-directory
+                   (make-temp-name
+                    (file-name-concat
+                     (file-name-directory (directory-file-name root))
+                     "outside"))))
+         (data-buffer (generate-new-buffer " *mwt-refuse-delete-data*"))
+         (live-buffer (generate-new-buffer " *mwt-refuse-live*")))
+    (unwind-protect
+        (progn
+          (mevedel-worktree-test--init-repo root)
+          (make-directory worktrees-root t)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "worktree/locked" locked)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "lock" locked)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "worktree/live" live)
+          (mevedel-worktree-test--git-ok
+           root "worktree" "add" "-b" "worktree/outside" outside)
+          (with-current-buffer live-buffer
+            (setq-local mevedel--session
+                        (mevedel-session-create "live" workspace live)))
+          (let ((buffer (mevedel-worktree-test--open-real-list
+                         root workspace data-buffer)))
+            (dolist (path (list root locked live outside))
+              (with-current-buffer buffer
+                (mevedel-cockpit-surface-refresh path)
+                (should-error (mevedel-worktree-list--delete nil)
+                              :type 'user-error)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer live-buffer)
+      (when (file-directory-p outside)
+        (delete-directory outside t))
+      (delete-directory root t)))
+
+  :doc "refuses bare selected rows before removing"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-bare-delete-" t)))
+         (workspace (mevedel-worktree-test--workspace root))
+         (path (file-name-as-directory
+                (file-name-concat root ".worktrees" "bare")))
+         (status (plist-put
+                  (mevedel-worktree-test--status
+                   root
+                   (list (list :path path :bare t :head "def")))
+                  :workspace workspace))
+         (data-buffer (generate-new-buffer " *mwt-bare-delete-data*")))
+    (unwind-protect
+        (progn
+          (make-directory path t)
+          (with-current-buffer data-buffer
+            (setq-local default-directory root))
+          (cl-letf (((symbol-function 'mevedel-worktree--collect-status)
+                     (lambda (&optional _context) status))
+                    ((symbol-function 'mevedel-worktree--git-result)
+                     (lambda (&rest _)
+                       (error "Should not remove"))))
+            (let ((buffer (mevedel-worktree-list-open
+                           (mevedel-worktree-test--context
+                            status data-buffer data-buffer data-buffer))))
+              (with-current-buffer buffer
+                (mevedel-cockpit-goto-id path)
+                (should-error (mevedel-worktree-list--delete nil)
+                              :type 'user-error)))))
+      (mevedel-worktree-test--cleanup-surfaces data-buffer)
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-worktree-list-delete
+  (:after-each (mevedel-worktree-test--cleanup-surfaces))
+  ,test
+  (test)
+
+  :doc "delegates to normal deletion"
+  (let (force)
+    (cl-letf (((symbol-function 'mevedel-worktree-list--delete)
+               (lambda (value)
+                 (setq force value)
+                 :deleted)))
+      (should (eq (mevedel-worktree-list-delete) :deleted))
+      (should-not force))))
+
+(mevedel-deftest mevedel-worktree-list-force-delete
+  (:after-each (mevedel-worktree-test--cleanup-surfaces))
+  ,test
+  (test)
+
+  :doc "delegates to force deletion"
+  (let (force)
+    (cl-letf (((symbol-function 'mevedel-worktree-list--delete)
+               (lambda (value)
+                 (setq force value)
+                 :deleted)))
+      (should (eq (mevedel-worktree-list-force-delete) :deleted))
+      (should force))))
+
 (mevedel-deftest mevedel-worktree-list-help ()
   ,test
   (test)
@@ -933,6 +1169,10 @@
           (should (string-match-p "o    Open selected worktree session"
                                   (buffer-string)))
           (should (string-match-p "c    Create a linked worktree session"
+                                  (buffer-string)))
+          (should (string-match-p "d    Delete selected worktree"
+                                  (buffer-string)))
+          (should (string-match-p "D    Force-delete selected worktree"
                                   (buffer-string)))))
     (mevedel-worktree-test--cleanup-surfaces)))
 
