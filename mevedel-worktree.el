@@ -631,6 +631,74 @@
     (mevedel-worktree-list-refresh)
     result))
 
+(defun mevedel-worktree-list--delete (force)
+  "Remove the selected worktree.
+When FORCE is non-nil, pass `--force' to `git worktree remove'."
+  (let* ((item (or (mevedel-worktree-list--selected-item)
+                   (user-error "No worktree on this line")))
+         (context (mevedel-worktree-list--context))
+         (workspace (or (mevedel-cockpit-context-workspace context)
+                        (user-error "No mevedel workspace for selected worktree")))
+         (workspace-root (file-name-as-directory
+                          (expand-file-name
+                           (mevedel-workspace-root workspace))))
+         (worktrees-root (file-name-as-directory
+                          (file-name-concat workspace-root ".worktrees")))
+         (path (mevedel-worktree-list--normalize-path
+                (plist-get item :path)))
+         (entry (plist-get item :entry))
+         (branch (plist-get entry :branch))
+         (sessions (mevedel-worktree-list--sessions workspace path)))
+    (when (plist-get item :current)
+      (user-error "Cannot remove the current worktree"))
+    (unless (file-in-directory-p path worktrees-root)
+      (user-error "Can only remove worktrees under %s" worktrees-root))
+    (when (plist-get entry :bare)
+      (user-error "Cannot remove a bare worktree"))
+    (when (plist-get entry :locked)
+      (user-error "Cannot remove a locked worktree"))
+    (when sessions
+      (user-error "Worktree has live mevedel sessions: %s"
+                  (string-join sessions ", ")))
+    (unless force
+      (let ((status (mevedel-worktree--git-result
+                     path "status" "--porcelain")))
+        (unless (eq 0 (plist-get status :exit))
+          (user-error "Git status failed: %s"
+                      (plist-get status :output)))
+        (unless (string-empty-p (plist-get status :output))
+          (user-error "Worktree has uncommitted changes; use D to force remove"))))
+    (unless (yes-or-no-p
+             (if force
+                 (format "Force remove %s and discard uncommitted changes? "
+                         path)
+               (format "Remove worktree %s? " path)))
+      (user-error "Cancelled"))
+    (let ((result (apply #'mevedel-worktree--git-result
+                         (mevedel-worktree--context-directory context)
+                         "worktree" "remove"
+                         (append (when force (list "--force"))
+                                 (list path)))))
+      (unless (eq 0 (plist-get result :exit))
+        (user-error "Git worktree remove failed: %s"
+                    (plist-get result :output))))
+    (mevedel-worktree-list-refresh)
+    (message "mevedel: removed worktree %s; %s"
+             path
+             (if branch
+                 (format "branch %s was left intact" branch)
+               "no branch was deleted"))))
+
+(defun mevedel-worktree-list-delete ()
+  "Remove the selected clean worktree."
+  (interactive)
+  (mevedel-worktree-list--delete nil))
+
+(defun mevedel-worktree-list-force-delete ()
+  "Force-remove the selected worktree."
+  (interactive)
+  (mevedel-worktree-list--delete t))
+
 (defun mevedel-worktree-list-help ()
   "Open worktree list help."
   (interactive)
@@ -663,7 +731,11 @@
     :keys (("c" "Create a linked worktree session"
             mevedel-worktree-list-create)
            ("o" "Open selected worktree session"
-            mevedel-worktree-list-open-selected)))
+            mevedel-worktree-list-open-selected)
+           ("d" "Delete selected worktree"
+            mevedel-worktree-list-delete)
+           ("D" "Force-delete selected worktree"
+            mevedel-worktree-list-force-delete)))
   "Cockpit surface spec for the worktree list.")
 
 (define-derived-mode mevedel-worktree-list-mode tabulated-list-mode
