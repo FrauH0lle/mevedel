@@ -850,7 +850,8 @@ session has fully materialized."
             (condition-case err
                 (progn
                   (when (buffer-modified-p)
-                    (let ((save-silently t)
+                    (let ((coding-system-for-write 'utf-8-unix)
+                          (save-silently t)
                           (inhibit-message t)
                           (message-log-max nil)
                           (undo-tree-auto-save-history nil)

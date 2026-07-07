@@ -1787,67 +1787,78 @@ and optional :timeout_seconds."
                  timed-out
                  finished
                  proc-pid
-                 (proc (let ((default-directory workdir))
-                         (with-current-buffer output-buffer
-                           (setq-local default-directory workdir))
-                         (make-process
-                          :name "mevedel-bash"
-                          :buffer output-buffer
-                          :command (plist-get spawn :command)
-                          :connection-type 'pipe
-                          :sentinel
-                          (lambda (process _event)
-                            (condition-case sentinel-err
-                                (when (and (not finished)
-                                           (memq (process-status process)
-                                                 '(exit signal)))
-                                  (setq finished t)
-                                  (when (timerp timer)
-                                    (cancel-timer timer))
-                                  (when (timerp force-timer)
-                                    (cancel-timer force-timer)
-                                    (when timed-out
+                 proc)
+            (cl-labels
+                ((process-output ()
+                   (let ((buffer (and (processp proc)
+                                      (process-buffer proc))))
+                     (if (buffer-live-p buffer)
+                         (mevedel-tool-exec--truncate-output
+                          (with-current-buffer buffer
+                            (buffer-string)))
+                       "")))
+                 (cleanup-buffer ()
+                   (let ((buffer (and (processp proc)
+                                      (process-buffer proc))))
+                     (when (buffer-live-p buffer)
+                       (kill-buffer buffer))))
+                 (finish (exit-code)
+                   (unless finished
+                     (setq finished t)
+                     (when (timerp timer)
+                       (cancel-timer timer))
+                     (when (timerp force-timer)
+                       (cancel-timer force-timer))
+                     (let ((output (process-output)))
+                       (cleanup-buffer)
+                       (funcall
+                        callback
+                        (mevedel-tool-exec--bash-format-result
+                         exit-code output timed-out timeout))))))
+              (setq proc
+                    (let ((default-directory workdir))
+                      (with-current-buffer output-buffer
+                        (setq-local default-directory workdir))
+                      (make-process
+                       :name "mevedel-bash"
+                       :buffer output-buffer
+                       :command (plist-get spawn :command)
+                       :connection-type 'pipe
+                       :sentinel
+                       (lambda (process _event)
+                         (condition-case sentinel-err
+                             (when (memq (process-status process)
+                                         '(exit signal))
+                               (finish (process-exit-status process)))
+                           (error
+                            (cleanup-buffer)
+                            (funcall callback
+                                     (format "Error in sentinel: %s"
+                                             sentinel-err))))))))
+              (setq proc-pid (process-id proc))
+              (when timeout
+                (setq timer
+                      (run-at-time
+                       timeout nil
+                       (lambda ()
+                         (when (and (not finished)
+                                    (process-live-p proc))
+                           (setq timed-out t)
+                           (mevedel-tool-exec--terminate-bash-process
+                            proc process-group-p)
+                           (setq force-timer
+                                 (run-at-time
+                                  mevedel-tool-exec--bash-timeout-kill-delay
+                                  nil
+                                  (lambda ()
+                                    (unless finished
                                       (mevedel-tool-exec--kill-bash-process
-                                       process process-group-p proc-pid)))
-                                  (let* ((buffer (process-buffer process))
-                                         (exit-code (process-exit-status process))
-                                         (output
-                                          (if (buffer-live-p buffer)
-                                              (mevedel-tool-exec--truncate-output
-                                               (with-current-buffer buffer
-                                                 (buffer-string)))
-                                            "")))
-                                    (when (buffer-live-p buffer)
-                                      (kill-buffer buffer))
-                                    (funcall
-                                     callback
-                                     (mevedel-tool-exec--bash-format-result
-                                      exit-code output timed-out timeout))))
-                              (error
-                               (when-let* ((buffer (process-buffer process))
-                                           ((buffer-live-p buffer)))
-                                 (kill-buffer buffer))
-                               (funcall callback
-                                        (format "Error in sentinel: %s"
-                                                sentinel-err)))))))))
-          (setq proc-pid (process-id proc))
-          (when timeout
-            (setq timer
-                  (run-at-time
-                   timeout nil
-                   (lambda ()
-                     (when (and (not finished)
-                                (process-live-p proc))
-                       (setq timed-out t)
-                       (mevedel-tool-exec--terminate-bash-process
-                        proc process-group-p)
-                       (setq force-timer
-                             (run-at-time
-                              mevedel-tool-exec--bash-timeout-kill-delay
-                              nil
-                              #'mevedel-tool-exec--kill-bash-process
-                              proc process-group-p proc-pid)))))))
-            proc)
+                                       proc process-group-p proc-pid)
+                                      (finish -1)
+                                      (when (process-live-p proc)
+                                        (ignore-errors
+                                          (delete-process proc))))))))))))
+              proc))
         (error
          (funcall callback (format "Failed to start process: %s" err))
          nil)))))

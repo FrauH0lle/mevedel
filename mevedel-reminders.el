@@ -779,7 +779,13 @@ enough to surface immediately rather than throttle."
     (cl-remove-if-not
      (lambda (buf)
        (when-let* ((file (buffer-file-name buf)))
-         (string-prefix-p root (expand-file-name file))))
+         (or (file-in-directory-p file root)
+             (let ((true-root (ignore-errors
+                                (file-name-as-directory
+                                 (file-truename root))))
+                   (true-file (ignore-errors (file-truename file))))
+               (and true-root true-file
+                    (file-in-directory-p true-file true-root))))))
      (buffer-list))))
 
 (defun mevedel-reminders--collect-flymake-in-buffer ()

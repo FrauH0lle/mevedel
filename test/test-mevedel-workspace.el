@@ -39,7 +39,7 @@
           (unwind-protect
               (let ((result (mevedel-workspace--file-workspace)))
                 (should (eq 'file (car result)))
-                (should (equal tmp (cdr result))))
+                (should (file-equal-p tmp (cdr result))))
             (kill-buffer (current-buffer))))
       (delete-file tmp))))
 
@@ -177,26 +177,32 @@
          (mevedel-plans-directory "/tmp/plans/"))
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
-      (let ((roots (mevedel--all-allowed-roots)))
-        (should (member "/tmp/rootsproj/" roots))
-        (should (member "/tmp/rootsproj/.mevedel/memory/" roots))
-        (should (member "/tmp/rootsproj/.agents/memory/" roots))
+      (let ((roots (mevedel--all-allowed-roots))
+            (root (file-name-as-directory (expand-file-name "/tmp/rootsproj/"))))
+        (should (member root roots))
+        (should (member (file-name-concat root ".mevedel/memory/") roots))
+        (should (member (file-name-concat root ".agents/memory/") roots))
         (should (member (file-name-as-directory
                          (expand-file-name temporary-file-directory))
                         roots))
-        (should (member "/tmp/plans/" roots)))))
+        (should (member (file-name-as-directory (expand-file-name "/tmp/plans/"))
+                        roots)))))
 
   :doc "includes additional roots configured for workspace"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/rootsproj/" "/tmp/rootsproj/" "rootsproj"))
          (mevedel-workspace-additional-roots
-          '(("/tmp/rootsproj/" . ("/tmp/extra-a/" "/tmp/extra-b/"))))
+          (list
+           (cons (file-name-as-directory (expand-file-name "/tmp/rootsproj/"))
+                 (list "/tmp/extra-a/" "/tmp/extra-b/"))))
          (mevedel-plans-directory "/tmp/plans/"))
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
       (let ((roots (mevedel--all-allowed-roots)))
-        (should (member "/tmp/extra-a/" roots))
-        (should (member "/tmp/extra-b/" roots))))))
+        (should (member (file-name-as-directory (expand-file-name "/tmp/extra-a/"))
+                        roots))
+        (should (member (file-name-as-directory (expand-file-name "/tmp/extra-b/"))
+                        roots))))))
 
 (mevedel-deftest mevedel-workspace--file-in-allowed-roots-p
   (:before-each (mevedel-workspace-clear-registry)

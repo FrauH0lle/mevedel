@@ -1092,6 +1092,7 @@ PATH is not a readable directory, or rg exits with an unexpected code."
          ((= exit 0)
           (let* ((raw (split-string (buffer-string) "\n" t))
                  (all (mapcar (lambda (s)
+                                (setq s (replace-regexp-in-string "\\\\" "/" s))
                                 (if (string-prefix-p "./" s) (substring s 2) s))
                               raw))
                  (truncated (> (length all) max))
@@ -1476,7 +1477,9 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 Narrow your search with :glob, :type, or a more specific :pattern."
                                 (/ mevedel-tool-fs--grep-max-output-bytes
                                    1024))))
-                     (setq result (buffer-string))))
+                     (setq result
+                           (replace-regexp-in-string "\r\n?" "\n"
+                                                     (buffer-string)))))
                  (when (buffer-live-p output-buffer)
                    (kill-buffer output-buffer))
                  (funcall callback (or result ""))))))

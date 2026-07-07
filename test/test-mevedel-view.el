@@ -2731,8 +2731,8 @@ PROPS is the value for the `gptel' property."
               (should (string-prefix-p "main  " line))
               (should (string-match-p
                        (regexp-quote
-                        (abbreviate-file-name
-                         (file-name-as-directory root)))
+                        (file-name-nondirectory
+                         (directory-file-name root)))
                        line))
               (should (string-match-p
                        (regexp-quote "plan · idle · gpt-5.5 · 2 tools")

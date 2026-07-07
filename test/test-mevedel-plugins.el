@@ -719,7 +719,9 @@
       (let ((details (buffer-string)))
         (should (string-match-p "Plugin metadata error" details))
         (should (string-match-p "Unsafe plugin name: ../x" details))
-        (should (string-match-p (regexp-quote root) details)))))
+        (should (string-match-p
+                 (regexp-quote (abbreviate-file-name root))
+                 details)))))
 
   :doc "dispatches adaptive activation and hook override actions at point"
   (let ((root (mevedel-plugins-test--plugin-root user-dir "repo")))

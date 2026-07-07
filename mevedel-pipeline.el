@@ -171,7 +171,8 @@ available, falls back to `mevedel-pipeline--truncate-result'."
                                          :end preview-end)))
                     (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
              (has-more (< cut (length result))))
-        (write-region result nil file nil 'silent)
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region result nil file nil 'silent))
         (concat "<persisted-output>\n"
                 (format "Output too large (%d chars). Full output saved to: %s\n\n"
                         (length result) file)

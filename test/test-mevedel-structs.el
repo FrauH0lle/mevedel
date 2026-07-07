@@ -117,7 +117,8 @@
   (test)
   :doc "returns .mevedel under root"
   (let ((ws (mevedel-workspace--create :root "/tmp/project/")))
-    (should (equal "/tmp/project/.mevedel/"
+    (should (equal (file-name-concat (expand-file-name "/tmp/project/")
+                                     ".mevedel/")
                    (mevedel-workspace-state-dir ws))))
 
   :doc "expands legacy tilde roots"
@@ -158,7 +159,10 @@
   :doc "returns project path when neither exists"
   (let* ((ws (mevedel-workspace--create :root "/tmp/nonexistent-project/"))
          (result (mevedel-workspace-find-state-file ws "config.el")))
-    (should (equal "/tmp/nonexistent-project/.mevedel/config.el" result))))
+    (should (equal (file-name-concat
+                    (expand-file-name "/tmp/nonexistent-project/")
+                    ".mevedel/config.el")
+                   result))))
 
 
 ;;
