@@ -593,7 +593,8 @@ PATTERN supports:
 
 Returns non-nil if PATH matches PATTERN."
   (when (and path pattern)
-    (let* ((expanded (if (string-prefix-p "~" pattern)
+    (let* ((expanded (if (or (string-prefix-p "~" pattern)
+                             (file-name-absolute-p pattern))
                          (expand-file-name pattern)
                        pattern))
            (expanded-path (expand-file-name path))

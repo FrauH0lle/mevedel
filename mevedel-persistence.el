@@ -64,6 +64,21 @@ not saved."
   (append (mevedel--instruction-file-metadata content)
           entry))
 
+(defun mevedel--instruction-relative-file-name (file base-directory)
+  "Return FILE relative to BASE-DIRECTORY, tolerating alias spellings."
+  (let ((file (expand-file-name file))
+        (base (file-name-as-directory (expand-file-name base-directory))))
+    (cond
+     ((file-in-directory-p file base)
+      (file-relative-name file base))
+     ((let ((true-file (ignore-errors (file-truename file)))
+            (true-base (ignore-errors
+                         (file-name-as-directory (file-truename base)))))
+        (when (and true-file true-base
+                   (file-in-directory-p true-file true-base))
+          (file-relative-name true-file true-base))))
+     (t file))))
+
 (defun mevedel--serialize-instructions
     (&optional base-directory include-original-content)
   "Return a plist snapshot of the current workspace instructions.
@@ -83,8 +98,8 @@ contents for position patching if the file changes before restore."
                   (when-let* (((buffer-live-p buffer))
                               (buffer-file-name (buffer-file-name buffer)))
                     (let ((file (if base-directory
-                                    (file-relative-name buffer-file-name
-                                                        base-directory)
+                                    (mevedel--instruction-relative-file-name
+                                     buffer-file-name base-directory)
                                   (expand-file-name buffer-file-name))))
                       (when-let* ((instrs (mevedel--stashed-buffer-instructions
                                            buffer)))

@@ -62,15 +62,26 @@ jobs:
     - name: Verify ripgrep
       run: rg --version
 
+    - name: Clean Eask state
+      run: eask clean all
+
+    # HACK: Work around package.el skipping bundled package upgrades during
+    # dependency installation; gptel needs a newer transient than Emacs 30.2
+    # ships.
+    - name: Install transient
+      run: eask install transient --force
+
+    - name: Install dependencies
+      run: eask install-deps --dev
+
     - name: Run tests
-      run: |
-        eask clean all
-        # HACK: Work around package.el skipping bundled package upgrades during
-        # dependency installation; gptel needs a newer transient than Emacs 30.2
-        # ships.
-        eask install transient --force
-        eask install-deps --dev
-        eask test ert test/test-*.el
-        eask compile
-        eask package
-        eask install
+      run: eask test ert test/test-*.el
+
+    - name: Compile
+      run: eask compile
+
+    - name: Build package
+      run: eask package
+
+    - name: Install package
+      run: eask install

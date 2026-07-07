@@ -94,7 +94,8 @@
     (mevedel-file-cache-put cache b)
     (should (= 2 (hash-table-count (mevedel-file-cache-table cache))))
     (should (= 5 (mevedel-file-cache-total-bytes cache)))
-    (should (equal "/tmp/b" (car (mevedel-file-cache-order cache)))))
+    (should (equal (expand-file-name "/tmp/b")
+                   (car (mevedel-file-cache-order cache)))))
 
   :doc "update in place replaces prior size"
   (let* ((cache (mevedel-file-cache-create))
@@ -131,7 +132,8 @@
     (mevedel-file-cache-put cache c)
     ;; Order is now (c b a); touch a to promote.
     (should (eq a (mevedel-file-cache-get cache "/tmp/a")))
-    (should (equal "/tmp/a" (car (mevedel-file-cache-order cache))))))
+    (should (equal (expand-file-name "/tmp/a")
+                   (car (mevedel-file-cache-order cache))))))
 
 (mevedel-deftest mevedel-file-cache-remove
   ()
@@ -224,7 +226,8 @@
          (session (mevedel-session-create "main" ws))
          (entry (mevedel-session-record-interaction session "/tmp/a" 'read 3)))
     (should (mevedel-file-interaction-p entry))
-    (should (equal "/tmp/a" (mevedel-file-interaction-path entry)))
+    (should (equal (expand-file-name "/tmp/a")
+                   (mevedel-file-interaction-path entry)))
     (should (= 3 (mevedel-file-interaction-read-turn entry)))
     (should (null (mevedel-file-interaction-modified-turn entry))))
 

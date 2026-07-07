@@ -176,7 +176,8 @@ TOOL-PROP."
          (recovered (mevedel-session-persistence--workspace-from-plist plist)))
     (should (eq 'project (mevedel-workspace-type recovered)))
     (should (equal "xyz" (mevedel-workspace-id recovered)))
-    (should (equal "/tmp/q" (mevedel-workspace-root recovered))))
+    (should (equal (expand-file-name "/tmp/q")
+                   (mevedel-workspace-root recovered))))
   :doc "expands legacy tilde project paths"
   (mevedel-workspace-clear-registry)
   (let* ((root "~/mevedel-session-root/")
@@ -4736,9 +4737,11 @@ workspace tree."
     (mevedel-session-persistence--reconcile-relocation
      session '(:type project :id "id" :root "/old/root/" :name "ws"))
     (let ((rules (mevedel-session-permission-rules session)))
-      (should (equal "/new/root/foo/**"
+      (should (equal (file-name-concat (expand-file-name "/new/root/")
+                                       "foo/**")
                      (plist-get (cdr (nth 0 rules)) :path)))
-      (should (equal "/new/root/bar/baz"
+      (should (equal (file-name-concat (expand-file-name "/new/root/")
+                                       "bar/baz")
                      (plist-get (cdr (nth 1 rules)) :path)))
       ;; Bash rule untouched (no :path).
       (should (equal "git log*" (plist-get (cdr (nth 2 rules)) :pattern)))
@@ -4769,7 +4772,9 @@ workspace tree."
     (let ((rules (mevedel-session-permission-rules session)))
       (should (equal "/old/root/packages/api/foo"
                      (plist-get (cdr (nth 0 rules)) :path)))
-      (should (equal "/old/root/packages/api/other"
+      (should (equal (file-name-concat
+                      (expand-file-name "/old/root/packages/api/")
+                      "other")
                      (plist-get (cdr (nth 1 rules)) :path))))
     (mevedel-workspace-clear-registry)))
 
@@ -5058,7 +5063,8 @@ workspace tree."
                (tracked  (file-name-concat tempdir "tracked.el"))
                ;; Plant pre-edit content so the snapshot has a
                ;; non-nil "original" to compare against at save time.
-               (_ (write-region "ORIGINAL\n" nil tracked nil 'silent))
+               (_ (let ((coding-system-for-write 'utf-8-unix))
+                    (write-region "ORIGINAL\n" nil tracked nil 'silent)))
                ;; Mock tool with `get-path' so the pipeline's
                ;; snapshot step fires for it.  Handler mutates the
                ;; file to simulate what a real Edit / Write would do.
@@ -5067,7 +5073,8 @@ workspace tree."
                       :handler (lambda (args)
                                  (let ((p (plist-get args :path))
                                        (c (plist-get args :content)))
-                                   (write-region c nil p nil 'silent)
+                                   (let ((coding-system-for-write 'utf-8-unix))
+                                     (write-region c nil p nil 'silent))
                                    "ok"))
                       :args '((path string :required "Path")
                               (content string :required "Content"))

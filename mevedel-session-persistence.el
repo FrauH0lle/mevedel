@@ -2724,29 +2724,34 @@ touched-files entries pointing at vanished paths.  Logs the rewrite
 count to `*Messages*'.
 
 A no-op when the saved root is missing or matches current."
-  (let* ((saved-root   (plist-get saved-workspace-plist :root))
+  (let* ((saved-root (plist-get saved-workspace-plist :root))
          (current-root (mevedel-workspace-root
-                        (mevedel-session-workspace session))))
+                        (mevedel-session-workspace session)))
+         (saved-root-expanded (and saved-root (expand-file-name saved-root)))
+         (current-root-expanded (and current-root
+                                     (expand-file-name current-root))))
     (when (and saved-root current-root
-               (not (equal saved-root current-root)))
+               (not (equal saved-root-expanded current-root-expanded)))
       ;; Rewrite path-bearing permission rules.
       (let ((rewrites 0)
-            (saved-prefix (file-name-as-directory saved-root))
-            (current-prefix (file-name-as-directory current-root)))
+            (saved-prefix (file-name-as-directory saved-root-expanded))
+            (current-prefix (file-name-as-directory current-root-expanded)))
         (setf (mevedel-session-permission-rules session)
               (mapcar
                (lambda (rule)
-                 (let ((path (plist-get (cdr rule) :path)))
+                 (let* ((path (plist-get (cdr rule) :path))
+                        (expanded-path (and path (expand-file-name path))))
                    (cond
-                    ((and path
-                          (string-prefix-p saved-prefix path)
-                          (not (string-prefix-p current-prefix path)))
+                    ((and expanded-path
+                          (string-prefix-p saved-prefix expanded-path)
+                          (not (string-prefix-p current-prefix expanded-path)))
                      (cl-incf rewrites)
                      (let ((new-rule (copy-tree rule)))
                        (plist-put
                         (cdr new-rule) :path
                         (concat current-prefix
-                                (substring path (length saved-prefix))))
+                                (substring expanded-path
+                                           (length saved-prefix))))
                        new-rule))
                     (t rule))))
                (mevedel-session-permission-rules session)))

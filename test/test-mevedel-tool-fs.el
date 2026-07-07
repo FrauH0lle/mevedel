@@ -1186,7 +1186,7 @@
           (setq result
                 (test-mevedel-tool-fs--await-callback
                  #'mevedel-tool-fs--grep
-                 (list :pattern "start.end"
+                 (list :pattern "start.*end"
                        :path tmp-dir
                        :multiline t
                        :output_mode "content")))

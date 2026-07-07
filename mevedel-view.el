@@ -292,6 +292,15 @@
 (declare-function dnd-get-local-file-name "dnd" (uri &optional must-exist))
 (defvar dnd-protocol-alist)
 
+(defun mevedel-view--normalize-local-file-uri-path (path)
+  "Normalize local file URI PATH for Emacs file APIs."
+  (let ((path (and path (subst-char-in-string ?\\ ?/ path))))
+    (if (and path
+             (eq system-type 'windows-nt)
+             (string-match "\\`/+\\([A-Za-z]:/.*\\)\\'" path))
+        (match-string 1 path)
+      path)))
+
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
@@ -1610,7 +1619,8 @@ of scope for the composer."
   (let (paths)
     (dolist (uri (ensure-list uris))
       (let ((path (and (stringp uri)
-                       (dnd-get-local-file-name uri nil))))
+                       (mevedel-view--normalize-local-file-uri-path
+                        (dnd-get-local-file-name uri nil)))))
         (cond
          ((not path)
           (message "mevedel: ignored non-local drop: %s" uri))
@@ -3580,7 +3590,8 @@ When COLLAPSED-ONLY is non-nil, omit the body from the returned plist."
   ;; slashless filename with an extension (e.g. foo.el, AGENTS.md).  The
   ;; trailing `-' inside each character class stays last to avoid being
   ;; parsed as a range delimiter.
-  (concat "\\(?:/[[:alnum:]_./+@-]+"
+  (concat "\\(?:[A-Za-z]:/[[:alnum:]_./+@-]+"
+          "\\|/[[:alnum:]_./+@-]+"
           "\\|[[:alnum:]_.+@-]+\\(?:/[[:alnum:]_./+@-]+\\)+"
           "\\|[[:alnum:]_+-]+\\(?:\\.[[:alnum:]_+-]+\\)+\\)")
   "Regular expression matching candidate file paths in rendered bodies.")
@@ -3925,7 +3936,8 @@ not treated as delimiters."
     (let* ((without-fragment
             (replace-regexp-in-string "#L[0-9]+\\'" "" url))
            (raw (if (string-prefix-p "file://" without-fragment)
-                    (substring without-fragment 7)
+                    (mevedel-view--normalize-local-file-uri-path
+                     (substring without-fragment 7))
                   without-fragment))
            (resolved (mevedel-view--resolve-path raw)))
       (and resolved (file-exists-p resolved) resolved))))

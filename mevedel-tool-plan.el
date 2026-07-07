@@ -215,7 +215,8 @@ Returns the absolute path."
     (unless path
       (error "Could not materialize session plan path"))
     (make-directory (file-name-directory path) t)
-    (write-region plan-markdown nil path nil 'silent)
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region plan-markdown nil path nil 'silent))
     (let ((turn (or (mevedel-session-turn-count session) 0))
           (metadata (copy-sequence (or (mevedel-session-plan-metadata session)
                                        nil)))

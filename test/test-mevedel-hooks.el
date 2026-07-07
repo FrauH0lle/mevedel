@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'json)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -40,6 +41,13 @@
   "Return a fresh workspace for ROOT."
   (mevedel-workspace-get-or-create
    'project (format "hooks-test:%s" root) root "hooks-test"))
+
+(defun mevedel-hooks-test--emacs-command (form)
+  "Return a shell command running this Emacs in batch and evaluating FORM."
+  (mapconcat #'shell-quote-argument
+             (list (expand-file-name invocation-name invocation-directory)
+                   "--quick" "--batch" "--eval" form)
+             " "))
 
 (defun mevedel-hooks-test--session (root)
   "Return a session rooted at ROOT."
@@ -869,12 +877,9 @@
 			 `((PreToolUse
 			    ((:matcher "Bash"
 				       :hooks ((:type command
-						      :command ,(concat
-								 "printf '%s' "
-								 "\"{\\\"permissionDecision\\\":"
-								 "\\\"ask\\\","
-								 "\\\"permissionDecisionReason\\\":"
-								 "\\\"review\\\"}\"")
+						      :command
+						      ,(mevedel-hooks-test--emacs-command
+							"(princ \"{\\\"permissionDecision\\\":\\\"ask\\\",\\\"permissionDecisionReason\\\":\\\"review\\\"}\")")
 						      :timeout 5))))))))
 		   (unwind-protect
 		       (let ((decision
@@ -903,7 +908,9 @@
                                  `((PreToolUse
                                     ((:matcher "Bash"
                                                :hooks ((:type command
-                                                              :command "printf '%100s' x; exit 2"
+                                                              :command
+                                                              ,(mevedel-hooks-test--emacs-command
+                                                                "(progn (princ (make-string 100 ?x)) (kill-emacs 2))")
                                                               :timeout 5))))))))
                            (unwind-protect
                                (let ((decision
@@ -992,10 +999,12 @@
 		 (let* ((root (make-temp-file "mevedel-hooks-block" t))
 			(session (mevedel-hooks-test--session root))
 			(mevedel-hook-rules
-			 '((UserPromptSubmit
+			 `((UserPromptSubmit
 			    ((:matcher "*"
 				       :hooks ((:type command
-						      :command "printf blocked >&2; exit 2"
+						      :command
+						      ,(mevedel-hooks-test--emacs-command
+							"(progn (princ \"blocked\") (kill-emacs 2))")
 						      :timeout 5))))))))
 		   (unwind-protect
 		       (let ((decision
@@ -1017,10 +1026,12 @@
 				 (file-name-concat root "subdir")))
 			session
 			(mevedel-hook-rules
-			 '((PreToolUse
+			 `((PreToolUse
 			    ((:matcher "Bash"
 				       :hooks ((:type command
-						      :command "pwd >&2"
+						      :command
+						      ,(mevedel-hooks-test--emacs-command
+							"(princ default-directory)")
 						      :source project-file
 						      :timeout 5))))))))
 		   (unwind-protect
@@ -1042,10 +1053,11 @@
 			      :tool-input '(:command "echo hi"))
 			     cb session)))
 			 (should
-			  (equal
-			   (string-trim
-			    (plist-get (car (mevedel-session-hook-log session))
-				       :stderr-preview))
+			  (file-equal-p
+			   (directory-file-name
+			    (string-trim
+			     (plist-get (car (mevedel-session-hook-log session))
+					:stdout-preview)))
 			   (directory-file-name root))))
 			     (delete-directory root t))))
 
@@ -1056,7 +1068,6 @@
                     (make-temp-file "mevedel-hooks-plugin-env-user" t)))
          (plugin-root (file-name-as-directory
                        (file-name-concat user-dir "plugins" "repo")))
-         (script (file-name-concat plugin-root "env.sh"))
          (mevedel-user-dir user-dir)
          (mevedel-plugin-install-directory
           (file-name-concat user-dir ".agents" "plugins"))
@@ -1064,23 +1075,19 @@
          (session (mevedel-hooks-test--session root))
          (workspace (mevedel-session-workspace session))
          (data-dir (file-name-concat root ".mevedel"
-                                     "plugin-data" "demo")))
+                                     "plugin-data" "demo"))
+         (env-command
+          (mevedel-hooks-test--emacs-command
+           "(princ (format \"{\\\"systemMessage\\\":\\\"%s|%s|%s|%s|%s|%s\\\"}\" (getenv \"PLUGIN_ROOT\") (getenv \"CLAUDE_PLUGIN_ROOT\") (getenv \"PLUGIN_DATA\") (getenv \"CLAUDE_PLUGIN_DATA\") (getenv \"MEVEDEL_PLUGIN_ROOT\") (getenv \"MEVEDEL_PLUGIN_DATA\")))")))
     (unwind-protect
         (progn
           (mevedel-hooks-test--clear-plugin-env)
           (make-directory (file-name-concat plugin-root "hooks") t)
-          (with-temp-file script
-            (insert "#!/bin/sh\n"
-                    "printf '{\"systemMessage\":\"%s|%s|%s|%s|%s|%s\"}' "
-                    "\"$PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" "
-                    "\"$PLUGIN_DATA\" \"$CLAUDE_PLUGIN_DATA\" "
-                    "\"$MEVEDEL_PLUGIN_ROOT\" \"$MEVEDEL_PLUGIN_DATA\"\n"))
-          (set-file-modes script #o755)
           (with-temp-file (file-name-concat plugin-root "hooks" "hooks.json")
             (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
-                    "\"hooks\":[{\"type\":\"command\",\"command\":\""
-                    script
-                    "\"}]}]}}"))
+                    "\"hooks\":[{\"type\":\"command\",\"command\":"
+                    (json-encode-string env-command)
+                    "}]}]}}"))
           (mevedel-hooks-test--write-plugin-manifest
            plugin-root
            "{\"name\":\"demo\",\"hooks\":\"hooks/hooks.json\"}")
@@ -1107,12 +1114,8 @@
             (should (file-directory-p data-dir)))
           (mevedel-plugins-disable "demo" workspace)
           (let* ((clean-command
-                  (concat
-                   "if [ -n \"$PLUGIN_ROOT$CLAUDE_PLUGIN_ROOT"
-                   "$PLUGIN_DATA$CLAUDE_PLUGIN_DATA"
-                   "$MEVEDEL_PLUGIN_ROOT$MEVEDEL_PLUGIN_DATA\" ]; "
-                   "then printf '{\"systemMessage\":\"leaked\"}'; "
-                   "else printf '{\"systemMessage\":\"clean\"}'; fi"))
+                  (mevedel-hooks-test--emacs-command
+                   "(princ (if (or (getenv \"PLUGIN_ROOT\") (getenv \"CLAUDE_PLUGIN_ROOT\") (getenv \"PLUGIN_DATA\") (getenv \"CLAUDE_PLUGIN_DATA\") (getenv \"MEVEDEL_PLUGIN_ROOT\") (getenv \"MEVEDEL_PLUGIN_DATA\")) \"{\\\"systemMessage\\\":\\\"leaked\\\"}\" \"{\\\"systemMessage\\\":\\\"clean\\\"}\"))"))
                  (mevedel-hook-rules
                   `((PreToolUse
                      ((:matcher "Bash"
@@ -1136,10 +1139,12 @@
 			(session (mevedel-hooks-test--session root))
 			(mevedel-hooks-test--seen-buffer nil)
 			(mevedel-hook-rules
-			 '((PostToolUse
+			 `((PostToolUse
 			    ((:matcher "Read"
 				       :hooks ((:type command
-						      :command "printf '{\"systemMessage\":\"ok\"}'"
+						      :command
+						      ,(mevedel-hooks-test--emacs-command
+							"(princ \"{\\\"systemMessage\\\":\\\"ok\\\"}\")")
 						      :timeout 5)
 					       (:type elisp
 						      :function
