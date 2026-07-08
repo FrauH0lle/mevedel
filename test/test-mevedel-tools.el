@@ -532,11 +532,28 @@ function returning the states entered by test handlers."
        (setf (alist-get "Edit"
                         (alist-get "mevedel" gptel--known-tools nil nil #'equal)
                         nil nil #'equal)
+             (mevedel-tool-gptel-tool tool)))
+     (let ((tool (mevedel-tool--create
+                  :name "function_source"
+                  :category "mevedel-introspection"
+                  :summary "Read source"
+                  :groups '(elisp)
+                  :gptel-tool (mevedel-tools-test--make-fake-gptel-tool
+                               "function_source"
+                               "mevedel-introspection"))))
+       (mevedel-tool-register tool)
+       (setf (alist-get
+              "function_source"
+              (alist-get "mevedel-introspection"
+                         gptel--known-tools nil nil #'equal)
+              nil nil #'equal)
              (mevedel-tool-gptel-tool tool))))
    :after-each
    (progn
      (mevedel-tool-clear-registry)
      (setf (alist-get "mevedel" gptel--known-tools nil t #'equal) nil)
+     (setf (alist-get "mevedel-introspection" gptel--known-tools nil t #'equal)
+           nil)
      (mevedel-workspace-clear-registry)))
   ,test
   (test)
@@ -563,6 +580,19 @@ function returning the states entered by test handlers."
     (should (string-match-p "available now" result))
     (should (= 1 (length (mevedel-session-deferred-pending session))))
     (should (equal "Edit"
+                   (gptel-tool-name
+                    (car (mevedel-session-deferred-pending session))))))
+
+  :doc "loads deferred tools when the query matches their registered group"
+  (let* ((session (mevedel-tools-test--make-session))
+         (mevedel--session session)
+         (result nil))
+    (setf (mevedel-session-deferred-set session)
+          '((("mevedel-introspection" "function_source") . "Read source")))
+    (mevedel-tools--tool-search (lambda (s) (setq result s)) "elisp" t)
+    (should (string-match-p "available now" result))
+    (should (= 1 (length (mevedel-session-deferred-pending session))))
+    (should (equal "function_source"
                    (gptel-tool-name
                     (car (mevedel-session-deferred-pending session))))))
 

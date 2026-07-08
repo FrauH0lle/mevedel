@@ -82,6 +82,7 @@
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 
 ;; `mevedel-tool-ui'
@@ -480,7 +481,16 @@ Returns a list of (TOOL-PATH . SHORT-DESCRIPTION) pairs from CTX's
                        (split-string query nil t))))
     (cl-remove-if-not
      (lambda (entry)
-       (let ((text (downcase (concat (cadr (car entry)) " " (cdr entry)))))
+       (let* ((path (car entry))
+              (category (car path))
+              (name (cadr path))
+              (tool (and category name (mevedel-tool-get name category)))
+              (groups (and tool
+                           (mapconcat #'symbol-name
+                                      (mevedel-tool-groups tool)
+                                      " ")))
+              (text (downcase
+                     (concat category " " name " " (cdr entry) " " groups))))
          (cl-some (lambda (term) (string-match-p term text)) terms)))
      (mevedel-tools--ctx-deferred-set ctx))))
 
