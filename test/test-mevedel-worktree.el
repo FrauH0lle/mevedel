@@ -750,6 +750,40 @@
             (should (equal (plist-get item :sessions) '("main")))))
       (delete-directory root t))))
 
+  :doc "uses workspace root spelling for aliased porcelain paths"
+  (let* ((alias-root (file-name-as-directory
+                      (expand-file-name "/alias/root")))
+         (real-root (file-name-as-directory
+                     (expand-file-name "/real/root")))
+         (workspace (mevedel-worktree-test--workspace real-root))
+         (expected-workspace workspace)
+         (alias-path (file-name-as-directory
+                      (file-name-concat alias-root ".worktrees" "foo")))
+         (real-path (file-name-as-directory
+                     (file-name-concat real-root ".worktrees" "foo")))
+         (entry (list :path alias-path :branch "worktree/foo" :head "def"))
+         (status (list :directory alias-root
+                       :workspace workspace
+                       :worktrees (list entry))))
+    (cl-letf (((symbol-function 'file-equal-p)
+               (lambda (a b)
+                 (let ((a (directory-file-name a))
+                       (b (directory-file-name b))
+                       (alias (directory-file-name alias-root))
+                       (real (directory-file-name real-root)))
+                   (or (equal a b)
+                       (and (equal a alias) (equal b real))
+                       (and (equal a real) (equal b alias))))))
+              ((symbol-function 'mevedel-worktree-list--sessions)
+               (lambda (workspace path)
+                 (should (eq workspace expected-workspace))
+                 (should (equal path real-path))
+                 nil)))
+      (let ((item (mevedel-worktree-list--item status entry)))
+        (should (equal (plist-get item :path) real-path))
+        (should (equal (mevedel-worktree-list--item-id item) real-path))
+        (should-not (plist-get item :current)))))
+
 (mevedel-deftest mevedel-worktree-list--items ()
   ,test
   (test)

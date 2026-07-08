@@ -66,18 +66,7 @@ not saved."
 
 (defun mevedel--instruction-relative-file-name (file base-directory)
   "Return FILE relative to BASE-DIRECTORY, tolerating alias spellings."
-  (let ((file (expand-file-name file))
-        (base (file-name-as-directory (expand-file-name base-directory))))
-    (cond
-     ((file-in-directory-p file base)
-      (file-relative-name file base))
-     ((let ((true-file (ignore-errors (file-truename file)))
-            (true-base (ignore-errors
-                         (file-name-as-directory (file-truename base)))))
-        (when (and true-file true-base
-                   (file-in-directory-p true-file true-base))
-          (file-relative-name true-file true-base))))
-     (t file))))
+  (mevedel--file-relative-name-or-absolute file base-directory))
 
 (defun mevedel--serialize-instructions
     (&optional base-directory include-original-content)

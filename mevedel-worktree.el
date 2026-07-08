@@ -76,11 +76,18 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-p "mevedel-structs" (cl-x))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
+
+;; `mevedel-utilities'
+(declare-function mevedel--file-in-directory-p
+                  "mevedel-utilities" (file directory))
+(declare-function mevedel--file-relative-name-or-absolute
+                  "mevedel-utilities" (file directory))
 
 ;; `tabulated-list'
 (declare-function tabulated-list-get-id "tabulated-list" ())
@@ -497,6 +504,21 @@
   "Return PATH as an absolute directory name."
   (file-name-as-directory (expand-file-name path)))
 
+(defun mevedel-worktree-list--workspace-path (path workspace)
+  "Return PATH using WORKSPACE's root spelling when possible."
+  (let ((path (mevedel-worktree-list--normalize-path path)))
+    (if (not (mevedel-workspace-p workspace))
+        path
+      (require 'mevedel-utilities)
+      (let* ((root (mevedel-worktree-list--normalize-path
+                    (mevedel-workspace-root workspace)))
+             (relative (mevedel--file-relative-name-or-absolute
+                        path root)))
+        (if (file-name-absolute-p relative)
+            path
+          (mevedel-worktree-list--normalize-path
+           (expand-file-name relative root)))))))
+
 (defun mevedel-worktree-list--item-id (item)
   "Return stable row id for worktree ITEM."
   (plist-get item :path))
@@ -537,12 +559,12 @@
 
 (defun mevedel-worktree-list--item (status entry)
   "Return a tabulated worktree item from STATUS and porcelain ENTRY."
-  (let* ((path (mevedel-worktree-list--normalize-path
-                (plist-get entry :path)))
-         (current (equal path
-                         (mevedel-worktree-list--normalize-path
-                          (plist-get status :directory))))
-         (workspace (plist-get status :workspace))
+  (let* ((workspace (plist-get status :workspace))
+         (path (mevedel-worktree-list--workspace-path
+                (plist-get entry :path) workspace))
+         (directory (mevedel-worktree-list--workspace-path
+                     (plist-get status :directory) workspace))
+         (current (equal path directory))
          (sessions (mevedel-worktree-list--sessions workspace path)))
     (list :path path
           :branch (mevedel-worktree-list--branch-label entry)
@@ -651,7 +673,8 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
          (sessions (mevedel-worktree-list--sessions workspace path)))
     (when (plist-get item :current)
       (user-error "Cannot remove the current worktree"))
-    (unless (file-in-directory-p path worktrees-root)
+    (require 'mevedel-utilities)
+    (unless (mevedel--file-in-directory-p path worktrees-root)
       (user-error "Can only remove worktrees under %s" worktrees-root))
     (when (plist-get entry :bare)
       (user-error "Cannot remove a bare worktree"))

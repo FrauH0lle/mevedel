@@ -1800,8 +1800,13 @@ and optional :timeout_seconds."
                  (cleanup-buffer ()
                    (let ((buffer (and (processp proc)
                                       (process-buffer proc))))
+                     (when (process-live-p proc)
+                       (set-process-query-on-exit-flag proc nil)
+                       (ignore-errors
+                         (delete-process proc)))
                      (when (buffer-live-p buffer)
-                       (kill-buffer buffer))))
+                       (let ((kill-buffer-query-functions nil))
+                         (kill-buffer buffer)))))
                  (finish (exit-code)
                    (unless finished
                      (setq finished t)
@@ -1844,20 +1849,24 @@ and optional :timeout_seconds."
                          (when (and (not finished)
                                     (process-live-p proc))
                            (setq timed-out t)
-                           (mevedel-tool-exec--terminate-bash-process
-                            proc process-group-p)
-                           (setq force-timer
-                                 (run-at-time
-                                  mevedel-tool-exec--bash-timeout-kill-delay
-                                  nil
-                                  (lambda ()
-                                    (unless finished
-                                      (mevedel-tool-exec--kill-bash-process
-                                       proc process-group-p proc-pid)
-                                      (finish -1)
-                                      (when (process-live-p proc)
+                           (condition-case nil
+                               (mevedel-tool-exec--terminate-bash-process
+                                proc process-group-p)
+                             (error (finish -1)))
+                           (unless finished
+                             (setq force-timer
+                                   (run-at-time
+                                    mevedel-tool-exec--bash-timeout-kill-delay
+                                    nil
+                                    (lambda ()
+                                      (unless finished
                                         (ignore-errors
-                                          (delete-process proc))))))))))))
+                                          (mevedel-tool-exec--kill-bash-process
+                                           proc process-group-p proc-pid))
+                                        (finish -1)
+                                        (when (process-live-p proc)
+                                          (ignore-errors
+                                            (delete-process proc)))))))))))))
               proc))
         (error
          (funcall callback (format "Failed to start process: %s" err))

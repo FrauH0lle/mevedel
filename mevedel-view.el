@@ -3590,9 +3590,9 @@ When COLLAPSED-ONLY is non-nil, omit the body from the returned plist."
   ;; slashless filename with an extension (e.g. foo.el, AGENTS.md).  The
   ;; trailing `-' inside each character class stays last to avoid being
   ;; parsed as a range delimiter.
-  (concat "\\(?:[A-Za-z]:/[[:alnum:]_./+@-]+"
-          "\\|/[[:alnum:]_./+@-]+"
-          "\\|[[:alnum:]_.+@-]+\\(?:/[[:alnum:]_./+@-]+\\)+"
+  (concat "\\(?:[A-Za-z]:/[[:alnum:]_./+@~-]+"
+          "\\|/[[:alnum:]_./+@~-]+"
+          "\\|[[:alnum:]_.+@~-]+\\(?:/[[:alnum:]_./+@~-]+\\)+"
           "\\|[[:alnum:]_+-]+\\(?:\\.[[:alnum:]_+-]+\\)+\\)")
   "Regular expression matching candidate file paths in rendered bodies.")
 

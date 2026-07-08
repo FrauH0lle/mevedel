@@ -210,6 +210,8 @@
 (declare-function mevedel-tools--ctx-messages "mevedel-tools" (ctx))
 
 ;; `mevedel-utilities'
+(declare-function mevedel--same-file-p "mevedel-utilities"
+                  (file-a file-b))
 (declare-function mevedel--optimize-transcript-buffer
                   "mevedel-utilities" ())
 
@@ -843,10 +845,11 @@ session has fully materialized."
         (with-current-buffer buf
           (when (and buffer-file-name rel session
                      (mevedel-session-save-path session)
-                     (string= (expand-file-name buffer-file-name)
-                              (expand-file-name
-                               rel
-                               (mevedel-session-save-path session))))
+                     (mevedel--same-file-p
+                      buffer-file-name
+                      (expand-file-name
+                       rel
+                       (mevedel-session-save-path session))))
             (condition-case err
                 (progn
                   (when (buffer-modified-p)
