@@ -80,6 +80,159 @@ insertion from running expensive editor hooks."
 ;;
 ;;; General helpers
 
+(defun mevedel--file-truename (file)
+  "Return truename for FILE, or nil when it cannot be resolved."
+  (ignore-errors (file-truename file)))
+
+(defun mevedel--file-long-name (file)
+  "Return Windows long name for FILE, or nil when unavailable."
+  (and (fboundp 'w32-long-file-name)
+       (or (ignore-errors (funcall 'w32-long-file-name file))
+           (let ((directory-name (directory-file-name file)))
+             (and (not (string= directory-name file))
+                  (ignore-errors
+                    (funcall 'w32-long-file-name directory-name)))))))
+
+(defun mevedel--file-macos-var-alias (file)
+  "Return FILE with macOS /private/var and /var aliases swapped."
+  (cond
+   ((not (eq system-type 'darwin)) nil)
+   ((string-prefix-p "/System/Volumes/Data/private/var/" file)
+    (concat "/var/" (substring file
+                               (length "/System/Volumes/Data/private/var/"))))
+   ((string-prefix-p "/System/Volumes/Data/var/" file)
+    (concat "/var/" (substring file
+                               (length "/System/Volumes/Data/var/"))))
+   ((string-prefix-p "/private/var/" file)
+    (concat "/var/" (substring file (length "/private/var/"))))
+   ((string-prefix-p "/var/" file)
+    (concat "/private/var/" (substring file (length "/var/"))))))
+
+(defun mevedel--file-name-prefix-p (file directory)
+  "Return non-nil when FILE is textually under DIRECTORY."
+  (let* ((file (directory-file-name file))
+         (directory (file-name-as-directory
+                     (directory-file-name directory)))
+         (ignore-case
+          (or (memq system-type '(windows-nt ms-dos cygwin))
+              (ignore-errors
+                (file-name-case-insensitive-p directory)))))
+    (string-prefix-p directory file ignore-case)))
+
+(defun mevedel--file-name-candidates (file)
+  "Return alias-tolerant absolute path candidates for FILE."
+  (let* ((expanded (expand-file-name file))
+         (true (mevedel--file-truename expanded))
+         (long (mevedel--file-long-name expanded))
+         (true-long (and true (mevedel--file-long-name true)))
+         candidates)
+    (dolist (candidate (list expanded true long true-long))
+      (when candidate
+        (push candidate candidates)
+        (when-let* ((alias (mevedel--file-macos-var-alias candidate)))
+          (push alias candidates))))
+    (delete-dups
+     (mapcar #'directory-file-name
+             (nreverse candidates)))))
+
+(defun mevedel--same-file-p (file-a file-b)
+  "Return non-nil when FILE-A and FILE-B name the same file.
+
+The comparison accepts expanded names, truenames, and matching basenames
+whose parent directories are equal.  The parent fallback covers generated
+files before their first save, where the file itself may not yet exist but
+its containing directory does."
+  (let ((candidates-a (mevedel--file-name-candidates file-a))
+        (candidates-b (mevedel--file-name-candidates file-b)))
+    (or (cl-some (lambda (a)
+                   (or (member a candidates-b)
+                       (cl-some (lambda (b)
+                                  (ignore-errors (file-equal-p a b)))
+                                candidates-b)))
+                 candidates-a)
+        (let* ((da (car candidates-a))
+               (db (car candidates-b))
+               (parent-a (file-name-directory da))
+               (parent-b (file-name-directory db))
+               (name-a (file-name-nondirectory da))
+               (name-b (file-name-nondirectory db)))
+          (and (not (string= da parent-a))
+               (not (string= db parent-b))
+               (string= name-a name-b)
+               (mevedel--same-file-p parent-a parent-b))))))
+
+(defun mevedel--file-in-directory-p (file directory)
+  "Return non-nil when FILE is under DIRECTORY, tolerating path aliases."
+  (let* ((file (expand-file-name file))
+         (directory (file-name-as-directory (expand-file-name directory)))
+         (file-candidates (mevedel--file-name-candidates file))
+         (directory-candidates (mevedel--file-name-candidates directory))
+         (cursor file)
+         (found nil))
+    (or (file-in-directory-p file directory)
+        (cl-some
+         (lambda (file-candidate)
+           (cl-some
+            (lambda (directory-candidate)
+              (or (mevedel--file-name-prefix-p
+                   file-candidate directory-candidate)
+                  (file-in-directory-p
+                   file-candidate
+                   (file-name-as-directory directory-candidate))))
+            directory-candidates))
+         file-candidates)
+        (progn
+          (while (and (not found)
+                      cursor
+                      (not (string= cursor
+                                    (file-name-directory
+                                     (directory-file-name cursor)))))
+            (when (mevedel--same-file-p cursor directory)
+              (setq found t))
+            (setq cursor (file-name-directory
+                          (directory-file-name cursor))))
+          found))))
+
+(defun mevedel--file-relative-name-or-absolute (file directory)
+  "Return FILE relative to DIRECTORY, or absolute FILE when outside.
+
+Alias spellings such as /var vs /private/var and Windows 8.3 names are
+accepted when Emacs can prove the directories are the same."
+  (let* ((file (expand-file-name file))
+         (directory (file-name-as-directory (expand-file-name directory)))
+         (file-candidates (mevedel--file-name-candidates file))
+         (directory-candidates (mevedel--file-name-candidates directory))
+         (cursor file)
+         parts
+         found)
+    (cond
+     ((mevedel--file-name-prefix-p file directory)
+      (file-relative-name file directory))
+     ((catch 'relative
+        (dolist (file-candidate file-candidates)
+          (dolist (directory-candidate directory-candidates)
+            (when (mevedel--file-name-prefix-p
+                   file-candidate directory-candidate)
+              (throw 'relative
+                     (file-relative-name
+                      file-candidate
+                      (file-name-as-directory directory-candidate))))))))
+     ((progn
+        (while (and (not found)
+                    cursor
+                    (not (string= cursor
+                                  (file-name-directory
+                                   (directory-file-name cursor)))))
+          (if (mevedel--same-file-p cursor directory)
+              (setq found t)
+            (push (file-name-nondirectory (directory-file-name cursor))
+                  parts)
+            (setq cursor (file-name-directory
+                          (directory-file-name cursor)))))
+        found)
+      (string-join parts "/"))
+     (t file))))
+
 (defun mevedel--cycle-list-around (element list)
   "Cycle list LIST around ELEMENT.
 

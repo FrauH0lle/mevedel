@@ -53,6 +53,132 @@
     (should (equal "bad \\xFF byte" normalized))
     (should-not (test-mevedel-utilities--raw-byte-string-p normalized))))
 
+(mevedel-deftest mevedel--path-alias-helpers ()
+  ,test
+  (test)
+
+  :doc "same-file comparison accepts aliased parent directories"
+  (let ((alias-root (expand-file-name "/alias/root"))
+        (real-root (expand-file-name "/real/root")))
+    (cl-letf (((symbol-function 'file-equal-p)
+               (lambda (a b)
+                 (let ((a (directory-file-name a))
+                       (b (directory-file-name b)))
+                   (or (and (equal a alias-root)
+                            (equal b real-root))
+                       (and (equal a real-root)
+                            (equal b alias-root)))))))
+      (should (mevedel--same-file-p
+               (file-name-concat alias-root "source.el")
+               (file-name-concat real-root "source.el")))))
+
+  :doc "directory containment accepts aliased parent directories"
+  (let ((alias-root (expand-file-name "/alias/root"))
+        (real-root (expand-file-name "/real/root")))
+    (cl-letf (((symbol-function 'file-equal-p)
+               (lambda (a b)
+                 (let ((a (directory-file-name a))
+                       (b (directory-file-name b)))
+                   (or (and (equal a alias-root)
+                            (equal b real-root))
+                       (and (equal a real-root)
+                            (equal b alias-root)))))))
+      (should (mevedel--file-in-directory-p
+               (file-name-concat alias-root "source.el")
+               (file-name-as-directory real-root)))))
+
+  :doc "relative-name helper keeps aliased children relative"
+  (let ((alias-root (expand-file-name "/alias/root"))
+        (real-root (expand-file-name "/real/root")))
+    (cl-letf (((symbol-function 'file-equal-p)
+               (lambda (a b)
+                 (let ((a (directory-file-name a))
+                       (b (directory-file-name b)))
+                   (or (and (equal a alias-root)
+                            (equal b real-root))
+                       (and (equal a real-root)
+                            (equal b alias-root)))))))
+      (should (equal "source.el"
+                     (mevedel--file-relative-name-or-absolute
+                      (file-name-concat alias-root "source.el")
+                      (file-name-as-directory real-root))))))
+
+  :doc "relative-name helper avoids plain relative paths across aliases"
+  (let* ((alias-root (expand-file-name "/alias/root"))
+         (real-root (expand-file-name "/real/root"))
+         (alias-file (file-name-concat alias-root "source.el"))
+         (original-file-in-directory-p
+          (symbol-function 'file-in-directory-p)))
+    (cl-letf (((symbol-function 'file-equal-p)
+               (lambda (a b)
+                 (let ((a (directory-file-name a))
+                       (b (directory-file-name b)))
+                   (or (and (equal a alias-root)
+                            (equal b real-root))
+                       (and (equal a real-root)
+                            (equal b alias-root))))))
+              ((symbol-function 'file-in-directory-p)
+               (lambda (file directory)
+                 (or (and (equal (directory-file-name file) alias-file)
+                          (equal (directory-file-name directory) real-root))
+                     (funcall original-file-in-directory-p file directory)))))
+      (should (equal "source.el"
+                     (mevedel--file-relative-name-or-absolute
+                      alias-file
+                      (file-name-as-directory real-root))))))
+
+  :doc "macOS system volume var aliases stay inside var roots"
+  (let ((actual-system-type system-type)
+        (system-type 'darwin))
+    (should (equal "/var/folders/k8/x/T/root/source.el"
+                   (mevedel--file-macos-var-alias
+                    "/System/Volumes/Data/private/var/folders/k8/x/T/root/source.el")))
+    (should
+     (equal "/var/folders/k8/x/T/root/source.el"
+            (mevedel--file-macos-var-alias
+             "/System/Volumes/Data/var/folders/k8/x/T/root/source.el")))
+    (unless (eq actual-system-type 'windows-nt)
+      (should
+       (mevedel--file-in-directory-p
+        "/System/Volumes/Data/private/var/folders/k8/x/T/root/.worktrees/foo/"
+        "/var/folders/k8/x/T/root/.worktrees/"))
+      (should (equal "source.el"
+                     (mevedel--file-relative-name-or-absolute
+                      "/System/Volumes/Data/private/var/folders/k8/x/T/root/source.el"
+                      "/var/folders/k8/x/T/root/")))))
+
+  :doc "Windows long-name aliases accept trailing directory arguments"
+  (let* ((system-type 'windows-nt)
+         (short-root (expand-file-name
+                      "/runner/RUNNER~1/AppData/Local/Temp/root"))
+         (long-root (expand-file-name
+                     "/runner/runneradmin/AppData/Local/Temp/root")))
+    (cl-letf (((symbol-function 'w32-long-file-name)
+               (lambda (file)
+                 (unless (string-suffix-p "/" file)
+                   (let ((file (directory-file-name file)))
+                     (cond
+                      ((string-prefix-p short-root file)
+                       (concat long-root
+                               (substring file (length short-root))))
+                      ((string-prefix-p long-root file)
+                       file)))))))
+      (should (equal "source.el"
+                     (mevedel--file-relative-name-or-absolute
+                      (file-name-concat long-root "source.el")
+                      (file-name-as-directory short-root))))
+      (should
+       (mevedel--file-in-directory-p
+        (file-name-concat long-root ".worktrees" "foo")
+        (file-name-as-directory
+         (file-name-concat short-root ".worktrees"))))))
+
+  :doc "relative-name helper leaves outside files absolute"
+  (let ((file (expand-file-name "/elsewhere/source.el")))
+    (should (equal file
+                   (mevedel--file-relative-name-or-absolute
+                    file "/real/root/")))))
+
 (mevedel-deftest mevedel--tint ()
   ,test
   (test)
