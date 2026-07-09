@@ -99,6 +99,8 @@
                   "mevedel-chat" (buf workspace))
 (declare-function mevedel--chat-buffer-disable-org-element-cache
                   "mevedel-chat" ())
+(declare-function mevedel--normalize-session-directory
+                  "mevedel-chat" (directory workspace))
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view" (&optional view-buffer))
 (declare-function mevedel-agent-invocation-activity
@@ -2986,6 +2988,19 @@ mentions-shown reset to empty hash tables on load."
            ;; named `main' in one workspace don't collide.
            (live         (mevedel-session-persistence--find-live-buffer
                           session-id buf-name))
+           (cwd-retargeted-p
+            (when (and (not live)
+                       (not (file-directory-p
+                             (mevedel-session-working-directory session))))
+              (setf (mevedel-session-working-directory session)
+                    (mevedel--normalize-session-directory
+                     (read-directory-name
+                      (format "Session directory %s is missing; resume in: "
+                              (mevedel-session-working-directory session))
+                      (mevedel-workspace-root workspace)
+                      (mevedel-workspace-root workspace)
+                      t)
+                     workspace))))
            ;; Acquire the lock BEFORE opening the segment file.  If the
            ;; user aborts the conflict prompt (`user-error') we unwind
            ;; before any buffer is materialized, so no stray half-
@@ -3045,11 +3060,13 @@ mentions-shown reset to empty hash tables on load."
                 (mevedel--chat-buffer-init-common buf workspace))
               (unless live
                 (mevedel-session-persistence--load-instructions session buf))
-              ;; Persist the self-healed segment counter so subsequent
-              ;; resumes don't re-detect the mismatch.
-              (when (and had-sidecar-p
-                         sidecar-current-n
-                         (not (= sidecar-current-n segment-n)))
+              ;; Persist restore-time repairs so subsequent resumes don't
+              ;; repeat them.
+              (when (and acquired
+                         had-sidecar-p
+                         (or cwd-retargeted-p
+                             (and sidecar-current-n
+                                  (not (= sidecar-current-n segment-n)))))
                 (condition-case _
                     (mevedel-session-persistence-write
                      (mevedel-session-persistence--sidecar-path session-dir)

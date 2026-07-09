@@ -659,6 +659,33 @@ installs the real hook)."
     (with-current-buffer buf (set-buffer-modified-p nil))
     (kill-buffer buf)))
 
+(defun test-mevedel-session-persistence--make-missing-cwd-session ()
+  "Return a saved session whose working directory has been deleted.
+The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((missing-dir (file-name-as-directory
+                         (file-name-concat tempdir "deleted-worktree")))
+           (replacement-dir (file-name-as-directory
+                             (file-name-concat tempdir "replacement")))
+           (session (mevedel-session-create "main" workspace missing-dir))
+           (buf (generate-new-buffer "*test-data-buf*"))
+           session-dir)
+      (unwind-protect
+          (progn
+            (make-directory missing-dir t)
+            (make-directory replacement-dir t)
+            (with-current-buffer buf
+              (org-mode)
+              (insert "Missing working directory\n")
+              (mevedel-session-persistence-save session buf))
+            (setq session-dir (mevedel-session-save-path session))
+            (test-mevedel-session-persistence--release-and-kill buf session)
+            (setq buf nil)
+            (delete-directory missing-dir t)
+            (list workspace tempdir missing-dir replacement-dir session-dir))
+        (test-mevedel-session-persistence--release-and-kill buf session)))))
+
 (defun test-mevedel-session-persistence--reset-instructions ()
   "Reset global and workspace-scoped instruction state for persistence cases."
   (setf (mevedel--instruction-alist) nil)
@@ -3205,6 +3232,99 @@ workspace tree."
              (and restored (buffer-local-value 'mevedel--session restored)))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
+  :doc "retargets and persists a missing working directory"
+  (cl-destructuring-bind
+      (_workspace tempdir _missing-dir replacement-dir session-dir)
+      (test-mevedel-session-persistence--make-missing-cwd-session)
+    (let (restored)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (prompt dir default mustmatch &rest _)
+                         (should (string-match-p
+                                  "deleted-worktree.*missing" prompt))
+                         (should (equal tempdir
+                                        (file-name-as-directory dir)))
+                         (should (equal tempdir
+                                        (file-name-as-directory default)))
+                         (should mustmatch)
+                         replacement-dir)))
+              (setq restored
+                    (mevedel-session-persistence-restore session-dir)))
+            (with-current-buffer restored
+              (should (equal replacement-dir default-directory))
+              (should (equal replacement-dir
+                             (mevedel-session-working-directory
+                              mevedel--session))))
+            (let ((sidecar
+                   (mevedel-session-persistence-load-sidecar
+                    (mevedel-session-persistence--sidecar-path session-dir))))
+              (should (equal replacement-dir
+                             (plist-get sidecar :working-directory)))))
+        (test-mevedel-session-persistence--release-and-kill
+         restored
+         (and restored (buffer-local-value 'mevedel--session restored)))
+        (when (file-directory-p tempdir)
+          (delete-directory tempdir t))
+        (mevedel-workspace-clear-registry))))
+  :doc "does not persist a retargeted directory in read-only mode"
+  (cl-destructuring-bind
+      (_workspace tempdir missing-dir replacement-dir session-dir)
+      (test-mevedel-session-persistence--make-missing-cwd-session)
+    (let (restored)
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _) replacement-dir))
+                      ((symbol-function
+                        'mevedel-session-persistence-lock-acquire)
+                       (lambda (&rest _) nil)))
+              (setq restored
+                    (mevedel-session-persistence-restore session-dir)))
+            (with-current-buffer restored
+              (should mevedel-session--read-only-mode)
+              (should (equal replacement-dir default-directory))
+              (should (equal replacement-dir
+                             (mevedel-session-working-directory
+                              mevedel--session))))
+            (let ((sidecar
+                   (mevedel-session-persistence-load-sidecar
+                    (mevedel-session-persistence--sidecar-path session-dir))))
+              (should (equal missing-dir
+                             (plist-get sidecar :working-directory)))))
+        (test-mevedel-session-persistence--release-and-kill
+         restored
+         (and restored (buffer-local-value 'mevedel--session restored)))
+        (when (file-directory-p tempdir)
+          (delete-directory tempdir t))
+        (mevedel-workspace-clear-registry))))
+  :doc "rejects an invalid replacement before opening the session"
+  (cl-destructuring-bind
+      (workspace tempdir missing-dir _replacement-dir session-dir)
+      (test-mevedel-session-persistence--make-missing-cwd-session)
+    (let ((outside (make-temp-file "mevedel-cwd-outside-" t))
+          (buf-name (mevedel-session-buffer-name "main" workspace)))
+      (unwind-protect
+          (progn
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _) outside)))
+              (should-error
+               (mevedel-session-persistence-restore session-dir)
+               :type 'user-error))
+            (should-not
+             (file-exists-p
+              (mevedel-session-persistence--lock-path session-dir)))
+            (should-not (get-buffer buf-name))
+            (let ((sidecar
+                   (mevedel-session-persistence-load-sidecar
+                    (mevedel-session-persistence--sidecar-path session-dir))))
+              (should (equal missing-dir
+                             (plist-get sidecar :working-directory)))))
+        (when (file-directory-p tempdir)
+          (delete-directory tempdir t))
+        (when (file-directory-p outside)
+          (delete-directory outside t))
+        (mevedel-workspace-clear-registry))))
   :doc "round-trips a multi-segment (compacted) session"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
