@@ -208,7 +208,7 @@ inlining a paragraph.
 - **Source:** `specs/21-agent-transcript-persistence.md` "Non-goal:
   Recovery"
 - **What's owed:** Reconstructing in-flight sub-agent FSMs, replaying
-  undelivered mailbox messages, and re-arming task overlays on
+  undelivered mailbox messages, and rebuilding task status fragments on
   `mevedel-resume`.
 - **Why deferred:** v1 transcripts are audit-log only; recovery
   requires idempotent FSM rebuild and is its own design.

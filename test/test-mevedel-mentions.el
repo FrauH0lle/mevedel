@@ -65,10 +65,10 @@ Returns (buffer . overlay)."
 
 (defun mevedel-test--reset-instructions ()
   "Reset global and workspace-scoped instruction state for mentions."
-  (setq mevedel--instructions nil)
-  (setq mevedel--id-counter 0)
-  (setq mevedel--id-usage-map (make-hash-table))
-  (setq mevedel--retired-ids nil)
+  (setf (mevedel--instruction-alist) nil)
+  (setf (mevedel--instruction-id-counter) 0)
+  (setf (mevedel--instruction-id-usage-map) (make-hash-table))
+  (setf (mevedel--instruction-retired-ids) nil)
   (setq mevedel--instruction-states (make-hash-table :test #'equal))
   (setq mevedel--instruction-current-state-key :global))
 
@@ -80,7 +80,7 @@ Returns (buffer . overlay)."
   (:before-each
    (mevedel-test--reset-instructions)
    :after-each
-   (dolist (entry mevedel--instructions)
+   (dolist (entry (mevedel--instruction-alist))
      (when (buffer-live-p (car entry))
        (let ((file (buffer-file-name (car entry))))
          (with-current-buffer (car entry)
@@ -241,7 +241,7 @@ Returns (buffer . overlay)."
   (:before-each
    (mevedel-test--reset-instructions)
    :after-each
-   (dolist (entry mevedel--instructions)
+   (dolist (entry (mevedel--instruction-alist))
      (when (buffer-live-p (car entry))
        (let ((file (buffer-file-name (car entry))))
          (with-current-buffer (car entry)
@@ -871,7 +871,7 @@ Returns (buffer . overlay)."
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry)
    :after-each
-   (dolist (entry mevedel--instructions)
+   (dolist (entry (mevedel--instruction-alist))
      (when (buffer-live-p (car entry))
        (let ((file (buffer-file-name (car entry))))
          (with-current-buffer (car entry)
@@ -1063,7 +1063,7 @@ Returns (buffer . overlay)."
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry)
    :after-each
-   (dolist (entry mevedel--instructions)
+   (dolist (entry (mevedel--instruction-alist))
      (when (buffer-live-p (car entry))
        (let ((file (buffer-file-name (car entry))))
          (with-current-buffer (car entry)

@@ -677,7 +677,7 @@
               :type 'test :id "read-integration"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -699,7 +699,7 @@
               :type 'test :id "read-media-dedup"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -733,7 +733,7 @@
               :type 'test :id "read-dedup"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -753,7 +753,7 @@
               :type 'test :id "read-agent-dedup"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -785,7 +785,7 @@
               :type 'test :id "read-dedup-mtime"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -808,7 +808,7 @@
               :type 'test :id "read-dedup-range"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)

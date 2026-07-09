@@ -3,11 +3,8 @@
 ;;; Commentary:
 
 ;; Task CRUD tools (TaskCreate, TaskUpdate, TaskList, TaskGet), TaskNote,
-;; and the session task overlay.  Tasks live on `mevedel-session' and
-;; replace the legacy TodoWrite/TodoRead flat checklist: they carry IDs,
-;; status, optional owner and dependency information, so simple sessions
-;; can use them as a plain checklist while coordinator sessions get the
-;; full dependency graph.
+;; and the session task status fragment.  Tasks live on `mevedel-session'
+;; with IDs, status, optional owner, and dependency information.
 
 ;;; Code:
 
@@ -979,44 +976,40 @@ MAX-LINES caps the rendered body without changing task storage."
 
 
 ;;
-;;; Overlay display
+;;; Status display
 
-(defconst mevedel-tool-task--hrule
-  (propertize "\n" 'face '(:inherit shadow :underline t :extend t))
-  "Horizontal rule used around the task overlay.")
+(defconst mevedel-tool-task--status-min-body-lines 4
+  "Minimum body lines reserved for task status.")
 
-(defconst mevedel-tool-task--overlay-min-body-lines 4
-  "Minimum body lines reserved for the task overlay.")
+(defconst mevedel-tool-task--status-max-body-lines 12
+  "Maximum body lines reserved for task status.")
 
-(defconst mevedel-tool-task--overlay-max-body-lines 12
-  "Maximum body lines reserved for the task overlay.")
-
-(defun mevedel-tool-task--overlay-line-budget ()
-  "Return the current task overlay body-line budget, or nil."
+(defun mevedel-tool-task--status-line-budget ()
+  "Return the current task status body-line budget, or nil."
   (when-let* ((window (get-buffer-window (current-buffer) t)))
     (let ((budget (floor (* (window-body-height window) 0.25))))
-      (min mevedel-tool-task--overlay-max-body-lines
-           (max mevedel-tool-task--overlay-min-body-lines budget)))))
+      (min mevedel-tool-task--status-max-body-lines
+           (max mevedel-tool-task--status-min-body-lines budget)))))
 
-(defvar mevedel-tool-task--overlay-keymap
+(defvar mevedel-tool-task--status-keymap
   (define-keymap
     "<tab>" #'mevedel-toggle-tasks
     "TAB"   #'mevedel-toggle-tasks
     "<return>" #'mevedel-toggle-tasks
     "RET"   #'mevedel-toggle-tasks)
-  "Keymap installed on the task-list overlay.
-Shared with the overlay's header label via `where-is-internal' so the
+  "Keymap installed on the task status fragment.
+Shared with the fragment's header label via `where-is-internal' so the
 displayed key matches the actual binding -- see
 `mevedel-tool-task--toggle-key-label'.")
 
 (defun mevedel-tool-task--toggle-key-label ()
-  "Return the `key-description' string for toggling the task overlay.
-Looks up `mevedel-toggle-tasks' directly in the overlay's keymap so
+  "Return the `key-description' string for toggling the task fragment.
+Looks up `mevedel-toggle-tasks' directly in the fragment's keymap so
 the label is correct regardless of where point is when the display
 string is built.  Falls back to `M-x mevedel-toggle-tasks' if the
 command has somehow lost its binding."
   (if-let* ((keys (where-is-internal 'mevedel-toggle-tasks
-                                     mevedel-tool-task--overlay-keymap
+                                     mevedel-tool-task--status-keymap
                                      t)))
       (key-description keys)
     "M-x mevedel-toggle-tasks"))
@@ -1044,42 +1037,15 @@ character so keybindings on trailing newlines still toggle the fragment."
   (interactive)
   (if-let* ((pos (mevedel-tool-task--fragment-position))
             (collapse-key (get-text-property
-                           pos 'mevedel-view-fragment-collapse-key))
-            ((require 'mevedel-view-fragment nil t)))
+                           pos 'mevedel-view-fragment-collapse-key)))
       (progn
         (mevedel-view-fragment-set-collapse-state
          collapse-key
          (not (mevedel-view-fragment-collapse-state
                collapse-key
                (get-text-property pos 'mevedel-view-fragment-collapsed))))
-        (if (fboundp 'mevedel-view--render-status)
-            (mevedel-view--render-status)
-          (message "No task list renderer here")))
-    (pcase-let ((`(,prop-value . ,ov)
-                 (or (get-char-property-and-overlay (point) 'mevedel-tool-task)
-                     (get-char-property-and-overlay
-                      (previous-single-char-property-change
-                       (point) 'mevedel-tool-task nil (point-min))
-                      'mevedel-tool-task))))
-      (if (null ov)
-          (message "No task list overlay here")
-        (overlay-put ov 'mevedel-tool-task--show-completed
-                     (not (overlay-get ov
-                                       'mevedel-tool-task--show-completed)))
-        (if-let* ((refresh (overlay-get ov 'mevedel-tool-task--refresh)))
-            (funcall refresh)
-          (let ((display (if (overlay-get ov
-                                          'mevedel-tool-task--show-completed)
-                             (overlay-get ov
-                                          'mevedel-tool-task--expanded-string)
-                           (or (overlay-get ov
-                                            'mevedel-tool-task--compact-string)
-                               (and (stringp prop-value) prop-value)))))
-            (if (= (overlay-start ov) (overlay-end ov))
-                (overlay-put ov 'before-string display)
-              (overlay-put ov 'after-string display))))))))
-
-(defalias 'mevedel-toggle-todos #'mevedel-toggle-tasks)
+        (mevedel-view--render-status))
+    (message "No task list here")))
 
 (defun mevedel-tool-task--task-label ()
   "Return the status-zone task label."
@@ -1092,105 +1058,26 @@ character so keybindings on trailing newlines still toggle the fragment."
      toggle-key
      (propertize " to toggle" 'face 'mevedel-view-zone-separator))))
 
-(defun mevedel-tool-task--display-string (session show-completed view-p)
+(defun mevedel-tool-task--display-string (session show-completed)
   "Return task display for SESSION.
-SHOW-COMPLETED controls whether completed task detail is included.
-VIEW-P means use `view-buffer' separator formatting."
+SHOW-COMPLETED controls whether completed task detail is included."
   (let* ((body (mevedel-tool-task--format-groups
                 session show-completed (not show-completed)
-                (mevedel-tool-task--overlay-line-budget)))
-         (separator
-          (if (and view-p (fboundp 'mevedel-view--zone-separator))
-              (mevedel-view--zone-separator
-               (mevedel-tool-task--task-label))
-            mevedel-tool-task--hrule)))
-    (concat separator
-            body "\n"
-            (if (and view-p (fboundp 'mevedel-view--zone-separator))
-                ""
-              mevedel-tool-task--hrule)
-            "\n")))
+                (mevedel-tool-task--status-line-budget)))
+         (separator (mevedel-view--zone-separator
+                     (mevedel-tool-task--task-label))))
+    (concat separator body "\n\n")))
 
-(defun mevedel-tool-task--delete-overlay (session)
-  "Delete SESSION's task compatibility overlay and clear the slot."
-  (let ((ov (mevedel-session-task-overlay session)))
-    (when (overlayp ov)
-      (delete-overlay ov)
-      (setf (mevedel-session-task-overlay session) nil))))
-
-(defun mevedel-tool-task--display-overlay ()
-  "Display the current session's task list.
-When a view buffer exists, render the fragment-backed status zone
-and clear any legacy compatibility overlay.  Otherwise fall back
-to the tracking-marker overlay in the data buffer."
-  (let* ((session (and (boundp 'mevedel--session) mevedel--session))
-         (info (and (boundp 'gptel--fsm-last)
-                    gptel--fsm-last
-                    (gptel-fsm-info gptel--fsm-last)))
-         (marker (and info (plist-get info :tracking-marker)))
-         (view-buf (and (boundp 'mevedel--view-buffer)
-                        mevedel--view-buffer
-                        (buffer-live-p mevedel--view-buffer)
-                        mevedel--view-buffer)))
-    (unless view-buf
-      (when (and (boundp 'mevedel-view--status-marker)
-                 (markerp mevedel-view--status-marker)
-                 (eq (marker-buffer mevedel-view--status-marker)
-                     (current-buffer)))
-        (setq view-buf (current-buffer))))
-    (cond
-     ((and session view-buf)
-      (mevedel-tool-task--delete-overlay session)
-      (with-current-buffer view-buf
-        (let ((mevedel--session session)
-              (mevedel--view-buffer view-buf))
-          (mevedel-view--render-status))))
-     ((and session
-           (not (mevedel-tool-task--session-has-active-p session)))
-      (mevedel-tool-task--delete-overlay session))
-     ((and session info marker)
-      (let* ((where-to marker)
-               (where-from (previous-single-property-change
-                            where-to 'gptel nil (point-min))))
-          (when (and where-from (not (= where-from where-to)))
-            (let* ((old-ov (mevedel-session-task-overlay session))
-                   (show-completed
-                    (and (overlayp old-ov)
-                         (overlay-get old-ov
-                                      'mevedel-tool-task--show-completed)))
-                   (ov old-ov))
-              (unless (and (overlayp ov)
-                           (eq (overlay-buffer ov) (current-buffer)))
-                (when (and (overlayp ov) (overlay-buffer ov))
-                  (delete-overlay ov))
-                (setq ov (make-overlay where-from where-to nil t t))
-                (overlay-put ov 'mevedel-tool-task t)
-                (overlay-put ov 'evaporate nil)
-                (overlay-put ov 'priority 100)
-                (overlay-put ov 'keymap
-                             mevedel-tool-task--overlay-keymap)
-                (setf (mevedel-session-task-overlay session) ov))
-              (move-overlay ov where-from where-to)
-              (let ((expanded
-                     (mevedel-tool-task--display-string session t nil))
-                    (compact-display
-                     (mevedel-tool-task--display-string session nil nil)))
-                (add-text-properties 0 (length expanded)
-                                     '(mevedel-tool-task t)
-                                     expanded)
-                (add-text-properties 0 (length compact-display)
-                                     '(mevedel-tool-task t)
-                                     compact-display)
-                (overlay-put ov 'mevedel-tool-task--show-completed
-                             show-completed)
-                (overlay-put ov 'mevedel-tool-task--expanded-string
-                             expanded)
-                (overlay-put ov 'mevedel-tool-task--compact-string
-                             compact-display)
-                (overlay-put ov 'after-string
-                             (if show-completed
-                                 expanded
-                               compact-display))))))))))
+(defun mevedel-tool-task--refresh-display ()
+  "Render the current session's task status in its view buffer."
+  (when-let* ((session (and (boundp 'mevedel--session) mevedel--session))
+              (view-buf (and (boundp 'mevedel--view-buffer)
+                             mevedel--view-buffer
+                             (buffer-live-p mevedel--view-buffer)
+                             mevedel--view-buffer)))
+    (with-current-buffer view-buf
+      (let ((mevedel--session session))
+        (mevedel-view--render-status)))))
 
 
 ;;
@@ -1280,7 +1167,7 @@ feedback string when :note has a value, otherwise nil."
           (mevedel-tool-task--apply-note-arg
            session args mevedel-tool-task--note-owner-keys))
     (mevedel-tool-task--mark-write session)
-    (mevedel-tool-task--display-overlay)
+    (mevedel-tool-task--refresh-display)
     (let ((base (format "Created %d task%s:\n%s"
                         (length created)
                         (if (= 1 (length created)) "" "s")
@@ -1308,7 +1195,7 @@ feedback string when :note has a value, otherwise nil."
              session args mevedel-tool-task--note-owner-keys)))
       (mevedel-tool-task--clear-inactive-status-notes session)
       (mevedel-tool-task--mark-write session)
-      (mevedel-tool-task--display-overlay)
+      (mevedel-tool-task--refresh-display)
       (let ((base (format "Updated task:\n%s"
                           (mevedel-tool-task--format-for-llm
                            (list task)))))
@@ -1324,7 +1211,7 @@ feedback string when :note has a value, otherwise nil."
     (let* ((feedback
             (mevedel-tool-task--apply-note-arg session args '(:owner))))
       (mevedel-tool-task--mark-write session)
-      (mevedel-tool-task--display-overlay)
+      (mevedel-tool-task--refresh-display)
       feedback)))
 
 (defun mevedel-tool-task--handle-list (args)
@@ -1339,7 +1226,7 @@ feedback string when :note has a value, otherwise nil."
                         (lambda (t1) (eq (mevedel-task-status t1) filter))
                         tasks)
                      tasks)))
-    (mevedel-tool-task--display-overlay)
+    (mevedel-tool-task--refresh-display)
     (if filter
         (format "Tasks with status %s:\n%s"
                 (mevedel-tool-task--status-string filter)

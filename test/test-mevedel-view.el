@@ -4401,10 +4401,10 @@ PROPS is the value for the `gptel' property."
         (setq-local mevedel--session session)
         (setq-local mevedel--view-buffer view-buf)
         (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
-        (mevedel-view-test--insert-data data-buf "Response\n" 'response))
+        (mevedel-view-test--insert-data data-buf "Response\n" 'response)
+        (mevedel-tool-task--refresh-display))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
-        (mevedel-tool-task--display-overlay)
         (should (string-match-p "visible task" (buffer-string)))
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
@@ -4417,8 +4417,7 @@ PROPS is the value for the `gptel' property."
                                'mevedel-view-fragment-namespace)))
           (should (eq 'tasks (get-text-property
                               (1- (point))
-                              'mevedel-view-fragment-id)))
-          (should-not (mevedel-session-task-overlay session))))))
+                              'mevedel-view-fragment-id)))))))
   :doc "rebuilds status and permission zones in order after full rerender"
   (let ((mevedel-session-persistence nil))
     (mevedel-view-test--with-buffers
@@ -4452,7 +4451,7 @@ PROPS is the value for the `gptel' property."
           (setq-local mevedel--session session)
           ;; Render task status before the full rerender so the fragment
           ;; region is rebuilt along with the other chrome zones.
-          (mevedel-tool-task--display-overlay)
+          (mevedel-tool-task--refresh-display)
           (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
                        (list (list :agent-id "verifier--zones123"
@@ -4505,8 +4504,7 @@ PROPS is the value for the `gptel' property."
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should-not (string-match-p "tasks" text))
-          (should-not (string-match-p "completed task" text))
-          (should-not (mevedel-session-task-overlay session))))))
+          (should-not (string-match-p "completed task" text))))))
   :doc "header stays at top when rerendering (input-marker advances past it)"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** Greetings\n" nil)
@@ -4993,10 +4991,8 @@ PROPS is the value for the `gptel' property."
           (mevedel-view-toggle-section)
           (should-not (get-text-property (point) 'mevedel-view-collapsed)))
         (setq mevedel-view--data-turn-start data-turn-start)
-        ;; Exercise the legacy integer shape too: the rerender must
-        ;; normalize it to a marker that tracks fold-state restoration.
         (setq mevedel-view--in-flight-turn-start
-              (marker-position mevedel-view--input-marker))
+              (copy-marker mevedel-view--input-marker nil))
         (mevedel-view--full-rerender)
         (should (markerp mevedel-view--in-flight-turn-start))
         (save-excursion
@@ -5015,7 +5011,7 @@ PROPS is the value for the `gptel' property."
                                 count t
                                 do (setq start (match-end 0)))))))))
 
-  :doc "turn fold normalizes legacy in-flight assistant anchor"
+  :doc "turn fold preserves the in-flight assistant anchor"
   (mevedel-view-test--with-buffers
     (let (data-turn-start second-start)
       (mevedel-view-test--insert-data data-buf "*** First\n" nil)
@@ -5035,7 +5031,7 @@ PROPS is the value for the `gptel' property."
           (search-forward "Assistant")
           (setq second-start (match-beginning 0)))
         (setq mevedel-view--data-turn-start data-turn-start)
-        (setq mevedel-view--in-flight-turn-start second-start)
+        (mevedel-view--set-in-flight-turn-start second-start)
         (save-excursion
           (goto-char (point-min))
           (search-forward "Assistant")
@@ -5817,7 +5813,7 @@ PROPS is the value for the `gptel' property."
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       ;; Status/task redraw coverage for this composer shape lives in
-      ;; `mevedel-tool-task--display-overlay'; this case fills the
+      ;; `mevedel-tool-task--refresh-display'; this case fills the
       ;; interaction-zone redraw gap before the fragment migration.
       (let* ((draft "> first line\nsecond line")
              (point-offset (length "> first"))
@@ -8919,7 +8915,7 @@ state of its inner sections"
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
-        (setq mevedel-view--in-flight-turn-start (point-min))
+        (mevedel-view--set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -8957,7 +8953,7 @@ state of its inner sections"
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
-        (setq mevedel-view--in-flight-turn-start history-start)
+        (mevedel-view--set-in-flight-turn-start history-start)
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -8995,7 +8991,7 @@ state of its inner sections"
         (set-marker mevedel-view--status-marker (point-min))
         (set-marker mevedel-view--interaction-marker (point))
         (set-marker mevedel-view--input-marker (point))
-        (setq mevedel-view--in-flight-turn-start (point-min))
+        (mevedel-view--set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -9227,7 +9223,7 @@ state of its inner sections"
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--input-marker (point-min))
-          (setq mevedel-view--in-flight-turn-start (point-min))
+          (mevedel-view--set-in-flight-turn-start (point-min))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -9263,7 +9259,7 @@ state of its inner sections"
           (insert "TASK STATUS\n")
           (set-marker mevedel-view--status-marker nil)
           (set-marker mevedel-view--input-marker nil)
-          (setq mevedel-view--in-flight-turn-start (point-min))
+          (mevedel-view--set-in-flight-turn-start (point-min))
           (setq mevedel-view--data-turn-start
                 (with-current-buffer data-buf
                   (copy-marker (point-min))))))
@@ -9293,7 +9289,7 @@ state of its inner sections"
       (let ((inhibit-read-only t))
         (set-marker mevedel-view--status-marker nil)
         (set-marker mevedel-view--input-marker nil)
-        (setq mevedel-view--in-flight-turn-start (point-min))
+        (mevedel-view--set-in-flight-turn-start (point-min))
         (setq mevedel-view--data-turn-start
               (with-current-buffer data-buf
                 (copy-marker (point-min))))
@@ -12875,29 +12871,6 @@ finds it during `$' skill dispatch."
         (should (eq 'tasks (get-text-property
                             (point) 'mevedel-view-fragment-id))))))
 
-  :doc "direct status render clears stale task compatibility overlay"
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "status-task-overlay-cleanup"
-                       :root temporary-file-directory
-                       :name "status-task-overlay-cleanup"))
-           (session (mevedel-session-create "main" workspace))
-           legacy-overlay)
-      (setf (mevedel-session-tasks session)
-            (list (mevedel-task--create
-                   :id 1 :subject "visible task" :status 'pending)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq legacy-overlay (make-overlay (point-min) (point-min)))
-        (setf (mevedel-session-task-overlay session) legacy-overlay))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (mevedel-view--render-status data-buf)
-        (should (string-match-p "visible task" (buffer-string)))
-        (should-not (overlay-buffer legacy-overlay))
-        (should-not (mevedel-session-task-overlay session)))))
-
   :doc "display navigation chooses the next turn before later status fragments"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
@@ -13090,39 +13063,6 @@ finds it during `$' skill dispatch."
                         (mevedel-view--input-start) (point-max))))
             (should (string-match-p "Agent: explorer -- count" display))
             (should-not (string-match-p "Agent: explorer -- count" input)))))))
-
-  :doc "status fallback ignores stale data-buffer task overlays"
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "stale-status-overlay"
-                       :root temporary-file-directory
-                       :name "stale-status-overlay"))
-           (session (mevedel-session-create "main" workspace)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (let ((ov (make-overlay (point-min) (point-min)
-                                (current-buffer) t nil)))
-          (overlay-put ov 'mevedel-tool-task t)
-          (setf (mevedel-session-task-overlay session) ov))
-        (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
-                   (lambda ()
-                     (list (list :agent-id "verifier--stale123"
-                                 :status 'running
-                                 :agent-type "verifier"
-                                 :description "verify stale anchor"
-                                 :calls 1)))))
-          (mevedel-view--render-agent-status))
-        (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
-               (agent-pos (string-search
-                           "Agent: verifier -- verify stale anchor"
-                           text)))
-          (should agent-pos)
-          (should (>= (+ (point-min) agent-pos)
-                      (marker-position mevedel-view--status-marker)))))))
 
   :doc "live status rows render below the task status fragment"
   (mevedel-view-test--with-buffers

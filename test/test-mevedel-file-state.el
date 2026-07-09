@@ -73,21 +73,12 @@
 ;;
 ;;; LRU cache primitives
 
-(mevedel-deftest mevedel-file-cache-create
-  (:doc "`mevedel-file-cache-create' returns empty cache")
-  (let ((cache (mevedel-file-cache-create)))
-    (should (mevedel-file-cache-p cache))
-    (should (hash-table-p (mevedel-file-cache-table cache)))
-    (should (null (mevedel-file-cache-order cache)))
-    (should (= 0 (mevedel-file-cache-total-bytes cache)))
-    (should (= 0 (hash-table-count (mevedel-file-cache-table cache))))))
-
 (mevedel-deftest mevedel-file-cache-put
   ()
   ,test
   (test)
   :doc "inserts new state and promotes to MRU"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "aa" :size 2))
          (b (mevedel-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
     (mevedel-file-cache-put cache a)
@@ -98,7 +89,7 @@
                    (car (mevedel-file-cache-order cache)))))
 
   :doc "update in place replaces prior size"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (v1 (mevedel-file-state--create :path "/tmp/a" :content "aa" :size 2))
          (v2 (mevedel-file-state--create :path "/tmp/a" :content "aaaaa" :size 5)))
     (mevedel-file-cache-put cache v1)
@@ -110,7 +101,7 @@
                     (mevedel-file-cache-get cache "/tmp/a")))))
 
   :doc "returns the state argument"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (s (mevedel-file-state--create :path "/tmp/a" :content "x" :size 1)))
     (should (eq s (mevedel-file-cache-put cache s)))))
 
@@ -119,11 +110,11 @@
   ,test
   (test)
   :doc "returns nil for missing key"
-  (let ((cache (mevedel-file-cache-create)))
+  (let ((cache (mevedel-test-file-cache-create)))
     (should (null (mevedel-file-cache-get cache "/tmp/missing"))))
 
   :doc "returns cached state and promotes to MRU"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "aa" :size 2))
          (b (mevedel-file-state--create :path "/tmp/b" :content "bb" :size 2))
          (c (mevedel-file-state--create :path "/tmp/c" :content "cc" :size 2)))
@@ -140,7 +131,7 @@
   ,test
   (test)
   :doc "removes existing entry and decrements total bytes"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "aa" :size 2))
          (b (mevedel-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
     (mevedel-file-cache-put cache a)
@@ -151,7 +142,7 @@
     (should (null (mevedel-file-cache-get cache "/tmp/a"))))
 
   :doc "returns nil when removing missing entry"
-  (let ((cache (mevedel-file-cache-create)))
+  (let ((cache (mevedel-test-file-cache-create)))
     (should (null (mevedel-file-cache-remove cache "/tmp/missing")))))
 
 (mevedel-deftest mevedel-file-cache--evict
@@ -161,7 +152,7 @@
   :doc "drops least recently used entries by count"
   (let* ((mevedel-file-cache-max-entries 2)
          (mevedel-file-cache-max-bytes (* 1024 1024))
-         (cache (mevedel-file-cache-create))
+         (cache (mevedel-test-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "a" :size 1))
          (b (mevedel-file-state--create :path "/tmp/b" :content "b" :size 1))
          (c (mevedel-file-state--create :path "/tmp/c" :content "c" :size 1)))
@@ -176,7 +167,7 @@
   :doc "drops least recently used entries by byte limit"
   (let* ((mevedel-file-cache-max-entries 100)
          (mevedel-file-cache-max-bytes 5)
-         (cache (mevedel-file-cache-create))
+         (cache (mevedel-test-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "aaa" :size 3))
          (b (mevedel-file-state--create :path "/tmp/b" :content "bbb" :size 3)))
     (mevedel-file-cache-put cache a)
@@ -188,7 +179,7 @@
   :doc "MRU promotion protects recently used from eviction"
   (let* ((mevedel-file-cache-max-entries 2)
          (mevedel-file-cache-max-bytes (* 1024 1024))
-         (cache (mevedel-file-cache-create))
+         (cache (mevedel-test-file-cache-create))
          (a (mevedel-file-state--create :path "/tmp/a" :content "a" :size 1))
          (b (mevedel-file-state--create :path "/tmp/b" :content "b" :size 1))
          (c (mevedel-file-state--create :path "/tmp/c" :content "c" :size 1)))
@@ -199,18 +190,6 @@
     (should (mevedel-file-cache-get cache "/tmp/a"))
     (should (null (mevedel-file-cache-get cache "/tmp/b")))
     (should (mevedel-file-cache-get cache "/tmp/c"))))
-
-(mevedel-deftest mevedel-file-cache-clear
-  (:doc "`mevedel-file-cache-clear' empties cache")
-  (let* ((cache (mevedel-file-cache-create))
-         (a (mevedel-file-state--create :path "/tmp/a" :content "aa" :size 2)))
-    (mevedel-file-cache-put cache a)
-    (mevedel-file-cache-clear cache)
-    (should (= 0 (hash-table-count (mevedel-file-cache-table cache))))
-    (should (= 0 (mevedel-file-cache-total-bytes cache)))
-    (should (null (mevedel-file-cache-order cache)))
-    (should (null (mevedel-file-cache-get cache "/tmp/a")))))
-
 
 ;;
 ;;; Session interaction helpers
@@ -266,7 +245,7 @@
   ,test
   (test)
   :doc "returns empty list when no files changed"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -275,7 +254,7 @@
       (delete-file tmp)))
 
   :doc "detects modified file with advanced mtime and different content"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -294,7 +273,7 @@
       (when (file-exists-p tmp) (delete-file tmp))))
 
   :doc "ignores mtime bumps when content is unchanged"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -305,7 +284,7 @@
       (when (file-exists-p tmp) (delete-file tmp))))
 
   :doc "detects deleted file"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -320,7 +299,7 @@
       (when (file-exists-p tmp) (delete-file tmp))))
 
   :doc "does not mutate cache on detection"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -339,7 +318,7 @@
   ,test
   (test)
   :doc "updates modified entry to current on-disk state"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -356,7 +335,7 @@
       (when (file-exists-p tmp) (delete-file tmp))))
 
   :doc "removes deleted entry from cache"
-  (let* ((cache (mevedel-file-cache-create))
+  (let* ((cache (mevedel-test-file-cache-create))
          (tmp (make-temp-file "mevedel-ec-" nil ".txt" "hello")))
     (unwind-protect
         (progn
@@ -381,7 +360,7 @@
               :type 'test :id "record-access"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -404,7 +383,7 @@
               :type 'test :id "record-access-2"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -445,7 +424,7 @@
               :type 'test :id "dedup-never"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -461,7 +440,7 @@
               :type 'test :id "dedup-hit"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -479,7 +458,7 @@
               :type 'test :id "dedup-range"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -501,7 +480,7 @@
               :type 'test :id "dedup-mtime"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)
@@ -530,7 +509,7 @@
               :type 'test :id "dedup-post-modify"
               :root (file-name-directory tmp)
               :name "test"
-              :file-cache (mevedel-file-cache-create)))
+              :file-cache (mevedel-test-file-cache-create)))
          (session (mevedel-session--create
                    :name "main" :workspace ws
                    :touched-files (make-hash-table :test #'equal)

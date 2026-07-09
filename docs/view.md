@@ -58,7 +58,7 @@ interaction chrome around that transcript.
 |   inline agent/tool handles, and any in-flight live tail.     |
 +------------------------- status marker ----------------------+
 | Status zone                                                  |
-|   Task overlay and aggregate running/blocked agent rows.      |
+|   Task status and aggregate running/blocked agent rows.       |
 +---------------------- interaction marker --------------------+
 | Interaction zone                                             |
 |   Permission prompts, plan approvals, RequestAccess, Ask,     |
@@ -140,7 +140,7 @@ properties are valid for view navigation, activation, collapse, and targeted
 refresh decisions, but they are UI cache only. Durable conversation state
 continues to live in the data buffer and session structures. Region overlays
 in `mevedel-view.el` define managed fragment containers; remaining interaction
-or task overlays are compatibility/callback handles, not parallel renderers.
+overlays are callback handles, not parallel renderers.
 
 Current fragment namespaces:
 

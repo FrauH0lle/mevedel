@@ -27,11 +27,11 @@
 
 (defun mevedel-plugins-test--plugin-root (user-dir repo)
   "Return test plugin root for REPO under USER-DIR."
-  (file-name-concat user-dir "plugins" repo))
+  (file-name-concat user-dir ".agents" "plugins" repo))
 
 (defun mevedel-plugins-test--github-plugin-root (user-dir owner repo)
   "Return GitHub install plugin root for OWNER and REPO under USER-DIR."
-  (file-name-concat user-dir "plugins" "github.com" owner repo))
+  (file-name-concat user-dir ".agents" "plugins" "github.com" owner repo))
 
 (defun mevedel-plugins-test--github-install-root (owner repo)
   "Return new-install plugin root for OWNER and REPO."
@@ -238,14 +238,12 @@
                              workspace-root ".mevedel" "plugins" "repo"))
          (workspace-agents (file-name-concat
                             workspace-root ".agents" "plugins" "repo"))
-         (global-mevedel (mevedel-plugins-test--plugin-root
-                          user-dir "repo"))
          (global-agents (file-name-concat
                          (mevedel-plugins-dir) "repo")))
     (unwind-protect
         (progn
           (dolist (root (list workspace-mevedel workspace-agents
-                              global-mevedel global-agents))
+                              global-agents))
             (mevedel-plugins-test--write-manifest
              root "{\"name\":\"demo\"}"))
           (let ((plugin (car (mevedel-plugins-list workspace))))
@@ -259,7 +257,6 @@
                               (file-name-as-directory
                                (expand-file-name root)))
                             (list workspace-agents
-                                  global-mevedel
                                   global-agents))))))
       (delete-directory workspace-root t)))
 
@@ -646,7 +643,8 @@
 
   :doc "renders visible plugin rows and details"
   (let ((shadow-root (file-name-concat (mevedel-plugins-dir) "shadow"))
-        (winning-root (mevedel-plugins-test--plugin-root user-dir "winner")))
+        (winning-root (file-name-concat
+                       workspace-root ".mevedel" "plugins" "winner")))
     (mevedel-plugins-test--write-manifest shadow-root "{\"name\":\"demo\"}")
     (mevedel-plugins-enable "demo" workspace)
     (make-directory (file-name-concat winning-root "hooks") t)

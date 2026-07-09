@@ -497,8 +497,8 @@ navigation), `RequestAccess` (request directory access outside workspace root)
 
 **Tasks:** `TaskCreate`, `TaskUpdate`, `TaskNote`, `TaskList`, `TaskGet` (a
 structured task list with statuses, dependencies, owner status notes, and an
-optional task overlay; use `mevedel-toggle-tasks` or `TAB`/`RET` on the overlay
-to show or hide completed tasks)
+optional task status fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the
+fragment to show or hide completed tasks)
 
 **Sub-agents:** `Agent` (dispatch a registered sub-agent, foreground or
 background), `SendMessage` (post a message to another agent's mailbox),
@@ -920,8 +920,8 @@ Useful commands:
 A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `.mevedel/skills/`, `.agents/skills/`,
 `~/.mevedel/skills/`, `~/.agents/skills/`, and from the directories listed in
-`mevedel-skill-dirs`. Legacy `.claude/skills/` entries are ignored. mevedel
-ships a few bundled skills under `skills/` (for example `coordinator`,
+`mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
+(for example `coordinator`,
 `review`, `analyze-log`, and `remember`); name conflicts are exposed with
 deterministic visible prefixes.
 
@@ -1075,7 +1075,7 @@ The maintained detail docs live in [`docs/`](docs/):
 - [`docs/permissions.md`](docs/permissions.md) — permission decision chain,
   bucket precedence, Bash/Eval handling, and sub-agent propagation.
 - [`docs/agents.md`](docs/agents.md) — built-in agents, background execution,
-  mailboxes, task overlay, and review flow.
+  mailboxes, task status, and review flow.
 - [`docs/preview.md`](docs/preview.md) — inline diff preview behavior and
   keybindings.
 - [`docs/mentions.md`](docs/mentions.md) — `@ref`, `@file`, `@agent`, and

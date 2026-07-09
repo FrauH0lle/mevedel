@@ -92,10 +92,11 @@
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;; `mevedel'
-(defvar mevedel--instructions)
 (declare-function mevedel--instruction-activate-buffer "mevedel-overlays" (&optional buffer))
-(declare-function mevedel--instruction-save-current-state "mevedel-overlays" ())
+(declare-function mevedel--instruction-alist-value "mevedel-overlays" ())
 (declare-function mevedel--instruction-bufferlevel-p "mevedel-overlays" (instruction))
+(declare-function mevedel--set-instruction-alist-value
+                  "mevedel-overlays" (value))
 
 
 (defun mevedel--string-common-prefix (strings)
@@ -698,14 +699,19 @@ the overlays."
                        final-overlays)
                       (save-buffer)
                       (mevedel--instruction-activate-buffer buf)
-                      (maphash (lambda (ov _state)
-                                 (unless (memq ov (alist-get buf mevedel--instructions))
-                                   (push ov (alist-get buf mevedel--instructions))))
-                               final-overlays)
-                      (setf (alist-get buf mevedel--instructions)
-                            (cl-remove-if (lambda (ov) (null (overlay-buffer ov)))
-                                          (alist-get buf mevedel--instructions)))
-                      (mevedel--instruction-save-current-state))))))
+                      (let ((instruction-alist
+                             (mevedel--instruction-alist-value)))
+                        (maphash
+                         (lambda (ov _state)
+                           (unless (memq ov (alist-get buf instruction-alist))
+                             (push ov (alist-get buf instruction-alist))))
+                         final-overlays)
+                        (setf (alist-get buf instruction-alist)
+                              (cl-remove-if
+                               (lambda (ov) (null (overlay-buffer ov)))
+                               (alist-get buf instruction-alist)))
+                        (mevedel--set-instruction-alist-value
+                         instruction-alist)))))))
               edits-by-buffer)
 
              (when files-to-remove

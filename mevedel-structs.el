@@ -180,7 +180,6 @@ workspace."
   agents            ; alist: agent-id -> FSM
   tasks             ; list of mevedel-task structs
   task-status-notes ; alist: owner -> plist with :note/:updated-turn/:updated-at
-  task-overlay      ; previous task overlay reference
   last-task-write-turn ; integer or nil: turn of last task tool write
   touched-files     ; hash-table: filepath -> mevedel-file-interaction
   permission-rules  ; session-scoped permission rules

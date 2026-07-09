@@ -145,10 +145,6 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
           (goto-char start)))
       (string-trim (buffer-string)))))
 
-(defun mevedel-plan-mode--metadata (&optional session)
-  "Return SESSION's plan metadata plist."
-  (mevedel-session-plan-metadata (or session mevedel--session)))
-
 (defun mevedel-plan-mode--metadata-put (session key value)
   "Set KEY to VALUE in SESSION's plan metadata."
   (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)

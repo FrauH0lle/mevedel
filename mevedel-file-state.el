@@ -68,13 +68,6 @@ not distort byte counts."
 ;;
 ;;; LRU cache primitives
 
-(defun mevedel-file-cache-create ()
-  "Return a fresh empty `mevedel-file-cache' struct."
-  (mevedel-file-cache--create
-   :table (make-hash-table :test #'equal)
-   :order nil
-   :total-bytes 0))
-
 (defun mevedel-file-cache-get (cache path)
   "Return the `mevedel-file-state' for PATH in CACHE, or nil if missing.
 
@@ -142,13 +135,6 @@ Returns STATE."
           (cons key (delete key (mevedel-file-cache-order cache))))
     (mevedel-file-cache--evict cache)
     state))
-
-(defun mevedel-file-cache-clear (cache)
-  "Remove all entries from CACHE."
-  (clrhash (mevedel-file-cache-table cache))
-  (setf (mevedel-file-cache-order cache) nil
-        (mevedel-file-cache-total-bytes cache) 0))
-
 
 ;;
 ;;; External change detection
@@ -278,7 +264,7 @@ SESSION has no workspace."
                  (or (null mod-turn) (< mod-turn read-turn))))
               ((equal offset (mevedel-file-interaction-read-offset entry)))
               ((equal limit (mevedel-file-interaction-read-limit entry)))
-              (state (gethash key (mevedel-file-cache-table cache)))
+              (state (mevedel-file-cache-get cache key))
               (cached-mtime (mevedel-file-state-mtime state))
               ((file-readable-p key))
               (current-mtime (file-attribute-modification-time

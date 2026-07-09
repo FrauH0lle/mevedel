@@ -152,14 +152,12 @@
                   "mevedel-tool-plan" (&optional session))
 
 ;; `mevedel-tool-task'
-(declare-function mevedel-tool-task--delete-overlay
-                  "mevedel-tool-task" (session))
 (declare-function mevedel-tool-task--display-string
-                  "mevedel-tool-task" (session show-completed view-p))
+                  "mevedel-tool-task" (session show-completed))
 (declare-function mevedel-tool-task--session-has-active-p
                   "mevedel-tool-task" (session))
 (declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
-(defvar mevedel-tool-task--overlay-keymap)
+(defvar mevedel-tool-task--status-keymap)
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-ensure-generated-state-ignored
@@ -1034,11 +1032,7 @@ Set by the send path right after the user turn is echoed, consumed by
 `mevedel-view--render-incremental' to bound the delete-and-re-render
 region for each progress update, and cleared when the final
 `gptel-post-response-functions' render completes.  Nil outside an
-active exchange.
-
-Older sessions and tests may leave this as an integer position; render
-paths accept that shape and normalize it back to a marker when they
-re-anchor the current turn.")
+active exchange.")
 
 (defvar-local mevedel-view--data-turn-start nil
   "Data-buffer marker at which the current assistant turn starts.
@@ -1518,7 +1512,7 @@ navigation and activation fallbacks."
      "TAB" #'mevedel-view-toggle-section
      "<return>" #'mevedel-view-activate-at-point
      "RET" #'mevedel-view-activate-at-point)
-   mevedel-tool-task--overlay-keymap))
+   mevedel-tool-task--status-keymap))
 
 (define-key mevedel-view-mode-map
             [remap move-beginning-of-line]
@@ -2731,7 +2725,7 @@ the view has already inserted the in-flight markers."
   (and (not mevedel-view--agent-transcript-p)
        (not mevedel-view--request-progress-suppressed)
        (or mevedel-view--spinner-start-time
-           (mevedel-view--normalize-in-flight-turn-start)
+           (mevedel-view--in-flight-turn-start-position)
            (let ((buf (or data-buf
                           (and (boundp 'mevedel--data-buffer)
                                mevedel--data-buffer))))
@@ -3092,7 +3086,7 @@ INFO is a plist with at least :name and :args."
       ;; `mevedel-view--pre-tool-hook' owns in-flight tool status lines.
       ;; Avoid creating a second "Calling ..." line before that hook renders
       ;; the animated pending-tool live tail.
-      (unless (and (mevedel-view--normalize-in-flight-turn-start)
+      (unless (and (mevedel-view--in-flight-turn-start-position)
                    (markerp mevedel-view--data-turn-start)
                    (marker-position mevedel-view--data-turn-start))
         (let ((summary (mevedel-view--tool-status-string tool-name args)))
@@ -3716,10 +3710,6 @@ workspace root of the session tied to the current data buffer."
     action nil
     pointer nil)
   "Text properties that make rendered text act like a link.")
-
-(defun mevedel-view--clear-link-action-properties (start end)
-  "Remove link action properties between START and END."
-  (remove-text-properties start end mevedel-view--link-action-properties))
 
 (defun mevedel-view--open-url-action (button)
   "Open BUTTON's URL with `browse-url'."
@@ -5790,25 +5780,14 @@ a marker so toggles that change buffer length do not invalidate the walk."
 
 (defun mevedel-view--in-flight-turn-start-position ()
   "Return the current in-flight turn start position, or nil."
-  (cond
-   ((markerp mevedel-view--in-flight-turn-start)
-    (marker-position mevedel-view--in-flight-turn-start))
-   ((integerp mevedel-view--in-flight-turn-start)
-    mevedel-view--in-flight-turn-start)))
+  (when (markerp mevedel-view--in-flight-turn-start)
+    (marker-position mevedel-view--in-flight-turn-start)))
 
 (defun mevedel-view--set-in-flight-turn-start (position)
   "Set `mevedel-view--in-flight-turn-start' to POSITION as a marker.
 POSITION may be an integer or marker."
   (setq mevedel-view--in-flight-turn-start
         (copy-marker position nil)))
-
-(defun mevedel-view--normalize-in-flight-turn-start ()
-  "Convert a legacy integer in-flight turn start to a marker.
-Return the current in-flight turn start position, or nil."
-  (when (integerp mevedel-view--in-flight-turn-start)
-    (mevedel-view--set-in-flight-turn-start
-     mevedel-view--in-flight-turn-start))
-  (mevedel-view--in-flight-turn-start-position))
 
 (defun mevedel-view--recover-in-flight-turn-start
     (data-from history-start history-end)
@@ -5907,7 +5886,7 @@ the render so user toggles survive streaming ticks."
                      (with-current-buffer data-buf
                        (mevedel-transcript--extract-segments data-from data-to))))
          (turns (mevedel-view--group-into-turns segments data-buf))
-         (in-flight-p (mevedel-view--normalize-in-flight-turn-start))
+         (in-flight-p (mevedel-view--in-flight-turn-start-position))
          (pre-rendered-user-visible-p
           (mevedel-view--pre-rendered-user-visible-p))
          (pending mevedel-view--pending-tool-calls))
@@ -6090,7 +6069,7 @@ the render so user toggles survive streaming ticks."
 (defun mevedel-view--schedule-tool-boundary-render (data-buf)
   "Schedule a coalesced incremental render for DATA-BUF."
   (when (and (buffer-live-p data-buf)
-             (mevedel-view--normalize-in-flight-turn-start)
+             (mevedel-view--in-flight-turn-start-position)
              (markerp mevedel-view--data-turn-start))
     (mevedel-view--cancel-tool-boundary-render)
     (if (and (numberp mevedel-view-tool-boundary-render-delay)
@@ -6125,7 +6104,7 @@ rebuilds at most a few times per second rather than per token."
       ;; Only schedule when a turn is in-flight.  Before the first
       ;; user send -- or after the final post-response cleanup -- the
       ;; incremental markers are nil and rendering would no-op.
-      (when (and (mevedel-view--normalize-in-flight-turn-start)
+      (when (and (mevedel-view--in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (unless mevedel-view--stream-render-timer
           (setq mevedel-view--stream-render-timer
@@ -6192,7 +6171,7 @@ debounced so bursts of tool boundary hooks coalesce."
       ;; progress.
       (mevedel-view--ensure-request-progress data-buf)
       (mevedel-view--start-spinner-timer)
-      (when (and (mevedel-view--normalize-in-flight-turn-start)
+      (when (and (mevedel-view--in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--refresh-pending-tool-lines)
         (mevedel-view--schedule-tool-boundary-render data-buf)
@@ -6231,7 +6210,7 @@ debounced so bursts of completed tool calls coalesce."
       (unless (or mevedel-view--pending-tool-calls
                   (mevedel-view--request-progress-visible-p))
         (mevedel-view--stop-spinner-timer))
-      (when (and (mevedel-view--normalize-in-flight-turn-start)
+      (when (and (mevedel-view--in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
         (mevedel-view--refresh-pending-tool-lines)
         (mevedel-view--schedule-tool-boundary-render data-buf)
@@ -6707,11 +6686,6 @@ EXPANDED means insert the disclosure body expanded."
       (setq body (string-trim body))
       (unless (string-empty-p body)
         body))))
-
-(defun mevedel-view--hook-context-body-from-text (text)
-  "Return the first generated hook context body from TEXT, or nil."
-  (when-let* ((entry (car (mevedel-view--hook-context-events-from-text text))))
-    (plist-get entry :body)))
 
 (defun mevedel-view--hook-context-unescape (text)
   "Unescape XML entities in hook context TEXT."
@@ -7620,7 +7594,7 @@ section only."
      ((mevedel-view--toggle-fragment-section)
       t)
      ((memq vtype '(turn-header turn-summary))
-      (mevedel-view--normalize-in-flight-turn-start)
+      (mevedel-view--in-flight-turn-start-position)
       (if collapsed
           (mevedel-view--expand-turn)
         (mevedel-view--collapse-turn)))
@@ -7849,7 +7823,7 @@ from signalling `args-out-of-range' on stale source coordinates."
              ;; the turn.
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
-              (when-let* ((pos (mevedel-view--normalize-in-flight-turn-start)))
+              (when-let* ((pos (mevedel-view--in-flight-turn-start-position)))
                 (<= view-start pos view-end))))
         (save-excursion
           (goto-char view-start)
@@ -8007,7 +7981,7 @@ Tool segments with a registered renderer produce the renderer's
                       'mevedel-view-system-reminder)))
              (turn-id (get-text-property (car bounds) 'mevedel-view-turn-id))
              (in-flight-after-section-p
-              (when-let* ((pos (mevedel-view--normalize-in-flight-turn-start)))
+              (when-let* ((pos (mevedel-view--in-flight-turn-start-position)))
                 (<= view-start pos view-end))))
         (save-excursion
           (goto-char view-start)
@@ -8191,7 +8165,7 @@ restore the turn with all inner section state intact.  Signals a
          (id (get-text-property (point) 'mevedel-view-turn-id)))
     (unless (and bounds role id)
       (user-error "No turn at point"))
-    (mevedel-view--normalize-in-flight-turn-start)
+    (mevedel-view--in-flight-turn-start-position)
     (let* ((turn-start (car bounds))
            (turn-end (cdr bounds))
            (stash (buffer-substring turn-start turn-end))
@@ -8233,7 +8207,7 @@ restore the turn with all inner section state intact.  Signals a
          (stash (get-text-property (point) 'mevedel-view-stash)))
     (unless (and bounds stash)
       (user-error "No collapsed turn at point"))
-    (mevedel-view--normalize-in-flight-turn-start)
+    (mevedel-view--in-flight-turn-start-position)
     (let ((inhibit-read-only t))
       (save-excursion
         (goto-char (car bounds))
@@ -8628,7 +8602,7 @@ rerender)."
             (data-turn-start-pos
              (and (markerp mevedel-view--data-turn-start)
                   (marker-position mevedel-view--data-turn-start)))
-            (in-flight-was (mevedel-view--normalize-in-flight-turn-start))
+            (in-flight-was (mevedel-view--in-flight-turn-start-position))
             (preserved-live-tail
              (when-let* (((not mevedel-view--agent-transcript-p))
                          (tail-start
@@ -9988,7 +9962,7 @@ HOOK-CONTEXT and HOOK-AUDITS are summarized in the view when present."
           (when-let* ((marker (mevedel-view--active-response-marker
                                info data-buffer)))
             (setq mevedel-view--data-turn-start (copy-marker marker nil))))
-        (unless (mevedel-view--normalize-in-flight-turn-start)
+        (unless (mevedel-view--in-flight-turn-start-position)
           (setq mevedel-view--in-flight-turn-start
                 (copy-marker (mevedel-view--history-insertion-marker) nil)))
         (setq mevedel-view--request-progress-suppressed nil)
@@ -11258,7 +11232,7 @@ HEADER-WIDTH is the optional width used to align the row header."
 
 (defun mevedel-view--status-task-body (session show-completed)
   "Return propertized status-zone task text for SESSION and SHOW-COMPLETED."
-  (let ((body (mevedel-tool-task--display-string session show-completed t)))
+  (let ((body (mevedel-tool-task--display-string session show-completed)))
     (add-text-properties 0 (length body) '(mevedel-tool-task t) body)
     body))
 
@@ -11347,12 +11321,6 @@ HEADER-WIDTH is the optional width used to align the row header."
        (mevedel-view--call-preserving-input-point
         (lambda ()
           (require 'mevedel-view-fragment)
-          (when-let* ((session (or (and (boundp 'mevedel--session)
-                                        mevedel--session)
-                                   (and (buffer-live-p data-buf)
-                                        (buffer-local-value
-                                         'mevedel--session data-buf)))))
-            (mevedel-tool-task--delete-overlay session))
           (let* ((model (mevedel-view--status-model data-buf))
                  (fragments (mevedel-view--status-fragments model)))
             (when (or fragments
@@ -11447,7 +11415,7 @@ Return non-nil on success."
            (turn-id (get-text-property pos 'mevedel-view-turn-id))
            (in-flight-after-section-p
             (and bounds
-                 (when-let* ((start (mevedel-view--normalize-in-flight-turn-start)))
+                 (when-let* ((start (mevedel-view--in-flight-turn-start-position)))
                    (<= (car bounds) start (cdr bounds)))))
            (rendering
             (and bounds

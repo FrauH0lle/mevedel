@@ -10,9 +10,9 @@ Plugin details are exposed from the management buffer, not as a separate slash c
 
 Plugin mutations should refresh the current session's visible plugin skills and hook state immediately when possible; activation should not require starting a new session.
 
-The first implementation slice covers plugin and hook resource roots, source-bound activation state with hook consent fingerprints, global `.agents` installs with legacy `.mevedel` management, enable-all activation with consent, managed update/removal rules, and the `*mevedel plugins*` management buffer. Transient UI is deferred until the command API and buffer behavior settle.
+The first implementation slice covers plugin and hook resource roots, source-bound activation state with hook consent fingerprints, global `.agents` installs, enable-all activation with consent, managed update/removal rules, and the `*mevedel plugins*` management buffer. Transient UI is deferred until the command API and buffer behavior settle.
 
-Plugin install/update/removal remains source-specific: `/plugin install OWNER/REPO` writes to global `~/.agents/plugins/`, while legacy global `~/.mevedel/plugins/` installs remain manageable. `/plugin disable NAME` is the project deactivation path; `/plugin remove NAME` and `/plugin uninstall NAME` uninstall only global managed installs. If current workspace activation points at the removed source, it is cleared. Project-local plugins and extra roots are not updated or deleted by mevedel, and workspace plugin data is not deleted by uninstall.
+Plugin install/update/removal remains source-specific: `/plugin install OWNER/REPO` writes to global `~/.agents/plugins/`. `/plugin disable NAME` is the project deactivation path; `/plugin remove NAME` and `/plugin uninstall NAME` uninstall only global managed installs. If current workspace activation points at the removed source, it is cleared. Project-local plugins and extra roots are not updated or deleted by mevedel, and workspace plugin data is not deleted by uninstall.
 
 Activation is bound to plugin name plus source root, not name alone. If a higher-precedence plugin with the same manifest name appears, it does not inherit enabled state from the shadowed source; plugin listing must report the conflict so the user can consciously switch to the new source.
 

@@ -542,23 +542,6 @@ TOOL-PROP."
             (should (equal "main" (plist-get readback :session-name)))))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
-
-;;
-;;; Version patch
-
-(mevedel-deftest mevedel-session-persistence--patch-sidecar ()
-  ,test
-  (test)
-  :doc "passes through plist on current version"
-  (let* ((plist `(:version ,(mevedel-version) :session-name "x"))
-         (out   (mevedel-session-persistence--patch-sidecar plist)))
-    (should (equal plist out)))
-  :doc "stamps current version on missing/old version"
-  (let* ((plist '(:session-name "x"))
-         (out   (mevedel-session-persistence--patch-sidecar plist)))
-    (should (equal (mevedel-version) (plist-get out :version)))))
-
-
 ;;
 ;;; Phase 2: ID generation, paths, lazy materialization
 
@@ -678,10 +661,10 @@ installs the real hook)."
 
 (defun test-mevedel-session-persistence--reset-instructions ()
   "Reset global and workspace-scoped instruction state for persistence cases."
-  (setq mevedel--instructions nil)
-  (setq mevedel--id-counter 0)
-  (setq mevedel--id-usage-map (make-hash-table))
-  (setq mevedel--retired-ids nil)
+  (setf (mevedel--instruction-alist) nil)
+  (setf (mevedel--instruction-id-counter) 0)
+  (setf (mevedel--instruction-id-usage-map) (make-hash-table))
+  (setf (mevedel--instruction-retired-ids) nil)
   (setq mevedel--instruction-states (make-hash-table :test #'equal))
   (setq mevedel--instruction-current-state-key :global))
 
@@ -785,11 +768,11 @@ installs the real hook)."
               (setq-local mevedel--workspace ws-b)
               (mevedel--create-reference-in buf-b (point-min) (point-max)))
             (mevedel--instruction-activate-workspace ws-a)
-            (should (= 1 (length (alist-get buf-a mevedel--instructions))))
-            (should-not (assoc buf-b mevedel--instructions))
+            (should (= 1 (length (alist-get buf-a (mevedel--instruction-alist)))))
+            (should-not (assoc buf-b (mevedel--instruction-alist)))
             (mevedel--instruction-activate-workspace ws-b)
-            (should (= 1 (length (alist-get buf-b mevedel--instructions))))
-            (should-not (assoc buf-a mevedel--instructions))))
+            (should (= 1 (length (alist-get buf-b (mevedel--instruction-alist)))))
+            (should-not (assoc buf-a (mevedel--instruction-alist)))))
       (when (buffer-live-p buf-a)
         (with-current-buffer buf-a (set-buffer-modified-p nil))
         (kill-buffer buf-a))
@@ -1196,10 +1179,10 @@ installs the real hook)."
               (insert "Explain beta\n")
               (mevedel-session-persistence-save session data-buf)
               (mevedel--clear-instruction-state workspace)
-              (should-not (mevedel--instructions))
+              (should-not (mevedel--all-instructions))
               (mevedel-session-persistence--load-instructions session data-buf 1))
             (mevedel--instruction-activate-workspace workspace)
-            (should (= 1 (length (alist-get source-buf mevedel--instructions)))))
+            (should (= 1 (length (alist-get source-buf (mevedel--instruction-alist))))))
         (when (and data-buf (buffer-live-p data-buf))
           (test-mevedel-session-persistence--release-and-kill data-buf session))
         (when (buffer-live-p source-buf)
@@ -1253,7 +1236,7 @@ installs the real hook)."
               (mevedel--clear-instruction-state workspace)
               (mevedel-session-persistence--load-instructions session data-buf))
             (mevedel--instruction-activate-workspace workspace)
-            (let* ((ov (car (alist-get source-buf mevedel--instructions)))
+            (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
                    (directive (overlay-get ov 'mevedel-directive)))
               (should (equal "Fix beta" directive))
               (should-not (text-properties-at 0 directive))))
@@ -1317,7 +1300,7 @@ installs the real hook)."
                 (mevedel-session-save-path session))
                tempdir nil t workspace))
             (mevedel--instruction-activate-workspace workspace)
-            (let* ((ov (car (alist-get source-buf mevedel--instructions)))
+            (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
                    (directive (overlay-get ov 'mevedel-directive)))
               (should (equal "Fix beta" directive))
               (should-not (text-properties-at 0 directive))))
@@ -1395,7 +1378,7 @@ installs the real hook)."
               (mevedel-session-persistence--load-instructions
                session data-buf 1))
             (mevedel--instruction-activate-workspace workspace)
-            (let ((ov (car (alist-get source-buf mevedel--instructions))))
+            (let ((ov (car (alist-get source-buf (mevedel--instruction-alist)))))
               (should ov)
               (with-current-buffer source-buf
                 (should (equal "TARGET\n"
@@ -1448,7 +1431,7 @@ installs the real hook)."
               (mevedel-session-persistence--load-instructions
                session data-buf 1))
             (mevedel--instruction-activate-workspace workspace)
-            (let* ((ovs (alist-get source-buf mevedel--instructions))
+            (let* ((ovs (alist-get source-buf (mevedel--instruction-alist)))
                    (child (cl-find-if
                            (lambda (ov)
                              (with-current-buffer source-buf
@@ -1553,7 +1536,7 @@ installs the real hook)."
               (mevedel-session-persistence--load-instructions
                session data-buf 1))
             (mevedel--instruction-activate-workspace workspace)
-            (let ((ov (car (alist-get source-buf mevedel--instructions))))
+            (let ((ov (car (alist-get source-buf (mevedel--instruction-alist)))))
               (should ov)
               (should (= (overlay-start ov) (overlay-end ov)))
               (with-current-buffer source-buf
@@ -3158,15 +3141,24 @@ workspace tree."
 (mevedel-deftest mevedel-session-persistence-load-sidecar ()
   ,test
   (test)
-  :doc "reads + applies version patch"
+  :doc "reads a current-version sidecar"
   (let ((tmp (make-temp-file "mevedel-meta-test-" nil ".el")))
     (unwind-protect
         (progn
           (mevedel-session-persistence-write
-           tmp `(:version "v0.0.0" :session-name "x"))
+           tmp `(:version ,(mevedel-version) :session-name "x"))
           (let ((plist (mevedel-session-persistence-load-sidecar tmp)))
             (should (equal (mevedel-version) (plist-get plist :version)))
             (should (equal "x" (plist-get plist :session-name)))))
+      (when (file-exists-p tmp) (delete-file tmp))))
+
+  :doc "rejects an unsupported sidecar version"
+  (let ((tmp (make-temp-file "mevedel-meta-test-" nil ".el")))
+    (unwind-protect
+        (progn
+          (mevedel-session-persistence-write
+           tmp '(:version "v0.0.0" :session-name "x"))
+          (should-not (mevedel-session-persistence-load-sidecar tmp)))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
 (mevedel-deftest mevedel-session-persistence-restore ()
@@ -5132,8 +5124,7 @@ workspace tree."
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace
                         (mevedel-session-workspace session))
-            ;; Begin a request so tool-fs's snapshot writes into the
-            ;; struct slot as well as the legacy alist.
+            ;; Begin a request so tool-fs records the original content.
             (mevedel-request-begin session)
             (unwind-protect
                 (progn
@@ -5141,13 +5132,7 @@ workspace tree."
                    tool (lambda (r) (setq result r))
                    (list :path tracked :content "MODIFIED\n"))
                   (should (equal "ok" result))
-                  ;; Snapshot step captured the pre-edit content on
-                  ;; both surfaces (legacy alist AND struct hash).
-                  (should (assoc tracked mevedel--request-file-snapshots))
-                  (should (equal
-                           "ORIGINAL\n"
-                           (cdr (assoc tracked
-                                       mevedel--request-file-snapshots))))
+                  ;; Snapshot step captured the pre-edit content.
                   (let ((ht (mevedel-request-file-snapshots
                              mevedel--current-request)))
                     (should (hash-table-p ht))

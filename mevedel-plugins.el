@@ -126,11 +126,6 @@ roots below it."
   "Return the global directory where new plugins are installed."
   (mevedel-plugins--normalize-directory mevedel-plugin-install-directory))
 
-(defun mevedel-plugins--legacy-dir ()
-  "Return the legacy global mevedel plugin directory."
-  (mevedel-plugins--normalize-directory
-   (file-name-concat mevedel-user-dir "plugins")))
-
 (defun mevedel-plugins--current-workspace ()
   "Return the current chat workspace, if available."
   (or (and (boundp 'mevedel--session)
@@ -317,8 +312,7 @@ Do not descend into a directory once it is recognized as a plugin root."
    (when workspace
      (list (mevedel-plugins--workspace-plugins-dir workspace ".mevedel")
            (mevedel-plugins--workspace-plugins-dir workspace ".agents")))
-   (list (mevedel-plugins--legacy-dir)
-         (mevedel-plugins-dir))
+   (list (mevedel-plugins-dir))
    mevedel-plugin-extra-roots))
 
 (defun mevedel-plugins--plugin-roots (&optional workspace)
@@ -885,10 +879,7 @@ Preserve plugin state in WORKSPACE."
 
 (defun mevedel-plugins--managed-root-directories ()
   "Return directories that mevedel may update or remove."
-  (delete-dups
-   (mapcar #'mevedel-plugins--source-root
-           (list (mevedel-plugins--legacy-dir)
-                 (mevedel-plugins-dir)))))
+  (list (mevedel-plugins--source-root (mevedel-plugins-dir))))
 
 (defun mevedel-plugins--managed-root-p (root)
   "Return non-nil when ROOT is below a mevedel-managed global root."
