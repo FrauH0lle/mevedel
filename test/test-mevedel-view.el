@@ -9487,7 +9487,7 @@ finds it during `$' skill dispatch."
           (should (equal (list session data-buf) save-called))
           (should (equal '(" Ready" success) status-called)))))
 
-  :doc "fork result render-data preserves prompt rewrite audit after rerender"
+  :doc "fork result prompt rewrite audit rerenders on the submitted user turn"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "myfork"
@@ -9512,35 +9512,51 @@ finds it during `$' skill dispatch."
                    '(:status ok :kind fork
                              :result "agent body"
                              :agent-id "myfork--audit"
+                             :hook-audits
+                             ((:type prompt-rewrite
+                                     :event "UserPromptExpansion"
+                                     :original "Original body"
+                                     :submitted "Expanded body"
+                                     :reason "expanded"))
                              :render-data
                              (:kind agent-transcript
                                     :agent-id "myfork--audit"
                                     :agent-type "general-purpose"
                                     :description "run"
                                     :status completed
-                                    :body "agent body"
-                                    :hook-audits
-                                    ((:type prompt-rewrite
-                                            :event "UserPromptExpansion"
-                                            :original "Original body"
-                                            :submitted "Expanded body"
-                                            :reason "expanded"))))))
+                                    :body "agent body"))))
         (with-current-buffer data-buf
           (let* ((text (buffer-string))
+                 (audit-pos (string-search
+                             "<!-- mevedel-hook-audit -->" text))
+                 (response-pos (and audit-pos
+                                    (string-search gptel-response-separator
+                                                   text (1+ audit-pos))))
                  (render-data (cdr (mevedel-pipeline-extract-render-data
                                     text))))
             (should (string-search "<!-- mevedel-render-data -->" text))
+            (should audit-pos)
+            (should response-pos)
+            (should (< audit-pos response-pos))
+            (goto-char (point-min))
+            (search-forward "<!-- mevedel-hook-audit -->")
+            (should (eq (get-text-property (match-beginning 0) 'gptel)
+                        'ignore))
             (goto-char (point-min))
             (search-forward "<!-- mevedel-render-data -->")
             (should (eq (get-text-property (match-beginning 0) 'gptel)
                         'ignore))
-            (should (plist-get render-data :hook-audits))))
+            (should-not (plist-get render-data :hook-audits))))
         (with-current-buffer view-buf
           (mevedel-view--full-rerender)
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
+          (let* ((text (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker))
+                 (hook-pos (string-search "hook changed prompt" text))
+                 (agent-pos (string-search
+                             "Agent: general-purpose -- run" text)))
             (should (string-match-p "Agent: general-purpose -- run" text))
             (should (string-match-p "hook changed prompt" text))
+            (should (< hook-pos agent-pos))
             (should-not (string-match-p "Original body" text)))
           (goto-char (point-min))
           (search-forward "hook changed prompt")
@@ -10604,7 +10620,11 @@ finds it during `$' skill dispatch."
           (let ((text (buffer-string)))
             (should (string-match-p "first prepared" text))
             (should (string-match-p "<!-- mevedel-hook-audit -->" text))
-            (should (string-match-p "secret draft" text))))
+            (should-not (string-match-p "secret draft" text))
+            (let ((audit (car (mevedel-view--hook-audit-records-from-text
+                               text))))
+              (should (equal "secret draft"
+                             (plist-get audit :original))))))
         (with-current-buffer view-buf
           (mevedel-view--full-rerender)
           (should (string-match-p "second prepared"
@@ -11263,7 +11283,39 @@ finds it during `$' skill dispatch."
         (should (string-match-p "Startup context" text))
         (should (string-match-p "UserPromptSubmit" text))
         (should (string-match-p "Prompt context" text))
-        (should-not (string-match-p "<hook-event" text))))))
+        (should-not (string-match-p "<hook-event" text)))))
+
+  :doc "escaped hook context preserves delimiter-looking body text"
+  (mevedel-view-test--with-buffers
+    (let ((body "literal </hook-event> & <tag>"))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat
+        "Real user prompt here.\n\n"
+        (mevedel-hooks-format-context
+         (list (list :event "UserPromptSubmit"
+                     :body body)))
+        "\n")
+       nil)
+      (with-current-buffer data-buf
+        (let ((text (buffer-string)))
+          (should (string-match-p "&lt;/hook-event&gt;" text))
+          (should-not (string-match-p "literal </hook-event>" text))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Real user prompt" text))
+          (should (string-match-p "hook context added" text))
+          (should-not (string-match-p "literal </hook-event>" text)))
+        (goto-char (point-min))
+        (search-forward "hook context added")
+        (mevedel-view-toggle-section)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "UserPromptSubmit" text))
+          (should (string-match-p (regexp-quote body) text))
+          (should-not (string-match-p "&lt;/hook-event&gt;" text)))))))
 
 (mevedel-deftest mevedel-view--render-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")

@@ -940,6 +940,22 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                             :body (format "%s" item))))
                   additional))))
 
+(defun mevedel-hooks--context-xml-escape (text &optional attribute)
+  "Escape TEXT for hook context XML-ish content.
+When ATTRIBUTE is non-nil, also escape double quotes."
+  (let ((text
+         (replace-regexp-in-string
+          ">" "&gt;"
+          (replace-regexp-in-string
+           "<" "&lt;"
+           (replace-regexp-in-string
+            "&" "&amp;" (or text "") t t)
+           t t)
+          t t)))
+    (if attribute
+        (replace-regexp-in-string "\"" "&quot;" text t t)
+      text)))
+
 (defun mevedel-hooks-format-context (entries)
   "Return model-visible hook context XML for normalized ENTRIES."
   (let ((entries (delq nil
@@ -954,8 +970,11 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
        (mapconcat
         (lambda (entry)
           (format "<hook-event name=\"%s\">\n%s\n</hook-event>"
-                  (plist-get entry :event)
-                  (plist-get entry :body)))
+                  (mevedel-hooks--context-xml-escape
+                   (format "%s" (plist-get entry :event))
+                   t)
+                  (mevedel-hooks--context-xml-escape
+                   (format "%s" (plist-get entry :body)))))
         entries
         "\n")
        "\n</hook-context>"))))

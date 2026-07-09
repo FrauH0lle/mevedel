@@ -640,6 +640,24 @@
 		   (should (string-match-p "not-json"
 					   (alist-get 'callback payload)))))
 
+(mevedel-deftest mevedel-hooks-format-context
+  (:doc "escapes event names and delimiter-looking body text")
+  (should
+   (equal
+    (concat
+     "<hook-context>\n"
+     "<hook-event name=\"UserPromptSubmit\">\n"
+     "literal &lt;/hook-event&gt; &amp; &lt;tag&gt; \"quoted\"\n"
+     "</hook-event>\n"
+     "<hook-event name=\"A&quot;B\">\n"
+     "x &amp; y\n"
+     "</hook-event>\n"
+     "</hook-context>")
+    (mevedel-hooks-format-context
+     '((:event "UserPromptSubmit"
+               :body "literal </hook-event> & <tag> \"quoted\"")
+       (:event "A\"B" :body "x & y"))))))
+
 
 ;;
 ;;; Decisions

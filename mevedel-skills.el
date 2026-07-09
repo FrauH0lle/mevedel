@@ -148,6 +148,9 @@
                   "mevedel-utilities" (start end))
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-utilities" (record))
+(declare-function mevedel--hook-prompt-rewrite-audit-record
+                  "mevedel-utilities"
+                  (event original submitted &optional reason))
 (declare-function mevedel--restore-render-data-gptel-properties
                   "mevedel-utilities" (start end))
 
@@ -2500,15 +2503,10 @@ that boundary defensive."
 (defun mevedel-skills--prompt-rewrite-audit-record (original decision)
   "Return a `UserPromptExpansion' rewrite audit record, or nil."
   (when-let* ((updated (plist-get decision :updated-input))
-              ((stringp updated))
-              ((not (equal updated original))))
-    (append
-     (list :type 'prompt-rewrite
-           :event "UserPromptExpansion"
-           :original (or original "")
-           :submitted updated)
-     (when-let* ((reason (mevedel-hooks-decision-reason decision)))
-       (list :reason reason)))))
+              ((stringp updated)))
+    (mevedel--hook-prompt-rewrite-audit-record
+     'UserPromptExpansion original updated
+     (mevedel-hooks-decision-reason decision))))
 
 (defun mevedel-skills-inline-display-text (name arguments)
   "Return the compact view text for inline skill NAME and ARGUMENTS."
@@ -3031,15 +3029,6 @@ that already operate async (e.g., the `Skill' tool handler)."
                                    (render-data
                                     (and wrapped-p
                                          (plist-get response :render-data)))
-                                   (render-data
-                                    (if (and render-data hook-audits)
-                                        (plist-put
-                                         (copy-sequence render-data)
-                                         :hook-audits
-                                         (append
-                                          hook-audits
-                                          (plist-get render-data :hook-audits)))
-                                      render-data))
                                    (transcript-agent-id
                                     (and wrapped-p
                                          (plist-get render-data :agent-id))))
@@ -4081,11 +4070,6 @@ observe the completed response."
                        (concat result
                                (mevedel-pipeline--format-render-data-block
                                 render-data)))
-                   result))
-         (result (if (and hook-audits (not render-data))
-                     (concat result
-                             (mapconcat #'mevedel--format-hook-audit-record
-                                        hook-audits ""))
                    result)))
     (unless (bound-and-true-p mevedel--current-request)
       (when (bound-and-true-p mevedel--session)
@@ -4100,6 +4084,9 @@ observe the completed response."
         (unless (bolp) (insert "\n"))
         (mevedel--clear-user-turn-gptel-properties
          user-turn-start (point))))
+    (when hook-audits
+      (insert (mapconcat #'mevedel--format-hook-audit-record
+                         hook-audits "")))
     (unless (bolp) (insert "\n"))
     (insert gptel-response-separator)
     (let ((start (point)))

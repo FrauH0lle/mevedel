@@ -55,14 +55,12 @@
       (while (search-forward mevedel--hook-audit-open nil t)
         (let ((record-start (point)))
           (when (search-forward mevedel--hook-audit-close nil t)
-            (let ((read-eval nil))
-              (condition-case nil
-                  (push (read-from-string
-                         (buffer-substring-no-properties
-                          record-start (match-beginning 0)))
-                        records)
-                (error nil)))))))
-    (mapcar #'car (nreverse records))))
+            (when-let* ((record
+                         (mevedel--read-hook-audit-record
+                          (buffer-substring-no-properties
+                           record-start (match-beginning 0)))))
+              (push record records))))))
+    (nreverse records)))
 
 
 ;;
