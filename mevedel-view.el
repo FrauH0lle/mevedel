@@ -528,6 +528,16 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
   "Face for collapsed response summary markers."
   :group 'mevedel)
 
+(defface mevedel-view-source-block
+  '((t :inherit org-block :foreground unspecified :extend t))
+  "Face for rendered Markdown source block panels."
+  :group 'mevedel)
+
+(defface mevedel-view-source-block-language
+  '((t :inherit (italic font-lock-type-face mevedel-view-source-block)))
+  "Face for rendered Markdown source block language labels."
+  :group 'mevedel)
+
 (defface mevedel-view-spinner
   '((t :inherit (bold font-lock-comment-face)))
   "Face for the spinner status line."
@@ -3808,6 +3818,15 @@ workspace root of the session tied to the current data buffer."
         (push (cons (plist-get block :body-start)
                     (plist-get block :body-end))
               ranges)))
+    (save-excursion
+      (goto-char start)
+      (while (< (point) end)
+        (let ((next (or (next-single-property-change
+                         (point) 'mevedel-view-code-block-body nil end)
+                        end)))
+          (when (get-text-property (point) 'mevedel-view-code-block-body)
+            (push (cons (point) next) ranges))
+          (goto-char next))))
     (nreverse ranges)))
 
 (defun mevedel-view--position-in-ranges-p (position ranges)
@@ -3943,7 +3962,9 @@ not treated as delimiters."
     (append widths nil)))
 
 (defconst mevedel-view--markdown-table-pad-properties
-  '(mevedel-view-source
+  '(face
+    font-lock-face
+    mevedel-view-source
     mevedel-view-source-key
     mevedel-view-type
     mevedel-view-collapsed
@@ -3954,13 +3975,20 @@ not treated as delimiters."
     rear-nonsticky)
   "Text properties copied onto inserted Markdown table padding.")
 
-(defun mevedel-view--markdown-table-pad-string (text position)
-  "Return TEXT with structural properties copied from POSITION."
+(defun mevedel-view--selected-text-properties (position properties)
+  "Return plist of PROPERTIES present at POSITION."
   (let (props)
-    (dolist (prop mevedel-view--markdown-table-pad-properties)
+    (dolist (prop properties)
       (let ((value (get-text-property position prop)))
         (when value
           (setq props (plist-put props prop value)))))
+    props))
+
+(defun mevedel-view--markdown-table-pad-string (text position)
+  "Return TEXT with structural properties copied from POSITION."
+  (let ((props (mevedel-view--selected-text-properties
+                position
+                mevedel-view--markdown-table-pad-properties)))
     (if props
         (apply #'propertize text props)
       text)))
@@ -4001,32 +4029,217 @@ not treated as delimiters."
     (dolist (table (reverse (mevedel-view--markdown-table-collect start end)))
       (mevedel-view--prettify-markdown-table table))))
 
+(defun mevedel-view--code-block-body-range-after (position &optional limit)
+  "Return rendered code block body range after POSITION before LIMIT."
+  (let ((pos position)
+        (limit (or limit (point-max)))
+        start)
+    (while (and (< pos limit) (not start))
+      (if (get-text-property pos 'mevedel-view-code-block-body)
+          (setq start pos)
+        (setq pos (or (next-single-property-change
+                       pos 'mevedel-view-code-block-body nil limit)
+                      limit))))
+    (when start
+      (cons start
+            (or (next-single-property-change
+                 start 'mevedel-view-code-block-body nil limit)
+                limit)))))
+
 (defun mevedel-view--copy-code-block-button-action (button)
   "Copy BUTTON's fenced code block body."
-  (let ((start (button-get button 'mevedel-view-copy-start))
-        (end (button-get button 'mevedel-view-copy-end)))
-    (when (and start end (<= start end))
-      (kill-new (buffer-substring-no-properties start end))
+  (let* ((panel-end (button-get button 'mevedel-view-panel-end))
+         (limit (and (markerp panel-end) (marker-position panel-end)))
+         (range (and limit
+                     (mevedel-view--code-block-body-range-after
+                      (button-end button)
+                      limit)))
+         (text (if range
+                   (buffer-substring-no-properties (car range) (cdr range))
+                 "")))
+    (when limit
+      (kill-new text)
       (message "Copied"))))
 
+(defconst mevedel-view--source-block-carried-properties
+  '(mevedel-view-source
+    mevedel-view-source-key
+    mevedel-view-type
+    mevedel-view-collapsed
+    mevedel-view-turn-id
+    read-only
+    keymap
+    front-sticky
+    rear-nonsticky)
+  "Text properties copied onto inserted Markdown source panel text.")
+
+(defconst mevedel-view--source-block-mode-alist
+  '(("bash" . sh-mode)
+    ("c" . c-mode)
+    ("c++" . c++-mode)
+    ("cpp" . c++-mode)
+    ("elisp" . emacs-lisp-mode)
+    ("emacs-lisp" . emacs-lisp-mode)
+    ("javascript" . js-mode)
+    ("js" . js-mode)
+    ("lisp" . lisp-mode)
+    ("python" . python-mode)
+    ("sh" . sh-mode)
+    ("shell" . sh-mode))
+  "Best-effort major modes for common Markdown source block languages.")
+
+(defun mevedel-view--markdown-code-block-language (block)
+  "Return BLOCK's fenced language string, or nil."
+  (let ((fence (buffer-substring-no-properties
+                (plist-get block :fence-start)
+                (plist-get block :fence-end))))
+    (when (string-match "\\`[ \t]*```[ \t]*\\([^ \t\n`]*\\)" fence)
+      (let ((lang (string-trim (match-string 1 fence))))
+        (unless (string-empty-p lang)
+          lang)))))
+
+(defun mevedel-view--source-block-mode (language)
+  "Return a major mode for source block LANGUAGE, or nil."
+  (when-let* ((language (and (stringp language)
+                             (downcase language))))
+    (let ((mode (or (cdr (assoc language
+                                mevedel-view--source-block-mode-alist))
+                    (intern-soft (concat language "-mode")))))
+      (and (fboundp mode) mode))))
+
+(defun mevedel-view--markdown-code-block-label (block)
+  "Return label text for BLOCK's copy affordance."
+  (concat (or (mevedel-view--markdown-code-block-language block)
+              "snippet")
+          " ⧉"))
+
+(defun mevedel-view--source-block-carried-props (position)
+  "Return source panel properties copied from POSITION."
+  (mevedel-view--selected-text-properties
+   position
+   mevedel-view--source-block-carried-properties))
+
+(defun mevedel-view--source-block-prefix ()
+  "Return visual inset prefix for rendered source block lines."
+  (propertize "    " 'font-lock-face 'mevedel-view-source-block))
+
+(defun mevedel-view--source-block-font-lock-face (face)
+  "Return FACE combined with the source block panel face."
+  (cond
+   ((null face) 'mevedel-view-source-block)
+   ((listp face) (append face '(mevedel-view-source-block)))
+   (t (list face 'mevedel-view-source-block))))
+
+(defun mevedel-view--fontify-source-block-body (start end language)
+  "Apply best-effort LANGUAGE fontification to source body START..END."
+  (let* ((mode (mevedel-view--source-block-mode language))
+         (text (buffer-substring-no-properties start end))
+         (fontified (and mode (mevedel-view--fontify-as text mode)))
+         (limit (and fontified
+                     (min (length fontified) (- end start)))))
+    (put-text-property start end 'font-lock-face 'mevedel-view-source-block)
+    (when fontified
+      (let ((pos 0))
+        (while (< pos limit)
+          (let* ((next (or (next-single-property-change
+                            pos 'font-lock-face fontified limit)
+                           limit))
+                 (face (get-text-property pos 'font-lock-face fontified)))
+            (when face
+              (put-text-property
+               (+ start pos) (+ start next)
+               'font-lock-face
+               (mevedel-view--source-block-font-lock-face face)))
+            (setq pos next)))))))
+
+(defun mevedel-view--add-source-block-line-properties (start end)
+  "Add source panel line wrapping properties to START..END."
+  (let ((prefix (mevedel-view--source-block-prefix)))
+    (add-text-properties
+     start end
+     `(line-prefix ,prefix
+       wrap-prefix ,prefix
+       rear-nonsticky (line-prefix wrap-prefix)))))
+
 (defun mevedel-view--decorate-code-blocks-in-range (start end)
-  "Add copy affordances to fenced Markdown code blocks between START and END."
-  (dolist (block (mevedel-view--markdown-code-blocks start end))
-    (let ((fence-start (plist-get block :fence-start))
-          (fence-end (plist-get block :fence-end))
-          (body-start (plist-get block :body-start))
-          (body-end (plist-get block :body-end)))
-      (when (< fence-start fence-end)
-        (make-text-button
-         fence-start fence-end
-         'action #'mevedel-view--copy-code-block-button-action
-         'mevedel-view-copy-start body-start
-         'mevedel-view-copy-end body-end
-         'follow-link t
-         'help-echo "Copy code block"
-         'display (propertize "📋 "
-                              'font-lock-face 'shadow
-                              'pointer 'hand))))))
+  "Render fenced Markdown code blocks as source panels in START..END."
+  (let ((inhibit-read-only t))
+    (dolist (block (reverse (mevedel-view--markdown-code-blocks start end)))
+      (let* ((fence-start (plist-get block :fence-start))
+             (fence-end (plist-get block :fence-end))
+             (body-start (copy-marker (plist-get block :body-start) t))
+             (body-end (copy-marker (plist-get block :body-end) t))
+             (content-end (copy-marker
+                           (if (and (< (plist-get block :body-start)
+                                       (plist-get block :body-end))
+                                    (eq (char-before
+                                         (plist-get block :body-end))
+                                        ?\n))
+                               (1- (plist-get block :body-end))
+                             (plist-get block :body-end))))
+             (end-fence-start (plist-get block :end-fence-start))
+             (end-fence-end (plist-get block :end-fence-end))
+             (end-fence-delete-end
+              (if (and (< end-fence-end (point-max))
+                       (eq (char-after end-fence-end) ?\n))
+                  (1+ end-fence-end)
+                end-fence-end))
+             (language (mevedel-view--markdown-code-block-language block))
+             (label (mevedel-view--markdown-code-block-label block))
+             (carried (mevedel-view--source-block-carried-props
+                       fence-start)))
+        (delete-region end-fence-start end-fence-delete-end)
+        (delete-region fence-start fence-end)
+        (let* ((panel-start (marker-position body-start))
+               (panel-end (make-marker))
+               (panel-padding-line (propertize "\n"
+                                                'font-lock-face
+                                                'mevedel-view-source-block))
+               (header (concat label
+                               panel-padding-line
+                               panel-padding-line)))
+          (goto-char body-start)
+          (insert header)
+          (when carried
+            (add-text-properties panel-start (marker-position body-start)
+                                 carried))
+          (mevedel-view--add-source-block-line-properties
+           panel-start (marker-position body-start))
+          (goto-char panel-start)
+          (make-text-button
+           (point) (+ (point) (length label))
+           'action #'mevedel-view--copy-code-block-button-action
+           'follow-link t
+           'help-echo "Copy code block"
+           'mevedel-view-panel-end panel-end
+           'font-lock-face 'mevedel-view-source-block-language
+           'mouse-face 'highlight
+           'pointer 'hand)
+          (when (< (marker-position body-start)
+                   (marker-position body-end))
+            (mevedel-view--fontify-source-block-body
+             (marker-position body-start)
+             (marker-position body-end)
+             language)
+            (mevedel-view--add-source-block-line-properties
+             (marker-position body-start)
+             (marker-position body-end)))
+          (when (< (marker-position body-start)
+                   (marker-position content-end))
+            (put-text-property (marker-position body-start)
+                               (marker-position content-end)
+                               'mevedel-view-code-block-body t))
+          (goto-char body-end)
+          (let ((pad-start (point)))
+            (insert panel-padding-line)
+            (when carried
+              (add-text-properties pad-start (point) carried))
+            (mevedel-view--add-source-block-line-properties
+             pad-start (point)))
+          (set-marker panel-end (point)))
+        (set-marker body-start nil)
+        (set-marker body-end nil)
+        (set-marker content-end nil)))))
 
 (defconst mevedel-view--image-extensions
   '("png" "jpg" "jpeg" "gif" "webp")

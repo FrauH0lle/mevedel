@@ -1287,7 +1287,7 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
 
-  :doc "renders raw Markdown responses without org-style display conversion"
+  :doc "renders completed Markdown source blocks as view panels"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
@@ -1295,13 +1295,32 @@ PROPS is the value for the `gptel' property."
      'response)
     (with-current-buffer data-buf
       (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer data-buf
+      (should (string-match-p
+               "```emacs-lisp"
+               (buffer-substring-no-properties (point-min) (point-max)))))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Here is `code`" text))
-        (should (string-match-p "```emacs-lisp" text))
+        (should (string-match-p "emacs-lisp ⧉" text))
         (should (string-match-p "(message \"hi\")" text))
+        (should-not (string-match-p "```emacs-lisp" text))
         (should-not (string-match-p "#\\+begin_src" text)))))
+
+  :doc "keeps incomplete streaming Markdown source blocks raw"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     "```emacs-lisp\n(message \"hi\")\n"
+     'response)
+    (with-current-buffer data-buf
+      (mevedel-view--render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "```emacs-lisp" text))
+        (should (string-match-p "(message \"hi\")" text)))))
 
   :doc "assistant prose file line reference is buttonized"
   (let* ((root (make-temp-file "mevedel-view-response-line-" t))
@@ -1442,8 +1461,9 @@ PROPS is the value for the `gptel' property."
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "```r" text))
+        (should (string-match-p "r ⧉" text))
         (should (string-match-p "eval(f\\[\\[3\\]\\], df)" text))
+        (should-not (string-match-p "```r" text))
         (should-not (string-match-p "eval(f3, df)" text)))
       (let ((pos (save-excursion
                    (goto-char (point-min))
@@ -4016,8 +4036,13 @@ PROPS is the value for the `gptel' property."
   (with-temp-buffer
     (insert "before\n```elisp\n(+ 1 2)\n```\nafter\n")
     (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
+    (let ((text (buffer-substring-no-properties (point-min) (point-max))))
+      (should (equal "before\nelisp ⧉\n\n(+ 1 2)\n\nafter\n" text))
+      (should-not (string-match-p "```" text))
+      (should (string-match-p "elisp ⧉" text))
+      (should (string-match-p (regexp-quote "(+ 1 2)") text)))
     (goto-char (point-min))
-    (search-forward "```elisp")
+    (search-forward "elisp ⧉")
     (let ((button (button-at (match-beginning 0)))
           copied)
       (should button)
@@ -4025,7 +4050,48 @@ PROPS is the value for the `gptel' property."
                  (lambda (text &optional _replace)
                    (setq copied text))))
         (button-activate button))
-      (should (equal "(+ 1 2)\n" copied)))))
+      (should (equal "(+ 1 2)" copied)))
+    (goto-char (point-min))
+    (search-forward "(+ 1 2)")
+    (should (get-text-property (match-beginning 0)
+                               'mevedel-view-code-block-body)))
+
+  :doc "leaves incomplete fenced blocks unrendered"
+  (let ((text "before\n```elisp\n(+ 1 2)\n"))
+    (with-temp-buffer
+      (insert text)
+      (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
+      (should (equal text (buffer-string)))))
+
+  :doc "empty rendered code block copies an empty string"
+  (with-temp-buffer
+    (insert "```text\n```\n```text\nnext\n```\n")
+    (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
+    (should (string-prefix-p "text ⧉\n\n\ntext ⧉"
+                             (buffer-substring-no-properties
+                              (point-min) (point-max))))
+    (goto-char (point-min))
+    (search-forward "text ⧉")
+    (let ((button (button-at (match-beginning 0)))
+          copied)
+      (should button)
+      (cl-letf (((symbol-function 'kill-new)
+                 (lambda (text &optional _replace)
+                   (setq copied text))))
+        (button-activate button))
+      (should (equal "" copied))))
+
+  :doc "decorated code bodies stay hidden from later Markdown affordances"
+  (let ((text "```md\n| A | B |\n|---|---|\n| x | yy |\n```\n"))
+    (with-temp-buffer
+      (insert text)
+      (mevedel-view--decorate-code-blocks-in-range (point-min) (point-max))
+      (mevedel-view--prettify-markdown-tables-in-range
+       (point-min) (point-max))
+      (let ((rendered (buffer-substring-no-properties
+                       (point-min) (point-max))))
+        (should-not (string-match-p "```" rendered))
+        (should (string-match-p "| A | B |" rendered))))))
 
 (mevedel-deftest mevedel-view--decorate-markdown-url-links-in-range
   (:doc "`mevedel-view--decorate-markdown-in-range' renders Markdown links")
@@ -4109,6 +4175,19 @@ PROPS is the value for the `gptel' property."
      (point-min) (point-max))
     (should (equal "| Name  | Role     |\n|-------|----------|\n| **Alice** | [Engineer](http://x.com) |\n"
                    (buffer-string))))
+
+  :doc "copies table face onto inserted padding"
+  (with-temp-buffer
+    (insert "| Name | Role |\n")
+    (insert "|------|------|\n")
+    (insert "| Ada | Developer |\n")
+    (add-text-properties (point-min) (point-max)
+                         '(font-lock-face markdown-table-face))
+    (mevedel-view--prettify-markdown-tables-in-range
+     (point-min) (point-max))
+    (should-not
+     (text-property-not-all
+      (point-min) (point-max) 'font-lock-face 'markdown-table-face)))
 
   :doc "skips tables inside fenced code blocks"
   (let ((text "```md\n| A | B |\n|---|---|\n| x | yy |\n```\n"))

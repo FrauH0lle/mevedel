@@ -202,7 +202,12 @@ visible.
 
 Markdown rendering adds small view-only affordances:
 
-- fenced code blocks get a copy button on the opening fence line;
+- completed fenced code blocks are rewritten in the view projection as
+  source panels: the data buffer keeps the raw Markdown fences, while
+  the view strips them, inserts a clickable `LANG ⧉` label (`snippet ⧉`
+  for unlabeled fences), adds panel padding/background, and copies only
+  the code body;
+- incomplete streaming fences stay raw until the closing fence arrives;
 - local Markdown image links and bare local image paths render inline
   when Emacs can display images;
 - simple Markdown pipe tables are padded so columns line up in the view;
