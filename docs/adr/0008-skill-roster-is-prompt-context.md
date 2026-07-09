@@ -44,8 +44,8 @@ existing budget
 machinery but default to 2% of the context window, matching Codex's known-window
 policy. When the roster exceeds budget, shrink descriptions first so skill names
 remain visible; omit whole entries only when name-only entries still cannot fit.
-In `mevedel-system.el`, keep the skills descriptor after environment in the
-fixed prompt-section list, with no cache. The producer reads the current
+In `mevedel-system.el`, register the dynamic skills prompt section after
+environment, at order 50, with no cache. The producer reads the current
 session's effective skills when the session matches the prompt workspace and
 working directory; otherwise it returns nil.
 
