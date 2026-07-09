@@ -46,16 +46,6 @@
           (end-of-file nil))))
     (nreverse entries)))
 
-(defun test-mevedel-pipeline--strip-hook-audit-blocks (text)
-  "Return TEXT without hidden hook audit blocks."
-  (replace-regexp-in-string
-   (concat "\n?"
-           (regexp-quote mevedel--hook-audit-open)
-           "\\(?:.\\|\n\\)*?"
-           (regexp-quote mevedel--hook-audit-close)
-           "\n?")
-   "" (or text "") t t))
-
 (defun test-mevedel-pipeline--hook-audit-records (text)
   "Return hook audit records parsed from TEXT."
   (let (records)
@@ -427,7 +417,7 @@
 		      (lambda (_ctx) (setq result "next"))
 		      (lambda (reason) (setq result reason))))
 		   (should permission-denied-p)
-		   (should (equal (test-mevedel-pipeline--strip-hook-audit-blocks
+		   (should (equal (mevedel--strip-hook-audit-blocks
                                    result)
 				  "rewritten denial"))
                    (let ((record (car (test-mevedel-pipeline--hook-audit-records
@@ -459,7 +449,7 @@
 				   (mevedel-pipeline--step-pre-tool-hooks
 				    context #'ignore (lambda (reason) (setq failure reason))))
 				 (should (equal
-                                          (test-mevedel-pipeline--strip-hook-audit-blocks
+                                          (mevedel--strip-hook-audit-blocks
                                            failure)
                                           "blocked by PreToolUse: blocked"))
                                  (let ((record (car (test-mevedel-pipeline--hook-audit-records
@@ -703,7 +693,7 @@
 		     (mevedel-pipeline--step-post-tool-hooks
 		      context (lambda (ctx) (setq after-hooks ctx)) #'ignore))
 		   (should (equal "<media-file>\ndata:\nHOOK\n</media-file>"
-				  (test-mevedel-pipeline--strip-hook-audit-blocks
+				  (mevedel--strip-hook-audit-blocks
                                    (plist-get after-hooks :result))))
                    (let ((record (car (test-mevedel-pipeline--hook-audit-records
                                        (plist-get after-hooks :result)))))
@@ -1654,7 +1644,7 @@
 		      (lambda (reason) (setq fail-reason reason))))
 		   (should-not next-called)
 		   (should (equal
-                            (test-mevedel-pipeline--strip-hook-audit-blocks
+                            (mevedel--strip-hook-audit-blocks
                              fail-reason)
 			    "Permission denied: blocked by PermissionRequest: hook failed"))
                    (let ((record (car (test-mevedel-pipeline--hook-audit-records
@@ -2904,6 +2894,25 @@
 				  :updated-result "redacted")))
 			(raw (concat "redacted" block))
 			(tc (list :name "Read" :args nil :result raw))
+			(seen nil)
+			(orig-fun (lambda (_b tool-use)
+				    (setq seen (plist-get (car tool-use) :result))
+				    'ok)))
+		   (mevedel--parse-tool-results-scrub-advice
+		    orig-fun 'dummy-backend (list tc))
+		   (should (equal "redacted" seen))
+		   (should-not (string-match-p "SECRET" seen))
+		   (should (equal raw (plist-get tc :result))))
+
+		 :doc "strips hook-audit side channel from id Read model-bound :result"
+		 (let* ((block (mevedel--format-hook-audit-record
+				'(:type tool-result-rewrite
+				  :event "PostToolUse"
+				  :original-result "SECRET"
+				  :updated-result "redacted")))
+			(raw (concat "redacted" block))
+			(tc (list :id "toolu_1" :name "Read" :args nil
+				  :result raw))
 			(seen nil)
 			(orig-fun (lambda (_b tool-use)
 				    (setq seen (plist-get (car tool-use) :result))

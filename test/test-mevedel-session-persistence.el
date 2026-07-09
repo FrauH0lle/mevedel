@@ -1795,6 +1795,26 @@ installs the real hook)."
           (setq pos (or (next-single-property-change pos 'gptel nil user-end)
                         user-end)))
         (should ok))))
+
+  :doc "restores persisted hook audit side channels as ignored text"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:END:\n"
+            "#+begin_summary mevedel-role=compaction-summary\n"
+            "summary\n"
+            (substring-no-properties
+             (mevedel--format-hook-audit-record
+              '(:type compact-context
+                :event "PreCompact"
+                :context "private note")))
+            "#+end_summary\n")
+    (goto-char (point-min))
+    (search-forward "<!-- mevedel-hook-audit -->")
+    (should-not (get-text-property (match-beginning 0) 'gptel))
+    (mevedel-session-persistence--normalize-gptel-properties)
+    (should (eq (get-text-property (match-beginning 0) 'gptel)
+                'ignore)))
+
   :doc "leaves pasted tool-shaped text inside reasoning unclassified"
   (with-temp-buffer
     (org-mode)

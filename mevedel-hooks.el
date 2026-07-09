@@ -781,6 +781,9 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                   (plist-put out :additional-context
                              (cond
                               ((null ctx) nil)
+                              ((and (listp ctx)
+                                    (keywordp (car-safe ctx)))
+                               nil)
                               ((listp ctx) ctx)
                               (t (list ctx)))))))
         (when-let* ((perm (mevedel-hooks--normalize-permission-decision
@@ -924,38 +927,26 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
   "Return a human-readable display name for hook EVENT."
   (if (symbolp event) (symbol-name event) (format "%s" event)))
 
-(defun mevedel-hooks--context-entry (event item)
-  "Return a normalized hook context entry for EVENT and ITEM."
-  (let* ((plist-item (and (listp item)
-                          (keywordp (car-safe item))
-                          item))
-         (body (if plist-item
-                   (plist-get plist-item :body)
-                 item))
-         (entry-event (or (and plist-item (plist-get plist-item :event))
-                          event)))
-    (when body
-      (list :event (mevedel-hooks--event-display-name
-                    (or entry-event 'UserPromptSubmit))
-            :body (format "%s" body)))))
-
 (defun mevedel-hooks-context-entries (decision event)
   "Return normalized additional-context entries for DECISION and EVENT."
   (when-let* ((decision (mevedel-hooks--safe-decision decision))
               (additional (plist-get decision :additional-context)))
     (delq nil
           (mapcar (lambda (item)
-                    (mevedel-hooks--context-entry event item))
+                    (when (and item
+                               (not (and (listp item)
+                                         (keywordp (car-safe item)))))
+                      (list :event (mevedel-hooks--event-display-name event)
+                            :body (format "%s" item))))
                   additional))))
 
-(defun mevedel-hooks-format-context (entries &optional default-event)
-  "Return model-visible hook context XML for ENTRIES.
-DEFAULT-EVENT is used for legacy string entries without an event tag."
+(defun mevedel-hooks-format-context (entries)
+  "Return model-visible hook context XML for normalized ENTRIES."
   (let ((entries (delq nil
                        (mapcar (lambda (entry)
-                                 (mevedel-hooks--context-entry
-                                  (or default-event 'UserPromptSubmit)
-                                  entry))
+                                 (when-let* ((body (plist-get entry :body)))
+                                   (list :event (plist-get entry :event)
+                                         :body body)))
                                entries))))
     (when entries
       (concat
@@ -978,13 +969,11 @@ DEFAULT-EVENT is used for legacy string entries without an event tag."
           (append (mevedel-session-hook-context-pending session)
                   entries))))
 
-(defun mevedel-hooks-take-session-context (session &optional default-event)
-  "Return and clear SESSION's pending hook context as model-visible XML.
-DEFAULT-EVENT labels legacy string entries."
+(defun mevedel-hooks-take-session-context (session)
+  "Return and clear SESSION's pending hook context as model-visible XML."
   (when-let* ((session session)
               (entries (mevedel-session-hook-context-pending session))
-              (context (mevedel-hooks-format-context
-                        entries (or default-event 'SessionStart))))
+              (context (mevedel-hooks-format-context entries)))
     (setf (mevedel-session-hook-context-pending session) nil)
     context))
 
