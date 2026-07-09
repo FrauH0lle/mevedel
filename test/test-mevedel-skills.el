@@ -2376,8 +2376,13 @@ allowed-tools:
        :trigger 'user-skill))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal
-             "Expanded by hook\n\n<hook-context>\nexpansion context\n</hook-context>"
-             (plist-get outcome :body))))
+             "Expanded by hook\n\n<hook-context>\n<hook-event name=\"UserPromptExpansion\">\nexpansion context\n</hook-event>\n</hook-context>"
+             (plist-get outcome :body)))
+    (let ((audit (car (plist-get outcome :hook-audits))))
+      (should (eq (plist-get audit :type) 'prompt-rewrite))
+      (should (equal (plist-get audit :event) "UserPromptExpansion"))
+      (should (equal (plist-get audit :original) "Original body"))
+      (should (equal (plist-get audit :submitted) "Expanded by hook"))))
 
   :doc "malformed UserPromptExpansion decision does not abort user skill"
   (let* ((ws (mevedel-workspace--create

@@ -4111,6 +4111,12 @@ workspace tree."
                                  (let ((inhibit-read-only t))
                                    (erase-buffer)
                                    (insert "First prompt\n")
+                                   (insert
+                                    (mevedel--format-hook-audit-record
+                                     '(:type prompt-rewrite
+                                       :event "UserPromptSubmit"
+                                       :original "first original"
+                                       :submitted "First prompt")))
                                    (insert (propertize
                                             "First reply.\n"
                                             'gptel 'response)))
@@ -4139,6 +4145,8 @@ workspace tree."
                                    (point-min) (point-max))))
                     (should (string-match-p "You" rendered))
                     (should (string-match-p "First prompt" rendered))
+                    (should (string-match-p "hook changed prompt" rendered))
+                    (should-not (string-match-p "first original" rendered))
                     (should (string-match-p "Assistant" rendered))
                     (should-not (string-match-p ":PROPERTIES:" rendered))
                     (should-not (string-match-p "Second prompt" rendered)))))
@@ -4442,6 +4450,12 @@ workspace tree."
                 (org-mode)
                 (setq-local mevedel--session session)
                 (insert "Original prompt\n")
+                (insert
+                 (mevedel--format-hook-audit-record
+                  '(:type prompt-rewrite
+                    :event "UserPromptSubmit"
+                    :original "original prompt"
+                    :submitted "Original prompt")))
                 (mevedel-session-persistence-save session buf)
                 (mevedel-session-persistence-rotate-segment
                  session buf "Summary 1.")
@@ -4500,6 +4514,16 @@ workspace tree."
                     (should (file-exists-p
                              (mevedel-session-persistence--segment-path
                               new-path 1)))
+                    (with-temp-buffer
+                      (insert-file-contents
+                       (mevedel-session-persistence--segment-path
+                        new-path 1))
+                      (should (string-match-p
+                               "<!-- mevedel-hook-audit -->"
+                               (buffer-string)))
+                      (should (string-match-p
+                               "original prompt"
+                               (buffer-string))))
                     (should (file-exists-p
                              (file-name-concat
                               new-path "plans/current.md")))
@@ -5208,6 +5232,60 @@ workspace tree."
                 ;; flow (which touches the view buffer).  We only care
                 ;; that it fires at least once.
                 (should (>= rerender-count 1)))
+            (test-mevedel-session-persistence--release-and-kill
+             buf session)
+            (test-mevedel-session-persistence--release-and-kill
+             restored
+             (and restored
+                  (buffer-local-value 'mevedel--session restored)))))
+	  (delete-directory tempdir t)
+	  (mevedel-workspace-clear-registry)))
+
+  :doc "resume path renders persisted hook audit records"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf     (generate-new-buffer "*test-data-buf*"))
+               session-dir restored view)
+          (unwind-protect
+              (progn
+                (with-current-buffer buf
+                  (org-mode)
+                  (setq-local gptel-response-separator "\n\n")
+                  (setq-local gptel-prompt-prefix-alist
+                              '((org-mode . "*** ")))
+                  (insert "\n\n*** rewritten prompt")
+                  (insert
+                   (mevedel--format-hook-audit-record
+                    '(:type prompt-rewrite
+                      :event "UserPromptSubmit"
+                      :original "original prompt"
+                      :submitted "rewritten prompt")))
+                  (insert "\n")
+                  (mevedel-session-persistence-save session buf))
+                (setq session-dir (mevedel-session-save-path session))
+                (test-mevedel-session-persistence--release-and-kill
+                 buf session)
+                (setq buf nil)
+                (setq restored
+                      (mevedel-session-persistence-restore session-dir))
+                (setq view
+                      (buffer-local-value 'mevedel--view-buffer restored))
+                (should (buffer-live-p view))
+                (with-current-buffer view
+                  (mevedel-view--full-rerender)
+                  (let ((text (buffer-substring-no-properties
+                               (point-min) mevedel-view--input-marker)))
+                    (should (string-match-p "hook changed prompt" text))
+                    (should (string-match-p "rewritten prompt" text))
+                    (should-not (string-match-p "original prompt" text)))
+                  (goto-char (point-min))
+                  (search-forward "hook changed prompt")
+                  (mevedel-view-toggle-section)
+                  (let ((expanded (buffer-substring-no-properties
+                                   (point-min) mevedel-view--input-marker)))
+                    (should (string-match-p "original prompt" expanded)))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill

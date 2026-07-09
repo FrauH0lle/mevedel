@@ -245,8 +245,10 @@
 				     (plist-get event :hook-event-name))
 				   (nreverse mevedel-chat-test--hook-events))
 			   '(SessionStart SessionEnd)))
-			 (should (equal (mevedel-session-hook-context-pending session)
-					'("startup context"))))
+			 (should
+			  (equal (mevedel-session-hook-context-pending session)
+				 '((:event "SessionStart"
+				    :body "startup context")))))
 		     (delete-directory root t)
 		     (delete-directory user-dir t))))
 
@@ -277,8 +279,10 @@
 			   (mevedel--run-session-start-hooks))
 			 (should called)
 			 (should-not mevedel--session-start-hooks-pending)
-			 (should (equal (mevedel-session-hook-context-pending session)
-					'("async startup"))))
+			 (should
+			  (equal (mevedel-session-hook-context-pending session)
+				 '((:event "SessionStart"
+				    :body "async startup")))))
 		     (delete-directory root t))))
 
 

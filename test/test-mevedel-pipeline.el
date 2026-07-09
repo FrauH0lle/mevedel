@@ -46,6 +46,34 @@
           (end-of-file nil))))
     (nreverse entries)))
 
+(defun test-mevedel-pipeline--strip-hook-audit-blocks (text)
+  "Return TEXT without hidden hook audit blocks."
+  (replace-regexp-in-string
+   (concat "\n?"
+           (regexp-quote mevedel--hook-audit-open)
+           "\\(?:.\\|\n\\)*?"
+           (regexp-quote mevedel--hook-audit-close)
+           "\n?")
+   "" (or text "") t t))
+
+(defun test-mevedel-pipeline--hook-audit-records (text)
+  "Return hook audit records parsed from TEXT."
+  (let (records)
+    (with-temp-buffer
+      (insert (or text ""))
+      (goto-char (point-min))
+      (while (search-forward mevedel--hook-audit-open nil t)
+        (let ((record-start (point)))
+          (when (search-forward mevedel--hook-audit-close nil t)
+            (let ((read-eval nil))
+              (condition-case nil
+                  (push (read-from-string
+                         (buffer-substring-no-properties
+                          record-start (match-beginning 0)))
+                        records)
+                (error nil)))))))
+    (mapcar #'car (nreverse records))))
+
 
 ;;
 ;;; Pipeline runner
@@ -399,7 +427,14 @@
 		      (lambda (_ctx) (setq result "next"))
 		      (lambda (reason) (setq result reason))))
 		   (should permission-denied-p)
-		   (should (equal result "rewritten denial")))
+		   (should (equal (test-mevedel-pipeline--strip-hook-audit-blocks
+                                   result)
+				  "rewritten denial"))
+                   (let ((record (car (test-mevedel-pipeline--hook-audit-records
+                                       result))))
+                     (should (eq (plist-get record :type) 'tool-permission))
+                     (should (equal (plist-get record :event) "PreToolUse"))
+                     (should (equal (plist-get record :outcome) "deny"))))
 		 :doc "PreToolUse-denied Bash diagnostics use sanitized command summary"
 			 (let* ((dir (file-name-as-directory
 				      (make-temp-file "mevedel-permission-log-" t)))
@@ -423,7 +458,18 @@
 							 :stop-reason "blocked")))))
 				   (mevedel-pipeline--step-pre-tool-hooks
 				    context #'ignore (lambda (reason) (setq failure reason))))
-				 (should (equal failure "blocked by PreToolUse: blocked"))
+				 (should (equal
+                                          (test-mevedel-pipeline--strip-hook-audit-blocks
+                                           failure)
+                                          "blocked by PreToolUse: blocked"))
+                                 (let ((record (car (test-mevedel-pipeline--hook-audit-records
+                                                     failure))))
+                                   (should (eq (plist-get record :type)
+                                               'tool-permission))
+                                   (should (equal (plist-get record :event)
+                                                  "PreToolUse"))
+                                   (should (equal (plist-get record :outcome)
+                                                  "deny")))
 				 (let ((entry (car (test-mevedel-pipeline--read-permission-log
 						    session))))
 				   (should (eq 'permission-decision
@@ -452,7 +498,40 @@
 		      (lambda (_ctx) (setq next-called t))
 		      (lambda (reason) (setq failure reason))))
 		   (should-not next-called)
-		   (should failure)))
+		   (should failure))
+		 :doc "audits valid updated input before continuing"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Write"
+			       :args '((file_path string :required "Path"))))
+			(context (list :tool tool
+				       :args '(:file_path "/tmp/old")
+				       :default-directory default-directory))
+			next-context
+			failure)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback
+					 '(:updated-input
+					   (:file_path "/tmp/new")
+					   :system-message "normalized")))))
+		     (mevedel-pipeline--step-pre-tool-hooks
+		      context
+		      (lambda (ctx) (setq next-context ctx))
+		      (lambda (reason) (setq failure reason))))
+		   (should-not failure)
+		   (should (equal '(:file_path "/tmp/new")
+				  (plist-get next-context :args)))
+		   (let ((record (car (plist-get next-context
+						  :hook-audit-records))))
+		     (should (eq (plist-get record :type)
+				 'tool-input-rewrite))
+		     (should (equal (plist-get record :event) "PreToolUse"))
+		     (should (equal (plist-get record :original-input)
+				    '(:file_path "/tmp/old")))
+		     (should (equal (plist-get record :updated-input)
+				    '(:file_path "/tmp/new")))
+		     (should (equal (plist-get record :reason)
+				    "normalized")))))
 
 
 ;;
@@ -577,6 +656,32 @@
 		   (should-not (string-search "QUJD"
 					      (plist-get seen-payload
 							 :raw-result))))
+                 :doc "post-tool additional context is event-tagged and audited on the result"
+                 (let* ((tool (mevedel-tool--create :name "Read"))
+                        (context (list :tool tool
+                                       :args nil
+                                       :result "visible"
+                                       :default-directory default-directory))
+                        result)
+                   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                              (lambda (_event _payload callback &rest _)
+                                (funcall callback
+                                         '(:additional-context
+                                           ("hook note")
+                                           :system-message "because")))))
+                     (mevedel-pipeline--step-post-tool-hooks
+                      context
+                      (lambda (ctx) (setq result (plist-get ctx :result)))
+                      #'ignore))
+                   (should (string-match-p
+                            "<hook-event name=\"PostToolUse\">"
+                            result))
+                   (let ((record (car (test-mevedel-pipeline--hook-audit-records
+                                       result))))
+                     (should (eq (plist-get record :type) 'tool-context))
+                     (should (equal (plist-get record :event) "PostToolUse"))
+                     (should (equal (plist-get record :context) "hook note"))
+                     (should (equal (plist-get record :reason) "because"))))
 		 :doc "updated hook result clears stale media before later attachment"
 		 (let* ((tool (mevedel-tool--create :name "Read"))
 			(media '((:path "/tmp/a.png"
@@ -598,7 +703,15 @@
 		     (mevedel-pipeline--step-post-tool-hooks
 		      context (lambda (ctx) (setq after-hooks ctx)) #'ignore))
 		   (should (equal "<media-file>\ndata:\nHOOK\n</media-file>"
-				  (plist-get after-hooks :result)))
+				  (test-mevedel-pipeline--strip-hook-audit-blocks
+                                   (plist-get after-hooks :result))))
+                   (let ((record (car (test-mevedel-pipeline--hook-audit-records
+                                       (plist-get after-hooks :result)))))
+                     (should (eq (plist-get record :type)
+                                 'tool-result-rewrite))
+                     (should (equal (plist-get record :event) "PostToolUse"))
+                     (should (equal (plist-get record :updated-result)
+                                    "<media-file>\ndata:\nHOOK\n</media-file>")))
 		   (should-not (plist-get after-hooks :media))
 		   (mevedel-pipeline--step-attach-media-data
 		    after-hooks (lambda (ctx) (setq after-media ctx)) #'ignore)
@@ -1540,8 +1653,16 @@
 		      (lambda (_c) (setq next-called t))
 		      (lambda (reason) (setq fail-reason reason))))
 		   (should-not next-called)
-		   (should (equal fail-reason
-				  "Permission denied: blocked by PermissionRequest: hook failed"))))
+		   (should (equal
+                            (test-mevedel-pipeline--strip-hook-audit-blocks
+                             fail-reason)
+			    "Permission denied: blocked by PermissionRequest: hook failed"))
+                   (let ((record (car (test-mevedel-pipeline--hook-audit-records
+                                       fail-reason))))
+                     (should (eq (plist-get record :type) 'tool-permission))
+                     (should (equal (plist-get record :event)
+                                    "PermissionRequest"))
+                     (should (equal (plist-get record :outcome) "deny")))))
 
 
 ;;
@@ -2774,6 +2895,24 @@
 		   (should (equal seen '("clean 1" "clean 2")))
 		   (should (equal (plist-get tc1 :result) "clean 1"))
 		   (should (equal (plist-get tc2 :result) "clean 2")))
+
+		 :doc "strips hook-audit side channel from model-bound :result"
+		 (let* ((block (mevedel--format-hook-audit-record
+				'(:type tool-result-rewrite
+				  :event "PostToolUse"
+				  :original-result "SECRET"
+				  :updated-result "redacted")))
+			(raw (concat "redacted" block))
+			(tc (list :name "Read" :args nil :result raw))
+			(seen nil)
+			(orig-fun (lambda (_b tool-use)
+				    (setq seen (plist-get (car tool-use) :result))
+				    'ok)))
+		   (mevedel--parse-tool-results-scrub-advice
+		    orig-fun 'dummy-backend (list tc))
+		   (should (equal "redacted" seen))
+		   (should-not (string-match-p "SECRET" seen))
+		   (should (equal raw (plist-get tc :result))))
 
 		 :doc "non-string :result is left untouched and handed to ORIG-FUN verbatim"
 		 (let* ((tc (list :name "Edit" :args nil :result nil))

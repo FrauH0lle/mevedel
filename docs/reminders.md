@@ -124,10 +124,10 @@ guidance in the rejection reminder.
   path can activate dormant enabled path-scoped skills. When activated
   skills are model-invocable, a pending event names the triggering path
   and a capped list of newly active skills.
-- **Hook outcome:** hooks record blocking and system-message outcomes
-  through `mevedel-hooks-record-session-reminder`, consumed by
-  `pending-events`; additional hook context still uses
-  `<hook-context>`.
+- **Hook outcome:** hooks record blocking outcomes through
+  `mevedel-hooks-record-session-reminder`, consumed by `pending-events`;
+  standalone `:system-message` remains a transient notification and hook-log
+  entry. Additional hook context still uses `<hook-context>`.
 - **Queued user-message:** queued user-message batches are wrapped in
   an inline `<system-reminder>` explaining that the input arrived while
   the previous request was active.

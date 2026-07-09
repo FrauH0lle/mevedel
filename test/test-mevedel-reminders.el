@@ -323,7 +323,8 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
-            (setf (mevedel-session-hook-context-pending session) '("HOOK"))
+            (setf (mevedel-session-hook-context-pending session)
+                  '((:event "SessionStart" :body "HOOK")))
             (mevedel-session-add-reminder
              session
              (mevedel-reminder-create
@@ -333,9 +334,10 @@
           (with-current-buffer prompt-buf
             (insert "user prompt body")
             (mevedel-reminders--transform fsm)
-            (should (string-match-p
-                     "<system-reminder>\nREMIND\n</system-reminder>\n\n<hook-context>\nHOOK\n</hook-context>\nuser prompt body"
-                     (buffer-string)))
+            (should
+             (string-match-p
+              "<system-reminder>\nREMIND\n</system-reminder>\n\n<hook-context>\n<hook-event name=\"SessionStart\">\nHOOK\n</hook-event>\n</hook-context>\nuser prompt body"
+              (buffer-string)))
             (dolist (block '("<hook-context>" "<system-reminder>"))
               (save-excursion
                 (goto-char (point-min))

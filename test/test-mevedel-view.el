@@ -149,6 +149,12 @@ PROPS is the value for the `gptel' property."
   '(:updated-input "rewritten prompt"
     :additional-context "model-only context"))
 
+(defun mevedel-view-test--rewrite-prompt-hook-with-message (event)
+  "Capture prompt EVENT, rewrite it, and add a user-facing message."
+  (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
+  '(:updated-input "rewritten prompt"
+    :system-message "changed by test hook"))
+
 
 ;;
 ;;; Segment extraction
@@ -1179,6 +1185,38 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Read.*test\\.el" text))
         (should-not (string-match-p "file content" text))
         (should (string-match-p "Here is the file" text)))))
+
+  :doc "full rerender preserves tool result rewrite audit details"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "(:name \"Read\" :args (:file_path \"/tmp/test.el\"))\n\n"
+      "updated result"
+      (mevedel--format-hook-audit-record
+       '(:type tool-result-rewrite
+               :event "PostToolUse"
+               :original-result "original result"
+               :updated-result "updated result"
+               :reason "redacted"))
+      "\n")
+     '(tool . "call_1"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read.*test\\.el" text))
+        (should (string-match-p "hook changed tool result" text))
+        (should-not (string-match-p "original result" text)))
+      (goto-char (point-min))
+      (search-forward "hook changed tool result")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Original result" text))
+        (should (string-match-p "original result" text))
+        (should (string-match-p "Updated result" text))
+        (should (string-match-p "updated result" text)))))
 
   :doc "decorates agent-result blocks inside assistant responses"
   (mevedel-view-test--with-buffers
@@ -6231,6 +6269,29 @@ PROPS is the value for the `gptel' property."
           (should (string-match-p "final response body" text))
           (should-not (string-match-p "Read" text)))))))
 
+  :doc "Agent rows render SubagentStart hook context as a compact audit note"
+  (mevedel-view-test--with-buffers
+    (let* ((args '(:subagent_type "explorer" :description "Task"))
+           (rd '(:kind agent-transcript
+                 :agent-id "explorer--hook"
+                 :status running
+                 :hook-audits
+                 ((:type subagent-context
+                   :event "SubagentStart"))))
+           (rendering (mevedel-tool-ui--render-agent
+                       "Agent" args "launch body" rd)))
+      (with-current-buffer view-buf
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "hook added sub-agent context" text))
+          (should-not (string-match-p "extra start context" text))))))
+
   :doc "Agent handle transcript click target is the visible type label"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--abcdef1234567890")
@@ -7654,6 +7715,50 @@ state of its inner sections"
       (let ((before (buffer-string)))
         (should-error (mevedel-view-toggle-section))
         (should (equal before (buffer-string)))))))
+
+(mevedel-deftest mevedel-view--insert-rendered-tool/hook-audits ()
+  ,test
+  (test)
+  :doc "renders updated tool input and result audit details"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering
+           '(:header "Read: /tmp/file (1 line)"
+                     :body "updated result"
+                     :initially-collapsed-p t
+                     :hook-audits
+                     ((:type tool-input-rewrite
+                             :event "PreToolUse"
+                             :original-input (:file_path "/tmp/old")
+                             :updated-input (:file_path "/tmp/new")
+                             :reason "normalized")
+                      (:type tool-result-rewrite
+                             :event "PostToolUse"
+                             :original-result "original result"
+                             :updated-result "updated result"
+                             :reason "redacted"))))
+          (inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool rendering (cons 1 40))
+      (let ((text (buffer-string)))
+        (should (string-match-p "hook changed tool input" text))
+        (should (string-match-p "hook changed tool result" text))
+        (should-not (string-match-p "original result" text)))
+      (goto-char (point-min))
+      (search-forward "hook changed tool input")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Original input" text))
+        (should (string-match-p ":file_path \"/tmp/old\"" text))
+        (should (string-match-p "Updated input" text))
+        (should (string-match-p ":file_path \"/tmp/new\"" text)))
+      (goto-char (point-min))
+      (search-forward "hook changed tool result")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Original result" text))
+        (should (string-match-p "original result" text))
+        (should (string-match-p "Updated result" text))
+        (should (string-match-p "updated result" text))))))
 
 
 ;;
@@ -9347,6 +9452,70 @@ finds it during `$' skill dispatch."
           (should (equal (list session data-buf) save-called))
           (should (equal '(" Ready" success) status-called)))))
 
+  :doc "fork result render-data preserves prompt rewrite audit after rerender"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myfork"
+       :body "ignored"
+       :context 'fork
+       :agent "general-purpose"
+       :user-invocable-p t)
+    (let (captured-args)
+      (cl-letf (((symbol-function 'mevedel-skills-invoke)
+                 (lambda (_skill _args callback &rest _)
+                   (setq captured-args (list :callback callback))))
+                ((symbol-function 'mevedel-session-persistence-save)
+                 (lambda (&rest _) "saved"))
+                ((symbol-function 'gptel--update-status)
+                 (lambda (&rest _))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$myfork run")
+          (mevedel-view-send))
+        (with-current-buffer data-buf
+          (funcall (plist-get captured-args :callback)
+                   '(:status ok :kind fork
+                             :result "agent body"
+                             :agent-id "myfork--audit"
+                             :render-data
+                             (:kind agent-transcript
+                                    :agent-id "myfork--audit"
+                                    :agent-type "general-purpose"
+                                    :description "run"
+                                    :status completed
+                                    :body "agent body"
+                                    :hook-audits
+                                    ((:type prompt-rewrite
+                                            :event "UserPromptExpansion"
+                                            :original "Original body"
+                                            :submitted "Expanded body"
+                                            :reason "expanded"))))))
+        (with-current-buffer data-buf
+          (let* ((text (buffer-string))
+                 (render-data (cdr (mevedel-pipeline-extract-render-data
+                                    text))))
+            (should (string-search "<!-- mevedel-render-data -->" text))
+            (goto-char (point-min))
+            (search-forward "<!-- mevedel-render-data -->")
+            (should (eq (get-text-property (match-beginning 0) 'gptel)
+                        'ignore))
+            (should (plist-get render-data :hook-audits))))
+        (with-current-buffer view-buf
+          (mevedel-view--full-rerender)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "Agent: general-purpose -- run" text))
+            (should (string-match-p "hook changed prompt" text))
+            (should-not (string-match-p "Original body" text)))
+          (goto-char (point-min))
+          (search-forward "hook changed prompt")
+          (mevedel-view-toggle-section)
+          (let ((text (buffer-substring-no-properties
+                       (point-min) mevedel-view--input-marker)))
+            (should (string-match-p "UserPromptExpansion" text))
+            (should (string-match-p "Original body" text))
+            (should (string-match-p "Expanded body" text)))))))
+
   :doc "fork error stops the spinner and does not insert a response"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
@@ -9424,19 +9593,80 @@ finds it during `$' skill dispatch."
             (should (equal
                      (mevedel-pipeline--strip-render-data-blocks text)
                      "\n\n*** Expanded hello\n"))))
+	        (with-current-buffer view-buf
+	          (mevedel-view--full-rerender)
+	          (let ((text (buffer-substring-no-properties
+	                       (point-min) mevedel-view--input-marker)))
+	            (should (string-match-p "\\$myskill hello" text))
+	            (should (string-match-p "Prompt" text))
+	            (should-not (string-match-p "Expanded hello" text)))
+	          (goto-char (point-min))
+	          (search-forward "Prompt")
+	          (mevedel-view-toggle-section)
+	          (let ((expanded (buffer-substring-no-properties
+	                           (point-min) mevedel-view--input-marker)))
+	            (should (string-match-p "Expanded hello" expanded)))))))
+
+  :doc "inline skill expansion rewrites render hook audit and context"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "myskill"
+       :body "Expanded $0"
+       :context 'inline
+       :user-invocable-p t)
+    (let ((mevedel-hook-rules
+           '((UserPromptExpansion
+              ((:matcher "*"
+                         :hooks ((:type elisp
+                                        :function
+                                        mevedel-view-test--rewrite-prompt-hook-with-context)))))))
+          send-called)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq send-called t))))
         (with-current-buffer view-buf
-          (mevedel-view--full-rerender)
+          (goto-char (mevedel-view--input-start))
+          (insert "$myskill hello")
+          (mevedel-view-send)
+          (should send-called)
           (let ((text (buffer-substring-no-properties
                        (point-min) mevedel-view--input-marker)))
             (should (string-match-p "\\$myskill hello" text))
             (should (string-match-p "Prompt" text))
-            (should-not (string-match-p "Expanded hello" text)))
+            (should (string-match-p "hook changed prompt" text))
+            (should (string-match-p "hook context added" text))
+            (should-not (string-match-p "rewritten prompt" text))
+            (should-not (string-match-p "model-only context" text)))
           (goto-char (point-min))
-          (search-forward "Prompt")
+          (search-forward "hook changed prompt")
+          (mevedel-view-toggle-section)
+	          (let ((expanded (buffer-substring-no-properties
+	                           (point-min) mevedel-view--input-marker)))
+	            (should (string-match-p "UserPromptExpansion" expanded))
+	            (should (string-match-p "Expanded hello" expanded))
+	            (should (string-match-p "rewritten prompt" expanded)))
+	          (goto-char (point-min))
+	          (search-forward "hook changed prompt")
+	          (mevedel-view-toggle-section)
+	          (goto-char (point-min))
+	          (search-forward "Prompt")
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "Expanded hello" expanded)))))))
+            (should (string-match-p "rewritten prompt" expanded))
+            (should-not (string-match-p "model-only context" expanded)))))
+      (with-current-buffer data-buf
+        (let ((text (buffer-string)))
+          (should (string-match-p "rewritten prompt" text))
+          (should (string-match-p "model-only context" text))
+          (should (string-match-p "<!-- mevedel-hook-audit -->" text))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+	          (should (string-match-p "hook changed prompt" text))
+	          (should (string-match-p "hook context added" text))
+	          (should-not (string-match-p "model-only context" text))))))
 
   :doc "inline attachment failure rolls back echoed prompt"
   (mevedel-view-test--with-fork-skill
@@ -9508,7 +9738,54 @@ finds it during `$' skill dispatch."
               (end (line-end-position)))
           (while (< pos end)
             (should-not (get-text-property pos 'gptel))
-            (setq pos (1+ pos))))))))
+            (setq pos (1+ pos)))))))
+
+  :doc "attaches pending SessionStart hook context to the submitted prompt"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vf-session-hook" :root "/tmp/vf"
+                :name "vf"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (mevedel-hooks-record-session-context
+         session
+         '(:additional-context ("PONYTAIL MODE ACTIVE - level: full"))
+         'SessionStart))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (goto-char (mevedel-view--input-start))
+        (insert "Hello"))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&optional _arg) (setq sent t)))
+                ((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (_event _session _workspace &rest extra) extra)))
+        (with-current-buffer view-buf
+          (mevedel-view-send)
+          (should sent)
+          (should-not (mevedel-session-hook-context-pending session))
+          (let ((text (buffer-string)))
+            (should (string-match-p "hook context added" text))
+            (should-not (string-match-p "PONYTAIL MODE ACTIVE" text)))
+          (search-backward "hook context added")
+          (mevedel-view-toggle-section)
+          (should (string-match-p "SessionStart" (buffer-string)))
+          (should (string-match-p "PONYTAIL MODE ACTIVE - level: full"
+                                  (buffer-string)))))
+      (with-current-buffer data-buf
+        (should (string-match-p "<hook-event name=\"SessionStart\">"
+                                (buffer-string)))
+        (should (string-match-p "PONYTAIL MODE ACTIVE - level: full"
+                                (buffer-string)))))))
 
 (mevedel-deftest mevedel-view-send/queued-user-messages ()
   ,test
@@ -9715,7 +9992,8 @@ finds it during `$' skill dispatch."
                 ((symbol-function 'mevedel-hooks-event-plist)
                  (lambda (_event _session _workspace &rest extra) extra))
                 ((symbol-function 'mevedel-hooks-additional-context-string)
-                 (lambda (&rest _) "<hook-context>\nctx\n</hook-context>")))
+                 (lambda (&rest _)
+                   "<hook-context>\n<hook-event name=\"UserPromptSubmit\">\nctx\n</hook-event>\n</hook-context>")))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "draft")
@@ -9726,8 +10004,65 @@ finds it during `$' skill dispatch."
         (should (equal "draft" (plist-get entry :input)))
         (should (equal "draft" (plist-get entry :history-input)))
         (should (equal "rewritten" (plist-get entry :display-text)))
-        (should (equal "rewritten\n\n<hook-context>\nctx\n</hook-context>"
+        (should (equal "rewritten\n\n<hook-context>\n<hook-event name=\"UserPromptSubmit\">\nctx\n</hook-event>\n</hook-context>"
                        (plist-get entry :model-input))))))
+
+  :doc "queue-time UserPromptSubmit rewrite audit survives drain and rerender"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-hook-audit" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace ws)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (funcall callback '(:updated-input "rewritten"
+                                       :system-message "queued rewrite"))))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (_event _session _workspace &rest extra) extra))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "draft")
+          (mevedel-view-send))
+        (should (= 1 (length (mevedel-session-queued-user-messages session))))
+        (should (plist-get (car (mevedel-session-queued-user-messages session))
+                           :hook-audits))
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request nil))
+        (mevedel-view--drain-queued-user-message-batch data-buf)
+        (should sent))
+      (with-current-buffer data-buf
+        (let ((text (buffer-string)))
+          (should (string-match-p "<!-- mevedel-hook-audit -->" text))
+          (goto-char (point-min))
+          (search-forward "<!-- mevedel-hook-audit -->")
+          (should (eq 'ignore
+                      (get-text-property (match-beginning 0)
+                                         'gptel)))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "Queued message" text))
+          (should (string-match-p "hook changed prompt" text))
+          (should-not (string-match-p "queued rewrite" text)))
+        (goto-char (point-min))
+        (search-forward "hook changed prompt")
+        (mevedel-view-toggle-section)
+        (let ((expanded (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "queued rewrite" expanded))
+          (should (string-match-p "draft" expanded))
+          (should (string-match-p "rewritten" expanded))))))
 
   :doc "queue-time UserPromptSubmit block leaves composer and queue untouched"
   (mevedel-view-test--with-buffers
@@ -10529,9 +10864,69 @@ finds it during `$' skill dispatch."
 	        (should-not (string-search "<!-- mevedel-render-data -->"
 	                                   mevedel-view-test--seen-prompt))
 	        (with-current-buffer data-buf
-	          (let ((text (buffer-string)))
+	          (let ((text (mevedel-view--strip-hook-audit-blocks
+                         (buffer-string))))
 	            (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "Expanded hello" text)))))))
+
+  :doc "prompt rewrites render an expandable hook audit disclosure"
+  (let* ((root (make-temp-file "mevedel-view-hooks-audit" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-hooks-audit" root "view-hooks-audit"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type elisp
+                                       :function
+                                       mevedel-view-test--rewrite-prompt-hook-with-message)))))))
+         (send-called nil))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace))
+          (cl-letf (((symbol-function 'gptel-send)
+                     (lambda (&rest _)
+                       (setq send-called t))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "original prompt")
+              (mevedel-view-send)
+              (should send-called)
+              (let ((text (buffer-substring-no-properties
+                           (point-min) mevedel-view--input-marker)))
+                (should (string-match-p "rewritten prompt" text))
+                (should (string-match-p "hook changed prompt" text))
+                (should-not (string-match-p "original prompt" text))
+                (should-not (string-match-p "changed by test hook" text)))
+              (goto-char (point-min))
+              (search-forward "hook changed prompt")
+              (mevedel-view-toggle-section)
+              (let ((expanded (buffer-substring-no-properties
+                               (point-min) mevedel-view--input-marker)))
+                (should (string-match-p "UserPromptSubmit" expanded))
+                (should (string-match-p "changed by test hook" expanded))
+                (should (string-match-p "Original prompt:" expanded))
+                (should (string-match-p "original prompt" expanded))
+                (should (string-match-p "Submitted prompt:" expanded))
+                (should (string-match-p "rewritten prompt" expanded)))))
+          (with-current-buffer data-buf
+            (let ((text (buffer-string)))
+              (should (string-match-p "<!-- mevedel-hook-audit -->" text))
+              (should (string-match-p "rewritten prompt" text))
+              (goto-char (point-min))
+              (search-forward "<!-- mevedel-hook-audit -->")
+              (should (eq 'ignore
+                          (get-text-property (match-beginning 0)
+                                             'gptel)))))
+          (with-current-buffer view-buf
+            (mevedel-view--full-rerender)
+            (let ((text (buffer-substring-no-properties
+                         (point-min) mevedel-view--input-marker)))
+              (should (string-match-p "hook changed prompt" text))
+              (should-not (string-match-p "original prompt" text)))))
+      (delete-directory root t)))
 
   :doc "inline skill Prompt omits hook context in immediate render"
   (mevedel-view-test--with-fork-skill
@@ -10603,7 +10998,8 @@ finds it during `$' skill dispatch."
         (should send-called)
         (should-not invoke-called)
         (with-current-buffer data-buf
-          (let ((text (buffer-string)))
+          (let ((text (mevedel-view--strip-hook-audit-blocks
+                       (buffer-string))))
             (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "\\$myfork original" text)))))))
 
@@ -10761,7 +11157,12 @@ finds it during `$' skill dispatch."
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "Real user prompt here.\n\n<hook-context>\nModel-only context.\n</hook-context>\n"
+     (concat "Real user prompt here.\n\n"
+             "<hook-context>\n"
+             "<hook-event name=\"UserPromptSubmit\">\n"
+             "Model-only context.\n"
+             "</hook-event>\n"
+             "</hook-context>\n")
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -10776,7 +11177,42 @@ finds it during `$' skill dispatch."
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "UserPromptSubmit" text))
-        (should (string-match-p "Model-only context" text))))))
+        (should (string-match-p "Model-only context" text)))))
+
+  :doc "event-tagged hook context renders one combined disclosure"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "Real user prompt here.\n\n"
+      "<hook-context>\n"
+      "<hook-event name=\"SessionStart\">\n"
+      "Startup context.\n"
+      "</hook-event>\n"
+      "<hook-event name=\"UserPromptSubmit\">\n"
+      "Prompt context.\n"
+      "</hook-event>\n"
+      "</hook-context>\n")
+     nil)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (= 1 (mevedel-view-test--count-substring
+                      "hook context added" text)))
+        (should (string-match-p "Real user prompt" text))
+        (should-not (string-match-p "Startup context" text))
+        (should-not (string-match-p "Prompt context" text)))
+      (goto-char (point-min))
+      (search-forward "hook context added")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "SessionStart" text))
+        (should (string-match-p "Startup context" text))
+        (should (string-match-p "UserPromptSubmit" text))
+        (should (string-match-p "Prompt context" text))
+        (should-not (string-match-p "<hook-event" text))))))
 
 (mevedel-deftest mevedel-view--render-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")

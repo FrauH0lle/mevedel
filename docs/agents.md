@@ -29,6 +29,10 @@ agent and are folded into the agent invocation layer before skill-scoped
 hook rules for fork skill invocations. Within an agent definition, `Stop`
 means "when this sub-agent stops" and is normalized to `SubagentStop`;
 top-level `Stop` remains reserved for the main assistant turn.
+`SubagentStart :additional-context` is auditable in both transcript
+surfaces: the parent Agent tool row records that hook context was supplied,
+and the child transcript stores the full hook context on the initial
+prompt.
 
 Agent prompts are built from the agent's own prompt file plus selected
 system sections. `:include-workspace-config`, `:include-memory`,

@@ -12,6 +12,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-system)
+(require 'mevedel-utilities)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -34,9 +35,31 @@
     (insert "#+begin_summary\n"
             mevedel-session-persistence--summary-handoff-prefix
             "## Goal\n- Continue\n"
+            (mevedel--format-hook-audit-record
+             '(:type compact-context
+               :event "PreCompact"
+               :context "private audit"))
             "#+end_summary\n")
     (should (equal "## Goal\n- Continue"
                    (mevedel--compact-previous-summary)))))
+
+(mevedel-deftest mevedel--compact-apply-legacy ()
+  ,test
+  (test)
+  :doc "keeps PreCompact audit blocks gptel-ignored after summary cleanup"
+  (with-temp-buffer
+    (org-mode)
+    (insert "old transcript\n")
+    (let ((summary (propertize "summary" 'gptel 'ignore))
+          (audit '(:type compact-context
+                   :event "PreCompact"
+                   :context "compact note")))
+      (mevedel--compact-apply-legacy (point-max) summary (list audit))
+      (goto-char (point-min))
+      (search-forward "<!-- mevedel-hook-audit -->")
+      (should (eq 'ignore
+                  (get-text-property (match-beginning 0) 'gptel)))
+      (should (string-match-p "summary" (buffer-string))))))
 
 (mevedel-deftest mevedel--file-local-variables-start ()
   ,test
@@ -817,6 +840,8 @@
   :doc "streaming compaction applies the accumulated summary at completion"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-stream-callback*"))
         applied-summary
+        applied-hook-audits
+        captured-system
         observations)
     (unwind-protect
         (with-current-buffer chat-buf
@@ -838,17 +863,23 @@
                        (lambda (&rest _)
                          '(:description "test")))
                       ((symbol-function 'mevedel--compact-apply)
-                       (lambda (_boundary summary &rest _)
-                         (setq applied-summary summary)))
+                       (lambda (_boundary summary &optional _tail _pending hook-audits)
+                         (setq applied-summary summary
+                               applied-hook-audits hook-audits)))
                       ((symbol-function 'mevedel-hooks-run-event)
-                       (lambda (_event _plist callback &rest _)
-                         (funcall callback nil)))
+                       (lambda (event _plist callback &rest _)
+                         (if (eq event 'PreCompact)
+                             (funcall callback
+                                      '(:additional-context ("compact note")
+                                        :system-message "because"))
+                           (funcall callback nil))))
                       ((symbol-function 'message)
                        #'ignore)
                       ((symbol-function 'display-warning)
                        #'ignore)
                       ((symbol-function 'gptel-request)
                        (lambda (_prompt &rest args)
+                         (setq captured-system (plist-get args :system))
                          (let ((callback (plist-get args :callback))
                                (info '(:stream t)))
                            (funcall callback "summary " info)
@@ -861,7 +892,15 @@
               (mevedel--compact-run :aggressive t :pending-start (point-max))))
           (should (null (alist-get 'after-first observations)))
           (should (null (alist-get 'after-second observations)))
-          (should (equal applied-summary "summary text"))
+          (should (string-match-p "<hook-event name=\"PreCompact\">"
+                                  captured-system))
+          (should (string-prefix-p "summary text" applied-summary))
+          (should-not (string-match-p "<!-- mevedel-hook-audit -->"
+                                      applied-summary))
+          (should (= 1 (length applied-hook-audits)))
+          (let ((audit (car applied-hook-audits)))
+            (should (eq (plist-get audit :type) 'compact-context))
+            (should (equal (plist-get audit :context) "compact note")))
           (should-not mevedel--compaction-in-flight))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf))))

@@ -77,6 +77,10 @@
 (declare-function mevedel-file-cache-detect-external-changes
                   "mevedel-file-state" (cache))
 
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-format-context "mevedel-hooks"
+                  (entries &optional default-event))
+
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
 
@@ -338,11 +342,9 @@ prompt text."
         (setf (mevedel-session-hook-context-pending session) nil)
         (goto-char (mevedel-transcript-prompt-transform-start))
         (let ((start (point)))
-          (insert "\n<hook-context>\n"
-                  (mapconcat (lambda (item) (format "%s" item))
-                             contexts
-                             "\n")
-                  "\n</hook-context>\n")
+          (insert "\n"
+                  (mevedel-hooks-format-context contexts 'SessionStart)
+                  "\n")
           (remove-text-properties
            start (point)
            '(gptel nil response nil invisible nil front-sticky nil))))

@@ -75,7 +75,7 @@
 (declare-function mevedel-hooks-event-plist
                   "mevedel-hooks" (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-record-session-context
-                  "mevedel-hooks" (session decision))
+                  "mevedel-hooks" (session decision &optional event))
 (declare-function mevedel-hooks-run-event
                   "mevedel-hooks"
                   (event event-plist callback
@@ -345,7 +345,8 @@ workspace."
        (lambda (decision)
          (when (buffer-live-p buffer)
            (with-current-buffer buffer
-             (mevedel-hooks-record-session-context mevedel--session decision)
+             (mevedel-hooks-record-session-context
+              mevedel--session decision 'SessionStart)
              (setq-local mevedel--session-start-hooks-pending nil)))
          (setq done t))
        mevedel--session workspace nil nil)

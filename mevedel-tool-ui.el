@@ -50,46 +50,51 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-invocation-activity
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-background-result-reported-p
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-call-count
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-create "mevedel-agents" (agent))
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-foreground-result-reported-p
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-hook-audits
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-model-tier-override
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-context
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-context
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-fsm
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-tool-callback
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-turn
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-status
+(declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-sidecar-dirty
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-background-result-reported-p
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-foreground-result-reported-p
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-model-tier-override
+(declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-verdict
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-call-count
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-activity
-                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-tier-selector "mevedel-models" (tier))
@@ -2580,18 +2585,24 @@ Use SendMessage(to=\"%s\", ...) to send this agent guidance."
                             agent-type agent-id agent-type))
                    (rel (and (mevedel-agent-invocation-p invocation)
                              (mevedel-agent-invocation-transcript-relative-path
-                              invocation))))
+                              invocation)))
+                   (hook-audits (and (mevedel-agent-invocation-p invocation)
+                                     (mevedel-agent-invocation-hook-audits
+                                      invocation))))
               (funcall main-cb
                        (cond
                         (rel
                          (list :result launch-result
                                :render-data
-                               (list :kind 'agent-transcript
-                                     :agent-id agent-id
-                                     :transcript-relative-path rel
-                                     :background t
-                                     :status 'running
-                                     :calls 0)))
+                               (append
+                                (list :kind 'agent-transcript
+                                      :agent-id agent-id
+                                      :transcript-relative-path rel
+                                      :background t
+                                      :status 'running
+                                      :calls 0)
+                                (when hook-audits
+                                  (list :hook-audits hook-audits)))))
                         (t launch-result))))))))))
 
 (defun mevedel-tools--task--abandon-persistence (invocation)
@@ -2760,6 +2771,9 @@ path or the response is not a string."
                     (float-time (time-subtract (current-time) started-at))))
          (reason (and (mevedel-agent-invocation-p invocation)
                       (mevedel-agent-invocation-terminal-reason invocation)))
+         (hook-audits (and (mevedel-agent-invocation-p invocation)
+                           (mevedel-agent-invocation-hook-audits
+                            invocation)))
          (verdict (mevedel-tool-ui--record-verifier-verdict
                    response invocation)))
     (cond
@@ -2774,6 +2788,8 @@ path or the response is not a string."
                                   :calls (or calls 0))
                             (when elapsed (list :elapsed elapsed))
                             (when reason (list :reason reason))
+                            (when hook-audits
+                              (list :hook-audits hook-audits))
                             (when verdict (list :verdict verdict))))))))
 
 (defun mevedel-tool-ui--display-label-from-canonical (agent-id)
@@ -3441,6 +3457,7 @@ the data buffer's major mode."
             :agent-id agent-id
             :agent-status (plist-get effective-render-data :status)
             :agent-description description
+            :hook-audits (plist-get effective-render-data :hook-audits)
             :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--result-status (result)
