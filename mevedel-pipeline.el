@@ -446,7 +446,7 @@ signal handler."
 
 (defun mevedel-pipeline--record-hook-context (context decision &optional event)
   "Append DECISION's additional hook context to CONTEXT.
-EVENT labels legacy string context entries."
+EVENT labels generated hook event blocks."
   (if-let* ((entries (mevedel-hooks-context-entries
                      decision (or event 'PreToolUse))))
       (plist-put context :hook-additional-context
@@ -463,12 +463,6 @@ EVENT labels legacy string context entries."
                 "\n\n"
                 formatted)
       text)))
-
-(defun mevedel-pipeline--hook-event-name (event)
-  "Return display name for hook EVENT."
-  (if (symbolp event)
-      (symbol-name event)
-    (format "%s" event)))
 
 (defun mevedel-pipeline--record-hook-audit (context records)
   "Append hook audit RECORDS to CONTEXT."
@@ -504,7 +498,7 @@ EVENT labels legacy string context entries."
   "Return a permission audit record for hook EVENT and OUTCOME."
   (append
    (list :type 'tool-permission
-         :event (mevedel-pipeline--hook-event-name event)
+         :event (mevedel-hooks--event-display-name event)
          :outcome (format "%s" outcome))
    (when-let* ((reason (or reason
                            (mevedel-hooks-decision-reason decision))))
@@ -515,7 +509,7 @@ EVENT labels legacy string context entries."
   "Return a tool input rewrite audit record for hook EVENT."
   (append
    (list :type 'tool-input-rewrite
-         :event (mevedel-pipeline--hook-event-name event)
+         :event (mevedel-hooks--event-display-name event)
          :original-input original
          :updated-input updated)
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))
@@ -526,7 +520,7 @@ EVENT labels legacy string context entries."
   "Return a result rewrite audit record for hook EVENT."
   (append
    (list :type 'tool-result-rewrite
-         :event (mevedel-pipeline--hook-event-name event)
+         :event (mevedel-hooks--event-display-name event)
          :original-result (or original "")
          :updated-result (or updated ""))
    (when-let* ((reason (mevedel-hooks-decision-reason decision)))
@@ -2021,8 +2015,9 @@ the view parser, persistence) keeps seeing the full block."
                                 extracted-media)))
                    (cleaned (and (stringp orig)
                                  (if (and read-tool-p tool-use-id)
-                                     (mevedel-pipeline--strip-render-data-blocks
-                                      (car (or extracted (cons orig nil))))
+                                     (mevedel--strip-hook-audit-blocks
+                                      (mevedel-pipeline--strip-render-data-blocks
+                                       (car (or extracted (cons orig nil)))))
                                    (mevedel-pipeline--strip-side-channel-blocks
                                     orig))))
                    (llm-result

@@ -79,7 +79,7 @@
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
-                  (entries &optional default-event))
+                  (entries))
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
@@ -343,7 +343,7 @@ prompt text."
         (goto-char (mevedel-transcript-prompt-transform-start))
         (let ((start (point)))
           (insert "\n"
-                  (mevedel-hooks-format-context contexts 'SessionStart)
+                  (mevedel-hooks-format-context contexts)
                   "\n")
           (remove-text-properties
            start (point)

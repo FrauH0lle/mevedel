@@ -1218,6 +1218,41 @@ PROPS is the value for the `gptel' property."
         (should (string-match-p "Updated result" text))
         (should (string-match-p "updated result" text)))))
 
+  :doc "full rerender preserves ignored tool result audit segments"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert "(:name \"Read\" :args (:file_path \"/tmp/test.el\"))\n\nupdated")
+        (put-text-property start (point) 'gptel '(tool . "call_1")))
+      (let ((start (point)))
+        (insert
+         (mevedel--format-hook-audit-record
+          '(:type tool-result-rewrite
+                  :event "PostToolUse"
+                  :original-result "original result"
+                  :updated-result "updated result"
+                  :reason "redacted")))
+        (put-text-property start (point) 'gptel 'ignore))
+      (let ((start (point)))
+        (insert " result\n")
+        (put-text-property start (point) 'gptel '(tool . "call_1"))))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Read.*test\\.el" text))
+        (should (string-match-p "hook changed tool result" text))
+        (should-not (string-match-p "original result" text)))
+      (goto-char (point-min))
+      (search-forward "hook changed tool result")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Original result" text))
+        (should (string-match-p "original result" text))
+        (should (string-match-p "Updated result" text))
+        (should (string-match-p "updated result" text)))))
+
   :doc "decorates agent-result blocks inside assistant responses"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -10864,7 +10899,7 @@ finds it during `$' skill dispatch."
 	        (should-not (string-search "<!-- mevedel-render-data -->"
 	                                   mevedel-view-test--seen-prompt))
 	        (with-current-buffer data-buf
-	          (let ((text (mevedel-view--strip-hook-audit-blocks
+	          (let ((text (mevedel--strip-hook-audit-blocks
                          (buffer-string))))
 	            (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "Expanded hello" text)))))))
@@ -10998,7 +11033,7 @@ finds it during `$' skill dispatch."
         (should send-called)
         (should-not invoke-called)
         (with-current-buffer data-buf
-          (let ((text (mevedel-view--strip-hook-audit-blocks
+          (let ((text (mevedel--strip-hook-audit-blocks
                        (buffer-string))))
             (should (string-match-p "rewritten prompt" text))
             (should-not (string-match-p "\\$myfork original" text)))))))

@@ -151,6 +151,10 @@
                   "mevedel-persistence"
                   (path &optional base-directory confirm quiet workspace))
 
+;; `mevedel-utilities'
+(declare-function mevedel--restore-render-data-gptel-properties
+                  "mevedel-utilities" (start end))
+
 
 ;;
 ;;; Customization
@@ -1503,7 +1507,10 @@ assistant turns are not inferred."
           (let ((ranges (mevedel-session-persistence--structural-gptel-ranges)))
             (mevedel-session-persistence--apply-block-gptel-props ranges)
             (mevedel-session-persistence--repair-response-continuation-gaps
-             ranges)))))))
+             ranges)
+            (require 'mevedel-utilities)
+            (mevedel--restore-render-data-gptel-properties
+             (point-min) (point-max))))))))
 
 (defun mevedel-session-persistence--restore-gptel-state ()
   "Restore gptel state without dirtying the visited segment buffer.

@@ -80,12 +80,12 @@
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-format-context "mevedel-hooks"
-                  (entries &optional default-event))
+                  (entries))
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-take-session-context "mevedel-hooks"
-                  (session &optional default-event))
+                  (session))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--render-head
@@ -3207,6 +3207,18 @@ real user message."
                    data-buf
                    (mevedel-view--queued-user-message-batch-segment-p
                     data-buf seg-start (caddr seg))))
+             (queued-batch-continuation-p
+              (and (eq type 'user)
+                   data-buf
+                   (null current-role)
+                   turns
+                   (eq (plist-get (car turns) :role) 'user)
+                   (mevedel-view--queued-user-message-batch-items-from-text
+                    (mevedel-view--queued-user-message-batch-normalized-text
+                     (mevedel-view--segments-raw-text
+                      (append (plist-get (car turns) :segments)
+                              (list seg))
+                      data-buf)))))
              (system-reminder-p
               (and data-buf
                    (memq type '(user ignore))
@@ -3260,6 +3272,7 @@ real user message."
           nil)
          ((or prompt-drawer-after-user-p
               hook-audit-after-user-p
+              queued-batch-continuation-p
               (and inline-skill-render-p
                    (null current-role)
                    turns
@@ -3368,7 +3381,7 @@ produces a `Bash: …' / `Read: …' header instead of bare `Tool'."
                        result-text)
                     result-text))
                  (result-text
-                  (mevedel-view--strip-hook-audit-blocks result-text))
+                  (mevedel--strip-hook-audit-blocks result-text))
                  (result-lines (length (split-string result-text "\n" t)))
                  (primary-arg (mevedel-tool-display-string name args))
                  (blocked (mevedel-view--tool-hook-blocked-info
@@ -3468,7 +3481,7 @@ renderer to fall back to the bare `Tool' one-liner."
                       (mevedel-view--hook-audit-records-from-text
                        full-result))
                      (full-result
-                      (mevedel-view--strip-hook-audit-blocks full-result))
+                      (mevedel--strip-hook-audit-blocks full-result))
                      (extract (mevedel-pipeline-extract-render-data
                                full-result
                                (and (boundp 'mevedel--session)
@@ -4510,7 +4523,7 @@ the raw tool segment."
     (when hook-audits
       (let ((audit-start (point)))
         (dolist (audit hook-audits)
-          (mevedel-view--insert-hook-audit-block audit nil))
+          (mevedel-view--insert-hook-audit-block audit source))
         (mevedel-view--add-display-region-properties
          audit-start (point) 'hook-audit)))))
 
@@ -4680,7 +4693,7 @@ system reminder wrappers."
        (not (string-empty-p (string-trim text)))
        (string-empty-p
         (string-trim
-         (mevedel-view--strip-hook-audit-blocks text)))))
+         (mevedel--strip-hook-audit-blocks text)))))
 
 (defun mevedel-view--hook-audit-only-segment-p (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF's SEG-START..SEG-END is only hook audit data."
@@ -6081,54 +6094,63 @@ TURN is a plist with :role, :segments, :start, :end."
 Returns the concatenated, trimmed text with org scaffolding removed.
 Empty string when the turn contains only whitespace or markers."
   (with-current-buffer data-buf
-    (let ((parts nil))
-      (dolist (seg segments)
-        (let* ((seg-start (cadr seg))
-               (seg-end (caddr seg))
-               (text (buffer-substring-no-properties seg-start seg-end)))
-          ;; Strip org heading prefix (e.g., "*** ")
-          (when (string-match "\\`\\*+ " text)
-            (setq text (substring text (match-end 0))))
-          ;; Strip hidden view render-data side channels.
-          (setq text (mevedel-view--strip-render-data-display-text text))
-          ;; Strip hidden hook audit side channels; they render as separate
-          ;; disclosures below the affected transcript artifact.
-          (setq text (mevedel-view--strip-hook-audit-blocks text))
-          ;; Strip synthetic review action blocks.  They stay in the data
-          ;; buffer so the model can resolve follow-ups like "fix finding 2",
-          ;; but the normal view should show only the user's visible prompt.
-          (setq text (mevedel-view--strip-review-action-blocks text))
-          ;; Queued batches are model-visible control wrappers around real
-          ;; follow-up messages.  Render only the follow-up bodies.
-          (setq text (mevedel-view--queued-user-message-batch-display-text text))
-          ;; Strip model-only prompt context added by UserPromptSubmit hooks.
-          (setq text (mevedel-view--strip-hook-context-blocks text))
-          ;; Strip prompt drawer content
-          (when (string-match "\\`:PROMPT:\n\\(?:.*\n\\)*?:END:\n?" text)
-            (setq text (replace-match "" t t text)))
-          ;; Strip leading gptel-org `:PROPERTIES: ... :END:' drawer.
-          ;; gptel-org stores per-buffer state (preset, model, system
-          ;; prompt, GPTEL_BOUNDS) here; without this strip, the entire
-          ;; system prompt leaks into the visible "You" turn on a full
-          ;; rerender that didn't pre-narrow past the drawer.
-          (when (string-match "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" text)
-            (setq text (replace-match "" t t text)))
-          ;; Strip reasoning block markers
-          (setq text (replace-regexp-in-string
-                      "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" text))
-          ;; Strip tool block markers.  gptel emits `#+begin_tool ...'
-          ;; and `#+end_tool' without the `gptel' text property, so the
-          ;; separator text around a tool block appears here as a user
-          ;; segment -- skip it, otherwise the raw header would render
-          ;; as a spurious "You" turn.
-          (setq text (replace-regexp-in-string
-                      "#\\+begin_tool[^\n]*\n?" "" text))
-          (setq text (replace-regexp-in-string
-                      "#\\+end_tool[^\n]*\n?" "" text))
-          (let ((trimmed (string-trim text)))
-            (unless (string-empty-p trimmed)
-              (push trimmed parts)))))
-      (string-join (nreverse parts) "\n"))))
+    (let* ((batch-text (mevedel-view--queued-user-message-batch-normalized-text
+                        (mevedel-view--segments-raw-text segments data-buf)))
+           (batch-display
+            (and (mevedel-view--queued-user-message-batch-items-from-text
+                  batch-text)
+                 (mevedel-view--queued-user-message-batch-display-text
+                  batch-text))))
+      (if batch-display
+          (string-trim (mevedel-view--strip-hook-context-blocks batch-display))
+        (let ((parts nil))
+          (dolist (seg segments)
+            (let* ((seg-start (cadr seg))
+                   (seg-end (caddr seg))
+                   (text (buffer-substring-no-properties seg-start seg-end)))
+              ;; Strip org heading prefix (e.g., "*** ")
+              (when (string-match "\\`\\*+ " text)
+                (setq text (substring text (match-end 0))))
+              ;; Strip hidden view render-data side channels.
+              (setq text (mevedel-view--strip-render-data-display-text text))
+              ;; Strip hidden hook audit side channels; they render as separate
+              ;; disclosures below the affected transcript artifact.
+              (setq text (mevedel--strip-hook-audit-blocks text))
+              ;; Strip synthetic review action blocks.  They stay in the data
+              ;; buffer so the model can resolve follow-ups like "fix finding 2",
+              ;; but the normal view should show only the user's visible prompt.
+              (setq text (mevedel-view--strip-review-action-blocks text))
+              ;; Queued batches are model-visible control wrappers around real
+              ;; follow-up messages.  Render only the follow-up bodies.
+              (setq text (mevedel-view--queued-user-message-batch-display-text text))
+              ;; Strip model-only prompt context added by UserPromptSubmit hooks.
+              (setq text (mevedel-view--strip-hook-context-blocks text))
+              ;; Strip prompt drawer content
+              (when (string-match "\\`:PROMPT:\n\\(?:.*\n\\)*?:END:\n?" text)
+                (setq text (replace-match "" t t text)))
+              ;; Strip leading gptel-org `:PROPERTIES: ... :END:' drawer.
+              ;; gptel-org stores per-buffer state (preset, model, system
+              ;; prompt, GPTEL_BOUNDS) here; without this strip, the entire
+              ;; system prompt leaks into the visible "You" turn on a full
+              ;; rerender that didn't pre-narrow past the drawer.
+              (when (string-match "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?" text)
+                (setq text (replace-match "" t t text)))
+              ;; Strip reasoning block markers
+              (setq text (replace-regexp-in-string
+                          "#\\+\\(?:begin\\|end\\)_reasoning[^\n]*\n?" "" text))
+              ;; Strip tool block markers.  gptel emits `#+begin_tool ...'
+              ;; and `#+end_tool' without the `gptel' text property, so the
+              ;; separator text around a tool block appears here as a user
+              ;; segment -- skip it, otherwise the raw header would render
+              ;; as a spurious "You" turn.
+              (setq text (replace-regexp-in-string
+                          "#\\+begin_tool[^\n]*\n?" "" text))
+              (setq text (replace-regexp-in-string
+                          "#\\+end_tool[^\n]*\n?" "" text))
+              (let ((trimmed (string-trim text)))
+                (unless (string-empty-p trimmed)
+                  (push trimmed parts)))))
+          (string-join (nreverse parts) "\n"))))))
 
 (defun mevedel-view--strip-hook-context-blocks (text)
   "Return TEXT without generated `<hook-context>' blocks."
@@ -6146,19 +6168,6 @@ Empty string when the turn contains only whitespace or markers."
     (while (re-search-forward "\n\\{3,\\}" nil t)
       (replace-match "\n\n" t t))
     (buffer-string)))
-
-(defun mevedel-view--hook-audit-regexp ()
-  "Return a regexp matching one hidden hook audit block."
-  (concat "\n?"
-          (regexp-quote mevedel--hook-audit-open)
-          "\\(?:.\\|\n\\)*?"
-          (regexp-quote mevedel--hook-audit-close)
-          "\n?"))
-
-(defun mevedel-view--strip-hook-audit-blocks (text)
-  "Return TEXT without generated hook audit blocks."
-  (replace-regexp-in-string
-   (mevedel-view--hook-audit-regexp) "" (or text "") t t))
 
 (defun mevedel-view--read-hook-audit-record (text)
   "Read one hidden hook audit record from TEXT, or nil."
@@ -6377,42 +6386,21 @@ EXPANDED means insert the disclosure body expanded."
   (when (and (listp record)
              (keywordp (car-safe record)))
     (let ((start (point))
-          (id (cl-gensym "mevedel-hook-audit-")))
+          (source (and (consp source) (cons (car source) (cdr source)))))
       (insert (mevedel-view--format-hook-audit-block record expanded))
       (add-text-properties
        start (point)
        `(font-lock-face mevedel-view-hook-audit
          mevedel-view-type hook-audit
          mevedel-view-collapsed ,(not expanded)
-         mevedel-view-hook-audit-id ,id
          mevedel-view-hook-audit-record ,record
          mevedel-view-source ,source
          mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
                                    source 'hook-audit))))))
 
-(defun mevedel-view--hook-audit-section-bounds ()
-  "Return bounds of the hook audit disclosure at point, or nil."
-  (let ((id (get-text-property (point) 'mevedel-view-hook-audit-id)))
-    (when id
-      (let ((start (or (previous-single-property-change
-                        (point) 'mevedel-view-hook-audit-id)
-                       (point-min)))
-            (end (or (next-single-property-change
-                      (point) 'mevedel-view-hook-audit-id)
-                     (point-max))))
-        (when (and (< start (point))
-                   (not (eq (get-text-property
-                             start 'mevedel-view-hook-audit-id)
-                            id)))
-          (setq start (or (next-single-property-change
-                           start 'mevedel-view-hook-audit-id)
-                          (point))))
-        (cons start end)))))
-
 (defun mevedel-view--toggle-hook-audit ()
   "Toggle a hook audit disclosure."
-  (let* ((bounds (or (mevedel-view--hook-audit-section-bounds)
-                     (mevedel-view--section-bounds)))
+  (let* ((bounds (mevedel-view--section-bounds))
          (source (and bounds
                       (get-text-property
                        (car bounds) 'mevedel-view-source)))
@@ -6453,7 +6441,7 @@ EXPANDED means insert the disclosure body expanded."
   "Return collapsed prompt body for inline-skill TEXT, or nil."
   (when (mevedel-view--inline-skill-render-data-from-text text)
     (let ((body (mevedel-view--strip-render-data-display-text text)))
-      (setq body (mevedel-view--strip-hook-audit-blocks body))
+      (setq body (mevedel--strip-hook-audit-blocks body))
       (setq body (mevedel-view--strip-review-action-blocks body))
       (setq body (mevedel-view--strip-hook-context-blocks body))
       (when (string-match
@@ -6511,27 +6499,45 @@ EXPANDED means insert the disclosure body expanded."
   "Return generated queued user-message items parsed from TEXT, or nil."
   (mevedel-transcript--queued-user-message-batch-items-from-text text))
 
+(defun mevedel-view--queued-user-message-batch-normalized-text (text)
+  "Return TEXT normalized for generated queued-message batch parsing."
+  (let ((text (string-trim-left
+               (mevedel--strip-hook-audit-blocks text))))
+    (when (string-match "\\`\\*+ " text)
+      (setq text (substring text (match-end 0))))
+    text))
+
+(defun mevedel-view--segments-raw-text (segments data-buf)
+  "Return raw DATA-BUF text covered by SEGMENTS."
+  (with-current-buffer data-buf
+    (mapconcat
+     (lambda (seg)
+       (buffer-substring-no-properties (cadr seg) (caddr seg)))
+     segments
+     "")))
+
 (defun mevedel-view--queued-user-message-batch-segment-p
     (data-buf seg-start seg-end)
   "Return non-nil when DATA-BUF SEG-START..SEG-END spans a message batch."
   (with-current-buffer data-buf
     (mevedel-view--queued-user-message-batch-items-from-text
-     (buffer-substring-no-properties seg-start seg-end))))
+     (mevedel-view--queued-user-message-batch-normalized-text
+      (buffer-substring-no-properties seg-start seg-end)))))
 
 (defun mevedel-view--queued-user-message-batch-turn-p (turn data-buf)
   "Return non-nil when TURN in DATA-BUF has a generated message batch."
-  (cl-some
-   (lambda (seg)
-     (and (eq (car seg) 'user)
-          (mevedel-view--queued-user-message-batch-segment-p
-           data-buf (cadr seg) (caddr seg))))
-   (plist-get turn :segments)))
+  (and (eq (plist-get turn :role) 'user)
+       (mevedel-view--queued-user-message-batch-items-from-text
+        (mevedel-view--queued-user-message-batch-normalized-text
+         (mevedel-view--segments-raw-text
+          (plist-get turn :segments)
+          data-buf)))))
 
 (defun mevedel-view--queued-user-message-batch-display-text (text)
   "Return view display text for queued-message batch TEXT."
   (if-let* ((items (mevedel-view--queued-user-message-batch-items-from-text
                     text)))
-      (let* ((items (mapcar #'mevedel-view--strip-hook-audit-blocks items))
+      (let* ((items (mapcar #'mevedel--strip-hook-audit-blocks items))
              (label (if (= (length items) 1)
                        "Queued message"
                      (format "Queued messages (%d)" (length items)))))
@@ -7083,18 +7089,22 @@ are merged into a single summary."
                    (setq tool-group nil))
                  (mevedel-view--render-agent-transcript-segment
                   data-buf seg))
-             ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
-             ;; lines) so it doesn't surface as a one-line `Thinking…'
-             ;; between adjacent tool blocks.  Skip without flushing the
-             ;; tool-group so consecutive tool segments separated only
-             ;; by glue still group / render together.
-             ;; Flush tool group before thinking
-             (when tool-group
-               (mevedel-view--render-tool-group
-                (nreverse tool-group) data-buf)
-               (setq tool-group nil))
-             ;; Accumulate consecutive thinking segments
-             (push seg thinking-group))))))
+             (if (and tool-group
+                      (mevedel-view--hook-audit-only-segment-p
+                       data-buf (cadr seg) (caddr seg)))
+                 (push seg tool-group)
+               ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
+               ;; lines) so it doesn't surface as a one-line `Thinking…'
+               ;; between adjacent tool blocks.  Skip without flushing the
+               ;; tool-group so consecutive tool segments separated only
+               ;; by glue still group / render together.
+               ;; Flush tool group before thinking
+               (when tool-group
+                 (mevedel-view--render-tool-group
+                  (nreverse tool-group) data-buf)
+                 (setq tool-group nil))
+               ;; Accumulate consecutive thinking segments
+               (push seg thinking-group)))))))
     ;; Flush remaining groups
     (mevedel-view--flush-thinking-group thinking-group data-buf)
     (when tool-group
@@ -7121,12 +7131,40 @@ are merged into a single summary."
                        render-data))))
       (mevedel-view--insert-rendered-tool rendering source))))
 
+(defun mevedel-view--same-tool-call-segment-p (left right data-buf)
+  "Return non-nil when LEFT and RIGHT belong to the same tool call."
+  (and (eq (car left) 'tool)
+       (eq (car right) 'tool)
+       (with-current-buffer data-buf
+         (equal (get-text-property (cadr left) 'gptel)
+                (get-text-property (cadr right) 'gptel)))))
+
+(defun mevedel-view--merge-tool-hook-audit-segments (segments data-buf)
+  "Merge hook audit side-channel SEGMENTS into adjacent tool segments."
+  (let (out)
+    (dolist (seg segments (nreverse out))
+      (cond
+       ((and out
+             (eq (caar out) 'tool)
+             (eq (car seg) 'ignore)
+             (mevedel-view--hook-audit-only-segment-p
+              data-buf (cadr seg) (caddr seg)))
+        (setcar out (list 'tool (cadar out) (caddr seg))))
+       ((and out
+             (mevedel-view--same-tool-call-segment-p (car out) seg data-buf))
+        (setcar out (list 'tool (cadar out) (caddr seg))))
+       (t
+        (push seg out))))))
+
 (defun mevedel-view--render-tool-group (tool-segments data-buf)
   "Render consecutive TOOL-SEGMENTS from DATA-BUF.
 Each tool call gets its own collapsible entry.  A registered
 `:renderer' is invoked when the segment carries a render-data
 side-channel, falling back to the default one-liner otherwise."
-  (let ((start-time (float-time))
+  (let ((tool-segments
+         (mevedel-view--merge-tool-hook-audit-segments
+          tool-segments data-buf))
+        (start-time (float-time))
         (inserted-rule nil)
         (rendered 0)
         (fallbacks 0))
@@ -9443,7 +9481,7 @@ such as `passed' cannot escape into `plist-get' or `plist-member'."
 
 (defun mevedel-view--take-pending-hook-context (session)
   "Return and clear SESSION's pending hook context as model-visible XML."
-  (mevedel-hooks-take-session-context session 'SessionStart))
+  (mevedel-hooks-take-session-context session))
 
 (defun mevedel-view--join-hook-contexts (&rest contexts)
   "Return CONTEXTS joined as separate hook context blocks."
