@@ -31,7 +31,11 @@
   (progn
     (should (stringp mevedel-system--tone-prompt))
     (should (string-match-p "Tone and style" mevedel-system--tone-prompt))
-    (should (string-match-p "Critical thinking" mevedel-system--tone-prompt))))
+    (should (string-match-p "Critical thinking" mevedel-system--tone-prompt))
+    (should (string-match-p "em dashes" mevedel-system--tone-prompt))
+    (should (string-match-p "fenced code blocks" mevedel-system--tone-prompt))
+    (should (string-match-p "Markdown structure" mevedel-system--tone-prompt))
+    (should (string-match-p "repeating the path noisily" mevedel-system--tone-prompt))))
 
 
 ;;
@@ -44,6 +48,9 @@
     (should (string-match-p "Tone and style" mevedel-system--base-prompt))
     (should (string-match-p "Task execution protocol" mevedel-system--base-prompt))
     (should (string-match-p "Using your tools" mevedel-system--base-prompt))
+    (should (string-match-p "path/to/file\\.ext:123" mevedel-system--base-prompt))
+    (should (string-match-p "update item statuses" mevedel-system--base-prompt))
+    (should (string-match-p "Frontend work" mevedel-system--base-prompt))
     (should (string-match-p "explorer" mevedel-system--base-prompt))
     (should (string-match-p "/plan" mevedel-system--base-prompt))))
 
