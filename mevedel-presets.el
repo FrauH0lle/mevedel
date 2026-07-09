@@ -94,9 +94,6 @@
 (declare-function mevedel-agents--setup-for-request "mevedel-agents"
                   (&optional preset-name))
 
-;; `mevedel-tool-fs'
-(defvar mevedel--request-file-snapshots)
-
 ;; `mevedel-structs'
 (defvar mevedel--current-request)
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -512,7 +509,6 @@ alist with mevedel-specific handlers added:
            (when-let* ((info (gptel-fsm-info fsm))
                        (chat-buffer (plist-get info :buffer)))
              (with-current-buffer chat-buffer
-               (setq mevedel--request-file-snapshots nil)
                (mevedel--clear-pending-access-requests))))
          handlers))
   ;; 5. Increment session turn count (drives reminder throttling)

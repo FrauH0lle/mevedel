@@ -114,6 +114,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
 (declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
                   (name workspace &optional working-directory))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -151,7 +152,6 @@
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
-(defvar mevedel--request-file-snapshots)
 
 ;; `mevedel-tool-plan'
 (declare-function mevedel-plan-mode--post-response
@@ -714,13 +714,19 @@ if none found."
   "Generate final diffs for all tracked files in current request.
 
 Return a unified diff string showing original -> final state for each
-file.  Uses the `mevedel--request-file-snapshots' to compare original
-states with current file contents in WORKSPACE."
+file.  Uses the active request's snapshots to compare original states
+with current file contents in WORKSPACE."
   (let ((diffs "")
-        (workspace-root (mevedel-workspace-root (or workspace (mevedel-workspace)))))
-    (dolist (snapshot mevedel--request-file-snapshots)
-      (let* ((filepath (car snapshot))
-             (original (cdr snapshot))
+        (workspace-root (mevedel-workspace-root
+                         (or workspace (mevedel-workspace))))
+        paths)
+    (when mevedel--current-request
+      (maphash (lambda (filepath _original) (push filepath paths))
+               (mevedel-request-file-snapshots mevedel--current-request)))
+    (dolist (filepath (sort paths #'string<))
+      (let* ((original (gethash filepath
+                                (mevedel-request-file-snapshots
+                                 mevedel--current-request)))
              (current (when (file-exists-p filepath)
                         (with-temp-buffer
                           (insert-file-contents filepath)

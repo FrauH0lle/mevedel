@@ -35,8 +35,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   args, category, read-only/destructive/async flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,
   `get-domain`, `get-name`), groups, max-result-size, renderer.
-- `mevedel--instructions`: buffer -> overlay alist
-- `mevedel--id-counter` / `mevedel--id-usage-map`: instruction IDs
+- `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
 - Instruction types: **References** (context) and **Directives** (prompts)
 
 Directive request callbacks must not assume the original overlay object is

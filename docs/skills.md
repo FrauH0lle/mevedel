@@ -29,8 +29,6 @@ Skills are scanned from configured user/project/managed/plugin dirs plus
 bundled skills under `skills/` when `mevedel-skills-include-bundled` is
 non-nil. The default search order is `.mevedel/skills/`,
 `.agents/skills/`, `~/.mevedel/skills/`, then `~/.agents/skills/`.
-Legacy `.claude/skills/` entries are ignored even if left in a custom
-`mevedel-skill-dirs` value.
 Unique names stay unqualified. When non-plugin skills from different
 sources share a name, all colliding entries are exposed with the shortest
 deterministic prefix that disambiguates them, such as `mevedel:review`,
@@ -50,8 +48,8 @@ and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
 unchanged. New installs live under `~/.agents/plugins/`, including
 GitHub installs below `github.com/OWNER/REPO`. Plugin roots are
 discovered from workspace `.mevedel/plugins/`, workspace
-`.agents/plugins/`, legacy global `~/.mevedel/plugins/`, global
-`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Plugin
+`.agents/plugins/`, global `~/.agents/plugins/`, then
+`mevedel-plugin-extra-roots`. Plugin
 activation is workspace-scoped: plugins are inactive by default in each
 project until enabled, and the state is stored in that workspace's
 `.mevedel/plugins.el`. Activating a plugin enables all implemented plugin
@@ -64,8 +62,8 @@ manifest.
 When multiple plugin roots contain the same manifest name, mevedel keeps
 the highest-precedence plugin and reports shadowed duplicates in
 `/plugin list`. Precedence is workspace `.mevedel/plugins/`, workspace
-`.agents/plugins/`, global `~/.mevedel/plugins/`, global
-`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Activation is
+`.agents/plugins/`, global `~/.agents/plugins/`, then
+`mevedel-plugin-extra-roots`. Activation is
 bound to the plugin name and source root, so a higher-precedence plugin
 with the same name does not silently inherit enabled state from a
 different source. `/plugin list` reports the conflict so the user can
@@ -150,7 +148,7 @@ Plugin management:
   untouched and should be updated with `/plugin update NAME`. Install is
   always global and does not enable the plugin in the current workspace.
 - `/plugin update NAME` runs `git pull --ff-only` for global managed
-  installs under `~/.agents/plugins/` or legacy `~/.mevedel/plugins/`.
+  installs under `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the
   update result reports that hook consent is pending.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a

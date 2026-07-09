@@ -6,8 +6,8 @@
 ;; Instructions are file-specific; the save format records buffer
 ;; associations, positions, and overlay properties.  When a save file
 ;; is loaded against a buffer whose contents have changed, ediff is
-;; used to reconcile overlay positions.  Version stamping on the save
-;; format lets older files be auto-patched when loaded.
+;; used to reconcile overlay positions.  Save files must match the
+;; current mevedel version.
 
 ;;; Code:
 
@@ -44,9 +44,9 @@ not saved."
 
 (defun mevedel--instruction-id-state-plist ()
   "Return the current instruction ID state as a serializable plist."
-  (list :id-counter mevedel--id-counter
-        :used-ids (hash-table-keys mevedel--id-usage-map)
-        :retired-ids mevedel--retired-ids))
+  (list :id-counter (mevedel--instruction-id-counter)
+        :used-ids (hash-table-keys (mevedel--instruction-id-usage-map))
+        :retired-ids (mevedel--instruction-retired-ids)))
 
 (defun mevedel--instructions-saved-count (file-alist)
   "Return the number of serialized instructions in FILE-ALIST."
@@ -81,7 +81,7 @@ contents for position patching if the file changes before restore."
         (base-directory (and base-directory
                              (file-name-as-directory
                               (expand-file-name base-directory)))))
-    (cl-loop for cons in mevedel--instructions
+    (cl-loop for cons in (mevedel--instruction-alist)
              if (bufferp (car cons))
              do (let ((buffer (car cons)))
                   (when-let* (((buffer-live-p buffer))
@@ -246,14 +246,16 @@ before replacing existing instructions.  QUIET suppresses messages."
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
   (mevedel--instruction-activate-workspace workspace)
-  (when (and (mevedel--instructions)
+  (when (and (mevedel--all-instructions)
              confirm)
     (unless (y-or-n-p "Discard existing mevedel instructions? ")
       (user-error "Aborted")))
-  (let* ((save-file (mevedel--patch-save-file
-                     (mevedel--read-instructions-file path)))
+  (let* ((save-file (mevedel--read-instructions-file path))
          (file-alist (plist-get save-file :files))
          (id-counter-plist (plist-get save-file :ids)))
+    (unless (equal (plist-get save-file :version) (mevedel-version))
+      (user-error "Unsupported instruction file version: %s"
+                  (or (plist-get save-file :version) "missing")))
     (unless (listp file-alist)
       (user-error "Malformed mevedel instruction list"))
     (mevedel--clear-instruction-state workspace)
@@ -261,11 +263,11 @@ before replacing existing instructions.  QUIET suppresses messages."
       (let ((hm (make-hash-table)))
         (cl-loop for used-id in used-ids
                  do (puthash used-id t hm))
-        (setq mevedel--id-counter (or id-counter 0)
-              mevedel--id-usage-map hm
-              mevedel--retired-ids retired-ids)))
-    (setq mevedel--instructions file-alist)
-    (cl-loop for cons in mevedel--instructions
+        (setf (mevedel--instruction-id-counter) (or id-counter 0)
+              (mevedel--instruction-id-usage-map) hm
+              (mevedel--instruction-retired-ids) retired-ids)))
+    (setf (mevedel--instruction-alist) file-alist)
+    (cl-loop for cons in (mevedel--instruction-alist)
              do (when (stringp (car cons))
                   (setf (car cons)
                         ;; We want to turn the relative paths of the save file to be absolute paths
@@ -274,16 +276,15 @@ before replacing existing instructions.  QUIET suppresses messages."
                          (car cons)
                          (or base-directory
                              (file-name-parent-directory path)))))))
-    (mevedel--instruction-save-current-state)
     (let ((total-restored 0)
           (total-kia 0)
           (total (cl-reduce #'+
                             (mapcar #'length
                                     (mapcar (lambda (plist)
                                               (plist-get plist :instructions))
-                                            (mapcar #'cdr mevedel--instructions)))
+                                            (mapcar #'cdr (mevedel--instruction-alist))))
                             :initial-value 0)))
-      (cl-loop for (file . _) in mevedel--instructions
+      (cl-loop for (file . _) in (mevedel--instruction-alist)
                do (progn
                     (cl-multiple-value-bind (_ restored kia) (mevedel--restore-file-instructions file t)
                       (cl-incf total-restored restored)
@@ -306,7 +307,7 @@ up-to-date, not the actual file on the disk being outdated."
   (when-let* ((buffer (find-buffer-visiting file)))
     (mevedel--instruction-activate-buffer buffer))
   (when (file-exists-p file)
-    (when-let* ((file-plist (cdr (assoc file mevedel--instructions))))
+    (when-let* ((file-plist (cdr (assoc file (mevedel--instruction-alist)))))
       (let ((mevedel--inhibit-file-patching t))
         (let ((original-content (plist-get file-plist :original-content))
               (buffer (find-file-noselect file)))
@@ -334,8 +335,9 @@ reverted, and restores them afterward."
                                    (insert-file-contents file)
                                    (buffer-substring-no-properties (point-min) (point-max)))))
                             (mevedel--stash-buffer buffer file-contents))
-                        (setq mevedel--instructions (assq-delete-all buffer mevedel--instructions))))))
-                  (mevedel--instruction-save-current-state))
+                        (setf (mevedel--instruction-alist)
+                              (assq-delete-all
+                               buffer (mevedel--instruction-alist))))))))
                 nil t))
     (add-hook 'before-revert-hook
               (lambda ()
@@ -521,11 +523,11 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
     (when-let* ((buffer (find-buffer-visiting file)))
       (mevedel--instruction-activate-buffer buffer))
     (unless (and (file-exists-p file)
-                 (assoc file mevedel--instructions))
+                 (assoc file (mevedel--instruction-alist)))
       (cl-return-from mevedel--restore-file-instructions (cl-values nil 0 0)))
     (cl-destructuring-bind
         (&key original-content instructions content-hash &allow-other-keys)
-        (alist-get file mevedel--instructions nil nil #'equal)
+        (alist-get file (mevedel--instruction-alist) nil nil #'equal)
       (when (null instructions)
         (error "Malformed file given for restoration"))
       (let ((buffer (find-file-noselect file))
@@ -584,15 +586,14 @@ If MESSAGE is non-nil, message the intent of patching outdated files."
               (mevedel--update-instruction-overlay instr t))
             (setq restored (length restored-instrs)
                   kia (- (length instructions) restored))
-            (setf (alist-get file mevedel--instructions nil nil #'equal) restored-instrs)
+            (setf (alist-get file (mevedel--instruction-alist) nil nil #'equal) restored-instrs)
             (when (and message (> kia 0))
               (display-warning
                'mevedel
                (format "Could not restore %d mevedel instruction%s in %s"
                        kia (if (= kia 1) "" "s") file)
                :warning))))
-        (setf (car (assoc file mevedel--instructions)) buffer)
-        (mevedel--instruction-save-current-state)
+        (setf (car (assoc file (mevedel--instruction-alist))) buffer)
         (cl-values buffer restored kia)))))
 
 (defun mevedel--wordwise-diff-patch-buffers (old new)
@@ -640,58 +641,6 @@ This is mostly a brittle hack meant to make Ediff be used noninteractively."
                           (apply-all-diffs)
                           (ediff-quit t)))))))))
         (set-window-configuration orig-window-config)))))
-
-(cl-defun mevedel--patch-save-file (save-file)
-  "Return a patched SAVE-FILE that matches the current version."
-  (let ((save-file-version (plist-get save-file :version))
-        (new-save-file ()))
-    (when (string= save-file-version (mevedel-version))
-      (cl-return-from mevedel--patch-save-file save-file))
-    (cl-labels ((recreate-instr-ids (files-alist)
-                  (let ((mevedel--id-counter 0)
-                        (mevedel--id-usage-map (make-hash-table))
-                        (mevedel--retired-ids ()))
-                    (cl-loop for (_ . file-plist) in files-alist
-                             do (let ((instr-plists (plist-get file-plist :instructions)))
-                                  (cl-loop for instr-plist in instr-plists
-                                           do (let ((ov-props (plist-get instr-plist :properties)))
-                                                (with-temp-buffer
-                                                  (let ((ov (make-overlay 1 1)))
-                                                    (mapc (lambda (prop)
-                                                            (overlay-put ov
-                                                                         prop
-                                                                         (plist-get ov-props prop)))
-                                                          ov-props)
-                                                    (overlay-put ov 'mevedel-id (mevedel--create-id))
-                                                    (plist-put instr-plist
-                                                               :properties
-                                                               (overlay-properties ov))))))))
-                    (cl-values files-alist mevedel--id-counter mevedel--id-usage-map mevedel--retired-ids)))
-                (recreate-id-counter (files-alist)
-                  (cl-multiple-value-bind (files-alist id-counter id-usage-map retired-ids)
-                      (recreate-instr-ids files-alist)
-                    (cl-values
-                     (list :id-counter id-counter
-                           :used-ids (hash-table-keys id-usage-map)
-                           :retired-ids retired-ids)
-                     files-alist))))
-      ;; NOTE: Here is the place to introduce backwards compatibility logic for
-      ;;   different save file version.
-      (pcase save-file-version
-        ;; Example
-        ;; ("v0.5.0"
-        ;;  ;; Compatibility logic ...
-        ;;  )
-        ;; Save file is a newer version, but needs no patching. We would still
-        ;; like to display a message indicating that the file underwent a
-        ;; patching procedure.
-        (_ (setq new-save-file save-file)))
-      (if new-save-file
-          (progn
-            (message "Patched loaded save file to version %s" (mevedel-version))
-            (setq new-save-file (plist-put new-save-file :version (mevedel-version)))
-            new-save-file)
-        save-file))))
 
 (add-hook 'find-file-hook
           (lambda ()

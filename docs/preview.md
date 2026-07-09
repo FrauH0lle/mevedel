@@ -62,6 +62,6 @@ temporary properties already cleared by an earlier move. Line-based
 overlays snap back to full lines, and deleted overlays become stubs so
 instruction persistence still has a live anchor.
 
-Persist moved instruction state only after `save-buffer` succeeds. If
-saving fails, do not write the moved overlay state; otherwise persisted
-instructions can point at content that never reached disk.
+Update the workspace instruction state only after `save-buffer` succeeds. If
+saving fails, leave the overlay state unchanged; otherwise instructions can
+point at content that never reached disk.

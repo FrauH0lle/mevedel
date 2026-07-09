@@ -834,6 +834,33 @@
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
+(mevedel-deftest mevedel--generate-final-patch ()
+  ,test
+  (test)
+  :doc "uses the active request snapshots in deterministic path order"
+  (let* ((root (make-temp-file "mevedel-final-patch-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id root :root root :name "patch"))
+         (a-file (file-name-concat root "a.txt"))
+         (z-file (file-name-concat root "z.txt"))
+         (snapshots (make-hash-table :test #'equal))
+         (mevedel--current-request
+          (mevedel-request--create :file-snapshots snapshots)))
+    (unwind-protect
+        (progn
+          (puthash z-file nil snapshots)
+          (puthash a-file "old\n" snapshots)
+          (with-temp-file a-file (insert "new\n"))
+          (with-temp-file z-file (insert "created\n"))
+          (let* ((patch (mevedel--generate-final-patch workspace))
+                 (a-pos (string-search "diff --git a/a.txt" patch))
+                 (z-pos (string-search "diff --git a/z.txt" patch)))
+            (should a-pos)
+            (should z-pos)
+            (should (< a-pos z-pos))
+            (should (string-match-p "new file mode 100644" patch))))
+      (delete-directory root t))))
+
 
 (provide 'test-mevedel-chat)
 ;;; test-mevedel-chat.el ends here

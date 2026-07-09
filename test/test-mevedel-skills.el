@@ -69,10 +69,10 @@
 	      (insert body)))
     skill-file))
 
-(defun mevedel-skills-test--write-plugin-manifest (user-dir repo json)
-  "Create a test plugin manifest JSON for REPO under USER-DIR.
+(defun mevedel-skills-test--write-plugin-manifest (_user-dir repo json)
+  "Create a test plugin manifest JSON for REPO in the install directory.
 Return the plugin root directory."
-  (let ((root (file-name-concat user-dir "plugins" repo)))
+  (let ((root (file-name-concat mevedel-plugin-install-directory repo)))
     (make-directory (file-name-concat root ".codex-plugin") t)
     (with-temp-file (file-name-concat root ".codex-plugin" "plugin.json")
       (insert json))
@@ -172,20 +172,6 @@ argument-hint: \"[path]\"
             ;; Body is not loaded eagerly.
             (should-not (mevedel-skill-body skill))))
       (delete-directory dir t)))
-
-  :doc "explicit legacy .claude skill directories are ignored"
-  (let* ((mevedel-skills-include-bundled nil)
-         (root (make-temp-file "mevedel-skills-legacy-" t))
-         (legacy-dir (file-name-concat root ".claude" "skills")))
-    (unwind-protect
-        (progn
-          (mevedel-skills-test--write-skill
-           legacy-dir "legacy"
-           "name: legacy
-description: old
-" "Legacy body")
-          (should-not (mevedel-skills-scan root '(".claude/skills/"))))
-      (delete-directory root t)))
 
   :doc "project/user name conflicts are source-qualified"
   (let* ((mevedel-skills-include-bundled nil)

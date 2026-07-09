@@ -255,8 +255,7 @@ Absolute paths and `~'-prefixed paths are scanned as-is and classified
 as `user' skills.  Relative paths are resolved against the current
 workspace root and classified as `project' skills.  Default directories
 scan local mevedel resources, local shared agent resources, global
-mevedel resources, then global shared agent resources.  Legacy
-`.claude/skills' entries are ignored."
+mevedel resources, then global shared agent resources."
   :type '(repeat directory)
   :group 'mevedel)
 
@@ -740,13 +739,6 @@ the fallback."
        ((string-match-p "\\(?:\\`\\|/\\)\\.agents/skills\\'" path)
         'agents)))))
 
-(defun mevedel-skills--claude-skills-dir-p (dir)
-  "Return non-nil when DIR points at a legacy `.claude/skills' tree."
-  (when (stringp dir)
-    (string-match-p "\\(?:\\`\\|/\\)\\.claude/skills\\'"
-                    (directory-file-name
-                     (expand-file-name (substitute-in-file-name dir))))))
-
 (defun mevedel-skills--resolve-dir (dir workspace-root)
   "Resolve DIR against WORKSPACE-ROOT, returning (ABSOLUTE . SOURCE).
 SOURCE is `user' for absolute/`~'-prefixed paths and `project' for
@@ -757,8 +749,6 @@ relative and WORKSPACE-ROOT is nil."
     (when-let* ((resolved (mevedel-skills--resolve-dir
                            (car dir) workspace-root)))
       (cons (car resolved) (cdr dir))))
-   ((mevedel-skills--claude-skills-dir-p dir)
-    nil)
    ((file-name-absolute-p dir)
     (let ((family (mevedel-skills--source-family-from-dir dir)))
       (cons (file-name-as-directory (expand-file-name dir))
@@ -961,9 +951,8 @@ including plugin skills, are left untouched."
 (defun mevedel-skills-scan (&optional workspace-root dirs workspace)
   "Scan skill directories and return a list of `mevedel-skill' structs.
 
-DIRS defaults to `mevedel-skill-dirs'.  Legacy `.claude/skills'
-entries are ignored.  WORKSPACE-ROOT is used to resolve relative
-entries; when nil, relative entries are skipped.
+DIRS defaults to `mevedel-skill-dirs'.  WORKSPACE-ROOT is used to
+resolve relative entries; when nil, relative entries are skipped.
 Unique names remain unqualified.  When user/project/bundled/managed
 sources collide, all colliding entries are exposed as `source:name'.
 Same-source duplicates keep the first entry.  After scanning
@@ -1762,13 +1751,6 @@ argumentSubstitution.ts."
      (list mevedel-skills--non-author-text-property t)
      copy)
     copy))
-
-(defun mevedel-skills--non-author-text-p (text position)
-  "Return non-nil when TEXT at POSITION did not come from SKILL.md."
-  (and (>= position 0)
-       (< position (length text))
-       (get-text-property
-        position mevedel-skills--non-author-text-property text)))
 
 (defun mevedel-skills--property-range-p (text start end property)
   "Return non-nil when TEXT has PROPERTY anywhere from START to END."
@@ -5328,12 +5310,6 @@ to `mevedel-skills--maybe-activate'."
   "Install the buffer-local post-tool-call activation hook."
   (add-hook 'gptel-post-tool-call-functions
             #'mevedel-skills--post-tool-activate nil t))
-
-(defun mevedel-skills-uninstall-activation-hook ()
-  "Remove the buffer-local post-tool-call activation hook."
-  (remove-hook 'gptel-post-tool-call-functions
-               #'mevedel-skills--post-tool-activate t))
-
 
 ;;
 ;;; Reminder installation

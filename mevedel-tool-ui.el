@@ -2416,21 +2416,9 @@ permission resolver pick them up."
       (setf (mevedel-agent-invocation-hook-rules invocation)
             (append (mevedel-agent-invocation-hook-rules invocation)
                     skill-hook-rules)))
-    ;; Allocate the agent buffer (best-effort; nil falls back to
-    ;; the legacy parent-buffer dispatch path).
     (let ((agent-buffer
-           (catch 'mevedel-agent-buffer-setup-failed
-             (condition-case err
-                 (mevedel-agent-exec--allocate-agent-buffer
-                  invocation parent-data-buffer)
-               (error
-                (message "mevedel: agent-buffer allocation failed: %S" err)
-                nil)))))
-      ;; A `throw' from the allocator (gptel-mode failure, etc.)
-      ;; resolves to a non-buffer sentinel; treat as failure and
-      ;; fall back to the legacy prompt-only path.
-      (unless (bufferp agent-buffer)
-        (setq agent-buffer nil))
+           (mevedel-agent-exec--allocate-agent-buffer
+            invocation parent-data-buffer)))
       (setf (mevedel-agent-invocation-buffer invocation) agent-buffer)
       ;; Try to set up persistence (shallow materialize + transcript file).
       (mevedel-tools--task--setup-transcript invocation agent-buffer)
@@ -2440,14 +2428,13 @@ permission resolver pick them up."
       ;; disk, perms, read-only mount), drop persistence: clear
       ;; `buffer-file-name', drop the in-memory transcript entry,
       ;; and continue with the agent buffer as ephemeral.
-      (when (and agent-buffer (buffer-live-p agent-buffer))
-        (with-current-buffer agent-buffer
-          (let ((inhibit-read-only t))
-            (goto-char (point-max))
-            (unless (bobp) (insert "\n"))
-            (insert (format "* Agent Task: %s\n\n%s\n"
-                            (or description "")
-                            (or prompt "")))))
+      (with-current-buffer agent-buffer
+        (let ((inhibit-read-only t))
+          (goto-char (point-max))
+          (unless (bobp) (insert "\n"))
+          (insert (format "* Agent Task: %s\n\n%s\n"
+                          (or description "")
+                          (or prompt ""))))
         (when (mevedel-agent-invocation-transcript-relative-path invocation)
           (let ((saved
                  (mevedel-agent-exec--save-transcript-buffer invocation)))

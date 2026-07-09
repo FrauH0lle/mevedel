@@ -39,6 +39,7 @@
 ;; `mevedel-overlays'
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-overlays" (&optional buffer))
+(declare-function mevedel--instruction-alist-value "mevedel-overlays" ())
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
@@ -739,7 +740,7 @@ points back at the chat buffer that owns the session.  Dispatches per
   "Completion-at-point function for @ref mentions.
 Provides completion for both @ref:ID and @ref:{tag-query} syntax."
   (mevedel--instruction-activate-buffer)
-  (when (bound-and-true-p mevedel--instructions)
+  (when (mevedel--instruction-alist-value)
     (save-excursion
       (let ((orig-point (point)))
         ;; Try to match @ref:ID pattern

@@ -313,7 +313,8 @@
                 (project-agents (file-name-concat root ".agents"))
                 (project-mevedel (file-name-concat root ".mevedel"))
                 (plugin-root (file-name-as-directory
-                              (file-name-concat user-dir "plugins" "repo"))))
+                              (file-name-concat
+                               mevedel-plugin-install-directory "repo"))))
             (write-el global-agents "echo global-agents-el")
             (write-json global-agents "echo global-agents-json")
             (write-el global-mevedel "echo global-mevedel-el")
@@ -385,7 +386,7 @@
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-hooks-plugin-user" t)))
          (plugin-root (file-name-as-directory
-                       (file-name-concat user-dir "plugins" "repo")))
+                       (file-name-concat user-dir ".agents" "plugins" "repo")))
          (workspace (mevedel-hooks-test--workspace root))
          (session (mevedel-session-create "main" workspace root))
          (mevedel-user-dir user-dir)
@@ -472,7 +473,8 @@
     (unwind-protect
         (progn
           (let ((default-root (file-name-as-directory
-                               (file-name-concat user-dir "plugins" "default"))))
+                               (file-name-concat
+                                mevedel-plugin-install-directory "default"))))
             (make-directory (file-name-concat default-root "hooks") t)
             (with-temp-file (file-name-concat default-root "hooks" "hooks.json")
               (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
@@ -484,7 +486,8 @@
                        (lambda (_prompt) t)))
               (mevedel-plugins-enable "default" workspace)))
           (let ((path-root (file-name-as-directory
-                            (file-name-concat user-dir "plugins" "path"))))
+                            (file-name-concat
+                             mevedel-plugin-install-directory "path"))))
             (make-directory (file-name-concat path-root "hooks") t)
             (with-temp-file (file-name-concat path-root "hooks" "a.json")
               (insert "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
@@ -517,7 +520,7 @@
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-hooks-superpowers-user" t)))
          (plugin-root (file-name-as-directory
-                       (file-name-concat user-dir "plugins" "repo")))
+                       (file-name-concat user-dir ".agents" "plugins" "repo")))
          (workspace (mevedel-hooks-test--workspace root))
          (session (mevedel-session-create "main" workspace root))
          (mevedel-user-dir user-dir)
@@ -1083,7 +1086,7 @@
          (user-dir (file-name-as-directory
                     (make-temp-file "mevedel-hooks-plugin-env-user" t)))
          (plugin-root (file-name-as-directory
-                       (file-name-concat user-dir "plugins" "repo")))
+                       (file-name-concat user-dir ".agents" "plugins" "repo")))
          (mevedel-user-dir user-dir)
          (mevedel-plugin-install-directory
           (file-name-concat user-dir ".agents" "plugins"))

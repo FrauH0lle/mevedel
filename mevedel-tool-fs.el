@@ -397,36 +397,24 @@ Header shows the directory path with a created, exists, or error suffix."
 ;;
 ;;; File Snapshotting
 
-(defvar-local mevedel--request-file-snapshots nil
-  "Alist of (FILEPATH . ORIGINAL-CONTENT) tracking files modified.
-
-Each entry stores the original state of a file before any modifications
-in the current request.  ORIGINAL-CONTENT is nil if the file didn't exist
-before the request.  Cleared when request completes.")
-
 (defun mevedel--snapshot-file-if-needed (filepath)
   "Capture original state of FILEPATH before first modification in request.
 Does nothing if FILEPATH has already been snapshotted in this request.
 Stores nil for ORIGINAL-CONTENT if file doesn't exist yet.
 
-Populates both the legacy buffer-local alist
-`mevedel--request-file-snapshots' (consumed by
-`mevedel--generate-final-patch') and the active request struct's
-`:file-snapshots' hash table (consumed by the session-persistence
-file-history store)."
-  (when (and filepath (stringp filepath))
-    (let ((abs-path (expand-file-name filepath)))
-      (unless (assoc abs-path mevedel--request-file-snapshots)
+Stores snapshots in the active request for final patch generation and
+session file history."
+  (when (and filepath (stringp filepath) mevedel--current-request)
+    (let* ((abs-path (expand-file-name filepath))
+           (snapshots (mevedel-request-file-snapshots
+                       mevedel--current-request))
+           (missing (make-symbol "missing")))
+      (when (eq missing (gethash abs-path snapshots missing))
         (let ((original (when (file-exists-p abs-path)
                           (with-temp-buffer
                             (insert-file-contents abs-path)
                             (buffer-string)))))
-          (push (cons abs-path original) mevedel--request-file-snapshots)
-          (when (and (boundp 'mevedel--current-request)
-                     mevedel--current-request)
-            (let ((ht (mevedel-request-file-snapshots mevedel--current-request)))
-              (when (hash-table-p ht)
-                (puthash abs-path original ht)))))))))
+          (puthash abs-path original snapshots))))))
 
 
 ;;

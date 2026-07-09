@@ -411,11 +411,12 @@ from PLIST.  The auxiliary fields (first-user-message,
 latest-user-message, additional-roots) are returned alongside because
 they are not on the session struct.
 
-The PLIST is run through `mevedel-session-persistence--patch-sidecar'
-first for version migration.  Permission rules with unknown actions
-are dropped via the hygiene filter."
-  (let* ((plist    (mevedel-session-persistence--patch-sidecar plist))
-         (workspace (mevedel-session-persistence--workspace-from-plist
+Only the current sidecar version is accepted.  Permission rules with
+unknown actions are dropped via the hygiene filter."
+  (unless (equal (plist-get plist :version) (mevedel-version))
+    (error "Unsupported session version: %s"
+           (or (plist-get plist :version) "missing")))
+  (let* ((workspace (mevedel-session-persistence--workspace-from-plist
                      (plist-get plist :workspace)))
          (working-directory
           (mevedel-session-persistence--working-directory-from-plist
@@ -504,33 +505,11 @@ the system temp directory."
 (defun mevedel-session-persistence-read (path)
   "Read sidecar plist from PATH.
 Returns the raw plist.  Caller is responsible for passing it through
-`mevedel-session-persistence-deserialize' (which applies the version
-patch and hygiene filters)."
+`mevedel-session-persistence-deserialize' for validation and hygiene."
   (with-temp-buffer
     (insert-file-contents path)
     (goto-char (point-min))
     (read (current-buffer))))
-
-
-;;
-;;; Version migration
-
-(defun mevedel-session-persistence--patch-sidecar (plist)
-  "Patch sidecar PLIST forward to the current `mevedel-version'.
-
-Each older version branch should rewrite PLIST in place and fall through
-to the current version.  When the version matches `mevedel-version',
-returns PLIST unchanged.  Mirrors `mevedel--patch-save-file' in
-`mevedel-persistence.el'."
-  (let ((version (plist-get plist :version)))
-    (cond
-     ((string= version (mevedel-version))
-      plist)
-     (t
-      ;; No older versions to migrate yet.  Future versions add a
-      ;; pcase here that rewrites PLIST and updates :version.
-      (plist-put plist :version (mevedel-version))))))
-
 
 ;;
 ;;; Sub-agent transcript helpers
@@ -2845,15 +2824,8 @@ restoration and reveal timers."
     (find-file-noselect file)))
 
 (defun mevedel-session-persistence-load-sidecar (path)
-  "Read sidecar PLIST from PATH, applying version migration.
-
-This is the public read entry point: combines
-`mevedel-session-persistence-read' (raw I/O) with
-`mevedel-session-persistence--patch-sidecar' (version
-forward-migration).  Returns the patched plist, or nil when the
-sidecar is missing or unparseable (a warning is logged so the caller
-can fall back to a fresh-session treatment per the failure-mode
-table)."
+  "Read a current-version sidecar plist from PATH.
+Return nil when the sidecar is missing, unreadable, or unsupported."
   (cond
    ((not (file-exists-p path))
     (display-warning 'mevedel
@@ -2863,8 +2835,11 @@ table)."
     nil)
    (t
     (condition-case err
-        (mevedel-session-persistence--patch-sidecar
-         (mevedel-session-persistence-read path))
+        (let ((plist (mevedel-session-persistence-read path)))
+          (unless (equal (plist-get plist :version) (mevedel-version))
+            (error "Unsupported session version: %s"
+                   (or (plist-get plist :version) "missing")))
+          plist)
       (error
        (display-warning 'mevedel
                         (format "Sidecar unreadable at %s: %s; treating as fresh session"
@@ -4125,6 +4100,8 @@ until restore actually reads it."
   (condition-case _
       (let* ((plist (mevedel-session-persistence-read sidecar-path))
              (prompt-index (plist-get plist :prompt-index))
+             (_ (unless (equal (plist-get plist :version) (mevedel-version))
+                  (error "Unsupported session version")))
              (latest-user-message
               (or (plist-get plist :latest-user-message)
                   (mevedel-session-persistence--latest-user-message-from-index

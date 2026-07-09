@@ -141,135 +141,29 @@ share the same template behavior as native `gptel-agent' definitions."
   session
   refresh-buffer)
 
-(cl-defstruct (mevedel-system-prompt-section
-               (:constructor mevedel-system-prompt-section--create))
-  "A named prompt section.
-
-NAME is the section identifier.  ORDER controls assembly order.  PRODUCER
-is called with a `mevedel-system-context' and returns a string or nil.
-CACHE is nil, `global', `keyed', or t.  `global' and t share one cached
-value across contexts.  `keyed' caches per value returned by CACHE-KEY."
-  name
-  order
-  producer
-  cache
-  cache-key)
-
-(defvar mevedel-system--prompt-sections nil
-  "Registered prompt sections.")
-
 (defvar mevedel-system--prompt-section-cache (make-hash-table :test #'equal)
   "Memoized prompt section values keyed by section name and cache key.")
 
 (defconst mevedel-system--prompt-cache-miss (make-symbol "mevedel-prompt-cache-miss")
   "Sentinel for missing prompt section cache entries.")
 
-(defun mevedel-system--register-prompt-section (name props)
-  "Register prompt section NAME with PROPS."
-  (let ((producer (plist-get props :producer))
-        (cache (plist-get props :cache))
-        (cache-key (plist-get props :cache-key)))
-    (unless (functionp producer)
-      (error "Prompt section :producer must be a function"))
-    (when (and (eq cache 'keyed)
-               (not (functionp cache-key)))
-      (error "Keyed prompt section requires :cache-key"))
-    (mevedel-system-clear-prompt-section-cache name)
-    (setq mevedel-system--prompt-sections
-          (cons
-           (mevedel-system-prompt-section--create
-            :name name
-            :order (or (plist-get props :order) 100)
-            :producer producer
-            :cache cache
-            :cache-key cache-key)
-           (let (sections)
-             (dolist (section mevedel-system--prompt-sections
-                              (nreverse sections))
-               (unless (eq name (mevedel-system-prompt-section-name section))
-                 (push section sections)))))))
-  name)
-
-(defmacro mevedel-define-prompt-section (name &rest props)
-  "Define prompt section NAME.
-
-Recognized PROPS:
-
-- `:order' integer ordering key.
-- `:producer' function called with a `mevedel-system-context'.
-- `:cache' nil, `global', `keyed', or t.
-- `:cache-key' function called with context for keyed sections."
-  `(mevedel-system--register-prompt-section
-    ',name
-    (list ,@props)))
-
-(defun mevedel-system-clear-prompt-section-cache (&optional name)
-  "Clear memoized prompt section values.
-
-When NAME is nil, clear all prompt section cache entries."
-  (if (null name)
-      (clrhash mevedel-system--prompt-section-cache)
-    (let (keys)
-      (maphash
-       (lambda (key _value)
-         (when (eq (car-safe key) name)
-           (push key keys)))
-       mevedel-system--prompt-section-cache)
-      (dolist (key keys)
-        (remhash key mevedel-system--prompt-section-cache)))))
-
-(defun mevedel-system--prompt-sections-sorted ()
-  "Return prompt sections sorted by ascending order."
-  (sort (copy-sequence mevedel-system--prompt-sections)
-        (lambda (a b)
-          (< (mevedel-system-prompt-section-order a)
-             (mevedel-system-prompt-section-order b)))))
-
 (defun mevedel-system--section-cache-key (section context)
   "Return cache key for SECTION and CONTEXT, or nil when uncached."
-  (let ((cache (mevedel-system-prompt-section-cache section))
-        (name (mevedel-system-prompt-section-name section)))
-    (pcase cache
-      ('global (list name :global))
-      ('keyed (list name
-                    (funcall (mevedel-system-prompt-section-cache-key section)
-                             context)))
-      ('nil nil)
-      (_ (and cache (list name :global))))))
+  (when-let* ((cache-key (plist-get section :cache-key)))
+    (list (plist-get section :name) (funcall cache-key context))))
 
 (defun mevedel-system--render-section (section context)
   "Return rendered SECTION for CONTEXT."
   (let ((key (mevedel-system--section-cache-key section context)))
     (if (null key)
-        (funcall (mevedel-system-prompt-section-producer section) context)
+        (funcall (plist-get section :producer) context)
       (let ((cached (gethash key mevedel-system--prompt-section-cache
                              mevedel-system--prompt-cache-miss)))
         (if (not (eq cached mevedel-system--prompt-cache-miss))
             cached
-          (let ((value (funcall (mevedel-system-prompt-section-producer section)
-                                context)))
+          (let ((value (funcall (plist-get section :producer) context)))
             (puthash key value mevedel-system--prompt-section-cache)
             value))))))
-
-(defun mevedel-system-prompt-section-report (&optional base-prompt workspace working-directory)
-  "Return audit data for BASE-PROMPT, WORKSPACE, and WORKING-DIRECTORY."
-  (let* ((context (mevedel-system--make-context
-                   (or base-prompt mevedel-system--base-prompt)
-                   workspace working-directory)))
-    (mapcar
-     (lambda (section)
-       (let* ((key (mevedel-system--section-cache-key section context))
-              (cached (and key
-                           (not (eq (gethash key mevedel-system--prompt-section-cache
-                                             mevedel-system--prompt-cache-miss)
-                                    mevedel-system--prompt-cache-miss))))
-              (value (mevedel-system--render-section section context)))
-         (list :name (mevedel-system-prompt-section-name section)
-               :order (mevedel-system-prompt-section-order section)
-               :cache (mevedel-system-prompt-section-cache section)
-               :cached cached
-               :chars (if (stringp value) (length value) 0))))
-     (mevedel-system--prompt-sections-sorted))))
 
 
 ;;
@@ -556,41 +450,31 @@ present."
      :session session
      :refresh-buffer refresh-buffer)))
 
-(mevedel-define-prompt-section base
-  :order 10
-  :cache 'keyed
-  :cache-key (lambda (context)
-               (mevedel-system-context-base-prompt context))
-  :producer (lambda (context)
-              (mevedel-system-context-base-prompt context)))
-
-(mevedel-define-prompt-section workspace-config
-  :order 20
-  :cache 'keyed
-  :cache-key #'mevedel-system--workspace-config-cache-key
-  :producer (lambda (context)
-              (mevedel-system--workspace-config-prompt
-               (mevedel-system-context-workspace context)
-               (mevedel-system-context-working-directory context))))
-
-(mevedel-define-prompt-section memory
-  :order 30
-  :cache 'keyed
-  :cache-key #'mevedel-system--memory-cache-key
-  :producer (lambda (context)
-              (funcall mevedel-system--memory-prompt
-                       (mevedel-system-context-workspace context))))
-
-(mevedel-define-prompt-section environment
-  :order 40
-  :producer (lambda (context)
-              (mevedel-system--environment-prompt
-               (mevedel-system-context-workspace context)
-               (mevedel-system-context-working-directory context))))
-
-(mevedel-define-prompt-section skills
-  :order 50
-  :producer #'mevedel-system--skills-prompt)
+(defconst mevedel-system--prompt-sections
+  (list
+   (list :name 'base
+         :cache-key (lambda (context)
+                      (mevedel-system-context-base-prompt context))
+         :producer (lambda (context)
+                     (mevedel-system-context-base-prompt context)))
+   (list :name 'workspace-config
+         :cache-key #'mevedel-system--workspace-config-cache-key
+         :producer (lambda (context)
+                     (mevedel-system--workspace-config-prompt
+                      (mevedel-system-context-workspace context)
+                      (mevedel-system-context-working-directory context))))
+   (list :name 'memory
+         :cache-key #'mevedel-system--memory-cache-key
+         :producer (lambda (context)
+                     (funcall mevedel-system--memory-prompt
+                              (mevedel-system-context-workspace context))))
+   (list :name 'environment
+         :producer (lambda (context)
+                     (mevedel-system--environment-prompt
+                      (mevedel-system-context-workspace context)
+                      (mevedel-system-context-working-directory context))))
+   (list :name 'skills :producer #'mevedel-system--skills-prompt))
+  "Prompt sections in provider cache-friendly rendering order.")
 
 
 ;;
@@ -608,7 +492,7 @@ WORKSPACE and WORKING-DIRECTORY are normalized the same way as
     (mapcar
      (lambda (section)
        (mevedel-system--render-section section context))
-     (mevedel-system--prompt-sections-sorted))))
+     mevedel-system--prompt-sections)))
 
 (defun mevedel-system-render-named-sections
     (base-prompt section-names &optional workspace working-directory
@@ -616,7 +500,7 @@ WORKSPACE and WORKING-DIRECTORY are normalized the same way as
   "Return rendered prompt SECTION-NAMES for BASE-PROMPT.
 
 SECTION-NAMES is a list of prompt section symbols.  Sections are still
-rendered in their registered order; unknown names are ignored."
+rendered in descriptor order; unknown names are ignored."
   (let ((context (mevedel-system--make-context
                   base-prompt workspace working-directory
                   session refresh-buffer))
@@ -624,9 +508,9 @@ rendered in their registered order; unknown names are ignored."
     (delq nil
           (mapcar
            (lambda (section)
-             (when (memq (mevedel-system-prompt-section-name section) wanted)
+             (when (memq (plist-get section :name) wanted)
                (mevedel-system--render-section section context)))
-           (mevedel-system--prompt-sections-sorted)))))
+           mevedel-system--prompt-sections))))
 
 (defun mevedel-system-build-prompt
     (base-prompt &optional workspace working-directory session refresh-buffer)

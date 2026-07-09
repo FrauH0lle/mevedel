@@ -151,7 +151,7 @@ of that type.
 
 If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
 ...)."
-  (let ((overlays (alist-get buffer mevedel--instructions)))
+  (let ((overlays (alist-get buffer (mevedel--instruction-alist))))
     (when type-of
       (setq overlays (seq-filter
                       (lambda (ov)
@@ -482,10 +482,10 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
 
 (mevedel-deftest mevedel-diff-apply-buffer
   (:before-each
-   (setq mevedel--instructions nil)
-   (setq mevedel--id-counter 0)
-   (setq mevedel--id-usage-map (make-hash-table))
-   (setq mevedel--retired-ids nil)
+   (setf (mevedel--instruction-alist) nil)
+   (setf (mevedel--instruction-id-counter) 0)
+   (setf (mevedel--instruction-id-usage-map) (make-hash-table))
+   (setf (mevedel--instruction-retired-ids) nil)
    (setq mevedel--instruction-states (make-hash-table :test #'equal))
    (setq mevedel--instruction-current-state-key :global)
    :after-each
@@ -541,7 +541,6 @@ Regression: failed buffer save does not persist moved instruction state"
          (test-buffer (car buf-setup))
          (directive-ov (cdr buf-setup))
          (diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
-         persisted
          err)
 
     (cl-letf (((symbol-function #'mevedel-workspace)
@@ -552,10 +551,7 @@ Regression: failed buffer save does not persist moved instruction state"
                   (file-name-nondirectory (buffer-file-name test-buffer)))))
               ((symbol-function #'save-buffer)
                (lambda (&rest _)
-                 (error "Forced save failure")))
-              ((symbol-function #'mevedel--instruction-save-current-state)
-               (lambda ()
-                 (setq persisted t))))
+                 (error "Forced save failure"))))
       (setq err
             (condition-case error
                 (with-current-buffer diff-buffer
@@ -565,7 +561,6 @@ Regression: failed buffer save does not persist moved instruction state"
               (error error))))
 
     (should err)
-    (should-not persisted)
     (should (overlay-buffer directive-ov))
     (with-current-buffer test-buffer
       (should (equal buffer-text
@@ -1401,7 +1396,7 @@ Cumulative delta with mixed insert/delete pattern"
             (setq target-ov (make-overlay 11 18))
             (overlay-put target-ov 'mevedel-instruction t)
             (overlay-put target-ov 'mevedel-instruction-type 'directive)
-            (push target-ov (alist-get test-buffer mevedel--instructions)))
+            (push target-ov (alist-get test-buffer (mevedel--instruction-alist))))
 
           (setq diff-buffer (mevedel-test--create-diff-buffer new-text test-buffer))
 

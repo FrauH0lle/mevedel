@@ -29,7 +29,7 @@ lazily — read them when planning work in the relevant area. The
   sub-agent permission propagation, example config
 - [`docs/agents.md`](docs/agents.md) — explorer/coordinator/
   verifier/reviewer, background spawning + BWAIT, SendMessage mailboxes,
-  coordinator and review skills, task overlay
+  coordinator and review skills, task status fragment
 - [`docs/preview.md`](docs/preview.md) — inline diff overlay,
   keybindings, mode dispatch, handler return shape
 - [`docs/mentions.md`](docs/mentions.md) — `@ref`/`@file`/`@agent`/`@mcp`
@@ -204,7 +204,7 @@ warnings.
 - `mevedel-compact`
 - `mevedel-review` / `mevedel-verify`
 - `mevedel-add/remove/list-project-roots`
-- `mevedel-toggle-todos` / `mevedel-toggle-hints`
+- `mevedel-toggle-tasks` / `mevedel-toggle-hints`
 - `mevedel-display-hints` / `mevedel-clear-hints`
 
 ## Code style

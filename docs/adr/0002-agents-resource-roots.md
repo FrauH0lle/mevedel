@@ -36,16 +36,15 @@ Skill discovery uses the same local-before-global and `.mevedel/`-before-
 `.agents/` order for ordinary resource roots, followed by bundled skills and
 plugin skills. Hook execution visits lower-precedence hook roots before
 higher-precedence hook roots because later hook rewrites win. Plugin
-discovery includes local and global `.mevedel/plugins/` and
-`.agents/plugins/` roots, but discovery never implies activation.
+discovery includes local `.mevedel/plugins/` and `.agents/plugins/` roots,
+plus the global `.agents/plugins/` root, but discovery never implies activation.
 `/plugin install` writes new installs to the global `~/.agents/plugins/`
-root, while legacy `~/.mevedel/plugins/` installs remain discoverable and
-manageable.
+root.
 
 When the same plugin manifest name appears in multiple roots, mevedel uses
 root precedence rather than exposing multiple prefixed plugin names:
 workspace `.mevedel/plugins/`, workspace `.agents/plugins/`, global
-`~/.mevedel/plugins/`, global `~/.agents/plugins/`, then extra roots.
+`~/.agents/plugins/`, then extra roots.
 Shadowed duplicates should be visible in plugin listing output.
 
 Workspace instructions remain in ordinary `AGENTS.md` and `AGENTS.local.md`

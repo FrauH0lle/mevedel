@@ -45,11 +45,22 @@ fire-count and payload."
   `(let* ((fired nil)
           (main-cb (lambda (&rest args) (push args fired)))
           (partial-cell (list ""))
-          (,callback-sym (mevedel-agent-exec--make-callback
-                          main-cb "explorer" "Test task"
-                          (point-min-marker) partial-cell)))
+          (default-invocation
+           (mevedel-agent-invocation--create
+            :agent (mevedel-agent--create :name "explorer")
+            :agent-id "explorer--callback-test"))
+          (raw-callback (mevedel-agent-exec--make-callback
+                         main-cb "explorer" "Test task"
+                         (point-min-marker) partial-cell))
+          (,callback-sym
+           (lambda (response info &rest rest)
+             (unless (plist-get info :mevedel-agent-invocation)
+               (setq info (plist-put info :mevedel-agent-invocation
+                                     default-invocation)))
+             (apply raw-callback response info rest))))
      (ignore main-cb partial-cell)
-     ,@body))
+     (cl-letf (((symbol-function 'mevedel-agent-exec--finalize) #'ignore))
+       ,@body)))
 
 
 ;;
@@ -145,17 +156,20 @@ fire-count and payload."
 		 (let* ((fired nil)
 			(main-cb (lambda (&rest args) (push args fired)))
 			(partial-cell (list "prefix: "))
+			(inv (mevedel-agent-invocation--create
+			      :agent (mevedel-agent--create :name "explorer")))
 			(cb (mevedel-agent-exec--make-callback
 			     main-cb "explorer" "Test task"
 			     (point-min-marker) partial-cell))
-			(info '(:stream t)))
-		   (funcall cb "first" info)
-		   (funcall cb " second" info)
-		   (should (equal "prefix: " (car partial-cell)))
-		   (funcall cb t info)
-		   (should (= 1 (length fired)))
-		   (should (equal "prefix: first second" (car (car fired))))
-		   (should (equal "prefix: first second" (car partial-cell))))
+			(info (list :stream t :mevedel-agent-invocation inv)))
+		   (cl-letf (((symbol-function 'mevedel-agent-exec--finalize) #'ignore))
+		     (funcall cb "first" info)
+		     (funcall cb " second" info)
+		     (should (equal "prefix: " (car partial-cell)))
+		     (funcall cb t info)
+		     (should (= 1 (length fired)))
+		     (should (equal "prefix: first second" (car (car fired))))
+		     (should (equal "prefix: first second" (car partial-cell)))))
 
 		 :doc "streaming: transcript final response overrides noisy accumulator"
 		 (let ((buf (generate-new-buffer " *mev-agent-exec-final-response*")))
@@ -420,14 +434,7 @@ fire-count and payload."
 								     (should (= 1 (length fired)))))))
 		     (when (buffer-live-p buf) (kill-buffer buf))))
 
-		 :doc "terminal-ready-p: legacy callers without an invocation are ready"
-		 ;; The fallback at the predicate's tail keeps missing-invocation info
-		 ;; firing on the first text-only `t' as before.
-		 (mevedel-agent-exec-test--with-callback cb
-							 (let ((info (list :stream t)))           ; no :context at all
-							   (funcall cb "result" info)
-							   (funcall cb t info)
-							   (should (= 1 (length fired))))))
+		 )
 
 
 ;;
@@ -647,6 +654,8 @@ fire-count and payload."
 		 :doc "inherits parent include-reasoning into per-agent request buffers"
 		 (let ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
 		       (agent-buf (generate-new-buffer " *mev-agent-child*"))
+		       (inv (mevedel-agent-invocation--create
+		             :agent (mevedel-agent--create :name "explorer")))
 		       captured-buffer
 		       captured-include-reasoning)
 		   (unwind-protect
@@ -679,7 +688,7 @@ fire-count and payload."
 					#'ignore))
 			       (mevedel-agent-exec--run
 				#'ignore "explorer" "count defcustoms" "prompt"
-				nil agent-buf))))
+				inv agent-buf))))
 			 (should (eq captured-buffer agent-buf))
 			 (should (eq captured-include-reasoning t))
 			 (with-current-buffer agent-buf
@@ -797,17 +806,7 @@ fire-count and payload."
 		   (should (eq inv (mevedel-agent-exec--invocation-from-info
 				    (list :mevedel-agent-invocation inv)))))
 
-		 :doc "keeps overlay lookup as a compatibility fallback"
-		 (let ((buf (generate-new-buffer " *mev-agent-exec-ov*")))
-		   (unwind-protect
-		       (with-current-buffer buf
-			 (let* ((agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create :agent agent))
-				(ov (make-overlay (point-min) (point-min))))
-			   (overlay-put ov 'mevedel-agent-invocation inv)
-			   (should (eq inv (mevedel-agent-exec--invocation-from-info
-					    (list :context ov))))))
-		     (when (buffer-live-p buf) (kill-buffer buf)))))
+		 )
 
 
 (mevedel-deftest mevedel-agent-exec--render-data-bounds ()
@@ -984,7 +983,7 @@ fire-count and payload."
                   ((symbol-function
                     'mevedel-view-agent-live-transcript-finalize)
                    (lambda (_invocation) nil))
-                  ((symbol-function 'mevedel-tool-task--display-overlay)
+                  ((symbol-function 'mevedel-tool-task--refresh-display)
                    (lambda () t))
                   ((symbol-function
                     'mevedel-session-persistence--write-sidecar-now)

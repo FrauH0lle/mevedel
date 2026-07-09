@@ -64,7 +64,6 @@
                                      (expand-file-name "~/.agents/memory"))
                                     prompt))
             (should-not (string-match-p "CLAUDE\\.md" prompt))
-            (should-not (string-match-p "\\.claude/skills" prompt))
             (should (string-match-p "User-provided focus: prefer hooks"
                                     prompt))))
       (kill-buffer data-buffer))))

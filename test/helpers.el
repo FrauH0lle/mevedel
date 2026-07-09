@@ -8,6 +8,13 @@
 
 (defvar tabulated-list-entries)
 
+(defun mevedel-test-file-cache-create ()
+  "Return an empty file cache for tests."
+  (mevedel-file-cache--create
+   :table (make-hash-table :test #'equal)
+   :order nil
+   :total-bytes 0))
+
 
 ;;
 ;;; Test macro
