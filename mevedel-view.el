@@ -9761,11 +9761,12 @@ HTTP request, then commits the batch by clearing the editable queue."
                        queue session))))
               ((not (mevedel-view--agent-fsm-p info data-buffer)))
               (data (plist-get info :data)))
-    (let ((block (mevedel-view--queued-user-message-batch-block queue)))
+    (let* ((block (mevedel-view--queued-user-message-batch-block queue))
+           (model-block (mevedel--strip-hook-audit-blocks block)))
       (gptel--inject-prompt
        (plist-get info :backend) data
        (list :role "user"
-             :content block))
+             :content model-block))
       (mevedel-view--insert-queued-user-message-batch
        data-buffer block
        (mevedel-view--active-response-marker info data-buffer))

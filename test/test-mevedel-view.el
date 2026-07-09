@@ -10574,6 +10574,14 @@ finds it during `$' skill dispatch."
         (setq-local mevedel--workspace ws))
       (setf (mevedel-session-queued-user-messages session)
             (list (list :input "first" :model-input "first prepared")
+                  (list :input "audited"
+                        :model-input "audited prepared"
+                        :hook-audits
+                        '((:type prompt-rewrite
+                                  :event "UserPromptSubmit"
+                                  :original "secret draft"
+                                  :submitted "audited prepared"
+                                  :reason "queued rewrite")))
                   (list :input "second" :model-input "second prepared")))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
@@ -10585,10 +10593,18 @@ finds it during `$' skill dispatch."
           (let ((content (plist-get (aref msgs 1) :content)))
             (should (string-match-p "first prepared" content))
             (should (string-match-p "second prepared" content))
+            (should (string-match-p "audited prepared" content))
+            (should-not (string-match-p "<!-- mevedel-hook-audit -->"
+                                        content))
+            (should-not (string-match-p "secret draft" content))
+            (should-not (string-match-p "queued rewrite" content))
             (should (< (string-match-p "first prepared" content)
                        (string-match-p "second prepared" content)))))
         (with-current-buffer data-buf
-          (should (string-match-p "first prepared" (buffer-string))))
+          (let ((text (buffer-string)))
+            (should (string-match-p "first prepared" text))
+            (should (string-match-p "<!-- mevedel-hook-audit -->" text))
+            (should (string-match-p "secret draft" text))))
         (with-current-buffer view-buf
           (mevedel-view--full-rerender)
           (should (string-match-p "second prepared"
