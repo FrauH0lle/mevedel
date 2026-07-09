@@ -6499,6 +6499,139 @@ PROPS is the value for the `gptel' property."
               (should (= 187 (button-get button 'mevedel-view-line))))))
       (delete-directory root t)))
 
+  :doc "relative file line range stores first line and spans full range"
+  (let* ((root (make-temp-file "mevedel-view-linkify-range-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-range"
+                     :root root :name "linkify-range"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See file.el:100-102\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "file.el:100-102")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 100 (button-get button 'mevedel-view-line)))
+              (let ((end-button (button-at (1- (match-end 0)))))
+                (should end-button)
+                (should (equal file
+                               (button-get end-button 'mevedel-view-path)))
+                (should (= 100
+                           (button-get end-button 'mevedel-view-line)))))))
+      (delete-directory root t)))
+
+  :doc "relative file L-prefixed line range stores first line"
+  (let* ((root (make-temp-file "mevedel-view-linkify-l-range-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-l-range"
+                     :root root :name "linkify-l-range"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See file.el:L1400-L1422\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "file.el:L1400-L1422")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 1400 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "colon line list creates separate buttons"
+  (let* ((root (make-temp-file "mevedel-view-linkify-list-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-list"
+                     :root root :name "linkify-list"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See file.el:L24,L120-L143\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "file.el:L24")
+            (let ((first (button-at (match-beginning 0))))
+              (should first)
+              (should (= 24 (button-get first 'mevedel-view-line))))
+            (search-forward ",")
+            (should-not (button-at (1- (point))))
+            (search-forward "L120-L143")
+            (let ((second (button-at (match-beginning 0))))
+              (should second)
+              (should (equal file
+                             (button-get second 'mevedel-view-path)))
+              (should (= 120 (button-get second 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "hash line list creates separate buttons"
+  (let* ((root (make-temp-file "mevedel-view-linkify-hash-list-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-hash-list"
+                     :root root :name "linkify-hash-list"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See file.el:#L24,#L120-#L143\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "file.el:#L24")
+            (let ((first (button-at (match-beginning 0))))
+              (should first)
+              (should (= 24 (button-get first 'mevedel-view-line))))
+            (search-forward ",")
+            (should-not (button-at (1- (point))))
+            (search-forward "#L120-#L143")
+            (let ((second (button-at (match-beginning 0))))
+              (should second)
+              (should (equal file
+                             (button-get second 'mevedel-view-path)))
+              (should (= 120 (button-get second 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "direct #L fragment stores first line"
+  (let* ((root (make-temp-file "mevedel-view-linkify-hash-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-hash"
+                     :root root :name "linkify-hash"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "See file.el#L24-L30\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "file.el#L24-L30")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 24 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
   :doc "@file mention with line reference stores path and line"
   (let* ((root (make-temp-file "mevedel-view-linkify-file-mention-" t))
          (file (file-name-concat root "with space.el"))
@@ -6520,6 +6653,58 @@ PROPS is the value for the `gptel' property."
               (should (equal file
                              (button-get button 'mevedel-view-path)))
               (should (= 7 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "Markdown local link #L range stores first line"
+  (let* ((root (make-temp-file "mevedel-view-linkify-md-range-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-md-range"
+                     :root root :name "linkify-md-range"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "[spot](file.el#L24-L30)\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "spot")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 24 (button-get button 'mevedel-view-line))))))
+      (delete-directory root t)))
+
+  :doc "Markdown local link colon line suffix stores first line"
+  (let* ((root (make-temp-file "mevedel-view-linkify-md-colon-" t))
+         (file (file-name-concat root "file.el"))
+         (workspace (mevedel-workspace--create
+                     :type 'project :id "linkify-md-colon"
+                     :root root :name "linkify-md-colon"))
+         (session (mevedel-session-create "main" workspace)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "root\n"))
+          (with-temp-buffer
+            (setq-local mevedel--session session)
+            (insert "[plain](file.el:24)\n[prefixed](file.el:L25-L30)\n")
+            (mevedel-view--linkify-paths-in-range (point-min) (point-max))
+            (goto-char (point-min))
+            (search-forward "plain")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 24 (button-get button 'mevedel-view-line))))
+            (search-forward "prefixed")
+            (let ((button (button-at (match-beginning 0))))
+              (should button)
+              (should (equal file
+                             (button-get button 'mevedel-view-path)))
+              (should (= 25 (button-get button 'mevedel-view-line))))))
       (delete-directory root t)))
 
   :doc "nested relative file line reference resolves from workspace root"

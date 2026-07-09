@@ -3716,6 +3716,59 @@ workspace root of the session tied to the current data buffer."
   (when-let* ((url (button-get button 'mevedel-view-url)))
     (browse-url url)))
 
+(defconst mevedel-view--line-ref-atom-regexp
+  "\\(?:#L\\|L\\)?[1-9][0-9]*"
+  "Regexp matching one line number atom in a file reference.")
+
+(defconst mevedel-view--line-ref-regexp
+  (concat mevedel-view--line-ref-atom-regexp
+          "\\(?:-" mevedel-view--line-ref-atom-regexp "\\)?")
+  "Regexp matching one line or line-range reference.")
+
+(defconst mevedel-view--line-ref-list-regexp
+  (concat mevedel-view--line-ref-regexp
+          "\\(?:," mevedel-view--line-ref-regexp "\\)*")
+  "Regexp matching comma-separated line references.")
+
+(defconst mevedel-view--direct-line-ref-list-regexp
+  (concat "#L[1-9][0-9]*"
+          "\\(?:-" mevedel-view--line-ref-atom-regexp "\\)?"
+          "\\(?:," mevedel-view--line-ref-regexp "\\)*")
+  "Regexp matching line references that immediately follow a path.")
+
+(defconst mevedel-view--line-ref-suffix-regexp
+  (concat "\\(?:"
+          ":\\(" mevedel-view--line-ref-list-regexp "\\)"
+          "\\|\\(" mevedel-view--direct-line-ref-list-regexp "\\)"
+          "\\)")
+  "Regexp matching a file-reference line suffix.")
+
+(defun mevedel-view--line-ref-start-line (text)
+  "Return the first line number in line reference TEXT, or nil."
+  (save-match-data
+    (when (and (stringp text)
+               (string-match
+                "\\`\\(?:#L\\|L\\)?\\([1-9][0-9]*\\)\\(?:-\\(?:#L\\|L\\)?[1-9][0-9]*\\)?\\'"
+                text))
+      (string-to-number (match-string 1 text)))))
+
+(defun mevedel-view--line-ref-list-start-line (text)
+  "Return the first line number in line reference list TEXT, or nil."
+  (when-let* ((first (car (split-string (or text "") "," t))))
+    (mevedel-view--line-ref-start-line first)))
+
+(defun mevedel-view--make-file-button (start end path line)
+  "Make START..END a button visiting PATH at optional LINE."
+  (make-text-button
+   start end
+   'action #'mevedel-view--linkify-path-action
+   'mevedel-view-path path
+   'mevedel-view-line line
+   'follow-link t
+   'help-echo (if line
+                  (format "Visit %s:%d" path line)
+                (format "Visit %s" path))))
+
 (defun mevedel-view--markdown-code-blocks (start end)
   "Return fenced Markdown code blocks between START and END."
   (let (blocks
@@ -3992,7 +4045,9 @@ not treated as delimiters."
              (not (string-empty-p url))
              (not (string-match-p "\\`https?://" url)))
     (let* ((without-fragment
-            (replace-regexp-in-string "#L[0-9]+\\'" "" url))
+            (replace-regexp-in-string
+             (concat mevedel-view--line-ref-suffix-regexp "\\'")
+             "" url))
            (raw (if (string-prefix-p "file://" without-fragment)
                     (mevedel-view--normalize-local-file-uri-path
                      (substring without-fragment 7))
@@ -4003,8 +4058,12 @@ not treated as delimiters."
 (defun mevedel-view--local-link-line (url)
   "Return URL's trailing #L line number, or nil."
   (when (and (stringp url)
-             (string-match "#L\\([1-9][0-9]*\\)\\'" url))
-    (string-to-number (match-string 1 url))))
+             (string-match
+              (concat mevedel-view--line-ref-suffix-regexp "\\'")
+              url))
+    (mevedel-view--line-ref-list-start-line
+     (or (match-string-no-properties 1 url)
+         (match-string-no-properties 2 url)))))
 
 (defun mevedel-view--image-display (path)
   "Return an image display spec for PATH, or nil."
@@ -4053,7 +4112,8 @@ not treated as delimiters."
             (mevedel-view--put-image-display mb me path)))))))
 
 (defconst mevedel-view--file-mention-regexp
-  "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)\\(?:#L\\([0-9]+\\)\\(?:-[0-9]+\\)?\\)?"
+  (concat "@file:\\({\\(?:\\\\.\\|[^}]\\)+}\\|[^ \t\n#]+\\)"
+          "\\(" mevedel-view--direct-line-ref-list-regexp "\\)?")
   "Regexp matching rendered `@file' mentions.")
 
 (defun mevedel-view--unescape-braced-file-path (token)
@@ -4091,20 +4151,12 @@ not treated as delimiters."
                (raw (mevedel-view--file-mention-token-path
                      (match-string-no-properties 1)))
                (line (and (match-beginning 2)
-                          (string-to-number
+                          (mevedel-view--line-ref-list-start-line
                            (match-string-no-properties 2))))
                (resolved (mevedel-view--resolve-path raw)))
           (push (cons mb me) ranges)
           (when (and resolved (file-exists-p resolved))
-            (make-text-button
-             mb me
-             'action #'mevedel-view--linkify-path-action
-             'mevedel-view-path resolved
-             'mevedel-view-line line
-             'follow-link t
-             'help-echo (if line
-                            (format "Visit %s:%d" resolved line)
-                          (format "Visit %s" resolved)))))))
+            (mevedel-view--make-file-button mb me resolved line)))))
     (nreverse ranges)))
 
 (defun mevedel-view--linkify-markdown-file-links-in-range (start end)
@@ -4122,15 +4174,7 @@ not treated as delimiters."
                (line (mevedel-view--local-link-line url)))
           (push (cons whole-start whole-end) ranges)
           (when path
-            (make-text-button
-             mb me
-             'action #'mevedel-view--linkify-path-action
-             'mevedel-view-path path
-             'mevedel-view-line line
-             'follow-link t
-             'help-echo (if line
-                            (format "Visit %s:%d" path line)
-                          (format "Visit %s" path)))))))
+            (mevedel-view--make-file-button mb me path line)))))
     (nreverse ranges)))
 
 (defun mevedel-view--render-markdown-url-links-in-range (start end)
@@ -4162,14 +4206,34 @@ not treated as delimiters."
              'mouse-face 'highlight
              'help-echo (format "Visit %s" url))))))))
 
+(defun mevedel-view--linkify-path-reference
+    (path-start path-end suffix-start suffix-end path)
+  "Create file buttons for PATH reference at PATH-START..PATH-END.
+When SUFFIX-START and SUFFIX-END delimit a line-reference list, create
+one button per reference.  The first button includes the path text."
+  (if (not (and suffix-start suffix-end (< suffix-start suffix-end)))
+      (mevedel-view--make-file-button path-start path-end path nil)
+    (let ((first t))
+      (save-excursion
+        (goto-char suffix-start)
+        (while (re-search-forward mevedel-view--line-ref-regexp suffix-end t)
+          (mevedel-view--make-file-button
+           (if first path-start (match-beginning 0))
+           (match-end 0)
+           path
+           (mevedel-view--line-ref-start-line
+            (match-string-no-properties 0)))
+          (setq first nil))))))
+
 (defun mevedel-view--linkify-paths-in-range (start end)
   "Scan the buffer between START and END and turn paths into text buttons.
 Clickable targets are resolved to absolute paths via
 `mevedel-view--resolve-path' and gated on `file-exists-p' -- paths that
 don't resolve to an existing file stay as plain text.  References may
-include a positive decimal line suffix, such as file.el:12."
+include line suffixes, such as file.el:12, file.el:L12-L20, and
+file.el#L12."
   (let ((regexp (concat "\\(" mevedel-view--linkify-path-regexp "\\)"
-                        "\\(?::\\([1-9][0-9]*\\)\\)?"))
+                        "\\(?:" mevedel-view--line-ref-suffix-regexp "\\)?"))
         (src-ranges (mevedel-view--src-block-body-ranges start end)))
     (setq src-ranges
           (append (mevedel-view--linkify-file-mentions-in-range start end)
@@ -4181,23 +4245,16 @@ include a positive decimal line suffix, such as file.el:12."
         (let* ((mb (match-beginning 1))
                (me (match-end 0))
                (raw (buffer-substring-no-properties mb (match-end 1)))
-               (line (and (match-beginning 2)
-                          (string-to-number (match-string-no-properties 2))))
+               (suffix-start (or (match-beginning 2) (match-beginning 3)))
+               (suffix-end (or (match-end 2) (match-end 3)))
                (resolved (and (not (mevedel-view--position-in-ranges-p
                                     mb src-ranges))
                               (mevedel-view--path-candidate-p raw)
                               (mevedel-view--path-context-candidate-p mb raw)
                               (mevedel-view--resolve-path raw))))
           (when (and resolved (file-exists-p resolved))
-            (make-text-button
-             mb me
-             'action #'mevedel-view--linkify-path-action
-             'mevedel-view-path resolved
-             'mevedel-view-line line
-             'follow-link t
-             'help-echo (if line
-                            (format "Visit %s:%d" resolved line)
-                          (format "Visit %s" resolved)))))))))
+            (mevedel-view--linkify-path-reference
+             mb me suffix-start suffix-end resolved)))))))
 
 (defun mevedel-view--decorate-markdown-in-range (start end)
   "Apply Markdown view affordances between START and END."
