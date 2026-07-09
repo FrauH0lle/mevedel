@@ -86,6 +86,10 @@ wrapped by stable mevedel events rather than exposed directly.
 - Treat hook commands as trusted project/user code and require an explicit
   trust story before project-local shell hooks execute.
 - Record enough hook status/debug output that misconfiguration is visible.
+- Provide a hook audit surface for every hook decision that changes
+  model-visible context, control flow, permissions, or submitted content.
+  Diagnostic stdout/stderr and hook runner logs may stay in hook logs or
+  `*Messages*`.
 
 ## Event set
 
@@ -332,6 +336,12 @@ Decision plist fields:
 - `:permission-reason`: model-facing reason for deny/ask feedback.
 - `:updated-input`: replacement prompt text for `UserPromptSubmit` and
   `UserPromptExpansion`, or replacement tool args for `PreToolUse`.
+  Prompt rewrites create a hook audit surface attached to the submitted
+  user turn.  The audit surface records the hook event, optional
+  system-message/reason detail, and original versus submitted text;
+  it does not need inline diff review UI.  Tool argument rewrites create
+  a hook audit surface attached to the affected tool attempt, recording
+  original and updated args.
 - `:updated-result`: replacement result for post-tool events.
 - `:suppress-output`: reserved; should be rejected until implemented.
 
@@ -376,6 +386,10 @@ they can be guarded with `PreToolUse` but do not fire `PermissionRequest`.
 for audit, formatting, redaction, or repair hooks that need the handler's
 original output.  Post-tool hooks cannot block already-completed tool side
 effects; they may replace feedback with `:updated-result` or add context.
+`PostToolUse` and `PostToolUseFailure :additional-context` attach their
+hook audit surface to the affected tool transcript result because that is
+the feedback they modify.  The hidden audit block is stripped at
+`gptel--parse-tool-results` before any model-bound tool result is built.
 
 Hook steps must read session/workspace/default-directory from the pipeline
 context, matching the existing rule for all post-handler steps.
@@ -388,10 +402,35 @@ prompt to `gptel-send`.  A blocking decision stops the send without
 inserting a user turn.  `:updated-input` replaces the prompt text;
 `:additional-context` is appended to the model-visible prompt inside a
 `<hook-context>` block while staying out of the view-facing user message
-body.  The view shows a collapsed `◇ hook context added` disclosure that
-can be expanded to see the event name and injected text.
+body.  The view shows a generic collapsed `◇ hook context added`
+disclosure that can be expanded to see the contributing event names and
+injected text.  Multiple hook context contributions consumed by the same
+prompt share one combined disclosure, preserving contribution order in the
+expanded details.
+Hook audit records for persisted `<hook-context>` blocks contain ordered `<hook-event
+name="...">` entries so resume, rewind, and full rerender can recover
+which hook events contributed context:
+
+```xml
+<hook-context>
+<hook-event name="SessionStart">
+PONYTAIL MODE ACTIVE - level: full
+</hook-event>
+<hook-event name="UserPromptSubmit">
+Project-specific prompt policy.
+</hook-event>
+</hook-context>
+```
+
+No backwards-compatible plain-body format is required for new persisted
+hook context.
 Internal flows that construct their own requests, such as directive
 processing and plan execution, do not currently fire this event.
+
+`SessionStart :additional-context` is pending context for the next
+request, not an immediate transcript event.  Its hook audit surface is
+attached to the first user turn that consumes it, so the visible record
+appears at the point where the context actually affects model input.
 
 `UserPromptExpansion` runs for user `$skill` expansion after the skill
 body has been prepared and before it is installed as the prompt sent to
@@ -410,6 +449,8 @@ this event.
 but before the compaction request is sent.  A blocking decision stops the
 compaction.  `:additional-context` is appended to the compaction system
 prompt, so hooks can give the summarizer local policy or retention hints.
+Its hook audit surface belongs on the compaction event/summary, not a
+user turn, because the summarizer request is the model call it changes.
 For automatic compaction, a block is treated as compaction failure and the
 pending user request is not sent.
 
@@ -424,7 +465,10 @@ decision stops the Agent tool before the child FSM is created.
 `:additional-context` is appended to the sub-agent prompt inside a
 `<hook-context>` block.  This hook is waited on synchronously because the
 Agent tool must return the spawned FSM immediately for abort and background
-tracking.
+tracking.  Its hook audit surface is split across parent and child:
+the parent Agent tool row records that the spawned agent received hook
+context, while the child transcript attaches the full hook context to the
+child's initial prompt.
 
 `SubagentStop` runs after the invocation reaches `completed`, `error`, or
 `aborted` and after transcript status/sidecar updates have been written.
@@ -455,6 +499,11 @@ model:
 - changed project hook files require re-trust.
 - trusting a project refreshes that workspace's trust entries to the current
   hook files only, so removed hook files are no longer trusted.
+
+Permission decisions are audit-surfaced by outcome.  `deny` and forced
+`ask` decisions are visible on the affected tool attempt because they
+change control flow.  `allow` decisions remain in hook logs unless they
+suppress a permission prompt that would otherwise have been shown.
 
 Elisp functions from project hook files are higher risk because loading the
 file already evaluates Lisp.  Project files are treated as data only: read
@@ -497,6 +546,18 @@ as declarative `elisp` handlers.
 The hook runner keeps a per-session in-memory hook log with event,
 handler, status, elapsed time for command hooks, stdout/stderr previews,
 parsed decision, and failure details.
+
+Raw command-hook stdout/stderr never appears in the view by default.
+Only structured decision fields are eligible for user-facing hook audit
+surfaces.  Hook authors who want user-visible text must return fields such
+as `:system-message`, `:stop-reason`, `:permission-reason`,
+`:additional-context`, or `:updated-input`.
+
+`:system-message` by itself is a transient user notification: it is shown
+through `message` and recorded in the hook log, but it does not create a
+transcript/view audit item.  When the same decision also changes
+model-visible context, submitted content, control flow, or permissions,
+the hook audit surface includes the system message as supporting detail.
 
 When the session has been materialized on disk, the same entries are also
 appended to `<session>/hook-log.el` as one sanitized plist per line when

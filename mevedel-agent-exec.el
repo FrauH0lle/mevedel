@@ -114,6 +114,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-hook-audits
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-model-tier-override
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
@@ -150,7 +152,9 @@
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
-                  (decision))
+                  (decision &optional event))
+(declare-function mevedel-hooks-context-audit-records
+                  "mevedel-hooks" (decision event type &optional omit-context))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
@@ -1370,6 +1374,11 @@ abort/background bookkeeping."
       (accept-process-output nil 0.05))
     decision))
 
+(defun mevedel-agent-exec--start-hook-audit-records (decision)
+  "Return parent-row audit records for a SubagentStart hook DECISION."
+  (mevedel-hooks-context-audit-records
+   decision 'SubagentStart 'subagent-context t))
+
 (defun mevedel-agent-exec--run-stop-hook (invocation status)
   "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."
   (when (mevedel-agent-invocation-p invocation)
@@ -1447,7 +1456,11 @@ Returns the spawned FSM."
                       "SubagentStart hook stopped sub-agent")))
     (when-let* ((msg (plist-get decision :system-message)))
       (message "mevedel: %s" msg))
-    (when-let* ((context (mevedel-hooks-additional-context-string decision)))
+    (when (mevedel-agent-invocation-p invocation)
+      (setf (mevedel-agent-invocation-hook-audits invocation)
+            (mevedel-agent-exec--start-hook-audit-records decision)))
+    (when-let* ((context (mevedel-hooks-additional-context-string
+                          decision 'SubagentStart)))
       (setq prompt (concat prompt "\n\n" context))
       (when (buffer-live-p agent-buffer)
         (with-current-buffer agent-buffer

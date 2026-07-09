@@ -53,7 +53,9 @@
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
-                  (decision))
+                  (decision &optional event))
+(declare-function mevedel-hooks-context-audit-records
+                  "mevedel-hooks" (decision event type &optional omit-context))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
@@ -113,6 +115,12 @@
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
+
+;; `mevedel-utilities'
+(declare-function mevedel--format-hook-audit-record "mevedel-utilities"
+                  (record))
+(declare-function mevedel--strip-hook-audit-blocks "mevedel-utilities"
+                  (text))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
@@ -912,11 +920,13 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
 (defun mevedel--compact-previous-summary ()
   "Return the leading compaction summary body, or nil."
   (when-let* ((bounds (mevedel--compact-summary-bounds)))
+    (require 'mevedel-utilities)
     (mevedel-session-persistence--strip-summary-handoff-prefix
      (string-trim
-      (buffer-substring-no-properties
-       (plist-get bounds :body-begin)
-       (plist-get bounds :body-end))))))
+      (mevedel--strip-hook-audit-blocks
+       (buffer-substring-no-properties
+        (plist-get bounds :body-begin)
+        (plist-get bounds :body-end)))))))
 
 (defun mevedel--compact-body-start ()
   "Return the position after the leading summary block, if present."
@@ -986,7 +996,8 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
       nil)
      (t nil))))
 
-(defun mevedel--compact-apply (boundary summary &optional tail-text pending-text)
+(defun mevedel--compact-apply
+    (boundary summary &optional tail-text pending-text hook-audits)
   "Apply compaction to the current buffer.
 
 Implements **split-on-compact**: when the session is materialized
@@ -996,7 +1007,8 @@ Falls back to the legacy in-place approach when the session has no
 `save-path' (persistence disabled).
 
 BOUNDARY is unused in the segment-rotation path; it is preserved
-for the legacy fallback."
+for the legacy fallback.  HOOK-AUDITS are persisted as ignored
+side-channel records next to the summary."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (cond
      ;; Split-on-compact path: rotate to a new segment file.
@@ -1004,15 +1016,17 @@ for the legacy fallback."
            (mevedel--compact-can-rotate-p))
       (remove-text-properties 0 (length summary)
                               '(gptel nil face nil) summary)
+      (setq summary
+            (mevedel--compact-append-hook-audits summary hook-audits))
       (mevedel-session-persistence-rotate-segment
        session (current-buffer) summary
        :tail-text tail-text
        :pending-text pending-text))
      ;; Legacy path: in-place ignore marking (no on-disk persistence).
      (t
-      (mevedel--compact-apply-legacy boundary summary)))))
+      (mevedel--compact-apply-legacy boundary summary hook-audits)))))
 
-(defun mevedel--compact-apply-legacy (boundary summary)
+(defun mevedel--compact-apply-legacy (boundary summary &optional hook-audits)
   "Legacy in-place compaction: mark content before BOUNDARY as ignored.
 
 Used when no on-disk session exists (`mevedel-session-persistence' is
@@ -1026,6 +1040,8 @@ BOUNDARY wrapped in a folded summary block."
       (let ((sep (format "\n\n--- Conversation compacted at %s ---\n\n"
                          (format-time-string "%Y-%m-%d %H:%M"))))
         (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
+        (setq summary
+              (mevedel--compact-append-hook-audits summary hook-audits))
         (insert
          (propertize sep 'gptel 'ignore)
          (if (derived-mode-p 'org-mode)
@@ -1106,6 +1122,19 @@ PRESERVED-TAIL-TURNS is the actual count returned by
     (mevedel-session-enqueue-pending-reminder session body)
     body))
 
+(defun mevedel--compact-hook-audit-records (decision)
+  "Return PreCompact audit records for hook DECISION."
+  (mevedel-hooks-context-audit-records decision 'PreCompact 'compact-context))
+
+(defun mevedel--compact-append-hook-audits (summary records)
+  "Return SUMMARY followed by ignored PreCompact audit RECORDS."
+  (if (and records (stringp summary))
+      (progn
+        (require 'mevedel-utilities)
+        (concat summary
+                (mapconcat #'mevedel--format-hook-audit-record records "")))
+    summary))
+
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto)
   "Run compaction in the current chat buffer.
@@ -1161,6 +1190,7 @@ auto-compaction call."
                 (mevedel--compact-prompt previous-summary
                                          instructions
                                          mevedel--session))
+               (pre-compact-hook-audits nil)
                (attempt 0)
                (max-attempts 3))
           (when (string-blank-p old-content)
@@ -1209,7 +1239,8 @@ auto-compaction call."
                                  (progn
                                    (mevedel--compact-apply
                                     boundary-marker summary
-                                    tail-text pending-text)
+                                    tail-text pending-text
+                                    pre-compact-hook-audits)
                                    (let ((reminder
                                           (mevedel--compact-file-reference-reminder-body
                                            session preserved-tail-turns)))
@@ -1330,7 +1361,10 @@ auto-compaction call."
                       (t
                        (when-let* ((context
                                     (mevedel-hooks-additional-context-string
-                                     decision)))
+                                     decision 'PreCompact)))
+                         (setq pre-compact-hook-audits
+                               (mevedel--compact-hook-audit-records
+                                decision))
                          (setq system-prompt
                                (concat system-prompt "\n\n" context)))
                        (message "mevedel: compacting (%dk -> ...)"

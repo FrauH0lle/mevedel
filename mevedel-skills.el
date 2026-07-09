@@ -146,6 +146,10 @@
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-utilities" (record))
+(declare-function mevedel--restore-render-data-gptel-properties
+                  "mevedel-utilities" (start end))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
@@ -550,13 +554,15 @@ offending skill in the warning."
                   "mevedel-permissions" (entry))
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
+(declare-function mevedel-hooks-decision-reason
+                  "mevedel-hooks" (decision))
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-additional-context-string
-                  "mevedel-hooks" (decision))
+                  "mevedel-hooks" (decision &optional event))
 
 (defun mevedel-skills--parse-allowed-tool-rules (entries source-file)
   "Map each ENTRY through `mevedel-permission--parse-rule-string'.
@@ -2457,7 +2463,8 @@ skip the hook and call CALLBACK with PROMPT and nil."
         :prompt prompt)
        (lambda (decision)
          (let* ((updated (plist-get decision :updated-input))
-                (context (mevedel-hooks-additional-context-string decision))
+                (context (mevedel-hooks-additional-context-string
+                          decision 'UserPromptExpansion))
                 (prompt (if (stringp updated) updated prompt)))
            (when (and context (not (string-empty-p context)))
              (setq prompt (concat prompt "\n\n" context)))
@@ -2489,6 +2496,19 @@ that boundary defensive."
      (format "Ignoring malformed %s hook decision: %S" event decision)
      :warning)
     nil))
+
+(defun mevedel-skills--prompt-rewrite-audit-record (original decision)
+  "Return a `UserPromptExpansion' rewrite audit record, or nil."
+  (when-let* ((updated (plist-get decision :updated-input))
+              ((stringp updated))
+              ((not (equal updated original))))
+    (append
+     (list :type 'prompt-rewrite
+           :event "UserPromptExpansion"
+           :original (or original "")
+           :submitted updated)
+     (when-let* ((reason (mevedel-hooks-decision-reason decision)))
+       (list :reason reason)))))
 
 (defun mevedel-skills-inline-display-text (name arguments)
   "Return the compact view text for inline skill NAME and ARGUMENTS."
@@ -2783,31 +2803,38 @@ Preparation order matches the body-injection section:
 	                (or (plist-get decision :stop-reason)
 	                    "UserPromptExpansion hook stopped skill")
 	                callback display-callback))
-	           (let* ((record
-	                   (mevedel-skill-invocation-record--create
-	                    :name skill-name
-	                    :args arguments
-	                    :trigger trigger
-	                    :turn (and session
-	                               (mevedel-session-turn-count session))
-	                    :source-path (mevedel-skill-source-file skill)
-	                    :prepared-body expanded))
-	                  (ctx (list :permission-rules rules
-	                             :model model
-	                             :effort effort
-	                             :hook-rules hooks
-	                             :invoked-skills (list record))))
-	             ;; Rules already activated above; do not append them twice.
-	             (mevedel-skills--activate-context
-	              trigger :model model :effort effort
-	              :invoked-skill record)
-	             (mevedel-skills--invoke-done
-	              skill
-	              `(:status ok :kind inline
-	                        :body ,expanded
-	                        :arguments ,arguments
-	                        :request-context ,ctx)
-	              callback display-callback))))))
+                   (let* ((hook-audits
+                           (delq nil
+                                 (list
+                                  (mevedel-skills--prompt-rewrite-audit-record
+                                   (plist-get injection-outcome :body)
+                                   decision))))
+                          (record
+                           (mevedel-skill-invocation-record--create
+                            :name skill-name
+                            :args arguments
+                            :trigger trigger
+                            :turn (and session
+                                       (mevedel-session-turn-count session))
+                            :source-path (mevedel-skill-source-file skill)
+                            :prepared-body expanded))
+                          (ctx (list :permission-rules rules
+                                     :model model
+                                     :effort effort
+                                     :hook-rules hooks
+                                     :invoked-skills (list record))))
+                     ;; Rules already activated above; do not append them twice.
+                     (mevedel-skills--activate-context
+                      trigger :model model :effort effort
+                      :invoked-skill record)
+                     (mevedel-skills--invoke-done
+                      skill
+                      `(:status ok :kind inline
+                                :body ,expanded
+                                :arguments ,arguments
+                                :hook-audits ,hook-audits
+                                :request-context ,ctx)
+                      callback display-callback))))))
 	     (_
 	      (when (eq trigger 'user-skill)
 	        (setq-local mevedel-skills--pending-request-context nil))
@@ -2964,7 +2991,13 @@ that already operate async (e.g., the `Skill' tool handler)."
                       (or (plist-get decision :stop-reason)
                           "UserPromptExpansion hook stopped skill")
                       callback display-callback)
-                   (let* ((prepared
+                   (let* ((hook-audits
+                           (delq nil
+                                 (list
+                                  (mevedel-skills--prompt-rewrite-audit-record
+                                   (plist-get injection-outcome :body)
+                                   decision))))
+                          (prepared
                            (if (and (stringp additional-context)
                                     (not (string-empty-p additional-context)))
                                (concat prepared "\n\n" additional-context)
@@ -2998,6 +3031,15 @@ that already operate async (e.g., the `Skill' tool handler)."
                                    (render-data
                                     (and wrapped-p
                                          (plist-get response :render-data)))
+                                   (render-data
+                                    (if (and render-data hook-audits)
+                                        (plist-put
+                                         (copy-sequence render-data)
+                                         :hook-audits
+                                         (append
+                                          hook-audits
+                                          (plist-get render-data :hook-audits)))
+                                      render-data))
                                    (transcript-agent-id
                                     (and wrapped-p
                                          (plist-get render-data :agent-id))))
@@ -3008,6 +3050,7 @@ that already operate async (e.g., the `Skill' tool handler)."
                                          :agent-id
                                          ,(or transcript-agent-id
                                               (mevedel-agent-name agent))
+                                         :hook-audits ,hook-audits
                                          :render-data ,render-data)
                                callback display-callback)))
                           agent description prepared
@@ -4028,8 +4071,22 @@ foreground agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
   (require 'mevedel-utilities)
-  (let ((result (or (plist-get outcome :result)
-                    "Fork skill produced no result.")))
+  (let* ((render-data (plist-get outcome :render-data))
+         (hook-audits (plist-get outcome :hook-audits))
+         (result (or (plist-get outcome :result)
+                     "Fork skill produced no result."))
+         (result (if render-data
+                     (progn
+                       (require 'mevedel-pipeline)
+                       (concat result
+                               (mevedel-pipeline--format-render-data-block
+                                render-data)))
+                   result))
+         (result (if (and hook-audits (not render-data))
+                     (concat result
+                             (mapconcat #'mevedel--format-hook-audit-record
+                                        hook-audits ""))
+                   result)))
     (unless (bound-and-true-p mevedel--current-request)
       (when (bound-and-true-p mevedel--session)
         (mevedel-request-begin mevedel--session
@@ -4051,7 +4108,9 @@ observe the completed response."
         (insert "\n"))
       (let ((end (point)))
         (add-text-properties start end '(gptel response))
+        (mevedel--restore-render-data-gptel-properties start end)
         (run-hook-with-args 'gptel-post-response-functions start end)
+        (mevedel--restore-render-data-gptel-properties start end)
         (mevedel-skills--finalize-fork-turn)))))
 
 (defun mevedel-skills--finalize-fork-turn ()

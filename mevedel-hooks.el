@@ -920,32 +920,85 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
         (and (memq event '(PreToolUse PermissionRequest))
              (eq (plist-get decision :permission-decision) 'deny)))))
 
-(defun mevedel-hooks-record-session-context (session decision)
-  "Append DECISION's additional context to SESSION's next prompt."
+(defun mevedel-hooks--event-display-name (event)
+  "Return a human-readable display name for hook EVENT."
+  (if (symbolp event) (symbol-name event) (format "%s" event)))
+
+(defun mevedel-hooks--context-entry (event item)
+  "Return a normalized hook context entry for EVENT and ITEM."
+  (let* ((plist-item (and (listp item)
+                          (keywordp (car-safe item))
+                          item))
+         (body (if plist-item
+                   (plist-get plist-item :body)
+                 item))
+         (entry-event (or (and plist-item (plist-get plist-item :event))
+                          event)))
+    (when body
+      (list :event (mevedel-hooks--event-display-name
+                    (or entry-event 'UserPromptSubmit))
+            :body (format "%s" body)))))
+
+(defun mevedel-hooks-context-entries (decision event)
+  "Return normalized additional-context entries for DECISION and EVENT."
   (when-let* ((decision (mevedel-hooks--safe-decision decision))
               (additional (plist-get decision :additional-context)))
+    (delq nil
+          (mapcar (lambda (item)
+                    (mevedel-hooks--context-entry event item))
+                  additional))))
+
+(defun mevedel-hooks-format-context (entries &optional default-event)
+  "Return model-visible hook context XML for ENTRIES.
+DEFAULT-EVENT is used for legacy string entries without an event tag."
+  (let ((entries (delq nil
+                       (mapcar (lambda (entry)
+                                 (mevedel-hooks--context-entry
+                                  (or default-event 'UserPromptSubmit)
+                                  entry))
+                               entries))))
+    (when entries
+      (concat
+       "<hook-context>\n"
+       (mapconcat
+        (lambda (entry)
+          (format "<hook-event name=\"%s\">\n%s\n</hook-event>"
+                  (plist-get entry :event)
+                  (plist-get entry :body)))
+        entries
+        "\n")
+       "\n</hook-context>"))))
+
+(defun mevedel-hooks-record-session-context (session decision &optional event)
+  "Append DECISION's additional context for EVENT to SESSION's next prompt."
+  (when-let* ((decision (mevedel-hooks--safe-decision decision))
+              (entries (mevedel-hooks-context-entries
+                        decision (or event 'SessionStart))))
     (setf (mevedel-session-hook-context-pending session)
           (append (mevedel-session-hook-context-pending session)
-                  additional))))
+                  entries))))
+
+(defun mevedel-hooks-take-session-context (session &optional default-event)
+  "Return and clear SESSION's pending hook context as model-visible XML.
+DEFAULT-EVENT labels legacy string entries."
+  (when-let* ((session session)
+              (entries (mevedel-session-hook-context-pending session))
+              (context (mevedel-hooks-format-context
+                        entries (or default-event 'SessionStart))))
+    (setf (mevedel-session-hook-context-pending session) nil)
+    context))
 
 (defun mevedel-hooks-record-session-reminder (event session decision)
   "Queue model-visible hook guidance for EVENT, SESSION, and DECISION."
   (when-let* ((session session)
               (decision (mevedel-hooks--safe-decision decision)))
-    (cond
-     ((mevedel-hooks--decision-blocking-p decision)
+    (when (mevedel-hooks--decision-blocking-p decision)
       (mevedel-session-enqueue-pending-reminder
        session
        (format "%s hook blocked the previous operation: %s. Adapt your next action to respect this hook decision instead of retrying the same blocked operation unchanged."
                event
-               (or (mevedel-hooks--decision-reason decision)
-                   "no reason provided"))))
-     ((plist-get decision :system-message)
-      (mevedel-session-enqueue-pending-reminder
-       session
-       (format "%s hook reported: %s"
-               event
-               (plist-get decision :system-message)))))))
+               (or (mevedel-hooks-decision-reason decision)
+                   "no reason provided"))))))
 
 
 ;;
@@ -998,15 +1051,11 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
            :tool-input (plist-get context :args))
      extra)))
 
-(defun mevedel-hooks-additional-context-string (decision)
-  "Return model-visible additional context from hook DECISION, or nil."
-  (when-let* ((decision (mevedel-hooks--safe-decision decision))
-              (additional (plist-get decision :additional-context)))
-    (concat "<hook-context>\n"
-            (mapconcat (lambda (item) (format "%s" item))
-                       additional
-                       "\n")
-            "\n</hook-context>")))
+(defun mevedel-hooks-additional-context-string (decision &optional event)
+  "Return model-visible additional context from hook DECISION, or nil.
+EVENT labels each generated hook event block."
+  (mevedel-hooks-format-context
+   (mevedel-hooks-context-entries decision (or event 'UserPromptSubmit))))
 
 (defun mevedel-hooks-log-path (session)
   "Return the persistent hook log path for SESSION, or nil."
@@ -1076,10 +1125,6 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                 :time (format-time-string "%FT%T%z"))
           props))
 
-(defun mevedel-hooks--event-display-name (event)
-  "Return a human-readable display name for hook EVENT."
-  (if (symbolp event) (symbol-name event) (format "%s" event)))
-
 (defun mevedel-hooks--surface (_session text &optional spinner-text)
   "Surface hook TEXT and optionally update SPINNER-TEXT."
   (message "mevedel: %s" text)
@@ -1101,12 +1146,29 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
              (not (plist-get decision :continue)))
         (eq (plist-get decision :permission-decision) 'deny))))
 
-(defun mevedel-hooks--decision-reason (decision)
+(defun mevedel-hooks-decision-reason (decision)
   "Return a user-facing reason string from DECISION, or nil."
   (let ((decision (mevedel-hooks--safe-decision decision)))
     (or (plist-get decision :stop-reason)
         (plist-get decision :permission-reason)
         (plist-get decision :system-message))))
+
+(defun mevedel-hooks-context-audit-records
+    (decision event type &optional omit-context)
+  "Return hook audit records for DECISION context at EVENT.
+TYPE is stored as the audit record type.  When OMIT-CONTEXT is non-nil,
+record only that context was added, without duplicating the body."
+  (let ((reason (mevedel-hooks-decision-reason decision)))
+    (mapcar
+     (lambda (entry)
+       (append
+        (list :type type
+              :event (plist-get entry :event))
+        (unless omit-context
+          (list :context (plist-get entry :body)))
+        (when reason
+          (list :reason reason))))
+     (mevedel-hooks-context-entries decision event))))
 
 (defun mevedel-hooks--surface-final-decision (event session decision)
   "Surface user-visible fields from hook DECISION for EVENT and SESSION."
@@ -1121,7 +1183,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
        session
        (format "%s hook blocked: %s"
                (mevedel-hooks--event-display-name event)
-               (or (mevedel-hooks--decision-reason decision)
+               (or (mevedel-hooks-decision-reason decision)
                    "no reason provided"))))
      ((plist-get decision :system-message)
       (mevedel-hooks--surface

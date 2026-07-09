@@ -681,7 +681,7 @@
                  bad 'UserPromptSubmit))
     (should-not (mevedel-hooks-additional-context-string bad))
     (should-not (mevedel-hooks--decision-blocking-p bad))
-    (should-not (mevedel-hooks--decision-reason bad))
+    (should-not (mevedel-hooks-decision-reason bad))
     (should (equal (mevedel-hooks--apply-decision-to-event-plist
                     'UserPromptSubmit '(:prompt "old") bad)
                    '(:prompt "old")))))
@@ -837,7 +837,7 @@
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/session-reminders
-  (:doc "queues model-visible reminders for blocking and system-message outcomes")
+  (:doc "queues model-visible reminders for blocking outcomes only")
   (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
          (session (mevedel-hooks-test--session root)))
     (unwind-protect
@@ -864,9 +864,7 @@
               'PostToolUse
               '(:tool-name "Read" :tool-result "ok")
               cb session)))
-          (let ((body (car (mevedel-session-pending-reminders session))))
-            (should (string-match-p "PostToolUse hook reported" body))
-            (should (string-match-p "remember the project rule" body))))
+          (should-not (mevedel-session-pending-reminders session)))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command

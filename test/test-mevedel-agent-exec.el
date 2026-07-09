@@ -619,7 +619,14 @@ fire-count and payload."
 			     (should (equal (plist-get start-event :agent-id) "explorer-1"))
 			     (should (equal (plist-get start-event :prompt) "prompt body"))
 			     (should (equal (plist-get decision :additional-context)
-					    '("extra start context")))))
+					    '("extra start context")))
+                             (let ((audit (car (mevedel-agent-exec--start-hook-audit-records
+                                                decision))))
+                               (should (eq (plist-get audit :type)
+                                           'subagent-context))
+                               (should (equal (plist-get audit :event)
+                                              "SubagentStart"))
+                               (should-not (plist-member audit :context)))))
 			 (setf (mevedel-agent-invocation-terminal-reason inv) "done")
 			 (with-temp-buffer
 			   (mevedel-agent-exec--run-stop-hook inv 'completed))

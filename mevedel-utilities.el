@@ -445,16 +445,22 @@ line by itself."
 (defconst mevedel--render-data-close "<!-- /mevedel-render-data -->"
   "Closing delimiter for internal render-data side-channel blocks.")
 
-(defun mevedel--restore-render-data-gptel-properties (start end)
-  "Mark internal render-data blocks in START..END as `gptel' ignored."
+(defconst mevedel--hook-audit-open "<!-- mevedel-hook-audit -->"
+  "Opening delimiter for internal hook audit side-channel blocks.")
+
+(defconst mevedel--hook-audit-close "<!-- /mevedel-hook-audit -->"
+  "Closing delimiter for internal hook audit side-channel blocks.")
+
+(defun mevedel--restore-delimited-gptel-ignore (start end open close)
+  "Mark delimited side-channel blocks between START and END as ignored."
   (save-excursion
     (let ((limit (copy-marker end)))
       (unwind-protect
           (progn
             (goto-char start)
-            (while (search-forward mevedel--render-data-open limit t)
+            (while (search-forward open limit t)
               (let ((block-start (match-beginning 0)))
-                (if (search-forward mevedel--render-data-close limit t)
+                (if (search-forward close limit t)
                     (progn
                       (when (and (< (point) limit)
                                  (eq (char-after) ?\n))
@@ -463,6 +469,52 @@ line by itself."
                                          'gptel 'ignore))
                   (goto-char limit)))))
         (set-marker limit nil)))))
+
+(defun mevedel--restore-render-data-gptel-properties (start end)
+  "Mark internal side-channel blocks in START..END as `gptel' ignored."
+  (mevedel--restore-delimited-gptel-ignore
+   start end mevedel--render-data-open mevedel--render-data-close)
+  (mevedel--restore-delimited-gptel-ignore
+   start end mevedel--hook-audit-open mevedel--hook-audit-close))
+
+(defun mevedel--hook-audit-regexp ()
+  "Return a regexp matching one hidden hook audit block."
+  (concat "\n?"
+          (regexp-quote mevedel--hook-audit-open)
+          "\\(?:.\\|\n\\)*?"
+          (regexp-quote mevedel--hook-audit-close)
+          "\n?"))
+
+(defun mevedel--strip-hook-audit-blocks (text)
+  "Return TEXT without generated hook audit blocks."
+  (replace-regexp-in-string
+   (mevedel--hook-audit-regexp) "" (or text "") t t))
+
+(defun mevedel--plain-hook-audit-data (value)
+  "Return VALUE stripped of text properties in contained strings."
+  (cond
+   ((stringp value) (substring-no-properties value))
+   ((consp value)
+    (cons (mevedel--plain-hook-audit-data (car value))
+          (mevedel--plain-hook-audit-data (cdr value))))
+   ((vectorp value)
+    (apply #'vector
+           (mapcar #'mevedel--plain-hook-audit-data value)))
+   (t value)))
+
+(defun mevedel--format-hook-audit-record (record)
+  "Return a hidden transcript side-channel block for hook audit RECORD."
+  (propertize
+   (concat "\n" mevedel--hook-audit-open "\n"
+           (let ((print-level nil)
+                 (print-length nil)
+                 (print-circle t))
+             (prin1-to-string
+              (mevedel--plain-hook-audit-data record)))
+           "\n" mevedel--hook-audit-close "\n")
+   'invisible t
+   'gptel 'ignore
+   'mevedel-hook-audit t))
 
 (defun mevedel--insert-user-role-block-at-marker (block &optional marker)
   "Insert synthetic user-role BLOCK at MARKER or `point-max'.

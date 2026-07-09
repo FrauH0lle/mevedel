@@ -425,7 +425,11 @@ Transcript views restore only the gptel bounds/properties needed for
 rendering. They do not restore backend/tool objects or become live agent
 buffers themselves.
 
-## Hook Context Display
+When `SubagentStart` injects hook context, the parent transcript renders a
+compact audit note on the Agent tool row, and the child transcript renders
+the full hook-context disclosure on the child's initial prompt.
+
+## Hook Audit Display
 
 Model-visible `<hook-context>` blocks are stripped out of the rendered
 user message body so injected policy/context does not look like text the
@@ -436,10 +440,52 @@ disclosure:
   ◇ hook context added
 ```
 
-Expanding it shows the hook event and injected context. This keeps
-successful context injection quiet by default while still making it
-auditable in the transcript view.
+Expanding it shows the contributing hook event names and injected context.
+When multiple hooks contribute context to the same prompt, the view renders
+one combined disclosure for that prompt, preserving contribution order in
+the expanded details.  This keeps successful context injection quiet by
+default while still making it auditable in the transcript view.
+
+The renderer builds hook audit surfaces from hook audit records.  For
+context injection, it reads ordered `<hook-event name="...">` entries
+inside a `<hook-context>` block; new persisted hook context does not need
+a plain-body fallback.
+
+Prompt rewrites from `:updated-input` use a separate compact disclosure
+attached to the submitted user turn:
+
+```text
+  ◇ hook changed prompt
+```
+
+Expanding it shows the hook event, any hook-provided message or reason,
+and the original and submitted prompt text:
+
+```text
+  ◇ hook changed prompt
+    UserPromptSubmit
+    reason: normalized review request
+
+    Original prompt
+    review plz
+
+    Submitted prompt
+    Please review this file.
+```
+
+The first implementation does not need inline diff review UI.
 
 Tool calls blocked by `PreToolUse` or `PermissionRequest` stay visible as
 normal tool attempts, with a short second line showing which hook blocked
-the call and the hook-provided reason.
+the call and the hook-provided reason.  Forced `ask` decisions are also
+shown on the affected tool attempt.  `allow` decisions are not rendered
+unless they suppress a permission prompt that would otherwise have been
+shown.  A `PreToolUse :updated-input` rewrite is shown on the same tool
+row as `◇ hook changed tool input`; expanding it shows the event,
+supporting message/reason, and original versus updated tool args.
+
+`PostToolUse` and `PostToolUseFailure` context is rendered on the affected
+tool result row, not the next user turn, because the hook modifies the
+model-visible tool feedback.  A post-tool `:updated-result` rewrite is
+shown on the affected tool row as `◇ hook changed tool result`; expanding
+it shows original and updated model-visible result text.

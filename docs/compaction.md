@@ -39,6 +39,11 @@ original request continues and the spinner returns to `Thinking...`.
 The slash/manual command remains useful when the user wants to compact
 with custom instructions.
 
+When `PreCompact` adds hook context, the hook audit surface is stored as
+an ignored side channel next to the compaction summary, not in the
+model-visible summary text.  The expanded audit detail shows the
+`PreCompact` event and injected context that affected the summarizer.
+
 The first-compaction accuracy notice is controlled by
 `mevedel-compact-warn-on-completion`, enabled by default. It is emitted
 as a plain `message`, not a `display-warning`.
