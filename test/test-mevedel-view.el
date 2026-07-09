@@ -1171,6 +1171,59 @@ PROPS is the value for the `gptel' property."
           (should (string-match-p "Worked for 6m" text))
           (should-not (string-match-p "mevedel-render-data" text))))))
 
+  :doc "final response moves stale request summary after later streamed text"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'project
+                       :id "worked-footer-tail"
+                       :root temporary-file-directory
+                       :name "worked-footer-tail"))
+           (session (mevedel-session-create "main" workspace))
+           (started (time-subtract (current-time) (seconds-to-time 9)))
+           response-start)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--current-request
+                    (mevedel-request--create
+                     :session session
+                     :started-at started)))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer data-buf
+        (setq response-start (point)))
+      (mevedel-view-test--insert-data
+       data-buf
+       "```python\nprint('one')\n```\n"
+       'response)
+      (mevedel-view-test--insert-data
+       data-buf
+       (mevedel-pipeline--format-render-data-block
+        '(:kind request-summary :elapsed-seconds 4))
+       'ignore)
+      (mevedel-view-test--insert-data
+       data-buf
+       "```javascript\nconsole.log('two');\n```\n"
+       'response)
+      (with-current-buffer data-buf
+        (mevedel-view--render-response response-start (point-max)))
+      (with-current-buffer data-buf
+        (let* ((data (buffer-substring-no-properties
+                      (point-min) (point-max)))
+               (summary (string-match-p "request-summary" data))
+               (javascript (string-match-p "```javascript" data)))
+          (should summary)
+          (should javascript)
+          (should (> summary javascript))
+          (should-not (string-match-p ":elapsed-seconds 4" data))))
+      (with-current-buffer view-buf
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (worked (string-match-p "Worked for" text))
+               (javascript (string-match-p "javascript ⧉" text)))
+          (should javascript)
+          (should worked)
+          (should (> worked javascript))
+          (should-not (string-match-p "mevedel-render-data" text))))))
+
   :doc "renders tool calls as one-liners"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -4175,6 +4228,45 @@ PROPS is the value for the `gptel' property."
      (point-min) (point-max))
     (should (equal "| Name  | Role     |\n|-------|----------|\n| **Alice** | [Engineer](http://x.com) |\n"
                    (buffer-string))))
+
+  :doc "keeps inline pipes and unmatched literal backticks from breaking table detection"
+  (let ((tick (make-string 1 ?`)))
+    (with-temp-buffer
+      (insert "| Item | Description | Example |\n")
+      (insert "|---|---|---|\n")
+      (insert (concat "| Markdown table | Uses pipes and dashes | "
+                      tick "| A | B |" tick " |\n"))
+      (insert (concat "| Code block | Uses triple backticks | "
+                      (make-string 3 ?`) "python |\n"))
+      (insert (concat "| Inline code | Uses single backticks | "
+                      tick "example" tick " |\n"))
+      (add-text-properties (point-min) (point-max)
+                           '(font-lock-face markdown-table-face))
+      (save-excursion
+        (goto-char (point-min))
+        (search-forward "```python")
+        (add-text-properties (match-beginning 0) (match-end 0)
+                             '(font-lock-face markdown-code-face
+                               invisible t
+                               display "``python")))
+      (mevedel-view--prettify-markdown-tables-in-range
+       (point-min) (point-max))
+      (should
+       (equal
+        (concat "| Item           | Description           | Example     |\n"
+                "|----------------|-----------------------|-------------|\n"
+                "| Markdown table | Uses pipes and dashes | `| A | B |` |\n"
+                "| Code block     | Uses triple backticks | ```python   |\n"
+                "| Inline code    | Uses single backticks | `example`   |\n")
+        (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "```python")
+      (should-not
+       (text-property-any (match-beginning 0) (match-end 0) 'invisible t))
+      (should-not
+       (text-property-not-all
+        (match-beginning 0) (match-end 0)
+        'font-lock-face 'markdown-table-face))))
 
   :doc "copies table face onto inserted padding"
   (with-temp-buffer

@@ -3854,8 +3854,7 @@ not treated as delimiters."
       (skip-chars-forward " \t" end)
       (when (and (< (point) end) (eq (char-after) ?|))
         (forward-char 1)
-        (let ((cell-start (point))
-              (in-code nil))
+        (let ((cell-start (point)))
           (while (< (point) end)
             (let ((ch (char-after)))
               (cond
@@ -3864,9 +3863,15 @@ not treated as delimiters."
                 (when (< (point) end)
                   (forward-char 1)))
                ((eq ch ?`)
-                (setq in-code (not in-code))
-                (forward-char 1))
-               ((and (eq ch ?|) (not in-code))
+                (let ((ticks-start (point)))
+                  (skip-chars-forward "`" end)
+                  (let* ((ticks (buffer-substring-no-properties
+                                 ticks-start (point)))
+                         (close (save-excursion
+                                  (search-forward ticks end t))))
+                    (when close
+                      (goto-char close)))))
+               ((eq ch ?|)
                 (push (list :start cell-start
                             :end (point)
                             :content (buffer-substring-no-properties
@@ -3887,6 +3892,20 @@ not treated as delimiters."
                      (string-match-p "\\`[:-]+\\'" content))
           (setq ok nil))))))
 
+(defun mevedel-view--markdown-table-unmatched-backtick-p (text)
+  "Return non-nil when TEXT contains an unmatched backtick run."
+  (let ((pos 0)
+        unmatched)
+    (while (and (not unmatched)
+                (string-match "`+" text pos))
+      (let* ((ticks (match-string 0 text))
+             (after (match-end 0))
+             (close (string-search ticks text after)))
+        (if close
+            (setq pos (+ close (length ticks)))
+          (setq unmatched t))))
+    unmatched))
+
 (defun mevedel-view--markdown-table-visible-width (text)
   "Return a cheap visible width estimate for Markdown table cell TEXT."
   (let ((text (string-trim (or text ""))))
@@ -3895,8 +3914,19 @@ not treated as delimiters."
            "\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))" "\\1" text))
     (setq text
           (replace-regexp-in-string
-           "\\(?:\\*\\*\\|__\\|`\\)" "" text))
+           "\\(?:\\*\\*\\|__\\)" "" text))
     (string-width text)))
+
+(defun mevedel-view--markdown-table-normalize-cell-face (cell)
+  "Render malformed Markdown table CELL as literal table text."
+  (when (mevedel-view--markdown-table-unmatched-backtick-p
+         (plist-get cell :content))
+    (let ((start (plist-get cell :start))
+          (end (plist-get cell :end)))
+      (remove-text-properties
+       start end
+       '(face nil font-lock-face nil display nil invisible nil composition nil))
+      (put-text-property start end 'font-lock-face 'markdown-table-face))))
 
 (defun mevedel-view--markdown-table-valid-p (rows)
   "Return non-nil when ROWS form one simple Markdown table."
@@ -4016,6 +4046,7 @@ not treated as delimiters."
                           (mevedel-view--markdown-table-visible-width
                            content)))
                  (pad (- target width)))
+            (mevedel-view--markdown-table-normalize-cell-face cell)
             (when (> pad 0)
               (goto-char (plist-get cell :end))
               (insert
@@ -4029,36 +4060,12 @@ not treated as delimiters."
     (dolist (table (reverse (mevedel-view--markdown-table-collect start end)))
       (mevedel-view--prettify-markdown-table table))))
 
-(defun mevedel-view--code-block-body-range-after (position &optional limit)
-  "Return rendered code block body range after POSITION before LIMIT."
-  (let ((pos position)
-        (limit (or limit (point-max)))
-        start)
-    (while (and (< pos limit) (not start))
-      (if (get-text-property pos 'mevedel-view-code-block-body)
-          (setq start pos)
-        (setq pos (or (next-single-property-change
-                       pos 'mevedel-view-code-block-body nil limit)
-                      limit))))
-    (when start
-      (cons start
-            (or (next-single-property-change
-                 start 'mevedel-view-code-block-body nil limit)
-                limit)))))
-
 (defun mevedel-view--copy-code-block-button-action (button)
   "Copy BUTTON's fenced code block body."
-  (let* ((panel-end (button-get button 'mevedel-view-panel-end))
-         (limit (and (markerp panel-end) (marker-position panel-end)))
-         (range (and limit
-                     (mevedel-view--code-block-body-range-after
-                      (button-end button)
-                      limit)))
-         (text (if range
-                   (buffer-substring-no-properties (car range) (cdr range))
-                 "")))
-    (when limit
-      (kill-new text)
+  (let ((start (button-get button 'mevedel-view-copy-start))
+        (end (button-get button 'mevedel-view-copy-end)))
+    (when (and start end (<= start end))
+      (kill-new (buffer-substring-no-properties start end))
       (message "Copied"))))
 
 (defconst mevedel-view--source-block-carried-properties
@@ -4107,22 +4114,6 @@ not treated as delimiters."
                     (intern-soft (concat language "-mode")))))
       (and (fboundp mode) mode))))
 
-(defun mevedel-view--markdown-code-block-label (block)
-  "Return label text for BLOCK's copy affordance."
-  (concat (or (mevedel-view--markdown-code-block-language block)
-              "snippet")
-          " ⧉"))
-
-(defun mevedel-view--source-block-carried-props (position)
-  "Return source panel properties copied from POSITION."
-  (mevedel-view--selected-text-properties
-   position
-   mevedel-view--source-block-carried-properties))
-
-(defun mevedel-view--source-block-prefix ()
-  "Return visual inset prefix for rendered source block lines."
-  (propertize "    " 'font-lock-face 'mevedel-view-source-block))
-
 (defun mevedel-view--source-block-font-lock-face (face)
   "Return FACE combined with the source block panel face."
   (cond
@@ -4154,7 +4145,8 @@ not treated as delimiters."
 
 (defun mevedel-view--add-source-block-line-properties (start end)
   "Add source panel line wrapping properties to START..END."
-  (let ((prefix (mevedel-view--source-block-prefix)))
+  (let ((prefix (propertize "    " 'font-lock-face
+                            'mevedel-view-source-block)))
     (add-text-properties
      start end
      `(line-prefix ,prefix
@@ -4176,7 +4168,8 @@ not treated as delimiters."
                                          (plist-get block :body-end))
                                         ?\n))
                                (1- (plist-get block :body-end))
-                             (plist-get block :body-end))))
+                             (plist-get block :body-end))
+                           t))
              (end-fence-start (plist-get block :end-fence-start))
              (end-fence-end (plist-get block :end-fence-end))
              (end-fence-delete-end
@@ -4185,13 +4178,14 @@ not treated as delimiters."
                   (1+ end-fence-end)
                 end-fence-end))
              (language (mevedel-view--markdown-code-block-language block))
-             (label (mevedel-view--markdown-code-block-label block))
-             (carried (mevedel-view--source-block-carried-props
-                       fence-start)))
+             (label (concat (or language "snippet") " ⧉"))
+             (carried
+              (mevedel-view--selected-text-properties
+               fence-start
+               mevedel-view--source-block-carried-properties)))
         (delete-region end-fence-start end-fence-delete-end)
         (delete-region fence-start fence-end)
         (let* ((panel-start (marker-position body-start))
-               (panel-end (make-marker))
                (panel-padding-line (propertize "\n"
                                                 'font-lock-face
                                                 'mevedel-view-source-block))
@@ -4211,7 +4205,8 @@ not treated as delimiters."
            'action #'mevedel-view--copy-code-block-button-action
            'follow-link t
            'help-echo "Copy code block"
-           'mevedel-view-panel-end panel-end
+           'mevedel-view-copy-start (marker-position body-start)
+           'mevedel-view-copy-end (marker-position content-end)
            'font-lock-face 'mevedel-view-source-block-language
            'mouse-face 'highlight
            'pointer 'hand)
@@ -4235,8 +4230,7 @@ not treated as delimiters."
             (when carried
               (add-text-properties pad-start (point) carried))
             (mevedel-view--add-source-block-line-properties
-             pad-start (point)))
-          (set-marker panel-end (point)))
+             pad-start (point))))
         (set-marker body-start nil)
         (set-marker body-end nil)
         (set-marker content-end nil)))))
@@ -5101,23 +5095,34 @@ turn shows one bogus thinking summary per tool boundary."
     (mevedel-view--request-summary-render-data-from-text
      (buffer-substring-no-properties seg-start seg-end))))
 
-(defun mevedel-view--request-summary-present-p (data-buf start end)
-  "Return non-nil when DATA-BUF already has a request summary in START..END."
+(defun mevedel-view--delete-request-summaries (data-buf start end)
+  "Delete request-summary render-data blocks in DATA-BUF START..END."
   (with-current-buffer data-buf
     (save-excursion
       (let ((case-fold-search nil)
-            (limit (or end (point-max))))
+            (limit (copy-marker (or end (point-max)) t)))
         (goto-char (or start (point-min)))
-        (catch 'found
-          (while (search-forward "<!-- mevedel-render-data -->" limit t)
-            (let ((block-start (match-beginning 0)))
-              (when-let* ((close (search-forward
-                                  "<!-- /mevedel-render-data -->"
-                                  limit t)))
-                (when (mevedel-view--request-summary-render-data-from-text
-                       (buffer-substring-no-properties block-start close))
-                  (throw 'found t)))))
-          nil)))))
+        (unwind-protect
+            (while (search-forward "<!-- mevedel-render-data -->" limit t)
+              (let ((block-start (match-beginning 0)))
+                (when-let* ((close (search-forward
+                                    "<!-- /mevedel-render-data -->"
+                                    limit t)))
+                  (when (mevedel-view--request-summary-render-data-from-text
+                         (buffer-substring-no-properties block-start close))
+                    (let ((delete-start
+                           (if (and (> block-start (point-min))
+                                    (eq (char-before block-start) ?\n))
+                               (1- block-start)
+                             block-start))
+                          (delete-end
+                           (if (and (< close (point-max))
+                                    (eq (char-after close) ?\n))
+                               (1+ close)
+                             close)))
+                      (delete-region delete-start delete-end)
+                      (goto-char delete-start))))))
+          (set-marker limit nil))))))
 
 (defun mevedel-view--request-summary-elapsed-seconds (data-buf)
   "Return elapsed seconds for DATA-BUF's current request, or nil."
@@ -5135,16 +5140,16 @@ Return the new data-buffer end position."
     (require 'mevedel-pipeline)
     (with-current-buffer data-buf
       (let ((tail-start (or search-start (point-min))))
-        (unless (mevedel-view--request-summary-present-p
-                 data-buf tail-start (point-max))
-          (save-excursion
-            (goto-char (point-max))
-            (unless (bolp) (insert "\n"))
-            (let ((start (point)))
-              (insert (mevedel-pipeline--format-render-data-block
-                       (list :kind 'request-summary
-                             :elapsed-seconds elapsed)))
-              (add-text-properties start (point) '(gptel ignore)))))))
+        (mevedel-view--delete-request-summaries
+         data-buf tail-start (point-max))
+        (save-excursion
+          (goto-char (point-max))
+          (unless (bolp) (insert "\n"))
+          (let ((start (point)))
+            (insert (mevedel-pipeline--format-render-data-block
+                     (list :kind 'request-summary
+                           :elapsed-seconds elapsed)))
+            (add-text-properties start (point) '(gptel ignore))))))
     (with-current-buffer data-buf
       (point-max))))
 
@@ -5490,7 +5495,7 @@ behave normally."
         ;; reinserted beside completed tool output.
         (setq mevedel-view--pending-tool-calls nil)
         (mevedel-view--delete-pending-tool-live-lines)
-        (setq end (or (mevedel-view--append-request-summary data-buf end)
+        (setq end (or (mevedel-view--append-request-summary data-buf start)
                       end))
         ;; Delegate to the shared incremental path, which deletes the
         ;; in-flight assistant turn (if any) and re-renders it from the
@@ -7260,7 +7265,7 @@ are merged into a single summary."
                       'mevedel-view-type 'turn-header
                       'mevedel-view-turn-role 'assistant
                       'mevedel-view-collapsed nil))
-  (let (tool-group thinking-group)
+  (let (tool-group thinking-group request-summary-group)
     (dolist (seg segments)
       (let ((type (car seg)))
         (pcase type
@@ -7284,20 +7289,23 @@ are merged into a single summary."
                      (mevedel-view--ensure-blank-line-before-response)
                      (let ((start (point)))
                        (insert (mevedel-view--fontify-response text) "\n")
-                       (add-text-properties
-                        start (point)
-                        `(mevedel-view-source ,(cons seg-start seg-end)
-                          mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
-                                                    (cons seg-start seg-end)
-                                                    'response)
-                          mevedel-view-type response
-                          mevedel-view-collapsed nil))
-                       (mevedel-view--decorate-agent-result-blocks
-                        start (point))
-                       (mevedel-view--decorate-agent-message-blocks
-                        start (point))
-                       (mevedel-view--decorate-markdown-in-range
-                        start (point)))))))))
+                       (let ((response-end (copy-marker (point) t)))
+                         (add-text-properties
+                          start response-end
+                          `(mevedel-view-source ,(cons seg-start seg-end)
+                            mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
+                                                      (cons seg-start seg-end)
+                                                      'response)
+                            mevedel-view-type response
+                            mevedel-view-collapsed nil))
+                         (mevedel-view--decorate-agent-result-blocks
+                          start response-end)
+                         (mevedel-view--decorate-agent-message-blocks
+                          start response-end)
+                         (mevedel-view--decorate-markdown-in-range
+                          start response-end)
+                         (goto-char response-end)
+                         (set-marker response-end nil)))))))))
           ('tool
            ;; Flush thinking group before tools
            (mevedel-view--flush-thinking-group thinking-group data-buf)
@@ -7312,12 +7320,7 @@ are merged into a single summary."
              (setq tool-group nil))
            (mevedel-view--render-system-reminder-segment seg data-buf))
           ('request-summary
-           (mevedel-view--flush-thinking-group thinking-group data-buf)
-           (setq thinking-group nil)
-           (when tool-group
-             (mevedel-view--render-tool-group (nreverse tool-group) data-buf)
-             (setq tool-group nil))
-           (mevedel-view--render-request-summary-segment seg data-buf))
+           (push seg request-summary-group))
           ('user
            (let ((seg-start (cadr seg))
                  (seg-end (caddr seg)))
@@ -7383,7 +7386,9 @@ are merged into a single summary."
     ;; Flush remaining groups
     (mevedel-view--flush-thinking-group thinking-group data-buf)
     (when tool-group
-      (mevedel-view--render-tool-group (nreverse tool-group) data-buf))))
+      (mevedel-view--render-tool-group (nreverse tool-group) data-buf))
+    (dolist (seg (nreverse request-summary-group))
+      (mevedel-view--render-request-summary-segment seg data-buf))))
 
 (defun mevedel-view--render-agent-transcript-segment (data-buf seg)
   "Render an agent-transcript render-data SEG from DATA-BUF."
