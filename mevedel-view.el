@@ -6169,19 +6169,6 @@ Empty string when the turn contains only whitespace or markers."
       (replace-match "\n\n" t t))
     (buffer-string)))
 
-(defun mevedel-view--read-hook-audit-record (text)
-  "Read one hidden hook audit record from TEXT, or nil."
-  (condition-case nil
-      (let ((read-eval nil))
-        (with-temp-buffer
-          (insert text)
-          (goto-char (point-min))
-          (let ((record (read (current-buffer))))
-            (and (listp record)
-                 (keywordp (car-safe record))
-                 record))))
-    (error nil)))
-
 (defun mevedel-view--hook-audit-records-from-text (text &optional type)
   "Return hook audit records parsed from TEXT.
 When TYPE is non-nil, return only records with matching `:type'."
@@ -6194,7 +6181,7 @@ When TYPE is non-nil, return only records with matching `:type'."
           (let ((record-start (point)))
             (when (search-forward mevedel--hook-audit-close nil t)
               (when-let* ((record
-                           (mevedel-view--read-hook-audit-record
+                           (mevedel--read-hook-audit-record
                             (buffer-substring-no-properties
                              record-start (match-beginning 0)))))
                 (when (or (null type)
@@ -6242,15 +6229,9 @@ PRIMARY records usually have source metadata and are preferred."
 (defun mevedel-view--prompt-rewrite-audit-record
     (event original submitted decision)
   "Return a prompt rewrite audit record, or nil if nothing changed."
-  (when (and (stringp submitted)
-             (not (equal submitted original)))
-    (append
-     (list :type 'prompt-rewrite
-           :event (if (symbolp event) (symbol-name event) (format "%s" event))
-           :original (or original "")
-           :submitted submitted)
-     (when-let* ((reason (mevedel-hooks-decision-reason decision)))
-       (list :reason reason)))))
+  (mevedel--hook-prompt-rewrite-audit-record
+   event original submitted
+   (mevedel-hooks-decision-reason decision)))
 
 (defun mevedel-view--user-turn-hook-audits (segments data-buf)
   "Return hook audit records found in user SEGMENTS from DATA-BUF."
@@ -6266,8 +6247,8 @@ PRIMARY records usually have source metadata and are preferred."
                       (record-start (point)))
                   (when (search-forward mevedel--hook-audit-close
                                         seg-end t)
-                    (when-let* ((record
-                                 (mevedel-view--read-hook-audit-record
+                  (when-let* ((record
+                                 (mevedel--read-hook-audit-record
                                   (buffer-substring-no-properties
                                    record-start (match-beginning 0)))))
                       (push (append record
@@ -6457,6 +6438,29 @@ EXPANDED means insert the disclosure body expanded."
   (when-let* ((entry (car (mevedel-view--hook-context-events-from-text text))))
     (plist-get entry :body)))
 
+(defun mevedel-view--hook-context-unescape (text)
+  "Unescape XML entities in hook context TEXT."
+  (replace-regexp-in-string
+   "&amp;" "&"
+   (replace-regexp-in-string
+    "&lt;" "<"
+    (replace-regexp-in-string
+     "&gt;" ">"
+     (replace-regexp-in-string
+      "&quot;" "\"" (or text "") t t)
+     t t)
+    t t)
+   t t))
+
+(defun mevedel-view--hook-context-event-body (text)
+  "Return TEXT without the wrapper newlines added around event bodies."
+  (let ((text (or text "")))
+    (when (string-prefix-p "\n" text)
+      (setq text (substring text 1)))
+    (when (string-suffix-p "\n" text)
+      (setq text (substring text 0 -1)))
+    (mevedel-view--hook-context-unescape text)))
+
 (defun mevedel-view--hook-context-events-from-body (body)
   "Return event-tagged hook context entries parsed from BODY."
   (when (stringp body)
@@ -6466,11 +6470,12 @@ EXPANDED means insert the disclosure body expanded."
         (goto-char (point-min))
         (while (re-search-forward
                 "<hook-event[ \t\n]+name=\"\\([^\"]+\\)\">" nil t)
-          (let ((event (match-string 1))
+          (let ((event (mevedel-view--hook-context-unescape
+                        (match-string 1)))
                 (body-start (point)))
             (when (search-forward "</hook-event>" nil t)
               (let ((event-body
-                     (string-trim
+                     (mevedel-view--hook-context-event-body
                       (buffer-substring-no-properties
                        body-start (match-beginning 0)))))
                 (unless (string-empty-p event-body)

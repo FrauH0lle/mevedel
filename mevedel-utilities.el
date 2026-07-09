@@ -11,6 +11,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (eval-when-compile
   (require 'ediff-init))
 
@@ -30,6 +31,9 @@
 
 ;; `gptel'
 (defvar gptel-default-mode)
+
+;; `subr'
+(defvar read-eval)
 
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--current-overlay)
@@ -502,15 +506,52 @@ line by itself."
            (mapcar #'mevedel--plain-hook-audit-data value)))
    (t value)))
 
+(defun mevedel--hook-prompt-rewrite-audit-record
+    (event original submitted &optional reason)
+  "Return a prompt rewrite audit record for EVENT, or nil if unchanged."
+  (when (and (stringp submitted)
+             (not (equal submitted original)))
+    (append
+     (list :type 'prompt-rewrite
+           :event (format "%s" event)
+           :original (or original "")
+           :submitted submitted)
+     (when reason
+       (list :reason reason)))))
+
+(defun mevedel--hook-audit-record-payload (record)
+  "Return encoded payload text for hook audit RECORD."
+  (base64-encode-string
+   (encode-coding-string
+    (let ((print-level nil)
+          (print-length nil)
+          (print-circle t))
+      (prin1-to-string
+       (mevedel--plain-hook-audit-data record)))
+    'utf-8 t)
+   t))
+
+(defun mevedel--read-hook-audit-record (text)
+  "Read one encoded hook audit record from TEXT, or nil."
+  (condition-case nil
+      (let ((read-eval nil))
+        (with-temp-buffer
+          (insert
+           (decode-coding-string
+            (base64-decode-string (string-trim (or text "")))
+            'utf-8 t))
+          (goto-char (point-min))
+          (let ((record (read (current-buffer))))
+            (and (listp record)
+                 (keywordp (car-safe record))
+                 record))))
+    (error nil)))
+
 (defun mevedel--format-hook-audit-record (record)
   "Return a hidden transcript side-channel block for hook audit RECORD."
   (propertize
    (concat "\n" mevedel--hook-audit-open "\n"
-           (let ((print-level nil)
-                 (print-length nil)
-                 (print-circle t))
-             (prin1-to-string
-              (mevedel--plain-hook-audit-data record)))
+           (mevedel--hook-audit-record-payload record)
            "\n" mevedel--hook-audit-close "\n")
    'invisible t
    'gptel 'ignore

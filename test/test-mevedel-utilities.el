@@ -260,6 +260,75 @@
         (should-not (get-text-property (point) 'front-sticky))
         (forward-char 1)))))
 
+(mevedel-deftest mevedel--hook-audit-helpers ()
+  ,test
+  (test)
+
+  :doc "formats hook audit blocks as ignored hidden side channels"
+  (let* ((record
+          `(:type prompt-rewrite
+                  :event "UserPromptSubmit"
+                  :submitted ,(propertize
+                                "new <!-- /mevedel-hook-audit -->"
+                                'face 'bold)
+                  :nested (:original ,(propertize "old" 'face 'italic))))
+         (block (mevedel--format-hook-audit-record record))
+         parsed)
+    (should (eq 'ignore (get-text-property 0 'gptel block)))
+    (should (get-text-property 0 'invisible block))
+    (with-temp-buffer
+      (insert block)
+      (goto-char (point-min))
+      (search-forward mevedel--hook-audit-open)
+      (let ((body-start (point)))
+        (search-forward mevedel--hook-audit-close)
+        (let ((payload (buffer-substring-no-properties
+                        body-start (match-beginning 0))))
+          (should-not (string-match-p
+                       "<!-- /mevedel-hook-audit -->"
+                       payload))
+          (setq parsed (mevedel--read-hook-audit-record payload)))))
+    (should-not (text-properties-at 0 (plist-get parsed :submitted)))
+    (should-not (text-properties-at
+                 0 (plist-get (plist-get parsed :nested) :original))))
+
+  :doc "strips generated hook audit blocks from model-visible text"
+  (let ((block (mevedel--format-hook-audit-record
+                '(:type prompt-rewrite
+                  :event "UserPromptSubmit"
+                  :submitted "<!-- /mevedel-hook-audit --> tail"))))
+    (should (equal "beforeafter"
+                   (mevedel--strip-hook-audit-blocks
+                    (concat "before" block "after")))))
+
+  :doc "restores ignored properties on copied hook audit blocks"
+  (with-temp-buffer
+    (insert "before"
+            (substring-no-properties
+             (mevedel--format-hook-audit-record
+              '(:type prompt-rewrite :event "UserPromptSubmit")))
+            "after")
+    (mevedel--restore-render-data-gptel-properties
+     (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward mevedel--hook-audit-open)
+    (should (eq 'ignore
+                (get-text-property (match-beginning 0) 'gptel))))
+
+  :doc "builds prompt rewrite audit records only when the prompt changed"
+  (should-not
+   (mevedel--hook-prompt-rewrite-audit-record
+    'UserPromptSubmit "same" "same" "why"))
+  (should
+   (equal
+    '(:type prompt-rewrite
+            :event "UserPromptSubmit"
+            :original "old"
+            :submitted "new"
+            :reason "why")
+    (mevedel--hook-prompt-rewrite-audit-record
+     'UserPromptSubmit "old" "new" "why"))))
+
 (mevedel-deftest mevedel--tag-query-prefix-from-infix ()
   ,test
   (test)
