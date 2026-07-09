@@ -207,7 +207,8 @@ Markdown rendering adds small view-only affordances:
   when Emacs can display images;
 - simple Markdown pipe tables are padded so columns line up in the view;
 - rendered `@file` mentions, local Markdown links, and bare local paths
-  are clickable open-file buttons, including `#L<line>` targets.
+  are clickable open-file buttons, including `:LINE`, `:L<line>`,
+  `:#L<line>`, comma-separated line lists, and `#L<line>` targets.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible
