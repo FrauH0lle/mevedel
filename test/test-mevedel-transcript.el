@@ -29,6 +29,7 @@
     (let ((prompt-start (point)))
       (insert (propertize "User prompt" 'gptel 'prompt))
       (insert (propertize "\n<render-data />" 'gptel 'ignore))
+      (insert "\n\n")
       (should (= prompt-start
                  (mevedel-transcript-prompt-transform-start))))))
 

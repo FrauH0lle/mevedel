@@ -315,6 +315,27 @@
     (should (eq 'ignore
                 (get-text-property (match-beginning 0) 'gptel))))
 
+  :doc "keeps trailing tool whitespace inside the ignored audit span"
+  (with-temp-buffer
+    (insert
+     (propertize
+      (concat
+       "(:name \"Read\" :args nil)\n\nresult"
+       (substring-no-properties
+        (mevedel--format-hook-audit-record
+         '(:type tool-input-repair :state committed)))
+       "\n")
+      'gptel '(tool . "call-1")))
+    (insert (propertize "#+end_tool\nThe next response."
+                        'gptel 'ignore))
+    (mevedel--restore-render-data-gptel-properties
+     (point-min) (point-max))
+    (goto-char (point-min))
+    (search-forward mevedel--hook-audit-close)
+    (while (looking-at-p "[ \t\r\n]")
+      (should (eq 'ignore (get-text-property (point) 'gptel)))
+      (forward-char 1)))
+
   :doc "builds prompt rewrite audit records only when the prompt changed"
   (should-not
    (mevedel--hook-prompt-rewrite-audit-record

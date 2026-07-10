@@ -54,10 +54,16 @@ refresh).  Skip past it so the rendered view starts at real content."
   "Return the start of the last user prompt in a transform buffer."
   (let ((pos (point-max)))
     (while (and (> pos (point-min))
-                (eq (get-text-property (1- pos) 'gptel) 'ignore))
-      (setq pos (or (previous-single-property-change
-                     (1- pos) 'gptel nil (point-min))
-                    (point-min))))
+                (let ((prop (get-text-property (1- pos) 'gptel)))
+                  (cond
+                   ((eq prop 'ignore)
+                    (setq pos (or (previous-single-property-change
+                                   (1- pos) 'gptel nil (point-min))
+                                  (point-min))))
+                   ((and (null prop)
+                         (memq (char-before pos) '(?\s ?\t ?\n ?\r)))
+                    (setq pos (1- pos)))
+                   (t nil)))))
     (if-let* ((boundary (and (> pos (point-min))
                              (previous-single-property-change
                               (1- pos) 'gptel nil (point-min))))

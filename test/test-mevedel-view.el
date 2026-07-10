@@ -2781,6 +2781,30 @@ PROPS is the value for the `gptel' property."
 (mevedel-deftest mevedel-view--setup ()
   ,test
   (test)
+  :doc "fontifies known dollar skill mentions"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session-create
+                     "main"
+                     (mevedel-workspace--create
+                      :type 'test :id "skills" :root "/tmp/skills"
+                      :name "skills")))
+           (skill (mevedel-skill--create :name "review" :body "Review")))
+      (setf (mevedel-session-skills session) (list skill))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (font-lock-mode 1)
+        (goto-char (mevedel-view--input-start))
+        (insert "Run $review but keep $PATH literal")
+        (font-lock-flush (mevedel-view--input-start) (point-max))
+        (font-lock-ensure (mevedel-view--input-start) (point-max))
+        (goto-char (mevedel-view--input-start))
+        (search-forward "$review")
+        (should (memq 'font-lock-keyword-face
+                      (ensure-list
+                       (get-text-property (match-beginning 0) 'face))))
+        (search-forward "$PATH")
+        (should-not (get-text-property (match-beginning 0) 'face)))))
+
   :doc "wires buffers together correctly"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -10135,6 +10159,36 @@ finds it during `$' skill dispatch."
 (mevedel-deftest mevedel-view-send/skill-inline ()
   ,test
   (test)
+  :doc "inline attachment reaches the model-visible gptel request"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "thermo-review"
+       :body "THERMO BODY"
+       :context 'inline
+       :user-invocable-p t
+       :model-invocable-p nil)
+    (let (request-data)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (let ((fsm
+                          (gptel-request
+                              nil
+                            :buffer (current-buffer)
+                            :transforms
+                            '(mevedel-skills--transform-expand-inline-attachments)
+                            :dry-run t)))
+                     (setq request-data
+                           (format "%S"
+                                   (plist-get (gptel-fsm-info fsm)
+                                              :data)))))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Run $thermo-review on the repository")
+          (mevedel-view-send)))
+      (should (string-search "THERMO BODY" request-data))
+      (should (string-search "[skill:thermo-review -- attached]"
+                             request-data))))
+
   :doc "inline skill forwards expanded body with render-data side channel"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
