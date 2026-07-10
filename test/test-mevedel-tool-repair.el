@@ -215,6 +215,83 @@
 ;;
 ;;; Atomic repair
 
+(mevedel-deftest mevedel-tool-repair--with-lossless-json
+  ()
+  ,test
+  (test)
+
+  :doc "scopes lossless parsing to mevedel response buffers"
+  (with-temp-buffer
+    (setq-local mevedel--session t)
+    (should
+     (mevedel-tool-repair--with-lossless-json
+      (lambda (&rest _) mevedel-tool-repair--parsing-response)
+      'backend nil (list :buffer (current-buffer)))))
+
+  :doc "leaves unrelated gptel response buffers unchanged"
+  (with-temp-buffer
+    (should-not
+     (mevedel-tool-repair--with-lossless-json
+      (lambda (&rest _) mevedel-tool-repair--parsing-response)
+      'backend nil (list :buffer (current-buffer))))))
+
+(mevedel-deftest mevedel-tool-repair--json-parse-string
+  ()
+  ,test
+  (test)
+
+  :doc "preserves null while gptel parses a response"
+  (let ((mevedel-tool-repair--parsing-response t))
+    (should
+     (equal '(:empty nil :null :null)
+            (mevedel-tool-repair--json-parse-string
+             #'json-parse-string
+             "{\"empty\":{},\"null\":null}"
+             :object-type 'plist :null-object nil
+             :false-object :json-false))))
+
+  :doc "leaves unrelated JSON parsing unchanged"
+  (should
+   (equal '(:null nil)
+          (mevedel-tool-repair--json-parse-string
+           #'json-parse-string "{\"null\":null}"
+           :object-type 'plist :null-object nil
+           :false-object :json-false))))
+
+(mevedel-deftest mevedel-tool-repair--restore-argument-shapes
+  ()
+  ,test
+  (test)
+
+  :doc "distinguishes decoded empty objects from nulls before repair"
+  (let* ((tool
+          (mevedel-tool--create
+           :name "TaskUpdate"
+           :args '((id integer :required "ID")
+                   (blocks array :optional "Blocks"
+                           :items (:type integer)))))
+         (empty-call '(:id "empty" :name "TaskUpdate"
+                       :args (:id 3 :blocks nil)))
+         (null-call '(:id "null" :name "TaskUpdate"
+                      :args (:id 4 :blocks :null)))
+         (info (list :tool-use (list empty-call null-call)))
+         (fsm (gptel-make-fsm :info info)))
+    (cl-letf (((symbol-function 'mevedel-tool-get)
+               (lambda (&rest _) tool)))
+      (mevedel-tool-repair--restore-argument-shapes fsm))
+    (let* ((empty-args (plist-get empty-call :args))
+           (null-args (plist-get null-call :args))
+           (empty-outcome (mevedel-tool-repair-attempt tool empty-args))
+           (null-outcome (mevedel-tool-repair-attempt tool null-args)))
+      (should (hash-table-p (plist-get empty-args :blocks)))
+      (should (eq :null (plist-get null-args :blocks)))
+      (should (equal [] (plist-get (plist-get empty-outcome :args) :blocks)))
+      (should-not (plist-member (plist-get null-outcome :args) :blocks))
+      (should (eq 'empty-array-placeholder
+                  (plist-get (car (plist-get empty-outcome :repairs)) :rule)))
+      (should (eq 'omit-optional-null
+                  (plist-get (car (plist-get null-outcome :repairs)) :rule))))))
+
 (mevedel-deftest mevedel-tool-repair-attempt
   ()
   ,test
