@@ -110,7 +110,7 @@ Chat / view
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-view.el             compact user-facing view buffer
   mevedel-view-audit.el       audit disclosure rendering
-  mevedel-view-fragment.el    identity-backed view chrome blocks
+  mevedel-view-zone.el        managed view-zone lifecycle + fragments
   mevedel-view-history.el     view input history ring and persistence
   mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
   mevedel-overlays.el         instruction overlays (references/directives)

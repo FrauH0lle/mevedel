@@ -35,11 +35,11 @@
 (declare-function mevedel-view--render-status "mevedel-view" (&optional data-buf))
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 
-;; `mevedel-view-fragment'
-(declare-function mevedel-view-fragment-collapse-state
-                  "mevedel-view-fragment" (key &optional default))
-(declare-function mevedel-view-fragment-set-collapse-state
-                  "mevedel-view-fragment" (key collapsed))
+;; `mevedel-view-zone'
+(declare-function mevedel-view-zone-collapse-state
+                  "mevedel-view-zone" (key &optional default))
+(declare-function mevedel-view-zone-set-collapse-state
+                  "mevedel-view-zone" (key collapsed))
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--display-label-from-canonical
@@ -1019,16 +1019,16 @@ command has somehow lost its binding."
 When POSITION is just after task fragment text, also accept the previous
 character so keybindings on trailing newlines still toggle the fragment."
   (let ((pos (or position (point))))
-    (or (and (eq (get-text-property pos 'mevedel-view-fragment-namespace)
+    (or (and (eq (get-text-property pos 'mevedel-view-zone-namespace)
                  'status)
-             (eq (get-text-property pos 'mevedel-view-fragment-id) 'tasks)
+             (eq (get-text-property pos 'mevedel-view-zone-id) 'tasks)
              pos)
         (and (> pos (point-min))
              (let ((prev (1- pos)))
                (and (eq (get-text-property prev
-                                           'mevedel-view-fragment-namespace)
+                                           'mevedel-view-zone-namespace)
                         'status)
-                    (eq (get-text-property prev 'mevedel-view-fragment-id)
+                    (eq (get-text-property prev 'mevedel-view-zone-id)
                         'tasks)
                     prev))))))
 
@@ -1037,13 +1037,13 @@ character so keybindings on trailing newlines still toggle the fragment."
   (interactive)
   (if-let* ((pos (mevedel-tool-task--fragment-position))
             (collapse-key (get-text-property
-                           pos 'mevedel-view-fragment-collapse-key)))
+                           pos 'mevedel-view-zone-collapse-key)))
       (progn
-        (mevedel-view-fragment-set-collapse-state
+        (mevedel-view-zone-set-collapse-state
          collapse-key
-         (not (mevedel-view-fragment-collapse-state
+         (not (mevedel-view-zone-collapse-state
                collapse-key
-               (get-text-property pos 'mevedel-view-fragment-collapsed))))
+               (get-text-property pos 'mevedel-view-zone-collapsed))))
         (mevedel-view--render-status))
     (message "No task list here")))
 
