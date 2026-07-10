@@ -96,6 +96,7 @@ Data model
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
+  mevedel-tool-repair.el      structured validation, atomic input repair, telemetry
   mevedel-queue.el            shared FIFO queue machinery
   mevedel-permission-queue.el permission/Bash/Eval queue
   mevedel-reminders.el        system-reminder injection

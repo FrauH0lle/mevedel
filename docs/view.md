@@ -457,6 +457,16 @@ context injection, it reads ordered `<hook-event name="...">` entries
 inside a `<hook-context>` block; new persisted hook context does not need
 a plain-body fallback.
 
+Tool input repair reuses the same hidden audit side channel. A committed
+repair appears on the affected tool row as `◇ tool input repaired`; a
+tentative repair discarded because final validation failed appears as
+`◇ tool input repair abandoned`. Expanding either disclosure shows only the
+repair rule ID, argument-schema path, and before/after shape. Supplied and
+repaired values never enter this metadata. Malformed records render the safe
+`tool input repair audit unavailable` fallback without changing the tool
+result. Async audit redraw follows the normal view invariant: composer text
+and point, including multiline drafts beginning with `>`, are preserved.
+
 Prompt rewrites from `:updated-input` use a separate compact disclosure
 attached to the submitted user turn:
 

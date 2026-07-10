@@ -201,7 +201,15 @@
 				      (setq notified-workspace workspace))))
 			   (mevedel--chat-buffer-init-common
 			    (current-buffer) workspace))
-			 (should (eq notified-workspace workspace)))
+			 (should (eq notified-workspace workspace))
+			 (should (memq #'mevedel-tool-repair-pre-tool-call
+				       gptel-pre-tool-call-functions))
+			 (should (memq #'mevedel-tool-repair-post-tool-call
+				       gptel-post-tool-call-functions))
+			 (should (memq #'mevedel-tool-repair-clear-ledger
+				       gptel-post-response-functions))
+			 (should (memq #'mevedel-tool-repair-clear-ledger
+				       kill-buffer-hook)))
 		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-session-lifecycle-hooks

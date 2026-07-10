@@ -440,6 +440,16 @@ session struct."
     (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
     (add-hook 'gptel-post-response-functions
               #'mevedel-plan-mode--post-response t t)
+    ;; Repair raw model input before view hooks observe the call and before
+    ;; gptel maps the arguments into the pipeline wrapper.
+    (require 'mevedel-tool-repair)
+    (add-hook 'gptel-pre-tool-call-functions
+              #'mevedel-tool-repair-pre-tool-call -100 t)
+    (add-hook 'gptel-post-tool-call-functions
+              #'mevedel-tool-repair-post-tool-call -100 t)
+    (add-hook 'gptel-post-response-functions
+              #'mevedel-tool-repair-clear-ledger nil t)
+    (add-hook 'kill-buffer-hook #'mevedel-tool-repair-clear-ledger nil t)
     (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
     ;; Incremental view updates on tool boundaries so the user sees
     ;; progress per tool call, not only at turn end.

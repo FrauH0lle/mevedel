@@ -8,7 +8,8 @@ flowchart TD
     B --> C[Session state]
     C --> D[Request state]
     D --> E[gptel request and FSM]
-    E --> F[Tool pipeline and agents]
+    E --> R[Raw tool validation and repair]
+    R --> F[Tool pipeline and agents]
     F --> B
     B --> G[View buffer and previews]
     C --> H[Persistent memory and session files]
@@ -27,14 +28,16 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   deferred tool state, mailbox messages, background agents, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
-  queue, plan queue.
+  queue, plan queue, and a transient bounded tool-input repair log.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
   rules, hook rules, model override, effort override.
 - **`mevedel-tool`**: name, handler, description, summary, prompt,
-  args, category, read-only/destructive/async flags, sync/async
+  args, optional semantic `repair-input` callback, category,
+  read-only/destructive/async flags, sync/async
   permission hooks, specifier extractors (`get-path`, `get-pattern`,
-  `get-domain`, `get-name`), groups, max-result-size, renderer.
+  `get-domain`, `get-name`), groups, max-result-size, display argument,
+  render transform, renderer, and its provider-facing gptel tool.
 - `mevedel--instruction-states`: workspace-keyed instruction alists and ID state
 - Instruction types: **References** (context) and **Directives** (prompts)
 
@@ -70,6 +73,21 @@ dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md plus optional AGENTS.local.md), persistent memory,
 environment, then the dynamic skill roster.
+
+Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
+The pre-tool hook preserves raw JSON distinctions, validates the call as-is,
+and attempts deterministic repair only after failure. A buffer-local ledger
+then associates the raw call with pipeline dispatch and final result without
+placing argument values in telemetry. The normal pipeline remains the final
+validation, permission, execution, and persistence boundary. See
+[`tools.md`](tools.md#tool-input-validation-and-repair) and
+[`ADR 0011`](adr/0011-repair-model-tool-input-before-pipeline.md).
+
+`mevedel-tool-repair.el` is the deep module owning structured contract
+validation, generic and tool-owned repair, raw gptel adaptation, value-free
+model feedback and transcript audits, dispatch tracking, and redacted session
+telemetry. `mevedel-tool-registry.el` owns the schema declarations and lowers
+the internal `path` type to a provider-facing string.
 
 `mevedel-system-build-prompt` checks each directory from workspace root
 to the session working directory for `AGENTS.md`. `AGENTS.local.md`,

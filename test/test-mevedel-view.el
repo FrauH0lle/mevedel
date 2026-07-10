@@ -18,6 +18,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-registry)
+(require 'mevedel-tool-repair)
 (require 'mevedel-mentions)
 (require 'mevedel-skills)
 (require 'mevedel-workspace)
@@ -97,6 +98,20 @@ PROPS is the value for the `gptel' property."
        front-sticky nil
        rear-nonsticky nil))
     (goto-char (+ start (or point-offset (length draft))))))
+
+(defun mevedel-view-test--insert-repair-audited-tool (data-buf)
+  "Insert one completed repair-audited tool call into DATA-BUF."
+  (with-current-buffer data-buf
+    (let ((start (point)))
+      (insert "(:name \"Collect\" :args (:names [\"alice\"]))\n\ncompleted\n")
+      (put-text-property start (point) 'gptel '(tool . "repair-call")))
+    (let ((start (point)))
+      (insert
+       (mevedel-tool-repair-format-audit-block
+        'committed
+        '((:rule wrap-array-singleton :source generic
+                :paths ((names)) :before string :after array))))
+      (put-text-property start (point) 'gptel 'ignore))))
 
 (defun mevedel-view-test--count-substring (needle text)
   "Return the number of non-overlapping NEEDLE occurrences in TEXT."
@@ -8145,7 +8160,127 @@ state of its inner sections"
         (should (string-match-p "Original result" text))
         (should (string-match-p "original result" text))
         (should (string-match-p "Updated result" text))
-        (should (string-match-p "updated result" text))))))
+        (should (string-match-p "updated result" text)))))
+
+  :doc "renders committed and abandoned repair audits with value-free details"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering
+           '(:header "Collect: completed"
+                     :body "ordinary result"
+                     :initially-collapsed-p t
+                     :hook-audits
+                     ((:type tool-input-repair :state committed
+                             :repairs
+                             ((:rule wrap-array-singleton :source generic
+                                     :paths ((names))
+                                     :before string :after array)))
+                      (:type tool-input-repair :state abandoned
+                             :repairs
+                             ((:rule parse-json-value :source generic
+                                     :paths ((count))
+                                     :before string :after integer))))))
+          (inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool rendering (cons 1 40))
+      (let ((text (buffer-string)))
+        (should (string-match-p "tool input repaired" text))
+        (should (string-match-p "tool input repair abandoned" text))
+        (should-not (string-match-p "Rule:" text)))
+      (goto-char (point-min))
+      (search-forward "tool input repaired")
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Rule: wrap-array-singleton" text))
+        (should (string-match-p "Path: names" text))
+        (should (string-match-p "Shape: string -> array" text))
+        (should-not (string-match-p "alice\|ordinary result" text)))))
+
+  :doc "malformed repair audit metadata falls back without exposing values"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering
+           '(:header "Collect: completed"
+                     :body "ordinary result"
+                     :initially-collapsed-p t
+                     :hook-audits
+                     ((:type tool-input-repair :state committed
+                             :repairs
+                             ((:rule "sentinel-secret" :source generic
+                                     :paths ((/private/secret))
+                                     :before "raw-value" :after array))))))
+          (inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool rendering (cons 1 40))
+      (let ((text (buffer-string)))
+        (should (string-match-p "repair audit unavailable" text))
+        (should-not (string-match-p "sentinel\|private\|raw-value" text)))
+      (goto-char (point-min))
+      (search-forward "repair audit unavailable")
+      (mevedel-view-toggle-section)
+      (should-not
+       (string-match-p "sentinel\|private\|raw-value" (buffer-string)))))
+
+  :doc "repair audit normalization errors use the unavailable fallback"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((rendering
+           '(:header "Collect: completed"
+                     :body "ordinary result"
+                     :initially-collapsed-p t
+                     :hook-audits
+                     ((:type tool-input-repair :state committed
+                             :repairs
+                             ((:rule wrap-array-singleton :source generic
+                                     :paths ((names))
+                                     :before string :after array))))))
+          (inhibit-read-only t))
+      (cl-letf (((symbol-function
+                  'mevedel-tool-repair-normalize-audit-record)
+                 (lambda (&rest _) (error "private audit sentinel"))))
+        (mevedel-view--insert-rendered-tool rendering (cons 1 40)))
+      (should (string-match-p "repair audit unavailable" (buffer-string)))
+      (should-not (string-match-p "private\|sentinel" (buffer-string)))))
+
+  :doc "ordinary valid tools retain their undecorated compact rendering"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t))
+      (mevedel-view--insert-rendered-tool
+       '(:header "Read: file.el" :body "ordinary result"
+                 :initially-collapsed-p t)
+       (cons 1 40))
+      (should-not (string-match-p "repair" (buffer-string))))))
+
+(mevedel-deftest mevedel-view--repair-audit-reconstruction
+  ()
+  ,test
+  (test)
+
+  :doc "reconstructs a committed audit beside a persisted handler error"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat
+      "(:name \"Collect\" :args (:names [\"alice\"]))\n\n"
+      "Error: handler exploded"
+      (mevedel-tool-repair-format-audit-block
+       'committed
+       '((:rule wrap-array-singleton :source generic
+               :paths ((names)) :before string :after array)))
+      "\n")
+     '(tool . "repair-error"))
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Collect" text))
+        (should (string-match-p "tool input repaired" text))
+        (should-not (string-match-p "alice\|handler exploded" text)))
+      (goto-char (point-min))
+      (search-forward "tool input repaired")
+      (mevedel-view-toggle-section)
+      (should (string-match-p "Rule: wrap-array-singleton"
+                              (buffer-substring-no-properties
+                               (point-min) mevedel-view--input-marker))))))
 
 
 ;;
@@ -9395,6 +9530,51 @@ state of its inner sections"
                                mevedel-view--pending-tool-calls)))))
         (with-current-buffer view-buf
           (mevedel-view--cancel-tool-boundary-render)))))
+
+  :doc "repair audit redraw preserves a single-line composer and point"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-repair-audited-tool data-buf)
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min))))
+      (mevedel-view-test--insert-composer-draft "keep drafting" 5))
+    (let ((mevedel-view-tool-boundary-render-delay 0))
+      (with-current-buffer data-buf
+        (mevedel-view--post-tool-hook
+         '(:id "repair-call" :name "Collect"
+               :args (:names ["alice"])))))
+    (with-current-buffer view-buf
+      (should (equal "keep drafting" (mevedel-view--input-text)))
+      (should (= (point) (+ (mevedel-view--input-start) 5)))
+      (should (string-match-p
+               "tool input repaired"
+               (buffer-substring-no-properties
+                (point-min) mevedel-view--input-marker)))))
+
+  :doc "repair audit redraw preserves a multiline > composer and point"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (mevedel-view-test--insert-repair-audited-tool data-buf)
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min))))
+        (mevedel-view-test--insert-composer-draft draft 4))
+      (let ((mevedel-view-tool-boundary-render-delay 0))
+        (with-current-buffer data-buf
+          (mevedel-view--post-tool-hook
+           '(:id "repair-call" :name "Collect"
+                 :args (:names ["alice"])))))
+      (with-current-buffer view-buf
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (string-match-p
+                 "tool input repaired"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))))))
 
   :doc "post-tool hook deletes the live tail when no replacement text is ready"
   (mevedel-view-test--with-buffers

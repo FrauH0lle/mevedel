@@ -227,6 +227,12 @@
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x) t)
 
+;; `mevedel-tool-repair'
+(declare-function mevedel-tool-repair-format-path
+                  "mevedel-tool-repair" (path))
+(declare-function mevedel-tool-repair-normalize-audit-record
+                  "mevedel-tool-repair" (record))
+
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--display-label-from-canonical
                   "mevedel-tool-ui" (agent-id))
@@ -6515,6 +6521,32 @@ PRIMARY records usually have source metadata and are preferred."
   "Return display text for hook audit RECORD.
 When EXPANDED is non-nil, include record details."
   (pcase (plist-get record :type)
+    ('tool-input-repair
+     (condition-case nil
+         (progn
+           (require 'mevedel-tool-repair)
+           (if-let* ((audit
+                      (mevedel-tool-repair-normalize-audit-record record)))
+               (concat
+                (if (eq (plist-get audit :state) 'committed)
+                    "  ◇ tool input repaired\n"
+                  "  ◇ tool input repair abandoned\n")
+                (when expanded
+                  (mapconcat
+                   (lambda (repair)
+                     (concat
+                      "    Rule: " (symbol-name (plist-get repair :rule)) "\n"
+                      "    Path"
+                      (if (= 1 (length (plist-get repair :paths))) ": " "s: ")
+                      (mapconcat #'mevedel-tool-repair-format-path
+                                 (plist-get repair :paths) ", ")
+                      "\n    Shape: "
+                      (symbol-name (plist-get repair :before))
+                      " -> " (symbol-name (plist-get repair :after)) "\n"))
+                   (plist-get audit :repairs)
+                   "")))
+             "  ◇ tool input repair audit unavailable\n"))
+       (error "  ◇ tool input repair audit unavailable\n")))
     ('prompt-rewrite
      (concat
       "  \u25c7 hook changed prompt\n"

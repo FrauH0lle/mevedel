@@ -1896,7 +1896,7 @@ and optional :timeout_seconds."
     (result output result-format)
   "Format Eval RESULT and captured OUTPUT for RESULT-FORMAT."
   (mevedel-tool-exec--truncate-output
-   (if (eq result-format 'injection)
+   (if (equal result-format "injection")
        (concat
         (format "%S" result)
         (and (not (string-empty-p (or output "")))
@@ -1985,7 +1985,7 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
                                   :text
                                   (funcall
                                    truncate-output
-                                   (if (eq result-format 'injection)
+                                   (if (equal result-format "injection")
                                        (concat
                                         (format "%S" result)
                                         (and (> (length (or output "")) 0)

@@ -1373,7 +1373,8 @@ feedback string when :note has a value, otherwise nil."
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
                   "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (real owner id/bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
-                  :items (:type object))
+                  :items (:type object)
+                  :minItems 1)
            (note string :optional
                  "Optional owner-scoped status note to show above that owner's open tasks. Empty string intentionally clears it.")
            (noteOwner string :optional

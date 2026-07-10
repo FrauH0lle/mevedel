@@ -511,6 +511,76 @@ fire-count and payload."
                                (kill-buffer agent-buf))
                              (when (buffer-live-p parent-buf)
                                (kill-buffer parent-buf))
+                             (delete-directory root t)))
+
+                         :doc "installs independent repair hooks in foreground and background buffers"
+                         (let* ((root (file-name-as-directory
+                                      (make-temp-file "mevedel-agent-repair-" t)))
+                                (workspace (mevedel-workspace--create
+                                            :type 'project :id root :root root
+                                            :name "agent"))
+                                (session (mevedel-session-create
+                                          "main" workspace root))
+                                (parent-buf
+                                 (generate-new-buffer " *mev-agent-parent*"))
+                                buffers)
+                           (unwind-protect
+                               (progn
+                                 (with-current-buffer parent-buf
+                                   (setq-local mevedel--session session)
+                                   (setq-local mevedel--workspace workspace))
+                                 (dolist (background '(nil t))
+                                   (let* ((agent
+                                           (mevedel-agent--create
+                                            :name "explorer"))
+                                          (inv
+                                           (mevedel-agent-invocation--create
+                                            :agent agent
+                                            :agent-id
+                                            (if background
+                                                "explorer--background"
+                                              "explorer--foreground")
+                                            :background-p background))
+                                          buffer)
+                                     (cl-letf (((symbol-function 'gptel-mode)
+                                                #'ignore))
+                                       (setq buffer
+                                             (mevedel-agent-exec--allocate-agent-buffer
+                                              inv parent-buf)))
+                                     (push buffer buffers)
+                                     (with-current-buffer buffer
+                                       (should
+                                        (memq #'mevedel-tool-repair-pre-tool-call
+                                              gptel-pre-tool-call-functions))
+                                       (should
+                                        (memq #'mevedel-tool-repair-post-tool-call
+                                              gptel-post-tool-call-functions))
+                                       (should
+                                        (memq #'mevedel-tool-repair-clear-ledger
+                                              gptel-post-response-functions))
+                                       (should
+                                        (memq #'mevedel-tool-repair-clear-ledger
+                                              kill-buffer-hook)))))
+                                 (with-current-buffer (car buffers)
+                                   (setq-local mevedel-tool-repair--ledger
+                                               '((:tool "first"
+                                                        :telemetry-recorded t))))
+                                 (with-current-buffer (cadr buffers)
+                                   (setq-local mevedel-tool-repair--ledger
+                                               '((:tool "second"
+                                                        :telemetry-recorded t))))
+                                 (kill-buffer (car buffers))
+                                 (should
+                                  (equal
+                                   '((:tool "second" :telemetry-recorded t))
+                                   (buffer-local-value
+                                    'mevedel-tool-repair--ledger
+                                    (cadr buffers)))))
+                             (dolist (buffer buffers)
+                               (when (buffer-live-p buffer)
+                                 (kill-buffer buffer)))
+                             (when (buffer-live-p parent-buf)
+                               (kill-buffer parent-buf))
                              (delete-directory root t))))
 
 (mevedel-deftest mevedel-agent-exec--apply-request-locals ()

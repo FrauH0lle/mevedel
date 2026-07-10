@@ -3547,7 +3547,8 @@ the data buffer's major mode."
     :handler #'mevedel-tool-ui--ask
     :args ((questions array :required
                       "Array of question objects. Each question must have predefined answer options. Options may be strings or objects with label, description, and preview fields. Mark exactly one option per question by appending ` (Recommended)` to that option label."
-                      :items (:type object)))
+                      :items (:type object)
+                      :minItems 1))
     :async-p t
     :max-result-size 30000
     :read-only-p t
@@ -3559,7 +3560,7 @@ the data buffer's major mode."
     :description "Request access to a directory outside the current allowed project roots."
     :prompt-file "tools/requestaccess.md"
     :handler #'mevedel-tool-ui--request-access
-    :args ((directory string :required
+    :args ((directory path :required
                       "Absolute or relative path to the directory you need to access.")
            (reason string :required
                    "Clear explanation of why you need access to this directory."))

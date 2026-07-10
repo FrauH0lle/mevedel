@@ -489,7 +489,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :handler #'mevedel-tool-code--xref-references
     :args ((identifier string :required
                        "The exact identifier to find references for (case-sensitive).")
-           (file_path string :required
+           (file_path path :required
                       "File path to use as context for the search (affects which xref backend is used)."))
     :async-p t
     :read-only-p t
@@ -506,7 +506,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :handler #'mevedel-tool-code--xref-definitions
     :args ((pattern string :required
                     "The pattern (substring or regex) to match symbol names.")
-           (file_path string :required
+           (file_path path :required
                       "File path to use as context for the search."))
     :async-p t
     :read-only-p t
@@ -521,7 +521,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :summary "Fast outline of functions, classes, and variables in one file."
     :prompt-file "tools/imenu.md"
     :handler #'mevedel-tool-code--imenu
-    :args ((file_path string :required
+    :args ((file_path path :required
                       "Path to the file to analyze for symbols."))
     :async-p t
     :read-only-p t
@@ -535,7 +535,7 @@ LINE is 1-based, COLUMN is 0-based (Emacs convention)."
     :description "Get tree-sitter syntax tree information for a file."
     :prompt-file "tools/treesitter.md"
     :handler #'mevedel-tool-code--treesitter
-    :args ((file_path string :required
+    :args ((file_path path :required
                       "Path to the file to analyze.")
            (line integer :optional
                  "Line number (1-based).")

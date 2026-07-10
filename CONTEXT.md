@@ -20,6 +20,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
+- **tool input repair** — A deterministic correction to a tool call that either responds to a specific contract violation or is explicitly requested by the tool. Ordinary default values are tool semantics, not repairs.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by `$skill` syntax or model-side `Skill` tool.
 - **skill roster** — The model-facing list of active skill names and descriptions, including only enough metadata for the model to decide whether to invoke a skill.
