@@ -265,6 +265,20 @@
                  '((ids array :optional "list of ids" :items (:type integer))))))
     (should (equal '(:type integer) (plist-get (car result) :items))))
 
+  :doc "does not let gptel mutate nested mevedel schemas"
+  (let* ((args '((tasks array :required "Tasks" :items (:type object))))
+         (provider-args (mevedel-tool--args-to-gptel args)))
+    (gptel-make-tool :name "SchemaIsolation" :function #'ignore
+                     :args provider-args)
+    (should (eq 'object
+                (plist-get (plist-get (car args) :items) :type))))
+
+  :doc "does not share vector-valued extras with gptel"
+  (let* ((args '((mode string :required "Mode" :enum ["fast" "safe"])))
+         (provider-args (mevedel-tool--args-to-gptel args)))
+    (should-not (eq (plist-get (car args) :enum)
+                    (plist-get (car provider-args) :enum))))
+
   :doc "passes through :properties for objects"
   (let ((result (mevedel-tool--args-to-gptel
                  '((config object :required "config"
@@ -277,7 +291,27 @@
                               :optional t :items (:type integer))))
          (mevedel-args (mevedel-tool--args-from-gptel gptel-args "t"))
          (roundtrip (mevedel-tool--args-to-gptel mevedel-args)))
-    (should (equal '(:type integer) (plist-get (car roundtrip) :items)))))
+    (should (equal '(:type integer) (plist-get (car roundtrip) :items))))
+
+  :doc "normalizes nested string types imported from wrapped tools"
+  (let* ((gptel-args
+          '((:name "tasks" :type "array" :description "tasks"
+                   :items (:type "object"
+                           :properties (:subject (:type "string"))))))
+         (mevedel-args (mevedel-tool--args-from-gptel gptel-args "wrapped"))
+         (items (plist-get (car mevedel-args) :items)))
+    (should (eq 'object (plist-get items :type)))
+    (should (eq 'string
+                (plist-get (plist-get (plist-get items :properties) :subject)
+                           :type))))
+
+  :doc "does not confuse an object property named type with schema type"
+  (let* ((gptel-args
+          '((:name "config" :type "object" :description "config"
+                   :properties (:type (:type "string")))))
+         (mevedel-args (mevedel-tool--args-from-gptel gptel-args "wrapped"))
+         (properties (plist-get (car mevedel-args) :properties)))
+    (should (eq 'string (plist-get (plist-get properties :type) :type)))))
 
 
 ;;

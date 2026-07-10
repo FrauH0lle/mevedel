@@ -362,7 +362,7 @@ types under strict function-schema validation."
        (unless required
          (setq result (append result (list :optional t))))
        (when extras
-         (setq result (append result extras)))
+         (setq result (append result (copy-tree extras t))))
        result))
    args))
 
@@ -387,6 +387,27 @@ the type is unrecognized."
       (error "Wrapped tool %S has unknown :type %S (expected one of %S)"
              source-name raw mevedel-tool--canonical-types))
     value))
+
+(defun mevedel-tool--normalize-schema (value source-name)
+  "Copy VALUE while normalizing nested schema types for SOURCE-NAME."
+  (cond
+   ((vectorp value)
+    (vconcat (mapcar (lambda (item)
+                       (mevedel-tool--normalize-schema item source-name))
+                     value)))
+   ((consp value)
+    (let ((copy (mapcar (lambda (item)
+                          (mevedel-tool--normalize-schema item source-name))
+                        value)))
+      (when-let* (((keywordp (car-safe copy)))
+                  (raw-type (plist-get copy :type))
+                  ((or (symbolp raw-type)
+                       (stringp raw-type)
+                       (and (consp raw-type) (eq 'quote (car raw-type))))))
+        (plist-put copy :type
+                   (mevedel-tool--normalize-type raw-type source-name)))
+      copy))
+   (t value)))
 
 (defun mevedel-tool--args-from-gptel (gptel-args source-name)
   "Convert GPTEL-ARGS plist list to mevedel arg spec format.
@@ -413,7 +434,9 @@ a trailing plist tail on the mevedel spec element."
             (desc (or (plist-get arg :description) ""))
             (extras (cl-loop for (k v) on arg by #'cddr
                              unless (memq k '(:name :type :description :optional))
-                             append (list k v))))
+                             append
+                             (list k (mevedel-tool--normalize-schema
+                                      v source-name)))))
        (append (list name type (if required :required :optional) desc)
                extras)))
    gptel-args))
@@ -810,7 +833,7 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
                           (mevedel-pipeline--positional-to-plist
                            raw-args mevedel-args)))
              :description resolved-prompt
-             :args (gptel-tool-args source)
+             :args (mevedel-tool--args-to-gptel mevedel-args)
              :async t
              :include (gptel-tool-include source)
              :category target-category)))

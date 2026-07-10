@@ -335,6 +335,25 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                       (gptel-get-tool (list "test-src" name)))))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
+  :doc "wrapped provider and internal schemas do not alias the source"
+  (let* ((name (test-mevedel-tool-wrap--unique "wrap_schema_isolated"))
+         (src (test-mevedel-tool-wrap--make-source
+               :name name
+               :args '((:name "tasks" :type array :description "tasks"
+                        :items (:type object))))))
+    (mevedel-define-tool :wrap src :groups (web) :read-only-p t)
+    (let* ((source-args (gptel-tool-args src))
+           (wrapped (mevedel-tool-get name "mevedel-test-src"))
+           (target-args (gptel-tool-args (mevedel-tool-gptel-tool wrapped))))
+      (should-not (eq source-args target-args))
+      (should-not (eq (plist-get (car source-args) :items)
+                      (plist-get (car target-args) :items)))
+      (should (eq 'object
+                  (plist-get (plist-get (car (mevedel-tool-args wrapped))
+                                        :items)
+                             :type))))
+    (test-mevedel-tool-wrap--remove-source "test-src" name))
+
   :doc "wrapped gptel-tool preserves the source include slot"
   (let* ((name (test-mevedel-tool-wrap--unique "wrap_include"))
          (src (test-mevedel-tool-wrap--make-source
