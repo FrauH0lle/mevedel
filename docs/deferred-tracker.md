@@ -117,19 +117,6 @@ inlining a paragraph.
 - **Blast radius:** Model-driven worktree creation remains prompt-guided
   rather than schema-driven until the tool exists.
 
-### Plan implementation in a new worktree session
-
-- **Source:** worktree feature design discussion
-- **What's owed:** Add an option from Plan mode to implement an approved
-  plan in a freshly-created worktree session, carrying the plan context
-  into that session before implementation starts.
-- **Why deferred:** The first worktree pass needs to settle basic
-  worktree command/session semantics before adding Plan-mode branching.
-- **Status check:** Plan mode can implement in the current session; no
-  worktree-backed implementation target exists.
-- **Blast radius:** Users must manually create/switch worktrees before
-  implementing plans when they want isolated changes.
-
 ### Bulk session-management UI
 
 - **Source:** `specs/19-session-persistence.md` Q4

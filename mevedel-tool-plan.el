@@ -16,38 +16,51 @@
 (require 'mevedel-queue)
 (require 'mevedel-utilities)
 
+;; `gptel'
+(declare-function gptel-send "ext:gptel" (&optional arg))
+(defvar gptel-backend)
+(defvar gptel-model)
+(defvar gptel-prompt-prefix-alist)
+(defvar gptel-response-separator)
+
+;; `mevedel-chat'
+(declare-function mevedel--active-chat-buffer "mevedel-chat"
+                  (&optional workspace))
+(declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
+(declare-function mevedel--insert-local-user-turn
+                  "mevedel-chat"
+                  (prompt &optional display-text kind hook-context no-spinner))
+(defvar mevedel--session)
+(defvar mevedel-plans-directory)
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-apply-auto-lifecycle
+                  "mevedel-permissions"
+                  (previous-mode target-mode &optional session))
+(declare-function mevedel-permission-mode-normalize
+                  "mevedel-permissions" (mode))
+(declare-function mevedel-permission-mode-set-raw
+                  "mevedel-permissions" (mode))
+(defvar mevedel-permission-mode)
+
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
                   (entry key))
 (declare-function mevedel-queue--entry-metadata-put "mevedel-queue"
                   (entry key value))
 
-;; `mevedel-chat'
-(declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
-(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-queued-user-messages
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel-plans-directory)
-(defvar mevedel--session)
-(defvar mevedel-permission-mode)
-(defvar gptel-prompt-prefix-alist)
-(defvar gptel-response-separator)
-(declare-function gptel-send "ext:gptel" (&optional arg))
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-normalize
-                  "mevedel-permissions" (mode))
-(declare-function mevedel-permission-mode-set-raw
-                  "mevedel-permissions" (mode))
-(declare-function mevedel-permission-mode-apply-auto-lifecycle
-                  "mevedel-permissions"
-                  (previous-mode target-mode &optional session))
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-make-plan-mode "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-plan-mode-exit
+                  "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-plan-mode-reentry
+                  "mevedel-reminders" ())
+(declare-function mevedel-reminders-make-plan-reference
+                  "mevedel-reminders" ())
+(declare-function mevedel-session-ensure-reminder
+                  "mevedel-reminders" (session reminder))
+(declare-function mevedel-session-remove-reminder
+                  "mevedel-reminders" (session type))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-ensure-files
@@ -58,35 +71,38 @@
 ;; `mevedel-skills'
 (declare-function mevedel-skills--refresh-view-input-prompt "mevedel-skills" ())
 
-;; `mevedel-reminders'
-(declare-function mevedel-session-ensure-reminder
-                  "mevedel-reminders" (session reminder))
-(declare-function mevedel-session-remove-reminder
-                  "mevedel-reminders" (session type))
-(declare-function mevedel-reminders-make-plan-mode "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-plan-mode-reentry
-                  "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-plan-mode-exit
-                  "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-plan-reference
-                  "mevedel-reminders" ())
+;; `mevedel-structs'
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-queued-user-messages
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel--prompt--settle "mevedel-tool-ui" (overlay outcome))
 
 ;; `mevedel-view'
+(declare-function mevedel-view--begin-external-turn
+                  "mevedel-view"
+                  (display-text data-turn-start &optional kind hook-context))
+(declare-function mevedel-view--clear-input "mevedel-view" ())
+(declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
+(declare-function mevedel-view--input-start "mevedel-view" ())
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view--interaction-register "mevedel-view"
                   (descriptor))
 (declare-function mevedel-view--interaction-target-buffer "mevedel-view"
                   (&optional data-buffer))
-(declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
-(declare-function mevedel-view--begin-external-turn
-                  "mevedel-view"
-                  (display-text data-turn-start &optional kind hook-context))
-(declare-function mevedel-view--clear-input "mevedel-view" ())
-(declare-function mevedel-view--input-start "mevedel-view" ())
 (defvar mevedel--view-buffer)
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-create-session
+                  "mevedel-worktree" (&optional branch purpose clean))
 
 
 ;;
@@ -467,6 +483,8 @@ shown as a collapsed hook-context disclosure."
    " implement  "
    (propertize "I" 'font-lock-face 'help-key-binding)
    " implement (clear context)  "
+   (propertize "w" 'font-lock-face 'help-key-binding)
+   " implement in worktree  "
    (propertize "TAB" 'font-lock-face 'help-key-binding)
    "/"
    (propertize "m" 'font-lock-face 'help-key-binding)
@@ -507,6 +525,33 @@ shown as a collapsed hook-context disclosure."
            (let ((outcome (implementation-outcome 'implement-clear)))
              (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
              (settle outcome)))
+         (implement-plan-worktree ()
+           (interactive)
+           (let ((outcome (implementation-outcome 'implement-worktree))
+                 (backend (buffer-local-value 'gptel-backend chat-buffer))
+                 (model (buffer-local-value 'gptel-model chat-buffer)))
+             (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
+             (require 'mevedel-worktree)
+             (let* ((worktree
+                     (with-current-buffer chat-buffer
+                       (mevedel-worktree-create-session)))
+                    (buffer (plist-get worktree :buffer)))
+               (with-current-buffer buffer
+                 (setq-local gptel-backend backend)
+                 (setq-local gptel-model model)
+                 (let* ((target-path
+                         (mevedel-plan-mode--write-current-plan
+                          plan-markdown mevedel--session buffer))
+                        (target-accepted-plan
+                         (mevedel-plan-mode--archive-accepted-plan
+                          target-path mevedel--session)))
+                   (mevedel-plan-mode--mark-approved
+                    mevedel--session target-path target-accepted-plan)
+                   (mevedel-plan-mode--save-session-state
+                    mevedel--session buffer)
+                   (setq worktree
+                         (plist-put worktree :plan-file target-path))))
+               (settle (plist-put outcome :worktree worktree)))))
          (cycle-implementation-mode ()
            (interactive)
            (mevedel-plan-queue--cycle-entry-implementation-mode entry))
@@ -543,6 +588,7 @@ shown as a collapsed hook-context disclosure."
             (define-key keymap (kbd "i") #'implement-plan)
             (define-key keymap (kbd "C-c C-c") #'implement-plan)
             (define-key keymap (kbd "I") #'implement-plan-clear)
+            (define-key keymap (kbd "w") #'implement-plan-worktree)
             (define-key keymap (kbd "TAB") #'cycle-implementation-mode)
             (define-key keymap (kbd "<tab>") #'cycle-implementation-mode)
             (define-key keymap (kbd "m") #'cycle-implementation-mode)
@@ -579,9 +625,10 @@ shown as a collapsed hook-context disclosure."
                   (recenter-top-bottom 1))))))))))
 
 (defun mevedel-plan-mode--mark-approved
-    (session plan-path accepted-plan)
+    (session plan-path accepted-plan &optional skip-verification)
   "Mark SESSION's current plan artifact at PLAN-PATH as approved.
-ACCEPTED-PLAN is metadata for the archived accepted-plan artifact."
+ACCEPTED-PLAN is metadata for the archived accepted-plan artifact.
+When SKIP-VERIFICATION is non-nil, do not leave verification pending."
   (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
                                      nil))))
     (setq metadata
@@ -591,7 +638,8 @@ ACCEPTED-PLAN is metadata for the archived accepted-plan artifact."
                               (or (mevedel-session-turn-count session) 0)))
     (setq metadata (plist-put metadata :approved-at
                               (format-time-string "%FT%H-%M-%S")))
-    (setq metadata (plist-put metadata :verification-pending t))
+    (setq metadata (plist-put metadata :verification-pending
+                              (not skip-verification)))
     (setq metadata (plist-put metadata :absolute-path plan-path))
     (setq metadata (plist-put metadata :accepted-path
                               (plist-get accepted-plan :path)))
@@ -654,12 +702,38 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
                                         mevedel--session))))
     (mevedel-plan-mode--metadata-put session :verification-pending nil)))
 
+(defun mevedel-retry-plan-implementation ()
+  "Retry this session's failed worktree plan implementation request."
+  (interactive)
+  (require 'mevedel-chat)
+  (let ((data-buffer (mevedel--active-chat-buffer)))
+    (unless (and data-buffer (buffer-live-p data-buffer))
+      (user-error "No mevedel session in this buffer"))
+    (with-current-buffer data-buffer
+      (let ((retry
+             (plist-get (mevedel-session-plan-metadata mevedel--session)
+                        :implementation-retry)))
+        (unless retry
+          (user-error "No failed plan implementation to retry"))
+        (condition-case err
+            (progn
+              (mevedel--implement-plan retry)
+              (mevedel-plan-mode--metadata-put
+               mevedel--session :implementation-retry nil)
+              (mevedel-plan-mode--save-session-state
+               mevedel--session data-buffer))
+          (error
+           (mevedel-plan-mode--save-session-state
+            mevedel--session data-buffer)
+           (signal (car err) (cdr err))))))))
+
 (defun mevedel-plan-mode--approval-action (outcome)
   "Return implementation action represented by OUTCOME, or nil."
   (cond
-   ((memq outcome '(implement implement-clear)) outcome)
+   ((memq outcome '(implement implement-clear implement-worktree)) outcome)
    ((and (consp outcome)
-         (memq (plist-get outcome :action) '(implement implement-clear)))
+         (memq (plist-get outcome :action)
+               '(implement implement-clear implement-worktree)))
     (plist-get outcome :action))))
 
 (defun mevedel-plan-mode--approval-implementation-mode (outcome)
@@ -677,21 +751,58 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
     (with-current-buffer chat-buffer
       (if-let* ((action (mevedel-plan-mode--approval-action outcome)))
           (let* ((path (mevedel-plan-mode--write-current-plan
-	               plan-markdown mevedel--session chat-buffer))
+                        plan-markdown mevedel--session chat-buffer))
                 (accepted-plan
                  (mevedel-plan-mode--archive-accepted-plan
                   path mevedel--session))
+                (worktree (and (eq action 'implement-worktree)
+                               (plist-get outcome :worktree)))
                 (implementation-mode
                  (mevedel-plan-mode--approval-implementation-mode outcome)))
-	    (mevedel-plan-mode--mark-approved
-             mevedel--session path accepted-plan)
-	    (mevedel-plan-mode-exit)
-            (mevedel-plan-mode--save-session-state mevedel--session chat-buffer)
-	    (mevedel--implement-plan
-	     (list :action action
-                   :plan-file path
-                   :plan-markdown plan-markdown
-                   :permission-mode implementation-mode)))
+            (mevedel-plan-mode--mark-approved
+             mevedel--session path accepted-plan (not (null worktree)))
+            (mevedel-plan-mode-exit)
+            (if worktree
+                (let ((target-buffer (plist-get worktree :buffer)))
+                  (require 'mevedel-chat)
+                  (mevedel--insert-local-user-turn
+                   (format
+                    "Implementation handed off to worktree session %s.\n\nBranch: %s\nDirectory: %s"
+                    (with-current-buffer target-buffer
+                      (mevedel-session-name mevedel--session))
+                    (plist-get worktree :branch)
+                    (plist-get worktree :directory))
+                   nil 'worktree nil t)
+                  (mevedel-plan-mode--save-session-state
+                   mevedel--session chat-buffer)
+                  (with-current-buffer target-buffer
+                    (let ((implementation
+                           (list :action action
+                                 :plan-file
+                                 (plist-get worktree :plan-file)
+                                 :plan-markdown plan-markdown
+                                 :permission-mode implementation-mode)))
+                      (condition-case err
+                          (mevedel--implement-plan implementation)
+                        (error
+                         (mevedel-plan-mode--metadata-put
+                          mevedel--session :implementation-retry
+                          implementation)
+                         (mevedel--insert-local-user-turn
+                          (format
+                           "Implementation request failed to start: %s\n\nThe accepted plan remains in this worktree session. Run M-x mevedel-retry-plan-implementation to retry with the same implementation preset and permission mode."
+                           (error-message-string err))
+                          nil 'worktree nil t)
+                         (mevedel-plan-mode--save-session-state
+                          mevedel--session target-buffer)
+                         (signal (car err) (cdr err)))))))
+              (mevedel-plan-mode--save-session-state
+               mevedel--session chat-buffer)
+              (mevedel--implement-plan
+               (list :action action
+                     :plan-file path
+                     :plan-markdown plan-markdown
+                     :permission-mode implementation-mode))))
         (pcase outcome
         (`(feedback . ,text)
          (let ((path (mevedel-plan-mode--metadata-plan-path mevedel--session)))

@@ -47,7 +47,9 @@ to mark that implementation permissions have resumed.
 Accepted plans are recorded in session `plan-metadata` and persisted
 as `plans/current.md` under the session directory. The one-shot
 `plan-reference` reminder surfaces bounded contents of the approved
-plan on later turns when it may still be relevant.
+plan on later turns when it may still be relevant. When Plan mode hands
+implementation to a worktree session, both sessions retain an accepted-plan
+artifact, but only the worktree session keeps verification pending.
 
 ### Accepted-plan verification reminder
 

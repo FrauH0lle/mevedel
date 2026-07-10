@@ -20,6 +20,7 @@
 
 (defvar gptel-org-branching-context)
 (defvar gptel-org-ignore-elements)
+(defvar gptel--known-presets)
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--input-marker)
@@ -330,6 +331,56 @@
 		       (kill-buffer data-buffer))
 		     (when (buffer-live-p view-buffer)
 		       (kill-buffer view-buffer)))))
+
+(mevedel-deftest mevedel--implement-plan ()
+  ,test
+  (test)
+
+  :doc "starts worktree implementation with setup context and the implement preset"
+  (let ((plan-file (make-temp-file "mevedel-worktree-plan-"))
+        (buffer (generate-new-buffer " *mevedel-worktree-plan*"))
+        (gptel--known-presets
+         (cons '(mevedel-implement :description "test")
+               gptel--known-presets))
+        sent-preset
+        sent-text)
+    (unwind-protect
+        (progn
+          (write-region "# Plan\n\nDo it." nil plan-file nil 'silent)
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist
+                        '((org-mode . "* User\n")))
+            (setq-local mevedel--session
+                        (mevedel-session--create
+                         :name "worktree"
+                         :workspace nil
+                         :permission-mode 'default
+                         :permission-rules nil
+                         :permission-queue nil
+                         :plan-queue nil))
+            (insert "* User\nSetup context for this worktree session.\n"))
+          (cl-letf (((symbol-function 'gptel-send)
+                     (lambda (&optional _arg)
+                       (setq sent-preset gptel--preset)
+                       (setq sent-text
+                             (buffer-substring-no-properties
+                              (point-min) (point-max)))))
+                    ((symbol-function
+                      'mevedel-skills--refresh-view-input-prompt)
+                     #'ignore))
+            (with-current-buffer buffer
+              (mevedel--implement-plan
+               (list :action 'implement-worktree
+                     :plan-file plan-file
+                     :permission-mode 'trust-all))))
+          (should (eq 'mevedel-implement sent-preset))
+          (should (string-match-p "Setup context" sent-text))
+          (should (string-match-p "Implement the following plan" sent-text))
+          (should (string-match-p "# Plan" sent-text)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-exists-p plan-file) (delete-file plan-file)))))
 
 
 ;;

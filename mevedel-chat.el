@@ -1404,7 +1404,7 @@ with NO-SPINNER forwarded when non-nil."
   "Implement the plan described by ACTION-PLIST.
 
 ACTION-PLIST is a plist with keys:
-  :action        - Symbol: `implement' or `implement-clear'
+  :action        - `implement', `implement-clear', or `implement-worktree'
   :plan-file     - Path to the saved plan file
   :plan-markdown - The plan text as markdown
 
@@ -1412,7 +1412,11 @@ For `implement', the plan is inserted into the chat buffer as a user
 message and sent via `gptel-send', including full conversation context.
 
 For `implement-clear', a fresh `gptel-request' is fired with the plan
-as a string prompt, without prior conversation context."
+as a string prompt, without prior conversation context.
+
+For `implement-worktree', the target worktree buffer contains only its
+setup context; the plan is appended and sent with the implementation
+preset."
   (require 'mevedel-utilities)
   (let* ((plan-file (plist-get action-plist :plan-file))
          (permission-mode (plist-get action-plist :permission-mode))
@@ -1442,6 +1446,11 @@ as a string prompt, without prior conversation context."
                    :transforms (remove #'mevedel--compact-transform-auto
                                        gptel-prompt-transform-functions)
                    :fsm (gptel-make-fsm :handlers gptel-send--handlers))))
+              ('implement-worktree
+               (mevedel--insert-plan-implementation-turn
+                prompt "Implement accepted plan in worktree")
+               (gptel-with-preset 'mevedel-implement
+                 (gptel-send)))
               (_
                (error "Unknown plan implementation action: %s"
                       (plist-get action-plist :action)))))
