@@ -24,6 +24,7 @@
   set
   render
   settle
+  retain-on-settle-error
   coalesce
   render-error-outcome
   entry-origin)
@@ -117,17 +118,22 @@ Returns non-nil when this call delivered the outcome.  Duplicate
 settlement is ignored."
   (let ((cell (mevedel-queue--ensure-settled-cell entry)))
     (unless (car cell)
-      (setcar cell t)
-      (mevedel-queue--unregister-entry-interaction entry)
       (condition-case err
-          (funcall (mevedel-queue-spec-settle spec) entry outcome)
+          (progn
+            (funcall (mevedel-queue-spec-settle spec) entry outcome)
+            (setcar cell t)
+            (mevedel-queue--unregister-entry-interaction entry)
+            t)
         (error
          (display-warning
           'mevedel
           (format "%s: %s callback error: %S"
                   (mevedel-queue--name spec) phase err)
-          :warning)))
-      t)))
+          :warning)
+         (unless (mevedel-queue-spec-retain-on-settle-error spec)
+           (setcar cell t)
+           (mevedel-queue--unregister-entry-interaction entry))
+         (not (mevedel-queue-spec-retain-on-settle-error spec)))))))
 
 (defun mevedel-queue--render-head (spec session)
   "Render SPEC's current head in SESSION."
@@ -182,18 +188,22 @@ that joined the queue while the head is already visible."
        :warning))
      (t
       (setq entry head)
-      (mevedel-queue--set spec session (cdr queue))
-      (mevedel-queue--safe-settle spec entry outcome "pop")
-      (when-let* ((coalesce (mevedel-queue-spec-coalesce spec)))
-        (condition-case err
-            (funcall coalesce outcome session)
-          (error
-           (display-warning
-            'mevedel
-            (format "%s: coalesce error: %S"
-                    (mevedel-queue--name spec) err)
-            :warning))))
-      (mevedel-queue--render-head spec session)))))
+      (let ((retain (mevedel-queue-spec-retain-on-settle-error spec)))
+        (unless retain
+          (mevedel-queue--set spec session (cdr queue)))
+        (when (mevedel-queue--safe-settle spec entry outcome "pop")
+          (when retain
+            (mevedel-queue--set spec session (cdr queue)))
+          (when-let* ((coalesce (mevedel-queue-spec-coalesce spec)))
+            (condition-case err
+                (funcall coalesce outcome session)
+              (error
+               (display-warning
+                'mevedel
+                (format "%s: coalesce error: %S"
+                        (mevedel-queue--name spec) err)
+                :warning))))
+          (mevedel-queue--render-head spec session)))))))
 
 (defun mevedel-queue--abort-all (spec reason &optional session)
   "Flush SPEC's queue in SESSION, settling every entry with REASON."

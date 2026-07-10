@@ -814,6 +814,19 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
       (test-mevedel-session-persistence--reset-instructions)
       (mevedel-workspace-clear-registry))))
 
+(mevedel-deftest mevedel--instruction-operation-state-key ()
+  ,test
+  (test)
+  :doc "prefers a dynamic workspace override over the buffer workspace"
+  (let ((workspace (mevedel-workspace--create
+                    :type 'project :id "buffer" :root "/tmp/buffer/")))
+    (with-temp-buffer
+      (setq-local mevedel--workspace workspace)
+      (let ((mevedel--instruction-state-key-override
+             '(project . "explicit")))
+        (should (equal '(project . "explicit")
+                       (mevedel--instruction-operation-state-key)))))))
+
 (mevedel-deftest mevedel-session-persistence-ensure-files ()
   ,test
   (test)

@@ -66,16 +66,17 @@
       '((:path (name) :kind missing-required :expected string :actual missing
          :schema (:type string))
         (:path (mode) :kind invalid-enum :expected ["fast" "safe"]
-         :actual string :schema (:type string :enum ["fast" "safe"]))
+         :actual string :schema (:type string :mevedel-optional t
+                                 :enum ["fast" "safe"]))
         (:path (ids) :kind too-few-items :expected 3 :actual 2
-         :schema (:type array :items (:type integer)
+         :schema (:type array :mevedel-optional t :items (:type integer)
                   :minItems 3 :maxItems 3))
         (:path (ids 1) :kind wrong-type :expected integer :actual string
          :schema (:type integer))
         (:path (config host) :kind missing-required :expected string
          :actual missing :schema (:type string))
         (:path (config port) :kind wrong-type :expected integer
-         :actual string :schema (:type integer))
+         :actual string :schema (:mevedel-optional t :type integer))
         (:path (extra) :kind unexpected-property :expected absent
          :actual boolean :schema nil))
       issues)))

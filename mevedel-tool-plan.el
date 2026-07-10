@@ -405,6 +405,7 @@ shown as a collapsed hook-context disclosure."
    :settle (lambda (entry outcome)
              (when-let* ((callback (plist-get entry :callback)))
                (funcall callback outcome)))
+   :retain-on-settle-error t
    :entry-origin (lambda (entry) (plist-get entry :origin)))
   "Shared FIFO spec for plan approval confirmations.")
 
@@ -502,6 +503,61 @@ shown as a collapsed hook-context disclosure."
       (mevedel-view--fontify-as plan-markdown 'markdown-mode)
     plan-markdown))
 
+(defun mevedel-plan-mode--prepare-worktree-outcome
+    (entry plan-markdown chat-buffer outcome)
+  "Prepare and return ENTRY's cached worktree implementation OUTCOME."
+  (or (mevedel-queue--entry-metadata-get entry :prepared-outcome)
+      (let* ((backend (buffer-local-value 'gptel-backend chat-buffer))
+             (model (buffer-local-value 'gptel-model chat-buffer))
+             (state (or (mevedel-queue--entry-metadata-get
+                         entry :worktree-preparation)
+                        nil)))
+        (require 'mevedel-worktree)
+        (let* ((worktree
+                (or (plist-get state :worktree)
+                    (let ((created
+                           (with-current-buffer chat-buffer
+                             (mevedel-worktree-create-session))))
+                      (setq state (plist-put state :worktree created))
+                      (mevedel-queue--entry-metadata-put
+                       entry :worktree-preparation state)
+                      created)))
+               (buffer (plist-get worktree :buffer)))
+          (with-current-buffer buffer
+            (setq-local gptel-backend backend)
+            (setq-local gptel-model model)
+            (let* ((target-path
+                    (or (plist-get state :plan-file)
+                        (let ((path
+                               (mevedel-plan-mode--write-current-plan
+                                plan-markdown mevedel--session buffer)))
+                          (setq state (plist-put state :plan-file path))
+                          (mevedel-queue--entry-metadata-put
+                           entry :worktree-preparation state)
+                          path)))
+                   (target-accepted-plan
+                    (or (plist-get state :accepted-plan)
+                        (let ((accepted
+                               (mevedel-plan-mode--archive-accepted-plan
+                                target-path mevedel--session)))
+                          (setq state
+                                (plist-put state :accepted-plan accepted))
+                          (mevedel-queue--entry-metadata-put
+                           entry :worktree-preparation state)
+                          accepted))))
+              (unless (plist-get state :approved)
+                (mevedel-plan-mode--mark-approved
+                 mevedel--session target-path target-accepted-plan)
+                (setq state (plist-put state :approved t))
+                (mevedel-queue--entry-metadata-put
+                 entry :worktree-preparation state))
+              (mevedel-plan-mode--save-session-state mevedel--session buffer)
+              (setq worktree (plist-put worktree :plan-file target-path))))
+          (let ((prepared (plist-put outcome :worktree worktree)))
+            (mevedel-queue--entry-metadata-put
+             entry :prepared-outcome prepared)
+            prepared)))))
+
 (defun mevedel-plan-queue--render-entry (entry)
   "Render plan approval queue ENTRY in the interaction zone."
   (let ((plan-markdown (plist-get entry :body))
@@ -527,31 +583,11 @@ shown as a collapsed hook-context disclosure."
              (settle outcome)))
          (implement-plan-worktree ()
            (interactive)
-           (let ((outcome (implementation-outcome 'implement-worktree))
-                 (backend (buffer-local-value 'gptel-backend chat-buffer))
-                 (model (buffer-local-value 'gptel-model chat-buffer)))
+           (let ((outcome (implementation-outcome 'implement-worktree)))
              (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
-             (require 'mevedel-worktree)
-             (let* ((worktree
-                     (with-current-buffer chat-buffer
-                       (mevedel-worktree-create-session)))
-                    (buffer (plist-get worktree :buffer)))
-               (with-current-buffer buffer
-                 (setq-local gptel-backend backend)
-                 (setq-local gptel-model model)
-                 (let* ((target-path
-                         (mevedel-plan-mode--write-current-plan
-                          plan-markdown mevedel--session buffer))
-                        (target-accepted-plan
-                         (mevedel-plan-mode--archive-accepted-plan
-                          target-path mevedel--session)))
-                   (mevedel-plan-mode--mark-approved
-                    mevedel--session target-path target-accepted-plan)
-                   (mevedel-plan-mode--save-session-state
-                    mevedel--session buffer)
-                   (setq worktree
-                         (plist-put worktree :plan-file target-path))))
-               (settle (plist-put outcome :worktree worktree)))))
+             (settle
+              (mevedel-plan-mode--prepare-worktree-outcome
+               entry plan-markdown chat-buffer outcome))))
          (cycle-implementation-mode ()
            (interactive)
            (mevedel-plan-queue--cycle-entry-implementation-mode entry))
@@ -794,8 +830,7 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
                            (error-message-string err))
                           nil 'worktree nil t)
                          (mevedel-plan-mode--save-session-state
-                          mevedel--session target-buffer)
-                         (signal (car err) (cdr err)))))))
+                          mevedel--session target-buffer))))))
               (mevedel-plan-mode--save-session-state
                mevedel--session chat-buffer)
               (mevedel--implement-plan

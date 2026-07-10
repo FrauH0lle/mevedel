@@ -455,6 +455,12 @@ line by itself."
 (defconst mevedel--hook-audit-close "<!-- /mevedel-hook-audit -->"
   "Closing delimiter for internal hook audit side-channel blocks.")
 
+(autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
+(autoload 'mevedel--hook-prompt-rewrite-audit-record
+  "mevedel-transcript-audit")
+(autoload 'mevedel--read-hook-audit-record "mevedel-transcript-audit")
+(autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
+
 (defun mevedel--restore-delimited-gptel-ignore (start end open close)
   "Mark delimited side-channel blocks between START and END as ignored."
   (save-excursion
@@ -478,82 +484,6 @@ line by itself."
    start end mevedel--render-data-open mevedel--render-data-close)
   (mevedel--restore-delimited-gptel-ignore
    start end mevedel--hook-audit-open mevedel--hook-audit-close))
-
-(defun mevedel--hook-audit-regexp ()
-  "Return a regexp matching one hidden hook audit block."
-  (concat "\n?"
-          (regexp-quote mevedel--hook-audit-open)
-          "\\(?:.\\|\n\\)*?"
-          (regexp-quote mevedel--hook-audit-close)
-          "\n?"))
-
-(defun mevedel--strip-hook-audit-blocks (text)
-  "Return TEXT without generated hook audit blocks."
-  (replace-regexp-in-string
-   (mevedel--hook-audit-regexp) "" (or text "") t t))
-
-(defun mevedel--plain-hook-audit-data (value)
-  "Return VALUE stripped of text properties in contained strings."
-  (cond
-   ((stringp value) (substring-no-properties value))
-   ((consp value)
-    (cons (mevedel--plain-hook-audit-data (car value))
-          (mevedel--plain-hook-audit-data (cdr value))))
-   ((vectorp value)
-    (apply #'vector
-           (mapcar #'mevedel--plain-hook-audit-data value)))
-   (t value)))
-
-(defun mevedel--hook-prompt-rewrite-audit-record
-    (event original submitted &optional reason)
-  "Return a prompt rewrite audit record for EVENT, or nil if unchanged."
-  (when (and (stringp submitted)
-             (not (equal submitted original)))
-    (append
-     (list :type 'prompt-rewrite
-           :event (format "%s" event)
-           :original (or original "")
-           :submitted submitted)
-     (when reason
-       (list :reason reason)))))
-
-(defun mevedel--hook-audit-record-payload (record)
-  "Return encoded payload text for hook audit RECORD."
-  (base64-encode-string
-   (encode-coding-string
-    (let ((print-level nil)
-          (print-length nil)
-          (print-circle t))
-      (prin1-to-string
-       (mevedel--plain-hook-audit-data record)))
-    'utf-8 t)
-   t))
-
-(defun mevedel--read-hook-audit-record (text)
-  "Read one encoded hook audit record from TEXT, or nil."
-  (condition-case nil
-      (let ((read-eval nil))
-        (with-temp-buffer
-          (insert
-           (decode-coding-string
-            (base64-decode-string (string-trim (or text "")))
-            'utf-8 t))
-          (goto-char (point-min))
-          (let ((record (read (current-buffer))))
-            (and (listp record)
-                 (keywordp (car-safe record))
-                 record))))
-    (error nil)))
-
-(defun mevedel--format-hook-audit-record (record)
-  "Return a hidden transcript side-channel block for hook audit RECORD."
-  (propertize
-   (concat "\n" mevedel--hook-audit-open "\n"
-           (mevedel--hook-audit-record-payload record)
-           "\n" mevedel--hook-audit-close "\n")
-   'invisible t
-   'gptel 'ignore
-   'mevedel-hook-audit t))
 
 (defun mevedel--insert-user-role-block-at-marker (block &optional marker)
   "Insert synthetic user-role BLOCK at MARKER or `point-max'.

@@ -96,7 +96,9 @@ Data model
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
-  mevedel-tool-repair.el      structured validation, atomic input repair, telemetry
+  mevedel-tool-repair.el      structured validation and atomic input repair
+  mevedel-tool-repair-gptel.el  lossless gptel argument decoding bridge
+  mevedel-tool-repair-diagnostics.el  repair audit and telemetry
   mevedel-queue.el            shared FIFO queue machinery
   mevedel-permission-queue.el permission/Bash/Eval queue
   mevedel-reminders.el        system-reminder injection
@@ -105,9 +107,12 @@ Data model
 Chat / view
   mevedel-chat.el             session lifecycle
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
+  mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-view.el             compact user-facing view buffer
+  mevedel-view-audit.el       audit disclosure rendering
   mevedel-view-fragment.el    identity-backed view chrome blocks
   mevedel-view-history.el     view input history ring and persistence
+  mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-persistence.el      save/load instructions

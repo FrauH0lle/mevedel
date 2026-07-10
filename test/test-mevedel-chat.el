@@ -388,7 +388,52 @@
           (should (string-match-p "Implement the following plan" sent-text))
           (should (string-match-p "# Plan" sent-text)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-exists-p plan-file) (delete-file plan-file))))
+
+  :doc "rolls back a worktree implementation turn when request startup fails"
+  (let ((plan-file (make-temp-file "mevedel-worktree-plan-"))
+        (buffer (generate-new-buffer " *mevedel-worktree-plan-error*"))
+        (gptel--known-presets
+         (cons '(mevedel-implement :description "test")
+               gptel--known-presets)))
+    (unwind-protect
+        (progn
+          (write-region "# Plan\n\nDo it." nil plan-file nil 'silent)
+          (with-current-buffer buffer
+            (org-mode)
+            (setq-local gptel-response-separator "\n\n")
+            (setq-local gptel-prompt-prefix-alist
+                        '((org-mode . "* User\n")))
+            (insert "* User\nSetup context.\n")
+            (let ((before (buffer-string)))
+              (cl-letf (((symbol-function 'gptel-send)
+                         (lambda (&optional _arg) (error "No API key")))
+                        ((symbol-function 'mevedel-view--full-rerender)
+                         #'ignore))
+                (should-error
+                 (mevedel--implement-plan
+                  (list :action 'implement-worktree
+                        :plan-file plan-file))))
+              (should (equal before (buffer-string))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
       (when (file-exists-p plan-file) (delete-file plan-file)))))
+
+(mevedel-deftest mevedel--send-plan-implementation-turn ()
+  ,test
+  (test)
+  :doc "removes the inserted turn and rerenders after synchronous send failure"
+  (with-temp-buffer
+    (insert "existing")
+    (let ((rerendered nil))
+      (cl-letf (((symbol-function 'mevedel--insert-plan-implementation-turn)
+                 (lambda (&rest _) (insert " generated")))
+                ((symbol-function 'mevedel-view--full-rerender)
+                 (lambda () (setq rerendered t))))
+        (should-error
+         (mevedel--send-plan-implementation-turn
+          "prompt" "display" (lambda () (error "Send failed"))))
+        (should (equal "existing" (buffer-string)))
+        (should rerendered)))))
 
 
 ;;

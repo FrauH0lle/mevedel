@@ -45,7 +45,9 @@ Important tool metadata:
 ### Tool input validation and repair
 
 `mevedel-tool-repair.el` mediates raw model calls before gptel dispatches
-them into the pipeline. It first validates the call unchanged. Valid input is
+them into the pipeline. The temporary provider bridge lives in
+`mevedel-tool-repair-gptel.el`; audit and telemetry live in
+`mevedel-tool-repair-diagnostics.el`. The core first validates the call unchanged. Valid input is
 never rewritten. Only invalid model-produced input gets one atomic repair
 attempt; the pipeline then validates the committed arguments again before
 hooks or permissions run. Direct programmatic calls and arguments rewritten
@@ -72,7 +74,9 @@ Repairs never invent required values and do not coerce arbitrary strings to
 numbers or booleans: the JSON parser must consume the exact input and the
 result must validate. Required `null` and required empty-object placeholders
 therefore remain invalid. Generic repairs run before and after, at most once,
-an optional tool-owned `:repair-input` callback. The callback receives copies
+an optional tool-owned `:repair-input` callback. This deliberate extension
+handles relational or wrapped-tool invariants the generic schema visitor
+cannot express. The callback receives copies
 of `(args validation-issues)` and must return changed `:args` plus value-free
 `:repairs` records covering every changed top-level argument. The entire
 candidate is committed only when final validation succeeds; otherwise the

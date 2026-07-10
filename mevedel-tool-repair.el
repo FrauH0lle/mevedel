@@ -81,80 +81,45 @@
 (defvar mevedel-tool-repair--parsing-response nil
   "Non-nil while gptel is decoding a provider response.")
 
+(defvar mevedel-tool-repair--raw-input-p nil
+  "Non-nil while validating undecoded model-produced argument presence.")
+
+(autoload 'mevedel-tool-repair--current-session
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair--current-origin
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-record-result
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-mark-executed
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-format-audit-block
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-audit-record
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-normalize-audit-record
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-log-event
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair-log-path
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair--persist-event
+  "mevedel-tool-repair-diagnostics")
+(autoload 'mevedel-tool-repair--preserve-empty-objects
+  "mevedel-tool-repair-gptel")
+(autoload 'mevedel-tool-repair--with-lossless-json
+  "mevedel-tool-repair-gptel")
+(autoload 'mevedel-tool-repair--json-parse-string
+  "mevedel-tool-repair-gptel")
+(autoload 'mevedel-tool-repair--restore-argument-shapes
+  "mevedel-tool-repair-gptel")
+(autoload 'mevedel-tool-repair-install-shape-adapter
+  "mevedel-tool-repair-gptel")
+(autoload 'mevedel-tool-repair-uninstall-shape-adapter
+  "mevedel-tool-repair-gptel")
+
 
 ;;
-;;; Gptel input adaptation
-
-(defun mevedel-tool-repair--preserve-empty-objects (value)
-  "Restore empty JSON objects inside decoded VALUE.
-
-JSON nulls must already use the `:null' sentinel, leaving nil to mean an
-empty object."
-  (cond
-   ((null value) (make-hash-table))
-   ((vectorp value)
-    (vconcat (mapcar #'mevedel-tool-repair--preserve-empty-objects value)))
-   ((listp value)
-    (let (result)
-      (while value
-        (setq result
-              (plist-put result (pop value)
-                         (mevedel-tool-repair--preserve-empty-objects
-                          (pop value)))))
-      result))
-   (t value)))
-
-(defun mevedel-tool-repair--with-lossless-json (function &rest args)
-  "Call FUNCTION with ARGS while preserving JSON nulls in gptel responses."
-  (let* ((info (cl-find-if
-                (lambda (arg) (and (listp arg) (plist-member arg :buffer)))
-                args))
-         (buffer (and info (plist-get info :buffer)))
-         (mevedel-tool-repair--parsing-response
-          (and (buffer-live-p buffer)
-               (buffer-local-value 'mevedel--session buffer))))
-    (apply function args)))
-
-(defun mevedel-tool-repair--json-parse-string (function string &rest args)
-  "Call FUNCTION on JSON STRING and parser ARGS without lossy gptel nulls."
-  (when mevedel-tool-repair--parsing-response
-    (when-let* ((tail (plist-member args :null-object))
-                ((null (cadr tail))))
-      (setcar (cdr tail) :null)))
-  (apply function string args))
-
-(defun mevedel-tool-repair--restore-argument-shapes (fsm)
-  "Restore empty objects in mevedel tool calls held by FSM."
-  (dolist (tool-call (plist-get (gptel-fsm-info fsm) :tool-use))
-    (when-let* (((mevedel-tool-get (plist-get tool-call :name)))
-                (args (plist-get tool-call :args))
-                ((listp args)))
-      (plist-put tool-call :args
-                 (mevedel-tool-repair--preserve-empty-objects args)))))
-
-(defun mevedel-tool-repair-install-shape-adapter ()
-  "Install the temporary lossless gptel tool-input adapter."
-  (dolist (spec '((gptel--parse-response :around
-                                          mevedel-tool-repair--with-lossless-json)
-                  (gptel-curl--parse-stream :around
-                                            mevedel-tool-repair--with-lossless-json)
-                  (json-parse-string :around
-                                     mevedel-tool-repair--json-parse-string)
-                  (gptel--handle-pre-tool :before
-                                          mevedel-tool-repair--restore-argument-shapes)))
-    (unless (advice-member-p (nth 2 spec) (car spec))
-      (advice-add (car spec) (cadr spec) (nth 2 spec)))))
-
-(defun mevedel-tool-repair-uninstall-shape-adapter ()
-  "Remove the temporary lossless gptel tool-input adapter."
-  (dolist (spec '((gptel--parse-response
-                   mevedel-tool-repair--with-lossless-json)
-                  (gptel-curl--parse-stream
-                   mevedel-tool-repair--with-lossless-json)
-                  (json-parse-string mevedel-tool-repair--json-parse-string)
-                  (gptel--handle-pre-tool
-                   mevedel-tool-repair--restore-argument-shapes)))
-    (advice-remove (car spec) (cadr spec))))
+;;; Structured validation
 
 (defun mevedel-tool-repair--name (value)
   "Return VALUE as an unqualified symbol."
@@ -230,7 +195,10 @@ empty object."
         issues)
     (while properties
       (let* ((name (mevedel-tool-repair--name (pop properties)))
-             (property-schema (pop properties))
+             (property-schema
+              (append (and (not (memq name required))
+                           (list :mevedel-optional t))
+                      (pop properties)))
              (key (mevedel-tool-repair--key name))
              (present (and (listp value) (plist-member value key)))
              (property-value (and present (plist-get value key)))
@@ -244,6 +212,15 @@ empty object."
                          (mevedel-tool-repair--issue
                           property-path 'missing-required
                           (plist-get property-schema :type) 'missing
+                          property-schema)))))
+         ((and mevedel-tool-repair--raw-input-p present
+               (mevedel-tool-repair--null-p property-value))
+          (setq issues
+                (append issues
+                        (list
+                         (mevedel-tool-repair--issue
+                          property-path 'optional-null
+                          (plist-get property-schema :type) 'null
                           property-schema)))))
          ((and present property-value)
           (setq issues
@@ -290,6 +267,12 @@ empty object."
         (push (mevedel-tool-repair--issue
                path 'invalid-enum enum
                (mevedel-tool-repair--actual-type value) schema)
+              issues))
+      (when (and mevedel-tool-repair--raw-input-p
+                 (eq type 'path)
+                 (mevedel-tool-repair--unwrap-path-autolink value))
+        (push (mevedel-tool-repair--issue
+               path 'path-autolink 'path 'string schema)
               issues))
       (setq issues (nreverse issues))
       (cond
@@ -342,7 +325,10 @@ positional dispatch, which represents omitted optional arguments as nil."
                (key (mevedel-tool-repair--key name))
                (present (plist-member args key))
                (value (and present (plist-get args key)))
-               (schema (append (list :type type) (nthcdr 4 spec))))
+               (schema (append (list :type type)
+                               (and (not required)
+                                    (list :mevedel-optional t))
+                               (nthcdr 4 spec))))
           (push name known-names)
           (cond
            ((and required (mevedel-tool-repair--null-p value))
@@ -352,6 +338,13 @@ positional dispatch, which represents omitted optional arguments as nil."
                            (mevedel-tool-repair--issue
                             (list name) 'missing-required type 'missing
                             schema)))))
+           ((and mevedel-tool-repair--raw-input-p present
+                 (mevedel-tool-repair--null-p value))
+            (setq issues
+                  (append issues
+                          (list
+                           (mevedel-tool-repair--issue
+                            (list name) 'optional-null type 'null schema)))))
            ((and present value)
             (setq issues
                   (append issues
@@ -365,73 +358,6 @@ positional dispatch, which represents omitted optional arguments as nil."
 ;;
 ;;; Atomic repair
 
-(defun mevedel-tool-repair--optional-null-properties (schema value path)
-  "Return explicit optional-null issues below VALUE at PATH for SCHEMA."
-  (let ((type (plist-get schema :type))
-        issues)
-    (cond
-     ((and (eq type 'object) (listp value))
-      (let ((properties (plist-get schema :properties))
-            (required (mevedel-tool-repair--required-names schema)))
-        (while properties
-          (let* ((name (mevedel-tool-repair--name (pop properties)))
-                 (property-schema (pop properties))
-                 (key (mevedel-tool-repair--key name))
-                 (present (plist-member value key))
-                 (property-value (and present (plist-get value key)))
-                 (property-path (append path (list name))))
-            (cond
-             ((and present
-                   (mevedel-tool-repair--null-p property-value)
-                   (not (memq name required)))
-              (setq issues
-                    (append issues
-                            (list
-                             (mevedel-tool-repair--issue
-                              property-path 'optional-null
-                              (plist-get property-schema :type) 'null
-                              property-schema)))))
-             ((and present property-value)
-              (setq issues
-                    (append
-                     issues
-                     (mevedel-tool-repair--optional-null-properties
-                      property-schema property-value property-path)))))))))
-     ((and (eq type 'array) (vectorp value))
-      (when-let* ((item-schema (plist-get schema :items)))
-        (dotimes (index (length value))
-          (setq issues
-                (append issues
-                        (mevedel-tool-repair--optional-null-properties
-                         item-schema (aref value index)
-                         (append path (list index)))))))))
-    issues))
-
-(defun mevedel-tool-repair--raw-null-issues (tool args)
-  "Return explicit optional-null issues for raw TOOL ARGS."
-  (let (issues)
-    (dolist (spec (mevedel-tool-args tool))
-      (let* ((name (car spec))
-             (required (eq :required (nth 2 spec)))
-             (key (mevedel-tool-repair--key name))
-             (present (plist-member args key))
-             (value (and present (plist-get args key)))
-             (schema (append (list :type (cadr spec)) (nthcdr 4 spec))))
-        (cond
-         ((and present (mevedel-tool-repair--null-p value) (not required))
-          (setq issues
-                (append issues
-                        (list
-                         (mevedel-tool-repair--issue
-                          (list name) 'optional-null (cadr spec) 'null
-                          schema)))))
-         ((and present value)
-          (setq issues
-                (append issues
-                        (mevedel-tool-repair--optional-null-properties
-                         schema value (list name))))))))
-    issues))
-
 (defun mevedel-tool-repair--unwrap-path-autolink (path)
   "Return PATH with an exact final-component HTTP(S) auto-link unwrapped."
   (let ((case-fold-search nil))
@@ -442,57 +368,25 @@ positional dispatch, which represents omitted optional arguments as nil."
             path))
       (concat (match-string 1 path) (match-string 2 path)))))
 
-(defun mevedel-tool-repair--raw-path-issues (tool args)
-  "Return semantic path issues for raw TOOL ARGS."
-  (let (issues)
-    (dolist (spec (mevedel-tool-args tool))
-      (let* ((name (car spec))
-             (key (mevedel-tool-repair--key name))
-             (value (and (plist-member args key) (plist-get args key))))
-        (when (and (eq (cadr spec) 'path)
-                   (mevedel-tool-repair--unwrap-path-autolink value))
-          (setq issues
-                (append issues
-                        (list
-                         (mevedel-tool-repair--issue
-                          (list name) 'path-autolink 'path 'string
-                          '(:type path))))))))
-    issues))
-
 (defun mevedel-tool-repair--validate-raw (tool args)
   "Return validation issues for raw model-produced TOOL ARGS."
-  (append (mevedel-tool-repair-validate tool args)
-          (and (listp args)
-               (append (mevedel-tool-repair--raw-null-issues tool args)
-                       (mevedel-tool-repair--raw-path-issues tool args)))))
+  (let ((mevedel-tool-repair--raw-input-p t))
+    (mevedel-tool-repair-validate tool args)))
 
-(defun mevedel-tool-repair--schema-at-path (tool path)
-  "Return TOOL schema at issue PATH, including optionality metadata."
-  (let* ((name (car path))
-         (spec (assq name (mevedel-tool-args tool)))
-         (schema
-          (and spec
-               (append (list :type (cadr spec)
-                             :mevedel-optional
-                             (not (eq :required (nth 2 spec))))
-                       (nthcdr 4 spec)))))
+(defun mevedel-tool-repair--declared-path-p (tool path)
+  "Return non-nil when PATH names a declared schema location in TOOL."
+  (let* ((spec (assq (car path) (mevedel-tool-args tool)))
+         (schema (and spec (append (list :type (cadr spec))
+                                   (nthcdr 4 spec)))))
     (dolist (part (cdr path))
       (setq schema
             (cond
-             ((and schema (integerp part)
-                   (eq 'array (plist-get schema :type)))
+             ((and (integerp part) (eq 'array (plist-get schema :type)))
               (plist-get schema :items))
-             ((and schema (symbolp part)
-                   (eq 'object (plist-get schema :type)))
-              (let* ((required (mevedel-tool-repair--required-names schema))
-                     (property
-                      (plist-get (plist-get schema :properties)
-                                 (mevedel-tool-repair--key part))))
-                (and property
-                     (append
-                      (list :mevedel-optional (not (memq part required)))
-                      property)))))))
-    schema))
+             ((and (symbolp part) (eq 'object (plist-get schema :type)))
+              (plist-get (plist-get schema :properties)
+                         (mevedel-tool-repair--key part))))))
+    (not (null schema))))
 
 (defun mevedel-tool-repair--value-at-path (value path)
   "Return the value below VALUE at PATH."
@@ -562,15 +456,14 @@ positional dispatch, which represents omitted optional arguments as nil."
                           :false-object :json-false))
     (error :mevedel-json-parse-failed)))
 
-(defun mevedel-tool-repair--apply-rule (tool args issues rule)
-  "Apply the first RULE repair supported by TOOL ARGS and ISSUES."
+(defun mevedel-tool-repair--apply-rule (_tool args issues rule)
+  "Apply the first RULE repair supported by ARGS and canonical ISSUES."
   (catch 'applied
     (dolist (issue issues)
       (let* ((path (plist-get issue :path))
              (kind (plist-get issue :kind))
              (expected (plist-get issue :expected))
-             (schema (mevedel-tool-repair--schema-at-path tool path))
-             (value (mevedel-tool-repair--value-at-path args path)))
+             (schema (plist-get issue :schema)))
         (cond
          ((and (eq rule 'omit-optional-null)
                (eq kind 'optional-null))
@@ -586,8 +479,10 @@ positional dispatch, which represents omitted optional arguments as nil."
          ((and (eq rule 'parse-json-value)
                (eq kind 'wrong-type)
                (memq expected '(integer number boolean array object))
-               (stringp value))
-          (let ((parsed (mevedel-tool-repair--parse-json-value value)))
+               (stringp (mevedel-tool-repair--value-at-path args path)))
+          (let ((parsed
+                 (mevedel-tool-repair--parse-json-value
+                  (mevedel-tool-repair--value-at-path args path))))
             (when (and (not (eq parsed :mevedel-json-parse-failed))
                        (null (mevedel-tool-repair--validate-schema
                               schema parsed path)))
@@ -604,32 +499,35 @@ positional dispatch, which represents omitted optional arguments as nil."
          ((and (eq rule 'wrap-array-singleton)
                (eq kind 'wrong-type)
                (eq expected 'array)
-               value
-               (not (vectorp value))
-               (not (and (hash-table-p value)
-                         (= 0 (hash-table-count value))))
-               (let ((item-schema (plist-get schema :items)))
-                 (or (null item-schema)
-                     (null (mevedel-tool-repair--validate-schema
-                            item-schema value path)))))
-          (throw
-           'applied
-           (list
-            :args (mevedel-tool-repair--set-at-path
-                   args path (vector value))
-            :record
-            (mevedel-tool-repair--record
-             rule path (mevedel-tool-repair--actual-type value) 'array
-             (format "Wrapped the singleton at `%s` as an array."
-                     (mevedel-tool-repair-format-path path))))))
+               (let ((value (mevedel-tool-repair--value-at-path args path)))
+                 (and value
+                      (not (vectorp value))
+                      (not (and (hash-table-p value)
+                                (= 0 (hash-table-count value))))
+                      (let ((item-schema (plist-get schema :items)))
+                        (or (null item-schema)
+                            (null (mevedel-tool-repair--validate-schema
+                                   item-schema value path)))))))
+          (let ((value (mevedel-tool-repair--value-at-path args path)))
+            (throw
+             'applied
+             (list
+              :args (mevedel-tool-repair--set-at-path
+                     args path (vector value))
+              :record
+              (mevedel-tool-repair--record
+               rule path (mevedel-tool-repair--actual-type value) 'array
+               (format "Wrapped the singleton at `%s` as an array."
+                       (mevedel-tool-repair-format-path path)))))))
          ((and (eq rule 'empty-array-placeholder)
                (eq kind 'wrong-type)
                (eq expected 'array)
                (plist-get schema :mevedel-optional)
                (or (null (plist-get schema :minItems))
                    (= 0 (plist-get schema :minItems)))
-               (hash-table-p value)
-               (= 0 (hash-table-count value)))
+               (hash-table-p (mevedel-tool-repair--value-at-path args path))
+               (= 0 (hash-table-count
+                     (mevedel-tool-repair--value-at-path args path))))
           (throw
            'applied
            (list
@@ -641,18 +539,20 @@ positional dispatch, which represents omitted optional arguments as nil."
                      (mevedel-tool-repair-format-path path))))))
          ((and (eq rule 'unwrap-path-autolink)
                (eq kind 'path-autolink)
-               (mevedel-tool-repair--unwrap-path-autolink value))
-          (throw
-           'applied
-           (list
-            :args (mevedel-tool-repair--set-at-path
-                   args path
-                   (mevedel-tool-repair--unwrap-path-autolink value))
-            :record
-            (mevedel-tool-repair--record
-             rule path 'markdown-link 'path
-             (format "Unwrapped the filesystem path at `%s`."
-                     (mevedel-tool-repair-format-path path)))))))))
+               (mevedel-tool-repair--unwrap-path-autolink
+                (mevedel-tool-repair--value-at-path args path)))
+          (let ((unwrapped
+                 (mevedel-tool-repair--unwrap-path-autolink
+                  (mevedel-tool-repair--value-at-path args path))))
+            (throw
+             'applied
+             (list
+              :args (mevedel-tool-repair--set-at-path args path unwrapped)
+              :record
+              (mevedel-tool-repair--record
+               rule path 'markdown-link 'path
+               (format "Unwrapped the filesystem path at `%s`."
+                       (mevedel-tool-repair-format-path path))))))))))
     nil))
 
 (defun mevedel-tool-repair--generic-pass (tool args &optional seen remaining)
@@ -735,7 +635,7 @@ positional dispatch, which represents omitted optional arguments as nil."
                             (or (and (symbolp part) part)
                                 (and (integerp part) (>= part 0))))
                           path)
-                         (mevedel-tool-repair--schema-at-path tool path)))
+                         (mevedel-tool-repair--declared-path-p tool path)))
                   paths)
                  (memq before mevedel-tool-repair--shape-identifiers)
                  (memq after mevedel-tool-repair--shape-identifiers)
@@ -808,329 +708,6 @@ Invalid outcomes intentionally omit tentative args and repair records."
           (list :status (if records 'repaired 'valid)
                 :args (plist-get second :args)
                 :repairs records))))))
-
-
-;;
-;;; Repair audit metadata
-
-(defun mevedel-tool-repair--audit-identifier-p (value)
-  "Return non-nil when VALUE is a bounded value-free identifier."
-  (and (symbolp value)
-       (<= (length (symbol-name value)) 48)
-       (string-match-p "\\`[-[:alnum:]_]+\\'" (symbol-name value))))
-
-(defun mevedel-tool-repair--normalize-audit-path (path)
-  "Return a safe copy of schema PATH, or nil when malformed."
-  (when (and (consp path)
-             (when-let* ((length (proper-list-p path)))
-               (<= length mevedel-tool-repair--max-telemetry-path-depth))
-             (seq-every-p
-              (lambda (part)
-                (or (and (integerp part) (>= part 0))
-                    (mevedel-tool-repair--audit-identifier-p part)))
-              path))
-    (copy-sequence path)))
-
-(defun mevedel-tool-repair--normalize-audit-repair (record)
-  "Return value-free repair RECORD fields, or nil when malformed."
-  (when (and (proper-list-p record) (keywordp (car-safe record)))
-    (let ((rule (plist-get record :rule))
-          (source (plist-get record :source))
-          (paths (plist-get record :paths))
-          (before (plist-get record :before))
-          (after (plist-get record :after)))
-      (when (and
-               (mevedel-tool-repair--audit-identifier-p rule)
-               (memq source '(generic tool))
-               (consp paths)
-               (when-let* ((length (proper-list-p paths)))
-                 (<= length mevedel-tool-repair--max-telemetry-items))
-               (seq-every-p #'mevedel-tool-repair--normalize-audit-path paths)
-               (memq before mevedel-tool-repair--shape-identifiers)
-               (memq after mevedel-tool-repair--shape-identifiers))
-        (list :rule rule :source source
-              :paths (mapcar #'copy-sequence paths)
-              :before before :after after)))))
-
-(defun mevedel-tool-repair-normalize-audit-record (record)
-  "Return a bounded value-free tool repair audit RECORD, or nil."
-  (when (proper-list-p record)
-    (let ((state (plist-get record :state))
-          (repairs (plist-get record :repairs)))
-      (when (and (eq (plist-get record :type) 'tool-input-repair)
-                 (memq state '(committed abandoned))
-                 (consp repairs)
-                 (when-let* ((length (proper-list-p repairs)))
-                   (<= length mevedel-tool-repair--max-audit-records)))
-        (when-let* ((normalized
-                     (mapcar #'mevedel-tool-repair--normalize-audit-repair
-                             repairs))
-                    ((not (memq nil normalized))))
-          (list :type 'tool-input-repair
-                :state state
-                :repairs normalized))))))
-
-(defun mevedel-tool-repair-audit-record (state repairs)
-  "Return a normalized audit record for STATE and REPAIRS, or nil."
-  (mevedel-tool-repair-normalize-audit-record
-   (list :type 'tool-input-repair :state state :repairs repairs)))
-
-(defun mevedel-tool-repair-format-audit-block (state repairs)
-  "Return a hidden value-free audit block for STATE and REPAIRS.
-Return an empty string when audit formatting fails."
-  (condition-case nil
-      (if-let* ((record (mevedel-tool-repair-audit-record state repairs)))
-          (progn
-            (require 'mevedel-utilities)
-            (mevedel--format-hook-audit-record record))
-        "")
-    (error
-     (ignore-errors
-       (display-warning 'mevedel "Tool input repair audit formatting failed"
-                        :warning))
-     "")))
-
-;;
-;;; Repair telemetry
-
-(defun mevedel-tool-repair--current-session ()
-  "Return the top-level session associated with the current buffer."
-  (or (and (boundp 'mevedel--session) mevedel--session)
-      (and (boundp 'mevedel--agent-invocation)
-           (fboundp 'mevedel-agent-invocation-p)
-           (mevedel-agent-invocation-p mevedel--agent-invocation)
-           (mevedel-agent-invocation-parent-session
-            mevedel--agent-invocation))))
-
-(defun mevedel-tool-repair--current-origin ()
-  "Return the stable telemetry origin associated with the current buffer."
-  (or (and (boundp 'mevedel--agent-invocation)
-           (fboundp 'mevedel-agent-invocation-p)
-           (mevedel-agent-invocation-p mevedel--agent-invocation)
-           (mevedel-agent-invocation-agent-id mevedel--agent-invocation))
-      "main"))
-
-(defun mevedel-tool-repair--safe-dimension (value)
-  "Return a bounded telemetry dimension for VALUE."
-  (cond
-   ((null value) 'unknown)
-   ((symbolp value)
-    (let ((name (symbol-name value)))
-      (if (and (<= (length name) 128)
-               (not (string-match-p "[\n\r]" name)))
-          value
-        'redacted)))
-   ((stringp value)
-    (if (and (<= (length value) 128)
-             (not (string-match-p "[\n\r]" value)))
-        value
-      "<redacted>"))
-   (t (type-of value))))
-
-(defun mevedel-tool-repair--safe-backend (backend)
-  "Return the stable provider name represented by BACKEND."
-  (mevedel-tool-repair--safe-dimension
-   (if (and (fboundp 'gptel-backend-p)
-            (gptel-backend-p backend))
-       (gptel-backend-name backend)
-     backend)))
-
-(defun mevedel-tool-repair--safe-category (value allowed)
-  "Return VALUE when it is a member of ALLOWED, otherwise `unknown'."
-  (if (memq value allowed) value 'unknown))
-
-(defun mevedel-tool-repair--safe-rule (rule)
-  "Return a bounded telemetry representation of RULE."
-  (and (mevedel-tool-repair--audit-identifier-p rule) rule))
-
-(defun mevedel-tool-repair--bounded-values (values sanitizer)
-  "Return sanitized VALUES and their omitted count using SANITIZER."
-  (let ((tail values)
-        kept
-        (count 0))
-    (while (and tail (< count mevedel-tool-repair--max-telemetry-items))
-      (when-let* ((value (funcall sanitizer (pop tail))))
-        (push value kept))
-      (setq count (1+ count)))
-    (cons (nreverse kept) (length tail))))
-
-(defun mevedel-tool-repair--safe-telemetry-path (path)
-  "Return bounded schema PATH plus its omitted component count."
-  (let ((tail path)
-        kept
-        (count 0))
-    (while (and tail (< count mevedel-tool-repair--max-telemetry-path-depth))
-      (let ((part (pop tail)))
-        (push
-         (cond
-          ((and (integerp part) (>= part 0)) part)
-          ((and (symbolp part)
-                (<= (length (symbol-name part)) 48)
-                (string-match-p "\\`[-[:alnum:]_]+\\'"
-                                (symbol-name part)))
-           part)
-          (t 'redacted))
-         kept))
-      (setq count (1+ count)))
-    (cons (nreverse kept) (length tail))))
-
-(defun mevedel-tool-repair--safe-event (event)
-  "Return the whitelisted, bounded representation of telemetry EVENT."
-  (let* ((rules
-          (mevedel-tool-repair--bounded-values
-           (plist-get event :rules) #'mevedel-tool-repair--safe-rule))
-         (raw-paths
-          (mevedel-tool-repair--bounded-values
-           (plist-get event :paths) #'identity))
-         (safe-paths
-          (mapcar #'mevedel-tool-repair--safe-telemetry-path
-                  (car raw-paths)))
-         (issues
-          (mevedel-tool-repair--bounded-values
-           (plist-get event :issue-kinds) #'mevedel-tool-repair--safe-rule)))
-    (list
-     :time (mevedel-tool-repair--safe-dimension (plist-get event :time))
-     :origin (mevedel-tool-repair--safe-dimension (plist-get event :origin))
-     :backend (mevedel-tool-repair--safe-backend (plist-get event :backend))
-     :model (mevedel-tool-repair--safe-dimension (plist-get event :model))
-     :tool (mevedel-tool-repair--safe-dimension (plist-get event :tool))
-     :outcome
-     (mevedel-tool-repair--safe-category
-      (plist-get event :outcome) '(valid repaired invalid abandoned))
-     :repair-enabled (and (plist-get event :repair-enabled) t)
-     :rules (car rules)
-     :rules-omitted (cdr rules)
-     :paths (mapcar #'car safe-paths)
-     :paths-omitted (cdr raw-paths)
-     :path-components-omitted
-     (apply #'+ (mapcar #'cdr safe-paths))
-     :issue-kinds (car issues)
-     :issue-kinds-omitted (cdr issues)
-     :execution
-     (mevedel-tool-repair--safe-category
-      (plist-get event :execution) '(executed not-executed))
-     :result
-     (mevedel-tool-repair--safe-category
-      (plist-get event :result) '(success error none))
-     :failure-class
-     (and (eq (plist-get event :failure-class) 'internal-repair-error)
-          'internal-repair-error))))
-
-(defun mevedel-tool-repair-log-path (session)
-  "Return SESSION's persistent repair telemetry path, or nil."
-  (when-let* ((save-path (and session (mevedel-session-save-path session))))
-    (file-name-concat save-path "repair-log.el")))
-
-(defun mevedel-tool-repair--persist-event (session event)
-  "Append redacted telemetry EVENT to SESSION's local log."
-  (when-let* ((file (and mevedel-tool-repair-persist-log
-                         (mevedel-tool-repair-log-path session))))
-    (condition-case nil
-        (let ((print-length nil)
-              (print-level nil)
-              (print-quoted t))
-          (make-directory (file-name-directory file) t)
-          (with-temp-buffer
-            (prin1 event (current-buffer))
-            (insert "\n")
-            (append-to-file (point-min) (point-max) file)))
-      (error
-       (display-warning 'mevedel "Repair telemetry persistence failed"
-                        :warning)))))
-
-(defun mevedel-tool-repair-log-event (session event)
-  "Record redacted telemetry EVENT for SESSION without blocking execution."
-  (condition-case nil
-      (when session
-        (let* ((event (mevedel-tool-repair--safe-event event))
-               (log (append (mevedel-session-repair-log session)
-                            (list event))))
-          (when (> (length log) mevedel-tool-repair-log-limit)
-            (setq log (last log mevedel-tool-repair-log-limit)))
-          (setf (mevedel-session-repair-log session) log)
-          (mevedel-tool-repair--persist-event session event))
-        t)
-    (error
-     (ignore-errors
-       (display-warning 'mevedel "Repair telemetry logging failed" :warning))
-     t)))
-
-(defun mevedel-tool-repair--entry-paths (entry)
-  "Return schema paths represented by telemetry ENTRY."
-  (delete-dups
-   (append
-    (mapcan (lambda (record)
-              (copy-tree (plist-get record :paths) t))
-            (plist-get entry :repairs))
-    (mapcar (lambda (issue) (copy-tree (plist-get issue :path) t))
-            (plist-get entry :issues)))))
-
-(defun mevedel-tool-repair--event (entry outcome result)
-  "Build a value-free telemetry event from ENTRY, OUTCOME, and RESULT."
-  (list
-   :time (format-time-string "%FT%T%z")
-   :origin (plist-get entry :origin)
-   :backend (plist-get entry :backend)
-   :model (plist-get entry :model)
-   :tool (plist-get entry :tool)
-   :outcome outcome
-   :repair-enabled (plist-get entry :repair-enabled)
-   :rules (mapcar (lambda (record) (plist-get record :rule))
-                  (plist-get entry :repairs))
-   :paths (mevedel-tool-repair--entry-paths entry)
-   :issue-kinds (mapcar (lambda (issue) (plist-get issue :kind))
-                        (plist-get entry :issues))
-   :execution (plist-get entry :execution)
-   :result result
-   :failure-class (plist-get entry :failure-class)))
-
-(defun mevedel-tool-repair--release-entry (entry)
-  "Stop tracking completed pipeline ENTRY in its dispatch buffer."
-  (when-let* ((buffer (plist-get entry :buffer))
-              ((buffer-live-p buffer)))
-    (with-current-buffer buffer
-      (setq mevedel-tool-repair--in-flight
-            (delq entry mevedel-tool-repair--in-flight)))))
-
-(defun mevedel-tool-repair-record-result
-    (entry result &optional outcome result-classification)
-  "Record ENTRY telemetry after RESULT without exposing result content."
-  (condition-case nil
-      (when (and entry (not (plist-get entry :telemetry-recorded)))
-        (plist-put entry :telemetry-recorded t)
-        (unwind-protect
-            (let ((outcome
-                   (or outcome
-                 (pcase (plist-get entry :status)
-                         ((or 'valid 'repaired)
-                          (plist-get entry :status))
-                         ('invalid
-                          (if (plist-get entry :abandoned-repairs)
-                              'abandoned
-                            'invalid))
-                         (_ 'abandoned))))
-                  (classification
-                   (or result-classification
-                       (if (and (stringp result)
-                                (or (string-prefix-p "Error:" result)
-                                    (string-prefix-p "<tool_call_error>"
-                                                     result)))
-                           'error
-                         'success))))
-              (mevedel-tool-repair-log-event
-               (plist-get entry :session)
-               (mevedel-tool-repair--event entry outcome classification)))
-          (mevedel-tool-repair--release-entry entry)))
-    (error
-     (ignore-errors (mevedel-tool-repair--release-entry entry))
-     (ignore-errors
-       (display-warning 'mevedel "Repair telemetry logging failed" :warning))
-     nil)))
-
-(defun mevedel-tool-repair-mark-executed (entry)
-  "Mark telemetry ENTRY as having entered its tool handler."
-  (when entry
-    (plist-put entry :execution 'executed)))
 
 
 ;;

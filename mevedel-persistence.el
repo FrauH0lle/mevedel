@@ -245,8 +245,10 @@ before replacing existing instructions.  QUIET suppresses messages."
   (setq workspace (or workspace
                       (mevedel--instruction-buffer-workspace
                        (current-buffer))))
-  (mevedel--instruction-activate-workspace workspace)
-  (when (and (mevedel--all-instructions)
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (mevedel--instruction-activate-workspace workspace)
+    (when (and (mevedel--all-instructions)
              confirm)
     (unless (y-or-n-p "Discard existing mevedel instructions? ")
       (user-error "Aborted")))
@@ -297,7 +299,7 @@ before replacing existing instructions.  QUIET suppresses messages."
                  (if (not (zerop total-kia))
                      (format ", with %d lost to patching" total-kia)
                    "")))
-      (list :restored total-restored :lost total-kia :total total)))
+      (list :restored total-restored :lost total-kia :total total))))
 
 (defun mevedel--file-outdated-p (file)
   "Determine whether or not FILE needs patching.

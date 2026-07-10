@@ -1410,6 +1410,20 @@ with NO-SPINNER forwarded when non-nil."
   "Insert PROMPT as a user turn and notify the view with DISPLAY-TEXT."
   (mevedel--insert-local-user-turn prompt display-text))
 
+(defun mevedel--send-plan-implementation-turn (prompt display-text sender)
+  "Insert a plan turn and call SENDER, rolling the turn back on error."
+  (let ((start (point-max)))
+    (condition-case err
+        (progn
+          (mevedel--insert-plan-implementation-turn prompt display-text)
+          (funcall sender))
+      (error
+       (let ((inhibit-read-only t))
+         (delete-region start (point-max)))
+       (when (fboundp 'mevedel-view--full-rerender)
+         (mevedel-view--full-rerender))
+       (signal (car err) (cdr err))))))
+
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.
 
@@ -1443,24 +1457,26 @@ preset."
             (mevedel--close-unclosed-blocks)
             (pcase (plist-get action-plist :action)
               ('implement
-               (mevedel--insert-plan-implementation-turn
-                prompt "Implement accepted plan")
-               (gptel-send))
+               (mevedel--send-plan-implementation-turn
+                prompt "Implement accepted plan" #'gptel-send))
               ('implement-clear
-               (mevedel--insert-plan-implementation-turn
-                prompt "Implement accepted plan with cleared context")
-               (gptel-with-preset 'mevedel-implement
-                 (gptel-request prompt
-                   :buffer chat-buffer
-                   :stream gptel-stream
-                   :transforms (remove #'mevedel--compact-transform-auto
-                                       gptel-prompt-transform-functions)
-                   :fsm (gptel-make-fsm :handlers gptel-send--handlers))))
+               (mevedel--send-plan-implementation-turn
+                prompt "Implement accepted plan with cleared context"
+                (lambda ()
+                  (gptel-with-preset 'mevedel-implement
+                    (gptel-request prompt
+                      :buffer chat-buffer
+                      :stream gptel-stream
+                      :transforms (remove #'mevedel--compact-transform-auto
+                                          gptel-prompt-transform-functions)
+                      :fsm (gptel-make-fsm
+                            :handlers gptel-send--handlers))))))
               ('implement-worktree
-               (mevedel--insert-plan-implementation-turn
-                prompt "Implement accepted plan in worktree")
-               (gptel-with-preset 'mevedel-implement
-                 (gptel-send)))
+               (mevedel--send-plan-implementation-turn
+                prompt "Implement accepted plan in worktree"
+                (lambda ()
+                  (gptel-with-preset 'mevedel-implement
+                    (gptel-send)))))
               (_
                (error "Unknown plan implementation action: %s"
                       (plist-get action-plist :action)))))

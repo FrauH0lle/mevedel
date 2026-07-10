@@ -169,31 +169,46 @@ context only."
 Each value is a plist with keys `:instructions', `:id-counter',
 `:id-usage-map', and `:retired-ids'.")
 
-(defvar mevedel--instruction-current-state-key :global
-  "Workspace key selected for instruction operations.")
+(defvar-local mevedel--instruction-current-state-key nil
+  "Workspace key selected for this buffer's instruction operations.")
+
+(defvar mevedel--instruction-state-key-override nil
+  "Dynamically bound instruction state key for explicit operations.")
+
+(defun mevedel--instruction-operation-state-key ()
+  "Return the explicit or buffer-derived instruction state key."
+  (or mevedel--instruction-state-key-override
+      (and mevedel--instruction-current-state-key
+           (not (eq mevedel--instruction-current-state-key :global))
+           mevedel--instruction-current-state-key)
+      (when-let* ((workspace
+                   (mevedel--instruction-buffer-workspace (current-buffer))))
+        (mevedel--instruction-workspace-key workspace))
+      mevedel--instruction-current-state-key
+      :global))
 
 (defmacro mevedel--instruction-alist ()
   "Return the active workspace's instruction alist as a settable place."
   '(plist-get (mevedel--instruction-state
-               mevedel--instruction-current-state-key)
+               (mevedel--instruction-operation-state-key))
               :instructions))
 
 (defmacro mevedel--instruction-id-counter ()
   "Return the active workspace's instruction ID counter as a settable place."
   '(plist-get (mevedel--instruction-state
-               mevedel--instruction-current-state-key)
+               (mevedel--instruction-operation-state-key))
               :id-counter))
 
 (defmacro mevedel--instruction-id-usage-map ()
   "Return the active workspace's used-ID table as a settable place."
   '(plist-get (mevedel--instruction-state
-               mevedel--instruction-current-state-key)
+               (mevedel--instruction-operation-state-key))
               :id-usage-map))
 
 (defmacro mevedel--instruction-retired-ids ()
   "Return the active workspace's retired IDs as a settable place."
   '(plist-get (mevedel--instruction-state
-               mevedel--instruction-current-state-key)
+               (mevedel--instruction-operation-state-key))
               :retired-ids))
 
 (defun mevedel--instruction-alist-value ()
@@ -332,17 +347,18 @@ overlay is restored.")
 
 (defun mevedel--clear-instruction-state (&optional workspace)
   "Delete all visible instruction overlays in WORKSPACE and clear its state."
-  (mevedel--instruction-activate-workspace workspace)
-  (dolist (entry (mevedel--instruction-alist))
-    (when (bufferp (car entry))
-      (dolist (instr (cdr entry))
-        (when (overlayp instr)
-          (delete-overlay instr)))))
-  (setf (mevedel--instruction-alist) nil)
-  (setq mevedel--highlighted-instruction nil)
-  (setf (mevedel--instruction-id-counter) 0)
-  (setf (mevedel--instruction-id-usage-map) (make-hash-table))
-  (setf (mevedel--instruction-retired-ids) nil))
+  (let ((mevedel--instruction-state-key-override
+         (mevedel--instruction-workspace-key workspace)))
+    (dolist (entry (mevedel--instruction-alist))
+      (when (bufferp (car entry))
+        (dolist (instr (cdr entry))
+          (when (overlayp instr)
+            (delete-overlay instr)))))
+    (setf (mevedel--instruction-alist) nil)
+    (setq mevedel--highlighted-instruction nil)
+    (setf (mevedel--instruction-id-counter) 0)
+    (setf (mevedel--instruction-id-usage-map) (make-hash-table))
+    (setf (mevedel--instruction-retired-ids) nil)))
 
 (defmacro mevedel--foreach-instruction (binding &rest body)
   "Iterate over `(mevedel--instruction-alist)' with BINDING as the binding.
