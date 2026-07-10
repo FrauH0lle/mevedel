@@ -7,6 +7,26 @@ interacting with LLMs during programming. It enables overlay-based
 instruction management for AI-assisted development with direct gptel
 integration.
 
+## NO BACKWARDS COMPATIBILITY
+
+mevedel is under active development and has no backwards-compatibility
+contract. There is currently one known user, so prefer the cleanest current
+design even when it breaks existing APIs, commands, configuration, persisted
+state, or workflows.
+
+- Do not add compatibility wrappers, aliases, shims, deprecation layers,
+  dual-format readers/writers, version gates, or migrations unless the user
+  explicitly requests compatibility for that specific change.
+- Remove superseded code and update all in-repo callers, tests, fixtures, and
+  documentation in the same change. Do not leave the old path alongside the
+  new one.
+- Existing compatibility code is not precedent. Delete it when a touched
+  design no longer needs it.
+- Prefer a direct breaking change over complexity introduced solely to support
+  older mevedel versions or previously persisted local state.
+- Call out destructive effects in the handoff, but do not preserve the old
+  behavior merely to avoid a break.
+
 ## Documentation map
 
 This file is the entry point. Detail docs live in `docs/` and are loaded
