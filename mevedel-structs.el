@@ -206,6 +206,7 @@ workspace."
   hook-rules         ; transient session-scoped declarative hook rules
   hook-log           ; transient per-session hook execution log
   repair-log         ; transient bounded tool-input repair telemetry
+  permission-log-pending ; transient diagnostics awaiting materialization
   hook-context-pending ; transient hook context injected into the next prompt
   ;; Persistence -- nil until lazy materialization.
   save-path         ; absolute path to the session directory under .mevedel/sessions/

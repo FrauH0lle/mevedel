@@ -12,6 +12,8 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-structs'
+(declare-function mevedel-session-permission-log-pending
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-agents'
@@ -133,11 +135,14 @@
 (defun mevedel-permission-log (session event &rest props)
   "Append EVENT and PROPS to SESSION's permission diagnostic log."
   (when (and mevedel-permission-log-enabled session)
-    (mevedel-permission-log--persist
-     session
-     (append (list :event event
-                   :time (format-time-string "%FT%T%z"))
-             props))))
+    (let ((entry (append (list :event event
+                               :time (format-time-string "%FT%T%z"))
+                         props)))
+      (if (mevedel-session-save-path session)
+          (mevedel-permission-log--persist session entry)
+        (setf (mevedel-session-permission-log-pending session)
+              (append (mevedel-session-permission-log-pending session)
+                      (list entry)))))))
 
 (provide 'mevedel-permission-log)
 

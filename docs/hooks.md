@@ -561,11 +561,11 @@ the hook audit surface includes the system message as supporting detail.
 
 When the session has been materialized on disk, the same entries are also
 appended to `<session>/hook-log.el` as one sanitized plist per line when
-each log entry is recorded.  Entries created before the session has a save
-path remain only in memory; there is no backfill pass.  Non-readable runtime
+each log entry is recorded.  Bounded entries created before the session has
+a save path are backfilled when it first materializes.  Non-readable runtime
 values such as closures are converted to printable strings before writing.
-The in-memory log remains capped by `mevedel-hooks-log-limit`; the
-persistent file is append-only for the session.
+The in-memory log remains capped by `mevedel-hooks-log-limit`; the persistent
+file is append-only for the session.
 
 Raw hook stdout/stderr should stay out of the model transcript by default.
 Only explicit structured fields such as `:additional-context`,

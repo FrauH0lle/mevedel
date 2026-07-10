@@ -123,6 +123,13 @@
   ()
   ,test
   (test)
+  :doc "buffers diagnostics until the session is materialized"
+  (let ((session (test-pq--make-session))
+        (mevedel-permission-log-enabled t))
+    (mevedel-permission-log session 'permission-decision :tool-name "Read")
+    (should (= 1 (length (mevedel-session-permission-log-pending session))))
+    (should-not (mevedel-permission-log-path session)))
+
   :doc "permission queue writes enqueue and resolve diagnostics"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-permission-log-" t)))

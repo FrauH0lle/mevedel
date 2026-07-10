@@ -131,6 +131,8 @@ prompts are aborted on request/session teardown.
 Permission diagnostics are persisted to `permission-log.el` in the session
 directory when `mevedel-permission-log-enabled` is non-nil. The log is
 diagnostic only: resume never replays it into live permission state.
+Entries recorded before first materialization are buffered transiently and
+flushed when the session directory is created.
 
 Each tool invocation that reaches permission checking records a sanitized
 `permission-decision` event with fields such as tool name, origin, mode,

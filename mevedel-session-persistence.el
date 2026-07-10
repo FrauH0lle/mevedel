@@ -52,6 +52,8 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-log-pending
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-task-status-notes
@@ -79,6 +81,18 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks--persist-log-entry
+                  "mevedel-hooks" (session entry))
+
+;; `mevedel-permission-log'
+(declare-function mevedel-permission-log--persist
+                  "mevedel-permission-log" (session entry))
+
+;; `mevedel-tool-repair'
+(declare-function mevedel-tool-repair--persist-event
+                  "mevedel-tool-repair" (session event))
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-load
@@ -607,6 +621,19 @@ holds the lock and rewriting would corrupt its audit log."
                             (and (integerp pt) (> pt fork-turn))))
                         entries))))
 
+(defun mevedel-session-persistence--flush-diagnostic-logs (session)
+  "Persist SESSION diagnostics buffered before materialization."
+  (when (fboundp 'mevedel-hooks--persist-log-entry)
+    (dolist (entry (mevedel-session-hook-log session))
+      (mevedel-hooks--persist-log-entry session entry)))
+  (when (fboundp 'mevedel-tool-repair--persist-event)
+    (dolist (event (mevedel-session-repair-log session))
+      (mevedel-tool-repair--persist-event session event)))
+  (when (fboundp 'mevedel-permission-log--persist)
+    (dolist (entry (mevedel-session-permission-log-pending session))
+      (mevedel-permission-log--persist session entry))
+    (setf (mevedel-session-permission-log-pending session) nil)))
+
 (defun mevedel-session-persistence--shallow-ensure-files (session buffer)
   "Materialize SESSION and BUFFER paths without writing the sidecar.
 
@@ -655,6 +682,7 @@ persistence is disabled.  Idempotent."
             (setf (mevedel-session-created-at session)      now)
             (setf (mevedel-session-updated-at session)      now)
             (setf (mevedel-session-current-segment session) 1)
+            (mevedel-session-persistence--flush-diagnostic-logs session)
             (require 'mevedel-workspace)
             (mevedel-workspace-ensure-generated-state-ignored
              (mevedel-session-workspace session))
@@ -1062,6 +1090,7 @@ when persistence is disabled."
                   (setf (mevedel-session-created-at session)      now)
                   (setf (mevedel-session-updated-at session)      now)
                   (setf (mevedel-session-current-segment session) 1)
+                  (mevedel-session-persistence--flush-diagnostic-logs session)
                   (require 'mevedel-workspace)
                   (mevedel-workspace-ensure-generated-state-ignored
                    (mevedel-session-workspace session))
