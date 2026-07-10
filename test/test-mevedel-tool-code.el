@@ -80,7 +80,16 @@
                     (mevedel-tool-get "XrefDefinitions"))))
     (should (equal "Fast outline of functions, classes, and variables in one file."
                    (mevedel-tool-summary
-                    (mevedel-tool-get "Imenu"))))))
+                    (mevedel-tool-get "Imenu")))))
+
+  :doc "declares every native code-tool file argument as a semantic path"
+  (progn
+    (mevedel-tool-code--register)
+    (dolist (name '("XrefReferences" "XrefDefinitions" "Imenu" "Treesitter"))
+      (should
+       (eq 'path
+           (cadr (assq 'file_path
+                       (mevedel-tool-args (mevedel-tool-get name)))))))))
 
 
 ;;

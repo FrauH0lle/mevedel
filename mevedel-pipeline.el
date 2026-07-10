@@ -3,9 +3,10 @@
 ;;; Commentary:
 
 ;; Sequential step-based execution engine for mevedel tools.  Each tool
-;; invocation runs through a standard pipeline: validate -> permission ->
-;; snapshot -> handler -> render-transform -> persist ->
-;; specialist-nudges -> attach-render-data -> post-hooks -> attach-media.
+;; invocation runs through a standard pipeline: validate -> pre-tool-hooks ->
+;; permission -> snapshot -> handler -> repair-reminder -> render-transform ->
+;; persist -> specialist-nudges -> attach-render-data -> post-hooks ->
+;; re-persist -> attach-media.
 ;; Tool handlers that need user confirmation of a file change call
 ;; `mevedel-preview-mode-add-preview' directly; there is no explicit
 ;; confirm step in the pipeline.
@@ -24,6 +25,7 @@
 (require 'mevedel-utilities)
 (require 'mevedel-reminders)
 (require 'mevedel-permission-log)
+(require 'mevedel-tool-repair)
 
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-handler "mevedel-tool-registry" (cl-x) t)
@@ -37,8 +39,6 @@
 (declare-function mevedel-tool-max-result-size "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-render-transform
                   "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool--validate-args "mevedel-tool-registry"
-                  (tool-name args arg-specs))
 (declare-function mevedel-check-permission-async "mevedel-permissions"
                   (tool-name cont &rest args))
 (declare-function mevedel-check-permission-async-with-metadata
@@ -243,6 +243,42 @@ value so a misbehaving step still produces a legible error."
    ((stringp reason) (format "Error: %s" reason))
    (t (format "Error: %S" reason))))
 
+(defun mevedel-pipeline--format-context-failure (context reason)
+  "Return a failure for REASON with CONTEXT's accumulated audit metadata."
+  (let ((failure (mevedel-pipeline--format-failure reason)))
+    (when-let* ((repairs (plist-get context :input-repairs)))
+      (setq failure
+            (condition-case nil
+                (let ((reminder
+                       (mevedel-tool-repair-format-reminder repairs)))
+                  (if (string-search reminder failure)
+                      failure
+                    (concat failure "\n\n" reminder)))
+              (error
+               (ignore-errors
+                 (display-warning
+                  'mevedel
+                  "Could not append tool input repair reminder"
+                  :warning))
+               failure))))
+    (condition-case nil
+        (let* ((plain-reason (and (stringp reason)
+                                  (substring-no-properties reason)))
+               (records
+                (cl-remove-if
+                 (lambda (record)
+                   (and plain-reason
+                        (string-search
+                         (substring-no-properties
+                          (mevedel--format-hook-audit-record record))
+                         plain-reason)))
+                 (plist-get context :hook-audit-records))))
+          (mevedel-pipeline--append-hook-audit-records failure records))
+      (error
+       (ignore-errors
+         (display-warning 'mevedel "Pipeline audit formatting failed" :warning))
+       failure))))
+
 (defun mevedel-pipeline--context-default-directory (context)
   "Return the default directory captured for pipeline CONTEXT.
 
@@ -260,29 +296,6 @@ that bypass `mevedel-pipeline-run-tool'."
          (mevedel-pipeline--context-default-directory context)))
     (funcall thunk)))
 
-(defun mevedel-pipeline--plist-keys (plist)
-  "Return the keys in PLIST."
-  (let (keys)
-    (while (consp plist)
-      (push (car plist) keys)
-      (setq plist (cddr plist)))
-    (nreverse keys)))
-
-(defun mevedel-pipeline--args-match-p (tool-call-args pipeline-args)
-  "Return non-nil when TOOL-CALL-ARGS match PIPELINE-ARGS.
-Missing optional keys and explicit nil values are treated as equivalent
-because gptel dispatches positional tool arguments through the tool
-schema, while mevedel normalizes them back into a full plist."
-  (if (and (listp tool-call-args) (listp pipeline-args))
-      (cl-every
-       (lambda (key)
-         (equal (plist-get tool-call-args key)
-                (plist-get pipeline-args key)))
-       (delete-dups
-        (append (mevedel-pipeline--plist-keys tool-call-args)
-                (mevedel-pipeline--plist-keys pipeline-args))))
-    (equal tool-call-args pipeline-args)))
-
 (defun mevedel-pipeline--current-tool-use-id (tool args)
   "Return the active gptel tool-use id for TOOL and ARGS, when known."
   (let* ((fsm (and (boundp 'mevedel-tools--current-fsm)
@@ -297,7 +310,7 @@ schema, while mevedel normalizes them back into a full plist."
                    (and (not (plist-get tc :result))
                         (not (plist-get tc :mevedel-claimed))
                         (equal name (plist-get tc :name))
-                        (mevedel-pipeline--args-match-p
+                        (mevedel-tool-repair--args-equivalent-p
                          (plist-get tc :args)
                          args)))
                  tool-use))))
@@ -368,7 +381,8 @@ ignoring duplicate outcome"
                  context
                  (lambda ()
                    (funcall callback
-                            (mevedel-pipeline--format-failure reason))))))))
+                            (mevedel-pipeline--format-context-failure
+                             context reason))))))))
       (condition-case err
           (mevedel-pipeline--with-context-default-directory
            context
@@ -379,14 +393,15 @@ ignoring duplicate outcome"
           context
           (lambda ()
             (funcall callback
-                     (mevedel-pipeline--format-failure
-                      (or (cadr err) "Validation error"))))))
+                     (mevedel-pipeline--format-context-failure
+                      context (or (cadr err) "Validation error"))))))
         (mevedel-permission-denied
          (mevedel-pipeline--with-context-default-directory
           context
           (lambda ()
             (funcall callback
-                     (mevedel-pipeline--format-failure
+                     (mevedel-pipeline--format-context-failure
+                      context
                       (if (cadr err)
                           (format "Permission denied: %s" (cadr err))
                         "Permission denied"))))))
@@ -395,15 +410,15 @@ ignoring duplicate outcome"
           context
           (lambda ()
             (funcall callback
-                     (mevedel-pipeline--format-failure
-                      (or (cadr err) "Pipeline error"))))))
+                     (mevedel-pipeline--format-context-failure
+                      context (or (cadr err) "Pipeline error"))))))
         (error
          (mevedel-pipeline--with-context-default-directory
           context
           (lambda ()
             (funcall callback
-                     (mevedel-pipeline--format-failure
-                      (error-message-string err))))))))))
+                     (mevedel-pipeline--format-context-failure
+                      context (error-message-string err))))))))))
 
 
 ;;
@@ -419,12 +434,10 @@ validation fails synchronously, which the runner catches through its
 signal handler."
   (let* ((tool (plist-get context :tool))
          (args (plist-get context :args))
-         (err (mevedel-tool--validate-args
-               (mevedel-tool-name tool)
-               args
-               (mevedel-tool-args tool))))
-    (if err
-        (signal 'mevedel-validation-error (list err))
+         (issues (mevedel-tool-repair-validate tool args)))
+    (if issues
+        (signal 'mevedel-validation-error
+                (list (mevedel-tool-repair-format-issues tool issues)))
       (funcall next context))))
 
 (defun mevedel-pipeline--current-request ()
@@ -439,10 +452,8 @@ signal handler."
 
 (defun mevedel-pipeline--validate-updated-args (tool args)
   "Return validation error for TOOL ARGS, or nil."
-  (mevedel-tool--validate-args
-   (mevedel-tool-name tool)
-   args
-   (mevedel-tool-args tool)))
+  (when-let* ((issues (mevedel-tool-repair-validate tool args)))
+    (mevedel-tool-repair-format-issues tool issues)))
 
 (defun mevedel-pipeline--record-hook-context (context decision &optional event)
   "Append DECISION's additional hook context to CONTEXT.
@@ -1146,6 +1157,7 @@ NEXT is called on success."
   (let* ((tool (plist-get context :tool))
          (handler (mevedel-tool-handler tool))
          (args (plist-get context :args))
+         (repair-entry (plist-get context :repair-entry))
          (store (lambda (raw)
                   (let ((split (mevedel-pipeline--split-handler-return raw)))
                     (let ((result
@@ -1163,12 +1175,33 @@ NEXT is called on success."
                               (plist-put updated :media
                                          (plist-get raw :media))))
                       updated)))))
+    (mevedel-tool-repair-mark-executed repair-entry)
     (mevedel-pipeline--record-use tool)
     (if (mevedel-tool-async-p tool)
         (funcall handler
                  (lambda (raw) (funcall next (funcall store raw)))
                  args)
       (funcall next (funcall store (funcall handler args))))))
+
+(defun mevedel-pipeline--step-repair-reminder (context next _fail)
+  "Append one model-facing reminder for committed input repairs in CONTEXT."
+  (let ((records (plist-get context :input-repairs))
+        (result (plist-get context :result)))
+    (if (and records (stringp result))
+        (condition-case err
+            (funcall
+             next
+             (plist-put
+              context :result
+              (concat result "\n\n"
+                      (mevedel-tool-repair-format-reminder records))))
+          (error
+           (display-warning
+            'mevedel
+            (format "Could not append tool input repair reminder: %S" err)
+            :warning)
+           (funcall next context)))
+      (funcall next context))))
 
 
 (defconst mevedel-pipeline--render-data-open "<!-- mevedel-render-data -->"
@@ -2587,18 +2620,20 @@ explicit `:updated-result' changes the model-visible tool result."
 
 Returns a list of step functions based on TOOL's behavioral flags:
   1. validate            -- always included
-  2. permission          -- always included
-  3. snapshot            -- skipped if read-only-p
-  4. handler             -- always included
-  5. render-transform    -- always included; no-op when tool has none
-  6. persist             -- included when max-result-size is set
-  7. specialist-nudges   -- bounded guidance for generic code tools
-  8. attach-render-data  -- always included; no-op when handler returned
+  2. pre-tool-hooks      -- always included
+  3. permission          -- always included
+  4. snapshot            -- skipped if read-only-p
+  5. handler             -- always included
+  6. repair-reminder     -- appends feedback for committed input repairs
+  7. render-transform    -- always included; no-op when tool has none
+  8. persist             -- included when max-result-size is set
+  9. specialist-nudges   -- bounded guidance for generic code tools
+  10. attach-render-data -- always included; no-op when handler returned
                             no render-data
-  9. post-tool-hooks     -- always included
-  10. persist            -- included when max-result-size is set; bounds
+  11. post-tool-hooks    -- always included
+  12. persist            -- included when max-result-size is set; bounds
                             hook-updated results
-  11. attach-media-data  -- always included; no-op when handler returned
+  13. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
@@ -2610,6 +2645,7 @@ Returns a list of step functions based on TOOL's behavioral flags:
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-render-transform steps)
+    (push #'mevedel-pipeline--step-repair-reminder steps)
     (push #'mevedel-pipeline--step-handler steps)
     (unless (mevedel-tool-read-only-p tool)
       (push #'mevedel-pipeline--step-snapshot steps))
@@ -2660,11 +2696,30 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (request (mevedel-pipeline--current-request))
          (invocation (mevedel-pipeline--current-invocation))
          (tool-use-id (mevedel-pipeline--current-tool-use-id tool args))
+         (repair-entry
+          (mevedel-tool-repair-consume-ledger-entry tool args))
          (steps (mevedel-pipeline--build-steps tool))
          (context (list :tool tool :args args
                         :session session :workspace workspace
                         :request request :invocation invocation
                         :tool-use-id tool-use-id
+                        :repair-entry repair-entry
+                        :input-repairs (plist-get repair-entry :repairs)
+                        :hook-audit-records
+                        (condition-case nil
+                            (when-let* ((records
+                                         (plist-get repair-entry :repairs))
+                                        (audit
+                                         (mevedel-tool-repair-audit-record
+                                          'committed records)))
+                              (list audit))
+                          (error
+                           (ignore-errors
+                             (display-warning
+                              'mevedel
+                              "Tool input repair audit construction failed"
+                              :warning))
+                           nil))
                         :origin
                         (and (fboundp 'mevedel-agent-invocation-p)
                              (mevedel-agent-invocation-p invocation)
@@ -2677,6 +2732,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
             (cond
              ((not called)
               (setq called t)
+              (mevedel-tool-repair-record-result repair-entry result)
               (condition-case err
                   (funcall callback result)
                 (error

@@ -21,6 +21,38 @@
 
 (defvar gptel-backend)
 
+
+;;
+;;; Tool registration
+
+(mevedel-deftest mevedel-tool-fs--register/path-contracts
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "declares paths semantically while keeping patterns and globs strings"
+  (progn
+    (mevedel-tool-fs--register)
+    (dolist (entry '(("Glob" path)
+                     ("Read" file_path)
+                     ("Grep" path)
+                     ("MkDir" path)
+                     ("Write" file_path)
+                     ("Edit" file_path)))
+      (should
+       (eq 'path
+           (cadr (assq (cadr entry)
+                       (mevedel-tool-args (mevedel-tool-get (car entry))))))))
+    (should
+     (eq 'string
+         (cadr (assq 'pattern
+                     (mevedel-tool-args (mevedel-tool-get "Glob"))))))
+    (should
+     (eq 'string
+         (cadr (assq 'glob
+                     (mevedel-tool-args (mevedel-tool-get "Grep"))))))))
+
 (defun test-mevedel-tool-fs--await-callback (fn args)
   "Call async tool handler FN with ARGS and return its callback result."
   (let ((done nil)

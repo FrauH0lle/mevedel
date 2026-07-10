@@ -223,6 +223,43 @@
                    (limit integer :optional "Max lines")))))
     (should (= 3 (length result))))
 
+  :doc "lowers semantic paths to provider strings with one raw-path hint"
+  (let* ((description "File path")
+         (args (list (list 'file_path 'path :required description)))
+         (result (mevedel-tool--args-to-gptel args))
+         (provider-arg (car result))
+         (provider-description (plist-get provider-arg :description)))
+    (should (eq 'string (plist-get provider-arg :type)))
+    (should (equal description (nth 3 (car args))))
+    (should
+     (equal
+      "File path Pass a raw filesystem path, not Markdown or a URL."
+      provider-description))
+    (should-not
+     (string-match-p
+      (concat (regexp-quote mevedel-tool--path-description-suffix) ".*"
+              (regexp-quote mevedel-tool--path-description-suffix))
+      provider-description)))
+
+  :doc "does not add path semantics to wrapped string arguments"
+  (let* ((wrapped
+          '((:name "file_path" :type string :description "File path")))
+         (mevedel-args (mevedel-tool--args-from-gptel wrapped "wrapped"))
+         (roundtrip (mevedel-tool--args-to-gptel mevedel-args)))
+    (should (eq 'string (cadar mevedel-args)))
+    (should (equal "File path" (plist-get (car roundtrip) :description))))
+
+  :doc "appends the exact path hint when authored text differs only by case"
+  (let* ((description
+          "pass a raw filesystem path, not markdown or a url.")
+         (result
+          (mevedel-tool--args-to-gptel
+           (list (list 'file_path 'path :required description))))
+         (provider-description (plist-get (car result) :description)))
+    (should
+     (string-suffix-p mevedel-tool--path-description-suffix
+                      provider-description)))
+
   :doc "passes through :items for arrays (required for strict schema)"
   (let ((result (mevedel-tool--args-to-gptel
                  '((ids array :optional "list of ids" :items (:type integer))))))
@@ -241,63 +278,6 @@
          (mevedel-args (mevedel-tool--args-from-gptel gptel-args "t"))
          (roundtrip (mevedel-tool--args-to-gptel mevedel-args)))
     (should (equal '(:type integer) (plist-get (car roundtrip) :items)))))
-
-
-;;
-;;; Validation
-
-(mevedel-deftest mevedel-tool--validate-args
-  (:doc "`mevedel-tool--validate-args' validates tool arguments")
-  ,test
-  (test)
-  :doc "passes valid required args"
-  (should (null (mevedel-tool--validate-args
-                 "Read"
-                 '(:path "/tmp/test")
-                 '((path string :required "File path")))))
-
-  :doc "fails missing required arg"
-  (should (stringp (mevedel-tool--validate-args
-                    "Read"
-                    '()
-                    '((path string :required "File path")))))
-
-  :doc "passes when optional arg is nil"
-  (should (null (mevedel-tool--validate-args
-                 "Read"
-                 '(:path "/tmp/test")
-                 '((path string :required "File path")
-                   (offset integer :optional "Line offset")))))
-
-  :doc "fails wrong type"
-  (should (stringp (mevedel-tool--validate-args
-                    "Read"
-                    '(:path 42)
-                    '((path string :required "File path")))))
-
-  :doc "validates boolean (t and :json-false)"
-  (progn
-    (should (null (mevedel-tool--validate-args
-                   "Test"
-                   '(:flag t)
-                   '((flag boolean :required "A flag")))))
-    (should (null (mevedel-tool--validate-args
-                   "Test"
-                   '(:flag :json-false)
-                   '((flag boolean :required "A flag"))))))
-
-  :doc "validates enum values"
-  (progn
-    (should (null (mevedel-tool--validate-args
-                   "Test"
-                   '(:mode "live")
-                   '((mode string :optional "Mode" :enum ["live" "batch"])))))
-    (should (string-match-p
-             "must be one of"
-             (mevedel-tool--validate-args
-              "Test"
-              '(:mode "bogus")
-              '((mode string :optional "Mode" :enum ["live" "batch"])))))))
 
 
 ;;
@@ -540,6 +520,30 @@
       (should (equal '(:chars 4)
                      (funcall (mevedel-tool-render-transform tool)
                               "WrappedRenderTransform" nil "abcd")))))
+
+  :doc ":repair-input is stored on native tools"
+  (progn
+    (mevedel-define-tool
+     :name "NativeRepair"
+     :handler #'ignore
+     :description "Native repair callback"
+     :repair-input #'ignore)
+    (should (eq #'ignore
+                (mevedel-tool-repair-input
+                 (mevedel-tool-get "NativeRepair" "mevedel")))))
+
+  :doc ":repair-input is stored on wrapped tools"
+  (let ((source (gptel-make-tool
+                 :name "WrappedRepair"
+                 :function #'ignore
+                 :description "Wrapped repair callback"
+                 :args nil
+                 :category "test-repair")))
+    (mevedel-define-tool :wrap source :repair-input #'ignore)
+    (should
+     (eq #'ignore
+         (mevedel-tool-repair-input
+          (mevedel-tool-get "WrappedRepair" "mevedel-test-repair")))))
 
   :doc "wrapped tool dispatch suppresses interactive file-visit side effects"
   (let (captured result)

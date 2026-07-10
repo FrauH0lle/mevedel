@@ -1680,12 +1680,12 @@
     (should (plist-get mode :optional))
     (should (equal "boolean" (plist-get preserve-ui :type)))
     (should (plist-get preserve-ui :optional))
-    (should (string-match-p
-             "must be one of"
-             (mevedel-tool--validate-args
-              "Eval"
-              '(:expression "(+ 1 2)" :mode "bogus")
-              (mevedel-tool-args tool))))))
+    (should
+     (eq 'invalid-enum
+         (plist-get
+          (car (mevedel-tool-repair-validate
+                tool '(:expression "(+ 1 2)" :mode "bogus")))
+          :kind)))))
 
 (mevedel-deftest mevedel--prompt-user-for-eval ()
   ,test

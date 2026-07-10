@@ -381,6 +381,14 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
       (setq-local mevedel--agent-invocation invocation)
       (when (require 'mevedel-skills nil t)
         (mevedel-skills-install-activation-hook))
+      (require 'mevedel-tool-repair)
+      (add-hook 'gptel-pre-tool-call-functions
+                #'mevedel-tool-repair-pre-tool-call -100 t)
+      (add-hook 'gptel-post-tool-call-functions
+                #'mevedel-tool-repair-post-tool-call -100 t)
+      (add-hook 'gptel-post-response-functions
+                #'mevedel-tool-repair-clear-ledger nil t)
+      (add-hook 'kill-buffer-hook #'mevedel-tool-repair-clear-ledger nil t)
       ;; bump the invocation's call-count on each
       ;; tool dispatch so the parent's running-handle badge reads
       ;; [running * N calls] rather than the zero-suppressed

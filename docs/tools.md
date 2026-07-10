@@ -6,7 +6,9 @@ All tools go through `mevedel-pipeline-run-tool`:
 
 ```mermaid
 flowchart TD
-    A[Validate args] --> B[PreToolUse hooks]
+    R[Raw model call] --> S[Validate, then repair if needed]
+    S --> A[Validate final args]
+    A --> B[PreToolUse hooks]
     B --> C[Permission check]
     C --> D{Allowed?}
     D -- No --> E[PermissionDenied hooks]
@@ -14,15 +16,18 @@ flowchart TD
     F --> C
     D -- Yes --> G[Snapshot files]
     G --> H[Handler]
-    H --> I[Render transform]
-    I --> J[Persist oversized result]
-    J --> K[Specialist nudges]
-    K --> L[Attach render-data]
-    L --> M[PostToolUse or failure hooks]
-    M --> N[Attach media data]
+    H --> I[Append repair reminder]
+    I --> J[Render transform]
+    J --> K[Persist oversized result]
+    K --> L[Specialist nudges]
+    L --> M[Attach render-data]
+    M --> N[PostToolUse or failure hooks]
+    N --> O[Re-persist capped result]
+    O --> P[Attach media data]
 ```
 
-Handlers receive `(callback args)` where args is a keyword plist. The
+Synchronous handlers receive `(args)` and asynchronous handlers receive
+`(callback args)`, where args is a keyword plist. The
 pipeline handles all cross-cutting concerns; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
@@ -33,8 +38,65 @@ Important tool metadata:
 - Permissions: `:check-permission`, `:check-permission-async`,
   `:get-path`, `:get-pattern`, `:get-domain`, `:get-name`
 - Loading/grouping: `:category`, `:groups`, `:wrap`, `:prompt-file`
+- Input contracts: `:args`, `:repair-input`
 - Display/output: `:summary`, `:max-result-size`, `:render-transform`,
   `:renderer`
+
+### Tool input validation and repair
+
+`mevedel-tool-repair.el` mediates raw model calls before gptel dispatches
+them into the pipeline. It first validates the call unchanged. Valid input is
+never rewritten. Only invalid model-produced input gets one atomic repair
+attempt; the pipeline then validates the committed arguments again before
+hooks or permissions run. Direct programmatic calls and arguments rewritten
+by `PreToolUse` remain validation-only.
+
+The generic repair catalogue is deliberately small and ordered:
+
+1. omit explicit `null` from optional properties;
+2. parse exact JSON strings when the parsed value satisfies the expected
+   non-string contract;
+3. wrap a schema-valid singleton where an array is expected;
+4. replace an empty object placeholder with an empty array only for optional
+   arrays that permit zero items;
+5. unwrap an exact Markdown HTTP(S) auto-link in the final component of a
+   semantic filesystem path.
+
+Repairs never invent required values and do not coerce arbitrary strings to
+numbers or booleans: the JSON parser must consume the exact input and the
+result must validate. Required `null` and required empty-object placeholders
+therefore remain invalid. Generic repairs run before and after, at most once,
+an optional tool-owned `:repair-input` callback. The callback receives copies
+of `(args validation-issues)` and must return changed `:args` plus value-free
+`:repairs` records covering every changed top-level argument. The entire
+candidate is committed only when final validation succeeds; otherwise the
+model gets bounded, value-free retry guidance and no tentative arguments run.
+
+`path` is an internal semantic argument type for mevedel-owned filesystem
+contracts. Provider schemas lower it to an ordinary JSON string and append
+the guidance “Pass a raw filesystem path, not Markdown or a URL.” This lets
+native tools opt into the narrow auto-link repair without guessing whether an
+arbitrary string is a path. Wrapped tools can use `:repair-input` when their
+source schema cannot express mevedel's semantic `path` type.
+
+Committed repairs proceed without a retry and add one corrective note to the
+final tool result, including error results. If a multi-step candidate still
+fails validation, its repair audit is marked abandoned and the handler is not
+called. Both audit states contain only rule IDs, schema paths, and before/after
+shape names.
+
+Every raw model call records a redacted event on its top-level session with
+the actual backend, model, tool, stable origin (`main` or agent ID), outcome
+(`valid`, `repaired`, `invalid`, or `abandoned`), rule IDs, schema paths,
+execution state, and result classification. Argument values, paths, commands,
+prompts, schemas, validation messages, and results are excluded. The in-memory
+`mevedel-session-repair-log` is bounded by
+`mevedel-tool-repair-log-limit` (default 200). When
+`mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
+events to `<session>/repair-log.el`; earlier in-memory events are not
+backfilled when a session is first materialized. Telemetry failures never
+block tool execution. `mevedel-tool-input-repair-enabled` disables mutation
+while retaining validation and telemetry.
 
 `mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
 `gptel-get-tool` on every call (so upstream changes take effect without

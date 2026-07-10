@@ -66,6 +66,7 @@ created as a side effect of registration and handles serialization."
                     ;   descriptions that bloat the system reminder).
   prompt            ; string or function: detailed instructions
   args              ; arg spec list in mevedel format
+  repair-input      ; function or nil: tool-owned semantic input repair
   category          ; string: "mevedel" (default)
   ;; Behavioral declarations
   read-only-p       ; t if tool never modifies state
@@ -315,6 +316,21 @@ Convenience wrapper around `mevedel-tool-resolve' that extracts the
 ;;
 ;;; Args conversion
 
+(defconst mevedel-tool--path-description-suffix
+  "Pass a raw filesystem path, not Markdown or a URL."
+  "Provider-facing guidance appended to semantic path arguments.")
+
+(defun mevedel-tool--provider-arg-description (type description)
+  "Return provider-facing DESCRIPTION for argument TYPE."
+  (let ((description (or description "")))
+    (if (and (eq type 'path)
+             (not (string-search mevedel-tool--path-description-suffix
+                                 description)))
+        (concat description
+                (unless (string-empty-p description) " ")
+                mevedel-tool--path-description-suffix)
+      description)))
+
 (defun mevedel-tool--args-to-gptel (args)
   "Convert mevedel ARGS spec to gptel plist format.
 
@@ -339,8 +355,10 @@ types under strict function-schema validation."
             (desc (cadr rest))
             (extras (cddr rest))
             (result (list :name (symbol-name name)
-                          :type type
-                          :description (or desc ""))))
+                          :type (if (eq type 'path) 'string type)
+                          :description
+                          (mevedel-tool--provider-arg-description
+                           type desc))))
        (unless required
          (setq result (append result (list :optional t))))
        (when extras
@@ -449,19 +467,6 @@ fresh `:function') propagate automatically."
       (error
        (funcall callback (format "Error: %s" (error-message-string err)))))))
 
-(defconst mevedel-tool--type-predicates
-  '((string  . stringp)
-    (integer . integerp)
-    (number  . numberp)
-    (boolean . mevedel-tool--boolean-p)
-    (array   . vectorp)
-    (object  . listp))
-  "Mapping from JSON schema types to Elisp predicates.")
-
-(defun mevedel-tool--boolean-p (value)
-  "Return non-nil if VALUE is a JSON boolean (t or :json-false)."
-  (or (eq value t) (eq value :json-false)))
-
 (defun mevedel-tool-truthy-p (value)
   "Return non-nil if VALUE is a truthy LLM-supplied boolean.
 
@@ -479,7 +484,7 @@ Returns DEFAULT (nil if omitted) whenever the value is missing,
 optional string argument fetched from LLM-supplied ARGS to avoid
 passing `\"\"' / `:json-false' downstream to shell tools, path
 expansion, etc.  Required string arguments are validated upstream
-by `mevedel-tool--validate-args' and do not need this helper."
+by `mevedel-tool-repair-validate' and do not need this helper."
   (let ((v (plist-get args key)))
     (if (and (stringp v) (not (string-empty-p v)))
         v
@@ -495,35 +500,6 @@ to `format' or arithmetic, otherwise a mistyped value crashes the
 handler."
   (let ((v (plist-get args key)))
     (if (integerp v) v default)))
-
-(defun mevedel-tool--validate-args (tool-name args arg-specs)
-  "Validate ARGS against ARG-SPECS for TOOL-NAME.
-
-ARGS is a plist of argument values from the LLM.  ARG-SPECS is the
-mevedel args format list.  Returns nil on success, or an error string on
-failure."
-  (catch 'validation-error
-    (dolist (spec arg-specs)
-      (let* ((name (car spec))
-             (type (cadr spec))
-             (rest (cddr spec))
-             (required (eq :required (car rest)))
-             (enum (plist-get rest :enum))
-             (value (plist-get args (intern (format ":%s" name))))
-             (pred (alist-get type mevedel-tool--type-predicates)))
-        (when (and required (null value))
-          (throw 'validation-error
-                 (format "%s: missing required parameter '%s'" tool-name name)))
-        (when (and value pred (not (funcall pred value)))
-          (throw 'validation-error
-                 (format "%s: parameter '%s' must be %s, got %S"
-                         tool-name name type value)))
-        (when (and value enum (not (member value (append enum nil))))
-          (throw 'validation-error
-                 (format "%s: parameter '%s' must be one of %S, got %S"
-                         tool-name name (append enum nil) value)))))
-    nil))
-
 
 ;;
 ;;; Prompt resolution
@@ -580,6 +556,8 @@ Optional (both forms):
   :prompt-file      STRING       Load prompt from file (relative to mevedel
                                  source dir)
   :args             LIST         Arg specs: ((name type :required \"desc\") ...)
+  :repair-input     FN           Pure semantic repair callback receiving
+                                 (args-copy validation-issues)
   :category         STRING       Tool category (default \"mevedel\")
   :groups           LIST         Group symbols: (read edit util ...)
   :read-only-p      BOOL         Tool never modifies state
@@ -644,6 +622,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (prompt (plist-get props :prompt))
          (prompt-file (plist-get props :prompt-file))
          (args (plist-get props :args))
+         (repair-input (plist-get props :repair-input))
          (category (or (plist-get props :category) "mevedel"))
          (groups (plist-get props :groups))
          (read-only-p (plist-get props :read-only-p))
@@ -679,6 +658,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
               :summary ,summary
               :prompt resolved-prompt
               :args ',args
+              :repair-input ,repair-input
               :category ,category
               :read-only-p ,read-only-p
               :destructive-p ,destructive-p
@@ -722,6 +702,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
          (prompt-override (plist-get props :prompt))
          (prompt-file (plist-get props :prompt-file))
          (groups (plist-get props :groups))
+         (repair-input (plist-get props :repair-input))
          (read-only-p (plist-get props :read-only-p))
          (destructive-p (plist-get props :destructive-p))
          (check-permission (plist-get props :check-permission))
@@ -754,6 +735,7 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
       :summary ,summary
       :prompt-override ,prompt-override
       :groups ',groups
+      :repair-input ,repair-input
       :read-only-p ,read-only-p
       :destructive-p ,destructive-p
       :check-permission ,check-permission
@@ -769,15 +751,15 @@ The macro creates a `mevedel-tool' struct, registers it, and calls
 
 (cl-defun mevedel-tool--register-wrap
     (&key source category-override description-override summary
-          prompt-override groups read-only-p destructive-p
+          prompt-override groups repair-input read-only-p destructive-p
           check-permission check-permission-async
           get-path get-pattern get-domain get-name
           max-result-size display-arg render-transform renderer)
   "Runtime helper: build and register a wrapped tool from SOURCE.
 
 SOURCE must be a `gptel-tool' struct.  CATEGORY-OVERRIDE,
-DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, GROUPS, READ-ONLY-P,
-DESTRUCTIVE-P, CHECK-PERMISSION, CHECK-PERMISSION-ASYNC, GET-PATH,
+DESCRIPTION-OVERRIDE, SUMMARY, PROMPT-OVERRIDE, GROUPS, REPAIR-INPUT,
+READ-ONLY-P, DESTRUCTIVE-P, CHECK-PERMISSION, CHECK-PERMISSION-ASYNC, GET-PATH,
 GET-PATTERN, GET-DOMAIN, GET-NAME, MAX-RESULT-SIZE, DISPLAY-ARG,
 RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
   (unless (gptel-tool-p source)
@@ -803,6 +785,7 @@ RENDER-TRANSFORM, and RENDERER mirror `mevedel-define-tool'."
              :summary summary
              :prompt resolved-prompt
              :args mevedel-args
+             :repair-input repair-input
              :category target-category
              :read-only-p read-only-p
              :destructive-p destructive-p

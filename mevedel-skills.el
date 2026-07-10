@@ -2032,6 +2032,12 @@ original shell-injection marker used in diagnostics."
                     (require 'mevedel-tool-exec)
                     (mevedel-tool-exec--register)
                     (ignore-errors (mevedel-tool-get "Bash"))))))
+    (when tool
+      (setq tool (copy-mevedel-tool tool))
+      (setf (mevedel-tool-args tool)
+            (append (mevedel-tool-args tool)
+                    '((trust-literal-p boolean :optional
+                                       "Internal trusted skill input.")))))
     (cond
      ((null tool)
       (funcall callback
@@ -2080,6 +2086,15 @@ original elisp-injection marker used in diagnostics."
                     (require 'mevedel-tool-exec)
                     (mevedel-tool-exec--register)
                     (ignore-errors (mevedel-tool-get "Eval"))))))
+    (when tool
+      (setq tool (copy-mevedel-tool tool))
+      (setf (mevedel-tool-args tool)
+            (append
+             (mevedel-tool-args tool)
+             '((trust-literal-p boolean :optional
+                                "Internal trusted skill input.")
+               (result-format string :optional
+                              "Internal skill result format.")))))
     (cond
      ((null tool)
       (funcall callback
@@ -2111,7 +2126,7 @@ original elisp-injection marker used in diagnostics."
                                                  (or result "")))))))
              (list :expression expression
                    :trust-literal-p t
-                   :result-format 'injection)))
+                   :result-format "injection")))
         (error
          (funcall callback
                   `(:status error :reason elisp-failure

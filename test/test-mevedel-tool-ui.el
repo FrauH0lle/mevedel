@@ -378,6 +378,21 @@
 ;;
 ;;; RequestAccess
 
+(mevedel-deftest mevedel-tool-ui--register/path-contract
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "declares RequestAccess.directory as a semantic path"
+  (progn
+    (mevedel-tool-ui--register)
+    (should
+     (eq 'path
+         (cadr (assq 'directory
+                     (mevedel-tool-args
+                      (mevedel-tool-get "RequestAccess"))))))))
+
 (mevedel-deftest mevedel-tools--request-access/logging
   ()
   ,test
