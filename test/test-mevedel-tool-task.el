@@ -1080,9 +1080,9 @@
       (should (get-text-property (1- (point)) 'read-only))
       (should (eq 'status (get-text-property
                            (1- (point))
-                           'mevedel-view-fragment-namespace)))
+                           'mevedel-view-zone-namespace)))
       (should (eq 'tasks (get-text-property
-                          (1- (point)) 'mevedel-view-fragment-id)))))
+                          (1- (point)) 'mevedel-view-zone-id)))))
 
   :doc "re-rendering replaces the previous task fragment region"
   (test-mevedel-tool-task--with-view session data view
@@ -1226,7 +1226,7 @@
       (goto-char (point-min))
       (search-forward "last active")
       (should (eq 'tasks (get-text-property
-                          (1- (point)) 'mevedel-view-fragment-id))))
+                          (1- (point)) 'mevedel-view-zone-id))))
     (with-current-buffer data
       (mevedel-tool-task--handle-update
        (list :id 1 :status "completed")))
@@ -1275,7 +1275,7 @@
       (search-forward "active body")
       (goto-char (match-beginning 0))
       (should (eq 'tasks (get-text-property
-                          (point) 'mevedel-view-fragment-id)))
+                          (point) 'mevedel-view-zone-id)))
       (mevedel-view-activate-at-point)
       (should (string-match-p "done body" (buffer-string)))
       (goto-char (point-min))

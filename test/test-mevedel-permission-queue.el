@@ -868,11 +868,11 @@
                   (should (eq 'interaction
                               (get-text-property
                                (match-beginning 0)
-                               'mevedel-view-fragment-namespace)))
+                               'mevedel-view-zone-namespace)))
                   (should (eq :separator
                               (get-text-property
                                (match-beginning 0)
-                               'mevedel-view-fragment-id))))
+                               'mevedel-view-zone-id))))
                 (should (string-search "from verifier--abcdef" text))
                 (should (string-search "Mode: batch" text))))))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))

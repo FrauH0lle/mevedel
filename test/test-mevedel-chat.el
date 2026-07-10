@@ -10,6 +10,7 @@
 (require 'mevedel)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-plan)
+(require 'mevedel-view-zone)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -24,7 +25,6 @@
 (defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--input-marker)
-(defvar mevedel-view--request-progress-region-overlay)
 (defvar org-agenda-file-menu-enabled)
 (defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
@@ -643,7 +643,7 @@
 				 (should (markerp mevedel-view--in-flight-turn-start))
 				 (should (markerp mevedel-view--data-turn-start))
 				 (should (overlayp
-					  mevedel-view--request-progress-region-overlay))))
+					  (mevedel-view-zone-region 'progress)))))
 			     (let ((response-start
 				    (overlay-get directive
 						 'mevedel-directive-response-start)))

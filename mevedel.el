@@ -57,7 +57,7 @@
 (require 'mevedel-presets)
 (require 'mevedel-transcript)
 (require 'mevedel-compact)
-(require 'mevedel-view-fragment)
+(require 'mevedel-view-zone)
 (require 'mevedel-reminders)
 (require 'mevedel-skills)
 (require 'mevedel-cockpit)

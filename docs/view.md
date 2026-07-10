@@ -126,23 +126,28 @@ the live view/data pair once and routes each action to the owner buffer. The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
 from the paired data buffer.
 
-## Fragment-backed chrome
+## Managed-zone chrome
 
-`mevedel-view-fragment.el` provides private primitives for disposable,
-identity-backed blocks of view-owned chrome. A fragment is keyed by managed
-region identity, namespace, and id. It may also carry priority, label/body
-text, keymap/help text, activation metadata, navigation metadata, and a
-collapse key. `mevedel-view-fragment--reconcile` owns one namespace inside
-an explicit region: it sorts by descending priority and caller order, replaces
-stale fragments only for that namespace in that region, and leaves other
-regions or namespaces untouched.
+`mevedel-view-zone.el` owns the four fixed fragment-backed regions of
+view-owned chrome. Producers submit a complete desired fragment set for a
+named zone. The module owns region identity, overlay lifetime, marker
+choreography during mutation, uniform composer/point/window preservation,
+reconciliation, stale-region recovery, collapse, and navigation. Producers
+retain their domain text and actions.
 
-Fragment metadata lives in `mevedel-view-fragment-*` text properties. Those
+A fragment is keyed by managed region identity, namespace, and id. It may
+also carry priority, label/body text, keymap/help text, activation metadata,
+navigation metadata, and a collapse key. Whole-zone reconciliation sorts by
+descending priority and caller order. Unknown zone names and malformed
+descriptors are programming errors; stale disposable UI state is rebuilt.
+
+Fragment metadata lives in `mevedel-view-zone-*` text properties. Those
 properties are valid for view navigation, activation, collapse, and targeted
 refresh decisions, but they are UI cache only. Durable conversation state
-continues to live in the data buffer and session structures. Region overlays
-in `mevedel-view.el` define managed fragment containers; remaining interaction
-overlays are callback handles, not parallel renderers.
+continues to live in the data buffer and session structures. The zone module
+owns managed region overlays. Remaining interaction overlays are opaque
+callback handles for permission, plan, Ask, RequestAccess, and preview flows;
+they are not parallel renderers.
 
 Current fragment namespaces:
 
@@ -167,10 +172,9 @@ assistant text; fragment updates should not bypass the data-buffer transcript.
 Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
-High-level zone markers still define layout boundaries. Fragment producers
-should mutate only their managed region under the appropriate boundary and
-preservation wrapper so status, interaction, progress, and history-live
-updates do not become composer text or move point/windows unexpectedly.
+High-level zone markers still define layout order in `mevedel-view.el`.
+Producers provide those layout positions to the zone module but do not own
+managed overlays, preservation wrappers, or marker insertion choreography.
 
 ## Redraw invariants
 
