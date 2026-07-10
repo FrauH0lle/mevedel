@@ -14,6 +14,7 @@
 ;; `gptel-request'
 (declare-function gptel-backend-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-backend-p "ext:gptel-request" (cl-x))
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent-id
@@ -77,6 +78,84 @@
 (defvar-local mevedel-tool-repair--in-flight nil
   "Ordered pipeline calls awaiting completion in this buffer.")
 
+(defvar mevedel-tool-repair--parsing-response nil
+  "Non-nil while gptel is decoding a provider response.")
+
+
+;;
+;;; Gptel input adaptation
+
+(defun mevedel-tool-repair--preserve-empty-objects (value)
+  "Restore empty JSON objects inside decoded VALUE.
+
+JSON nulls must already use the `:null' sentinel, leaving nil to mean an
+empty object."
+  (cond
+   ((null value) (make-hash-table))
+   ((vectorp value)
+    (vconcat (mapcar #'mevedel-tool-repair--preserve-empty-objects value)))
+   ((listp value)
+    (let (result)
+      (while value
+        (setq result
+              (plist-put result (pop value)
+                         (mevedel-tool-repair--preserve-empty-objects
+                          (pop value)))))
+      result))
+   (t value)))
+
+(defun mevedel-tool-repair--with-lossless-json (function &rest args)
+  "Call FUNCTION with ARGS while preserving JSON nulls in gptel responses."
+  (let* ((info (cl-find-if
+                (lambda (arg) (and (listp arg) (plist-member arg :buffer)))
+                args))
+         (buffer (and info (plist-get info :buffer)))
+         (mevedel-tool-repair--parsing-response
+          (and (buffer-live-p buffer)
+               (buffer-local-value 'mevedel--session buffer))))
+    (apply function args)))
+
+(defun mevedel-tool-repair--json-parse-string (function string &rest args)
+  "Call FUNCTION on JSON STRING and parser ARGS without lossy gptel nulls."
+  (when mevedel-tool-repair--parsing-response
+    (when-let* ((tail (plist-member args :null-object))
+                ((null (cadr tail))))
+      (setcar (cdr tail) :null)))
+  (apply function string args))
+
+(defun mevedel-tool-repair--restore-argument-shapes (fsm)
+  "Restore empty objects in mevedel tool calls held by FSM."
+  (dolist (tool-call (plist-get (gptel-fsm-info fsm) :tool-use))
+    (when-let* (((mevedel-tool-get (plist-get tool-call :name)))
+                (args (plist-get tool-call :args))
+                ((listp args)))
+      (plist-put tool-call :args
+                 (mevedel-tool-repair--preserve-empty-objects args)))))
+
+(defun mevedel-tool-repair-install-shape-adapter ()
+  "Install the temporary lossless gptel tool-input adapter."
+  (dolist (spec '((gptel--parse-response :around
+                                          mevedel-tool-repair--with-lossless-json)
+                  (gptel-curl--parse-stream :around
+                                            mevedel-tool-repair--with-lossless-json)
+                  (json-parse-string :around
+                                     mevedel-tool-repair--json-parse-string)
+                  (gptel--handle-pre-tool :before
+                                          mevedel-tool-repair--restore-argument-shapes)))
+    (unless (advice-member-p (nth 2 spec) (car spec))
+      (advice-add (car spec) (cadr spec) (nth 2 spec)))))
+
+(defun mevedel-tool-repair-uninstall-shape-adapter ()
+  "Remove the temporary lossless gptel tool-input adapter."
+  (dolist (spec '((gptel--parse-response
+                   mevedel-tool-repair--with-lossless-json)
+                  (gptel-curl--parse-stream
+                   mevedel-tool-repair--with-lossless-json)
+                  (json-parse-string mevedel-tool-repair--json-parse-string)
+                  (gptel--handle-pre-tool
+                   mevedel-tool-repair--restore-argument-shapes)))
+    (advice-remove (car spec) (cadr spec))))
+
 (defun mevedel-tool-repair--name (value)
   "Return VALUE as an unqualified symbol."
   (cond
@@ -101,6 +180,7 @@
    ((integerp value) 'integer)
    ((numberp value) 'number)
    ((vectorp value) 'array)
+   ((hash-table-p value) 'object)
    ((listp value) 'object)
    ((symbolp value) 'symbol)
    (t 'unknown)))
@@ -113,7 +193,9 @@
     ('number (numberp value))
     ('boolean (or (eq value t) (eq value :json-false)))
     ('array (vectorp value))
-    ('object (listp value))
+    ('object (or (listp value)
+                 (and (hash-table-p value)
+                      (= 0 (hash-table-count value)))))
     (_ (error "Unsupported tool schema type: %S" type))))
 
 (defun mevedel-tool-repair--issue (path kind expected actual &optional schema)
@@ -150,7 +232,7 @@
       (let* ((name (mevedel-tool-repair--name (pop properties)))
              (property-schema (pop properties))
              (key (mevedel-tool-repair--key name))
-             (present (plist-member value key))
+             (present (and (listp value) (plist-member value key)))
              (property-value (and present (plist-get value key)))
              (property-path (append path (list name))))
         (cond
@@ -472,11 +554,12 @@ positional dispatch, which represents omitted optional arguments as nil."
 (defun mevedel-tool-repair--parse-json-value (string)
   "Parse exact JSON STRING, or return a private failure marker."
   (condition-case nil
-      (json-parse-string string
-                         :object-type 'plist
-                         :array-type 'array
-                         :null-object :null
-                         :false-object :json-false)
+      (mevedel-tool-repair--preserve-empty-objects
+       (json-parse-string string
+                          :object-type 'plist
+                          :array-type 'array
+                          :null-object :null
+                          :false-object :json-false))
     (error :mevedel-json-parse-failed)))
 
 (defun mevedel-tool-repair--apply-rule (tool args issues rule)

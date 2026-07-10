@@ -101,6 +101,12 @@
 (declare-function mevedel-skills-install-hot-reload "mevedel-skills" ())
 (declare-function mevedel-skills-uninstall-hot-reload "mevedel-skills" ())
 
+;; `mevedel-tool-repair'
+(declare-function mevedel-tool-repair-install-shape-adapter
+                  "mevedel-tool-repair" ())
+(declare-function mevedel-tool-repair-uninstall-shape-adapter
+                  "mevedel-tool-repair" ())
+
 ;; `mevedel-view'
 (declare-function mevedel-view-install-gptel-stream-advice "mevedel-view" ())
 (declare-function mevedel-view-uninstall-gptel-stream-advice "mevedel-view" ())
@@ -536,6 +542,10 @@ always prompt for the session name."
   (require 'mevedel-pipeline)
   (mevedel-pipeline-install-tool-result-scrubber)
 
+  ;; Preserve empty object versus null before gptel runs tool hooks.
+  (require 'mevedel-tool-repair)
+  (mevedel-tool-repair-install-shape-adapter)
+
   ;; Install slash-command advice on `gptel-send'
   (mevedel-worktree-install-slash-command)
   (mevedel-skills-install-slash-commands)
@@ -592,6 +602,10 @@ always prompt for the session name."
   ;; Remove render-data scrubber advice
   (when (featurep 'mevedel-pipeline)
     (mevedel-pipeline-uninstall-tool-result-scrubber))
+
+  ;; Remove lossless tool-argument shape restoration.
+  (when (featurep 'mevedel-tool-repair)
+    (mevedel-tool-repair-uninstall-shape-adapter))
 
   ;; Remove slash-command advice
   (mevedel-worktree-uninstall-slash-command)

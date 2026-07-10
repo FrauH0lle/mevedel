@@ -51,6 +51,12 @@ attempt; the pipeline then validates the committed arguments again before
 hooks or permissions run. Direct programmatic calls and arguments rewritten
 by `PreToolUse` remain validation-only.
 
+While gptel decodes provider responses, mevedel preserves JSON `null` as a
+distinct sentinel. Before pre-tool hooks it restores decoded empty objects in
+the common tool-call representation. This temporary adapter covers gptel's
+tool-capable backends in one place and can be removed when gptel's shared JSON
+string decoder preserves nulls itself.
+
 The generic repair catalogue is deliberately small and ordered:
 
 1. omit explicit `null` from optional properties;
