@@ -200,7 +200,9 @@ npx @emacs-eask/cli test ert test/test-mevedel-compact.el
 
 Test files mirror modules: `test/test-mevedel-MODULE.el`. Shared helpers
 (including the `mevedel-deftest` macro) are in `test/helpers.el`. Tests
-use real temp files/directories rather than mocking.
+use real temp files/directories rather than mocking. Eask gives ERT a temporary
+`HOME` and XDG roots; the shared helper rejects unsafe test invocations that
+could reach real user state.
 
 ### Byte compilation
 ```bash

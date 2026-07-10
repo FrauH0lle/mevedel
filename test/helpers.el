@@ -6,6 +6,16 @@
 
 (require 'cl-lib)
 
+(unless (cl-every
+         (lambda (directory)
+           (and directory
+                (file-in-directory-p directory temporary-file-directory)))
+         (cons (expand-file-name "~")
+               (mapcar #'getenv
+                       '("XDG_CACHE_HOME" "XDG_CONFIG_HOME"
+                         "XDG_DATA_HOME" "XDG_STATE_HOME"))))
+  (error "Tests require HOME and XDG roots under temporary-file-directory"))
+
 (defvar tabulated-list-entries)
 
 (defun mevedel-test-file-cache-create ()
