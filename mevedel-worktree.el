@@ -4,7 +4,8 @@
 
 ;; Provides the `/worktree' local slash command.  The command reports the
 ;; current Git worktree state and can create a fresh linked worktree under
-;; `.worktrees/' with a new mevedel session rooted there.
+;; `.worktrees/' with a new mevedel session rooted there.  Plan mode reuses
+;; the same creation interface for worktree-backed implementation handoffs.
 
 ;;; Code:
 
@@ -803,8 +804,8 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
                (and session (mevedel-session-name session))
                "session"))))
 
-(defun mevedel-worktree--parse-create-options (tokens session)
-  "Parse create command TOKENS for SESSION."
+(defun mevedel-worktree--parse-create-options (tokens)
+  "Parse create command TOKENS."
   (let (name purpose clean)
     (while tokens
       (let ((token (pop tokens)))
@@ -821,11 +822,6 @@ When FORCE is non-nil, pass `--force' to `git worktree remove'."
           (setq name token))
          (t
           (user-error "Unexpected /worktree create argument: %s" token)))))
-    (unless name
-      (setq name
-            (read-string
-             "Worktree branch name: " nil nil
-             (mevedel-worktree--default-branch-name session purpose))))
     (list :name name :purpose purpose :clean clean)))
 
 (defun mevedel-worktree--validate-branch-name (name &optional directory)
@@ -928,22 +924,24 @@ new session."
      "Cleanup:\n  git worktree remove %s\n  rm -rf %s\n  git worktree prune"
      quoted quoted)))
 
-(defun mevedel-worktree--create (args)
-  "Create a new worktree session from slash command ARGS."
+(defun mevedel-worktree-create-session (&optional branch purpose clean)
+  "Create and return a new worktree session from the current session.
+Prompt for BRANCH when it is nil.  PURPOSE is included in the setup
+context.  When CLEAN is non-nil, omit that context.  The return value is
+a plist with `:buffer', `:branch', `:directory', and `:warnings'."
   (let* ((context (mevedel-worktree--current-context))
          (data-buffer (plist-get context :data-buffer))
          (session (plist-get context :session)))
     (unless (and data-buffer session)
-      (user-error "'/worktree create' must run from a mevedel session"))
+      (user-error "Worktree creation must run from a mevedel session"))
     (with-current-buffer data-buffer
       (when (bound-and-true-p mevedel--current-request)
         (user-error "A request is already active -- wait or abort first"))
-      (let* ((options (mevedel-worktree--parse-create-options
-                       (cdr (mevedel-worktree--split-args args))
-                       session))
-             (branch (plist-get options :name))
-             (purpose (plist-get options :purpose))
-             (clean (plist-get options :clean))
+      (let* ((branch
+              (or branch
+                  (read-string
+                   "Worktree branch name: " nil nil
+                   (mevedel-worktree--default-branch-name session purpose))))
              (workspace (mevedel-session-workspace session))
              (workspace-root (file-name-as-directory
                               (expand-file-name
@@ -1000,15 +998,10 @@ new session."
                     warnings)
                    nil 'worktree nil t))
                 (mevedel-worktree--save-stub chat-buffer))
-              (string-join
-               (append
-                (list
-                 (format "Created worktree session `%s' at %s"
-                         branch worktree-directory))
-                (when warnings
-                  (list (format "Warnings: %s"
-                                (string-join warnings "; ")))))
-               "\n"))
+              (list :buffer chat-buffer
+                    :branch branch
+                    :directory worktree-directory
+                    :warnings warnings))
           (error
            (user-error
             "Created worktree at %s, but session setup failed: %s\n%s"
@@ -1016,6 +1009,25 @@ new session."
             (error-message-string err)
             (mevedel-worktree--cleanup-message
              worktree-directory workspace-root))))))))
+
+(defun mevedel-worktree--create (args)
+  "Create a new worktree session from slash command ARGS."
+  (let* ((options (mevedel-worktree--parse-create-options
+                   (cdr (mevedel-worktree--split-args args))))
+         (result (mevedel-worktree-create-session
+                  (plist-get options :name)
+                  (plist-get options :purpose)
+                  (plist-get options :clean))))
+    (string-join
+     (append
+      (list
+       (format "Created worktree session `%s' at %s"
+               (plist-get result :branch)
+               (plist-get result :directory)))
+      (when-let* ((warnings (plist-get result :warnings)))
+        (list (format "Warnings: %s"
+                      (string-join warnings "; ")))))
+     "\n")))
 
 
 ;;

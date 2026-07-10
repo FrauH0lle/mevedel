@@ -1270,6 +1270,42 @@
 ;;
 ;;; Create
 
+(mevedel-deftest mevedel-worktree-create-session ()
+  ,test
+  (test)
+
+  :doc "returns a clean worktree session created with the source-session default"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-worktree-interface-" t)))
+         (git-dir (file-name-concat root ".git"))
+         (new-buffer (generate-new-buffer " *mevedel-worktree-interface*"))
+         prompted-default)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat git-dir "info") t)
+          (mevedel-worktree-test--with-session root
+            (cl-letf (((symbol-function 'read-string)
+                       (lambda (_prompt &optional _initial _history default
+                                &rest _)
+                         (setq prompted-default default)
+                         default))
+                      ((symbol-function 'mevedel-worktree--open-session)
+                       (lambda (_workspace _dir) new-buffer))
+                      ((symbol-function 'mevedel-worktree--git-result)
+                       (lambda (_dir &rest args)
+                         (mevedel-worktree-test--base-response root args))))
+              (let* ((result (mevedel-worktree-create-session nil nil t))
+                     (expected-dir
+                      (file-name-as-directory
+                       (file-name-concat root ".worktrees" "main"))))
+                (should (equal "worktree/main" prompted-default))
+                (should (eq new-buffer (plist-get result :buffer)))
+                (should (equal "worktree/main" (plist-get result :branch)))
+                (should (equal expected-dir (plist-get result :directory)))
+                (should-not (plist-get result :warnings))))))
+      (when (buffer-live-p new-buffer) (kill-buffer new-buffer))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-cmd--worktree/create ()
   ,test
   (test)

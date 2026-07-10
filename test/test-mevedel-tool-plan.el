@@ -5,12 +5,14 @@
 ;;; Code:
 
 (require 'mevedel-tool-registry)
+(require 'mevedel-chat)
 (require 'mevedel-tool-plan)
 (require 'mevedel-structs)
 (require 'mevedel-view)
 (require 'mevedel-mentions)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
+(require 'mevedel-worktree)
 (require 'gptel-request)
 (require 'helpers
          (file-name-concat
@@ -481,6 +483,194 @@
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
 
+  :doc "hands worktree implementation and verification to the target session"
+  (let ((source-dir (make-temp-file "mevedel-plan-source-" t))
+        (target-dir (make-temp-file "mevedel-plan-target-" t))
+        (source-buffer (generate-new-buffer " *mev-plan-source*"))
+        (target-buffer (generate-new-buffer " *mev-plan-target*"))
+        saved-sessions
+        implementation-buffer
+        implementation)
+    (unwind-protect
+        (let* ((source-session
+                (mevedel-session--create
+                 :name "main"
+                 :workspace nil
+                 :save-path source-dir
+                 :permission-mode 'plan
+                 :permission-rules nil
+                 :permission-queue nil
+                 :plan-queue nil
+                 :plan-metadata
+                 '(:path "plans/current.md" :status presented)
+                 :turn-count 2))
+               (target-session
+                (mevedel-session--create
+                 :name ".worktrees:main"
+                 :workspace nil
+                 :save-path target-dir
+                 :permission-mode 'default
+                 :permission-rules nil
+                 :permission-queue nil
+                 :plan-queue nil
+                 :turn-count 0))
+               (worktree
+                (list :buffer target-buffer
+                      :branch "worktree/main"
+                      :directory "/tmp/project/.worktrees/main/"))
+               (outcome
+                (list :action 'implement-worktree
+                      :mode 'trust-all
+                      :worktree worktree)))
+          (dolist (pair `((,source-buffer . ,source-session)
+                          (,target-buffer . ,target-session)))
+            (with-current-buffer (car pair)
+              (org-mode)
+              (setq-local gptel-response-separator "\n\n")
+              (setq-local gptel-prompt-prefix-alist
+                          '((org-mode . "* User\n")))
+              (setq-local mevedel--session (cdr pair))))
+          (with-current-buffer target-buffer
+            (let* ((target-path
+                    (mevedel-plan-mode--write-current-plan
+                     "# Plan\n\nDo it." target-session target-buffer))
+                   (target-accepted-plan
+                    (mevedel-plan-mode--archive-accepted-plan
+                     target-path target-session)))
+              (mevedel-plan-mode--mark-approved
+               target-session target-path target-accepted-plan)
+              (setq worktree (plist-put worktree :plan-file target-path))
+              (setq outcome (plist-put outcome :worktree worktree))))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (session _buffer)
+                       (push session saved-sessions)))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (action)
+                       (setq implementation-buffer (current-buffer))
+                       (setq implementation action))))
+            (with-current-buffer source-buffer
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." source-buffer outcome)))
+          (let ((source-metadata
+                 (mevedel-session-plan-metadata source-session))
+                (target-metadata
+                 (mevedel-session-plan-metadata target-session)))
+            (should (eq 'approved (plist-get source-metadata :status)))
+            (should-not (plist-get source-metadata :verification-pending))
+            (should (eq 'approved (plist-get target-metadata :status)))
+            (should (plist-get target-metadata :verification-pending))
+            (should (file-exists-p
+                     (plist-get target-metadata :accepted-absolute-path)))
+            (with-temp-buffer
+              (insert-file-contents
+               (plist-get target-metadata :accepted-absolute-path))
+              (should (equal "# Plan\n\nDo it." (buffer-string)))))
+          (with-current-buffer source-buffer
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p "worktree/main" text))
+              (should (string-match-p
+                       (regexp-quote "/tmp/project/.worktrees/main/") text))))
+          (should (memq source-session saved-sessions))
+          (should (eq target-buffer implementation-buffer))
+          (should (eq 'implement-worktree
+                      (plist-get implementation :action)))
+          (should (eq 'trust-all
+                      (plist-get implementation :permission-mode)))
+          (should (string-prefix-p target-dir
+                                   (plist-get implementation :plan-file))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
+      (delete-directory source-dir t)
+      (delete-directory target-dir t)))
+
+  :doc "records a retryable target error when worktree request startup fails"
+  (let ((source-dir (make-temp-file "mevedel-plan-error-source-" t))
+        (target-dir (make-temp-file "mevedel-plan-error-target-" t))
+        (source-buffer (generate-new-buffer " *mev-plan-error-source*"))
+        (target-buffer (generate-new-buffer " *mev-plan-error-target*"))
+        target-saved)
+    (unwind-protect
+        (let* ((source-session
+                (mevedel-session--create
+                 :name "main"
+                 :workspace nil
+                 :save-path source-dir
+                 :permission-mode 'plan
+                 :permission-rules nil
+                 :permission-queue nil
+                 :plan-queue nil
+                 :plan-metadata '(:status presented)))
+               (target-session
+                (mevedel-session--create
+                 :name ".worktrees:main"
+                 :workspace nil
+                 :save-path target-dir
+                 :permission-mode 'default
+                 :permission-rules nil
+                 :permission-queue nil
+                 :plan-queue nil))
+               target-path
+               (worktree
+                (list :buffer target-buffer
+                      :branch "worktree/main"
+                      :directory "/tmp/project/.worktrees/main/")))
+          (dolist (pair `((,source-buffer . ,source-session)
+                          (,target-buffer . ,target-session)))
+            (with-current-buffer (car pair)
+              (org-mode)
+              (setq-local gptel-response-separator "\n\n")
+              (setq-local gptel-prompt-prefix-alist
+                          '((org-mode . "* User\n")))
+              (setq-local mevedel--session (cdr pair))))
+          (with-current-buffer target-buffer
+            (setq target-path
+                  (mevedel-plan-mode--write-current-plan
+                   "# Plan\n\nDo it." target-session target-buffer))
+            (mevedel-plan-mode--mark-approved
+             target-session target-path
+             (mevedel-plan-mode--archive-accepted-plan
+              target-path target-session)))
+          (setq worktree (plist-put worktree :plan-file target-path))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (session _buffer)
+                       (when (eq session target-session)
+                         (setq target-saved t))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (_action)
+                       (error "No API key"))))
+            (with-current-buffer source-buffer
+              (should-error
+               (mevedel-plan-mode--approval-callback
+                "# Plan\n\nDo it." source-buffer
+                (list :action 'implement-worktree
+                      :mode 'default
+                      :worktree worktree)))))
+          (with-current-buffer target-buffer
+            (let ((text (buffer-substring-no-properties
+                         (point-min) (point-max))))
+              (should (string-match-p
+                       "Implementation request failed to start: No API key"
+                       text))
+              (should (string-match-p "retry" text))))
+          (should target-saved)
+          (should (eq 'approved
+                      (plist-get (mevedel-session-plan-metadata target-session)
+                                 :status)))
+          (should (plist-get (mevedel-session-plan-metadata target-session)
+                             :verification-pending))
+          (should (equal
+                   (list :action 'implement-worktree
+                         :plan-file target-path
+                         :plan-markdown "# Plan\n\nDo it."
+                         :permission-mode 'default)
+                   (plist-get (mevedel-session-plan-metadata target-session)
+                              :implementation-retry))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
+      (delete-directory source-dir t)
+      (delete-directory target-dir t)))
+
   :doc "persists cancelled plan metadata"
   (let ((save-dir (make-temp-file "mevedel-plan-cancel-" t))
         (data-buffer (generate-new-buffer " *mev-plan-data*"))
@@ -518,6 +708,56 @@
                                (directory-files plans-dir nil
                                                 "\\`accepted-"))))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t))))
+
+(mevedel-deftest mevedel-retry-plan-implementation
+  (:doc "retries the persisted action with its implementation preset and permission mode")
+  ,test
+  (test)
+  (let ((data-buffer (generate-new-buffer " *mev-plan-retry-data*"))
+        (view-buffer (generate-new-buffer " *mev-plan-retry-view*"))
+        (save-dir (make-temp-file "mevedel-plan-retry-" t))
+        implemented
+        implementation-buffer
+        saved)
+    (unwind-protect
+        (let* ((retry (list :action 'implement-worktree
+                            :plan-file "/tmp/accepted-plan.md"
+                            :plan-markdown "# Plan\n\nDo it."
+                            :permission-mode 'trust-all))
+               (session
+                (mevedel-session--create
+                 :name "worktree"
+                 :workspace nil
+                 :save-path save-dir
+                 :permission-mode 'default
+                 :permission-rules nil
+                 :permission-queue nil
+                 :plan-queue nil
+                 :plan-metadata (list :status 'approved
+                                      :implementation-retry retry))))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--view-buffer view-buffer))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--data-buffer data-buffer)
+            (cl-letf
+                (((symbol-function 'mevedel--implement-plan)
+                  (lambda (action)
+                    (setq implemented action
+                          implementation-buffer (current-buffer))))
+                 ((symbol-function 'mevedel-session-persistence-save)
+                  (lambda (_session buffer)
+                    (setq saved buffer))))
+              (mevedel-retry-plan-implementation))
+            (should (equal retry implemented))
+            (should (eq data-buffer implementation-buffer))
+            (should-not (plist-get (mevedel-session-plan-metadata session)
+                                   :implementation-retry))
+            (should (eq data-buffer saved))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-queue--on-head-outcome
@@ -944,6 +1184,113 @@
             (should (eq entry (car (mevedel-session-plan-queue session)))))
         (when (buffer-live-p target-buffer)
           (kill-buffer target-buffer)))))
+
+  :doc "worktree key creates the target before settling approval"
+  (with-temp-buffer
+    (let* ((target-dir (make-temp-file "mevedel-plan-key-target-" t))
+           (chat-buffer (current-buffer))
+           (view-buffer (generate-new-buffer " *plan-view*"))
+           (worktree-buffer (generate-new-buffer " *plan-worktree*"))
+           (session (mevedel-session--create
+                     :name "test"
+                     :workspace nil
+                     :permission-rules nil
+                     :permission-mode 'default
+                     :permission-queue nil
+                     :plan-queue nil))
+           (target-session (mevedel-session--create
+                            :name "worktree"
+                            :workspace nil
+                            :save-path target-dir
+                            :permission-mode 'default))
+           (mevedel--session session)
+           captured-keymap
+           created-from
+           fail-create
+           outcome
+           target-saved
+           target-metadata-at-settle
+           (worktree-result
+            (list :buffer worktree-buffer
+                  :branch "worktree/test"
+                  :directory "/tmp/worktrees/test/"))
+           (entry (list :body "# Plan\n\nDo the work."
+                        :chat-buffer chat-buffer
+                        :session session
+                        :callback
+                        (lambda (value)
+                          (setq target-metadata-at-settle
+                                (copy-sequence
+                                 (mevedel-session-plan-metadata
+                                  target-session)))
+                          (setq outcome value)))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (&optional _data-buffer) view-buffer))
+                    ((symbol-function 'mevedel-view--interaction-anchor)
+                     (lambda () (point-min)))
+                    ((symbol-function 'mevedel-view--interaction-register)
+                     (lambda (descriptor)
+                       (setq captured-keymap (plist-get descriptor :keymap))
+                       (make-overlay (point-min) (point-min)
+                                     (current-buffer) nil t)))
+                    ((symbol-function 'mevedel--prompt--settle)
+                     (lambda (overlay value)
+                       (funcall (overlay-get overlay 'mevedel--callback)
+                                value)))
+                    ((symbol-function 'mevedel--prompt--register-canceller)
+                     #'ignore)
+                    ((symbol-function 'mevedel-plan-mode--save-session-state)
+                     (lambda (saved-session _buffer)
+                       (when (eq saved-session target-session)
+                         (setq target-saved t))))
+                    ((symbol-function 'mevedel-worktree-create-session)
+                     (lambda (&rest _)
+                       (setq created-from (current-buffer))
+                       (if fail-create
+                           (user-error "Worktree creation failed")
+                         worktree-result))))
+            (setq-local gptel-backend 'source-backend)
+            (setq-local gptel-model 'source-model)
+            (with-current-buffer view-buffer
+              (setq-local mevedel--prompt-overlays nil)
+              (setq-local mevedel-view--interaction-descriptors
+                          (make-hash-table :test #'equal))
+              (setq-local mevedel-view--interaction-overlays
+                          (make-hash-table :test #'equal)))
+            (with-current-buffer worktree-buffer
+              (org-mode)
+              (setq-local gptel-response-separator "\n\n")
+              (setq-local gptel-prompt-prefix-alist
+                          '((org-mode . "* User\n")))
+              (setq-local mevedel--session target-session))
+            (setf (mevedel-session-plan-queue session) (list entry))
+            (mevedel-plan-queue--render-entry entry)
+            (setq fail-create t)
+            (should-error
+             (call-interactively (lookup-key captured-keymap (kbd "w")))
+             :type 'user-error)
+            (should-not outcome)
+            (should (eq entry (car (mevedel-session-plan-queue session))))
+            (setq fail-create nil)
+            (call-interactively (lookup-key captured-keymap (kbd "w")))
+            (should (eq chat-buffer created-from))
+            (should (eq 'implement-worktree (plist-get outcome :action)))
+            (should (eq 'default (plist-get outcome :mode)))
+            (should (eq 'approved
+                        (plist-get target-metadata-at-settle :status)))
+            (should target-saved)
+            (should (plist-get target-metadata-at-settle
+                               :verification-pending))
+            (should (file-exists-p
+                     (plist-get target-metadata-at-settle
+                                :accepted-absolute-path)))
+            (with-current-buffer worktree-buffer
+              (should (eq 'source-backend gptel-backend))
+              (should (eq 'source-model gptel-model))))
+        (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+        (when (buffer-live-p worktree-buffer) (kill-buffer worktree-buffer))
+        (delete-directory target-dir t))))
 
   :doc "implementation mode rerender preserves point and viewport inside the plan overlay"
   (let* ((data-buffer (generate-new-buffer " *plan-data*"))
