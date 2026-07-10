@@ -238,12 +238,14 @@
                              workspace-root ".mevedel" "plugins" "repo"))
          (workspace-agents (file-name-concat
                             workspace-root ".agents" "plugins" "repo"))
+         (global-mevedel (file-name-concat
+                          mevedel-user-dir "plugins" "repo"))
          (global-agents (file-name-concat
                          (mevedel-plugins-dir) "repo")))
     (unwind-protect
         (progn
           (dolist (root (list workspace-mevedel workspace-agents
-                              global-agents))
+                              global-mevedel global-agents))
             (mevedel-plugins-test--write-manifest
              root "{\"name\":\"demo\"}"))
           (let ((plugin (car (mevedel-plugins-list workspace))))
@@ -257,6 +259,7 @@
                               (file-name-as-directory
                                (expand-file-name root)))
                             (list workspace-agents
+                                  global-mevedel
                                   global-agents))))))
       (delete-directory workspace-root t)))
 
@@ -947,6 +950,27 @@
                                   (expand-file-name root))
                                  (list "pull" "--ff-only")))
                      calls))))
+
+  :doc "updates and removes a managed global mevedel plugin in place"
+  (let* ((root (file-name-concat
+                mevedel-user-dir "plugins" "owner" "repo"))
+         calls)
+    (make-directory root t)
+    (mevedel-plugins-test--write-manifest root "{\"name\":\"demo\"}")
+    (let ((mevedel-plugins-git-executor
+           (lambda (directory args)
+             (push (list directory args) calls)
+             (list 0 ""))))
+      (should (equal "Updated plugin demo."
+                     (mevedel-plugins-test--slash session "update demo")))
+      (should (equal (list (list (file-name-as-directory
+                                  (expand-file-name root))
+                                 (list "pull" "--ff-only")))
+                     calls)))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_prompt) t)))
+      (should (equal "Removed plugin demo."
+                     (mevedel-plugins-test--slash session "remove demo"))))
+    (should-not (file-exists-p root)))
 
   :doc "install refuses an existing GitHub destination without running git"
   (let ((root (mevedel-plugins-test--github-install-root "owner" "repo")))

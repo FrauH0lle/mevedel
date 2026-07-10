@@ -48,8 +48,8 @@ and direct `Skill(name=...)` calls. The on-disk SKILL.md name remains
 unchanged. New installs live under `~/.agents/plugins/`, including
 GitHub installs below `github.com/OWNER/REPO`. Plugin roots are
 discovered from workspace `.mevedel/plugins/`, workspace
-`.agents/plugins/`, global `~/.agents/plugins/`, then
-`mevedel-plugin-extra-roots`. Plugin
+`.agents/plugins/`, global `~/.mevedel/plugins/`, global
+`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Plugin
 activation is workspace-scoped: plugins are inactive by default in each
 project until enabled, and the state is stored in that workspace's
 `.mevedel/plugins.el`. Activating a plugin enables all implemented plugin
@@ -62,8 +62,8 @@ manifest.
 When multiple plugin roots contain the same manifest name, mevedel keeps
 the highest-precedence plugin and reports shadowed duplicates in
 `/plugin list`. Precedence is workspace `.mevedel/plugins/`, workspace
-`.agents/plugins/`, global `~/.agents/plugins/`, then
-`mevedel-plugin-extra-roots`. Activation is
+`.agents/plugins/`, global `~/.mevedel/plugins/`, global
+`~/.agents/plugins/`, then `mevedel-plugin-extra-roots`. Activation is
 bound to the plugin name and source root, so a higher-precedence plugin
 with the same name does not silently inherit enabled state from a
 different source. `/plugin list` reports the conflict so the user can
@@ -148,7 +148,7 @@ Plugin management:
   untouched and should be updated with `/plugin update NAME`. Install is
   always global and does not enable the plugin in the current workspace.
 - `/plugin update NAME` runs `git pull --ff-only` for global managed
-  installs under `~/.agents/plugins/`.
+  installs under `~/.mevedel/plugins/` or `~/.agents/plugins/`.
   If the update changes an enabled plugin's executable hook surface, the
   update result reports that hook consent is pending.
 - `/plugin remove NAME` and `/plugin uninstall NAME` delete a
@@ -156,8 +156,9 @@ Plugin management:
   points at that source, mevedel clears that activation. Workspace plugin
   data is not deleted by default because it is shared by plugin name
   across source switches. Plugins discovered from workspace
-  `.agents/plugins/` or `mevedel-plugin-extra-roots` must be removed
-  manually. Use `/plugin disable NAME` for project-only deactivation.
+  `.mevedel/plugins/`, `.agents/plugins/`, or
+  `mevedel-plugin-extra-roots` must be removed manually. Use `/plugin
+  disable NAME` for project-only deactivation.
 - `/plugin` and `/plugin list` open the session-owned plugin cockpit for
   the current workspace in a dedicated `*mevedel plugins*` buffer. The
   cockpit is a `tabulated-list-mode` table with one selected plugin at a

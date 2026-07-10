@@ -31,3 +31,19 @@
 
 (development
  (depends-on "mcp"))
+
+(defun mevedel-eask--isolate-test-home ()
+  "Run ERT without access to the user's real home state."
+  (let ((home (make-temp-file "mevedel-test-home-" t)))
+    (setq default-directory (expand-file-name default-directory))
+    (setenv "HOME" home)
+    (dolist (entry '(("XDG_CACHE_HOME" . ".cache")
+                     ("XDG_CONFIG_HOME" . ".config")
+                     ("XDG_DATA_HOME" . ".local/share")
+                     ("XDG_STATE_HOME" . ".local/state")))
+      (setenv (car entry) (file-name-concat home (cdr entry))))
+    (add-hook 'kill-emacs-hook
+              (lambda ()
+                (ignore-errors (delete-directory home t))))))
+
+(add-hook 'eask-before-test/ert-hook #'mevedel-eask--isolate-test-home)

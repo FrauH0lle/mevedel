@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Minimal Codex-style plugin support.  Plugins are installed under
-;; `~/.agents/plugins' by default and each plugin root contains
+;; Minimal Codex-style plugin support.  Plugins are discovered from paired
+;; `.mevedel/plugins' and `.agents/plugins' roots; new installs default to
+;; `~/.agents/plugins'.  Each plugin root contains
 ;; `.codex-plugin/plugin.json'.  This module discovers manifests, persists
 ;; workspace-local enabled/hook state, and implements the local `/plugin'
 ;; command body.
@@ -125,6 +126,11 @@ roots below it."
 (defun mevedel-plugins-dir ()
   "Return the global directory where new plugins are installed."
   (mevedel-plugins--normalize-directory mevedel-plugin-install-directory))
+
+(defun mevedel-plugins--global-mevedel-dir ()
+  "Return the global mevedel-specific plugin directory."
+  (mevedel-plugins--normalize-directory
+   (file-name-concat mevedel-user-dir "plugins")))
 
 (defun mevedel-plugins--current-workspace ()
   "Return the current chat workspace, if available."
@@ -312,7 +318,8 @@ Do not descend into a directory once it is recognized as a plugin root."
    (when workspace
      (list (mevedel-plugins--workspace-plugins-dir workspace ".mevedel")
            (mevedel-plugins--workspace-plugins-dir workspace ".agents")))
-   (list (mevedel-plugins-dir))
+   (list (mevedel-plugins--global-mevedel-dir)
+         (mevedel-plugins-dir))
    mevedel-plugin-extra-roots))
 
 (defun mevedel-plugins--plugin-roots (&optional workspace)
@@ -879,7 +886,10 @@ Preserve plugin state in WORKSPACE."
 
 (defun mevedel-plugins--managed-root-directories ()
   "Return directories that mevedel may update or remove."
-  (list (mevedel-plugins--source-root (mevedel-plugins-dir))))
+  (delete-dups
+   (mapcar #'mevedel-plugins--source-root
+           (list (mevedel-plugins--global-mevedel-dir)
+                 (mevedel-plugins-dir)))))
 
 (defun mevedel-plugins--managed-root-p (root)
   "Return non-nil when ROOT is below a mevedel-managed global root."
