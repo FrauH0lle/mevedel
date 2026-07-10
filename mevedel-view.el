@@ -286,6 +286,7 @@
                   "mevedel-skills" (skill arguments))
 (declare-function mevedel-skills-inline-display-text
                   "mevedel-skills" (name arguments))
+(declare-function mevedel-skills-install-font-lock "mevedel-skills" ())
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (defvar mevedel-slash-commands)
 
@@ -1972,8 +1973,9 @@ existing `mevedel--view-buffer' binding untouched."
       ;; Install slash-command completion
       (add-hook 'completion-at-point-functions
                 #'mevedel-view-slash-capf nil t)
-      ;; Install @ref/@file font-lock and completion
+      ;; Install mention font-lock and completion
       (mevedel-mentions-install)
+      (mevedel-skills-install-font-lock)
       (mevedel-view--install-dnd)
       (add-hook 'post-command-hook
                 #'mevedel-view--refresh-skill-argument-hint nil t)

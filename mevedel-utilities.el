@@ -466,9 +466,7 @@ line by itself."
               (let ((block-start (match-beginning 0)))
                 (if (search-forward close limit t)
                     (progn
-                      (when (and (< (point) limit)
-                                 (eq (char-after) ?\n))
-                        (forward-char 1))
+                      (skip-chars-forward " \t\r\n" limit)
                       (put-text-property block-start (point)
                                          'gptel 'ignore))
                   (goto-char limit)))))

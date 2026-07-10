@@ -75,6 +75,8 @@
                   "mevedel-cockpit" (&optional no-error))
 
 ;; `mevedel-mentions'
+(declare-function mevedel-mentions--valid-mention-context-p
+                  "mevedel-mentions" (match-beg))
 (declare-function mevedel-mentions-replace-with-placeholder
                   "mevedel-mentions" (start end placeholder))
 
@@ -4880,6 +4882,37 @@ is active for slash commands that declare finite argument choices."
   (when (bound-and-true-p mevedel--session)
     (mevedel-skills--slash-capf
      (current-buffer) mevedel--session mevedel-slash-commands)))
+
+
+;;
+;;; Font-lock
+
+(defun mevedel-skills--fontify-dollar-keyword (end)
+  "Find a known `$skill' mention before END for font-lock."
+  (let (found)
+    (while (and (not found)
+                (re-search-forward "\\$\\([A-Za-z0-9_.:-]+\\)" end t))
+      (when-let* ((session (and (bound-and-true-p mevedel--session)
+                                mevedel--session))
+                  (start (match-beginning 0))
+                  (resolved
+                   (mevedel-skills--resolve-inline-skill-name
+                    (match-string-no-properties 1)
+                    (lambda (name)
+                      (mevedel-session-get-skill session name))))
+                  ((mevedel-mentions--valid-mention-context-p start)))
+        (set-match-data
+         (list start (+ start 1 (length (car resolved)))))
+        (setq found t)))
+    found))
+
+(defun mevedel-skills-install-font-lock ()
+  "Install font-lock support for known `$skill' mentions."
+  (font-lock-add-keywords
+   nil
+   '((mevedel-skills--fontify-dollar-keyword
+      0 font-lock-keyword-face prepend))
+   t))
 
 
 ;;
