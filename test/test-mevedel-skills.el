@@ -3297,6 +3297,39 @@ spanning lines")))
                      "Please use $disabled here" session)))
         (should (eq 'disabled (plist-get result :error)))))))
 
+(mevedel-deftest mevedel-skills--fontify-dollar-keyword ()
+  ,test
+  (test)
+  :doc "font-lock shares root, inline, quoting, and code-span token rules"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "alpha" :body "A")))
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (insert "$alpha root\nUse `$alpha`, \"$alpha\", and $alpha.")
+      (goto-char (point-min))
+      (should (mevedel-skills--fontify-dollar-keyword (point-max)))
+      (should (equal "$alpha" (match-string-no-properties 0)))
+      (should (mevedel-skills--fontify-dollar-keyword (point-max)))
+      (should (equal "$alpha" (match-string-no-properties 0)))
+      (should (string-prefix-p "and "
+                               (buffer-substring-no-properties
+                                (- (match-beginning 0) 4)
+                                (match-beginning 0))))
+      (should-not (mevedel-skills--fontify-dollar-keyword (point-max))))))
+
+(mevedel-deftest mevedel-skills--scan-skill-tokens ()
+  ,test
+  (test)
+  :doc "centralizes root, inline, quote, escape, and code token classification"
+  (let ((lookup (lambda (name) (and (equal name "alpha") 'skill))))
+    (should
+     (equal '((:start 33 :end 39 :name "alpha" :value skill))
+            (mevedel-skills--scan-skill-tokens
+             "$alpha \\$alpha `$alpha` \"$alpha\" $alpha" lookup)))
+    (should (= 2 (length (mevedel-skills--scan-skill-tokens
+                          "$alpha then $alpha" lookup t))))))
+
 (mevedel-deftest mevedel-skills--dispatch-inline-attachments ()
   ,test
   (test)

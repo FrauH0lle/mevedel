@@ -92,7 +92,7 @@
 
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair--persist-event
-                  "mevedel-tool-repair" (session event))
+                  "mevedel-tool-repair-diagnostics" (session event))
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-load

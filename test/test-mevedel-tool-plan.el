@@ -36,6 +36,55 @@
         (throw 'found t)))
     nil))
 
+(mevedel-deftest mevedel-plan-mode--prepare-worktree-outcome ()
+  ,test
+  (test)
+  :doc "reuses a created worktree when a later preparation phase is retried"
+  (with-temp-buffer
+    (let* ((chat-buffer (current-buffer))
+           (target-buffer (generate-new-buffer " *plan-prepare-target*"))
+           (target-session (mevedel-session--create
+                            :name "target" :workspace nil))
+           (entry (list :body "# Plan"))
+           (outcome '(:action implement-worktree :mode default))
+           (create-count 0)
+           (fail-write t)
+           (worktree (list :buffer target-buffer
+                           :branch "test"
+                           :directory "/tmp/test")))
+      (unwind-protect
+          (progn
+            (setq-local gptel-backend 'backend)
+            (setq-local gptel-model 'model)
+            (with-current-buffer target-buffer
+              (setq-local mevedel--session target-session))
+            (cl-letf (((symbol-function 'mevedel-worktree-create-session)
+                       (lambda (&rest _)
+                         (cl-incf create-count)
+                         worktree))
+                      ((symbol-function 'mevedel-plan-mode--write-current-plan)
+                       (lambda (&rest _)
+                         (if fail-write
+                             (error "Write failed")
+                           "/tmp/plan.md")))
+                      ((symbol-function 'mevedel-plan-mode--archive-accepted-plan)
+                       (lambda (&rest _) '(:absolute-path "/tmp/accepted.md")))
+                      ((symbol-function 'mevedel-plan-mode--mark-approved)
+                       #'ignore)
+                      ((symbol-function 'mevedel-plan-mode--save-session-state)
+                       #'ignore))
+              (should-error
+               (mevedel-plan-mode--prepare-worktree-outcome
+                entry "# Plan" chat-buffer outcome))
+              (setq fail-write nil)
+              (let ((prepared
+                     (mevedel-plan-mode--prepare-worktree-outcome
+                      entry "# Plan" chat-buffer outcome)))
+                (should (= 1 create-count))
+                (should (eq worktree (plist-get prepared :worktree))))))
+        (when (buffer-live-p target-buffer)
+          (kill-buffer target-buffer))))))
+
 
 ;;
 ;;; Proposed-plan blocks
@@ -640,12 +689,11 @@
                      (lambda (_action)
                        (error "No API key"))))
             (with-current-buffer source-buffer
-              (should-error
-               (mevedel-plan-mode--approval-callback
-                "# Plan\n\nDo it." source-buffer
-                (list :action 'implement-worktree
-                      :mode 'default
-                      :worktree worktree)))))
+              (mevedel-plan-mode--approval-callback
+               "# Plan\n\nDo it." source-buffer
+               (list :action 'implement-worktree
+                     :mode 'default
+                     :worktree worktree))))
           (with-current-buffer target-buffer
             (let ((text (buffer-substring-no-properties
                          (point-min) (point-max))))

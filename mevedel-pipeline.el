@@ -94,6 +94,10 @@
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
+;; `mevedel-tool-repair-diagnostics'
+(declare-function mevedel-tool-repair-audit-record
+                  "mevedel-tool-repair-diagnostics" (state repairs))
+
 ;; `mevedel-tool-ui'
 (require 'mevedel-permission-queue)
 

@@ -64,7 +64,7 @@ signal after recording."
   ,test
   (test)
 
-  :doc "pop removes head before settling and renders next exactly once"
+  :doc "pop settles the head and renders the next entry exactly once"
   (let* ((session (test-mevedel-queue--session))
          (mevedel--session session)
          (rendered (cons nil nil))
@@ -78,6 +78,19 @@ signal after recording."
     (should (equal '((a . done)) (car outcomes)))
     (should (equal '(b) (car rendered)))
     (should (= 1 (length (mevedel-session-permission-queue session))))))
+
+  :doc "pop keeps the head available when settlement fails"
+  (let* ((session (test-mevedel-queue--session))
+         (mevedel--session session)
+         (rendered (cons nil nil))
+         (outcomes (cons nil nil))
+         (spec (test-mevedel-queue--spec rendered outcomes 'done)))
+    (setf (mevedel-queue-spec-retain-on-settle-error spec) t)
+    (mevedel-queue--enqueue spec (list :id 'a))
+    (let ((entry (car (mevedel-session-permission-queue session))))
+      (mevedel-queue--pop spec entry 'done)
+      (should (eq entry (car (mevedel-session-permission-queue session))))
+      (should-not (car (mevedel-queue--ensure-settled-cell entry)))))
 
 (mevedel-deftest mevedel-queue--abort-all
   (:doc "shared queue abort contract")

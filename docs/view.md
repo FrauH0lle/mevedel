@@ -41,7 +41,9 @@ metadata and any leading compaction summary. `mevedel-view.el` then owns
 turn grouping and rendering. Transcript span classification, tool block
 recovery, generated queued-message parsing, and mailbox structural
 parsing live in `mevedel-transcript.el` so persistence and compaction use
-the same structural view of the buffer.
+the same structural view of the buffer. Hidden audit record grammar and
+attachment spans live in `mevedel-transcript-audit.el`; the view consumes
+those spans without reparsing the wire format.
 
 ## Zones
 
@@ -214,6 +216,11 @@ Markdown rendering adds small view-only affordances:
 - rendered `@file` mentions, local Markdown links, and bare local paths
   are clickable open-file buttons, including `:LINE`, `:L<line>`,
   `:#L<line>`, comma-separated line lists, and `#L<line>` targets.
+
+Markdown tables, links, local images, paths, and fenced source-panel
+projection are isolated in `mevedel-view-markdown.el`.
+Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
+`mevedel-view.el` retains the surrounding turn orchestration.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible

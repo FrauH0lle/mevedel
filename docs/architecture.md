@@ -83,9 +83,10 @@ validation, permission, execution, and persistence boundary. See
 [`tools.md`](tools.md#tool-input-validation-and-repair) and
 [`ADR 0011`](adr/0011-repair-model-tool-input-before-pipeline.md).
 
-`mevedel-tool-repair.el` is the deep module owning structured contract
-validation, generic and tool-owned repair, raw gptel adaptation, value-free
-model feedback and transcript audits, dispatch tracking, and redacted session
+`mevedel-tool-repair.el` owns structured contract validation plus generic and
+tool-owned atomic repair. `mevedel-tool-repair-gptel.el` isolates the temporary
+lossless gptel decoding bridge, while `mevedel-tool-repair-diagnostics.el`
+owns value-free audit records, dispatch-result tracking, and redacted
 telemetry. `mevedel-tool-registry.el` owns the schema declarations and lowers
 the internal `path` type to a provider-facing string.
 
