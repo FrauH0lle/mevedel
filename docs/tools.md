@@ -99,10 +99,11 @@ prompts, schemas, validation messages, and results are excluded. The in-memory
 `mevedel-session-repair-log` is bounded by
 `mevedel-tool-repair-log-limit` (default 200). When
 `mevedel-tool-repair-persist-log` is non-nil, materialized sessions also append
-events to `<session>/repair-log.el`; earlier in-memory events are not
-backfilled when a session is first materialized. Telemetry failures never
-block tool execution. `mevedel-tool-input-repair-enabled` disables mutation
-while retaining validation and telemetry.
+events to `<session>/repair-log.el`; bounded events recorded before first
+materialization are backfilled when the session directory is created.
+Telemetry failures never block tool execution.
+`mevedel-tool-input-repair-enabled` disables mutation while retaining
+validation and telemetry.
 
 `mevedel-define-tool :wrap SOURCE` adopts an existing `gptel-tool` via
 `gptel-get-tool` on every call (so upstream changes take effect without

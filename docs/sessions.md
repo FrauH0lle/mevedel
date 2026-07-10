@@ -40,6 +40,7 @@ Layout:
   segment-0003.chat.org              ; current/live
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
+  repair-log.el                      ; redacted tool-input validation telemetry
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
@@ -90,12 +91,14 @@ stale structural gaps are not offered as user turns.
 Hook execution logs are append-only diagnostics.  The in-memory
 `hook-log` slot is transient and capped, while `hook-log.el` keeps the
 session's persisted hook entries as sanitized plists.  It is not read back
-into live session state on resume.
+into live session state on resume.  Entries recorded before first
+materialization are backfilled when the session directory is created.
 
 Permission diagnostics are also append-only. `permission-log.el` records
 permission queue and `RequestAccess` prompt lifecycle events so transient
 overlays can be diagnosed after a turn or agent is aborted. It is not read
-back into live session state on resume.
+back into live session state on resume.  Pre-materialization entries wait in
+a transient session queue and flush with the other diagnostic logs.
 
 For mevedel chat buffers with dynamic preset system prompts, save-time
 advice around `gptel--save-state` removes frozen `GPTEL_SYSTEM`

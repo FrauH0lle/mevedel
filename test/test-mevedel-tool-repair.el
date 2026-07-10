@@ -853,7 +853,7 @@
   ,test
   (test)
 
-  :doc "bounds memory and appends only events emitted after materialization"
+  :doc "bounds memory and appends events after a save path is present"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-repair-log-" t)))
          (session (mevedel-session--create :name "main"))

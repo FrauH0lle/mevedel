@@ -15,7 +15,10 @@
 (require 'mevedel-view)
 (require 'mevedel-view-history)
 (require 'mevedel-chat)
+(require 'mevedel-hooks)
+(require 'mevedel-permission-log)
 (require 'mevedel-session-persistence)
+(require 'mevedel-tool-repair)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -847,6 +850,39 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                                  (mevedel-session-persistence-ensure-files
                                   session buf)))))
             (kill-buffer buf)))
+      (delete-directory tempdir t)
+      (mevedel-workspace-clear-registry)))
+  :doc "backfills diagnostics recorded before first materialization"
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (unwind-protect
+        (let* ((session (mevedel-session-create "main" workspace))
+               (buf (generate-new-buffer "*test-data-buf*"))
+               (repair-event
+                '(:time "now" :origin "main" :backend backend
+                  :model model :tool "Read" :outcome valid
+                  :repair-enabled t :rules nil :paths nil
+                  :issue-kinds nil :execution executed :result success)))
+          (unwind-protect
+              (progn
+                (mevedel-hooks--log
+                 session '(:event UserPromptSubmit :status ok))
+                (mevedel-tool-repair-log-event session repair-event)
+                (mevedel-permission-log
+                 session 'permission-decision :tool-name "Read")
+                (with-current-buffer buf
+                  (org-mode)
+                  (mevedel-session-persistence-ensure-files session buf))
+                (dolist (file '("hook-log.el" "repair-log.el"
+                                "permission-log.el"))
+                  (should
+                   (file-readable-p
+                    (file-name-concat
+                     (mevedel-session-save-path session) file))))
+                (should-not
+                 (mevedel-session-permission-log-pending session)))
+            (when (buffer-live-p buf)
+              (kill-buffer buf))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
   :doc "returns nil when persistence is disabled"
