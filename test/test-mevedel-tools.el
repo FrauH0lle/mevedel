@@ -56,14 +56,7 @@
 
 (defun mevedel-tools-test--register-agent-tools ()
   "Register the built-in tool surface needed by bundled agents."
-  (mevedel-tool-fs--register)
-  (mevedel-tool-code--register)
-  (mevedel-tool-exec--register)
-  (mevedel-tool-ui--register)
-  (mevedel-tool-task--register)
-  (mevedel-tool-web--register)
-  (mevedel-tool-introspect--register)
-  (mevedel-skills--register))
+  (mevedel-tools-register))
 
 (defun mevedel-tools-test--register-agent-fsm (invocation fsm)
   "Register FSM like the canonical agent runner for INVOCATION."
@@ -76,6 +69,21 @@
                      mevedel-agent-runtime--fsms nil nil #'equal)
           fsm))
   fsm)
+
+;;
+;;; Tool registration
+
+(mevedel-deftest mevedel-tools-register
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "registers built-in and skill tools"
+  (progn
+    (mevedel-tools-register)
+    (dolist (name '("Read" "Bash" "Skill" "ListSkills"))
+      (should (mevedel-tool-get name "mevedel")))))
+
 
 ;;
 ;;; Polymorphic deferred accessors

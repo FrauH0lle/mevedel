@@ -24,21 +24,25 @@
 (declare-function gptel--update-status "gptel" (status &optional face))
 
 ;; `mevedel-skills'
-(defvar mevedel-skills--bundled-dir)
-(defvar mevedel-slash-commands)
-(declare-function mevedel-skills--build-skill
-                  "mevedel-skills" (skill-file source))
 (declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
-(declare-function copy-mevedel-skill "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-allowed-tool-rules "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-allowed-tools "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-agent "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-name "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-p "mevedel-skills" (object))
-(declare-function mevedel-skill-source "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill--create "mevedel-skills" (&rest slots))
+(defvar mevedel-slash-commands)
+
+;; `mevedel-skills-core'
+(declare-function copy-mevedel-skill "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill--create "mevedel-skills-core" (&rest slots))
+(declare-function mevedel-skill-agent "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-allowed-tool-rules
+                  "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-allowed-tools
+                  "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-p "mevedel-skills-core" (object))
+(declare-function mevedel-skill-source "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skills--build-skill
+                  "mevedel-skills-core" (skill-file source))
+(defvar mevedel-skills--bundled-dir)
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--parse-rule-strings

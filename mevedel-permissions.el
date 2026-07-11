@@ -58,10 +58,12 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-check-permission "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-check-permission-async "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))
+(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-get-domain "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 
@@ -497,8 +499,6 @@ old value.  See `mevedel-permission-mode--set' and
 ;;
 ;;; allowed-tools parsing
 
-(declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
-
 (defun mevedel-permission--tool-specifier-key (tool-name)
   "Return the specifier keyword for TOOL-NAME, or nil if absent.
 
@@ -554,7 +554,7 @@ Failure modes:
      ;; Bare name: ^Tool$
      ((string-match "\\`\\([A-Za-z][A-Za-z0-9]*\\)\\'" entry)
       (let ((tool-name (match-string 1 entry)))
-        (unless (mevedel-tool-get tool-name)
+        (unless (mevedel-tool-ensure tool-name)
           (user-error "Unknown tool in allowed-tools: %s" tool-name))
         (list tool-name :action 'allow)))
      ;; Qualified: ^Tool(VALUE)$
@@ -563,7 +563,7 @@ Failure modes:
       (let* ((tool-name (match-string 1 entry))
              (raw-value (match-string 2 entry))
              (value raw-value))
-        (unless (mevedel-tool-get tool-name)
+        (unless (mevedel-tool-ensure tool-name)
           (user-error "Unknown tool in allowed-tools: %s" tool-name))
         (let ((spec-key (mevedel-permission--tool-specifier-key tool-name)))
           (unless spec-key

@@ -433,24 +433,9 @@ inlining a paragraph.
   `reasoning_effort`, no-op + warning for others).
 - **Why deferred:** Blocked on gptel exposing an effort/reasoning
   control.
-- **Status check:** Slot is populated; `mevedel-skills.el:1592`
-  raises a `display-warning` that the value is "stored but currently
-  inert".
+- **Status check:** The skill core populates the slot; invocation's
+  `mevedel-skills--apply-overrides-handler` leaves the value inert.
 - **Blast radius:** `effort: high` skills do not actually escalate.
-
-### Live skill discovery refresh
-
-- **Source:** `specs/22-skill-refinement.md` "Discovery refresh"
-- **What's owed:** File-notify-driven re-scan of skill directories
-  with a throttle defcustom, merge rules preserving `active-p`, and
-  an explicit `/refresh` command.
-- **Why deferred:** Over-scoped spec 22; pulled into its own future
-  spec.
-- **Status check:** Watcher plumbing exists at
-  `mevedel-skills.el:864` but doesn't trigger a re-scan; explicit
-  refresh command not wired.
-- **Blast radius:** Adding/editing SKILL.md files requires session
-  restart.
 
 ## Permissions and modes
 

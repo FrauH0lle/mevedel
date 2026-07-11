@@ -128,7 +128,7 @@ user turn via `gptel--inject-prompt`. Polymorphic accessor
 
 ## Coordinator skill
 
-Bundled at `skills/coordinator/SKILL.md` (discovered via
+Bundled at `skills/coordinator/SKILL.md` (discovered by the skill core via
 `mevedel-skills--bundled-dir`). `context: fork` delegates to the
 coordinator agent. User/project skills in `.mevedel/skills/`,
 `.agents/skills/`, `~/.mevedel/skills/`, or `~/.agents/skills/` can

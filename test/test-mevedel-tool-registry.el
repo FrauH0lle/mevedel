@@ -71,6 +71,50 @@
     (should (equal "v2" (mevedel-tool-description
                          (mevedel-tool-get "Read" "mevedel"))))))
 
+(mevedel-deftest mevedel-tool-ensure
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "returns an existing tool without loading its built-in owner"
+  (let ((tool (mevedel-tool--create :name "Bash" :category "custom"))
+        (require-called nil))
+    (mevedel-tool-register tool)
+    (cl-letf (((symbol-function 'require)
+               (lambda (&rest _args)
+                 (setq require-called t))))
+      (should (eq tool (mevedel-tool-ensure "Bash")))
+      (should-not require-called)))
+
+  :doc "loads only Bash's owner and returns the requested tool"
+  (let ((tool (mevedel-tool-ensure "Bash")))
+    (should (equal "Bash" (mevedel-tool-name tool)))
+    (should (equal '("Bash" "Eval")
+                   (sort (mapcar #'mevedel-tool-name
+                                 (mevedel-tool-all))
+                         #'string<))))
+
+  :doc "Skill and ListSkills each lazily register only their shared owner"
+  (dolist (name '("Skill" "ListSkills"))
+    (mevedel-tool-clear-registry)
+    (should (equal name (mevedel-tool-name (mevedel-tool-ensure name))))
+    (should (equal '("ListSkills" "Skill")
+                   (sort (mapcar #'mevedel-tool-name
+                                 (mevedel-tool-all))
+                         #'string<))))
+
+  :doc "Ask and RequestAccess each lazily register only their direct owner"
+  (dolist (name '("Ask" "RequestAccess"))
+    (mevedel-tool-clear-registry)
+    (should (equal name (mevedel-tool-name (mevedel-tool-ensure name))))
+    (should (equal (list name)
+                   (mapcar #'mevedel-tool-name (mevedel-tool-all)))))
+
+  :doc "returns nil without registering anything for an unknown name"
+  (progn
+    (should-not (mevedel-tool-ensure "DoesNotExist"))
+    (should-not (mevedel-tool-all))))
+
 (mevedel-deftest mevedel-tool-all
   (:before-each (mevedel-tool-clear-registry)
    :after-each (mevedel-tool-clear-registry))

@@ -54,8 +54,8 @@
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
-;; `mevedel-skills'
-(declare-function mevedel-skills-rescan "mevedel-skills" ())
+;; `mevedel-skills-core'
+(declare-function mevedel-skills-rescan "mevedel-skills-core" ())
 
 ;; `mevedel-structs'
 (defvar mevedel--session)

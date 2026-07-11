@@ -39,14 +39,7 @@
 
 (defun mevedel-agent-runtime-test--register-agent-tools ()
   "Register the built-in tool surface needed by bundled agents."
-  (mevedel-tool-fs--register)
-  (mevedel-tool-code--register)
-  (mevedel-tool-exec--register)
-  (mevedel-tool-ui--register)
-  (mevedel-tool-task--register)
-  (mevedel-tool-web--register)
-  (mevedel-tool-introspect--register)
-  (mevedel-skills--register))
+  (mevedel-tools-register))
 
 (defun mevedel-agent-runtime-test--register-agent-fsm (invocation fsm)
   "Register FSM like the canonical runtime for INVOCATION."

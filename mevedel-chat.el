@@ -143,12 +143,15 @@
 ;; `mevedel-skills'
 (declare-function mevedel-skills--refresh-view-input-prompt
                   "mevedel-skills" ())
-(declare-function mevedel-skills--release-on-kill "mevedel-skills" ())
-(declare-function mevedel-skills-install "mevedel-skills"
-                  (session &optional buffer))
 (declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
 (declare-function mevedel-skills-install-reminder "mevedel-skills" (session))
 (declare-function mevedel-slash-capf "mevedel-skills" ())
+
+;; `mevedel-skills-core'
+(declare-function mevedel-skills--release-on-kill
+                  "mevedel-skills-core" ())
+(declare-function mevedel-skills-install "mevedel-skills-core"
+                  (session &optional buffer))
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
