@@ -214,6 +214,143 @@
 ;;
 ;;; Full decision chain
 
+(mevedel-deftest mevedel-permission--preflight ()
+  ,test
+  (test)
+  :doc "normalizes extracted specifiers and shared decision facts"
+  (let* ((get-path-calls 0)
+         (tool (mevedel-tool--create
+                :name "Edit"
+                :get-path (lambda (input)
+                            (cl-incf get-path-calls)
+                            (plist-get input :file_path))
+                :read-only-p nil))
+         (context
+          (let ((mevedel-permission-rules nil)
+                (mevedel-protected-paths nil))
+            (mevedel-permission--preflight
+             "Edit"
+             :tool-struct tool
+             :content '(:file_path "/project/file.el")
+             :session-rules
+             '(("Edit" :path "/project/*" :action allow))
+             :mode 'default
+             :workspace-root "/project"))))
+    (should (= 1 get-path-calls))
+    (should (equal "/project/file.el" (plist-get context :path)))
+    (should-not (plist-get context :read-only-p))
+    (should (equal '("/project") (plist-get context :allowed-roots)))
+    (should (eq 'default (plist-get context :mode)))
+    (should-not (plist-get context :early-decision)))
+
+  :doc "returns an absolute deny with its winning bucket"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil))
+    (let* ((context
+            (mevedel-permission--preflight
+             "Edit"
+             :session-rules '(("Edit" :action deny))
+             :mode 'trust-all))
+           (decision (plist-get context :early-decision)))
+      (should (eq 'deny
+                  (mevedel-permission-decision-raw-outcome decision)))
+      (should (eq 'deny-rule (plist-get decision :via)))
+      (should (eq :session (plist-get decision :bucket)))))
+
+  :doc "protected paths produce the pre-tool decision after deny checks"
+  (let ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+        (mevedel-permission-rules nil)
+        (mevedel-protected-paths '("**/.git/**")))
+    (let* ((context
+            (mevedel-permission--preflight
+             "Edit" :tool-struct tool :path "/repo/.git/config"
+             :mode 'plan))
+           (decision (plist-get context :early-decision)))
+      (should (eq 'deny
+                  (mevedel-permission-decision-raw-outcome decision)))
+      (should (eq 'protected-path (plist-get decision :via))))))
+
+(mevedel-deftest mevedel-check-permission-async-with-metadata ()
+  ,test
+  (test)
+  :doc "sync and async entry points return identical non-async decisions"
+  (let* ((read-tool (mevedel-tool--create :name "Read" :read-only-p t))
+         (edit-tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+         (deny-tool
+          (mevedel-tool--create
+           :name "Custom"
+           :read-only-p nil
+           :check-permission
+           (lambda (_tool _input)
+             (signal 'mevedel-permission-denied '("custom reason")))))
+         (cases
+          `(("Edit" :tool-struct ,edit-tool
+             :session-rules (("Edit" :action deny)) :mode trust-all)
+            ("Read" :tool-struct ,read-tool
+             :path "/repo/.git/config" :mode trust-all)
+            ("Edit" :tool-struct ,edit-tool
+             :path "/repo/.git/config" :mode plan)
+            ("Read" :tool-struct ,read-tool
+             :path "/project/file.el" :allowed-roots ("/project")
+             :mode default)
+            ("Read" :tool-struct ,read-tool
+             :path "/drop/file.el" :exact-allowed-paths ("/drop/file.el")
+             :mode default)
+            ("Read" :tool-struct ,read-tool
+             :path "/outside/file.el" :allowed-roots ("/project")
+             :mode default)
+            ("Edit" :tool-struct ,edit-tool
+             :request-rules (("Edit" :action ask)) :mode plan)
+            ("Custom" :tool-struct ,deny-tool :mode trust-all))))
+    (let ((mevedel-permission-rules nil)
+          (mevedel-protected-paths '("**/.git/**")))
+      (dolist (case cases)
+        (let* ((tool-name (car case))
+               (args (cdr case))
+               (sync (apply #'mevedel-check-permission-with-metadata
+                            tool-name args))
+               async)
+          (apply #'mevedel-check-permission-async-with-metadata
+                 tool-name (lambda (decision) (setq async decision)) args)
+          (should (equal sync async))))))
+
+  :doc "an absolute deny is resolved once and skips both tool slots"
+  (let* ((deny-checks 0)
+         (sync-slot-called nil)
+         (async-slot-called nil)
+         (original (symbol-function
+                    'mevedel-permission--first-deny-bucket))
+         (tool
+          (mevedel-tool--create
+           :name "Custom"
+           :read-only-p nil
+           :check-permission
+           (lambda (_tool _input) (setq sync-slot-called t) 'allow)
+           :check-permission-async
+           (lambda (_tool _input cont)
+             (setq async-slot-called t)
+             (funcall cont 'allow))))
+         decision)
+    (let ((mevedel-permission-rules nil)
+          (mevedel-protected-paths '("**/.git/**")))
+      (cl-letf (((symbol-function 'mevedel-permission--first-deny-bucket)
+                 (lambda (&rest args)
+                   (cl-incf deny-checks)
+                   (apply original args))))
+        (mevedel-check-permission-async-with-metadata
+         "Custom" (lambda (result) (setq decision result))
+         :tool-struct tool
+         :path "/repo/.git/config"
+         :invocation-rules '(("Custom" :action allow))
+         :session-rules '(("Custom" :action deny))
+         :mode 'trust-all)))
+    (should (= 1 deny-checks))
+    (should-not sync-slot-called)
+    (should-not async-slot-called)
+    (should (equal '(:outcome deny :raw-outcome deny
+                     :via deny-rule :bucket :session)
+                   decision))))
+
 (mevedel-deftest mevedel-check-permission ()
   ,test
   (test)

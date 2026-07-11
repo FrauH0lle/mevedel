@@ -56,6 +56,12 @@ extraction, rule buckets, mode, allowed roots, dropped-file exact grants,
 missing-session fallback warnings, and the prompt rule shape used for
 outside-root approvals.
 
+The synchronous and asynchronous decision entry points then share one pure
+preflight. It normalizes the decision facts and resolves absolute deny rules
+and protected paths exactly once. Both paths use the same synchronous tool
+slot adapter and decision tail; only a tool that supplies an asynchronous
+permission callback introduces an asynchronous branch.
+
 ## Bucket precedence
 
 Steps 2 and 5 consume rules from multiple buckets, in this order:
