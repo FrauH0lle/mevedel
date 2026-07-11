@@ -8,8 +8,10 @@ session installation, path-scoped activation state, and hot reload.
 overrides, direct fork response insertion, inline attachments, and model-tool
 behavior. `mevedel-turn.el` owns the canonical terminal transaction shared by
 ordinary responses and direct fork completion.
-`mevedel-skills.el` owns local commands, command/skill completion, prompt roster
-rendering, event-shaped reminders, and send-dispatch composition.
+`mevedel-skills-prompt.el` owns prompt roster rendering, event-shaped reminders,
+and path-activation notices. `mevedel-skills-ui.el` owns local commands, the
+skills cockpit, command/skill completion, font-lock, and send-dispatch
+composition.
 
 ## Skill flow
 

@@ -10,7 +10,7 @@
 
 (require 'cl-lib)
 (require 'mevedel-structs)
-(require 'mevedel-skills)
+(require 'mevedel-skills-prompt)
 (require 'mevedel-workspace)
 (require 'mevedel-utilities)
 (require 'mevedel-system)

@@ -24,9 +24,9 @@
 ;; `gptel-agent'
 (declare-function gptel-agent-read-file "ext:gptel-agent" (agent-file &optional templates metadata-only))
 
-;; `mevedel-skills'
+;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
-                  "mevedel-skills" (session &optional buffer))
+                  "mevedel-skills-prompt" (session &optional buffer))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
@@ -525,7 +525,7 @@ present."
 
 (defun mevedel-system--skills-prompt (context)
   "Return dynamic skills prompt text for CONTEXT, or nil."
-  (when (require 'mevedel-skills nil t)
+  (when (require 'mevedel-skills-prompt nil t)
     (when-let* ((session (mevedel-system--context-session context)))
       (mevedel-skills-prompt-section
        session

@@ -9,7 +9,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-agents)
 (require 'mevedel-mentions)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-tools)
 (require 'mevedel-view)
 (require 'helpers

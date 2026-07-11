@@ -7,7 +7,6 @@
 ;;; Code:
 
 (require 'mevedel-agents)
-(require 'mevedel-skills)
 (require 'mevedel-tools)
 (require 'helpers
          (file-name-concat

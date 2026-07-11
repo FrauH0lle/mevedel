@@ -21,7 +21,7 @@
 (require 'mevedel-preview-mode)
 (require 'mevedel-review)
 (require 'mevedel-session-persistence)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-plan)

@@ -11,7 +11,7 @@
 (require 'mevedel-file-state)
 (require 'mevedel-view)
 (require 'mevedel-mentions)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'gptel-agent-tools)
 
 ;; Stubs for globals defined in `mevedel-chat' that auto-apply's

@@ -25,7 +25,7 @@
 (defvar gptel--known-presets)
 (defvar mevedel-session-persistence)
 (declare-function mevedel-skills--apply-overrides-handler
-                  "mevedel-skills" (fsm))
+                  "mevedel-skills-invoke" (fsm))
 (require 'helpers
          (file-name-concat
           (file-name-directory
