@@ -333,8 +333,6 @@
                   "mevedel-session-persistence" (file))
 (declare-function mevedel-session-persistence--sanitize-gptel-bounds
                   "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence--normalize-gptel-properties
-                  "mevedel-session-persistence" ())
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history" (input))
@@ -1000,7 +998,7 @@ Values are t when collapsed and nil when expanded.")
 Set by `mevedel-view--insert-user-message' when the view's send path
 echoes the user's input immediately, and consumed (cleared) by
 `mevedel-view--render-response' to skip the user turn that
-`mevedel-transcript--extract-segments' may pick up for the same exchange,
+`mevedel-transcript-segments' may pick up for the same exchange,
 which would otherwise produce a duplicate \"You\" block above the
 assistant reply.  Tests that drive function
 `mevedel-view--render-response' directly (without going through the
@@ -3070,8 +3068,7 @@ self-heal on rerender."
                        scan-start (point-max))))
         (mevedel-view--restore-gptel-bounds))
       (when (mevedel-view--gptel-props-present-p scan-start (point-max))
-        (require 'mevedel-session-persistence)
-        (mevedel-session-persistence--normalize-gptel-properties)))))
+        (mevedel-transcript-normalize-properties)))))
 
 (defun mevedel-view--running-agent-transcript-buffer-p ()
   "Return non-nil when the current buffer is a live agent transcript."
@@ -3107,34 +3104,31 @@ real user message."
              (type (car seg))
              (seg-start (cadr seg))
              (next-type (car-safe (cadr rest)))
-             (mailbox-user-p
-              (and (eq type 'user)
-                   data-buf
-                   (mevedel-view--mailbox-only-text-p
-                    (mevedel-view--user-turn-text (list seg) data-buf))))
              (prompt-drawer-after-user-p
-              (and (eq type 'ignore)
-                   data-buf
+              (and (eq type 'prompt)
                    (null current-role)
                    turns
-                   (eq (plist-get (car turns) :role) 'user)
-                   (mevedel-view--prompt-drawer-segment-p
-                    data-buf seg-start (caddr seg))))
+                   (eq (plist-get (car turns) :role) 'user)))
              (hook-audit-after-user-p
-              (and (eq type 'ignore)
+              (and (eq type 'ignored)
                    data-buf
                    (null current-role)
                    turns
                    (eq (plist-get (car turns) :role) 'user)
                    (mevedel-view--hook-audit-only-segment-p
                     data-buf seg-start (caddr seg))))
+             (hook-context-after-user-p
+              (and (eq type 'hook-context)
+                   (null current-role)
+                   turns
+                   (eq (plist-get (car turns) :role) 'user)))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
                    data-buf
                    (mevedel-view--scaffolding-only-p
                     data-buf seg-start (caddr seg))
                    (let ((next (cadr rest)))
-                     (and (eq (car-safe next) 'ignore)
+                     (and (eq (car-safe next) 'ignored)
                           (mevedel-view--hook-audit-only-segment-p
                            data-buf (cadr next) (caddr next))))))
              (review-action-p
@@ -3142,11 +3136,7 @@ real user message."
                    data-buf
                    (mevedel-view--review-action-segment-p
                     data-buf seg-start (caddr seg))))
-             (queued-batch-p
-              (and (eq type 'user)
-                   data-buf
-                   (mevedel-view--queued-user-message-batch-segment-p
-                    data-buf seg-start (caddr seg))))
+             (queued-batch-p (eq type 'queued-message))
              (queued-batch-continuation-p
               (and (eq type 'user)
                    data-buf
@@ -3159,25 +3149,21 @@ real user message."
                       (append (plist-get (car turns) :segments)
                               (list seg))
                       data-buf)))))
-             (system-reminder-p
-              (and data-buf
-                   (memq type '(user ignore))
-                   (mevedel-view--system-reminder-only-segment-p
-                    data-buf seg-start (caddr seg))))
+             (system-reminder-p (eq type 'reminder))
              (inline-skill-render-p
               (and data-buf
-                   (memq type '(user ignore))
+                   (memq type '(user render-data ignored))
                    (mevedel-view--inline-skill-render-segment-p
                     data-buf seg-start (caddr seg))))
              (request-summary-p
               (and data-buf
-                   (memq type '(user ignore))
+                   (memq type '(user render-data ignored))
                    (mevedel-view--request-summary-render-segment-p
                     data-buf seg-start (caddr seg))))
              (render-data-only-p
               (and data-buf
-                   (memq type '(user ignore))
-                   (not (and (eq type 'ignore)
+                   (memq type '(user render-data ignored))
+                   (not (and (memq type '(render-data ignored))
                              (mevedel-view--agent-transcript-render-segment-p
                               data-buf seg-start (caddr seg))))
                    (mevedel-view--render-data-only-segment-p
@@ -3212,6 +3198,7 @@ real user message."
           nil)
          ((or prompt-drawer-after-user-p
               hook-audit-after-user-p
+              hook-context-after-user-p
               queued-batch-continuation-p
               (and inline-skill-render-p
                    (null current-role)
@@ -3227,14 +3214,15 @@ real user message."
          (render-data-only-p
           nil)
          ((and (eq type 'user)
-               (not mailbox-user-p)
                (or review-action-p
                    (memq prev-type '(nil user response)))
                ;; Look-ahead: a scaffolding-only nil gap right after a
                ;; response is assistant-side glue.  Require DATA-BUF proof
                ;; so a real user prompt remains a user turn.
                (not (and (eq prev-type 'response)
-                         (or (and (memq next-type '(ignore tool))
+                         (or (and (memq next-type
+                                       '(reasoning ignored tool mailbox
+                                         reminder render-data))
                                   (mevedel-view--scaffolding-only-p
                                    data-buf seg-start (caddr seg)))
                              (and (eq next-type 'response)
@@ -4206,13 +4194,6 @@ as generated control markup."
                 (string-trim
                  (buffer-substring-no-properties body-start body-end))))))))))
 
-(defun mevedel-view--system-reminder-only-segment-p
-    (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF's SEG-START..SEG-END is only a system reminder."
-  (with-current-buffer data-buf
-    (mevedel-view--system-reminder-body-from-text
-     (buffer-substring-no-properties seg-start seg-end))))
-
 (defun mevedel-view--strip-system-reminder-blocks (text)
   "Return TEXT without generated `<system-reminder>' blocks."
   (with-temp-buffer
@@ -4267,13 +4248,6 @@ turn shows one bogus thinking summary per tool boundary."
              (cleaned (and text (mevedel-view--clean-reasoning-text text))))
         (or (null text)
             (string-empty-p (string-trim cleaned)))))))
-
-(defun mevedel-view--prompt-drawer-segment-p (data-buf seg-start seg-end)
-  "Return non-nil if DATA-BUF's SEG-START..SEG-END has a directive prompt drawer."
-  (with-current-buffer data-buf
-    (save-excursion
-      (goto-char seg-start)
-      (re-search-forward "^:PROMPT:\n" seg-end t))))
 
 (defun mevedel-view--inline-skill-render-data-from-text (text)
   "Return inline-skill render-data from TEXT, or nil."
@@ -5078,7 +5052,7 @@ the render so user toggles survive streaming ticks."
               (with-current-buffer data-buf (point-max))))
          (segments (when (and data-from data-to)
                      (with-current-buffer data-buf
-                       (mevedel-transcript--extract-segments data-from data-to))))
+                       (mevedel-transcript-segments data-from data-to))))
          (turns (mevedel-view--group-into-turns segments data-buf))
          (in-flight-p (mevedel-view--in-flight-turn-start-position))
          (pre-rendered-user-visible-p
@@ -5096,7 +5070,7 @@ the render so user toggles survive streaming ticks."
      :turn-detail (mevedel-view--debug-turn-summary turns data-buf)
      :pre-rendered-user mevedel-view--user-pre-rendered
      :pre-rendered-user-visible pre-rendered-user-visible-p)
-    ;; Filter the send-path user turn.  `--extract-segments' expands a
+    ;; Filter the send-path user turn.  `mevedel-transcript-segments' expands a
     ;; start position back to the containing `gptel' property run, so a
     ;; data-turn marker sitting at the end of the prompt can still yield
     ;; a leading user turn whose source starts before DATA-FROM.  That is
@@ -5721,14 +5695,6 @@ Empty string when the turn contains only whitespace or markers."
      segments
      "")))
 
-(defun mevedel-view--queued-user-message-batch-segment-p
-    (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF SEG-START..SEG-END spans a message batch."
-  (with-current-buffer data-buf
-    (mevedel-view--queued-user-message-batch-items-from-text
-     (mevedel-view--queued-user-message-batch-normalized-text
-      (buffer-substring-no-properties seg-start seg-end)))))
-
 (defun mevedel-view--queued-user-message-batch-turn-p (turn data-buf)
   "Return non-nil when TURN in DATA-BUF has a generated message batch."
   (and (eq (plist-get turn :role) 'user)
@@ -5754,7 +5720,7 @@ Empty string when the turn contains only whitespace or markers."
   (with-current-buffer data-buf
     (let (events first-start last-end)
       (dolist (seg segments)
-        (when (eq (car seg) 'user)
+        (when (memq (car seg) '(user hook-context))
           (let ((seg-end (caddr seg)))
             (save-excursion
               (goto-char (cadr seg))
@@ -5904,7 +5870,9 @@ EXPANDED means insert the disclosure body expanded."
   (with-current-buffer data-buf
     (let (info hook-audits)
       (dolist (seg segments)
-        (when (memq (car seg) '(user ignore))
+        (when (memq (car seg)
+                    '(user queued-message hook-context prompt
+                      render-data ignored))
           (let ((text (buffer-substring-no-properties
                        (cadr seg) (caddr seg))))
             (unless info
@@ -6066,7 +6034,7 @@ Each plist contains :start, :end, and :body for a `:PROMPT:' drawer."
   (with-current-buffer data-buf
     (let (drawers)
       (dolist (seg segments)
-        (when (memq (car seg) '(user ignore))
+        (when (memq (car seg) '(user prompt ignored))
           (let ((seg-end (caddr seg)))
             (save-excursion
               (goto-char (cadr seg))
@@ -6246,41 +6214,36 @@ are merged into a single summary."
            (mevedel-view--render-system-reminder-segment seg data-buf))
           ('request-summary
            (push seg request-summary-group))
+          ('mailbox
+           (mevedel-view--flush-thinking-group thinking-group data-buf)
+           (setq thinking-group nil)
+           (when tool-group
+             (mevedel-view--render-tool-group
+              (nreverse tool-group) data-buf)
+             (setq tool-group nil))
+           (let ((text (mevedel-view--user-turn-text (list seg) data-buf))
+                 (text-start nil))
+             (mevedel-view--ensure-blank-line-before-response)
+             (setq text-start (point))
+             (insert text "\n")
+             (mevedel-view--decorate-agent-result-blocks text-start (point))
+             (mevedel-view--decorate-agent-message-blocks text-start (point))))
           ('user
            (let ((seg-start (cadr seg))
                  (seg-end (caddr seg)))
-             (if (mevedel-view--mailbox-only-text-p
-                  (mevedel-view--user-turn-text (list seg) data-buf))
-                 (progn
-                   (mevedel-view--flush-thinking-group thinking-group data-buf)
-                   (setq thinking-group nil)
-                   (when tool-group
-                     (mevedel-view--render-tool-group
-                      (nreverse tool-group) data-buf)
-                     (setq tool-group nil))
-                   (let ((text (mevedel-view--user-turn-text
-                                (list seg) data-buf))
-                         (text-start nil))
-                     (mevedel-view--ensure-blank-line-before-response)
-                     (setq text-start (point))
-                     (insert text "\n")
-                     (mevedel-view--decorate-agent-result-blocks
-                      text-start (point))
-                     (mevedel-view--decorate-agent-message-blocks
-                      text-start (point))))
-               ;; Drop org-only glue (`#+end_tool', `#+begin_tool …',
-               ;; blank lines) so it doesn't surface as a one-line
-               ;; `Thinking…' between adjacent tool blocks.  Skip without
-               ;; flushing the tool-group so consecutive tool segments
-               ;; separated only by glue still group / render together.
-               (unless (mevedel-view--scaffolding-only-p
-                        data-buf seg-start seg-end)
-                 (when tool-group
-                   (mevedel-view--render-tool-group
-                    (nreverse tool-group) data-buf)
-                   (setq tool-group nil))
-                 (push seg thinking-group)))))
-          ('ignore
+             ;; Drop org-only glue (`#+end_tool', `#+begin_tool …',
+             ;; blank lines) so it doesn't surface as a one-line
+             ;; `Thinking…' between adjacent tool blocks.  Skip without
+             ;; flushing the tool-group so consecutive tool segments
+             ;; separated only by glue still group / render together.
+             (unless (mevedel-view--scaffolding-only-p
+                      data-buf seg-start seg-end)
+               (when tool-group
+                 (mevedel-view--render-tool-group
+                  (nreverse tool-group) data-buf)
+                 (setq tool-group nil))
+               (push seg thinking-group))))
+          ((or 'reasoning 'render-data 'ignored)
            (if (mevedel-view--agent-transcript-render-segment-p
                 data-buf (cadr seg) (caddr seg))
                (progn
@@ -6351,7 +6314,7 @@ are merged into a single summary."
       (cond
        ((and out
              (eq (caar out) 'tool)
-             (eq (car seg) 'ignore)
+             (eq (car seg) 'ignored)
              (mevedel-view--hook-audit-only-segment-p
               data-buf (cadr seg) (caddr seg)))
         (setcar out (list 'tool (cadar out) (caddr seg))))
@@ -7656,12 +7619,12 @@ rerender)."
                (cons scan-start after-summary))
               (setq compaction-indicator-inserted t)))
           (setq scan-start after-summary))
-        ;; Narrow so that `extract-segments' boundary expansion
+        ;; Narrow so that transcript segment boundary expansion
         ;; (`previous-single-property-change' bounded by `point-min')
         ;; can't walk back into the leading drawer / compacted region.
         (save-restriction
           (narrow-to-region scan-start (point-max))
-          (let* ((segments (mevedel-transcript--extract-segments
+          (let* ((segments (mevedel-transcript-segments
                             (point-min) (point-max)))
                  (turns (mevedel-view--group-into-turns segments data-buf))
                  (view-buf (if render-agent-transcript-p
@@ -8182,10 +8145,11 @@ text to render in the view."
                                ""))
             blocks))
     (format "<system-reminder>
-The following user message batch arrived while your previous request was already active. Account for it while continuing the current work; do not discard in-progress context just because this arrived mid-turn.
+%s
 </system-reminder>
 
 <queued-user-message-batch count=\"%d\">\n%s\n</queued-user-message-batch>"
+            mevedel-transcript-queued-message-reminder
             (length queue)
             (string-join (nreverse blocks) "\n\n"))))
 
@@ -9291,7 +9255,7 @@ PARENT-VIEW is the session view that opened the transcript."
             (when-let* ((sanitized
                          (org-entry-get (point-min) "GPTEL_BOUNDS")))
               (gptel--restore-props (read sanitized))
-              (mevedel-session-persistence--normalize-gptel-properties)))
+              (mevedel-transcript-normalize-properties)))
         (error
          (display-warning
           'mevedel
@@ -10176,7 +10140,7 @@ HEADER-WIDTH is the optional width used to align the row header."
         (save-restriction
           (widen)
           (catch 'found
-            (dolist (seg (mevedel-transcript--extract-segments (point-min) (point-max)))
+            (dolist (seg (mevedel-transcript-segments (point-min) (point-max)))
               (when (eq (car seg) 'tool)
                 (when-let* ((call (mevedel-view--tool-call-parse
                                    data-buf (cadr seg) (caddr seg))))

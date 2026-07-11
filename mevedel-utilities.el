@@ -441,7 +441,8 @@ line by itself."
   "Clear inherited text properties between START and END."
   (let ((inhibit-read-only t))
     (set-text-properties start end nil))
-  (mevedel--restore-render-data-gptel-properties start end))
+  (require 'mevedel-transcript)
+  (mevedel-transcript-restore-ignored-properties start end))
 
 (defconst mevedel--render-data-open "<!-- mevedel-render-data -->"
   "Opening delimiter for internal render-data side-channel blocks.")
@@ -460,30 +461,6 @@ line by itself."
   "mevedel-transcript-audit")
 (autoload 'mevedel--read-hook-audit-record "mevedel-transcript-audit")
 (autoload 'mevedel--format-hook-audit-record "mevedel-transcript-audit")
-
-(defun mevedel--restore-delimited-gptel-ignore (start end open close)
-  "Mark delimited side-channel blocks between START and END as ignored."
-  (save-excursion
-    (let ((limit (copy-marker end)))
-      (unwind-protect
-          (progn
-            (goto-char start)
-            (while (search-forward open limit t)
-              (let ((block-start (match-beginning 0)))
-                (if (search-forward close limit t)
-                    (progn
-                      (skip-chars-forward " \t\r\n" limit)
-                      (put-text-property block-start (point)
-                                         'gptel 'ignore))
-                  (goto-char limit)))))
-        (set-marker limit nil)))))
-
-(defun mevedel--restore-render-data-gptel-properties (start end)
-  "Mark internal side-channel blocks in START..END as `gptel' ignored."
-  (mevedel--restore-delimited-gptel-ignore
-   start end mevedel--render-data-open mevedel--render-data-close)
-  (mevedel--restore-delimited-gptel-ignore
-   start end mevedel--hook-audit-open mevedel--hook-audit-close))
 
 (defun mevedel--insert-user-role-block-at-marker (block &optional marker)
   "Insert synthetic user-role BLOCK at MARKER or `point-max'.

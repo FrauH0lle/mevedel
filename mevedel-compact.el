@@ -783,7 +783,7 @@ manual user instructions.  SESSION supplies invoked skill records."
 Return the position just after the last response, or nil if no response
 exists."
   (let (boundary)
-    (dolist (seg (mevedel-transcript--extract-segments (point-min) (point-max)))
+    (dolist (seg (mevedel-transcript-segments (point-min) (point-max)))
       (when (eq (car seg) 'response)
         (setq boundary (caddr seg))))
     boundary))
@@ -796,7 +796,7 @@ Tool-call/result spans between assistant response chunks do not create a
 new turn."
   (let ((after-response t)
         starts)
-    (dolist (seg (mevedel-transcript--extract-segments
+    (dolist (seg (mevedel-transcript-segments
                   (mevedel--compact-body-start) limit))
       (let ((seg-end (min (caddr seg) limit)))
         (when (< (cadr seg) seg-end)

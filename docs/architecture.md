@@ -124,17 +124,24 @@ artifacts where appropriate.
 
 ## Transcript structure
 
-`mevedel-transcript.el` is the shared, read-only transcript structure
-module. Its primary entry point, `mevedel-transcript--extract-segments`,
-classifies data-buffer spans as `(TYPE START END)` where type is
-`user`, `response`, `tool`, or `ignore`, using gptel text properties as
-the source of truth and repairing known org/gptel structural glue.
+`mevedel-transcript.el` owns the canonical transcript grammar. Its primary
+entry point, `mevedel-transcript-segments`, classifies data-buffer spans as
+`(TYPE START END)` where type is `user`, `response`, `tool`, `reasoning`,
+`mailbox`, `reminder`, `queued-message`, `hook-context`, `render-data`,
+`prompt`, or `ignored`. It combines gptel text-property runs with generated
+control ranges, protects literal user examples from structural recognition,
+and repairs known org/gptel boundary damage.
 
 The module also owns the small structural helpers needed to skip leading
 property drawers and compaction summaries, recover whole org tool
 blocks, split generated queued-user batches, parse agent mailbox blocks,
 and find the first real user prompt line outside tool/reasoning/summary
 scaffolding.
+
+`mevedel-transcript-normalize-properties` applies those same canonical ranges
+when a live or restored Org transcript needs its structural `gptel`
+properties repaired. Persistence, the view, and compaction consume this
+module instead of maintaining their own transcript grammars.
 
 View rendering, session prompt indexing/rewind, and compaction all read
 these shared spans. They keep their own policies: the view groups and

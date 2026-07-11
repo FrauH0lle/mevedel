@@ -90,11 +90,16 @@ When a saved session's working directory no longer exists, resume prompts
 for an existing replacement inside the workspace and persists that directory
 after the session opens successfully.
 
-The prompt-index is rebuilt from `mevedel-transcript--extract-segments`
+The prompt-index is rebuilt from `mevedel-transcript-segments`
 over the live segment. Only shared `user` spans whose real prompt text
 starts outside gptel-owned org tool/reasoning/summary scaffolding become
 rewind entries, so property drawers, compaction summaries, tool glue, and
 stale structural gaps are not offered as user turns.
+
+After gptel restores persisted bounds, session restoration calls
+`mevedel-transcript-normalize-properties`. The transcript module reapplies
+properties from its canonical structural ranges; persistence does not parse
+transcript control forms itself.
 
 Hook execution logs are append-only diagnostics.  The in-memory
 `hook-log` slot is transient and capped, while `hook-log.el` keeps the

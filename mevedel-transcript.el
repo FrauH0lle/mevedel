@@ -2,14 +2,18 @@
 
 ;;; Commentary:
 
-;; Read-only helpers for classifying the gptel data buffer transcript into
-;; structural spans.  Callers decide how to render, persist, or compact the
-;; spans.
+;; Canonical classification and property restoration for the gptel data
+;; buffer transcript.  Callers decide how to render, persist, or compact the
+;; resulting structural spans.
 
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
 (require 'subr-x)
+
+;; `org'
+(declare-function org-entry-get
+                  "ext:org" (pom property &optional inherit literal-nil))
 
 (defun mevedel-transcript--skip-leading-properties-drawer (pos)
   "Return POS advanced past a leading `:PROPERTIES:' drawer, if any.
@@ -76,7 +80,7 @@ refresh).  Skip past it so the rendered view starts at real content."
   (pcase prop
     ('nil 'user)
     ('response 'response)
-    ('ignore 'ignore)
+    ('ignore 'ignored)
     (`(tool . ,_id) 'tool)
     (_ 'response)))
 
@@ -256,23 +260,313 @@ examples embedded in user text are not treated as control markup."
         (mapcar #'cdr (sort items (lambda (a b) (< (car a) (car b)))))))))
 
 
-(defun mevedel-transcript--extract-segments (start end)
-  "Extract segments from the data buffer between START and END.
-Returns a list of (TYPE DATA-START DATA-END) where TYPE is one of
-`user', `response', `tool', or `ignore'.  Walks forward through
-text property changes on the `gptel' property.
+;;
+;;; Canonical structure
 
-START and END are first expanded to whole `gptel' property runs.  This
-matters for incremental re-rendering via `gptel-post-response-functions':
-those hooks may report a changed region that begins in the middle of an
-existing tool or response segment.  Without boundary expansion, the
-first extracted tool segment can start after the leading newline and
-opening paren of the tool plist, so reparsing sees `:name ...' instead
-of `(:name ...)'."
+(defconst mevedel-transcript-queued-message-reminder
+  "The following user message batch arrived while your previous request was already active. Account for it while continuing the current work; do not discard in-progress context just because this arrived mid-turn."
+  "Generated reminder that introduces a queued user-message batch.")
+
+(defun mevedel-transcript--tool-id-in-range (start end)
+  "Return the first gptel tool id in START..END, or nil."
+  (let ((pos start)
+        id)
+    (while (and (< pos end) (not id))
+      (let ((prop (get-text-property pos 'gptel)))
+        (when (and (consp prop) (eq (car prop) 'tool))
+          (setq id (cdr prop))))
+      (setq pos (or (next-single-property-change pos 'gptel nil end)
+                    end)))
+    id))
+
+(defun mevedel-transcript--tool-bound-id (start end)
+  "Return a persisted tool id overlapping START..END, or nil."
+  (when (derived-mode-p 'org-mode)
+    (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS"))
+                (bounds (condition-case nil (read raw) (error nil))))
+      (catch 'found
+        (dolist (range (alist-get 'tool bounds))
+          (when (and (integerp (car-safe range))
+                     (integerp (cadr range))
+                     (stringp (caddr range))
+                     (not (string-empty-p (caddr range)))
+                     (< (car range) end)
+                     (> (cadr range) start))
+            (throw 'found (caddr range))))))))
+
+(defun mevedel-transcript--org-tool-block-parts (start end)
+  "Return readable and scaffold subranges for the tool block START..END."
+  (save-excursion
+    (goto-char start)
+    (when (looking-at-p "#\\+begin_tool\\b")
+      (forward-line 1)
+      (skip-chars-forward " \t\n" end)
+      (let ((tool-start (point)))
+        (when (and (< tool-start end)
+                   (looking-at-p "(\\s-*:name\\_>"))
+          (condition-case nil
+              (progn
+                (forward-sexp 1)
+                (let ((sexp-end (point)))
+                  (when (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
+                    (let ((tool-end (match-beginning 0))
+                          (suffix-end (match-end 0)))
+                      (when (<= sexp-end tool-end)
+                        (list :prefix-start start
+                              :prefix-end tool-start
+                              :tool-start tool-start
+                              :tool-end tool-end
+                              :suffix-start tool-end
+                              :suffix-end suffix-end))))))
+            (error nil)))))))
+
+(defun mevedel-transcript--delimited-ranges (type open close start end)
+  "Return complete TYPE ranges delimited by OPEN and CLOSE in START..END."
+  (let (ranges)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward open end t)
+        (let ((block-start (match-beginning 0))
+              (next (match-end 0)))
+          (if (re-search-forward close end t)
+              (let ((block-end (match-end 0)))
+                (push (list type block-start block-end) ranges)
+                (goto-char block-end))
+            (goto-char next)))))
+    (nreverse ranges)))
+
+(defun mevedel-transcript--mailbox-ranges (start end)
+  "Return complete mailbox ranges in START..END."
+  (let (ranges)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward
+              "^\\(?:\\*+ \\)?<\\(?:agent-result\\|agent-message\\)\\(?:\\s-\\|>\\)"
+              end t)
+        (let ((line-start (match-beginning 0)))
+          (goto-char line-start)
+          (search-forward "<" end t)
+          (backward-char 1)
+          (if-let* ((block
+                     (mevedel-transcript--mailbox-any-block-at-point end)))
+              (progn
+                (push (list 'mailbox line-start
+                            (plist-get block :close-end))
+                      ranges)
+                (goto-char (plist-get block :close-end)))
+            (goto-char (1+ line-start))))))
+    (nreverse ranges)))
+
+(defun mevedel-transcript--structure-priority (range)
+  "Return overlay priority for structural RANGE."
+  (pcase (car range)
+    ('tool 40)
+    ((or 'mailbox 'reminder 'queued-message 'hook-context 'prompt) 30)
+    ('reasoning 20)
+    ((or 'render-data 'ignored) 10)
+    (_ 0)))
+
+(defun mevedel-transcript--property-priority (range)
+  "Return property-application priority for structural RANGE."
+  (pcase (car range)
+    ((or 'render-data 'ignored) 40)
+    ('tool 30)
+    ('reasoning 20)
+    (_ 10)))
+
+(defun mevedel-transcript--control-prefix-p (range base-segments accepted)
+  "Return non-nil when RANGE follows only ACCEPTED control structure.
+BASE-SEGMENTS delimit the containing raw property run."
+  (let* ((start (cadr range))
+         (base (cl-find-if
+                (lambda (seg)
+                  (and (<= (cadr seg) start) (< start (caddr seg))))
+                base-segments))
+         (cursor (and base (cadr base)))
+         ok)
+    (setq ok (numberp cursor))
+    (when (and base (not (eq (car base) 'user)))
+      (setq cursor start))
+    (dolist (prior (sort (copy-sequence accepted)
+                         (lambda (a b) (< (cadr a) (cadr b)))))
+      (when (and ok
+                 (< (cadr prior) start)
+                 (> (caddr prior) cursor))
+        (unless (and (eq (car range) 'queued-message)
+                     (mevedel-transcript--generated-queued-reminder-p prior))
+          (when (and (> (cadr prior) cursor)
+                     (string-match-p
+                      "[^ \t\r\n]"
+                      (buffer-substring-no-properties
+                       cursor (min start (cadr prior)))))
+            (setq ok nil)))
+        (setq cursor (max cursor (min start (caddr prior))))))
+    (and ok
+         (not (string-match-p
+               "[^ \t\r\n]"
+               (buffer-substring-no-properties cursor start))))))
+
+(defun mevedel-transcript--generated-queued-reminder-p (range)
+  "Return non-nil when reminder RANGE is the queued-message control text."
+  (and (eq (car range) 'reminder)
+       (string-search
+        mevedel-transcript-queued-message-reminder
+        (buffer-substring-no-properties (cadr range) (caddr range)))))
+
+(defun mevedel-transcript--mailbox-control-context-p (range base-segments)
+  "Return non-nil when mailbox RANGE is outside an Org user heading.
+BASE-SEGMENTS supplies the raw property span containing RANGE."
+  (let* ((start (cadr range))
+         (base (cl-find-if
+                (lambda (seg)
+                  (and (<= (cadr seg) start) (< start (caddr seg))))
+                base-segments)))
+    (and base
+         (not (string-match-p
+               "^\\*+ "
+               (buffer-substring-no-properties (cadr base) start))))))
+
+(defun mevedel-transcript--range-inside-tool-segment-p (range segments)
+  "Return non-nil when RANGE is contained by a raw tool entry in SEGMENTS."
+  (cl-find-if
+   (lambda (seg)
+     (and (eq (car seg) 'tool)
+          (<= (cadr seg) (cadr range))
+          (<= (caddr range) (caddr seg))))
+   segments))
+
+(defun mevedel-transcript--unparseable-tool-ranges
+    (start end base-segments tool-ranges)
+  "Return stale tool blocks in START..END absent from TOOL-RANGES.
+BASE-SEGMENTS supplies the raw property spans used to identify closed
+blocks that still carry stale tool properties."
+  (let (ranges)
+    (save-excursion
+      (goto-char start)
+      (while (re-search-forward "^#\\+begin_tool\\b" end t)
+        (let ((block-start (match-beginning 0)))
+          (if (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
+              (let ((block-end (match-end 0)))
+                (when (and
+                       (cl-find-if
+                        (lambda (seg)
+                          (and (eq (car seg) 'tool)
+                               (< (cadr seg) block-end)
+                               (> (caddr seg) block-start)))
+                        base-segments)
+                       (not (cl-find-if
+                             (lambda (range)
+                               (and (<= (cadr range) block-start)
+                                    (<= block-end (caddr range))))
+                             tool-ranges)))
+                  (push (list 'ignored block-start block-end) ranges)))
+            (goto-char (1+ block-start))))))
+    (nreverse ranges)))
+
+(defun mevedel-transcript--structural-ranges (start end base-segments)
+  "Return canonical control ranges in START..END.
+BASE-SEGMENTS are raw `gptel' property runs used to validate persisted
+tool blocks.  Each result is `(TYPE START END VALUE...)'."
+  (let ((ranges
+         (append
+          (mevedel-transcript--delimited-ranges
+           'reasoning "^#\\+begin_reasoning\\b" "^#\\+end_reasoning[^\n]*\n?"
+           start end)
+          (mevedel-transcript--mailbox-ranges start end)
+          (mevedel-transcript--delimited-ranges
+           'reminder "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$"
+           "^</system-reminder>[ \t]*\n?" start end)
+          (mevedel-transcript--delimited-ranges
+           'queued-message "^<queued-user-message-batch\\_>"
+           "^</queued-user-message-batch>[ \t]*\n?" start end)
+          (mevedel-transcript--delimited-ranges
+           'hook-context "^<hook-context>[ \t]*$"
+           "^</hook-context>[ \t]*\n?" start end)
+          (mevedel-transcript--delimited-ranges
+           'render-data "^<!-- mevedel-render-data -->[ \t]*$"
+           "^<!-- /mevedel-render-data -->[ \t]*\n?" start end)
+          (mevedel-transcript--delimited-ranges
+           'prompt "^:PROMPT:[ \t]*$" "^:END:[ \t]*\n?" start end)
+          (mevedel-transcript--delimited-ranges
+           'ignored "^<!-- mevedel-hook-audit -->[ \t]*$"
+           "^<!-- /mevedel-hook-audit -->[ \t]*\\(?:\n[ \t\r]*\\)*"
+           start end))))
+    (let (tool-ranges)
+      (dolist (block (mevedel-transcript--org-tool-blocks-overlapping
+                      base-segments start end))
+        (push (list 'tool (car block) (cdr block)
+                    (or (mevedel-transcript--tool-id-in-range
+                         (car block) (cdr block))
+                        (mevedel-transcript--tool-bound-id
+                         (car block) (cdr block))
+                        ""))
+              tool-ranges))
+      (setq tool-ranges (nreverse tool-ranges))
+      (setq ranges
+            (append ranges tool-ranges
+                    (mevedel-transcript--unparseable-tool-ranges
+                     start end base-segments tool-ranges))))
+    (let (accepted)
+      (dolist (range (sort ranges (lambda (a b) (< (cadr a) (cadr b)))))
+        (when (or (not (memq (car range) '(mailbox reminder queued-message)))
+                  (mevedel-transcript--generated-queued-reminder-p range)
+                  (and (eq (car range) 'mailbox)
+                       (mevedel-transcript--mailbox-control-context-p
+                        range base-segments))
+                  (and (eq (car range) 'mailbox)
+                       (cl-find-if (lambda (prior)
+                                     (eq (car prior) 'mailbox))
+                                   accepted))
+                  (mevedel-transcript--control-prefix-p
+                   range base-segments accepted))
+          (push range accepted)))
+      (setq ranges (nreverse accepted)))
+    (sort ranges
+          (lambda (a b)
+            (let ((pa (mevedel-transcript--structure-priority a))
+                  (pb (mevedel-transcript--structure-priority b)))
+              (if (= pa pb)
+                  (< (cadr a) (cadr b))
+                (< pa pb)))))))
+
+(defun mevedel-transcript--overlay-range (segments range)
+  "Overlay canonical RANGE on role SEGMENTS."
+  (let ((start (cadr range))
+        (end (caddr range))
+        (segment (list (car range) (cadr range) (caddr range)))
+        out inserted)
+    (dolist (seg segments)
+      (let ((seg-start (cadr seg))
+            (seg-end (caddr seg)))
+        (cond
+         ((or (<= seg-end start) (>= seg-start end))
+          (when (and (not inserted) (>= seg-start end))
+            (push segment out)
+            (setq inserted t))
+          (push seg out))
+         (t
+          (when (< seg-start start)
+            (push (list (car seg) seg-start start) out))
+          (unless inserted
+            (push segment out)
+            (setq inserted t))
+          (when (> seg-end end)
+            (push (list (if (and (eq (car range) 'tool)
+                                 (eq (car seg) 'tool))
+                            'user
+                          (car seg))
+                        end seg-end)
+                  out))))))
+    (unless inserted
+      (push segment out))
+    (nreverse out)))
+
+(defun mevedel-transcript--property-segments (start end)
+  "Return raw `gptel' property segments in START..END."
   (let (segments seg-start seg-type)
     (save-excursion
-      (setq start (or (previous-single-property-change (min (1+ start) (point-max))
-                                                       'gptel nil (point-min))
+      (setq start (or (previous-single-property-change
+                       (min (1+ start) (point-max)) 'gptel nil (point-min))
                       (point-min))
             end (or (next-single-property-change end 'gptel nil (point-max))
                     (point-max)))
@@ -286,43 +580,215 @@ of `(:name ...)'."
         (let ((next (next-single-property-change (point) 'gptel nil end)))
           (goto-char next)
           (when (< next end)
-            ;; Property changed before end -- push the completed segment
-            ;; and start a new one.
             (push (list seg-type seg-start next) segments)
             (setq seg-start next
                   seg-type (mevedel-transcript--classify-gptel-prop
                             (get-text-property next 'gptel))))))
-      ;; Push the final (or only) segment.
       (when (< seg-start end)
         (push (list seg-type seg-start end) segments)))
-    (setq segments (nreverse segments))
-    (mevedel-transcript--split-queued-user-message-batch-segments
-     (mevedel-transcript--repair-response-fragment-segments
-      (mevedel-transcript--split-structural-user-response-prefixes
-       (mevedel-transcript--normalize-tool-block-segments segments start end))))))
+    (nreverse segments)))
 
-(defun mevedel-transcript--split-queued-user-message-batch-segments (segments)
-  "Split generated queued-message batch suffixes out of user SEGMENTS."
-  (let (out)
-    (dolist (seg segments (nreverse out))
-      (pcase-let ((`(,type ,seg-start ,seg-end) seg))
-        (if (not (eq type 'user))
-            (push seg out)
-          (let (split-start)
-            (save-excursion
-              (goto-char seg-start)
-              (while (and (not split-start)
-                          (search-forward "<system-reminder>" seg-end t))
-                (let ((candidate (match-beginning 0)))
-                  (when (mevedel-transcript--queued-user-message-batch-items-from-text
-                         (buffer-substring-no-properties candidate seg-end))
-                    (setq split-start candidate)))))
-            (if split-start
-                (progn
-                  (when (< seg-start split-start)
-                    (push (list type seg-start split-start) out))
-                  (push (list type split-start seg-end) out))
-              (push seg out))))))))
+(defun mevedel-transcript-segments (start end)
+  "Return canonical transcript segments between START and END.
+Each segment is `(TYPE START END)'.  TYPE is `user',
+`response', `tool', `reasoning', `mailbox', `reminder',
+`queued-message', `hook-context', `render-data', `prompt', or
+`ignored'.  Structural control ranges override stale `gptel' property
+runs and incomplete control text remains ordinary transcript text."
+  (let* ((segments (mevedel-transcript--property-segments start end))
+         (scan-start (if segments (cadr (car segments)) start))
+         (scan-end (if segments (caddr (car (last segments))) end)))
+    (dolist (range (mevedel-transcript--structural-ranges
+                    scan-start scan-end segments))
+      (unless (and (memq (car range) '(render-data ignored))
+                   (mevedel-transcript--range-inside-tool-segment-p
+                    range segments))
+        (setq segments (mevedel-transcript--overlay-range segments range))))
+    (mevedel-transcript--merge-adjacent-segments
+     (mevedel-transcript--repair-response-fragment-segments
+      (mevedel-transcript--repair-mailbox-prose-segments
+       (mevedel-transcript--absorb-structural-whitespace segments)))
+     '(ignored))))
+
+(defun mevedel-transcript--whitespace-segment-p (seg)
+  "Return non-nil if SEG is entirely whitespace."
+  (not (string-match-p
+        "[^ \t\r\n]"
+        (buffer-substring-no-properties (cadr seg) (caddr seg)))))
+
+(defun mevedel-transcript--absorb-structural-whitespace (segments)
+  "Attach whitespace-only property fragments to adjacent control SEGMENTS."
+  (let (out rest)
+    (setq rest segments)
+    (while rest
+      (let ((seg (car rest))
+            (next (cadr rest)))
+        (if (and next
+                 (memq (car seg) '(user ignored))
+                 (mevedel-transcript--whitespace-segment-p seg)
+                 (memq (car next)
+                       '(tool reasoning mailbox reminder queued-message
+                         hook-context render-data prompt ignored)))
+            (progn
+              (setcar (cdr rest)
+                      (list (car next) (cadr seg) (caddr next)))
+              (setq rest (cdr rest)))
+          (push seg out)
+          (setq rest (cdr rest)))))
+    (nreverse out)))
+
+(defun mevedel-transcript--repair-mailbox-prose-segments (segments)
+  "Classify plain prose between mailbox SEGMENTS as assistant response."
+  (let (out rest)
+    (setq rest segments)
+    (while rest
+      (let ((seg (car rest)))
+        (push (if (and (eq (car seg) 'user)
+                       (eq (car-safe (car out)) 'mailbox)
+                       (eq (car-safe (cadr rest)) 'mailbox)
+                       (string-match-p
+                        "[^ \t\r\n]"
+                        (buffer-substring-no-properties
+                         (cadr seg) (caddr seg))))
+                  (list 'response (cadr seg) (caddr seg))
+                seg)
+              out))
+      (setq rest (cdr rest)))
+    (nreverse out)))
+
+(defun mevedel-transcript--clear-gptel-properties (start end)
+  "Clear stale gptel-related text properties from START to END."
+  (remove-text-properties
+   start end
+   '(gptel nil response nil invisible nil front-sticky nil)))
+
+(defun mevedel-transcript--apply-structural-properties (ranges)
+  "Apply canonical `gptel' properties for structural RANGES."
+  (dolist (range (sort (copy-sequence ranges)
+                       (lambda (a b)
+                         (< (mevedel-transcript--property-priority a)
+                            (mevedel-transcript--property-priority b)))))
+    (pcase-let ((`(,type ,start ,end . ,values) range))
+      (mevedel-transcript--clear-gptel-properties start end)
+      (pcase type
+        ('tool
+         (if-let* ((parts (mevedel-transcript--org-tool-block-parts
+                           start end)))
+             (progn
+               (put-text-property
+                (plist-get parts :prefix-start)
+                (plist-get parts :prefix-end) 'gptel 'ignore)
+               (put-text-property
+                (plist-get parts :tool-start)
+                (plist-get parts :tool-end)
+                'gptel (cons 'tool (or (car values) "")))
+               (put-text-property
+                (plist-get parts :suffix-start)
+                (plist-get parts :suffix-end) 'gptel 'ignore))
+           (put-text-property start end 'gptel 'ignore)))
+        ((or 'reasoning 'render-data 'prompt 'ignored)
+         (put-text-property start end 'gptel 'ignore))))))
+
+(defconst mevedel-transcript--response-continuation-max-gap 160
+  "Maximum structural-to-response prefix size repaired after restore.")
+
+(defun mevedel-transcript--structural-gap-prop-p (prop type)
+  "Return non-nil when PROP is stale structural state after TYPE."
+  (or (null prop)
+      (pcase type
+        ('tool
+         (or (eq prop 'tool)
+             (and (consp prop) (eq (car prop) 'tool))))
+        ((or 'reasoning 'render-data 'prompt 'ignored)
+         (eq prop 'ignore))
+        (_ nil))))
+
+(defun mevedel-transcript--first-nonblank-pos (start end)
+  "Return the first non-whitespace position in START..END, or nil."
+  (save-excursion
+    (goto-char start)
+    (skip-chars-forward " \t\n\r" end)
+    (when (< (point) end)
+      (point))))
+
+(defun mevedel-transcript--response-continuation-range (start type)
+  "Return a stale response prefix range after structural START and TYPE."
+  (let ((limit (min (point-max)
+                    (+ start mevedel-transcript--response-continuation-max-gap)))
+        (pos start)
+        prefix-start response-start done)
+    (while (and (< pos limit) (not response-start) (not done))
+      (let* ((prop (get-text-property pos 'gptel))
+             (next (or (next-single-property-change pos 'gptel nil limit)
+                       limit)))
+        (cond
+         ((eq prop 'response)
+          (setq response-start pos))
+         ((mevedel-transcript--structural-gap-prop-p prop type)
+          (unless prefix-start
+            (setq prefix-start
+                  (mevedel-transcript--first-nonblank-pos pos next))))
+         (t
+          (setq done t)))
+        (setq pos next)))
+    (when (and prefix-start
+               response-start
+               (< prefix-start response-start)
+               (not (memq (char-before response-start) '(?\n ?\r)))
+               (null (mevedel-transcript--structural-ranges
+                      prefix-start response-start
+                      (mevedel-transcript--property-segments
+                       prefix-start response-start)))
+               (mevedel-transcript--response-continuation-text-p
+                (buffer-substring-no-properties prefix-start response-start)))
+      (cons prefix-start response-start))))
+
+(defun mevedel-transcript--repair-response-continuation-properties (ranges)
+  "Repair stale response prefixes immediately after structural RANGES."
+  (dolist (range ranges)
+    (pcase-let ((`(,type ,_start ,end . ,_) range))
+      (when (< end (point-max))
+        (when-let* ((repair
+                     (mevedel-transcript--response-continuation-range
+                      end type)))
+          (add-text-properties
+           (car repair) (cdr repair)
+           '(gptel response front-sticky (gptel))))))))
+
+(defun mevedel-transcript-normalize-properties ()
+  "Normalize structural transcript properties in the current Org buffer."
+  (when (derived-mode-p 'org-mode)
+    (save-match-data
+      (save-excursion
+        (save-restriction
+          (widen)
+          (with-silent-modifications
+            (let* ((drawer-end
+                    (mevedel-transcript--skip-leading-properties-drawer
+                     (point-min)))
+                   (base (mevedel-transcript--property-segments
+                          (point-min) (point-max)))
+                   (ranges (mevedel-transcript--structural-ranges
+                            (point-min) (point-max) base)))
+              (when (> drawer-end (point-min))
+                (mevedel-transcript--clear-gptel-properties
+                 (point-min) drawer-end))
+              (mevedel-transcript--apply-structural-properties ranges)
+              (mevedel-transcript--repair-response-continuation-properties
+               ranges))))))))
+
+(defun mevedel-transcript-restore-ignored-properties (start end)
+  "Restore ignored side-channel properties within START..END."
+  (save-match-data
+    (let* ((base (mevedel-transcript--property-segments start end))
+           (ranges (mevedel-transcript--structural-ranges start end base))
+           ignored)
+      (dolist (range ranges)
+        (when (memq (car range) '(render-data ignored))
+          (push range ignored)))
+      (mevedel-transcript--apply-structural-properties (nreverse ignored)))))
+
+
 
 (defun mevedel-transcript--org-tool-blocks-overlapping (segments start end)
   "Return org tool block bounds from SEGMENTS overlapping START..END.
@@ -392,7 +858,7 @@ runs."
     (while (and segments (not found))
       (let ((seg (car segments)))
         (setq found
-              (and (eq (car seg) 'ignore)
+              (and (eq (car seg) 'ignored)
                    (<= (cadr seg) block-start)
                    (<= block-end (caddr seg)))))
       (setq segments (cdr segments)))
@@ -520,7 +986,7 @@ the next real tool call."
               (mevedel-transcript--range-has-gptel-prop-p
                block-end min-end '(tool))
               (not (mevedel-transcript--range-has-gptel-prop-p
-                    block-end min-end '(response ignore)))))))
+                    block-end min-end '(response ignored)))))))
 
 (defun mevedel-transcript--first-tool-close-after (pos &optional limit)
   "Return the first non-response `#+end_tool' marker end after POS.
@@ -677,7 +1143,7 @@ The returned plist includes open metadata plus `:body-start',
   "Return non-nil when START..END crosses non-tool conversation content."
   (and (< start end)
        (or (mevedel-transcript--range-has-gptel-prop-p start end
-                                                 '(response ignore))
+                                                 '(response ignored))
            (mevedel-transcript--mailbox-start-in-range-p start end)
            (save-excursion
              (goto-char start)
@@ -766,7 +1232,7 @@ next persisted tool."
               (unless (and (eq marker-type 'response)
                            (or (mevedel-transcript--range-has-gptel-prop-p
                                 (or last-close block-start)
-                                marker-start '(response ignore))
+                                marker-start '(response ignored))
                                (not (or
                                      (mevedel-transcript--range-has-gptel-prop-p
                                       (or last-close block-start)
@@ -795,118 +1261,10 @@ next persisted tool."
   "Return non-nil when START..END resemble unclassified tool body text."
   (and (< start end)
        (not (mevedel-transcript--range-has-gptel-prop-p
-             start end '(response ignore)))
+             start end '(response ignored)))
        (string-match-p "[^ \t\n]"
                        (buffer-substring-no-properties start end))))
 
-(defun mevedel-transcript--normalize-tool-block-segments (segments start end)
-  "Return SEGMENTS with overlapping org tool blocks made canonical.
-START and END are the requested data-buffer range.  Each org tool
-block overlapping that range becomes one `tool' segment covering the
-whole block; property runs that only contain pieces of the block marker
-or tool sexp are dropped.  Text outside tool blocks keeps its original
-classification."
-  (let ((blocks (mevedel-transcript--org-tool-blocks-overlapping segments start end))
-        out)
-    (dolist (block blocks)
-      (let ((block-start (car block))
-            (block-end (cdr block)))
-        (while (and segments (<= (caddr (car segments)) block-start))
-          (push (pop segments) out))
-        (when (and segments (< (cadr (car segments)) block-start))
-          (let ((seg (car segments)))
-            (push (list (car seg) (cadr seg) block-start) out)))
-        (while (and segments (< (cadr (car segments)) block-end))
-          (let ((seg (car segments)))
-            (setq segments (cdr segments))
-            (when (> (caddr seg) block-end)
-              (setq segments
-                    (cons (list (if (eq (car seg) 'tool)
-                                    'user
-                                  (car seg))
-                                block-end (caddr seg))
-                          segments)))))
-        (push (list 'tool block-start block-end) out)))
-    (nconc (nreverse out) segments)))
-
-(defun mevedel-transcript--leading-structural-user-tail-start (start end)
-  "Return assistant-tail start after leading structural user blocks.
-START..END is a nil-`gptel' segment.  Returns nil unless the segment
-begins with one or more complete mailbox/reminder blocks followed by
-non-whitespace prose."
-  (let ((patterns '(("<system-reminder>" . "</system-reminder>")
-                    ("<queued-user-message-batch\\_>" . "</queued-user-message-batch>")
-                    ("<hook-context>" . "</hook-context>")))
-        last-block-end done)
-    (save-excursion
-      (goto-char start)
-      (while (and (not done) (< (point) end))
-        (skip-chars-forward " \t\n\r" end)
-        (let (matched)
-          (cond
-           ((setq matched
-                  (mevedel-transcript--mailbox-any-block-at-point end))
-            (goto-char (plist-get matched :close-end))
-            (setq last-block-end (point)
-                  matched t))
-           (t
-            (dolist (pattern patterns)
-              (when (and (not matched)
-                         (looking-at-p (car pattern)))
-                (setq matched t)
-                (if (search-forward (cdr pattern) end t)
-                    (progn
-                      (when (and (< (point) end)
-                                 (eq (char-after) ?\n))
-                        (forward-char 1))
-                      (setq last-block-end (point)))
-                  (setq done t))))))
-          (unless matched
-            (setq done t))))
-      (when last-block-end
-        (goto-char last-block-end)
-        (skip-chars-forward " \t\n\r" end)
-        (when (and (< (point) end)
-                   (string-match-p
-                    "[^ \t\n\r]"
-                    (buffer-substring-no-properties (point) end)))
-          (point))))))
-
-(defun mevedel-transcript--response-continuation-gap-p (start end)
-  "Return non-nil if START..END is a response prefix gap."
-  (and (< start end)
-       (not (memq (char-before end) '(?\n ?\r)))
-       (string-match-p
-        "[^ \t\n\r]"
-        (buffer-substring-no-properties start end))))
-
-(defun mevedel-transcript--split-structural-user-response-prefixes (segments)
-  "Split assistant response prefixes out of structural user SEGMENTS.
-Stale restored bounds can leave an `<agent-result>' block and the first
-characters of the following assistant text in one nil-property segment,
-with the next segment marked `response'.  Split that mid-line prefix so
-the normal response merger can keep the assistant turn intact."
-  (let (out rest)
-    (setq rest segments)
-    (while rest
-      (let* ((seg (car rest))
-             (next (cadr rest))
-             (tail-start
-              (and (eq (car seg) 'user)
-                   (eq (car-safe next) 'response)
-                   (mevedel-transcript--leading-structural-user-tail-start
-                    (cadr seg) (caddr seg)))))
-        (if (and tail-start
-                 (< tail-start (caddr seg))
-                 (mevedel-transcript--response-continuation-gap-p
-                  tail-start (caddr seg)))
-            (progn
-              (when (< (cadr seg) tail-start)
-                (push (list 'user (cadr seg) tail-start) out))
-              (push (list 'response tail-start (caddr seg)) out))
-          (push seg out)))
-      (setq rest (cdr rest)))
-    (nreverse out)))
 
 (defun mevedel-transcript--repair-response-fragment-segments (segments)
   "Return SEGMENTS with stale response fragments reclassified.
@@ -924,7 +1282,9 @@ fake thinking block or user turn."
              (prev-seg (car converted))
              (convert-p
               (and (eq type 'user)
-                   (or (and (memq prev-type '(tool ignore))
+                   (or (and (memq prev-type
+                                  '(tool reasoning mailbox reminder queued-message
+                                    render-data ignored))
                             (eq next-type 'response)
                             (mevedel-transcript--response-fragment-segment-p
                              seg (cadr rest)))

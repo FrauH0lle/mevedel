@@ -167,11 +167,6 @@
                   "mevedel-persistence"
                   (path &optional base-directory confirm quiet workspace))
 
-;; `mevedel-utilities'
-(declare-function mevedel--restore-render-data-gptel-properties
-                  "mevedel-utilities" (start end))
-
-
 ;;
 ;;; Customization
 
@@ -849,7 +844,7 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                  (mevedel-session-persistence--content-start buffer))
                 (turn 0)
                 (results nil))
-            (dolist (seg (mevedel-transcript--extract-segments
+            (dolist (seg (mevedel-transcript-segments
                           content-start
                           (point-max)))
               (pcase-let ((`(,type ,seg-start ,seg-end) seg))
@@ -1118,376 +1113,6 @@ when persistence is disabled."
 ;;
 ;;; Transcript gptel metadata repair
 
-(defun mevedel-session-persistence--gptel-prop-in-range (start end predicate)
-  "Return the first `gptel' property in START..END matching PREDICATE."
-  (let ((pos start)
-        found)
-    (while (and (< pos end) (not found))
-      (let ((prop (get-text-property pos 'gptel)))
-        (when (funcall predicate prop)
-          (setq found prop)))
-      (setq pos (or (next-single-property-change pos 'gptel nil end)
-                    end)))
-    found))
-
-(defun mevedel-session-persistence--tool-id-in-range (start end)
-  "Return the first gptel tool id in START..END, or nil."
-  (cdr (mevedel-session-persistence--gptel-prop-in-range
-        start end
-        (lambda (prop)
-          (and (consp prop) (eq (car prop) 'tool))))))
-
-(defun mevedel-session-persistence--tool-prop-in-range-p (start end)
-  "Return non-nil when START..END already spans a tool `gptel' prop."
-  (mevedel-session-persistence--gptel-prop-in-range
-   start end
-   (lambda (prop)
-     (and (consp prop) (eq (car prop) 'tool)))))
-
-(defun mevedel-session-persistence--tool-bound-id-in-gptel-bounds (start end)
-  "Return a non-empty `GPTEL_BOUNDS' tool id overlapping START..END, or nil."
-  (save-excursion
-    (save-match-data
-      (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS"))
-                  (bounds (condition-case nil
-                              (read raw)
-                            (error nil)))
-                  (tools (alist-get 'tool bounds)))
-        (catch 'found
-          (dolist (range tools)
-            (when (and (integerp (car-safe range))
-                       (integerp (cadr range))
-                       (stringp (caddr range))
-                       (not (string-empty-p (caddr range)))
-                       (< (car range) end)
-                       (> (cadr range) start))
-              (throw 'found (caddr range)))))))))
-
-(defun mevedel-session-persistence--org-tool-block-start-p (pos)
-  "Return non-nil when a persisted org tool block is at POS."
-  (save-excursion
-    (goto-char pos)
-    (forward-line 1)
-    (skip-chars-forward " \t\n")
-    (looking-at-p "(\\s-*:name\\_>")))
-
-(defun mevedel-session-persistence--org-tool-block-parts (start end)
-  "Return parseable subranges for an org tool block in START..END.
-
-The return value is a plist with `:prefix-start', `:prefix-end',
-`:tool-start', `:tool-end', `:suffix-start', and `:suffix-end'.
-The tool range starts at the readable `(:name ...)' sexp and excludes
-`#+begin_tool' / `#+end_tool' scaffolding so provider parsers can read
-it directly.  Return nil when START..END is not a complete parseable
-persisted tool block."
-  (save-excursion
-    (goto-char start)
-    (when (looking-at-p "#\\+begin_tool\\b")
-      (forward-line 1)
-      (skip-chars-forward " \t\n" end)
-      (let ((sexp-start (point)))
-        (when (and (< sexp-start end)
-                   (looking-at-p "(\\s-*:name\\_>"))
-          (condition-case nil
-              (progn
-                (forward-sexp 1)
-                (let ((sexp-end (point)))
-                  (when (re-search-forward "^#\\+end_tool[^\n]*\n?" end t)
-                    (let ((suffix-start (match-beginning 0))
-                          (suffix-end (match-end 0)))
-                      (when (<= sexp-end suffix-start)
-                        (list :prefix-start start
-                              :prefix-end sexp-start
-                              :tool-start sexp-start
-                              :tool-end suffix-start
-                              :suffix-start suffix-start
-                              :suffix-end suffix-end))))))
-            (error nil)))))))
-
-(defun mevedel-session-persistence--clear-gptel-text-props (start end)
-  "Clear stale gptel-related text properties from START to END."
-  (remove-text-properties
-   start end
-   '(gptel nil response nil invisible nil front-sticky nil)))
-
-(defun mevedel-session-persistence--structural-gptel-ranges ()
-  "Return structural transcript block ranges for property repair.
-Each entry is (START END KIND VALUE).  KIND is `tool', `tool-scaffold',
-`ignore', or `user'.  User ranges are cleared but get no `gptel'
-property.  Tool VALUE is the gptel tool call id when available."
-  (let ((content-start (mevedel-session-persistence--content-start
-                        (current-buffer)))
-        ranges)
-    (when (> content-start (point-min))
-      (push (list (point-min) content-start 'user nil) ranges))
-    (save-excursion
-      (goto-char (point-min))
-      (while (re-search-forward
-              (concat "^#\\+begin_tool\\b"
-                      "\\|^<agent-result\\_>"
-                      "\\|^<agent-message\\_>"
-                      "\\|^<system-reminder>[ \t]*$"
-                      "\\|^<queued-user-message-batch\\_>"
-                      "\\|^<hook-context>[ \t]*$"
-                      "\\|^<!-- mevedel-render-data -->[ \t]*$"
-                      "\\|^#\\+begin_reasoning\\b"
-                      "\\|^:PROMPT:[ \t]*$")
-              nil t)
-        (let ((start (match-beginning 0))
-              (next (match-end 0))
-              end kind value)
-          (goto-char start)
-          (cond
-           ((looking-at-p "#\\+begin_tool\\b")
-            (when (re-search-forward "^#\\+end_tool[^\n]*\n?" nil t)
-              (let* ((block-end (match-end 0))
-                     (parts (mevedel-session-persistence--org-tool-block-parts
-                             start block-end))
-                     (tool-bound-id
-                      (mevedel-session-persistence--tool-bound-id-in-gptel-bounds
-                       start block-end)))
-                (when (or (mevedel-session-persistence--tool-prop-in-range-p
-                           start block-end)
-                          tool-bound-id)
-                  (setq end block-end
-                        kind 'handled)
-                  (if parts
-                      (progn
-                        (setq value
-                              (or (mevedel-session-persistence--tool-id-in-range
-                                   start block-end)
-                                  tool-bound-id
-                                  ""))
-                        (push (list (plist-get parts :prefix-start)
-                                    (plist-get parts :prefix-end)
-                                    'ignore nil)
-                              ranges)
-                        (push (list (plist-get parts :tool-start)
-                                    (plist-get parts :tool-end)
-                                    'tool value)
-                              ranges)
-                        (push (list (plist-get parts :suffix-start)
-                                    (plist-get parts :suffix-end)
-                                    'tool-scaffold nil)
-                              ranges))
-                    (push (list start block-end 'ignore nil) ranges))))))
-           ((looking-at-p "<agent-result\\_>")
-            (when (re-search-forward "^</agent-result>[ \t]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'user)))
-           ((looking-at-p "<agent-message\\_>")
-            (when (re-search-forward "^</agent-message>[ \t]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'user)))
-           ((looking-at-p "<system-reminder>")
-            (when (re-search-forward "^</system-reminder>[ \t]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'user)))
-           ((looking-at-p "<queued-user-message-batch\\_>")
-            (when (re-search-forward "^</queued-user-message-batch>[ \t]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'user)))
-           ((looking-at-p "<hook-context>")
-            (when (re-search-forward "^</hook-context>[ \t]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'user)))
-           ((looking-at-p "<!-- mevedel-render-data -->")
-            (when (re-search-forward "^<!-- /mevedel-render-data -->[ \t]*\n?"
-                                     nil t)
-              (setq end (match-end 0)
-                    kind 'ignore)))
-           ((looking-at-p "#\\+begin_reasoning\\b")
-            (when (re-search-forward "^#\\+end_reasoning[^\n]*\n?" nil t)
-              (let ((reasoning-end (match-end 0))
-                    (cursor start))
-                (goto-char start)
-                (while (re-search-forward "^#\\+begin_tool\\b" reasoning-end t)
-                  (let ((tool-start (match-beginning 0))
-                        tool-bound-id tool-end tool-value parts)
-                    (if (and (mevedel-session-persistence--org-tool-block-start-p
-                              tool-start)
-                             (re-search-forward "^#\\+end_tool[^\n]*\n?"
-                                                reasoning-end t)
-                             (progn
-                               (setq tool-end (match-end 0)
-                                     parts
-                                     (mevedel-session-persistence--org-tool-block-parts
-                                      tool-start tool-end)
-                                     tool-bound-id
-                                     (mevedel-session-persistence--tool-bound-id-in-gptel-bounds
-                                      tool-start tool-end))
-                               (and parts
-                                    (or (mevedel-session-persistence--tool-prop-in-range-p
-                                         tool-start tool-end)
-                                        tool-bound-id))))
-                        (progn
-                          (setq tool-value
-                                (or (mevedel-session-persistence--tool-id-in-range
-                                     tool-start tool-end)
-                                    tool-bound-id
-                                    ""))
-                          (when (< cursor tool-start)
-                            (push (list cursor tool-start 'ignore nil) ranges))
-                          (push (list (plist-get parts :prefix-start)
-                                      (plist-get parts :prefix-end)
-                                      'ignore nil)
-                                ranges)
-                          (push (list (plist-get parts :tool-start)
-                                      (plist-get parts :tool-end)
-                                      'tool tool-value)
-                                ranges)
-                          (push (list (plist-get parts :suffix-start)
-                                      (plist-get parts :suffix-end)
-                                      'ignore nil)
-                                ranges)
-                          (setq cursor tool-end)
-                          (goto-char tool-end))
-                      (goto-char (min (1+ tool-start) reasoning-end)))))
-                (when (< cursor reasoning-end)
-                  (push (list cursor reasoning-end 'ignore nil) ranges))
-                (setq end reasoning-end
-                      kind 'handled))))
-           ((looking-at-p ":PROMPT:")
-            (when (re-search-forward "^:END:[ \t]*\n?" nil t)
-              (setq end (match-end 0)
-                    kind 'ignore))))
-          (cond
-           ((eq kind 'handled)
-            (goto-char end))
-           ((and end kind)
-            (push (list start end kind value) ranges)
-            (goto-char end))
-           (t
-            (goto-char next))))))
-    (sort ranges (lambda (a b) (< (car a) (car b))))))
-
-(defun mevedel-session-persistence--apply-block-gptel-props (ranges)
-  "Apply structural `gptel' properties for RANGES."
-  (dolist (range ranges)
-    (pcase-let ((`(,start ,end ,kind ,value) range))
-      (mevedel-session-persistence--clear-gptel-text-props start end)
-      (pcase kind
-        ('tool
-         (put-text-property start end 'gptel (cons 'tool value)))
-        ('ignore
-         (put-text-property start end 'gptel 'ignore))
-        ('tool-scaffold
-         (put-text-property start end 'gptel 'ignore))))))
-
-(defconst mevedel-session-persistence--response-continuation-max-gap 160
-  "Maximum structural-to-response prefix size repaired after restore.")
-
-(defun mevedel-session-persistence--structural-gap-prop-p (prop kind)
-  "Return non-nil when PROP is stale structural state after KIND."
-  (or (null prop)
-      (pcase kind
-        ('tool
-         (or (eq prop 'tool)
-             (and (consp prop) (eq (car prop) 'tool))))
-        ('ignore
-         (eq prop 'ignore))
-        ('tool-scaffold
-         (or (eq prop 'ignore)
-             (eq prop 'tool)
-             (and (consp prop) (eq (car prop) 'tool))))
-        (_ nil))))
-
-(defun mevedel-session-persistence--first-nonblank-pos (start end)
-  "Return the first non-whitespace position in START..END, or nil."
-  (save-excursion
-    (goto-char start)
-    (skip-chars-forward " \t\n\r" end)
-    (when (< (point) end)
-      (point))))
-
-(defun mevedel-session-persistence--response-continuation-marker-p
-    (start end)
-  "Return non-nil when START..END has new transcript structure."
-  (save-excursion
-    (goto-char start)
-    (re-search-forward
-     (concat "\\(?:^\\|[\n\r]\\)"
-             "\\(?:#\\+begin_"
-             "\\|\\*\\*\\* User prompt"
-             "\\|<agent-result\\_>"
-             "\\|<agent-message\\_>"
-             "\\|<system-reminder>"
-             "\\|<queued-user-message-batch\\_>"
-             "\\|<hook-context>"
-             "\\|:PROMPT:\\)")
-     end t)))
-
-(defun mevedel-session-persistence--response-continuation-range
-    (start kind)
-  "Return a stale response prefix range after structural START and KIND.
-The returned cons cell covers only the missing prefix, not the existing
-response run that follows it."
-  (let ((limit (min (point-max)
-                    (+ start
-                       mevedel-session-persistence--response-continuation-max-gap)))
-        (pos start)
-        prefix-start response-start done)
-    (while (and (< pos limit) (not response-start) (not done))
-      (let* ((prop (get-text-property pos 'gptel))
-             (next (or (next-single-property-change pos 'gptel nil limit)
-                       limit)))
-        (cond
-         ((eq prop 'response)
-          (setq response-start pos))
-         ((mevedel-session-persistence--structural-gap-prop-p prop kind)
-          (unless prefix-start
-            (setq prefix-start
-                  (mevedel-session-persistence--first-nonblank-pos pos next))))
-         (t
-          (setq done t)))
-        (setq pos next)))
-    (when (and prefix-start
-               response-start
-               (< prefix-start response-start)
-               (not (memq (char-before response-start) '(?\n ?\r)))
-               (not (mevedel-session-persistence--response-continuation-marker-p
-                     prefix-start response-start))
-               (mevedel-transcript--response-continuation-text-p
-                (buffer-substring-no-properties prefix-start response-start)))
-      (cons prefix-start response-start))))
-
-(defun mevedel-session-persistence--repair-response-continuation-gaps
-    (ranges)
-  "Repair stale response prefixes immediately after structural RANGES.
-When a tool, reasoning block, or mailbox delivery is followed by nil or
-stale structural text and the next `gptel' run is a response starting
-mid-line, treat that gap as the missing prefix of the response."
-  (dolist (range ranges)
-    (pcase-let ((`(,_start ,end ,kind ,_value) range))
-      (when (and (memq kind '(tool tool-scaffold ignore user))
-                 (< end (point-max)))
-        (when-let* ((repair
-                     (mevedel-session-persistence--response-continuation-range
-                      end kind)))
-          (add-text-properties
-           (car repair) (cdr repair)
-           '(gptel response front-sticky (gptel))))))))
-
-(defun mevedel-session-persistence--normalize-gptel-properties ()
-  "Normalize transcript `gptel' text properties before saving or rendering.
-
-gptel persists only text-property bounds.  During long sessions, inserted
-tool blocks, mailbox deliveries, and hidden context blocks can leave stale
-or sticky properties around structural boundaries.  Only markup-delimited
-regions are normalized here; plain prose boundaries between user and
-assistant turns are not inferred."
-  (when (derived-mode-p 'org-mode)
-    (save-excursion
-      (save-restriction
-        (widen)
-        (with-silent-modifications
-          (let ((ranges (mevedel-session-persistence--structural-gptel-ranges)))
-            (mevedel-session-persistence--apply-block-gptel-props ranges)
-            (mevedel-session-persistence--repair-response-continuation-gaps
-             ranges)
-            (require 'mevedel-utilities)
-            (mevedel--restore-render-data-gptel-properties
-             (point-min) (point-max))))))))
 
 (defun mevedel-session-persistence--restore-gptel-state ()
   "Restore gptel state without dirtying the visited segment buffer.
@@ -1503,7 +1128,7 @@ look like it needs saving."
           (mevedel-session-persistence--sanitize-gptel-bounds)
           (unless (bound-and-true-p gptel-mode)
             (gptel-mode +1))
-          (mevedel-session-persistence--normalize-gptel-properties))
+          (mevedel-transcript-normalize-properties))
       (set-buffer-modified-p was-modified))))
 
 ;;
@@ -1656,7 +1281,7 @@ bounds no longer change."
               (attempts 0))
           (while (and (not done) (< attempts 8))
             (setq attempts (1+ attempts))
-            (mevedel-session-persistence--normalize-gptel-properties)
+            (mevedel-transcript-normalize-properties)
             (let ((serialized
                    (when-let* ((bounds (gptel--get-buffer-bounds)))
                      (prin1-to-string bounds))))
@@ -3599,7 +3224,7 @@ have been excluded."
                (mevedel-session-persistence--find-turn-cutoff file-turn-n)))
           (when (and cutoff (< cutoff (point-max)))
             (delete-region cutoff (point-max))))
-        (mevedel-session-persistence--normalize-gptel-properties))
+        (mevedel-transcript-normalize-properties))
       ;; Disconnect from the original file so saves can't corrupt it.
       (setq buffer-file-name nil)
       (set-buffer-modified-p nil)

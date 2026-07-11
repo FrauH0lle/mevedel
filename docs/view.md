@@ -36,12 +36,13 @@ flowchart TD
 ```
 
 Full rerenders parse the data buffer through
-`mevedel-transcript--extract-segments`, after skipping gptel-org leading
+`mevedel-transcript-segments`, after skipping gptel-org leading
 metadata and any leading compaction summary. `mevedel-view.el` then owns
 turn grouping and rendering. Transcript span classification, tool block
-recovery, generated queued-message parsing, and mailbox structural
-parsing live in `mevedel-transcript.el` so persistence and compaction use
-the same structural view of the buffer. Hidden audit record grammar and
+recovery, generated queued-message parsing, and mailbox, reminder,
+hook-context, render-data, prompt, and ignored-range recognition live in
+`mevedel-transcript.el` so persistence and compaction use the same structural
+view of the buffer. Hidden audit record grammar and
 attachment spans live in `mevedel-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
 
