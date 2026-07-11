@@ -38,6 +38,8 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
+
+;; `mevedel-view-composer'
 (defvar mevedel-view--input-marker)
 
 ;; `mevedel-persistence'

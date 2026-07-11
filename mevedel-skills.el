@@ -157,8 +157,9 @@
                   "mevedel-utilities"
                   (event original submitted &optional reason))
 
-;; `mevedel-view'
-(declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
+;; `mevedel-view-composer'
+(declare-function mevedel-view-refresh-input-prompt
+                  "mevedel-view-composer" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)

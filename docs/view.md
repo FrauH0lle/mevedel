@@ -1,11 +1,13 @@
 # View Buffer
 
 The view modules render a compact user-facing projection of the authoritative
-gptel data buffer. `mevedel-view.el` owns the mode, zones, composer, and
-session coordination. `mevedel-view-render.el` owns transcript rendering,
-folding, source mapping, and navigation. `mevedel-view-stream.el` owns
-streaming, request progress, and gptel stream integration. The data buffer
-remains the model-visible transcript.
+gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
+coordination. `mevedel-view-composer.el` owns the editable composer,
+submission hooks, queued follow-ups, and send/fork dispatch.
+`mevedel-view-render.el` owns transcript rendering, folding, source mapping,
+and navigation. `mevedel-view-stream.el` owns streaming, request progress,
+and gptel stream integration. The data buffer remains the model-visible
+transcript.
 
 ## Buffer Roles
 
@@ -364,7 +366,8 @@ Working... · 2m 14s · 1 agent blocked · 1 agent running
 ## Input History
 
 `mevedel-view-history.el` provides comint-style input history for the
-view input zone:
+view input zone. `mevedel-view-composer.el` owns the editable input boundary,
+completion, prompt submission, and integration with that history ring:
 
 - `M-p` / `M-n`: previous / next input
 - `M-r`: search history

@@ -31,12 +31,12 @@
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
 
-;; `mevedel-view'
-(declare-function mevedel-view--fork-if-pending "mevedel-view" ())
+;; `mevedel-view-composer'
+(declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
 (declare-function mevedel-view--forward-input
-                  "mevedel-view"
+                  "mevedel-view-composer"
                   (input &optional display-text before-send prompt-checked
-                         on-block hook-context))
+                         on-block hook-context hook-audits))
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
 
 ;; `mevedel-structs'

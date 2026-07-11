@@ -87,13 +87,16 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
-;; `mevedel-view'
+;; `mevedel-view-composer'
 (declare-function mevedel-view--begin-external-turn
-                  "mevedel-view"
-                  (display-text data-turn-start &optional kind hook-context))
-(declare-function mevedel-view--clear-input "mevedel-view" ())
+                  "mevedel-view-composer"
+                  (display-text data-turn-start
+                                &optional kind hook-context no-spinner))
+(declare-function mevedel-view--clear-input "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
+
+;; `mevedel-view'
 (declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
-(declare-function mevedel-view--input-start "mevedel-view" ())
 (declare-function mevedel-view--interaction-anchor "mevedel-view" ())
 (declare-function mevedel-view--interaction-register "mevedel-view"
                   (descriptor))

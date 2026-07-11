@@ -93,13 +93,15 @@
 (declare-function mevedel-tools-list-open "mevedel-tools-list"
                   (&optional context))
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view-abort "mevedel-view-composer" ())
+(declare-function mevedel-view-send "mevedel-view-composer" ())
+
 ;; `mevedel-view'
-(declare-function mevedel-view-abort "mevedel-view" ())
 (declare-function mevedel-view-next-display "mevedel-view" ())
 (declare-function mevedel-view-next-user-query "mevedel-view" ())
 (declare-function mevedel-view-previous-display "mevedel-view" ())
 (declare-function mevedel-view-previous-user-query "mevedel-view" ())
-(declare-function mevedel-view-send "mevedel-view" ())
 (declare-function mevedel-view-toggle-section "mevedel-view" ())
 
 ;; `mevedel-worktree'

@@ -34,17 +34,21 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools-active-count "mevedel-tools" (&optional buffer))
 
-;; `mevedel-view'
-(declare-function mevedel-view--agent-fsm-p "mevedel-view" (info data-buffer))
-(declare-function mevedel-view--agent-status-counts "mevedel-view" ())
-(declare-function mevedel-view--call-preserving-input-point "mevedel-view" (thunk))
+;; `mevedel-view-composer'
+(declare-function mevedel-view--agent-fsm-p
+                  "mevedel-view-composer" (info data-buffer))
+(declare-function mevedel-view--call-preserving-input-point
+                  "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
-                  "mevedel-view" (thunk))
+                  "mevedel-view-composer" (thunk))
+(defvar mevedel-view--input-marker)
+
+;; `mevedel-view'
+(declare-function mevedel-view--agent-status-counts "mevedel-view" ())
 (declare-function mevedel-view--render-agent-status "mevedel-view" ())
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
 (defvar mevedel-view--agent-transcript-p)
 (defvar mevedel-view--display-map)
-(defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
 (defvar mevedel-view-pending-tools-visible-max)
@@ -114,11 +118,6 @@ Anchored just after the user prompt was forwarded to the data
 buffer, so `mevedel-view--render-incremental' can extract only the
 in-flight assistant portion (not the whole conversation) when
 rebuilding the view.  Nil outside an active exchange.")
-
-(defvar-local mevedel-view--prompt-hook-pending nil
-  "Non-nil while a `UserPromptSubmit' hook gate is pending for this view.
-This covers the interval before the prompt has been accepted and before
-`mevedel--current-request' exists in the data buffer.")
 
 (defvar-local mevedel-view--pending-tool-calls nil
   "Alist of in-flight tool calls.
