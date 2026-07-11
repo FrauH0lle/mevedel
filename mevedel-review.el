@@ -18,14 +18,48 @@
 (require 'mevedel-structs)
 
 ;; `gptel'
+(declare-function gptel--update-status
+                  "ext:gptel" (status &optional face))
 (defvar gptel-display-buffer-action)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
-(declare-function gptel--update-status "gptel" (status &optional face))
+
+;; `mevedel-agent-exec'
+(defvar mevedel-agent-exec--agents)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-get "mevedel-agents" (name))
+(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-description
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
+(declare-function mevedel-agent-invocation-transcript-relative-path
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-transcript-status
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+(declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
+(declare-function mevedel-agents-ensure-verifier "mevedel-agents" ())
+
+;; `mevedel-chat'
+(declare-function mevedel--active-chat-buffer
+                  "mevedel-chat" (&optional workspace))
+(declare-function mevedel--chat-buffer
+                  "mevedel-chat"
+                  (session-name &optional create workspace working-directory))
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission--parse-rule-strings
+                  "mevedel-permissions" (entries))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--format-render-data-block
+                  "mevedel-pipeline" (render-data))
 
 ;; `mevedel-skills'
-(declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
-(declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-skills-core'
@@ -44,9 +78,25 @@
                   "mevedel-skills-core" (skill-file source))
 (defvar mevedel-skills--bundled-dir)
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--parse-rule-strings
-                  "mevedel-permissions" (entries))
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills--insert-fork-result
+                  "mevedel-skills-invoke" (outcome))
+(declare-function mevedel-skills-invoke "mevedel-skills-invoke" t t)
+
+;; `mevedel-structs'
+(declare-function mevedel-request-begin
+                  "mevedel-structs" (session &optional directive-uuid))
+(declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-session-working-directory
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--compaction-in-flight)
+(defvar mevedel--current-directive-uuid)
+(defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
+(defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
@@ -58,51 +108,8 @@
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
 
-;; `mevedel-structs'
-(defvar mevedel--data-buffer)
-(defvar mevedel--current-request)
-(defvar mevedel--current-directive-uuid)
-(defvar mevedel--compaction-in-flight)
-(defvar mevedel--session)
-(defvar mevedel--view-buffer)
-(defvar mevedel-session--read-only-mode)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-begin "mevedel-structs"
-                  (session &optional directive-uuid))
-(declare-function mevedel-request-end "mevedel-structs" ())
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-get "mevedel-agents" (name))
-(declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-description "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
-(declare-function mevedel-agent-invocation-transcript-relative-path
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-transcript-status
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
-(declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
-(declare-function mevedel-agents-ensure-verifier "mevedel-agents" ())
-
-;; `mevedel-agent-exec'
-(defvar mevedel-agent-exec--agents)
-
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-
-;; `mevedel-chat'
-(declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
-(declare-function mevedel--chat-buffer
-                  "mevedel-chat"
-                  (session-name &optional create workspace working-directory))
+;; `mevedel-view'
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
@@ -117,8 +124,9 @@
                   "mevedel-view-composer"
                   (input display-text &optional hook-context))
 
-;; `mevedel-view'
-(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+;; `mevedel-view-history'
+(declare-function mevedel-view-history-add
+                  "mevedel-view-history" (text))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--ensure-request-progress
@@ -126,9 +134,9 @@
 (declare-function mevedel-view--stop-request-progress
                   "mevedel-view-stream" ())
 
-;; `mevedel-view-history'
-(declare-function mevedel-view-history-add "mevedel-view-history" (text))
-
+;; `mevedel-workspace'
+(declare-function mevedel-workspace
+                  "mevedel-workspace" (&optional buffer))
 
 ;;
 ;;; Review target prompts

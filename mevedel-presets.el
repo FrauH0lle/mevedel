@@ -8,15 +8,16 @@
 ;; with instruction context, inherits implement), and `mevedel-tutor'
 ;; (tutoring assistant, inherits discuss).
 ;;
-;; Each preset assembles tool lists, installs FSM termination
-;; handlers for cleanup, and registers sub-agents buffer-locally at
-;; request time.  Deferred-tool wiring (BWAIT state, handler table
-;; injection) is also done here because it piggy-backs on preset
-;; setup.
+;; Each preset assembles tool lists and registers sub-agents buffer-locally at
+;; request time.  This module builds the request FSM handler chain around the
+;; neutral terminal transaction in `mevedel-turn'.  Deferred-tool wiring (BWAIT
+;; state and handler-table injection) also lives here because it piggy-backs on
+;; preset setup.
 
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-turn)
 
 (eval-when-compile
   (require 'mevedel-structs)
@@ -27,99 +28,50 @@
 (declare-function gptel-make-preset "ext:gptel" (name &rest keys))
 
 ;; `gptel-request'
-(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
-(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
 (defvar gptel-tools)
 
-;; `mevedel-chat'
-(declare-function mevedel--generate-final-patch "mevedel-chat" (&optional workspace))
-(declare-function mevedel--replace-patch-buffer "mevedel-chat" (patch-content))
-(declare-function mevedel--implementation-permission-mode-restore
-                  "mevedel-chat" ())
-(defvar mevedel--current-directive-uuid)
-
-;; `mevedel-view-composer'
-(declare-function mevedel-view--handle-queued-user-message-inject
-                  "mevedel-view-composer" (fsm))
-(declare-function mevedel-view--schedule-queued-user-message-drain
-                  "mevedel-view-composer" (fsm))
-
-;; `mevedel-view-stream'
-(declare-function mevedel-view-stream-ensure-progress-for-fsm
-                  "mevedel-view-stream" (fsm))
-
-;; `mevedel-compact'
-(declare-function mevedel--compact-record-token-baseline
-                  "mevedel-compact" (fsm))
-(declare-function mevedel--compact-handle-wait
-                  "mevedel-compact" (fsm))
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-run-event "mevedel-hooks"
-                  (event event-plist callback
-                         &optional session workspace request invocation))
-(declare-function mevedel-hooks-event-plist "mevedel-hooks"
-                  (event &optional session workspace &rest extra))
-
-;; `mevedel-skills'
-(declare-function mevedel-skills--apply-overrides-handler
-                  "mevedel-skills" (fsm))
-(declare-function mevedel-skills--drain-pending-context
-                  "mevedel-skills" (request))
-
-;; `mevedel-tools'
-(declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
-(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
-(declare-function mevedel-tools--handle-terminal-mailbox "mevedel-tools" (fsm))
-
 ;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--background-agents-pending-p
-                  "mevedel-agent-runtime" (info))
-(declare-function mevedel-agent-runtime--handle-bwait "mevedel-agent-runtime" (fsm))
-(declare-function mevedel-agent-runtime--bwait-injected-table
-                  "mevedel-agent-runtime" (source))
-
-;; `mevedel-tool-access'
-(declare-function mevedel--clear-pending-access-requests
-                  "mevedel-tool-access" (&rest _))
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
-(declare-function mevedel-tool-resolve-gptel "mevedel-tool-registry" (specs))
-(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-description "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-agent-runtime--handle-bwait
+                  "mevedel-agent-runtime" (fsm))
 
 ;; `mevedel-agents'
-(declare-function mevedel-agents--setup-for-request "mevedel-agents"
-                  (&optional preset-name))
+(declare-function mevedel-agents--setup-for-request
+                  "mevedel-agents" (&optional preset-name))
 
-;; `mevedel-structs'
-(defvar mevedel--current-request)
-(declare-function mevedel-request-begin "mevedel-structs"
-                  (session &optional directive-uuid))
-(declare-function mevedel-request-end "mevedel-structs" ())
+;; `mevedel-chat'
+(declare-function mevedel--generate-final-patch
+                  "mevedel-chat" (&optional workspace))
+(declare-function mevedel--replace-patch-buffer
+                  "mevedel-chat" (patch-content))
+(defvar mevedel--current-directive-uuid)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-fork-now
-                  "mevedel-session-persistence" (buffer))
-(defvar mevedel-session-persistence)
-(defvar mevedel-session--save-failed)
-(defvar mevedel-session--fork-pending)
+;; `mevedel-compact'
+(declare-function mevedel--compact-handle-wait "mevedel-compact" (fsm))
+(declare-function mevedel--compact-record-token-baseline
+                  "mevedel-compact" (fsm))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
+(declare-function mevedel--find-directive-by-uuid
+                  "mevedel-overlays" (uuid))
 
-;; `mevedel-structs' (accessors come from eval-when-compile require above)
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-fork-now
+                  "mevedel-session-persistence" (buffer))
+(defvar mevedel-session--fork-pending)
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills--apply-overrides-handler
+                  "mevedel-skills-invoke" (fsm))
+(declare-function mevedel-skills--drain-pending-context
+                  "mevedel-skills-invoke" (request))
+
+;; `mevedel-structs'
+(declare-function mevedel-request-begin
+                  "mevedel-structs" (session &optional directive-uuid))
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-system'
@@ -130,44 +82,38 @@
 (defvar mevedel-system--base-prompt)
 (defvar mevedel-system--tutor-base-prompt)
 
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
+(declare-function mevedel-tool-resolve-gptel
+                  "mevedel-tool-registry" (specs))
+(declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
+
+;; `mevedel-tools'
+(declare-function mevedel-tools--handle-deferred-inject
+                  "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-message-inject
+                  "mevedel-tools" (fsm))
+
+;; `mevedel-turn'
+(declare-function mevedel--complete-turn "mevedel-turn" (fsm))
+(declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
+(declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--handle-queued-user-message-inject
+                  "mevedel-view-composer" (fsm))
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view-stream-ensure-progress-for-fsm
+                  "mevedel-view-stream" (fsm))
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
 ;;
 ;;; Presets
-
-(defun mevedel--fsm-error-message (fsm)
-  "Return a compact error message for FSM, or nil."
-  (let* ((info (and fsm (gptel-fsm-info fsm)))
-         (error (plist-get info :error))
-         (status (plist-get info :status))
-         (error-type (and (listp error) (plist-get error :type)))
-         (error-message (and (listp error) (plist-get error :message))))
-    (or error-message
-        (and error-type status (format "%s: %s" error-type status))
-        (and error-type (format "%s" error-type))
-        (and status (format "%s" status)))))
-
-(defun mevedel--run-turn-terminal-hook (fsm event status)
-  "Run top-level turn terminal hook EVENT for FSM with STATUS."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (when (bound-and-true-p mevedel--session)
-        (require 'mevedel-hooks)
-        (let* ((workspace (mevedel-workspace))
-               (request (and (boundp 'mevedel--current-request)
-                             mevedel--current-request))
-               (reason (and (eq event 'StopFailure)
-                            (or (mevedel--fsm-error-message fsm)
-                                (symbol-name status)))))
-          (mevedel-hooks-run-event
-           event
-           (mevedel-hooks-event-plist
-            event mevedel--session workspace
-            :status (symbol-name status)
-            :terminal-reason reason)
-           #'ignore
-           mevedel--session workspace request nil))))))
 
 (defcustom mevedel-action-preset-alist
   '((implement . mevedel-implement)
@@ -389,95 +335,6 @@ Has no effect when no extras are registered for PRESET-NAME."
             (overlay-put directive 'mevedel-directive-patch final-patch)))
         (mevedel--replace-patch-buffer final-patch)))))
 
-(defun mevedel--turn-clear-access-state (fsm)
-  "Clear pending access state for FSM's live request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (mevedel--clear-pending-access-requests))))
-
-(defun mevedel--turn-increment (fsm)
-  "Increment the session turn count for FSM's live request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (when mevedel--session
-        (cl-incf (mevedel-session-turn-count mevedel--session))))))
-
-(defun mevedel--turn-autosave (fsm)
-  "Persist the completed turn represented by FSM when enabled."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (when (and mevedel--session
-                 (bound-and-true-p mevedel-session-persistence)
-                 (not (bound-and-true-p mevedel-session--read-only-mode)))
-        (condition-case err
-            (progn
-              (mevedel-session-persistence-save mevedel--session chat-buffer)
-              (when (bound-and-true-p mevedel-session--save-failed)
-                (setq mevedel-session--save-failed nil)
-                (force-mode-line-update)))
-          (error
-           (display-warning 'mevedel
-                            (format "Session auto-save failed: %s" err)
-                            :warning)
-           (setq-local mevedel-session--save-failed t)
-           (force-mode-line-update)))))))
-
-(defun mevedel--turn-restore-permission-mode (fsm)
-  "Restore any temporary permission mode for FSM's request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (mevedel--implementation-permission-mode-restore))))
-
-(defun mevedel--turn-end-request (fsm)
-  "End the active mevedel request for FSM's request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (mevedel-request-end))))
-
-(defun mevedel--run-turn-steps (fsm steps)
-  "Run FSM through STEPS without allowing one failure to skip the rest."
-  (dolist (step steps)
-    (funcall (mevedel--safe-fsm-handler step) fsm)))
-
-(defun mevedel--complete-turn (fsm)
-  "Run the canonical successful top-level turn transaction for FSM."
-  (mevedel--run-turn-steps
-   fsm
-   (list #'mevedel--turn-clear-access-state
-         #'mevedel--turn-increment
-         #'mevedel--compact-record-token-baseline
-         #'mevedel--turn-autosave
-         (lambda (machine)
-           (mevedel--run-turn-terminal-hook machine 'Stop 'completed))
-         #'mevedel--turn-restore-permission-mode
-         #'mevedel--turn-end-request
-         #'mevedel-view--schedule-queued-user-message-drain
-         #'mevedel-tools--handle-terminal-mailbox)))
-
-(defun mevedel--fail-turn (fsm status)
-  "Run failure cleanup for FSM with terminal STATUS."
-  (mevedel--run-turn-steps
-   fsm
-   (list #'mevedel--turn-clear-access-state
-         #'mevedel--turn-increment
-         #'mevedel--compact-record-token-baseline
-         (lambda (machine)
-           (mevedel--run-turn-terminal-hook
-            machine 'StopFailure status))
-         #'mevedel--turn-restore-permission-mode
-         #'mevedel--turn-end-request
-         #'mevedel-tools--handle-terminal-mailbox)))
-
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.
 
@@ -601,7 +458,7 @@ alist with mevedel-specific handlers added:
                 (append (cdr tpre-entry)
                         (list #'mevedel--compact-record-token-baseline)))
       (push (list 'TPRE #'mevedel--compact-record-token-baseline) handlers)))
-  ;; 5. Failure terminals retain StopFailure, skip persistence and queued
+  ;; Failure terminals retain StopFailure, skip persistence and queued
   ;; follow-up submission, and still perform all shared cleanup steps.
   (dolist (state '(ERRS ABRT))
     (let* ((entry (assq state handlers))
@@ -612,7 +469,7 @@ alist with mevedel-specific handlers added:
       (if entry
           (setcdr entry (append (cdr entry) (list failure-handler)))
         (push (list state failure-handler) handlers))))
-  ;; 6. BWAIT handler: parks the FSM when background agents are running.
+  ;; The BWAIT handler parks the FSM when background agents are running.
   (let ((bwait-entry (assq 'BWAIT handlers)))
     (if bwait-entry
         (setcdr bwait-entry
@@ -620,7 +477,7 @@ alist with mevedel-specific handlers added:
                         (list #'mevedel-agent-runtime--handle-bwait)))
       (push (list 'BWAIT #'mevedel-agent-runtime--handle-bwait) handlers)))
   (setq handlers (mevedel--wrap-terminal-handlers handlers))
-  ;; 4. Install the internally isolated successful transaction after the
+  ;; Install the internally isolated successful transaction after the
   ;; ordinary terminal handlers have been wrapped.  Keeping the named
   ;; function itself in the chain gives direct fork turns the exact same
   ;; entry point.
@@ -705,28 +562,6 @@ state with no possible transitions to another state."
        (let ((entry (assq state transitions)))
          (or (null entry) (null (cdr entry)))))
      all-states)))
-
-(defun mevedel--handler-name (handler)
-  "Return a compact display name for FSM HANDLER."
-  (cond
-   ((symbolp handler) (symbol-name handler))
-   ((byte-code-function-p handler) "#<byte-code>")
-   ((functionp handler) "#<function>")
-   (t (format "%S" handler))))
-
-(defun mevedel--safe-fsm-handler (handler)
-  "Return a wrapper to run FSM HANDLER without aborting sibling handlers."
-  (lambda (fsm)
-    (condition-case err
-        (funcall handler fsm)
-      (error
-       (display-warning
-        'mevedel
-        (format "FSM handler %s failed: %s"
-                (mevedel--handler-name handler)
-                (error-message-string err))
-        :warning)
-       nil))))
 
 (defun mevedel--wrap-terminal-handlers (handlers &optional transitions)
   "Wrap terminal-state HANDLERS for TRANSITIONS so one failure cannot skip cleanup."

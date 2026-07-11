@@ -90,6 +90,7 @@ Entry point
 
 Data model
   mevedel-structs.el          workspace, session, request, agent-invocation
+  mevedel-turn.el             canonical success/failure turn settlement
   mevedel-workspace.el        workspace detection and registry
   mevedel-models.el           model tier/provider resolution
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
@@ -104,7 +105,8 @@ Data model
   mevedel-permission-queue.el permission/Bash/Eval queue
   mevedel-reminders.el        system-reminder injection
   mevedel-skills-core.el      skill model, discovery, state, reload
-  mevedel-skills.el           invocation, tools, slash/editor UI, roster
+  mevedel-skills-invoke.el    skill preparation, invocation, model tools
+  mevedel-skills.el           slash/editor UI, roster, reminders
 
 Chat / view
   mevedel-chat.el             session lifecycle
@@ -130,7 +132,7 @@ Chat / view
 
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly
-  mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
+  mevedel-presets.el          gptel presets and request-time FSM assembly
   mevedel-specialist-nudges.el  generic-tool specialist prompting policy
   mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
