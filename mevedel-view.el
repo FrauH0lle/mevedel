@@ -256,8 +256,7 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data
                   "mevedel-pipeline"
-                  (result-string &optional session buffer
-                                 expected-tool-use-id
+                  (result-string &optional session expected-tool-use-id
                                  allow-payload-tool-use-id))
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
@@ -3423,7 +3422,6 @@ renderer to fall back to the bare `Tool' one-liner."
                                full-result
                                (and (boundp 'mevedel--session)
                                     mevedel--session)
-                               data-buf
                                tool-id
                                (and (stringp tool-id)
                                     (not (string-empty-p tool-id))

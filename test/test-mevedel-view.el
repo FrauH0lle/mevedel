@@ -17,6 +17,7 @@
 (require 'mevedel-transcript)
 (require 'mevedel-structs)
 (require 'mevedel-pipeline)
+(require 'mevedel-tool-media)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
 (require 'mevedel-mentions)
@@ -40,6 +41,14 @@
 (defvar org-mode-hook)
 (declare-function gptel-menu "ext:gptel-transient" ())
 (declare-function org-entry-put "org" (pom property value))
+
+(defun mevedel-view-test--format-media-data-block
+    (media session tool-use-id)
+  "Format MEDIA for SESSION and TOOL-USE-ID."
+  (mevedel-tool-media--format-media-data-block
+   media
+   (mevedel-pipeline--tool-results-dir session nil)
+   tool-use-id))
 
 (defun test-mevedel-view--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
@@ -1000,8 +1009,8 @@ PROPS is the value for the `gptel' property."
                    :kind image
                    :data "captured")))
          (copied (substring-no-properties
-                  (mevedel-pipeline--format-media-data-block
-                   media session nil "toolu_original"))))
+                  (mevedel-view-test--format-media-data-block
+                   media session "toolu_original"))))
     (unwind-protect
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
@@ -1014,7 +1023,7 @@ PROPS is the value for the `gptel' property."
           (with-current-buffer data-buf
             (let ((parsed (mevedel-view--tool-call-parse
                            data-buf (point-min) (point-max))))
-              (should (string-search mevedel-pipeline--media-data-open
+              (should (string-search mevedel-tool-media--data-open
                                      (plist-get parsed :result))))))
       (delete-directory tmpdir t)))
 
@@ -1030,8 +1039,8 @@ PROPS is the value for the `gptel' property."
                    :kind image
                    :data "captured")))
          (copied (substring-no-properties
-                  (mevedel-pipeline--format-media-data-block
-                   media session nil "toolu_original"))))
+                  (mevedel-view-test--format-media-data-block
+                   media session "toolu_original"))))
     (unwind-protect
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
@@ -1044,7 +1053,7 @@ PROPS is the value for the `gptel' property."
           (with-current-buffer data-buf
             (let ((parsed (mevedel-view--tool-call-parse
                            data-buf (point-min) (point-max))))
-              (should (string-search mevedel-pipeline--media-data-open
+              (should (string-search mevedel-tool-media--data-open
                                      (plist-get parsed :result))))))
       (delete-directory tmpdir t)))
 
@@ -1064,11 +1073,11 @@ PROPS is the value for the `gptel' property."
                           :kind image
                           :data "actual")))
          (copied (substring-no-properties
-                  (mevedel-pipeline--format-media-data-block
-                   copied-media session nil "toolu_copied")))
+                  (mevedel-view-test--format-media-data-block
+                   copied-media session "toolu_copied")))
          (actual (substring-no-properties
-                  (mevedel-pipeline--format-media-data-block
-                   actual-media session nil "toolu_actual")))
+                  (mevedel-view-test--format-media-data-block
+                   actual-media session "toolu_actual")))
          (result (concat "plain text" copied "\nbody tail" actual)))
     (unwind-protect
         (mevedel-view-test--with-buffers
@@ -1082,7 +1091,7 @@ PROPS is the value for the `gptel' property."
           (with-current-buffer data-buf
             (let ((parsed (mevedel-view--tool-call-parse
                            data-buf (point-min) (point-max))))
-              (should (string-search mevedel-pipeline--media-data-open
+              (should (string-search mevedel-tool-media--data-open
                                      (plist-get parsed :result)))
               (should (string-search "body tail"
                                      (plist-get parsed :result))))))
@@ -1101,8 +1110,8 @@ PROPS is the value for the `gptel' property."
                    :data "captured")))
          (result (substring-no-properties
                   (concat "plain media"
-                          (mevedel-pipeline--format-media-data-block
-                           media session nil "toolu_actual")))))
+                          (mevedel-view-test--format-media-data-block
+                           media session "toolu_actual")))))
     (unwind-protect
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
