@@ -58,6 +58,8 @@
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-compact)
+(require 'mevedel-view-agent)
+(require 'mevedel-view-interaction)
 (require 'mevedel-view-render)
 (require 'mevedel-view-composer)
 (require 'mevedel-view-stream)

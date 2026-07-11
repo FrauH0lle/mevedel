@@ -18,13 +18,13 @@
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
 
-;; `mevedel-view'
+;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
-                  "mevedel-view" (descriptor))
+                  "mevedel-view-interaction" (descriptor))
 (declare-function mevedel-view--interaction-target-buffer
-                  "mevedel-view" (&optional data-buffer))
+                  "mevedel-view-interaction" (&optional data-buffer))
 (declare-function mevedel-view--interaction-unregister
-                  "mevedel-view" (id))
+                  "mevedel-view-interaction" (id))
 (defvar mevedel-view--interaction-overlays)
 
 (defvar-local mevedel--prompt-overlays nil

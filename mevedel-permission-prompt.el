@@ -31,13 +31,15 @@
 (declare-function mevedel-queue--entry-metadata-put
                   "mevedel-queue" (entry key value))
 
-;; `mevedel-view'
+;; `mevedel-view-agent'
 (declare-function mevedel-view--insert-attribution
-                  "mevedel-view" (agent-id))
+                  "mevedel-view-agent" (agent-id))
+
+;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
-                  "mevedel-view" (descriptor))
+                  "mevedel-view-interaction" (descriptor))
 (declare-function mevedel-view--interaction-target-buffer
-                  "mevedel-view" (data-buffer))
+                  "mevedel-view-interaction" (data-buffer))
 
 
 ;;

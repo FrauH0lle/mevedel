@@ -207,12 +207,14 @@
                   "mevedel-utilities" ())
 
 ;; `mevedel-view'
-(declare-function mevedel-view-agent-live-transcript-finalize
-                  "mevedel-view" (invocation))
-(declare-function mevedel-view-refresh-agent-rendering
-                  "mevedel-view" (view-buffer agent-id))
 (declare-function mevedel-view-rerender "mevedel-view"
                   (&optional buffer))
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-agent-live-transcript-finalize
+                  "mevedel-view-agent" (invocation))
+(declare-function mevedel-view-refresh-agent-rendering
+                  "mevedel-view-agent" (view-buffer agent-id))
 
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"

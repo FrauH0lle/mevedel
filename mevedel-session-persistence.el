@@ -121,8 +121,6 @@
                   "mevedel-chat" ())
 (declare-function mevedel--normalize-session-directory
                   "mevedel-chat" (directory workspace))
-(declare-function mevedel-view-reset-agent-ephemeral-state
-                  "mevedel-view" (&optional view-buffer))
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-set-activity
@@ -157,6 +155,10 @@
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-reset-agent-ephemeral-state
+                  "mevedel-view-agent" (&optional view-buffer))
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `diff'

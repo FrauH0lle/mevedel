@@ -128,8 +128,10 @@ heterogeneous FIFO with three entry kinds:
 - `bash` for Bash command confirmation
 - `eval` for Eval expression confirmation
 
-Only the head is visible in the view interaction zone. Rule-creating
-outcomes (`allow-session`, `deny-session`, `always-allow`) can coalesce
+Only the head is visible in the view interaction zone. The permission UI
+registers that head with `mevedel-view-interaction.el`, which owns ordering,
+callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
+`deny-session`, `always-allow`) can coalesce
 queued siblings by re-running the decision chain. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
 prompts are aborted on request/session teardown.

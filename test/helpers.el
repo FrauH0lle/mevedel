@@ -29,6 +29,22 @@
 ;;
 ;;; View test helpers
 
+(defun mevedel-view-test--insert-composer-draft (draft &optional point-offset)
+  "Insert DRAFT into the editable composer and move point by POINT-OFFSET."
+  (let ((start (mevedel-view--input-start))
+        (inhibit-read-only t))
+    (goto-char start)
+    (insert draft)
+    (remove-text-properties
+     start (point)
+     '(read-only nil
+       mevedel-view-prompt nil
+       font-lock-face nil
+       face nil
+       front-sticky nil
+       rear-nonsticky nil))
+    (goto-char (+ start (or point-offset (length draft))))))
+
 (defmacro mevedel-view-test--with-buffers (&rest body)
   "Execute BODY with data and view buffers bound and initialized."
   (declare (indent 0) (debug t))

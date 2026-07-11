@@ -4,6 +4,9 @@ The view modules render a compact user-facing projection of the authoritative
 gptel data buffer. `mevedel-view.el` owns the mode, zones, and session
 coordination. `mevedel-view-composer.el` owns the editable composer,
 submission hooks, queued follow-ups, and send/fork dispatch.
+`mevedel-view-agent.el` owns agent transcript inspection, live agent status,
+and targeted handle refresh. `mevedel-view-interaction.el` owns interaction
+descriptor registration, ordering, callback overlays, and redraw.
 `mevedel-view-render.el` owns transcript rendering, folding, source mapping,
 and navigation. `mevedel-view-stream.el` owns streaming, request progress,
 and gptel stream integration. The data buffer remains the model-visible
@@ -102,12 +105,13 @@ Terminology:
 - **Input zone**: the read-only prompt prefix plus the editable composer.
   **Composer** refers only to the editable unsent input body.
 
-The interaction-zone painter renders descriptor bodies as `interaction`
-fragments. Descriptor overlays may still span those fragments as callback
-handles for prompt settlement and preview cleanup; they are not independent
-renderers. Register controls with `mevedel-view--interaction-register`; do
-not direct-insert ad hoc UI near the composer. Registering or rebuilding an
-interaction must not auto-focus the prompt or move point out of the composer.
+The interaction-zone painter in `mevedel-view-interaction.el` renders
+descriptor bodies as `interaction` fragments. Descriptor overlays may still
+span those fragments as callback handles for prompt settlement and preview
+cleanup; they are not independent renderers. Register controls with
+`mevedel-view--interaction-register`; do not direct-insert ad hoc UI near the
+composer. Registering or rebuilding an interaction must not auto-focus the
+prompt or move point out of the composer.
 Interaction keybindings are active only when point is on the interaction text;
 composer input must never settle or cycle interaction prompts.
 
@@ -191,8 +195,9 @@ Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
 High-level zone markers still define layout order in `mevedel-view.el`.
-Producers provide those layout positions to the zone module but do not own
-managed overlays, preservation wrappers, or marker insertion choreography.
+`mevedel-view-interaction.el` turns the interaction marker into managed
+fragments; producers do not own managed overlays, preservation wrappers, or
+marker insertion choreography.
 
 ## Redraw invariants
 
@@ -449,6 +454,10 @@ and restores a combined draft to the composer, so it cannot be
 auto-submitted while being edited.
 
 ## Agent Transcript Views
+
+`mevedel-view-agent.el` owns transcript lookup and inspection views, live
+rows and badges, and status/handle refresh. Transcript turn rendering remains
+in `mevedel-view-render.el`.
 
 Agent handles and attribution fragments are clickable when a transcript
 entry is available. Running agents show status/activity in the main view

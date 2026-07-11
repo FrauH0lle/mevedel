@@ -19,13 +19,16 @@
 (eval-when-compile
   (require 'cl-lib))
 
-;; `mevedel-view-composer'
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
-(defvar mevedel-view--input-marker)
-
 ;; `mevedel-view'
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
+
+;; `mevedel-view-agent'
+(defvar mevedel-view--agent-transcript-p)
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(defvar mevedel-view--input-marker)
 
 (defvar-local mevedel-view-zone--collapse-states nil
   "Buffer-local UI collapse state keyed by fragment collapse keys.")

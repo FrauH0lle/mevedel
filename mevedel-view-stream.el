@@ -28,11 +28,17 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-display-string "mevedel-tool-registry" (name args))
+;; `mevedel-view'
+(declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
+(defvar mevedel-view--display-map)
+(defvar mevedel-view-pending-tools-visible-max)
+(defvar mevedel-view-spinner-animate)
+(defvar mevedel-view-spinner-frames)
+(defvar mevedel-view-spinner-interval)
 
-;; `mevedel-tools'
-(declare-function mevedel-tools-active-count "mevedel-tools" (&optional buffer))
+;; `mevedel-view-agent'
+(declare-function mevedel-view--agent-status-counts "mevedel-view-agent" ())
+(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--agent-fsm-p
@@ -41,20 +47,6 @@
                   "mevedel-view-composer" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
                   "mevedel-view-composer" (thunk))
-(defvar mevedel-view--input-marker)
-
-;; `mevedel-view'
-(declare-function mevedel-view--agent-status-counts "mevedel-view" ())
-(declare-function mevedel-view--render-agent-status "mevedel-view" ())
-(declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
-(defvar mevedel-view--agent-transcript-p)
-(defvar mevedel-view--display-map)
-(defvar mevedel-view--interaction-marker)
-(defvar mevedel-view--status-marker)
-(defvar mevedel-view-pending-tools-visible-max)
-(defvar mevedel-view-spinner-animate)
-(defvar mevedel-view-spinner-frames)
-(defvar mevedel-view-spinner-interval)
 
 ;; `mevedel-view-render'
 (declare-function mevedel-view--append-request-summary

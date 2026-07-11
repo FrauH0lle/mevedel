@@ -21,11 +21,6 @@
 (declare-function cl-find "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--agent-invocation-at
-                  "mevedel-agent-runtime" (fsm))
-(defvar mevedel-agent-runtime--fsms)
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-status
@@ -109,30 +104,28 @@
                   "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--display-label-for-agent
-                  "mevedel-view" (agent-id))
 (declare-function mevedel-view--header-string
                   "mevedel-view" (data-buf))
-(declare-function mevedel-view--insert-attribution
-                  "mevedel-view" (agent-id &optional live-click-p calls))
-(declare-function mevedel-view--interaction-rebuild
-                  "mevedel-view" ())
-(declare-function mevedel-view--render-agent-status
-                  "mevedel-view" ())
 (declare-function mevedel-view--render-status
                   "mevedel-view" (&optional data-buf))
+(defvar mevedel-view--display-map)
+(defvar mevedel-view--interaction-marker)
+(defvar mevedel-view--status-marker)
+(defvar mevedel-view-pending-tools-visible-max)
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view--insert-attribution
+                  "mevedel-view-agent"
+                  (agent-id &optional live-click-p calls))
+(declare-function mevedel-view--render-agent-status
+                  "mevedel-view-agent" ())
 (declare-function mevedel-view-agent-handle-activate
-                  "mevedel-view" (&optional agent-id))
+                  "mevedel-view-agent" (&optional agent-id))
 (declare-function mevedel-view-agent-status-toggle
-                  "mevedel-view" ())
+                  "mevedel-view-agent" ())
 (defvar mevedel-view--agent-handle-map)
 (defvar mevedel-view--agent-label-map)
 (defvar mevedel-view--agent-transcript-p)
-(defvar mevedel-view--display-map)
-(defvar mevedel-view--interaction-marker)
-(defvar mevedel-view--status-agent-collapse-key)
-(defvar mevedel-view--status-marker)
-(defvar mevedel-view-pending-tools-visible-max)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--call-preserving-input-text
@@ -148,6 +141,10 @@
 (declare-function mevedel-view-refresh-input-prompt
                   "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" ())
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--delete-pending-tool-live-lines
@@ -180,8 +177,6 @@
 (declare-function mevedel-view-zone-previous
                   "mevedel-view-zone" (&optional limit))
 (declare-function mevedel-view-zone-region "mevedel-view-zone" (zone))
-(declare-function mevedel-view-zone-set-collapse-state
-                  "mevedel-view-zone" (key collapsed))
 
 ;; `org'
 (declare-function org-mode "ext:org" ())
@@ -1331,57 +1326,6 @@ buffer's font-lock refontification cycles."
              (buffer-string)))
         (error text)))))
 
-(defun mevedel-view--agent-invocation (agent-id)
-  "Return the live invocation for AGENT-ID visible to this view."
-  (cl-labels
-      ((id-match-p
-        (candidate)
-        (or (equal candidate agent-id)
-            (equal (mevedel-view--display-label-for-agent candidate)
-                   agent-id)))
-       (lookup-in-buffer
-        (buf)
-        (when (and buf (buffer-live-p buf))
-          (with-current-buffer buf
-            (catch 'found
-              (dolist (pair mevedel-agent-runtime--fsms)
-                (when (id-match-p (car pair))
-                  (when-let* ((inv (ignore-errors
-                                      (mevedel-agent-runtime--agent-invocation-at
-                                       (cdr pair)))))
-                    (throw 'found inv))))
-              nil)))))
-    (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
-                               mevedel--data-buffer))
-                ((buffer-live-p data-buf)))
-      (or (lookup-in-buffer data-buf)
-          (let ((session (buffer-local-value 'mevedel--session data-buf)))
-            (catch 'found
-              (dolist (buf (buffer-list))
-                (when (and (buffer-live-p buf)
-                           (eq (buffer-local-value 'mevedel--session buf)
-                               session))
-                  (when-let* ((inv (lookup-in-buffer buf)))
-                    (throw 'found inv))))
-              nil))))))
-
-(defun mevedel-view-reset-agent-ephemeral-state (&optional view-buffer)
-  "Reset view-local ephemeral agent UI state in VIEW-BUFFER.
-Defaults to the current buffer."
-  (with-current-buffer (or view-buffer (current-buffer))
-    (require 'mevedel-view-zone)
-    (mevedel-view-zone-set-collapse-state
-     mevedel-view--status-agent-collapse-key nil)
-    (mevedel-view--render-status)))
-
-(defun mevedel-view--queue-has-origin-p (queue origin)
-  "Return non-nil if QUEUE has an entry with ORIGIN."
-  (let (found)
-    (while (and queue (not found))
-      (setq found (equal (plist-get (car queue) :origin) origin))
-      (setq queue (cdr queue)))
-    found))
-
 (defun mevedel-view--queue-origin-fingerprint (queue)
   "Return the ORIGIN values in QUEUE for render cache invalidation."
   (mapcar (lambda (entry)
@@ -1404,17 +1348,6 @@ Defaults to the current buffer."
                             (plist-get data :status)
                             (plist-get data :path))))
                   (mevedel-session-agent-transcripts session)))))
-
-(defun mevedel-view--agent-status-blocked-p (agent-id)
-  "Return non-nil when AGENT-ID is waiting on a parent interaction queue."
-  (when-let* ((data-buf (and (boundp 'mevedel--data-buffer)
-                             mevedel--data-buffer))
-              ((buffer-live-p data-buf))
-              (session (buffer-local-value 'mevedel--session data-buf)))
-    (or (mevedel-view--queue-has-origin-p
-         (mevedel-session-permission-queue session) agent-id)
-        (mevedel-view--queue-has-origin-p
-         (mevedel-session-plan-queue session) agent-id))))
 
 (defun mevedel-view--stamp-agent-handle (start end rendering)
   "Stamp START..END with handle properties from RENDERING."

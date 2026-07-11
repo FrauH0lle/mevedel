@@ -15,31 +15,33 @@
 (require 'subr-x)
 (require 'mevedel-utilities)
 
-;; `mevedel-structs'
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
-
-;; `mevedel-workspace'
-(declare-function mevedel-workspace-ensure-generated-state-ignored
-                  "mevedel-workspace" (workspace))
-
-;; `mevedel-view-composer'
-(declare-function mevedel-view-abort "mevedel-view-composer" ())
-(declare-function mevedel-view--clear-input "mevedel-view-composer" ())
-(declare-function mevedel-view--input-start "mevedel-view-composer" ())
-
-;; `mevedel-view'
-(defvar mevedel--data-buffer)
-(defvar mevedel--session)
-(defvar mevedel-view--agent-transcript-p)
-
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-read
                   "mevedel-session-persistence" (path))
 (declare-function mevedel-session-persistence-write
                   "mevedel-session-persistence" (path plist))
-(defvar mevedel-session-persistence)
 (defvar mevedel-session--read-only-mode)
+(defvar mevedel-session-persistence)
+
+;; `mevedel-structs'
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+
+;; `mevedel-view'
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
+
+;; `mevedel-view-agent'
+(defvar mevedel-view--agent-transcript-p)
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--clear-input "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view-abort "mevedel-view-composer" ())
+
+;; `mevedel-workspace'
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+                  "mevedel-workspace" (workspace))
 
 
 ;;
