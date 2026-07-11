@@ -29,6 +29,10 @@ flowchart TD
 
 Sessions auto-save lazily and per-completed-turn under
 `<workspace-root>/.mevedel/sessions/<name>-<timestamp>-<short-uuid>/`.
+Ordinary model turns and direct foreground fork-skill turns share one
+successful-turn transaction.  It advances the turn, records the token
+baseline, saves before request teardown, runs `Stop`, restores temporary
+permission state, ends the request, and schedules queued follow-up delivery.
 Layout:
 
 ```

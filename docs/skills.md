@@ -390,7 +390,9 @@ Fork skills install them on the sub-agent invocation. For fork skills, a
 frontmatter `Stop` declaration is scoped to that child invocation and is
 normalized to `SubagentStop`; top-level `Stop` remains a main-turn event.
 Successful foreground fork user skills also complete the parent turn and
-fire the top-level `Stop` hook before request-scoped layers are cleared.
+use the same successful-turn transaction as an ordinary model response.  The
+top-level `Stop` hook runs before request-scoped layers are cleared; queued
+follow-ups and other terminal cleanup run through that shared boundary.
 
 ## Model And Effort
 

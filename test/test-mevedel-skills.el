@@ -3778,7 +3778,9 @@ spanning lines")))
                  :body "should-not-appear"
                  :context 'fork
                  :agent "coordinator"))
-         save-called status-called stop-called)
+         save-called status-called stop-called
+         access-cleared baseline-recorded permission-restored
+         queue-drain-scheduled mailbox-cleared post-hook-called)
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
@@ -3792,6 +3794,10 @@ spanning lines")))
                    (lambda (s b)
                      (setq save-called (list s b))
                      "saved"))
+                  ((symbol-function 'mevedel--clear-pending-access-requests)
+                   (lambda () (setq access-cleared t)))
+                  ((symbol-function 'mevedel--compact-record-token-baseline)
+                   (lambda (_fsm) (setq baseline-recorded t)))
                   ((symbol-function 'mevedel--run-turn-terminal-hook)
                    (lambda (_fsm event status)
                      (setq stop-called
@@ -3800,9 +3806,21 @@ spanning lines")))
                                   (null
                                    (bound-and-true-p
                                     mevedel--current-request)))))))
+                  ((symbol-function
+                    'mevedel--implementation-permission-mode-restore)
+                   (lambda () (setq permission-restored t)))
+                  ((symbol-function
+                    'mevedel-view--schedule-queued-user-message-drain)
+                   (lambda (_fsm) (setq queue-drain-scheduled t)))
+                  ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
+                   (lambda (_fsm) (setq mailbox-cleared t)))
                   ((symbol-function 'gptel--update-status)
                    (lambda (&rest args) (setq status-called args))))
-          (let ((gptel-response-separator "\n\n"))
+          (let ((gptel-response-separator "\n\n")
+                (gptel-post-response-functions
+                 (list (lambda (_start _end)
+                         (setq post-hook-called t)
+                         (error "Broken post-response hook")))))
             (insert "### $coordinator do the thing")
             (goto-char (point-max))
             (should (eq 'skill (mevedel-skills--dispatch-skill-command)))
@@ -3815,6 +3833,12 @@ spanning lines")))
             (should (= 1 (mevedel-session-turn-count session)))
             (should (equal (list session (current-buffer)) save-called))
             (should (equal '(Stop completed t) stop-called))
+            (should access-cleared)
+            (should baseline-recorded)
+            (should permission-restored)
+            (should queue-drain-scheduled)
+            (should mailbox-cleared)
+            (should post-hook-called)
             (should (equal '(" Ready" success) status-called)))))))
 
   :doc "no-prefix chat: skill body is placed on a fresh line with blank separator"

@@ -96,7 +96,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
-(declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-request-hook-rules
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-effort-override
@@ -228,8 +227,6 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--refresh-visited-file-modtime-or-error
                   "mevedel-session-persistence" (&optional expected-texts))
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-start-fresh-segment
                   "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session-persistence)
@@ -237,8 +234,7 @@
 (defvar mevedel-session--save-failed)
 
 ;; `mevedel-presets'
-(declare-function mevedel--run-turn-terminal-hook
-                  "mevedel-presets" (fsm event status))
+(declare-function mevedel--complete-turn "mevedel-presets" (fsm))
 
 
 ;;
@@ -4068,44 +4064,19 @@ observe the completed response."
       (let ((end (point)))
         (add-text-properties start end '(gptel response))
         (mevedel--restore-render-data-gptel-properties start end)
-        (run-hook-with-args 'gptel-post-response-functions start end)
+        (condition-case err
+            (run-hook-with-args 'gptel-post-response-functions start end)
+          (error
+           (display-warning
+            'mevedel
+            (format "Fork post-response hook failed: %s"
+                    (error-message-string err))
+            :warning)))
         (mevedel--restore-render-data-gptel-properties start end)
-        (mevedel-skills--finalize-fork-turn)))))
-
-(defun mevedel-skills--finalize-fork-turn ()
-  "Run completed-turn bookkeeping for a direct fork skill turn.
-
-Direct fork skills suppress the parent `gptel-send' request, so the
-main FSM's DONE handlers never run.  Mirror the subset of that
-terminal path that belongs to a successful completed turn: bump the
-session turn count, save the session sidecar/segment, clear the
-active request, and reset gptel's status indicator."
-  (unwind-protect
-      (when (bound-and-true-p mevedel--session)
-        (cl-incf (mevedel-session-turn-count mevedel--session))
-        (require 'mevedel-session-persistence)
-        (when (and (bound-and-true-p mevedel-session-persistence)
-                   (not (bound-and-true-p mevedel-session--read-only-mode)))
-          (condition-case err
-              (progn
-                (mevedel-session-persistence-save mevedel--session
-                                                  (current-buffer))
-                (when (bound-and-true-p mevedel-session--save-failed)
-                  (setq-local mevedel-session--save-failed nil)
-                  (force-mode-line-update)))
-            (error
-             (display-warning 'mevedel
-                              (format "Session auto-save failed: %s" err)
-                              :warning)
-             (setq-local mevedel-session--save-failed t)
-             (force-mode-line-update))))
         (require 'mevedel-presets)
-        (mevedel--run-turn-terminal-hook
-         (gptel-make-fsm :info (list :buffer (current-buffer)))
-         'Stop 'completed))
-    (when (bound-and-true-p mevedel--current-request)
-      (mevedel-request-end))
-    (gptel--update-status " Ready" 'success)))
+        (mevedel--complete-turn
+         (gptel-make-fsm :info (list :buffer (current-buffer))))
+        (gptel--update-status " Ready" 'success)))))
 
 (defun mevedel-skills--text-after-local-command-delete
     (delete-start region-end after-prefix)

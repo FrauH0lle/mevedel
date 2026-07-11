@@ -69,15 +69,17 @@
                   (cdr (assq 'WAIT result))))
     (should (memq #'mevedel--compact-record-token-baseline
                   (cdr (assq 'TPRE result))))
-    ;; Terminal states (DONE, ERRS) should have extra handlers.
-    ;; DONE has two extra handlers compared with ERRS: the
-    ;; completed-turn-boundary autosave and queued-message drain fire
-    ;; only on success, not on abort/error.
+    ;; DONE exposes one canonical named transaction; failure cleanup stays
+    ;; on ERRS and ABRT without installing the successful entry point.
     (let ((done-handlers (cdr (assq 'DONE result)))
-          (errs-handlers (cdr (assq 'ERRS result))))
+          (errs-handlers (cdr (assq 'ERRS result)))
+          (abrt-handlers (cdr (assq 'ABRT result))))
       (should (> (length done-handlers) 1))
       (should (> (length errs-handlers) 1))
-      (should (= (length done-handlers) (+ 2 (length errs-handlers))))))
+      (should (eq (car (last done-handlers)) #'mevedel--complete-turn))
+      (should (= 1 (cl-count #'mevedel--complete-turn done-handlers)))
+      (should-not (memq #'mevedel--complete-turn errs-handlers))
+      (should-not (memq #'mevedel--complete-turn abrt-handlers))))
 
   :doc "wraps gptel wait after existing WAIT injectors"
   (let* ((gptel-request--transitions
@@ -129,27 +131,26 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session))
-          ;; In ERRS the tail is: ... turn-count, token-baseline,
-          ;; StopFailure, permission-mode restore, request-end,
-          ;; terminal-mailbox.  In DONE the autosave and Stop handlers
-          ;; sit between token-baseline and permission-mode restore,
-          ;; and queued-message drain sits after request-end.
           (let* ((fsm (gptel-make-fsm
                        :info (list :buffer chat-buf)))
                  (errs-handlers (cdr (assq 'ERRS handlers)))
-                 (errs-turn-handler
-                 (nth (- (length errs-handlers) 6) errs-handlers))
-                 (done-handlers (cdr (assq 'DONE handlers)))
-                 (done-turn-handler
-                  (nth (- (length done-handlers) 8) done-handlers)))
-            (should (functionp done-turn-handler))
-            (funcall done-turn-handler fsm)
-            (should (= 1 (mevedel-session-turn-count session)))
-            (funcall done-turn-handler fsm)
-            (should (= 2 (mevedel-session-turn-count session)))
-            ;; ERRS terminal gets the same turn-count handler.
-            (funcall errs-turn-handler fsm)
-            (should (= 3 (mevedel-session-turn-count session)))))
+                 (failure-handler (car (last errs-handlers))))
+            (cl-letf (((symbol-function 'mevedel--run-turn-terminal-hook)
+                       #'ignore)
+                      ((symbol-function 'mevedel--turn-restore-permission-mode)
+                       #'ignore)
+                      ((symbol-function
+                        'mevedel-view--schedule-queued-user-message-drain)
+                       #'ignore)
+                      ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
+                       #'ignore))
+              (mevedel--complete-turn fsm)
+              (should (= 1 (mevedel-session-turn-count session)))
+              (mevedel--complete-turn fsm)
+              (should (= 2 (mevedel-session-turn-count session)))
+              ;; ERRS terminal gets the same turn-count handler.
+              (funcall failure-handler fsm)
+              (should (= 3 (mevedel-session-turn-count session))))))
       (kill-buffer chat-buf)))
 
   :doc "top-level terminal hooks report Stop and StopFailure"
@@ -192,7 +193,7 @@
                                       :terminal-reason)))))
       (kill-buffer chat-buf)))
 
-  :doc "terminal handler errors do not skip save cleanup or queued drain"
+  :doc "DONE uses one ordered transaction and continues after step errors"
   (let* ((gptel-request--transitions
           '((INIT . ((t . WAIT)))
             (WAIT . ((t . TYPE)))
@@ -208,10 +209,7 @@
               'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
-         (saved 0)
-         (stopped 0)
-         (restored 0)
-         (drained 0))
+         events)
     (unwind-protect
         (let ((mevedel-session-persistence t))
           (with-current-buffer chat-buf
@@ -223,32 +221,92 @@
           (cl-letf (((symbol-function 'display-warning) #'ignore)
                     ((symbol-function 'mevedel--generate-final-patch)
                      (lambda (&optional _workspace) nil))
-                    ((symbol-function 'mevedel--clear-pending-access-requests)
-                     #'ignore)
+                    ((symbol-function 'mevedel--turn-clear-access-state)
+                     (lambda (_fsm)
+                       (push 'access events)
+                       (error "Access cleanup failed")))
+                    ((symbol-function 'mevedel--turn-increment)
+                     (lambda (_fsm) (push 'turn events)))
                     ((symbol-function 'mevedel--compact-record-token-baseline)
-                     #'ignore)
+                     (lambda (_fsm) (push 'baseline events)))
+                    ((symbol-function 'mevedel--turn-autosave)
+                     (lambda (_fsm) (push 'save events)))
                     ((symbol-function 'mevedel--run-turn-terminal-hook)
-                     (lambda (&rest _) (cl-incf stopped)))
-                    ((symbol-function
-                      'mevedel--implementation-permission-mode-restore)
-                     (lambda () (cl-incf restored)))
-                    ((symbol-function 'mevedel-session-persistence-save)
-                     (lambda (_session _buffer) (cl-incf saved)))
+                     (lambda (_fsm event status)
+                       (push (list event status
+                                   (with-current-buffer chat-buf
+                                     (not (null mevedel--current-request))))
+                             events)))
+                    ((symbol-function 'mevedel--turn-restore-permission-mode)
+                     (lambda (_fsm) (push 'restore events)))
+                    ((symbol-function 'mevedel--turn-end-request)
+                     (lambda (_fsm)
+                       (push 'request-end events)
+                       (with-current-buffer chat-buf
+                         (setq mevedel--current-request nil))))
                     ((symbol-function 'mevedel-view--schedule-queued-user-message-drain)
-                     (lambda (_fsm) (cl-incf drained)))
+                     (lambda (_fsm)
+                       (push (list 'drain
+                                   (with-current-buffer chat-buf
+                                     (null mevedel--current-request)))
+                             events)))
                     ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
-                     #'ignore))
+                     (lambda (_fsm) (push 'mailbox events))))
             (let ((fsm (gptel-make-fsm
                         :info (list :buffer chat-buf))))
               (mapc (lambda (handler) (funcall handler fsm))
                     (cdr (assq 'DONE handlers)))))
-          (should (= saved 1))
-          (should (= stopped 1))
-          (should (= restored 1))
-          (should (= drained 1))
+          (should (equal (nreverse events)
+                         '(access turn baseline save
+                           (Stop completed t)
+                           restore request-end (drain t) mailbox)))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))
       (kill-buffer chat-buf))))
+
+  :doc "ERRS and ABRT skip successful persistence and queued drain"
+  (let* ((gptel-request--transitions
+          '((INIT . ((t . WAIT)))
+            (WAIT . ((t . TYPE)))
+            (TYPE . ((err . ERRS)
+                     (t . DONE)))))
+         (base-handlers '((WAIT) (DONE) (ERRS) (ABRT)))
+         (handlers (mevedel-preset--build-handlers
+                    (copy-tree base-handlers)))
+         (fsm (gptel-make-fsm :info nil))
+         events (saved 0) (drained 0))
+    (cl-letf (((symbol-function 'display-warning) #'ignore)
+              ((symbol-function 'mevedel--generate-final-patch)
+               (lambda (&optional _workspace) nil))
+              ((symbol-function 'mevedel--turn-clear-access-state)
+               (lambda (_fsm) (push 'access events)))
+              ((symbol-function 'mevedel--turn-increment)
+               (lambda (_fsm) (push 'turn events)))
+              ((symbol-function 'mevedel--compact-record-token-baseline)
+               (lambda (_fsm) (push 'baseline events)))
+              ((symbol-function 'mevedel--turn-autosave)
+               (lambda (_fsm) (cl-incf saved)))
+              ((symbol-function 'mevedel--run-turn-terminal-hook)
+               (lambda (_fsm event status)
+                 (push (list event status) events)))
+              ((symbol-function 'mevedel--turn-restore-permission-mode)
+               (lambda (_fsm) (push 'restore events)))
+              ((symbol-function 'mevedel--turn-end-request)
+               (lambda (_fsm) (push 'request-end events)))
+              ((symbol-function 'mevedel-view--schedule-queued-user-message-drain)
+               (lambda (_fsm) (cl-incf drained)))
+              ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
+               (lambda (_fsm) (push 'mailbox events))))
+      (dolist (case '((ERRS error) (ABRT aborted)))
+        (setq events nil)
+        (mapc (lambda (handler) (funcall handler fsm))
+              (cdr (assq (car case) handlers)))
+        (should (equal (nreverse events)
+                       `(access turn baseline
+                                (StopFailure ,(cadr case))
+                                restore request-end mailbox))))
+      (should (zerop saved))
+      (should (zerop drained))))
 
 
 ;;
