@@ -79,11 +79,27 @@
   '(:updated-input (:command "echo rewritten")))
 
 (defvar mevedel-hooks-test--read-eval-ran nil)
+(defvar mevedel-hooks-test--native-seen-event nil)
 (defvar mevedel-hooks-test--seen-event nil)
 (defvar mevedel-hooks-test--seen-buffer nil)
+(defvar mevedel-hooks-test--execution-order nil)
 
 (defun mevedel-hooks-test--capture-fn (event)
   "Capture EVENT for serial hook cases."
+  (setq mevedel-hooks-test--seen-event event)
+  nil)
+
+(defun mevedel-hooks-test--native-rewrite-fn (event)
+  "Record native execution and rewrite input for unified-engine cases."
+  (setq mevedel-hooks-test--native-seen-event event)
+  (setq mevedel-hooks-test--execution-order
+        (append mevedel-hooks-test--execution-order '(native)))
+  '(:updated-input (:command "native rewrite")))
+
+(defun mevedel-hooks-test--declarative-capture-fn (event)
+  "Record declarative execution and capture EVENT for unified-engine cases."
+  (setq mevedel-hooks-test--execution-order
+        (append mevedel-hooks-test--execution-order '(declarative)))
   (setq mevedel-hooks-test--seen-event event)
   nil)
 
@@ -593,6 +609,41 @@
               (:matcher "*" :hooks (Docs (:type nope) ,handler)))))))
     (should (equal handlers (list handler)))))
 
+(mevedel-deftest mevedel-hooks--handlers-for-event ()
+  ,test
+  (test)
+  :doc "prepends native functions as executable Elisp handler records"
+  (let ((mevedel-pre-tool-use-functions
+         '(mevedel-hooks-test--native-rewrite-fn))
+        (rules
+         '((PreToolUse
+            (:matcher "Bash"
+             :hooks ((:type elisp
+                      :function mevedel-hooks-test--declarative-capture-fn)))))))
+    (should
+     (equal
+      (mevedel-hooks--handlers-for-event
+       'PreToolUse '(:tool-name "Bash") rules)
+      '((:type elisp
+         :function mevedel-hooks-test--native-rewrite-fn
+         :source native)
+        (:type elisp
+         :function mevedel-hooks-test--declarative-capture-fn))))))
+
+  :doc "preserves buffer-local hook order and the global inheritance marker"
+  (let ((mevedel-pre-tool-use-functions
+         '(mevedel-hooks-test--native-rewrite-fn)))
+    (with-temp-buffer
+      (setq-local mevedel-pre-tool-use-functions
+                  '(mevedel-hooks-test--declarative-capture-fn t))
+      (should
+       (equal
+        (mapcar (lambda (handler) (plist-get handler :function))
+                (mevedel-hooks--handlers-for-event
+                 'PreToolUse '(:tool-name "Bash") nil))
+        '(mevedel-hooks-test--declarative-capture-fn
+          mevedel-hooks-test--native-rewrite-fn)))))
+
 (mevedel-deftest mevedel-hooks--event-json
 		 (:doc "serializes Lisp booleans and nil optional fields as JSON values")
 		 (let* ((payload (json-parse-string
@@ -806,6 +857,89 @@
 					'(:command "echo rewritten"))))
 		     (delete-directory root t))))
 
+(mevedel-deftest mevedel-hooks-run-event/unified-elisp-engine
+  (:doc "runs native then declarative Elisp with shared serial mutation")
+  (let* ((root (make-temp-file "mevedel-hooks-unified" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-test--execution-order nil)
+         (mevedel-hooks-test--native-seen-event nil)
+         (mevedel-hooks-test--seen-event nil)
+         (mevedel-pre-tool-use-functions
+          '(mevedel-hooks-test--native-rewrite-fn))
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type elisp
+                        :function
+                        mevedel-hooks-test--declarative-capture-fn))))))))
+    (unwind-protect
+        (progn
+          (mevedel-hooks-test--await
+           (lambda (cb)
+             (mevedel-hooks-run-event
+              'PreToolUse
+              '(:tool-name "Bash" :tool-input (:command "original"))
+              cb session)))
+          (should (equal '(native declarative)
+                         mevedel-hooks-test--execution-order))
+          (should (equal '(:command "native rewrite")
+                         (plist-get mevedel-hooks-test--seen-event
+                                    :tool-input)))
+          (should-not (plist-member mevedel-hooks-test--native-seen-event
+                                    :hook-handler))
+          (should (plist-member mevedel-hooks-test--seen-event
+                                :hook-handler))
+          (should (= 2 (length (mevedel-session-hook-log session)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/unified-elisp-errors
+  (:doc "normalizes native and declarative malformed decisions once each")
+  (let* ((root (make-temp-file "mevedel-hooks-unified-error" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-pre-tool-use-functions
+          '(mevedel-hooks-test--suppress-output-fn))
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type elisp
+                        :function mevedel-hooks-test--suppress-output-fn)
+                       (:type elisp
+                        :function mevedel-hooks-test--context-fn))))))))
+    (unwind-protect
+        (let ((decision
+               (mevedel-hooks-test--await
+                (lambda (cb)
+                  (mevedel-hooks-run-event
+                   'PreToolUse '(:tool-name "Bash") cb session)))))
+          (should (equal '("later")
+                         (plist-get decision :additional-context)))
+          (should (equal '(error error ok)
+                         (mapcar (lambda (entry) (plist-get entry :status))
+                                 (mevedel-session-hook-log session)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/unified-elisp-terminal
+  (:doc "a terminal native decision skips later declarative handlers")
+  (let* ((root (make-temp-file "mevedel-hooks-unified-terminal" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-pre-tool-use-functions
+          '(mevedel-hooks-test--stop-fn))
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Bash"
+               :hooks ((:type elisp
+                        :function mevedel-hooks-test--context-fn))))))))
+    (unwind-protect
+        (let ((decision
+               (mevedel-hooks-test--await
+                (lambda (cb)
+                  (mevedel-hooks-run-event
+                   'PreToolUse '(:tool-name "Bash") cb session)))))
+          (should-not (plist-get decision :continue))
+          (should-not (plist-get decision :additional-context))
+          (should (= 1 (length (mevedel-session-hook-log session)))))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-hooks-run-event/stale-ambient-context
 		 (:doc "ignores stale non-struct request context when collecting rules")
 		 (let* ((root (make-temp-file "mevedel-hooks-stale" t))
@@ -945,27 +1079,6 @@
                                           "Hook output truncated at 16 character limit"
                                           (plist-get decision :permission-reason))))
                              (delete-directory root t))))
-
-(mevedel-deftest mevedel-hooks-run-event/native-reserved-field
-		 (:doc "logs reserved fields returned by native hook functions")
-		 (let* ((root (make-temp-file "mevedel-hooks-native" t))
-			(session (mevedel-hooks-test--session root))
-			(mevedel-pre-tool-use-functions
-			 '(mevedel-hooks-test--suppress-output-fn)))
-		   (unwind-protect
-		       (let ((decision
-			      (mevedel-hooks-test--await
-			       (lambda (cb)
-				 (mevedel-hooks-run-event
-				  'PreToolUse
-				  '(:tool-name "Bash" :tool-input (:command "echo hi"))
-				  cb session)))))
-			 (should-not decision)
-			 (should (= (length (mevedel-session-hook-log session)) 1))
-			 (should (eq (plist-get (car (mevedel-session-hook-log session))
-						:status)
-				     'error)))
-		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/nonblocking-events-continue
 		 (:doc "does not let unsupported stop decisions skip observer hooks")
