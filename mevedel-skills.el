@@ -128,15 +128,19 @@
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 
-;; `mevedel-tool-ui'
+;; `mevedel-agent-runtime'
 ;; Use `t' for the arglist: cl-defun with &key keywords confuses the
 ;; byte-compiler's arity check (it counts each keyword as one arg
 ;; rather than a pair), producing spurious "called with N args, accepts
 ;; only M" warnings.
-(declare-function mevedel-tools--task "mevedel-tool-ui" t t)
+(declare-function mevedel-agent-runtime-dispatch "mevedel-agent-runtime" t t)
 
 ;; `mevedel-tools'
+(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
+(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-terminal-mailbox "mevedel-tools" (fsm))
 (declare-function mevedel-tools--register-builtins "mevedel-tools" ())
+(defvar mevedel-tools--current-fsm)
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -2858,7 +2862,7 @@ tools propagate through the spawn path's request-locals capture."
 (cl-defun mevedel-skills--invoke-fork-direct
     (skill arguments callback &key trigger display-callback
            additional-context description on-invocation)
-  "Direct fork dispatch via `mevedel-tools--task'.  Async outcome.
+  "Direct fork dispatch via `mevedel-agent-runtime-dispatch'.  Async outcome.
 
 SKILL is the skill to run.  ARGUMENTS is the raw user/model argument
 string.  CALLBACK receives the final outcome.  TRIGGER records the
@@ -2958,12 +2962,12 @@ that already operate async (e.g., the `Skill' tool handler)."
                        (setf (mevedel-session-invoked-skills session)
                              (append (mevedel-session-invoked-skills session)
                                      (list record))))
-                     (unless (fboundp 'mevedel-tools--task)
+                     (unless (fboundp 'mevedel-agent-runtime-dispatch)
                        (require 'mevedel-tool-ui))
                      (condition-case err
-                         (mevedel-tools--task
+                         (mevedel-agent-runtime-dispatch
                           (lambda (response)
-                            ;; `mevedel-tools--task' may deliver either a bare
+                            ;; `mevedel-agent-runtime-dispatch' may deliver either a bare
                             ;; string or a plist with transcript render data.
                             (let* ((wrapped-p
                                     (and (listp response)
@@ -2988,6 +2992,12 @@ that already operate async (e.g., the `Skill' tool handler)."
                                          :render-data ,render-data)
                                callback display-callback)))
                           agent description prepared
+                          :parent-context
+                          (mevedel-tools--current-deferred-context)
+                          :parent-fsm mevedel-tools--current-fsm
+                          :message-handler #'mevedel-tools--handle-message-inject
+                          :terminal-handler
+                          #'mevedel-tools--handle-terminal-mailbox
                           :skill-permission-rules rules
                           :skill-model-override model
                           :skill-effort-override effort
@@ -3031,7 +3041,7 @@ ADDITIONAL-CONTEXT is appended to fork-skill agent prompts after body
 injections have prepared the prompt.
 
 DESCRIPTION overrides the task description for fork skills.
-ON-INVOCATION is forwarded to `mevedel-tools--task' for fork skills.
+ON-INVOCATION is forwarded to `mevedel-agent-runtime-dispatch' for fork skills.
 SKIP-GATES bypasses user-disabled/user-invocable/model-invocable gates
 for first-class local commands that own their dispatch semantics.
 

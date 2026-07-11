@@ -75,9 +75,13 @@
 (declare-function mevedel-tools--handle-deferred-inject "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-terminal-mailbox "mevedel-tools" (fsm))
-(declare-function mevedel-tools--background-agents-pending-p "mevedel-tool-ui" (info))
-(declare-function mevedel-tools--handle-bwait "mevedel-tool-ui" (fsm))
-(declare-function mevedel-tools--bwait-injected-table "mevedel-tool-ui" (source))
+
+;; `mevedel-agent-runtime'
+(declare-function mevedel-agent-runtime--background-agents-pending-p
+                  "mevedel-agent-runtime" (info))
+(declare-function mevedel-agent-runtime--handle-bwait "mevedel-agent-runtime" (fsm))
+(declare-function mevedel-agent-runtime--bwait-injected-table
+                  "mevedel-agent-runtime" (source))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
@@ -610,8 +614,8 @@ alist with mevedel-specific handlers added:
     (if bwait-entry
         (setcdr bwait-entry
                 (append (cdr bwait-entry)
-                        (list #'mevedel-tools--handle-bwait)))
-      (push (list 'BWAIT #'mevedel-tools--handle-bwait) handlers)))
+                        (list #'mevedel-agent-runtime--handle-bwait)))
+      (push (list 'BWAIT #'mevedel-agent-runtime--handle-bwait) handlers)))
   (setq handlers (mevedel--wrap-terminal-handlers handlers))
   ;; 4. Install the internally isolated successful transaction after the
   ;; ordinary terminal handlers have been wrapped.  Keeping the named

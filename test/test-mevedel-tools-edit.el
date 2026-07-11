@@ -525,7 +525,9 @@ resulted in content being appended instead of replaced.")
         (should-not (string-match-p "Modified" final-content))))
     ;; Check callback was invoked with rejection message
     (should callback-invoked)
-    (should (string-match-p "rejected" callback-result))))
+    (should (string-match-p
+             "rejected"
+             (mevedel-test-edit--result-string callback-result)))))
 
 (mevedel-deftest mevedel-tools-edit-multiline-replacement
   (:vars* ((test-dir (make-temp-file "mevedel-test-" t))

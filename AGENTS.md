@@ -126,7 +126,8 @@ Prompt / presets / agents
   mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
   mevedel-specialist-nudges.el  generic-tool specialist prompting policy
   mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
-  mevedel-agent-exec.el       sub-agent task runner, FSM handlers, registry
+  mevedel-agent-exec.el       sub-agent request runner and FSM handlers
+  mevedel-agent-runtime.el    Agent lifecycle, BWAIT, watchdogs, completion, stopping
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)

@@ -2643,7 +2643,7 @@ allowed-tools:
 (mevedel-deftest mevedel-skills-invoke-fork ()
   ,test
   (test)
-  :doc "model-skill trigger routes to direct dispatch via mevedel-tools--task"
+  :doc "model-skill trigger routes to direct dispatch via mevedel-agent-runtime-dispatch"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (dispatched nil)
          (skill (mevedel-skill--create
@@ -2654,7 +2654,7 @@ allowed-tools:
                  :model "fast")))
     (cl-letf (((symbol-function 'mevedel-agent-get)
                (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-tools--task)
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (cb a desc prompt &rest args)
                  (setq dispatched
                        (list :agent a :description desc :prompt prompt
@@ -2677,7 +2677,7 @@ allowed-tools:
         (should (eq 'ok (plist-get outcome :status)))
         (should (eq 'fork (plist-get outcome :kind)))
         (should (equal "agent finished" (plist-get outcome :result)))
-        ;; When `mevedel-tools--task' delivers a bare string (no
+        ;; When `mevedel-agent-runtime-dispatch' delivers a bare string (no
         ;; transcript metadata, e.g. our test mock), the outcome
         ;; falls back to the registry agent's name.  When it
         ;; delivers a `(:result :render-data)' plist, the unique
@@ -2693,7 +2693,7 @@ allowed-tools:
                  :name "demo" :context 'fork :agent "explorer"
                  :body "Body")))
     (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
-              ((symbol-function 'mevedel-tools--task)
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (cb _agent _desc _prompt &rest _args)
                  (funcall cb
                           (list :result "wrapped"
@@ -2721,7 +2721,7 @@ allowed-tools:
          outcome)
     (cl-letf (((symbol-function 'mevedel-agent-get)
                (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-tools--task)
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (cb _agent _desc _prompt &rest _args)
                  (funcall cb "agent finished"))))
       (mevedel-skills-invoke
@@ -2740,7 +2740,7 @@ allowed-tools:
          captured-prompt)
     (cl-letf (((symbol-function 'mevedel-agent-get)
                (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-tools--task)
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (cb _agent _desc prompt &rest _args)
                  (setq captured-prompt prompt)
                  (funcall cb "agent finished"))))
@@ -2762,7 +2762,7 @@ allowed-tools:
          captured-on-invocation)
     (cl-letf (((symbol-function 'mevedel-agent-get)
                (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-tools--task)
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (cb _agent desc _prompt &rest args)
                  (setq captured-description desc)
                  (setq captured-on-invocation
@@ -2784,7 +2784,7 @@ allowed-tools:
          outcome)
     (cl-letf (((symbol-function 'mevedel-agent-get)
                (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-tools--task)
+              ((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (&rest _)
                  (error "SubagentStart hook stopped sub-agent"))))
       (mevedel-skills-invoke
@@ -2818,7 +2818,7 @@ allowed-tools:
                    (funcall callback '(:status error
                                        :reason stop
                                        :message "stop"))))
-	                ((symbol-function 'mevedel-tools--task)
+	                ((symbol-function 'mevedel-agent-runtime-dispatch)
 	                 (lambda (&rest _)
 	                   (error "Should not dispatch"))))
         (mevedel-skills-invoke
@@ -2840,13 +2840,13 @@ allowed-tools:
 
   :doc "omitted agent (parent-inherited) dispatches to a synthetic agent"
   ;; Parent-inherited fork uses a synthetic `skill:<name>' agent.
-  ;; Mock mevedel-tools--task to assert the dispatch happens with
+  ;; Mock mevedel-agent-runtime-dispatch to assert the dispatch happens with
   ;; the synthetic struct rather than erroring.
   (let* ((skill (mevedel-skill--create
                  :name "demo" :context 'fork
                  :body "Body"))
          (dispatched-agent nil))
-    (cl-letf (((symbol-function 'mevedel-tools--task)
+    (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
                (lambda (cb agent &rest _)
                  (setq dispatched-agent agent)
                  (funcall cb "result"))))
@@ -3787,7 +3787,7 @@ spanning lines")))
         (require 'mevedel-session-persistence)
         (cl-letf (((symbol-function 'mevedel-agent-get)
                    (lambda (n) (and (equal n "coordinator") agent)))
-                  ((symbol-function 'mevedel-tools--task)
+                  ((symbol-function 'mevedel-agent-runtime-dispatch)
                    (lambda (cb _agent _desc _prompt &rest _args)
                      (funcall cb "agent finished")))
                   ((symbol-function 'mevedel-session-persistence-save)

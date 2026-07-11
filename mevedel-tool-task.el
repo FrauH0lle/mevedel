@@ -42,7 +42,7 @@
                   "mevedel-view-zone" (key collapsed))
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-tool-ui--display-label-from-canonical
+(declare-function mevedel-agent-runtime-display-label
                   "mevedel-tool-ui" (agent-id))
 
 
@@ -394,8 +394,8 @@ clear that owner's task status note.  Return non-nil when SESSION changed."
 (defun mevedel-tool-task--owner-label (owner)
   "Return the display label for OWNER."
   (if (and (stringp owner) (not (string-empty-p owner)))
-      (or (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
-               (mevedel-tool-ui--display-label-from-canonical owner))
+      (or (and (fboundp 'mevedel-agent-runtime-display-label)
+               (mevedel-agent-runtime-display-label owner))
           (if-let* ((sep (string-search "--" owner)))
               (let* ((type (substring owner 0 sep))
                      (suffix (substring owner (+ sep 2)))

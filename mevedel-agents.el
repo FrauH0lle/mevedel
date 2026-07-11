@@ -261,7 +261,7 @@ Creates a `mevedel-agent' struct and registers it in
 
 Holds the cloned reminders list and a turn counter that are private to
 this particular invocation of AGENT. Created fresh each time
-`mevedel-tools--task' spawns an agent, attached to the agent's task
+`mevedel-agent-runtime-dispatch' spawns an agent, attached to the agent's task
 overlay so the reminders transform and terminal FSM handler can find it
 without relying on FSM info survival across `gptel-request'.
 
@@ -273,7 +273,7 @@ pipeline, and reminders can share one code path for both contexts.
 
 Persistence slots. AGENT-ID is the stable identifier used as the join
 key in the parent session's `agent-transcripts' alist, in
-`mevedel-tools--agents-fsm', and in the on-disk transcript filename.
+`mevedel-agent-runtime--fsms', and in the on-disk transcript filename.
 PARENT-DATA-BUFFER points back at the parent chat (data) buffer;
 PARENT-SESSION points at the top-level session (transcripts always live
 under the top-level session's `agents/' subdirectory). PARENT-TURN is
@@ -307,7 +307,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   (transcript-relative-path nil :type (or null string))
   (transcript-status nil :type (or null symbol))
   (sidecar-dirty nil :type boolean)
-  ;; Set by `mevedel-tools--task--dispatch' from its BACKGROUND argument. When
+  ;; Set by `mevedel-agent-runtime-dispatch' from its BACKGROUND argument. When
   ;; non-nil, the agent runs concurrently with its caller; the dispatcher
   ;; injects `SendMessage' into the agent buffer's `gptel-tools' so the agent
   ;; can communicate through the route matrix enforced by

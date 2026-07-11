@@ -63,18 +63,18 @@ flowchart TD
 
 ## Background spawning
 
-`run_in_background` makes `mevedel-tools--task` call
+`run_in_background` makes `mevedel-agent-runtime-dispatch` call
 `process-tool-result` immediately with a launch-status string,
 unblocking the parent FSM. The sub-agent completes fire-and-forget; its
 result is wrapped in `<agent-result>` and pushed to the parent's mailbox.
 When the LLM produces no tool calls but background agents are still
 running, the FSM parks in **BWAIT** instead of terminating. Completion
-resumes BWAIT→WAIT. `mevedel-tools--bwait-injected-table` injects the
+resumes BWAIT→WAIT. `mevedel-agent-runtime--bwait-injected-table` injects the
 transition table for main and sub-agent FSMs. `background-agents` slot
 on session/invocation tracks running children.
 
 Foreground-callback suppression: when a foreground agent has background
-children, `mevedel-tools--task` stashes the result on the invocation's
+children, `mevedel-agent-runtime-dispatch` stashes the result on the invocation's
 `stashed-result` slot; `main-cb` is called once all children finish.
 
 Foreground and background agents share a no-progress watchdog controlled
@@ -124,7 +124,7 @@ match resolves to a sub-agent. Messages queue on the recipient's mailbox
 and drain via `mevedel-tools--handle-message-inject` in WAIT state, wrapped
 as `<agent-message from="SENDER">...</agent-message>` and injected as a
 user turn via `gptel--inject-prompt`. Polymorphic accessor
-`mevedel-tools--ctx-messages` dispatches on session vs invocation.
+`mevedel-agent-runtime--ctx-messages` dispatches on session vs invocation.
 
 ## Coordinator skill
 
@@ -195,7 +195,7 @@ zone.
 ## Task status
 
 Tasks tracked per caller (main chat and each sub-agent separately).
-`blockedBy` propagates completion. `mevedel-tools--agents-fsm`
+`blockedBy` propagates completion. `mevedel-agent-runtime--fsms`
 (buffer-local on chat buffer) maps agent-id → sub-agent FSM for
 SendMessage resolution.
 

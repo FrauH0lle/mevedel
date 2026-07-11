@@ -293,6 +293,7 @@
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
+                        :origin "main"
                         :session session
                         :callback
                         (lambda (outcome)

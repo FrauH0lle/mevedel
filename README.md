@@ -561,7 +561,7 @@ override the tier for a single invocation.
 | `mevedel-agent-message-max-size`        | Maximum queued inter-agent message/result body before truncation.   |
 | `mevedel-agent-view-display-action`     | Display action used for rendered agent transcript views.            |
 | `mevedel-tool-ui-agent-description-width` | Maximum one-line task text width in agent handle headers.        |
-| `mevedel-tools-task-debug`              | Log sub-agent dispatch handoffs to `*Messages*` when non-nil.       |
+| `mevedel-agent-runtime-debug`              | Log sub-agent dispatch handoffs to `*Messages*` when non-nil.       |
 
 ### Plan Mode
 

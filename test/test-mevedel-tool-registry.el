@@ -601,7 +601,7 @@
            (find-file-hook '(sentinel-find-file-hook))
            (hack-local-variables-hook '(sentinel-local-variables-hook)))
       (funcall handler (lambda (value) (setq result value)) nil)
-      (should (equal "ok" result))
+      (should (equal '(:result "ok") result))
       (should (equal '(:safe nil nil) captured))))
 
   :doc ":summary keyword reaches the mevedel-tool struct"

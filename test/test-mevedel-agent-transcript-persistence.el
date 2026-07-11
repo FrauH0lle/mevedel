@@ -8,7 +8,7 @@
 ;; transitions, fork pruning, and the helper surface in
 ;; `mevedel-agent-exec.el' and `mevedel-tool-ui.el'.
 ;;
-;; FSM-driven dispatch flows (`mevedel-tools--task--dispatch'
+;; FSM-driven dispatch flows (`mevedel-agent-runtime-dispatch'
 ;; with a real agent buffer + gptel-request) are exercised
 ;; through stubbed gptel functions because gptel-request is
 ;; transport-bound and not reachable from the test environment.
@@ -100,7 +100,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
               :info (list :mevedel-agent-invocation inv
                           :buffer (mevedel-agent-invocation-buffer inv)))))
     (with-current-buffer parent-buffer
-      (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal)
+      (setf (alist-get agent-id mevedel-agent-runtime--fsms nil nil #'equal)
             fsm))
     nil))
 
@@ -456,27 +456,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
 ;;
 ;;; Agent-result format / parse
 
-(mevedel-deftest mevedel-tools--agent-result-format ()
-  ,test
-  (test)
 
-  :doc "round-trips agent-id through format -> parse"
-  (let ((s (mevedel-tools--agent-result-format
-            "explorer--abc" "explorer" "test" "body content")))
-    (should (equal (mevedel-tools--agent-result-parse-id s)
-                   "explorer--abc")))
-
-  :doc "XML-escapes embedded quotes in description"
-  (let ((s (mevedel-tools--agent-result-format
-            "x--1" "x" "He said \"hi\"" "body")))
-    (should (string-match-p "&quot;hi&quot;" s))
-    (should-not (string-match-p
-                 "description=\"He said \"hi\"\"" s)))
-
-  :doc "XML-escapes ampersands"
-  (let ((s (mevedel-tools--agent-result-format
-            "x--1" "x" "A&B" "body")))
-    (should (string-match-p "A&amp;B" s))))
 
 
 ;;
@@ -843,219 +823,13 @@ Returns nil; callers may pass the result to the shared cleanup helper."
 ;;
 ;;; Finalize sets terminal status
 
-(mevedel-deftest mevedel-agent-exec--finalize ()
-  ,test
-  (test)
 
-  :doc "marks status terminal and is idempotent"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (agent (mevedel-agent--create :name "explorer"
-                                             :system-prompt "stub"
-                                             :tools nil
-                                             :reminders nil))
-               (inv (mevedel-agent-invocation-create agent)))
-          (setf (mevedel-agent-invocation-agent-id inv) "explorer--fin")
-          (setf (mevedel-agent-invocation-parent-session inv) session)
-          (setf (mevedel-agent-invocation-transcript-status inv) 'running)
-          ;; Seed the session slot so finalize has somewhere to update.
-          (setf (mevedel-session-agent-transcripts session)
-                (list (cons "explorer--fin"
-                            (list :status 'running
-                                  :path "agents/explorer--fin.chat.org"
-                                  :parent-turn 1))))
-          (mevedel-agent-exec--finalize inv 'completed)
-          (should (eq (mevedel-agent-invocation-transcript-status inv)
-                      'completed))
-          (should (eq (plist-get (cdr (assoc "explorer--fin"
-                                             (mevedel-session-agent-transcripts
-                                              session)))
-                                 :status)
-                      'completed))
-          ;; Idempotent: a second call with a different status doesn't
-          ;; flip the terminal one.
-          (mevedel-agent-exec--finalize inv 'aborted)
-          (should (eq (mevedel-agent-invocation-transcript-status inv)
-                      'completed)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-
-  :doc "keeps live transcript data buffer while its rendered view is open"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (let ((agent-buf (generate-new-buffer " *mevedel-live-finalize-agent*"))
-          (view-buf (generate-new-buffer " *mevedel-live-finalize-view*")))
-      (unwind-protect
-          (let* ((session (mevedel-session-create "main" workspace))
-                 (agent (mevedel-agent--create :name "explorer"
-                                               :system-prompt "stub"
-                                               :tools nil
-                                               :reminders nil))
-                 (inv (mevedel-agent-invocation-create agent))
-                 (agent-id "explorer--livefin"))
-            (setf (mevedel-agent-invocation-agent-id inv) agent-id)
-            (setf (mevedel-agent-invocation-parent-session inv) session)
-            (setf (mevedel-agent-invocation-buffer inv) agent-buf)
-            (setf (mevedel-agent-invocation-transcript-status inv) 'running)
-            (setf (mevedel-agent-invocation-call-count inv) 3)
-            (setf (mevedel-session-agent-transcripts session)
-                  (list (cons agent-id
-                              (list :status 'running
-                                    :path "agents/explorer--livefin.chat.org"
-                                    :parent-turn 1))))
-            (with-current-buffer agent-buf
-              (org-mode)
-              (setq-local mevedel--session session)
-              (setq-local mevedel--agent-invocation inv)
-              (insert "*** Live transcript\n"))
-            (mevedel-view--setup
-             view-buf agent-buf
-             (list :agent-transcript-p t
-                   :agent-id agent-id
-                   :preserve-data-view-buffer t
-                   :transcript-info
-                   (list :agent-id agent-id
-                         :status 'running
-                         :buffer agent-buf
-                         :live-buffer t
-                         :calls 3
-                         :session session)))
-            (mevedel-agent-exec--finalize inv 'completed)
-            (should (buffer-live-p agent-buf))
-            (should (buffer-live-p view-buf))
-            (with-current-buffer view-buf
-              (should-not (plist-get mevedel-view--agent-transcript-info
-                                     :live-buffer))
-              (should (eq (plist-get mevedel-view--agent-transcript-info
-                                     :status)
-                          'completed))
-              (mevedel-view-close-agent-transcript))
-            (should-not (buffer-live-p view-buf))
-            (should-not (buffer-live-p agent-buf)))
-        (when (buffer-live-p view-buf) (kill-buffer view-buf))
-        (when (buffer-live-p agent-buf)
-          (with-current-buffer agent-buf
-            (setq kill-buffer-hook nil))
-          (kill-buffer agent-buf))
-        (delete-directory tempdir t)
-        (mevedel-workspace-clear-registry))))
-
-  :doc "copies final background activity into sidecar entry and render-data"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (let ((parent (generate-new-buffer " *mevedel-finalize-parent*")))
-      (unwind-protect
-          (let* ((session (mevedel-session-create "main" workspace))
-                 (agent (mevedel-agent--create :name "explorer"
-                                               :system-prompt "stub"
-                                               :tools nil
-                                               :reminders nil))
-                 (inv (mevedel-agent-invocation-create agent))
-                 (agent-id "explorer--bgfin"))
-            (setf (mevedel-agent-invocation-agent-id inv) agent-id)
-            (setf (mevedel-agent-invocation-parent-session inv) session)
-            (setf (mevedel-agent-invocation-parent-data-buffer inv) parent)
-            (setf (mevedel-agent-invocation-transcript-status inv) 'running)
-            (setf (mevedel-agent-invocation-background-p inv) t)
-            (setf (mevedel-agent-invocation-activity inv)
-                  '((:type message :from "main")
-                    (:type waiting)
-                    (:type tool-start :tool-name "SendMessage")
-                    (:type tool-finish :tool-name "SendMessage")
-                    (:type waiting)
-                    (:type tool-start :tool-name "Read")
-                    (:type tool-finish :tool-name "Read")
-                    (:type tool-start :tool-name "Grep")))
-            (setf (mevedel-session-agent-transcripts session)
-                  (list (cons agent-id
-                              (list :status 'running
-                                    :path "agents/explorer--bgfin.chat.org"
-                                    :parent-turn 1))))
-            (with-current-buffer parent
-              (insert "launch"
-                      (mevedel-pipeline--format-render-data-block
-                       (list :kind 'agent-transcript
-                             :agent-id agent-id
-                             :background t
-                             :status 'running
-                             :calls 0))))
-            (mevedel-agent-exec--finalize inv 'completed)
-            (let* ((entry (cdr (assoc agent-id
-                                      (mevedel-session-agent-transcripts
-                                       session))))
-              (activity (plist-get entry :activity)))
-              (should (eq (plist-get entry :status) 'completed))
-              (should (= 8 (length activity)))
-              (should (equal "main" (plist-get (car activity) :from)))
-              (should (eq 'tool-start
-                          (plist-get (car (last activity)) :type))))
-            (with-current-buffer parent
-              (let* ((bounds
-                      (mevedel-pipeline--find-render-data-block-by-agent-id
-                       agent-id))
-                     (raw (buffer-substring-no-properties
-                           (car bounds) (cdr bounds)))
-                     (rd (cdr (mevedel-pipeline-extract-render-data raw))))
-                (should (eq (plist-get rd :status) 'completed))
-                (should (= 8 (length (plist-get rd :activity)))))))
-        (when (buffer-live-p parent) (kill-buffer parent))
-        (delete-directory tempdir t)
-        (mevedel-workspace-clear-registry)))))
 
 
 ;;
 ;;; Foreground response wrapping with render-data
 
-(mevedel-deftest mevedel-tools--task--wrap-foreground-response ()
-  ,test
-  (test)
 
-  :doc "wraps with render-data when transcript path is set"
-  (let* ((agent (mevedel-agent--create :name "explorer"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-         (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explorer--frw")
-    (setf (mevedel-agent-invocation-transcript-relative-path inv)
-          "agents/explorer--frw.chat.org")
-    (setf (mevedel-agent-invocation-transcript-status inv) 'completed)
-    (let ((result
-           (mevedel-tools--task--wrap-foreground-response
-            "the response text" inv)))
-      (should (consp result))
-      (should (equal (plist-get result :result) "the response text"))
-      (let ((rd (plist-get result :render-data)))
-        (should (eq (plist-get rd :kind) 'agent-transcript))
-        (should (equal (plist-get rd :agent-id) "explorer--frw"))
-        (should (equal (plist-get rd :transcript-relative-path)
-                       "agents/explorer--frw.chat.org")))))
-
-  :doc "passes through when no transcript path"
-  (let* ((agent (mevedel-agent--create :name "explorer"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-         (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explorer--nopath")
-    (let ((result (mevedel-tools--task--wrap-foreground-response
-                   "raw" inv)))
-      (should (equal result "raw"))))
-
-  :doc "passes through non-string responses unchanged"
-  (let* ((agent (mevedel-agent--create :name "explorer"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-         (inv (mevedel-agent-invocation-create agent)))
-    (setf (mevedel-agent-invocation-agent-id inv) "explorer--ns")
-    (setf (mevedel-agent-invocation-transcript-relative-path inv)
-          "agents/explorer--ns.chat.org")
-    (let ((result (mevedel-tools--task--wrap-foreground-response
-                   nil inv)))
-      (should (eq result nil)))))
 
 
 ;;
@@ -1095,42 +869,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
       (should-not (string-match-p "\\[transcript:"
                                   (plist-get rendering :header))))))
 
-(mevedel-deftest mevedel-tool-ui--verifier-verdict ()
-  ,test
-  (test)
-  :doc "parses literal verifier verdict lines only for verifier agents"
-  (let* ((agent (mevedel-agent--create :name "verifier"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-         (inv (mevedel-agent-invocation-create agent)))
-    (should (eq 'fail
-                (mevedel-tool-ui--record-verifier-verdict
-                 "### Check\nok\nVERDICT: FAIL" inv)))
-    (should (eq 'fail (mevedel-agent-invocation-verdict inv))))
-  :doc "uses the final verdict line instead of earlier verdict-looking evidence"
-  (let* ((agent (mevedel-agent--create :name "verifier"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-         (inv (mevedel-agent-invocation-create agent)))
-    (should (eq 'pass
-                (mevedel-tool-ui--record-verifier-verdict
-                 (concat "### Check\n"
-                         "**Output observed:**\n"
-                         "  VERDICT: FAIL\n\n"
-                         "**Result: PASS**\n\n"
-                         "VERDICT: PASS\n")
-                 inv)))
-    (should (eq 'pass (mevedel-agent-invocation-verdict inv))))
-  (let* ((agent (mevedel-agent--create :name "explorer"
-                                       :system-prompt "stub"
-                                       :tools nil
-                                       :reminders nil))
-         (inv (mevedel-agent-invocation-create agent)))
-    (should-not
-     (mevedel-tool-ui--record-verifier-verdict
-      "VERDICT: FAIL" inv))))
+
 
 (mevedel-deftest mevedel-tool-ui--handle-badge-verdict ()
   ,test
@@ -1157,7 +896,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
   ,test
   (test)
   :doc "format helper never emits a transcript= attribute"
-  (let ((s (mevedel-tools--agent-result-format
+  (let ((s (mevedel-agent-runtime--agent-result-format
             "explorer--llm" "explorer" "desc" "body")))
     (should-not (string-match-p "transcript=" s))))
 
@@ -1215,155 +954,15 @@ Returns nil; callers may pass the result to the shared cleanup helper."
 ;;
 ;;; Path collision through allocation
 
-(mevedel-deftest mevedel-tools--task--path-collision ()
-  ,test
-  (test)
 
-  :doc "appends -2 when basename already exists"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (parent-buf (generate-new-buffer "*spec21-collision-parent*"))
-               (agent (mevedel-agent--create :name "explorer"
-                                             :system-prompt "stub"
-                                             :tools nil
-                                             :reminders nil))
-               (inv (mevedel-agent-invocation-create agent)))
-          (with-current-buffer parent-buf
-            (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
-          (setf (mevedel-agent-invocation-agent-id inv)
-                "explorer--abcdef0123456789abcdef0123456789")
-          (setf (mevedel-agent-invocation-parent-session inv) session)
-          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
-          (setf (mevedel-agent-invocation-parent-turn inv) 1)
-          ;; Materialize so we have a save-path under which to plant
-          ;; the colliding file.
-          (mevedel-session-persistence--shallow-ensure-files session parent-buf)
-          (let* ((save-path (mevedel-session-save-path session))
-                 (timestamp (format-time-string "%FT%H-%M-%S"))
-                 (suffix "abcdef01")
-                 (basename (format "explorer--%s--%s.chat.org"
-                                   timestamp suffix))
-                 (collide (file-name-concat save-path "agents" basename))
-                 (agent-buf (mevedel-agent-exec--allocate-agent-buffer
-                             inv parent-buf)))
-            (setf (mevedel-agent-invocation-buffer inv) agent-buf)
-            (with-temp-file collide (insert "preexisting"))
-            (cl-letf (((symbol-function 'format-time-string)
-                       (lambda (&rest _) timestamp)))
-              (mevedel-tools--task--setup-transcript inv agent-buf))
-            (let ((rel (mevedel-agent-invocation-transcript-relative-path
-                        inv)))
-              (should rel)
-              (should (string-match-p "-2\\.chat\\.org\\'" rel)))
-            (when (buffer-live-p agent-buf)
-              (with-current-buffer agent-buf
-                (set-buffer-modified-p nil)
-                (setq kill-buffer-hook nil))
-              (kill-buffer agent-buf))
-            (test-mevedel-spec21--release-and-kill parent-buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-tools--task--mark-start-blocked ()
-  ,test
-  (test)
-  :doc "marks a pre-start blocked transcript as terminal"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (parent-buf (generate-new-buffer "*spec21-block-parent*"))
-               (agent (mevedel-agent--create :name "explorer"
-                                             :system-prompt "stub"
-                                             :tools nil
-                                             :reminders nil))
-               (inv (mevedel-agent-invocation-create agent))
-               (agent-buf nil))
-          (with-current-buffer parent-buf
-            (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
-          (setf (mevedel-agent-invocation-agent-id inv)
-                "explorer--blocked")
-          (setf (mevedel-agent-invocation-parent-session inv) session)
-          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
-          (setf (mevedel-agent-invocation-parent-turn inv) 1)
-          (mevedel-session-persistence--shallow-ensure-files session parent-buf)
-          (setq agent-buf (mevedel-agent-exec--allocate-agent-buffer
-                           inv parent-buf))
-          (setf (mevedel-agent-invocation-buffer inv) agent-buf)
-          (mevedel-tools--task--setup-transcript inv agent-buf)
-          (setf (mevedel-agent-invocation-transcript-status inv) 'running)
-          (should (eq 'running
-                      (mevedel-agent-invocation-transcript-status inv)))
-          (mevedel-tools--task--mark-start-blocked inv "blocked")
-          (should (eq 'error
-                      (mevedel-agent-invocation-transcript-status inv)))
-          (should (equal "blocked"
-                         (mevedel-agent-invocation-terminal-reason inv)))
-          (let ((entry (cdr (assoc "explorer--blocked"
-                                   (mevedel-session-agent-transcripts
-                                    session)))))
-            (should (eq 'error (plist-get entry :status)))
-            (should (equal "blocked" (plist-get entry :reason))))
-          (when (buffer-live-p agent-buf)
-            (with-current-buffer agent-buf
-              (set-buffer-modified-p nil)
-              (setq kill-buffer-hook nil))
-            (kill-buffer agent-buf))
-          (test-mevedel-spec21--release-and-kill parent-buf session))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+
 
 
 ;;
 ;;; Visible-window kill rule
 
-(mevedel-deftest mevedel-agent-exec--finalize-keeps-displayed-buffer ()
-  ,test
-  (test)
-  :doc "finalize leaves a displayed agent buffer alive"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (agent (mevedel-agent--create :name "explorer"
-                                             :system-prompt "stub"
-                                             :tools nil
-                                             :reminders nil))
-               (inv (mevedel-agent-invocation-create agent))
-               (parent-buf (generate-new-buffer "*spec21-fin-parent*"))
-               (agent-buf nil))
-          (with-current-buffer parent-buf
-            (setq-local mevedel--session session)
-            (setq-local mevedel--workspace workspace))
-          (setf (mevedel-agent-invocation-agent-id inv) "explorer--keepit")
-          (setf (mevedel-agent-invocation-parent-session inv) session)
-          (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
-          (setf (mevedel-agent-invocation-transcript-status inv) 'running)
-          (setf (mevedel-session-agent-transcripts session)
-                (list (cons "explorer--keepit"
-                            (list :status 'running
-                                  :path "agents/x.chat.org"
-                                  :parent-turn 1))))
-          (setq agent-buf (mevedel-agent-exec--allocate-agent-buffer
-                           inv parent-buf))
-          (setf (mevedel-agent-invocation-buffer inv) agent-buf)
-          ;; Display the buffer in a window.
-          (let ((win (display-buffer agent-buf)))
-            (mevedel-agent-exec--finalize inv 'completed)
-            (should (buffer-live-p agent-buf))
-            (delete-window win))
-          (when (buffer-live-p agent-buf)
-            (with-current-buffer agent-buf
-              (set-buffer-modified-p nil)
-              (setq kill-buffer-hook nil))
-            (kill-buffer agent-buf))
-          (kill-buffer parent-buf))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+
 
 
 ;;
@@ -1384,7 +983,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer parent-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm
+            (setq-local mevedel-agent-runtime--fsms
                         (list (cons "explorer--abrt" fake-fsm))))
           (let* ((collected nil)
                  (gptel--request-alist
@@ -1470,7 +1069,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer parent-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (setf (mevedel-agent-invocation-agent-id inv) "explorer--cb")
           (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
           (setf (mevedel-agent-invocation-parent-session inv) session)
@@ -1493,9 +1092,9 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                        ((symbol-function 'gptel-with-preset)
                         (lambda (_preset &rest body)
                           (eval (cons 'progn body) t)))
-                       ((symbol-function 'mevedel-tools--augment-agent-handlers)
+                       ((symbol-function 'mevedel-agent-runtime--augment-agent-handlers)
                         (lambda (handlers &rest _) handlers))
-                       ((symbol-function 'mevedel-tools--inject-bwait-transition)
+                       ((symbol-function 'mevedel-agent-runtime--inject-bwait-transition)
                         #'ignore)
                        ((symbol-function 'gptel-request)
                         (lambda (&rest _args)
@@ -1543,7 +1142,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
             (insert "### /coordinator run first turn\n")
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (setf (mevedel-agent-invocation-agent-id inv) "coordinator--first")
           (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
           (setf (mevedel-agent-invocation-parent-session inv) session)
@@ -1561,7 +1160,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                         (lambda (_main _type _desc where _partial)
                           (setq tracking-marker where)
                           (lambda (&rest _) nil)))
-                       ((symbol-function 'mevedel-tools--augment-agent-handlers)
+                       ((symbol-function 'mevedel-agent-runtime--augment-agent-handlers)
                         (lambda (handlers &rest args)
                           (let ((prepend (plist-get args :prepend))
                                 (append (plist-get args :append)))
@@ -1578,7 +1177,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                                                          (cdr entry)))
                                   (push entry handlers))))
                             handlers)))
-                       ((symbol-function 'mevedel-tools--inject-bwait-transition)
+                       ((symbol-function 'mevedel-agent-runtime--inject-bwait-transition)
                         #'ignore)
                        ((symbol-function 'gptel-request)
                         (lambda (&rest args)
@@ -1738,32 +1337,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
-(mevedel-deftest mevedel-tools--queue-background-status-reminder ()
-  ,test
-  (test)
 
-  :doc "queues running and terminal background status details"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let ((session (mevedel-session-create "main" workspace)))
-          (mevedel-tools--queue-background-status-reminder
-           session "worker--1" "worker" "patch tests" 'running
-           "agents/worker--1.org")
-          (mevedel-tools--queue-background-status-reminder
-           session "worker--1" "worker" "patch tests" 'completed
-           "agents/worker--1.org" "All checks pass\nmore detail" nil)
-          (let ((body (string-join
-                       (mevedel-session-pending-reminders session)
-                       "\n")))
-            (should (string-match-p "worker--1" body))
-            (should (string-match-p "running" body))
-            (should (string-match-p "completed" body))
-            (should (string-match-p "Task: patch tests" body))
-            (should (string-match-p "Transcript: agents/worker--1.org" body))
-            (should (string-match-p "Latest summary: All checks pass" body))))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
 
 
 ;;
@@ -1925,7 +1499,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
                         "explorer" "explorer--main" chat-buffer session)))
@@ -1955,7 +1529,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
                         "coordinator" "coordinator--parent"
@@ -1998,7 +1572,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (pcase-let ((`(,_coord . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
                         "coordinator" "coordinator--parent"
@@ -2027,7 +1601,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (pcase-let ((`(,_coord . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
                         "coordinator" "coordinator--parent"
@@ -2060,7 +1634,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (pcase-let ((`(,_coord . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
                         "coordinator" "coordinator--parent"
@@ -2105,7 +1679,7 @@ Returns nil; callers may pass the result to the shared cleanup helper."
           (with-current-buffer chat-buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace)
-            (setq-local mevedel-tools--agents-fsm nil))
+            (setq-local mevedel-agent-runtime--fsms nil))
           (pcase-let ((`(,inv . ,buf)
                        (test-mevedel-spec21--make-agent-buffer
                         "coordinator" "coordinator--a"

@@ -12,6 +12,7 @@
 (require 'mevedel-mentions)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skills)
 (require 'mevedel-worktree)
 (require 'gptel-request)
 (require 'helpers
@@ -933,7 +934,7 @@
             (setq-local gptel-response-separator "\n\n")
             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** ")))
             (setq-local mevedel--view-buffer view-buffer)
-            (setq-local mevedel-tools--agents-fsm nil)
+            (setq-local mevedel-agent-runtime--fsms nil)
             (setq-local mevedel--agent-invocation nil))
           (mevedel-view--setup view-buffer data-buffer)
           (with-current-buffer data-buffer
@@ -1419,7 +1420,8 @@
                       "\n")
            "\n\nDo the work."))
          keymap
-         window-start-pos)
+         window-start-pos
+         window-start-text)
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -1454,6 +1456,14 @@
               (select-window input-window)
               (goto-char (point-max))
               (set-window-point input-window (point))
+              (redisplay t)
+              (setq window-start-pos (window-start overlay-window))
+              (setq window-start-text
+                    (with-current-buffer target-buffer
+                      (save-excursion
+                        (goto-char window-start-pos)
+                        (buffer-substring-no-properties
+                         (line-beginning-position) (line-end-position)))))
               (cl-letf (((symbol-function
                           'mevedel-view--refresh-skill-argument-hint-after-change)
                          #'ignore))
@@ -1461,7 +1471,14 @@
               (should (get-text-property
                        (window-point overlay-window)
                        'mevedel-view-interaction-overlay))
-              (should (= (window-start overlay-window) window-start-pos)))))
+              (should
+               (equal window-start-text
+                      (with-current-buffer target-buffer
+                        (save-excursion
+                          (goto-char (window-start overlay-window))
+                          (buffer-substring-no-properties
+                           (line-beginning-position)
+                           (line-end-position)))))))))
       (when (buffer-live-p target-buffer)
         (kill-buffer target-buffer))
       (when (buffer-live-p data-buffer)

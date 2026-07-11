@@ -316,7 +316,7 @@ inlining a paragraph.
 - **What's owed:** Compaction predicate check at the start of each
   agent step (after a tool result lands, before the next request).
 - **Why staged:** v1 ships pre-send compaction only; needs a pausable
-  FSM gate after `mevedel-tools--task` and before WAIT.
+  FSM gate after `mevedel-agent-runtime-dispatch` and before WAIT.
 - **Status check:** Pre-send is wired through gptel's prompt
   transformer; no between-step gate.
 - **Blast radius:** Long agentic loops can overflow context mid-flight;
