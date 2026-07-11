@@ -85,6 +85,12 @@ throttled per specialist family and suppress obvious good uses of the
 generic tools, such as regex/literal Grep searches, exact Read ranges,
 media/PDF reads, duplicate reads, and non-code files.
 
+`mevedel-specialist-nudges.el` owns this post-tool prompting policy,
+including eligibility, per-session or per-invocation throttling, deferred-tool
+guidance, and exact reminder text. `mevedel-reminders.el` remains the owner of
+workspace capability probing and the independent one-shot availability
+reminders described above.
+
 ### PDF and large-attachment reference reminders
 
 Large PDFs read without a `pages` selector receive an appended

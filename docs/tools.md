@@ -170,7 +170,10 @@ tool permission slots, so they do not currently fire `PermissionRequest`.
 context, but it cannot reopen the denied tool call.
 
 Post-tool hooks run after initial oversized-result persistence,
-specialist nudges, and render-data attachment. They receive both the raw
+specialist nudges, and render-data attachment. The specialist-nudge step is a
+thin pipeline delegation to `mevedel-specialist-nudges.el`, which owns all
+`Read`/`Grep` eligibility, family throttling, deferred `ToolSearch` guidance,
+and model-visible reminder text. Post-tool hooks receive both the raw
 handler output and the exact model-visible result. They can replace
 feedback or add context, but they cannot undo tool side effects that
 already happened. For capped tools, a second persistence/truncation pass
