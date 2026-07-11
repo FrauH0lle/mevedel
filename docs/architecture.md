@@ -74,6 +74,11 @@ for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md plus optional AGENTS.local.md), persistent memory,
 environment, then the dynamic skill roster.
 
+Successful top-level turns have one completion boundary in the preset
+lifecycle.  The ordinary gptel `DONE` state and direct foreground fork skills
+both call it after response hooks, while error and abort terminals retain
+their separate no-save/no-follow-up behavior.
+
 Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
 The pre-tool hook preserves raw JSON distinctions, validates the call as-is,
 and attempts deterministic repair only after failure. A buffer-local ledger

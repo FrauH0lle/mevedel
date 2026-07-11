@@ -162,7 +162,6 @@
                   "mevedel-tool-plan" (&optional session))
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
 (declare-function mevedel-tools--bwait-injected-table "mevedel-tool-ui" (source))
 (declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
 (declare-function mevedel-tools-stop-agent
@@ -419,10 +418,9 @@ session struct."
     (unless (local-variable-p 'mevedel-workspace-additional-roots)
       (setq-local mevedel-workspace-additional-roots
                   (copy-alist mevedel-workspace-additional-roots)))
-    (add-hook 'gptel-post-response-functions #'mevedel--clear-pending-access-requests nil t)
-    ;; Per-completed-turn auto-save is installed as a DONE-state
-    ;; terminal handler by `mevedel-preset--build-handlers' (see step
-    ;; 5a).  Loading the module here pulls in `kill-buffer-hook' and
+    ;; Per-completed-turn auto-save is installed as part of the DONE-state
+    ;; transaction by `mevedel-preset--build-handlers'.  Loading the module
+    ;; here pulls in `kill-buffer-hook' and
     ;; ensures handlers can reach the save function.
     (require 'mevedel-session-persistence)
     ;; gptel owns its `before-save-hook'; mevedel advises the save

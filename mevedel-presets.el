@@ -382,6 +382,95 @@ Has no effect when no extras are registered for PRESET-NAME."
             (overlay-put directive 'mevedel-directive-patch final-patch)))
         (mevedel--replace-patch-buffer final-patch)))))
 
+(defun mevedel--turn-clear-access-state (fsm)
+  "Clear pending access state for FSM's live request buffer."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (mevedel--clear-pending-access-requests))))
+
+(defun mevedel--turn-increment (fsm)
+  "Increment the session turn count for FSM's live request buffer."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when mevedel--session
+        (cl-incf (mevedel-session-turn-count mevedel--session))))))
+
+(defun mevedel--turn-autosave (fsm)
+  "Persist the completed turn represented by FSM when enabled."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when (and mevedel--session
+                 (bound-and-true-p mevedel-session-persistence)
+                 (not (bound-and-true-p mevedel-session--read-only-mode)))
+        (condition-case err
+            (progn
+              (mevedel-session-persistence-save mevedel--session chat-buffer)
+              (when (bound-and-true-p mevedel-session--save-failed)
+                (setq mevedel-session--save-failed nil)
+                (force-mode-line-update)))
+          (error
+           (display-warning 'mevedel
+                            (format "Session auto-save failed: %s" err)
+                            :warning)
+           (setq-local mevedel-session--save-failed t)
+           (force-mode-line-update)))))))
+
+(defun mevedel--turn-restore-permission-mode (fsm)
+  "Restore any temporary permission mode for FSM's request buffer."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (mevedel--implementation-permission-mode-restore))))
+
+(defun mevedel--turn-end-request (fsm)
+  "End the active mevedel request for FSM's request buffer."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (mevedel-request-end))))
+
+(defun mevedel--run-turn-steps (fsm steps)
+  "Run FSM through STEPS without allowing one failure to skip the rest."
+  (dolist (step steps)
+    (funcall (mevedel--safe-fsm-handler step) fsm)))
+
+(defun mevedel--complete-turn (fsm)
+  "Run the canonical successful top-level turn transaction for FSM."
+  (mevedel--run-turn-steps
+   fsm
+   (list #'mevedel--turn-clear-access-state
+         #'mevedel--turn-increment
+         #'mevedel--compact-record-token-baseline
+         #'mevedel--turn-autosave
+         (lambda (machine)
+           (mevedel--run-turn-terminal-hook machine 'Stop 'completed))
+         #'mevedel--turn-restore-permission-mode
+         #'mevedel--turn-end-request
+         #'mevedel-view--schedule-queued-user-message-drain
+         #'mevedel-tools--handle-terminal-mailbox)))
+
+(defun mevedel--fail-turn (fsm status)
+  "Run failure cleanup for FSM with terminal STATUS."
+  (mevedel--run-turn-steps
+   fsm
+   (list #'mevedel--turn-clear-access-state
+         #'mevedel--turn-increment
+         #'mevedel--compact-record-token-baseline
+         (lambda (machine)
+           (mevedel--run-turn-terminal-hook
+            machine 'StopFailure status))
+         #'mevedel--turn-restore-permission-mode
+         #'mevedel--turn-end-request
+         #'mevedel-tools--handle-terminal-mailbox)))
+
 (defun mevedel-preset--build-handlers (handlers)
   "Build the standard mevedel FSM handler chain from base HANDLERS.
 
@@ -392,15 +481,9 @@ alist with mevedel-specific handlers added:
   1a.  Inbound agent-message delivery (WAIT state handler)
   2.  Final patch generation (terminal state handler)
   3.  Request callback invocation (terminal state handler)
-  4.  File snapshot and access request cleanup (terminal state handler)
-  5.  Session turn-count increment (terminal state handler)
-  5a.  Token baseline correction
-  5b.  Session autosave (DONE state handler only)
-  5c.  Turn terminal hooks
-  5d.  Temporary implementation permission mode restore
-  6.  Request cleanup
-  7.  BWAIT parking
-  8.  Terminal mailbox guard"
+  4.  Canonical successful-turn transaction (DONE state handler only)
+  5.  Failure and abort cleanup
+  6.  BWAIT parking"
   ;; 1. Deferred tool injection: add to WAIT state
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -502,147 +585,45 @@ alist with mevedel-specific handlers added:
              (when (functionp request-callback)
                (funcall request-callback nil fsm))))
          handlers))
-  ;; 4. Cleanup local vars
-  (setq handlers
-        (mevedel--add-termination-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (chat-buffer (plist-get info :buffer)))
-             (with-current-buffer chat-buffer
-               (mevedel--clear-pending-access-requests))))
-         handlers))
-  ;; 5. Increment session turn count (drives reminder throttling)
-  (setq handlers
-        (mevedel--add-termination-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (chat-buffer (plist-get info :buffer))
-                       ((buffer-live-p chat-buffer)))
-             (with-current-buffer chat-buffer
-               (when mevedel--session
-                 (cl-incf (mevedel-session-turn-count mevedel--session))))))
-         handlers))
-  ;; 5a. Record API-reported token usage so pre-send compaction uses
-  ;; a real baseline once gptel has one.  Compaction requests are
-  ;; skipped inside the handler.
+  ;; Record API-reported token usage at TPRE so tool-using turns retain
+  ;; their latest intermediate baseline.  Terminal recording belongs to
+  ;; the successful/failure transactions below.
   (let ((tpre-entry (assq 'TPRE handlers)))
     (if tpre-entry
         (setcdr tpre-entry
                 (append (cdr tpre-entry)
                         (list #'mevedel--compact-record-token-baseline)))
       (push (list 'TPRE #'mevedel--compact-record-token-baseline) handlers)))
-  (setq handlers
-        (mevedel--add-termination-handler
-         #'mevedel--compact-record-token-baseline
-         handlers))
-  ;; 5b. Session autosave (completed-turn-boundary contract).  Only
-  ;; fires when the FSM reached `DONE' so abort/error turns never land
-  ;; on disk.  Runs after the turn-count bump (so `:total-turn-count'
-  ;; is current) and before `mevedel-request-end' (so the request
-  ;; struct's `:file-snapshots' hash is still reachable for file
-  ;; history).  Skipped in read-only session mode so a restore that
-  ;; opened under another host's lock cannot persist.
-  (let ((done-entry (assq 'DONE handlers))
-        (save-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (chat-buffer (plist-get info :buffer))
-                       ((buffer-live-p chat-buffer)))
-             (with-current-buffer chat-buffer
-               (when (and mevedel--session
-                          (bound-and-true-p mevedel-session-persistence)
-                          (not (bound-and-true-p
-                                mevedel-session--read-only-mode)))
-                 (condition-case err
-                     (progn
-                       (mevedel-session-persistence-save
-                        mevedel--session chat-buffer)
-                       (when (bound-and-true-p mevedel-session--save-failed)
-                         (setq mevedel-session--save-failed nil)
-                         (force-mode-line-update)))
-                   (error
-                    (display-warning 'mevedel
-                                     (format "Session auto-save failed: %s" err)
-                                     :warning)
-                    (setq-local mevedel-session--save-failed t)
-                    (force-mode-line-update)))))))))
-    (if done-entry
-        (unless (member save-handler (cdr done-entry))
-          (setcdr done-entry (append (cdr done-entry) (list save-handler))))
-      (push (list 'DONE save-handler) handlers)))
-  ;; 5c. Turn terminal hooks.  `Stop' is per successful top-level turn;
-  ;; `StopFailure' is per aborted or errored turn.  Both run before
-  ;; `mevedel-request-end' so request-scoped hook layers are still visible.
-  (let ((done-entry (assq 'DONE handlers))
-        (stop-handler
-         (lambda (fsm)
-           (mevedel--run-turn-terminal-hook fsm 'Stop 'completed))))
-    (if done-entry
-        (unless (member stop-handler (cdr done-entry))
-          (setcdr done-entry (append (cdr done-entry) (list stop-handler))))
-      (push (list 'DONE stop-handler) handlers)))
+  ;; 5. Failure terminals retain StopFailure, skip persistence and queued
+  ;; follow-up submission, and still perform all shared cleanup steps.
   (dolist (state '(ERRS ABRT))
     (let* ((entry (assq state handlers))
            (failure-status (if (eq state 'ABRT) 'aborted 'error))
            (failure-handler
             (lambda (fsm)
-              (mevedel--run-turn-terminal-hook
-               fsm 'StopFailure failure-status))))
+              (mevedel--fail-turn fsm failure-status))))
       (if entry
           (setcdr entry (append (cdr entry) (list failure-handler)))
         (push (list state failure-handler) handlers))))
-  ;; 5d. Restore temporary Plan implementation permission mode overrides.
-  ;; Runs before request cleanup so any save/hook code has already seen
-  ;; the implementation mode, but the session does not remain permissive
-  ;; after the turn reaches a terminal state.
-  (setq handlers
-        (mevedel--add-termination-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (chat-buffer (plist-get info :buffer))
-                       ((buffer-live-p chat-buffer)))
-             (with-current-buffer chat-buffer
-               (mevedel--implementation-permission-mode-restore))))
-         handlers))
-  ;; 6. End the mevedel-request (drains cancellers, clears buffer-local).
-  ;; Placed last so earlier termination handlers still see the live
-  ;; request if they need it.
-  (setq handlers
-        (mevedel--add-termination-handler
-         (lambda (fsm)
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (chat-buffer (plist-get info :buffer))
-                       ((buffer-live-p chat-buffer)))
-             (with-current-buffer chat-buffer
-               (mevedel-request-end))))
-         handlers))
-  ;; 6a. Queue drain.  Only successful top-level turns may submit a
-  ;; queued follow-up.  The zero-delay timer lets the terminal
-  ;; transition finish with `mevedel--current-request' already clear.
-  (let ((done-entry (assq 'DONE handlers))
-        (drain-handler #'mevedel-view--schedule-queued-user-message-drain))
-    (if done-entry
-        (unless (member drain-handler (cdr done-entry))
-          (setcdr done-entry (append (cdr done-entry)
-                                     (list drain-handler))))
-      (push (list 'DONE drain-handler) handlers)))
-  ;; 7. BWAIT handler: parks the FSM when background agents are running.
+  ;; 6. BWAIT handler: parks the FSM when background agents are running.
   (let ((bwait-entry (assq 'BWAIT handlers)))
     (if bwait-entry
         (setcdr bwait-entry
                 (append (cdr bwait-entry)
                         (list #'mevedel-tools--handle-bwait)))
       (push (list 'BWAIT #'mevedel-tools--handle-bwait) handlers)))
-  ;; 8. Terminal-state mailbox guard: log and clear orphaned messages
-  ;; if the main session ends in DONE/ERRS/ABRT with queued results.
-  (dolist (state '(DONE ERRS ABRT))
-    (let ((entry (assq state handlers)))
-      (if entry
-          (setcdr entry
-                  (append (cdr entry)
-                          (list #'mevedel-tools--handle-terminal-mailbox)))
-        (push (list state #'mevedel-tools--handle-terminal-mailbox) handlers))))
-  (mevedel--wrap-terminal-handlers handlers))
+  (setq handlers (mevedel--wrap-terminal-handlers handlers))
+  ;; 4. Install the internally isolated successful transaction after the
+  ;; ordinary terminal handlers have been wrapped.  Keeping the named
+  ;; function itself in the chain gives direct fork turns the exact same
+  ;; entry point.
+  (let ((done-entry (assq 'DONE handlers)))
+    (if done-entry
+        (unless (memq #'mevedel--complete-turn (cdr done-entry))
+          (setcdr done-entry
+                  (append (cdr done-entry) (list #'mevedel--complete-turn))))
+      (push (list 'DONE #'mevedel--complete-turn) handlers)))
+  handlers)
 
 
 ;;
