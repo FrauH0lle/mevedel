@@ -1,10 +1,11 @@
 # View Buffer
 
-`mevedel-view.el` renders a compact user-facing projection of the
-authoritative gptel data buffer. `mevedel-view-stream.el` owns streaming,
-request progress, and gptel stream integration. The data buffer remains the
-model-visible transcript; the view buffer owns display, interaction controls,
-and the input zone.
+The view modules render a compact user-facing projection of the authoritative
+gptel data buffer. `mevedel-view.el` owns the mode, zones, composer, and
+session coordination. `mevedel-view-render.el` owns transcript rendering,
+folding, source mapping, and navigation. `mevedel-view-stream.el` owns
+streaming, request progress, and gptel stream integration. The data buffer
+remains the model-visible transcript.
 
 ## Buffer Roles
 
@@ -38,8 +39,9 @@ flowchart TD
 
 Full rerenders parse the data buffer through
 `mevedel-transcript-segments`, after skipping gptel-org leading
-metadata and any leading compaction summary. `mevedel-view.el` then owns
-turn grouping and rendering. Transcript span classification, tool block
+metadata and any leading compaction summary. `mevedel-view.el` owns the
+surrounding view coordination, while `mevedel-view-render.el` owns turn
+grouping and rendering. Transcript span classification, tool block
 recovery, generated queued-message parsing, and mailbox, reminder,
 hook-context, render-data, prompt, and ignored-range recognition live in
 `mevedel-transcript.el` so persistence and compaction use the same structural
@@ -178,7 +180,8 @@ Source-backed transcript turns, tool summaries, and agent transcript handles
 are intentionally outside this chrome-fragment model even when they are
 clickable or collapsible. They are projections of the authoritative data
 buffer and keep source-coordinate disclosure state. The incremental renderer
-(`mevedel-view--render-incremental`) remains the correctness path for streaming
+in `mevedel-view-render.el` (`mevedel-view--render-incremental`) remains the
+correctness path for streaming
 assistant text. `mevedel-view-stream.el` schedules those updates and owns the
 gptel stream advice, request-progress state, and pending-tool live rows;
 fragment updates should not bypass the data-buffer transcript.
@@ -237,7 +240,7 @@ Markdown rendering adds small view-only affordances:
 Markdown tables, links, local images, paths, and fenced source-panel
 projection are isolated in `mevedel-view-markdown.el`.
 Audit disclosure formatting and toggling live in `mevedel-view-audit.el`;
-`mevedel-view.el` retains the surrounding turn orchestration.
+`mevedel-view-render.el` retains the surrounding turn orchestration.
 
 Tool-rendering caches are disposable UI caches, not just text caches.
 Cache keys must include session-side state that changes visible

@@ -6,6 +6,9 @@
 
 ;;; Code:
 
+;; `cl-extra'
+(declare-function cl-some "cl-extra" (predicate sequence &rest more-sequences))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-decision-reason "mevedel-hooks" (decision))
 
@@ -18,21 +21,24 @@
                   "mevedel-tool-repair-diagnostics" (record))
 
 ;; `mevedel-transcript-audit'
+(declare-function mevedel--hook-prompt-rewrite-audit-record
+                  "mevedel-transcript-audit"
+                  (event original submitted &optional reason))
 (declare-function mevedel-transcript-audit-records
                   "mevedel-transcript-audit" (text &optional type))
 (declare-function mevedel-transcript-audit-spans
                   "mevedel-transcript-audit" (text &optional type))
 
-;; `mevedel-view'
+;; `mevedel-view-render'
 (declare-function mevedel-view--add-display-region-properties
-                  "mevedel-view" (start end vtype))
+                  "mevedel-view-render" (start end &optional default-vtype))
 (declare-function mevedel-view--data-substring
-                  "mevedel-view" (data-buffer start end))
+                  "mevedel-view-render" (data-buffer start end))
 (declare-function mevedel-view--record-source-collapse-state
-                  "mevedel-view" (source type collapsed))
-(declare-function mevedel-view--section-bounds "mevedel-view" ())
+                  "mevedel-view-render" (source type collapsed))
+(declare-function mevedel-view--section-bounds "mevedel-view-render" ())
 (declare-function mevedel-view--source-collapse-state-key
-                  "mevedel-view" (source kind))
+                  "mevedel-view-render" (source kind))
 (defvar mevedel--data-buffer)
 
 (defun mevedel-view--hook-audit-records-from-text (text &optional type)

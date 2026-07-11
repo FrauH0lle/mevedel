@@ -7,26 +7,151 @@
 
 ;;; Code:
 
+;; `browse-url'
+(declare-function browse-url "browse-url" (url &optional new-window))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+
 ;; `mevedel-view'
-(declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
-(declare-function mevedel-view--line-ref-list-start-line
-                  "mevedel-view" (text))
-(declare-function mevedel-view--line-ref-start-line "mevedel-view" (text))
-(declare-function mevedel-view--make-file-button
-                  "mevedel-view" (start end path line))
-(declare-function mevedel-view--normalize-local-file-uri-path
-                  "mevedel-view" (path))
-(declare-function mevedel-view--open-url-action "mevedel-view" (button))
-(declare-function mevedel-view--path-candidate-p "mevedel-view" (text))
-(declare-function mevedel-view--path-context-candidate-p
-                  "mevedel-view" (start raw))
-(declare-function mevedel-view--resolve-path "mevedel-view" (raw))
-(defvar mevedel-view--direct-line-ref-list-regexp)
-(defvar mevedel-view--line-ref-regexp)
-(defvar mevedel-view--line-ref-suffix-regexp)
-(defvar mevedel-view--link-action-properties)
-(defvar mevedel-view--linkify-path-regexp)
 (defvar mevedel-view-inline-image-max-width)
+
+;; `mevedel-view-render'
+(declare-function mevedel-view--fontify-as "mevedel-view-render" (text mode))
+
+(defun mevedel-view--normalize-local-file-uri-path (path)
+  "Normalize local file URI PATH for Emacs file APIs."
+  (let ((path (and path (subst-char-in-string ?\\ ?/ path))))
+    (if (and path
+             (eq system-type 'windows-nt)
+             (string-match "\\`/+\\([A-Za-z]:/.*\\)\\'" path))
+        (match-string 1 path)
+      path)))
+
+(defvar mevedel-view--linkify-path-regexp
+  ;; Match either an absolute /foo/bar/... path, or a relative segment that
+  ;; contains at least one slash (e.g. foo/bar.el, src/mod/file), or a
+  ;; slashless filename with an extension (e.g. foo.el, AGENTS.md).  The
+  ;; trailing `-' inside each character class stays last to avoid being
+  ;; parsed as a range delimiter.
+  (concat "\\(?:[A-Za-z]:/[[:alnum:]_./+@~-]+"
+          "\\|/[[:alnum:]_./+@~-]+"
+          "\\|[[:alnum:]_.+@~-]+\\(?:/[[:alnum:]_./+@~-]+\\)+"
+          "\\|[[:alnum:]_+-]+\\(?:\\.[[:alnum:]_+-]+\\)+\\)")
+  "Regular expression matching candidate file paths in rendered bodies.")
+
+(defun mevedel-view--path-candidate-p (text)
+  "Return non-nil when TEXT resembles a real path worth linkifying.
+Accepts slash-containing paths and slashless filenames with an
+extension.  Guards against matching URLs."
+  (and (stringp text)
+       (not (string-prefix-p "//" text))
+       (not (string-match-p "\\`https?:" text))
+       (or (string-search "/" text)
+           (string-match-p "\\`[[:alnum:]_+-]+\\(?:\\.[[:alnum:]_+-]+\\)+\\'"
+                           text))))
+
+(defun mevedel-view--path-context-candidate-p (start raw)
+  "Return non-nil when RAW at START is not embedded in URL/email text."
+  (or (string-search "/" raw)
+      (not (memq (char-before start) '(?@ ?/ ?:)))))
+
+(defun mevedel-view--resolve-path (raw)
+  "Return an absolute path for RAW, or nil when no sensible anchor exists.
+Absolute RAW is returned untouched.  Relative RAW is resolved against the
+workspace root of the session tied to the current data buffer."
+  (cond
+   ((not (stringp raw)) nil)
+   ((file-name-absolute-p raw) raw)
+   (t (when-let* ((session (and (boundp 'mevedel--session) mevedel--session))
+                  (workspace (ignore-errors
+                               (mevedel-session-workspace session)))
+                  (root (ignore-errors (mevedel-workspace-root workspace))))
+        (expand-file-name raw root)))))
+
+(defun mevedel-view--linkify-path-action (button)
+  "Open the file referenced by BUTTON via `find-file'."
+  (let ((path (button-get button 'mevedel-view-path))
+        (line (button-get button 'mevedel-view-line)))
+    (when (and path (file-exists-p path))
+      (let ((buffer (find-file-other-window path)))
+        (when (and line (integerp line) (> line 0))
+          (with-current-buffer buffer
+            (goto-char (point-min))
+            (forward-line (1- line))
+            (when-let* ((window (get-buffer-window buffer t)))
+              (set-window-point window (point)))))))))
+
+(defconst mevedel-view--link-action-properties
+  '(keymap nil
+    follow-link nil
+    mouse-face nil
+    help-echo nil
+    button nil
+    category nil
+    action nil
+    pointer nil)
+  "Text properties that make rendered text act like a link.")
+
+(defun mevedel-view--open-url-action (button)
+  "Open BUTTON's URL with `browse-url'."
+  (when-let* ((url (button-get button 'mevedel-view-url)))
+    (browse-url url)))
+
+(defconst mevedel-view--line-ref-atom-regexp
+  "\\(?:#L\\|L\\)?[1-9][0-9]*"
+  "Regexp matching one line number atom in a file reference.")
+
+(defconst mevedel-view--line-ref-regexp
+  (concat mevedel-view--line-ref-atom-regexp
+          "\\(?:-" mevedel-view--line-ref-atom-regexp "\\)?")
+  "Regexp matching one line or line-range reference.")
+
+(defconst mevedel-view--line-ref-list-regexp
+  (concat mevedel-view--line-ref-regexp
+          "\\(?:," mevedel-view--line-ref-regexp "\\)*")
+  "Regexp matching comma-separated line references.")
+
+(defconst mevedel-view--direct-line-ref-list-regexp
+  (concat "#L[1-9][0-9]*"
+          "\\(?:-" mevedel-view--line-ref-atom-regexp "\\)?"
+          "\\(?:," mevedel-view--line-ref-regexp "\\)*")
+  "Regexp matching line references that immediately follow a path.")
+
+(defconst mevedel-view--line-ref-suffix-regexp
+  (concat "\\(?:"
+          ":\\(" mevedel-view--line-ref-list-regexp "\\)"
+          "\\|\\(" mevedel-view--direct-line-ref-list-regexp "\\)"
+          "\\)")
+  "Regexp matching a file-reference line suffix.")
+
+(defun mevedel-view--line-ref-start-line (text)
+  "Return the first line number in line reference TEXT, or nil."
+  (save-match-data
+    (when (and (stringp text)
+               (string-match
+                "\\`\\(?:#L\\|L\\)?\\([1-9][0-9]*\\)\\(?:-\\(?:#L\\|L\\)?[1-9][0-9]*\\)?\\'"
+                text))
+      (string-to-number (match-string 1 text)))))
+
+(defun mevedel-view--line-ref-list-start-line (text)
+  "Return the first line number in line reference list TEXT, or nil."
+  (when-let* ((first (car (split-string (or text "") "," t))))
+    (mevedel-view--line-ref-start-line first)))
+
+(defun mevedel-view--make-file-button (start end path line)
+  "Make START..END a button visiting PATH at optional LINE."
+  (make-text-button
+   start end
+   'action #'mevedel-view--linkify-path-action
+   'mevedel-view-path path
+   'mevedel-view-line line
+   'follow-link t
+   'help-echo (if line
+                  (format "Visit %s:%d" path line)
+                (format "Visit %s" path))))
 
 (defun mevedel-view--markdown-code-blocks (start end)
   "Return fenced Markdown code blocks between START and END."

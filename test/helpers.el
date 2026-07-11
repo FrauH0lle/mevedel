@@ -27,6 +27,50 @@
 
 
 ;;
+;;; View test helpers
+
+(defmacro mevedel-view-test--with-buffers (&rest body)
+  "Execute BODY with data and view buffers bound and initialized."
+  (declare (indent 0) (debug t))
+  `(let ((data-buf (generate-new-buffer " *test-data*"))
+         (view-buf (generate-new-buffer " *test-view*"))
+         (mevedel-user-dir (file-name-as-directory
+                            (make-temp-file "mevedel-view-user-" t)))
+         (mevedel-plugin-extra-roots nil))
+     (unwind-protect
+         (progn
+           (with-current-buffer data-buf
+             (org-mode)
+             (setq-local gptel-response-separator "\n\n")
+             (setq-local gptel-prompt-prefix-alist '((org-mode . "*** "))))
+           (mevedel-view--setup view-buf data-buf)
+           ,@body)
+       (when (buffer-live-p view-buf) (kill-buffer view-buf))
+       (when (buffer-live-p data-buf) (kill-buffer data-buf))
+       (when (file-directory-p mevedel-user-dir)
+         (delete-directory mevedel-user-dir t)))))
+
+(defun mevedel-view-test--insert-data (data-buf text props)
+  "Insert TEXT into DATA-BUF with gptel property value PROPS."
+  (with-current-buffer data-buf
+    (goto-char (point-max))
+    (let ((start (point)))
+      (insert text)
+      (when props
+        (put-text-property start (point) 'gptel props)))))
+
+(defun mevedel-view-test--count-substring (needle text)
+  "Return the number of non-overlapping NEEDLE occurrences in TEXT."
+  (let ((count 0)
+        (start 0)
+        position)
+    (while (setq position (string-search needle text start))
+      (cl-incf count)
+      (setq start (+ position (length needle))))
+    count))
+
+
+;;
 ;;; Test macro
 
 ;; Adapted from https://github.com/radian-software/straight.el
