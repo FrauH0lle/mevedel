@@ -1031,28 +1031,94 @@ on allow anyway, so the suppression has no effect there."
              (not read-only-p))
     '(:invocation :request)))
 
-(cl-defun mevedel-check-permission-with-metadata (tool-name
-                                    &key tool-struct path pattern domain name
-                                    content
-                                    invocation-rules request-rules
-                                    session-rules persistent-rules
-                                    mode workspace-root allowed-roots
-                                    exact-allowed-paths)
-  "Check permission for TOOL-NAME to operate on PATH with CONTENT.
+(cl-defun mevedel-permission--preflight
+    (tool-name &key tool-struct path pattern domain name content
+               invocation-rules request-rules session-rules persistent-rules
+               mode workspace-root allowed-roots exact-allowed-paths)
+  "Return normalized permission facts and any decision before the tool slot.
 
-TOOL-STRUCT is the `mevedel-tool' struct (nil for unknown tools).
-PATH is the file path being accessed (nil for non-path tools).
-PATTERN is a command string to match against `:pattern' rules.
-DOMAIN is a host string to match against `:domain' rules.
-NAME is a match name to test against `:name' rules.
-CONTENT is tool-specific content (e.g., bash command string).
-INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, PERSISTENT-RULES are
-the bucket lists.  Omitted bucket lists are empty.
-MODE is the permission mode (defaults to `mevedel-permission-mode').
-WORKSPACE-ROOT is the workspace root directory (nil if unknown).
-ALLOWED-ROOTS is a list of directories treated as in-bounds for paths.
-EXACT-ALLOWED-PATHS is a list of paths treated as in-bounds only when
-PATH matches exactly.
+This pure preflight owns specifier extraction, rule buckets, absolute
+denials, protected paths, and allowed-root normalization.  The returned
+plist's `:early-decision' is nil when the tool-owned permission slot and
+the remaining decision chain still need to run.
+
+TOOL-NAME identifies the tool.  TOOL-STRUCT and CONTENT supply its policy
+and input.  PATH, PATTERN, DOMAIN, and NAME may supply pre-extracted
+specifiers.  INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and
+PERSISTENT-RULES are the ordered rule sources.  MODE selects the permission
+mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, and EXACT-ALLOWED-PATHS define the
+filesystem boundary."
+  (setq mode (or mode mevedel-permission-mode))
+  (when (and tool-struct content)
+    (cl-flet ((extract (getter current)
+                (or current
+                    (when-let* ((fn (funcall getter tool-struct)))
+                      (ignore-errors (funcall fn content))))))
+      (setq path (extract #'mevedel-tool-get-path path)
+            pattern (extract #'mevedel-tool-get-pattern pattern)
+            domain (extract #'mevedel-tool-get-domain domain)
+            name (extract #'mevedel-tool-get-name name))))
+  (let* ((read-only-p
+          (when tool-struct (mevedel-tool-read-only-p tool-struct)))
+         (buckets
+          (mevedel-permission--collect-buckets
+           invocation-rules request-rules session-rules persistent-rules))
+         (deny-bucket
+          (mevedel-permission--first-deny-bucket
+           buckets tool-name path pattern domain name))
+         (early-decision
+          (cond
+           (deny-bucket
+            (mevedel-permission--decision
+             'deny 'deny-rule :bucket deny-bucket))
+           ((mevedel-permission--path-protected-p path)
+            (mevedel-permission--decision
+             (if (eq (mevedel-permission--mode-decision mode read-only-p)
+                     'deny)
+                 'deny
+               'ask)
+             'protected-path)))))
+    (list :tool-name tool-name
+          :tool tool-struct
+          :content content
+          :path path
+          :pattern pattern
+          :domain domain
+          :name name
+          :mode mode
+          :read-only-p read-only-p
+          :buckets buckets
+          :allowed-roots (or allowed-roots
+                             (and workspace-root (list workspace-root)))
+          :exact-allowed-paths exact-allowed-paths
+          :early-decision early-decision)))
+
+(defun mevedel-permission--sync-tool-decision (context)
+  "Return the synchronous tool-slot decision for preflight CONTEXT.
+
+Return nil when the tool has no synchronous slot or its slot declines to
+decide.  Permission denials retain their reason as decision metadata;
+other slot errors are reported and treated as no decision."
+  (when-let* ((tool (plist-get context :tool))
+              (check-fn (mevedel-tool-check-permission tool)))
+    (let ((result
+           (condition-case err
+               (funcall check-fn tool (plist-get context :content))
+             (mevedel-permission-denied
+              (mevedel-permission--decision
+               (cons 'deny (cadr err)) 'tool-slot))
+             (error
+              (message "mevedel: check-permission error: %S" err)
+              nil))))
+      (when result
+        (if (mevedel-permission-decision-metadata-p result)
+            result
+          (mevedel-permission--decision result 'tool-slot))))))
+
+(defun mevedel-check-permission-with-metadata (tool-name &rest args)
+  "Check permission for TOOL-NAME using keyword ARGS.
+
+ARGS are the inputs documented by `mevedel-permission--preflight'.
 
 Returns a plist describing an `allow', `deny', or `ask' decision.
 
@@ -1071,58 +1137,11 @@ The 9-step decision chain:
   7. Allowed roots/exact paths -> implicit allow for paths inside
   8. Outside allowed roots -> ask (workspace boundary)
   9. Mode/default decision"
-  (let* ((mode (or mode mevedel-permission-mode))
-         (read-only-p (when tool-struct (mevedel-tool-read-only-p tool-struct)))
-         (buckets (mevedel-permission--collect-buckets
-                   invocation-rules request-rules
-                   session-rules persistent-rules)))
-
-    ;; Step 1: Extract specifier values via tool-struct getters
-    (when (and tool-struct content)
-      (cl-flet ((extract (getter current)
-                  (or current
-                      (when-let* ((fn (funcall getter tool-struct)))
-                        (ignore-errors (funcall fn content))))))
-        (setq path    (extract #'mevedel-tool-get-path    path)
-              pattern (extract #'mevedel-tool-get-pattern pattern)
-              domain  (extract #'mevedel-tool-get-domain  domain)
-              name    (extract #'mevedel-tool-get-name    name))))
-
-    ;; Step 2: Pass 1 -- any bucket says deny.
-    (when-let* ((bucket (mevedel-permission--first-deny-bucket
-                         buckets tool-name path pattern domain name)))
-      (cl-return-from mevedel-check-permission-with-metadata
-        (mevedel-permission--decision 'deny 'deny-rule :bucket bucket)))
-
-    ;; Step 3: Protected paths.
-    (when (mevedel-permission--path-protected-p path)
-      (cl-return-from mevedel-check-permission-with-metadata
-        (mevedel-permission--decision
-         (if (eq (mevedel-permission--mode-decision mode read-only-p)
-                 'deny)
-             'deny
-           'ask)
-         'protected-path)))
-
-    ;; Step 4: Tool's check-permission slot.
-    (when tool-struct
-      (when-let* ((check-fn (mevedel-tool-check-permission tool-struct)))
-        (let ((result (condition-case err
-                          (funcall check-fn tool-struct content)
-                        (mevedel-pipeline-error (signal (car err) (cdr err)))
-                        (error
-                         (message "mevedel: check-permission error: %S" err)
-                         nil))))
-          (when result
-            (cl-return-from mevedel-check-permission-with-metadata
-              (mevedel-permission--decision result 'tool-slot))))))
-
-    ;; Steps 5-9 share one tail with `mevedel-check-permission-async'.
-    (mevedel-check-permission--tail-decision
-     tool-name buckets path pattern domain name
-     (or allowed-roots (and workspace-root (list workspace-root)))
-     exact-allowed-paths
-     mode read-only-p)))
+  (let* ((context (apply #'mevedel-permission--preflight tool-name args))
+         (early-decision (plist-get context :early-decision)))
+    (or early-decision
+        (mevedel-permission--sync-tool-decision context)
+        (mevedel-check-permission--tail-decision context))))
 
 (defun mevedel-check-permission (tool-name &rest args)
   "Check permission for TOOL-NAME with ARGS.
@@ -1135,26 +1154,13 @@ Return `allow', `deny', or `ask'."
 ;;
 ;;; Async decision chain
 
-(cl-defun mevedel-check-permission-async-with-metadata (tool-name cont
-                                                    &key tool-struct path
-                                                    pattern domain name
-                                                    content
-                                                    invocation-rules
-                                                    request-rules
-                                                    session-rules
-                                                    persistent-rules
-                                                    mode workspace-root
-                                                    allowed-roots
-                                                    exact-allowed-paths)
-  "Async variant of `mevedel-check-permission' for TOOL-NAME.
+(defun mevedel-check-permission-async-with-metadata
+    (tool-name cont &rest args)
+  "Async permission decision for TOOL-NAME using keyword ARGS.
 
 Invokes CONT with permission decision metadata.  The original pipeline
 outcome is available through `mevedel-permission-decision-raw-outcome'.
-
-TOOL-STRUCT, PATH, PATTERN, DOMAIN, NAME, CONTENT, INVOCATION-RULES,
-REQUEST-RULES, SESSION-RULES, PERSISTENT-RULES, MODE, WORKSPACE-ROOT,
-ALLOWED-ROOTS, and EXACT-ALLOWED-PATHS are forwarded into the permission
-decision context.
+ARGS are the inputs documented by `mevedel-permission--preflight'.
 
 Steps 1-3 and 5-9 run synchronously just like `mevedel-check-permission'.
 Step 4 may run async when the tool defines `:check-permission-async'; the
@@ -1164,91 +1170,37 @@ sync-slot adapter preserves the denial REASON captured from a
 Bucket-aware; see `mevedel-check-permission' for the keyword-arg
 semantics.  EXACT-ALLOWED-PATHS is passed to the shared tail as an
 exact-match in-bounds path list."
-  (let* ((mode (or mode mevedel-permission-mode))
-         (read-only-p (when tool-struct
-                        (mevedel-tool-read-only-p tool-struct)))
-         (buckets (mevedel-permission--collect-buckets
-                   invocation-rules request-rules
-                   session-rules persistent-rules)))
-    ;; Step 1: extract specifier values via tool-struct getters.
-    (when (and tool-struct content)
-      (cl-flet ((extract (getter current)
-                  (or current
-                      (when-let* ((fn (funcall getter tool-struct)))
-                        (ignore-errors (funcall fn content))))))
-        (setq path    (extract #'mevedel-tool-get-path    path)
-              pattern (extract #'mevedel-tool-get-pattern pattern)
-              domain  (extract #'mevedel-tool-get-domain  domain)
-              name    (extract #'mevedel-tool-get-name    name))))
-    (let ((resume-from-5
-           (lambda ()
-             ;; Step 5-9 are pure sync; funnel them through the existing
-             ;; chain by running the tail of `mevedel-check-permission'
-             ;; with the already-extracted specifier values.
-             (funcall
-              cont
-              (mevedel-check-permission--tail-decision
-               tool-name buckets path pattern domain name
-               (or allowed-roots (and workspace-root (list workspace-root)))
-               exact-allowed-paths
-               mode read-only-p)))))
-      (cond
-       ;; Step 2: any bucket says deny.
-       ((mevedel-permission--first-deny-bucket
-         buckets tool-name path pattern domain name)
-        (funcall
-         cont
-         (mevedel-permission--decision
-          'deny 'deny-rule
-          :bucket (mevedel-permission--first-deny-bucket
-                   buckets tool-name path pattern domain name))))
-       ;; Step 3: protected path.
-       ((mevedel-permission--path-protected-p path)
-        (funcall
-         cont
-         (mevedel-permission--decision
-          (if (eq (mevedel-permission--mode-decision mode read-only-p)
-                  'deny)
-              'deny
-            'ask)
-          'protected-path)))
-       ;; Step 4: tool slot (async preferred, sync fallback).
-       ((and tool-struct
-             (mevedel-tool-check-permission-async tool-struct))
-        (funcall (mevedel-tool-check-permission-async tool-struct)
-                 tool-struct (mevedel-permission--metadata-content content)
-                 (lambda (slot-result)
-                   (if (null slot-result)
-                       (funcall resume-from-5)
-                     (funcall
-                      cont
-                      (if (mevedel-permission-decision-metadata-p slot-result)
-                          slot-result
-                        (mevedel-permission--decision
-                         slot-result
-                         (cond
-                          ((equal tool-name "Bash") 'bash-classifier)
-                          ((equal tool-name "Eval") 'eval-policy)
-                          (t 'tool-slot)))))))))
-       ((and tool-struct
-             (mevedel-tool-check-permission tool-struct))
-        (let ((slot-result
-               (condition-case err
-                   (funcall (mevedel-tool-check-permission tool-struct)
-                            tool-struct content)
-                 (mevedel-permission-denied
-                  (cons 'deny (cadr err)))
-                 (error
-                  (message "mevedel: check-permission error: %S" err)
-                  nil))))
-          (if (null slot-result)
-              (funcall resume-from-5)
-            (funcall
-             cont
-             (if (mevedel-permission-decision-metadata-p slot-result)
-                 slot-result
-               (mevedel-permission--decision slot-result 'tool-slot))))))
-       (t (funcall resume-from-5))))))
+  (let* ((context (apply #'mevedel-permission--preflight tool-name args))
+         (tool (plist-get context :tool))
+         (early-decision (plist-get context :early-decision))
+         (finish
+          (lambda (slot-decision)
+            (funcall cont
+                     (or slot-decision
+                         (mevedel-check-permission--tail-decision context))))))
+    (cond
+     (early-decision (funcall cont early-decision))
+     ((and tool (mevedel-tool-check-permission-async tool))
+      (funcall
+       (mevedel-tool-check-permission-async tool)
+       tool
+       (mevedel-permission--metadata-content (plist-get context :content))
+       (lambda (slot-result)
+         (funcall
+          finish
+          (and slot-result
+               (if (mevedel-permission-decision-metadata-p slot-result)
+                   slot-result
+                 (mevedel-permission--decision
+                  slot-result
+                  (cond
+                   ((equal tool-name "Bash") 'bash-classifier)
+                   ((equal tool-name "Eval") 'eval-policy)
+                   (t 'tool-slot)))))))))
+     (t
+      (funcall
+       finish
+       (mevedel-permission--sync-tool-decision context))))))
 
 (defun mevedel-check-permission-async (tool-name cont &rest args)
   "Check TOOL-NAME permission with ARGS, then call CONT asynchronously."
@@ -1259,24 +1211,23 @@ exact-match in-bounds path list."
                     (mevedel-permission-decision-raw-outcome decision)))
          args))
 
-(defun mevedel-check-permission--tail-decision
-    (tool-name buckets path pattern domain name
-               allowed-roots exact-allowed-paths mode read-only-p)
-  "Return decision metadata for TOOL-NAME in the permission-chain tail.
+(defun mevedel-check-permission--tail-decision (context)
+  "Return decision metadata for preflight CONTEXT's permission-chain tail.
 
-Factored out so both the sync and async entry points can share the tail
-covering steps 5-9.  Specifier extraction (step 1), the deny /
-protected-path
-branches (steps 2-3), and the tool-slot branch (step 4) are handled
-by the callers -- this function presumes they already ran.  BUCKETS
-is the bucket alist from `mevedel-permission--collect-buckets'.
-PATH, PATTERN, DOMAIN, and NAME are the specifier values.
-ALLOWED-ROOTS is the list of directories treated as in-bounds for paths.
-EXACT-ALLOWED-PATHS is a list of paths treated as in-bounds only when
-PATH matches exactly.  MODE and READ-ONLY-P control final fallback
-behavior."
-  (let ((skip-keys
-         (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
+The preflight owns steps 1-3.  Callers own the tool slot at step 4; this
+function covers shared steps 5-9."
+  (let* ((tool-name (plist-get context :tool-name))
+         (buckets (plist-get context :buckets))
+         (path (plist-get context :path))
+         (pattern (plist-get context :pattern))
+         (domain (plist-get context :domain))
+         (name (plist-get context :name))
+         (allowed-roots (plist-get context :allowed-roots))
+         (exact-allowed-paths (plist-get context :exact-allowed-paths))
+         (mode (plist-get context :mode))
+         (read-only-p (plist-get context :read-only-p))
+         (skip-keys
+          (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
     (cond
      ;; Step 5: pass 2 -- allow/ask innermost-first across buckets.
      ((when-let* ((action-bucket
