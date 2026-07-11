@@ -1492,12 +1492,6 @@ and :content."
       (error "Parameter file_path is required"))
     (unless (stringp content)
       (error "Parameter content is required"))
-    ;; Ensure parent directory exists
-    (unless (file-directory-p dir)
-      (condition-case err
-          (make-directory dir t)
-        (error (error "Could not create directory %s: %s"
-                      dir (error-message-string err)))))
     (require 'mevedel-preview-mode)
     (condition-case err
         (let* ((temp-file (make-temp-file "mevedel-write-" nil nil content))
@@ -1513,6 +1507,7 @@ and :content."
            :tool-name "Write"
            ;; Write replaces the entire file -- no need for diff-apply
            :apply-fn (lambda ()
+                       (make-directory dir t)
                        (copy-file temp-file full-path t))))
       (error
        (funcall callback (format "Error writing file %s: %s"
