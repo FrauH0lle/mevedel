@@ -3,19 +3,19 @@
 ;;; Commentary:
 
 ;; Registers the model-facing Skill and ListSkills tool schemas.  Invocation,
-;; lookup, and rendering behavior remains owned by `mevedel-skills'.
+;; lookup, and rendering behavior remains owned by `mevedel-skills-invoke'.
 
 ;;; Code:
 
 (require 'mevedel-tool-registry)
 
-;; `mevedel-skills'
+;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--invoke-handler
-                  "mevedel-skills" (callback args))
+                  "mevedel-skills-invoke" (callback args))
 (declare-function mevedel-skills--list-handler
-                  "mevedel-skills" (callback args))
+                  "mevedel-skills-invoke" (callback args))
 (declare-function mevedel-skills--render-skill-tool
-                  "mevedel-skills" (name args result render-data))
+                  "mevedel-skills-invoke" (name args result render-data))
 
 
 ;;

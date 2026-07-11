@@ -4,8 +4,12 @@ Skills are reusable prompt packages loaded from `SKILL.md` files.
 `mevedel-skills-core.el` owns the skill model, discovery, persisted enablement,
 session installation, path-scoped activation state, and hot reload.
 `mevedel-tool-skills.el` registers the model-visible Skill tool schemas.
-`mevedel-skills.el` consumes the core for their behavior, command/skill
-completion, prompt roster rendering, and event-shaped skill reminders.
+`mevedel-skills-invoke.el` owns skill preparation, invocation, request-scoped
+overrides, direct fork response insertion, inline attachments, and model-tool
+behavior. `mevedel-turn.el` owns the canonical terminal transaction shared by
+ordinary responses and direct fork completion.
+`mevedel-skills.el` owns local commands, command/skill completion, prompt roster
+rendering, event-shaped reminders, and send-dispatch composition.
 
 ## Skill flow
 

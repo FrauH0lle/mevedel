@@ -81,28 +81,13 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-skills'
-(declare-function mevedel-skills--clear-pending-inline-attachments
-                  "mevedel-skills" ())
-(declare-function mevedel-skills--inline-skill-mentions
-                  "mevedel-skills" (text session))
-(declare-function mevedel-skills--insert-fork-result "mevedel-skills" (outcome))
-(declare-function mevedel-skills--parse-skill-line "mevedel-skills" (text))
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
-(declare-function mevedel-skills--prepare-inline-attachments-for-text
-                  "mevedel-skills" (text session callback))
 (declare-function mevedel-skills--remaining-argument-hint
                   "mevedel-skills" (skill arguments))
 (declare-function mevedel-skills--slash-capf
                   "mevedel-skills"
                   (buffer session local-commands &optional input-start))
-(declare-function mevedel-skills--stage-inline-attachments
-                  "mevedel-skills" (attachments))
-(declare-function mevedel-skills-format-inline-render-data
-                  "mevedel-skills" (skill arguments))
-(declare-function mevedel-skills-inline-display-text
-                  "mevedel-skills" (name arguments))
 (declare-function mevedel-skills-install-font-lock "mevedel-skills" ())
-(declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-skills-core'
@@ -111,6 +96,25 @@
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-user-invocable-p
                   "mevedel-skills-core" (cl-x) t)
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills--clear-pending-inline-attachments
+                  "mevedel-skills-invoke" ())
+(declare-function mevedel-skills--inline-skill-mentions
+                  "mevedel-skills-invoke" (text session))
+(declare-function mevedel-skills--insert-fork-result
+                  "mevedel-skills-invoke" (outcome))
+(declare-function mevedel-skills--parse-skill-line
+                  "mevedel-skills-invoke" (text))
+(declare-function mevedel-skills--prepare-inline-attachments-for-text
+                  "mevedel-skills-invoke" (text session callback))
+(declare-function mevedel-skills--stage-inline-attachments
+                  "mevedel-skills-invoke" (attachments))
+(declare-function mevedel-skills-format-inline-render-data
+                  "mevedel-skills-invoke" (skill arguments))
+(declare-function mevedel-skills-inline-display-text
+                  "mevedel-skills-invoke" (name arguments))
+(declare-function mevedel-skills-invoke "mevedel-skills-invoke" t t)
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -143,14 +147,14 @@
 (defvar mevedel--view-buffer)
 (defvar mevedel--workspace)
 
+;; `mevedel-transcript'
+(defvar mevedel-transcript-queued-message-reminder)
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
 (declare-function mevedel--strip-hook-audit-blocks
                   "mevedel-transcript-audit" (text))
-
-;; `mevedel-transcript'
-(defvar mevedel-transcript-queued-message-reminder)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties

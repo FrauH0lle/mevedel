@@ -22,6 +22,36 @@
 ;;
 ;;; Skill test helpers
 
+(defmacro mevedel-skills-test--with-model-backends (&rest body)
+  "Run BODY with an isolated pair of gptel model backends."
+  (declare (indent 0) (debug t))
+  `(let ((gptel--known-backends nil))
+     (gptel-make-openai "Fast" :key "test" :models '(fast-model))
+     (gptel-make-openai "Balanced" :key "test" :models '(balanced-model))
+     ,@body))
+
+(defun mevedel-skills-test--make-session (&optional name)
+  "Return a throwaway session named NAME with a minimal workspace."
+  (let ((ws (mevedel-workspace--create
+             :type 'test :id "t" :root "/tmp/t" :name (or name "t")
+             :file-cache (mevedel-file-cache--create
+                          :table (make-hash-table :test #'equal)
+                          :order nil :total-bytes 0))))
+    (mevedel-session-create (or name "main") ws)))
+
+(defmacro mevedel-skills-test--with-chat-buffer (session &rest body)
+  "Run BODY in a temp buffer that mimics a mevedel chat buffer.
+SESSION is bound to buffer-local `mevedel--session', and
+`gptel-prompt-prefix-alist' is extended so the buffer's major mode
+maps to \"### \"."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (let ((gptel-prompt-prefix-alist
+            (cons (cons major-mode "### ")
+                  gptel-prompt-prefix-alist)))
+       (setq mevedel--session ,session)
+       ,@body)))
+
 (defun mevedel-skills-test--write-skill (dir name frontmatter &optional body)
   "Create DIR/NAME/SKILL.md with FRONTMATTER and optional BODY."
   (let* ((skill-dir (file-name-as-directory (file-name-concat dir name)))

@@ -54,6 +54,7 @@
 (require 'mevedel-tools-list)
 (require 'mevedel-system)
 (require 'mevedel-agents)
+(require 'mevedel-turn)
 (require 'mevedel-presets)
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-restore)
@@ -66,6 +67,7 @@
 (require 'mevedel-view-zone)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
+(require 'mevedel-skills-invoke)
 (require 'mevedel-skills)
 (require 'mevedel-cockpit)
 (require 'mevedel-plugins)
@@ -88,47 +90,7 @@
 ;; `gptel-request'
 (defvar gptel-prompt-transform-functions)
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-install-tool-result-scrubber "mevedel-pipeline" ())
-(declare-function mevedel-pipeline-uninstall-tool-result-scrubber "mevedel-pipeline" ())
-
-;; `mevedel-presets'
-(declare-function mevedel--define-presets "mevedel-presets")
-(defvar mevedel-action-preset-alist)
-
-;; `mevedel-compact'
-(declare-function mevedel--compact-transform-auto "mevedel-compact"
-                  (continue fsm))
-
-;; `mevedel-skills'
-(declare-function mevedel-skills--transform-apply-model-override
-                  "mevedel-skills" (fsm))
-(declare-function mevedel-skills--transform-expand-inline-attachments
-                  "mevedel-skills" (fsm))
-
-;; `mevedel-skills-core'
-(declare-function mevedel-skills-install-hot-reload
-                  "mevedel-skills-core" ())
-(declare-function mevedel-skills-uninstall-hot-reload
-                  "mevedel-skills-core" ())
-
-;; `mevedel-tool-repair'
-(declare-function mevedel-tool-repair-install-shape-adapter
-                  "mevedel-tool-repair" ())
-(declare-function mevedel-tool-repair-uninstall-shape-adapter
-                  "mevedel-tool-repair" ())
-
-;; `mevedel-view-stream'
-(declare-function mevedel-view-stream-install "mevedel-view-stream" ())
-(declare-function mevedel-view-stream-uninstall "mevedel-view-stream" ())
-
-;; `mevedel-worktree'
-(declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
-(declare-function mevedel-worktree-uninstall-slash-command "mevedel-worktree" ())
-
 ;; `mevedel-chat'
-(declare-function mevedel--chat-buffer "mevedel-chat"
-                  (session-name &optional create workspace working-directory))
 (declare-function mevedel--discuss-directive-prompt "mevedel-chat" (content))
 (declare-function mevedel--implement-directive-prompt "mevedel-chat" (content))
 (declare-function mevedel--main-fsm-on-error "mevedel-chat" (fsm))
@@ -143,13 +105,53 @@
                   "mevedel-chat"
                   (workspace working-directory prompt-session
                              &optional directory-scoped))
-(declare-function mevedel--tutor-buffer "mevedel-chat" (&optional create workspace))
-(declare-function mevedel--workspace-sessions "mevedel-chat" (workspace))
+(declare-function mevedel--tutor-buffer
+                  "mevedel-chat" (&optional create workspace))
 (defvar mevedel--view-buffer)
+
+;; `mevedel-compact'
+(declare-function mevedel--compact-transform-auto
+                  "mevedel-compact" (continue fsm))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-install-tool-result-scrubber
+                  "mevedel-pipeline" ())
+(declare-function mevedel-pipeline-uninstall-tool-result-scrubber
+                  "mevedel-pipeline" ())
+
+;; `mevedel-presets'
+(declare-function mevedel--define-presets "mevedel-presets")
+(defvar mevedel-action-preset-alist)
+
+;; `mevedel-skills-core'
+(declare-function mevedel-skills-install-hot-reload
+                  "mevedel-skills-core" ())
+(declare-function mevedel-skills-uninstall-hot-reload
+                  "mevedel-skills-core" ())
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills--transform-apply-model-override
+                  "mevedel-skills-invoke" (fsm))
+(declare-function mevedel-skills--transform-expand-inline-attachments
+                  "mevedel-skills-invoke" (fsm))
 
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
+;; `mevedel-tool-repair'
+(declare-function mevedel-tool-repair-install-shape-adapter
+                  "mevedel-tool-repair" ())
+(declare-function mevedel-tool-repair-uninstall-shape-adapter
+                  "mevedel-tool-repair" ())
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view-stream-install "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-uninstall "mevedel-view-stream" ())
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
+(declare-function mevedel-worktree-uninstall-slash-command
+                  "mevedel-worktree" ())
 
 (defgroup mevedel nil
   "Customization group for Evedel."

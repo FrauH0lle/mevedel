@@ -82,10 +82,10 @@ follow-ups, and send/fork dispatch. `mevedel-view.el` coordinates the view
 mode, zones, and session lifecycle. The authoritative text remains in the
 gptel data buffer.
 
-Successful top-level turns have one completion boundary in the preset
-lifecycle.  The ordinary gptel `DONE` state and direct foreground fork skills
-both call it after response hooks, while error and abort terminals retain
-their separate no-save/no-follow-up behavior.
+`mevedel-turn.el` owns the single top-level completion boundary. The ordinary
+gptel `DONE` state and direct foreground fork skills both call it after response
+hooks, while error and abort terminals retain their separate
+no-save/no-follow-up behavior.
 
 Main and agent data buffers install buffer-local gptel pre/post-tool hooks.
 The pre-tool hook preserves raw JSON distinctions, validates the call as-is,
