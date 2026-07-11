@@ -87,6 +87,9 @@
 (declare-function mevedel-hooks-take-session-context "mevedel-hooks"
                   (session))
 
+;; `mevedel-interaction-prompt'
+(defvar mevedel--prompt-overlays)
+
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))

@@ -2963,7 +2963,7 @@ that already operate async (e.g., the `Skill' tool handler)."
                              (append (mevedel-session-invoked-skills session)
                                      (list record))))
                      (unless (fboundp 'mevedel-agent-runtime-dispatch)
-                       (require 'mevedel-tool-ui))
+                       (require 'mevedel-agent-runtime))
                      (condition-case err
                          (mevedel-agent-runtime-dispatch
                           (lambda (response)

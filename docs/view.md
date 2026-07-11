@@ -150,6 +150,11 @@ owns managed region overlays. Remaining interaction overlays are opaque
 callback handles for permission, plan, Ask, RequestAccess, and preview flows;
 they are not parallel renderers.
 
+`mevedel-interaction-prompt.el` owns the common lifecycle for those opaque
+handles: exactly-once settlement, request-local cancellation, buffer-kill
+cleanup, and standard prompt framing. Ask, RequestAccess, permission, plan,
+and preview code retain their domain-specific descriptors and outcomes.
+
 Current fragment namespaces:
 
 - `history-live`: pending tool live-tail rows in the history region, built

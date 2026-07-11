@@ -33,6 +33,10 @@
 (defvar mevedel--session)
 (defvar mevedel-plans-directory)
 
+;; `mevedel-interaction-prompt'
+(declare-function mevedel--prompt--settle
+                  "mevedel-interaction-prompt" (overlay outcome))
+
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-apply-auto-lifecycle
                   "mevedel-permissions"
@@ -82,9 +86,6 @@
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-
-;; `mevedel-tool-ui'
-(declare-function mevedel--prompt--settle "mevedel-tool-ui" (overlay outcome))
 
 ;; `mevedel-view'
 (declare-function mevedel-view--begin-external-turn
@@ -560,6 +561,7 @@ shown as a collapsed hook-context disclosure."
 
 (defun mevedel-plan-queue--render-entry (entry)
   "Render plan approval queue ENTRY in the interaction zone."
+  (require 'mevedel-interaction-prompt)
   (let ((plan-markdown (plist-get entry :body))
         (chat-buffer (plist-get entry :chat-buffer))
         overlay)
