@@ -90,14 +90,3 @@ the maintained docs, a design note, or a commit instead.
   correctness bug.
 - **Blast radius:** new tools currently have no clean place to declare
   their progress label; the view file grows a switch statement.
-
-### Legacy / backwards-compat code from the redesign
-
-- **Location:** TBD — needs an audit pass
-- **What's owed:** sweep the redesign branches for compatibility
-  shims, removed-feature comments, and dead code paths the new
-  architecture no longer needs.
-- **Why deferred:** the redesign rolled in incrementally; cleanup was
-  postponed to keep diffs small.
-- **Blast radius:** dead code obscures the real architecture and
-  inflates the agent's reading load.

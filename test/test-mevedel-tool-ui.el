@@ -94,6 +94,25 @@
 ;;
 ;;; Agent result formatting
 
+(mevedel-deftest mevedel-tool-ui--deliver-result ()
+  ,test
+  (test)
+  :doc "wraps raw results in the canonical envelope"
+  (let (delivered)
+    (mevedel-tool-ui--deliver-result
+     (lambda (value) (setq delivered value))
+     "done")
+    (should (equal '(:result "done") delivered)))
+
+  :doc "preserves result metadata envelopes"
+  (let ((envelope '(:result "done" :render-data (:kind card)
+                    :media ((:type image))))
+        delivered)
+    (mevedel-tool-ui--deliver-result
+     (lambda (value) (setq delivered value))
+     envelope)
+    (should (eq envelope delivered))))
+
 (mevedel-deftest mevedel-tools--agent-result-format ()
   ,test
   (test)

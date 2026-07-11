@@ -95,19 +95,14 @@ AGENT-ID, PARENT-BUFFER, and SESSION configure the invocation."
 
 (defun test-mevedel-spec21--register-agent (parent-buffer agent-id inv)
   "Register INV under AGENT-ID in PARENT-BUFFER's live agent registry.
-Returns the overlay backing buffer, which the caller should kill."
-  (let* ((ov-buf (generate-new-buffer " *spec21-agent-ov*"))
-         (ov (with-current-buffer ov-buf
-               (insert "x")
-               (make-overlay (point-min) (point-max))))
-         (fsm (gptel-make-fsm
-               :info (list :context ov
-                           :buffer (mevedel-agent-invocation-buffer inv)))))
-    (overlay-put ov 'mevedel-agent-invocation inv)
+Returns nil; callers may pass the result to the shared cleanup helper."
+  (let ((fsm (gptel-make-fsm
+              :info (list :mevedel-agent-invocation inv
+                          :buffer (mevedel-agent-invocation-buffer inv)))))
     (with-current-buffer parent-buffer
       (setf (alist-get agent-id mevedel-tools--agents-fsm nil nil #'equal)
             fsm))
-    ov-buf))
+    nil))
 
 
 ;;
@@ -241,32 +236,6 @@ Returns the overlay backing buffer, which the caller should kill."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
-
-;;
-;;; Old sidecar (forward compatibility)
-
-(mevedel-deftest mevedel-session-persistence-agent-transcripts-old-sidecar ()
-  ,test
-  (test)
-  :doc "missing :agent-transcripts deserializes to nil"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let* ((sidecar
-                `(:version ,(mevedel-version)
-                  :session-id "old-session"
-                  :session-name "main"
-                  :workspace
-                  ,(mevedel-session-persistence--workspace-to-plist
-                    workspace)
-                  :tasks nil
-                  :total-turn-count 0
-                  :current-segment 1))
-               (result (mevedel-session-persistence-deserialize sidecar))
-               (session (plist-get result :session)))
-          (should (null (mevedel-session-agent-transcripts session))))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
 
 
 ;;

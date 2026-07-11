@@ -131,7 +131,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (got nil))
     (funcall handler (lambda (r) (setq got r))
              (list :a "x" :b "y"))
-    (should (equal "x+y" got))
+    (should (equal '(:result "x+y") got))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
   :doc "async path receives callback as first arg"
@@ -145,7 +145,7 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                    "test-src" name t))
          (got nil))
     (funcall handler (lambda (r) (setq got r)) (list :v "hi"))
-    (should (equal "async:hi" got))
+    (should (equal '(:result "async:hi") got))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
   :doc "sync source error propagates to callback as Error: string"
@@ -158,9 +158,8 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
                    "test-src" name nil))
          (got nil))
     (funcall handler (lambda (r) (setq got r)) (list :v "x"))
-    (should (stringp got))
-    (should (string-prefix-p "Error:" got))
-    (should (string-match-p "boom" got))
+    (should (string-prefix-p "Error:" (plist-get got :result)))
+    (should (string-match-p "boom" (plist-get got :result)))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
   :doc "source replaced: dispatcher picks up fresh :function on next call"
@@ -174,13 +173,13 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (first nil)
          (second nil))
     (funcall handler (lambda (r) (setq first r)) (list :v "x"))
-    (should (equal "one" first))
+    (should (equal '(:result "one") first))
     (test-mevedel-tool-wrap--make-source
      :name name
      :function (lambda (_v) "two")
      :args '((:name "v" :type string :description "v")))
     (funcall handler (lambda (r) (setq second r)) (list :v "x"))
-    (should (equal "two" second))
+    (should (equal '(:result "two") second))
     (test-mevedel-tool-wrap--remove-source "test-src" name))
 
   :doc "source unregistered: dispatcher returns actionable error"
@@ -193,10 +192,9 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
          (got nil))
     (test-mevedel-tool-wrap--remove-source "test-src" name)
     (funcall handler (lambda (r) (setq got r)) nil)
-    (should (stringp got))
-    (should (string-prefix-p "Error:" got))
-    (should (string-match-p "unregistered" got))
-    (should (string-match-p name got))))
+    (should (string-prefix-p "Error:" (plist-get got :result)))
+    (should (string-match-p "unregistered" (plist-get got :result)))
+    (should (string-match-p name (plist-get got :result)))))
 
 
 ;;

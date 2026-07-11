@@ -129,12 +129,15 @@
   :doc "creates a batch of tasks with incrementing IDs"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 4)
-    (let ((result (mevedel-tool-task--handle-create
-                   (list :tasks
-                         (vector
-                          (list :subject "first" :status "completed")
-                          (list :subject "second" :status "in_progress")
-                          (list :subject "third"))))))
+    (let ((result
+           (plist-get
+            (mevedel-tool-task--handle-create
+             (list :tasks
+                   (vector
+                    (list :subject "first" :status "completed")
+                    (list :subject "second" :status "in_progress")
+                    (list :subject "third"))))
+            :result)))
       (should (stringp result))
       (let ((tasks (mevedel-session-tasks session)))
         (should (= 3 (length tasks)))
@@ -167,9 +170,11 @@
   :doc "accepts a top-level status note for the current owner"
   (test-mevedel-tool-task--with-session session
     (let ((result
-           (mevedel-tool-task--handle-create
-            (list :tasks (vector (list :subject "active"))
-                  :note "Implementing task notes"))))
+           (plist-get
+            (mevedel-tool-task--handle-create
+             (list :tasks (vector (list :subject "active"))
+                   :note "Implementing task notes"))
+            :result)))
       (should (string-match-p "Status note for Main"
                               result))
       (should (equal "Implementing task notes"
@@ -1296,8 +1301,10 @@
   (test-mevedel-tool-task--with-session session
     (mevedel-tool-task--handle-create
      (list :tasks (vector (list :subject "main active"))))
-    (let ((result (mevedel-tool-task--handle-note
-                   (list :note "Finishing task status polish"))))
+    (let ((result (plist-get
+                   (mevedel-tool-task--handle-note
+                    (list :note "Finishing task status polish"))
+                   :result)))
       (should (string-match-p "Status note for Main" result))
       (should (equal "Finishing task status polish"
                      (mevedel-tool-task--status-note session nil))))
@@ -1339,8 +1346,10 @@
 
   :doc "does not store notes for owners without open tasks"
   (test-mevedel-tool-task--with-session session
-    (let ((result (mevedel-tool-task--handle-note
-                   (list :note "No open task"))))
+    (let ((result (plist-get
+                   (mevedel-tool-task--handle-note
+                    (list :note "No open task"))
+                   :result)))
       (should (string-match-p "not shown" result))
       (should (null (mevedel-session-task-status-notes session)))))
 
@@ -1359,7 +1368,7 @@
   (test)
   :doc "returns a no-task message on empty session"
   (test-mevedel-tool-task--with-session session
-    (let ((result (mevedel-tool-task--handle-list nil)))
+    (let ((result (plist-get (mevedel-tool-task--handle-list nil) :result)))
       (should (stringp result))
       (should (string-match-p "No tasks" result))))
 
@@ -1368,7 +1377,7 @@
     (mevedel-tool-task--handle-create
      (list :tasks (vector (list :subject "one" :status "completed")
                           (list :subject "two" :status "pending"))))
-    (let ((result (mevedel-tool-task--handle-list nil)))
+    (let ((result (plist-get (mevedel-tool-task--handle-list nil) :result)))
       (should (string-match-p "one" result))
       (should (string-match-p "two" result))))
 
@@ -1378,7 +1387,10 @@
      (list :tasks (vector (list :subject "done1" :status "completed")
                           (list :subject "pending1" :status "pending")
                           (list :subject "done2" :status "completed"))))
-    (let ((result (mevedel-tool-task--handle-list (list :status "completed"))))
+    (let ((result (plist-get
+                   (mevedel-tool-task--handle-list
+                    (list :status "completed"))
+                   :result)))
       (should (string-match-p "done1" result))
       (should (string-match-p "done2" result))
       (should-not (string-match-p "pending1" result)))))
@@ -1393,7 +1405,9 @@
      (list :tasks (vector (list :subject "sample"
                                 :description "details here"
                                 :owner "agent-x"))))
-    (let ((result (mevedel-tool-task--handle-get (list :id 1))))
+    (let ((result (plist-get
+                   (mevedel-tool-task--handle-get (list :id 1))
+                   :result)))
       (should (string-match-p "sample" result))
       (should (string-match-p "details here" result))
       (should (string-match-p "agent-x" result))))

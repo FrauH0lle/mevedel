@@ -1047,8 +1047,7 @@ DOMAIN is a host string to match against `:domain' rules.
 NAME is a match name to test against `:name' rules.
 CONTENT is tool-specific content (e.g., bash command string).
 INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, PERSISTENT-RULES are
-the bucket lists.  All
-default to nil for backward compatibility.
+the bucket lists.  Omitted bucket lists are empty.
 MODE is the permission mode (defaults to `mevedel-permission-mode').
 WORKSPACE-ROOT is the workspace root directory (nil if unknown).
 ALLOWED-ROOTS is a list of directories treated as in-bounds for paths.

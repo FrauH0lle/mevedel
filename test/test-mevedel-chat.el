@@ -655,12 +655,7 @@
 								   captured-chat)))
 				 (with-current-buffer view-buf
 				   (mevedel-view--render-incremental captured-chat)))
-			       (overlay-put directive 'mevedel-directive-response-start nil)
-			       (cl-letf (((symbol-function
-					   'mevedel--ov-actions--find-directive-response-start)
-					  (lambda (&rest _) nil)))
-				 (let ((gptel--fsm-last nil))
-				   (mevedel--ov-actions-show-answer directive)))
+			       (mevedel--ov-actions-show-answer directive)
 			       (let ((view-buf (buffer-local-value 'mevedel--view-buffer
 								   captured-chat)))
 				 (with-current-buffer view-buf

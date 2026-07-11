@@ -561,7 +561,7 @@ LIMIT bounds the search when non-nil."
 
 (defconst mevedel-transcript--mailbox-block-specs
   '((agent-result
-     :open "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"\\([^\"]+\\)\"[^>]*>"
+     :open "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
      :close "</agent-result>")
     (agent-message
      :open "<agent-message\\s-+[^>]*from=\"\\([^\"]+\\)\"[^>]*>"

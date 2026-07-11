@@ -245,8 +245,8 @@ compaction uses the leading summary as `<previous-summary>`, mevedel
 strips that prefix so the summarizer receives only the anchored summary
 content.
 
-If persistence is disabled, manual compaction falls back to the legacy
-in-buffer mode: older content is marked `gptel 'ignore` and dimmed,
+If persistence is disabled, manual compaction uses the in-buffer mode:
+older content is marked `gptel 'ignore` and dimmed,
 with a folded summary block inserted as an anchor.
 
 ## Defcustoms

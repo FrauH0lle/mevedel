@@ -461,34 +461,39 @@ The dispatcher does a fresh `gptel-get-tool' lookup on every call
 so MCP reconnects (where mcp.el rebuilds the source struct with a
 fresh `:function') propagate automatically."
   (lambda (callback args)
-    (condition-case err
-        (let* ((source (condition-case _
-                           (gptel-get-tool (list source-category source-name))
-                         (error nil))))
-          (cond
-           ((null source)
-            (funcall callback
-                     (format "Error: wrapped tool %S has been unregistered; reconnect and re-wrap if needed"
-                             source-name)))
-           ((not (gptel-tool-p source))
-            (funcall callback
-                     (format "Error: wrapped tool %S resolved to a non-tool value"
-                             source-name)))
-           (t
-            (let* ((fn (gptel-tool-function source))
-                   (arg-specs (mevedel-tool--args-from-gptel
-                               (gptel-tool-args source) source-name))
-                   (positional
-                    (cl-loop for spec in arg-specs
-                             collect (plist-get
-                                      args
-                                      (intern (format ":%s" (car spec)))))))
-              (mevedel-tool--with-quiet-file-visit
-                (if async-p
-                    (apply fn callback positional)
-                  (funcall callback (apply fn positional))))))))
-      (error
-       (funcall callback (format "Error: %s" (error-message-string err)))))))
+    (let ((return (lambda (result)
+                    (funcall callback (list :result result)))))
+      (condition-case err
+          (let* ((source (condition-case _
+                             (gptel-get-tool
+                              (list source-category source-name))
+                           (error nil))))
+            (cond
+             ((null source)
+              (funcall return
+                       (format "Error: wrapped tool %S has been unregistered; reconnect and re-wrap if needed"
+                               source-name)))
+             ((not (gptel-tool-p source))
+              (funcall return
+                       (format "Error: wrapped tool %S resolved to a non-tool value"
+                               source-name)))
+             (t
+              (let* ((fn (gptel-tool-function source))
+                     (arg-specs (mevedel-tool--args-from-gptel
+                                 (gptel-tool-args source) source-name))
+                     (positional
+                      (cl-loop for spec in arg-specs
+                               collect (plist-get
+                                        args
+                                        (intern
+                                         (format ":%s" (car spec)))))))
+                (mevedel-tool--with-quiet-file-visit
+                  (if async-p
+                      (apply fn return positional)
+                    (funcall return (apply fn positional))))))))
+        (error
+         (funcall return
+                  (format "Error: %s" (error-message-string err))))))))
 
 (defun mevedel-tool-truthy-p (value)
   "Return non-nil if VALUE is a truthy LLM-supplied boolean.
@@ -573,7 +578,8 @@ Wrap form (:wrap EXPR):
   :category defaults to \"mevedel-<source-category>\".
 
 Optional (both forms):
-  :handler          FUNCTION     Tool implementation (native only)
+  :handler          FUNCTION     Tool implementation returning a plist with
+                                 required `:result' (native only)
   :prompt           STRING-OR-FN Detailed instructions (defaults to
                                  description)
   :prompt-file      STRING       Load prompt from file (relative to mevedel

@@ -355,11 +355,6 @@ carry both."
                        (inv (plist-get info :mevedel-agent-invocation))
                        ((mevedel-agent-invocation-p inv)))
              inv))
-      (and fsm
-           (when-let* ((info (gptel-fsm-info fsm))
-                       (ov (plist-get info :context))
-                       ((overlayp ov)))
-             (overlay-get ov 'mevedel-agent-invocation)))
       (when-let* ((fsm fsm)
                   (info (gptel-fsm-info fsm))
                   (buffer (plist-get info :buffer))

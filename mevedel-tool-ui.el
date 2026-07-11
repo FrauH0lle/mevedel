@@ -869,12 +869,9 @@ table."
 
 Returns nil if FSM is not an agent invocation."
   (when-let* ((info (and fsm (gptel-fsm-info fsm))))
-    (or (and (mevedel-agent-invocation-p
-              (plist-get info :mevedel-agent-invocation))
-             (plist-get info :mevedel-agent-invocation))
-        (when-let* ((ov (plist-get info :context))
-                    ((overlayp ov)))
-          (overlay-get ov 'mevedel-agent-invocation)))))
+    (and (mevedel-agent-invocation-p
+          (plist-get info :mevedel-agent-invocation))
+         (plist-get info :mevedel-agent-invocation))))
 
 (defun mevedel-tools--handle-wait-inject (fsm)
   "WAIT-state handler: advance turn count and inject agent reminders.
@@ -2267,9 +2264,7 @@ defaults to the data buffer reachable from the current buffer."
   "Call AGENT to do specific compound tasks.
 
 AGENT is a resolved `mevedel-agent' struct (registry-defined or
-synthetic).  Caller is responsible
-for resolution; see `mevedel-tools--task-by-name' for a lookup
-wrapper used by the Agent tool and similar string-name callers.
+synthetic).  Caller is responsible for resolution.
 
 Dispatches to `mevedel-agent-exec--run' and manages the entries
 in `mevedel-tools--agents-fsm'.  A fresh `mevedel-agent-invocation'
@@ -2315,21 +2310,6 @@ exactly once when neither has pending work."
    :skill-effort-override skill-effort-override
    :skill-hook-rules skill-hook-rules
    :on-invocation on-invocation))
-
-(defun mevedel-tools--task-by-name
-    (main-cb agent-type description prompt &optional background model-tier)
-  "Look AGENT-TYPE up in the registry and call `mevedel-tools--task'.
-
-Compatibility wrapper for callers that still pass the agent type
-as a string.  Sends an error string to
-MAIN-CB when AGENT-TYPE is not registered."
-  (let ((agent (mevedel-agent-get agent-type)))
-    (if (not agent)
-        (funcall main-cb
-                 (format "Error: Unknown agent type: %s" agent-type))
-      (mevedel-tools--task main-cb agent description prompt
-                           :background background
-                           :model-tier model-tier))))
 
 (cl-defun mevedel-tools--task--dispatch
     (main-cb agent-type description prompt background agent
@@ -2515,19 +2495,11 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                 ;; parent's `mevedel-tools--agents-fsm' BEFORE
                 ;; calling `gptel-request' -- so a racing
                 ;; `mevedel-abort' finds the entry while the HTTP
-                ;; request is still being set up.  Backstop on
-                ;; return: if `--run' returned an FSM but didn't
-                ;; register it (legacy path or test stub), put it
-                ;; on the registry now.  Idempotent re-set when
-                ;; the pre-registration already happened.
+                ;; request is still being set up.
                 (setq agent-fsm
                       (mevedel-agent-exec--run
                        wrapped-callback agent-type description prompt
                        invocation agent-buffer))
-                (when agent-fsm
-                  (setf (alist-get agent-id
-                                   mevedel-tools--agents-fsm nil nil #'equal)
-                        agent-fsm))
                 (when (and agent-fsm (not background))
                   (mevedel-tools--foreground-watchdog-arm invocation))
                 (setq success-p t))
@@ -3294,13 +3266,23 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
 ;;
 ;;; Pipeline-compatible handlers
 
+(defun mevedel-tool-ui--deliver-result (callback value &rest args)
+  "Deliver VALUE to CALLBACK as a canonical tool result."
+  (apply callback
+         (if (and (proper-list-p value) (plist-member value :result))
+             value
+           (list :result value))
+         args))
+
 (defun mevedel-tool-ui--ask (callback args)
   "Ask the user questions.
 CALLBACK receives the formatted answers.  ARGS is a plist with :questions."
   (let ((questions (plist-get args :questions)))
     (unless questions
       (error "Parameter questions is required"))
-    (mevedel-tools--ask-user callback questions)))
+    (mevedel-tools--ask-user
+     (apply-partially #'mevedel-tool-ui--deliver-result callback)
+     questions)))
 
 (defun mevedel-tool-ui--request-access (callback args)
   "Request access to a directory outside the workspace.
@@ -3312,15 +3294,17 @@ CALLBACK receives the result.  ARGS is a plist with :directory and :reason."
     (unless (stringp reason)
       (error "Parameter reason is required"))
     (if (not (and (file-readable-p directory) (file-directory-p directory)))
-        (funcall callback
-                 (format "Error: Directory '%s' is not readable" directory))
+        (mevedel-tool-ui--deliver-result
+         callback
+         (format "Error: Directory '%s' is not readable" directory))
       (let ((expanded (expand-file-name directory)))
         (mevedel-tools--request-access
          expanded reason
          (lambda (ui-outcome)
-           (funcall callback
-                    (mevedel-tools--request-access--format-result
-                     expanded ui-outcome))))))))
+           (mevedel-tool-ui--deliver-result
+            callback
+            (mevedel-tools--request-access--format-result
+             expanded ui-outcome))))))))
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch a specialized agent.
@@ -3339,16 +3323,23 @@ CALLBACK receives the agent result.  ARGS is a plist with :subagent_type,
     (unless (stringp prompt)
       (error "Parameter prompt is required"))
     (when (and model (not (mevedel-model-normalize-tier model)))
-      (funcall callback
-               (format "Error: Unknown model tier: %s. Available: fast, balanced, strong"
-                       model))
+      (mevedel-tool-ui--deliver-result
+       callback
+       (format "Error: Unknown model tier: %s. Available: fast, balanced, strong"
+               model))
       (setq agent-type nil))
     (when agent-type
       (when (equal agent-type "verifier")
         (mevedel-plan-mode-clear-verification-pending))
-      (mevedel-tools--task-by-name
-       callback agent-type description prompt background
-       (and model (mevedel-model-normalize-tier model))))))
+      (if-let* ((agent (mevedel-agent-get agent-type)))
+          (mevedel-tools--task
+           (apply-partially #'mevedel-tool-ui--deliver-result callback)
+           agent description prompt
+           :background background
+           :model-tier (and model (mevedel-model-normalize-tier model)))
+        (mevedel-tool-ui--deliver-result
+         callback
+         (format "Error: Unknown agent type: %s" agent-type))))))
 
 (defun mevedel-tool-ui--stop-agent (args)
   "Stop a running sub-agent.
@@ -3357,8 +3348,9 @@ ARGS is a plist with :agent_id and optional :reason."
         (reason (plist-get args :reason)))
     (unless (stringp agent-id)
       (error "Parameter agent_id is required"))
-    (mevedel-tools--stop-agent-result-string
-     (mevedel-tools-stop-agent agent-id reason))))
+    (list :result
+          (mevedel-tools--stop-agent-result-string
+           (mevedel-tools-stop-agent agent-id reason)))))
 
 (defun mevedel-tool-ui--tool-search (callback args)
   "Search for and load deferred tools.
@@ -3368,12 +3360,14 @@ and optional :load."
         (load (plist-get args :load)))
     (unless (stringp query)
       (error "Parameter query is required"))
-    (mevedel-tools--tool-search callback query load)))
+    (mevedel-tools--tool-search
+     (apply-partially #'mevedel-tool-ui--deliver-result callback)
+     query load)))
 
 (defun mevedel-tool-ui--send-message (args)
   "Dispatch SendMessage to the mevedel-tools implementation.
 ARGS is a plist with :to and :message."
-  (mevedel-tools--send-message args))
+  (list :result (mevedel-tools--send-message args)))
 
 
 ;;
@@ -3408,8 +3402,7 @@ the data buffer's major mode."
                   agent-id session)))
            (progress-p (plist-get effective-render-data :progress-handle))
            (agent-type (or (plist-get args :subagent_type) "?"))
-           ;; Empty when render-data lacks a recognized :status
-           ;; (e.g. legacy invocations).
+           ;; Empty when render-data lacks a recognized :status.
            (badge (mevedel-tool-ui--handle-badge
                    (if blocked-reason
                        (plist-put (copy-sequence effective-render-data)

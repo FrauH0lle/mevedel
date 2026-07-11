@@ -1595,21 +1595,12 @@ Falls back to the authoritative chat buffer if the compact view is not live."
   (let* ((response-marker
           (and instructions
                (overlay-get instructions 'mevedel-directive-response-start)))
-         (chat-buffer
-          (or (and (markerp response-marker)
-                   (marker-buffer response-marker))
-              (and gptel--fsm-last
-                   (plist-get (gptel-fsm-info gptel--fsm-last) :buffer))
-              (mevedel--active-chat-buffer)))
-         (response-start
-          (or (and (markerp response-marker)
-                   (marker-position response-marker))
-              (and gptel--fsm-last
-                   (let* ((info (gptel-fsm-info gptel--fsm-last))
-                          (pos (plist-get info :position)))
-                     (and (markerp pos) (marker-position pos))))
-              (mevedel--ov-actions--find-directive-response-start
-               instructions chat-buffer)))
+         (_ (unless (and (markerp response-marker)
+                         (marker-buffer response-marker)
+                         (marker-position response-marker))
+              (user-error "No answer location recorded for this directive")))
+         (chat-buffer (marker-buffer response-marker))
+         (response-start (marker-position response-marker))
          (view-buffer
           (mevedel--ov-actions--directive-view-buffer
            chat-buffer instructions)))
@@ -1629,18 +1620,6 @@ Falls back to the authoritative chat buffer if the compact view is not live."
             (when-let* ((display-window (get-buffer-window (current-buffer) t)))
               (with-selected-window display-window
                 (recenter))))))
-     ((and view-buffer
-           (buffer-live-p view-buffer))
-      (let ((window (display-buffer view-buffer gptel-display-buffer-action)))
-        (when window
-          (select-window window))
-        (with-current-buffer view-buffer
-          (unless (mevedel--ov-actions--goto-view-directive-answer
-                   instructions)
-            (user-error "No answer location recorded for this directive"))
-          (when-let* ((display-window (get-buffer-window (current-buffer) t)))
-            (with-selected-window display-window
-              (recenter))))))
      ((and response-start chat-buffer (buffer-live-p chat-buffer))
       (let ((window (display-buffer chat-buffer gptel-display-buffer-action)))
         (when window
@@ -1685,51 +1664,6 @@ Falls back to the authoritative chat buffer if the compact view is not live."
                                   (mevedel-workspace-id workspace)))
                   (throw 'view buf)))))))))
 
-(defun mevedel--ov-actions--goto-view-directive-answer (instructions)
-  "Move point to the rendered answer for INSTRUCTIONS in the current view."
-  (when-let* ((display-text
-               (mevedel--ov-actions--directive-display-text instructions)))
-    (let ((limit (or (and (boundp 'mevedel-view--input-marker)
-                          (markerp mevedel-view--input-marker)
-                          (marker-position mevedel-view--input-marker))
-                     (point-max)))
-          (case-fold-search nil)
-          answer-pos)
-      (save-excursion
-        (goto-char (point-min))
-        (when (search-forward display-text limit t)
-          (while (and (not answer-pos) (< (point) limit))
-            (let* ((pos (point))
-                   (type (get-text-property pos 'mevedel-view-type))
-                   (next (or (next-single-property-change
-                              pos 'mevedel-view-type nil limit)
-                             limit)))
-              (when (eq type 'response)
-                (setq answer-pos pos))
-              (goto-char (max (1+ pos) next))))))
-      (when answer-pos
-        (goto-char answer-pos)
-        t))))
-
-(defun mevedel--ov-actions--directive-display-text (instructions)
-  "Return the user-facing directive text for INSTRUCTIONS."
-  (when instructions
-    (let* ((action (or (overlay-get instructions 'mevedel-directive-action)
-                       'implement))
-           (action-label (or (alist-get action
-                                        '((implement . "Implement")
-                                          (revise . "Revise")
-                                          (discuss . "Discuss")
-                                          (tutor . "Tutor")))
-                             (capitalize
-                              (replace-regexp-in-string
-                               "[-_]+" " " (symbol-name action)))))
-           (directive-text (string-trim
-                            (mevedel--directive-text instructions))))
-      (if (string-empty-p directive-text)
-          action-label
-        (format "%s: %s" action-label directive-text)))))
-
 (defun mevedel--ov-actions--goto-view-source (response-start)
   "Move point to rendered source for RESPONSE-START in the current view buffer."
   (let ((limit (or (and (boundp 'mevedel-view--input-marker)
@@ -1757,70 +1691,6 @@ Falls back to the authoritative chat buffer if the compact view is not live."
     (when-let* ((target (or response-pos fallback-pos)))
       (goto-char target)
       t)))
-
-(defun mevedel--ov-actions--find-directive-response-start
-    (instructions chat-buffer)
-  "Find the response start for INSTRUCTIONS by scanning CHAT-BUFFER.
-
-This is a compatibility fallback for directive turns created before the
-overlay stored `mevedel-directive-response-start'."
-  (when (and instructions chat-buffer (buffer-live-p chat-buffer))
-    (let* ((action (overlay-get instructions 'mevedel-directive-action))
-           (action-str (and action (symbol-name action)))
-           (directive-text (string-trim (mevedel--directive-text instructions)))
-           match)
-      (with-current-buffer chat-buffer
-        (save-excursion
-          (goto-char (point-min))
-          (while (re-search-forward "^:PROMPT:\n" nil t)
-            (let* ((drawer-start (match-beginning 0))
-                   (body-start (point))
-                   (line (save-excursion
-                           (goto-char drawer-start)
-                           (forward-line -1)
-                           (buffer-substring-no-properties
-                            (line-beginning-position)
-                            (line-end-position)))))
-              (when (re-search-forward "^:END:[ \t]*\n?" nil t)
-                (let* ((drawer-end (point))
-                       (body (buffer-substring-no-properties
-                              body-start (match-beginning 0)))
-                       (action-match-p
-                        (or (null action-str)
-                            (string-match-p
-                             (regexp-quote (format ":%s:" action-str))
-                             line)
-                            (string-match-p
-                             (regexp-quote (format "`%s`" action-str))
-                             line)))
-                       (directive-match-p
-                        (or (string-empty-p directive-text)
-                            (string-match-p
-                             (regexp-quote directive-text)
-                             line)
-                            (string-match-p
-                             (regexp-quote directive-text)
-                             body))))
-                  (when (and action-match-p directive-match-p)
-                    (when-let* ((response-start
-                                 (mevedel--ov-actions--next-response-position
-                                  drawer-end)))
-                      (setq match response-start))))))))
-        match))))
-
-(defun mevedel--ov-actions--next-response-position (start)
-  "Return the first `gptel' response position at or after START."
-  (save-excursion
-    (goto-char start)
-    (let (found)
-      (while (and (not found) (< (point) (point-max)))
-        (let ((next (or (next-single-property-change
-                         (point) 'gptel nil (point-max))
-                        (point-max))))
-          (when (eq (get-text-property (point) 'gptel) 'response)
-            (setq found (point)))
-          (goto-char (if (= next (point)) (1+ (point)) next))))
-      found)))
 
 (defun mevedel--ov-actions-view (&optional instructions)
   "Display the patch buffer for INSTRUCTIONS."

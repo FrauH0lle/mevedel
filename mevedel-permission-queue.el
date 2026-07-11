@@ -132,6 +132,13 @@ ENTRY plist keys:
   :dangerous             -- boolean (`bash' only)
   :expression            -- string (`eval' only)
   :callback              -- function: (lambda (outcome) ...)"
+  (let ((origin (plist-get entry :origin)))
+    (unless (and (stringp origin)
+                 (or (equal origin "main")
+                     (string-match-p
+                      "\\`[^[:space:]]+--[[:xdigit:]]\\{32\\}\\'"
+                      origin)))
+      (error "Invalid permission queue origin: %S" origin)))
   (let ((session (or session (mevedel-permission-queue--current-session))))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
     (mevedel-queue--enqueue mevedel-permission-queue--spec entry session)))
@@ -376,24 +383,18 @@ Called from `mevedel-abort' / request-cancel-fn."
     (origin &optional session no-render)
   "Abort queued entries for ORIGIN in SESSION.
 
-Nil-origin entries are treated as \"main\" for compatibility with
-older in-memory queue entries.  When NO-RENDER is non-nil, do not
-render the next head entry after sweeping."
-  (let* ((resolved-origin (or origin "main"))
-         (session (or session (mevedel-permission-queue--current-session)))
+When NO-RENDER is non-nil, do not render the next head entry after
+sweeping."
+  (let* ((session (or session (mevedel-permission-queue--current-session)))
          (queue (and session (mevedel-permission-queue--get session))))
     (dolist (entry queue)
-      (when (equal (or (plist-get entry :origin) "main")
-                   resolved-origin)
+      (when (equal (plist-get entry :origin) origin)
         (mevedel-permission-queue--log
          'permission-swept entry session
-         :outcome 'aborted :sweep-origin resolved-origin)))
+         :outcome 'aborted :sweep-origin origin)))
     (mevedel-queue--sweep-origin
      mevedel-permission-queue--spec
-     resolved-origin 'aborted session no-render)
-    (when (equal resolved-origin "main")
-      (mevedel-queue--sweep-origin
-       mevedel-permission-queue--spec nil 'aborted session no-render))))
+     origin 'aborted session no-render)))
 
 (provide 'mevedel-permission-queue)
 

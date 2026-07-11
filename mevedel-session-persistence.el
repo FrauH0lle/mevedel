@@ -232,6 +232,16 @@ nil value disables auto-cleanup entirely."
 Rules with other actions are dropped on load (a future version may
 add more, and we don't want to act on actions we don't understand).")
 
+(defconst mevedel-session-persistence--required-sidecar-keys
+  '(:version :session-id :session-name :workspace :working-directory
+    :created-at :updated-at :current-segment :total-turn-count
+    :last-task-write-turn :task-status-notes :first-user-message
+    :latest-user-message :forked-from-session-id :forked-from-turn
+    :permission-mode :permission-rules :last-observed-date
+    :agent-types-snapshot :skills-snapshot :additional-roots :tasks
+    :prompt-index :file-snapshots :agent-transcripts :plan-metadata :messages)
+  "Keys required in every current-version session sidecar.")
+
 
 ;;
 ;;; Workspace serialization
@@ -285,14 +295,11 @@ A rule is `(TOOL-NAME &rest PLIST)' with `:action SYMBOL'."
     (plist workspace)
   "Return PLIST's restored working directory for WORKSPACE.
 
-Missing `:working-directory' values fall back to the workspace root for
-old sidecars.  When WORKSPACE is available, paths saved under a
-relocated workspace root are first mapped to the current root unless
+When WORKSPACE is available, paths saved under a relocated workspace
+root are first mapped to the current root unless
 they already live under that current root, then checked with the same
 containment semantics as session creation."
-  (let* ((raw (or (plist-get plist :working-directory)
-                  (and workspace
-                       (mevedel-workspace-root workspace))))
+  (let* ((raw (plist-get plist :working-directory))
          (saved-workspace (plist-get plist :workspace))
          (saved-root (plist-get saved-workspace :root))
          (current-root (and workspace
@@ -368,7 +375,7 @@ containment semantics as session creation."
                                                  additional-roots)
   "Serialize SESSION to a sidecar plist.
 
-FIRST-USER-MESSAGE is the legacy cached preview string.
+FIRST-USER-MESSAGE is the cached original-request preview.
 LATEST-USER-MESSAGE is the cached resume picker preview.
 ADDITIONAL-ROOTS is the buffer-local value of
 `mevedel-workspace-additional-roots' for this session.
@@ -413,6 +420,23 @@ The resulting plist is round-trippable via
    ;; :timestamp -- prin1/read clean.
    :messages               (mevedel-session-messages session)))
 
+(defun mevedel-session-persistence--validate-current-sidecar (plist)
+  "Return PLIST when it contains every current-version sidecar key."
+  (unless (proper-list-p plist)
+    (error "Invalid session sidecar"))
+  (dolist (key mevedel-session-persistence--required-sidecar-keys)
+    (unless (plist-member plist key)
+      (error "Missing session sidecar key: %s" key)))
+  (dolist (segment (plist-get plist :prompt-index))
+    (unless (and (consp segment) (integerp (car segment)))
+      (error "Invalid session prompt-index segment: %S" segment))
+    (dolist (prompt (cdr segment))
+      (unless (and (proper-list-p prompt)
+                   (cl-every (lambda (key) (plist-member prompt key))
+                             '(:turn :file-turn :cum-turn)))
+        (error "Invalid session prompt entry: %S" prompt))))
+  plist)
+
 (defun mevedel-session-persistence-deserialize (plist)
   "Reconstruct a session from sidecar PLIST.
 
@@ -432,6 +456,7 @@ unknown actions are dropped via the hygiene filter."
   (unless (equal (plist-get plist :version) (mevedel-version))
     (error "Unsupported session version: %s"
            (or (plist-get plist :version) "missing")))
+  (mevedel-session-persistence--validate-current-sidecar plist)
   (let* ((workspace (mevedel-session-persistence--workspace-from-plist
                      (plist-get plist :workspace)))
          (working-directory
@@ -442,10 +467,7 @@ unknown actions are dropped via the hygiene filter."
          (rules     (mevedel-session-persistence--filter-permission-rules
                      (plist-get plist :permission-rules)))
          (prompt-index (plist-get plist :prompt-index))
-         (latest-user-message
-          (or (plist-get plist :latest-user-message)
-              (mevedel-session-persistence--latest-user-message-from-index
-               prompt-index)))
+         (latest-user-message (plist-get plist :latest-user-message))
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
@@ -454,20 +476,12 @@ unknown actions are dropped via the hygiene filter."
                      :mentions-shown   (make-hash-table :test #'equal)
                      :tasks            tasks
                      :permission-rules rules
-                     :permission-mode  (or (plist-get plist :permission-mode)
-                                           'default)
-                     :turn-count       (or (plist-get plist :total-turn-count) 0)
-                     :last-observed-date
-                     (or (plist-get plist :last-observed-date)
-                         (format-time-string "%F"))
+                     :permission-mode  (plist-get plist :permission-mode)
+                     :turn-count       (plist-get plist :total-turn-count)
+                     :last-observed-date (plist-get plist :last-observed-date)
                      :agent-types-snapshot
-                     (if (plist-member plist :agent-types-snapshot)
-                         (plist-get plist :agent-types-snapshot)
-                       :uninitialized)
-                     :skills-snapshot
-                     (if (plist-member plist :skills-snapshot)
-                         (plist-get plist :skills-snapshot)
-                       :uninitialized)
+                     (plist-get plist :agent-types-snapshot)
+                     :skills-snapshot (plist-get plist :skills-snapshot)
                      :last-task-write-turn
                      (plist-get plist :last-task-write-turn)
                      :task-status-notes
@@ -475,7 +489,7 @@ unknown actions are dropped via the hygiene filter."
                      :session-id       (plist-get plist :session-id)
                      :created-at       (plist-get plist :created-at)
                      :updated-at       (plist-get plist :updated-at)
-                     :current-segment  (or (plist-get plist :current-segment) 1)
+                     :current-segment  (plist-get plist :current-segment)
                      :forked-from-session-id
                      (plist-get plist :forked-from-session-id)
                      :forked-from-turn (plist-get plist :forked-from-turn)
@@ -875,20 +889,6 @@ prompt).  Also skips unpropertized gptel org tool/reasoning block glue."
                   "0")))
     0))
 
-(defun mevedel-session-persistence--segment-tail-prompt-count-for-session
-    (session segment-n)
-  "Return copied-tail prompt count for SESSION's SEGMENT-N file."
-  (let ((path (and (mevedel-session-save-path session)
-                   (mevedel-session-persistence--segment-path
-                    (mevedel-session-save-path session) segment-n))))
-    (if (and path (file-exists-p path))
-        (with-temp-buffer
-          (let ((org-agenda-file-menu-enabled nil))
-            (org-mode))
-          (insert-file-contents path nil 0 8192)
-          (mevedel-session-persistence--segment-tail-prompt-count))
-      0)))
-
 (defun mevedel-session-persistence--update-prompt-index (session buffer)
   "Refresh the live segment's prompt list in SESSION from BUFFER's contents.
 
@@ -931,23 +931,9 @@ that prompt's response completed."
 
 (defun mevedel-session-persistence--newer-prompt-p (candidate incumbent)
   "Return non-nil when CANDIDATE is newer than INCUMBENT."
-  (if (null incumbent)
-      t
-    (let ((candidate-cum (plist-get candidate :cum-turn))
-          (incumbent-cum (plist-get incumbent :cum-turn))
-          (candidate-segment (or (plist-get candidate :segment) 0))
-          (incumbent-segment (or (plist-get incumbent :segment) 0))
-          (candidate-turn (or (plist-get candidate :turn) 0))
-          (incumbent-turn (or (plist-get incumbent :turn) 0)))
-      (cond
-       ((and (numberp candidate-cum)
-             (numberp incumbent-cum)
-             (/= candidate-cum incumbent-cum))
-        (> candidate-cum incumbent-cum))
-       ((/= candidate-segment incumbent-segment)
-        (> candidate-segment incumbent-segment))
-       (t
-        (> candidate-turn incumbent-turn))))))
+  (or (null incumbent)
+      (> (plist-get candidate :cum-turn)
+         (plist-get incumbent :cum-turn))))
 
 (defun mevedel-session-persistence--latest-user-message-from-index (index)
   "Return the newest non-empty prompt preview from prompt INDEX, or nil."
@@ -1771,8 +1757,7 @@ count, a turn-specific snapshot used by rewind/fork."
   "Restore SESSION instruction snapshot into BUFFER's workspace.
 
 When TURN is non-nil, restore the turn-specific snapshot; otherwise
-restore `instructions/current.el'.  Missing snapshots are ignored so
-older sessions without instruction persistence still resume."
+restore `instructions/current.el'.  Missing snapshots are ignored."
   (when-let* ((save-path (mevedel-session-save-path session)))
     (let ((path (if turn
                     (mevedel-session-persistence--instructions-turn-path
@@ -2837,7 +2822,8 @@ restoration and reveal timers."
 
 (defun mevedel-session-persistence-load-sidecar (path)
   "Read a current-version sidecar plist from PATH.
-Return nil when the sidecar is missing, unreadable, or unsupported."
+Return nil when the sidecar is missing or unreadable.  Signal when a
+readable sidecar has an unsupported version or obsolete shape."
   (cond
    ((not (file-exists-p path))
     (display-warning 'mevedel
@@ -2846,18 +2832,29 @@ Return nil when the sidecar is missing, unreadable, or unsupported."
                      :warning)
     nil)
    (t
-    (condition-case err
-        (let ((plist (mevedel-session-persistence-read path)))
-          (unless (equal (plist-get plist :version) (mevedel-version))
-            (error "Unsupported session version: %s"
-                   (or (plist-get plist :version) "missing")))
-          plist)
-      (error
-       (display-warning 'mevedel
-                        (format "Sidecar unreadable at %s: %s; treating as fresh session"
-                                path (error-message-string err))
-                        :warning)
-       nil)))))
+    (let ((plist
+           (condition-case err
+               (mevedel-session-persistence-read path)
+             (error
+              (display-warning
+               'mevedel
+               (format "Sidecar unreadable at %s: %s; treating as fresh session"
+                       path (error-message-string err))
+               :warning)
+              nil))))
+      (cond
+       ((null plist) nil)
+       ((not (proper-list-p plist))
+        (display-warning
+         'mevedel
+         (format "Sidecar unreadable at %s; treating as fresh session" path)
+         :warning)
+        nil)
+       (t
+        (unless (equal (plist-get plist :version) (mevedel-version))
+          (error "Unsupported session version: %s"
+                 (or (plist-get plist :version) "missing")))
+        (mevedel-session-persistence--validate-current-sidecar plist)))))))
 
 (defvar-local mevedel-session--read-only-mode nil
   "Non-nil when this chat buffer is in read-only session mode.
@@ -3471,17 +3468,11 @@ recent turns appear before older turns."
              (sort (copy-sequence (mevedel-session-prompt-index session))
                    ;; Newest segment first.
                    (lambda (a b) (> (car a) (car b)))))
-      (let* ((segment-n (car segment-entry))
-             (tail-count
-              (mevedel-session-persistence--segment-tail-prompt-count-for-session
-               session segment-n)))
+      (let ((segment-n (car segment-entry)))
         (dolist (prompt (reverse (cdr segment-entry)))
           (let* ((preview (or (plist-get prompt :preview) "(empty prompt)"))
                  (turn    (plist-get prompt :turn))
-                 (file-turn
-                  (or (plist-get prompt :file-turn)
-                      (and (integerp turn) (+ tail-count turn))
-                      turn))
+                 (file-turn (plist-get prompt :file-turn))
                  (display (format "S%d T%d  %s" segment-n turn preview)))
             (push (cons display
                         (list :segment  segment-n
@@ -3667,10 +3658,8 @@ no-op."
       (user-error "Active buffer has no mevedel session"))
     (when (buffer-local-value 'mevedel--current-request buffer)
       (user-error "Abort the current request first"))
-    ;; Refresh the live segment before presenting the picker.  This
-    ;; repairs older sidecars whose prompt-index may include org block
-    ;; scaffolding and keeps the picker in sync with manual data-buffer
-    ;; edits since the last save.
+    ;; Refresh the live segment before presenting the picker so it stays in
+    ;; sync with manual data-buffer edits since the last save.
     (mevedel-session-persistence--update-prompt-index session buffer)
     ;; Live sub-agents would race against the rewind's truncation and
     ;; fork materialization -- abort them first.  Their ABRT handlers
@@ -3705,9 +3694,7 @@ retry rewind"))))
           (when entry
             (let ((picked-segment  (plist-get (cdr entry) :segment))
                   (picked-turn     (plist-get (cdr entry) :turn))
-                  (picked-file-turn
-                   (or (plist-get (cdr entry) :file-turn)
-                       (plist-get (cdr entry) :turn)))
+                  (picked-file-turn (plist-get (cdr entry) :file-turn))
                   (picked-cum-turn (plist-get (cdr entry) :cum-turn))
                   (current-segment
                    (mevedel-session-current-segment session))
@@ -4073,9 +4060,8 @@ fork's save-path."
     (index picked-segment picked-cum-turn)
   "Return a copy of INDEX trimmed to the fork's picked turn.
 Drops segments past PICKED-SEGMENT entirely.  In the picked segment,
-keeps only prompts whose `:cum-turn' is `<=' PICKED-CUM-TURN (or all
-prompts when PICKED-CUM-TURN is nil, falling back to the
-segment-local `:turn' when no cumulative key is available)."
+keeps only prompts whose `:cum-turn' is `<=' PICKED-CUM-TURN, or all
+prompts when PICKED-CUM-TURN is nil."
   (cl-loop for (seg . prompts) in index
            when (< seg picked-segment)
            collect (cons seg (copy-sequence prompts))
@@ -4086,11 +4072,7 @@ segment-local `:turn' when no cumulative key is available)."
                      (lambda (p)
                        (let ((ct (plist-get p :cum-turn)))
                          (or (null picked-cum-turn)
-                             (and ct (<= ct picked-cum-turn))
-                             ;; Fallback when cum-turn is absent:
-                             ;; keep everything so we don't drop
-                             ;; prior turns blindly.
-                             (null ct))))
+                             (<= ct picked-cum-turn))))
                      prompts))))
 
 (defun mevedel-session-persistence--reduce-file-snapshots
@@ -4203,13 +4185,11 @@ sort key) are extracted.  The full sidecar plist is left on disk
 until restore actually reads it."
   (condition-case _
       (let* ((plist (mevedel-session-persistence-read sidecar-path))
-             (prompt-index (plist-get plist :prompt-index))
-             (_ (unless (equal (plist-get plist :version) (mevedel-version))
-                  (error "Unsupported session version")))
-             (latest-user-message
-              (or (plist-get plist :latest-user-message)
-                  (mevedel-session-persistence--latest-user-message-from-index
-                   prompt-index))))
+             (_version
+              (unless (equal (plist-get plist :version) (mevedel-version))
+                (error "Unsupported session version")))
+             (_shape
+              (mevedel-session-persistence--validate-current-sidecar plist)))
         (list :session-id         (plist-get plist :session-id)
               :session-name       (plist-get plist :session-name)
               :workspace          (plist-get plist :workspace)
@@ -4218,7 +4198,7 @@ until restore actually reads it."
               :current-segment    (plist-get plist :current-segment)
               :total-turn-count   (plist-get plist :total-turn-count)
               :first-user-message (plist-get plist :first-user-message)
-              :latest-user-message latest-user-message
+              :latest-user-message (plist-get plist :latest-user-message)
               :forked-from-session-id
               (plist-get plist :forked-from-session-id)))
     (error nil)))

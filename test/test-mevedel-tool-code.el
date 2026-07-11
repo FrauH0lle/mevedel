@@ -22,6 +22,11 @@
 (defvar mevedel-tool-code-test-xref-backend-state nil
   "State captured while invoking the test xref backend.")
 
+(defun test-mevedel-tool-code--handler-result (envelope)
+  "Return the required result from handler ENVELOPE."
+  (should (plist-member envelope :result))
+  (plist-get envelope :result))
+
 (cl-defstruct (mevedel-tool-code-test-location
                (:constructor mevedel-tool-code-test-location-create (file)))
   "Test xref location carrying a source FILE."
@@ -304,7 +309,8 @@
                     "(my-test-fn-12345)\n"
                     "(my-test-fn-12345)\n"))
           (mevedel-tool-code--xref-references
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :identifier "my-test-fn-12345" :file_path tmp))
           (should (stringp result))
           ;; Should find at least the two call sites
@@ -333,7 +339,8 @@
                                    hack-local-variables-hook))
                        'mevedel-tool-code-test-backend)))
             (mevedel-tool-code--xref-references
-             (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
              (list :identifier "xref-backend-quiet-test" :file_path tmp)))
           (should (string-match-p "No references found" result))
           (should (equal '(:safe nil nil) xref-find-backend-state))
@@ -351,7 +358,8 @@
           (with-temp-file tmp
             (insert "(defun some-unique-fn-99999 () nil)\n"))
           (mevedel-tool-code--xref-references
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :identifier identifier :file_path tmp))
           (should (stringp result))
           (should (string-match-p "No references found\\|Error" result)))
@@ -396,7 +404,8 @@
                                    hack-local-variables-hook))
                        'mevedel-tool-code-test-backend)))
             (mevedel-tool-code--xref-definitions
-             (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
              (list :pattern "xref-backend-quiet-test" :file_path tmp)))
           (should (string-match-p "No symbols found" result))
           (should (equal '(:safe nil nil) xref-find-backend-state))
@@ -413,7 +422,8 @@
           (with-temp-file tmp
             (insert "(defun test-fn () nil)\n"))
           (mevedel-tool-code--xref-definitions
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :pattern "zzz-nonexistent-pattern-zzz" :file_path tmp))
           (should (stringp result))
           (should (string-match-p "No symbols found\\|No xref\\|No tags\\|Error" result))
@@ -437,7 +447,8 @@
           (when (featurep 'apropos)
             (unload-feature 'apropos t))
           (mevedel-tool-code--xref-definitions
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :pattern (format "%s-apropos-.*" prefix) :file_path tmp))
           (should (stringp result))
           (should-not
@@ -472,7 +483,8 @@
                     "(defun my-test-beta () nil)\n"
                     "(defvar my-test-gamma 42)\n"))
           (mevedel-tool-code--imenu
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :file_path tmp))
           (should (stringp result))
           (should (string-match-p "my-test-alpha" result))
@@ -490,7 +502,8 @@
           (with-temp-file tmp
             (insert ";; empty file\n"))
           (mevedel-tool-code--imenu
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :file_path tmp))
           (should (stringp result))
           (should (string-match-p "No.*symbols\\|No imenu\\|Error" result)))
@@ -507,7 +520,8 @@
                     ";; line 2\n"
                     "(defun my-test-fn-line3 () nil)\n"))
           (mevedel-tool-code--imenu
-           (lambda (r) (setq result r))
+           (lambda (r)
+             (setq result (test-mevedel-tool-code--handler-result r)))
            (list :file_path tmp))
           (should (stringp result))
           (should (string-match-p ":3:.*my-test-fn-line3" result)))

@@ -99,6 +99,15 @@ Return the plugin root directory."
                 :table (make-hash-table :test #'equal)
                 :order nil :total-bytes 0)))
 
+(defun mevedel-skills-test--stateful-skill (&rest slots)
+  "Create a file-backed test skill from SLOTS."
+  (unless (plist-member slots :source-file)
+    (setq slots
+          (plist-put slots :source-file
+                     (format "/tmp/mevedel-test-skills/%s/SKILL.md"
+                             (or (plist-get slots :name) "unnamed")))))
+  (apply #'mevedel-skill--create slots))
+
 
 ;;
 ;;; Plist coercion helpers
@@ -2853,6 +2862,11 @@ allowed-tools:
           (should (equal "skill:demo"
                          (mevedel-agent-name dispatched-agent))))))))
 
+(defun test-mevedel-skills--handler-result (envelope)
+  "Return the required result from handler ENVELOPE."
+  (should (plist-member envelope :result))
+  (plist-get envelope :result))
+
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
   (test)
@@ -2867,7 +2881,8 @@ allowed-tools:
     (with-temp-buffer
       (setq mevedel--session session)
       (mevedel-skills--invoke-handler
-       (lambda (r) (setq received r))
+       (lambda (r)
+         (setq received (test-mevedel-skills--handler-result r)))
        (list :name "nope")))
     (should (string-match-p "Unknown skill" received)))
 
@@ -2893,7 +2908,8 @@ description: Yell
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--invoke-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :name "shout" :arguments "loudly")))
           (should (equal "YELL loudly" received)))
       (delete-directory dir t)))
@@ -2927,12 +2943,14 @@ description: Yell
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--invoke-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :name "local:shared" :arguments "now"))
             (should (equal "LOCAL now" received))
             (setq received nil)
             (mevedel-skills--invoke-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :name "shared"))
             (should (string-match-p "Unknown skill 'shared'" received))))
       (delete-directory user-dir t)))
@@ -2941,18 +2959,19 @@ description: Yell
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create
+         (skill (mevedel-skills-test--stateful-skill
                  :name "hidden"
                  :body "should not run"))
          received)
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
-          (mevedel-skills--set-enabled "hidden" nil)
+          (mevedel-skills--set-enabled skill nil)
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--invoke-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :name "hidden")))
           (should (string-match-p "disabled" received)))
       (delete-directory user-dir t))))
@@ -2967,7 +2986,7 @@ description: Yell
          (alpha (mevedel-skill--create
                  :name "alpha" :description "Alpha helper"
                  :active-p t :model-invocable-p t))
-         (beta (mevedel-skill--create
+         (beta (mevedel-skills-test--stateful-skill
                 :name "beta" :description "Beta helper"
                 :active-p t :model-invocable-p t))
          (model-disabled (mevedel-skill--create
@@ -2982,11 +3001,12 @@ description: Yell
         (progn
           (setf (mevedel-session-skills session)
                 (list alpha beta model-disabled dormant))
-          (mevedel-skills--set-enabled "beta" nil)
+          (mevedel-skills--set-enabled beta nil)
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--list-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :query "alp")))
           (should (string-match-p "alpha: Alpha helper" received))
           (should-not (string-match-p "beta" received))
@@ -2996,7 +3016,8 @@ description: Yell
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--list-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :query "Dormant")))
           (should (string-match-p "dormant \\[dormant path-scoped\\]: Dormant"
                                   received))
@@ -3020,7 +3041,8 @@ description: Yell
                        (setq refreshed s)
                        (setf (mevedel-session-skills s) (list fresh)))))
             (mevedel-skills--list-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              nil))
           (should (eq refreshed session))
           (should (string-match-p "fresh: Fresh helper" received)))
@@ -3053,7 +3075,8 @@ description: Yell
           (with-temp-buffer
             (setq mevedel--session session)
             (mevedel-skills--list-handler
-             (lambda (r) (setq received r))
+             (lambda (r)
+               (setq received (test-mevedel-skills--handler-result r)))
              (list :query "shared")))
           (should (string-match-p "local:shared: Local helper" received))
           (should (string-match-p "global:shared: Global helper" received))
@@ -3641,7 +3664,7 @@ spanning lines")))
   (let* ((user-dir (make-temp-file "mevedel-skills-slash-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create :name "visible")))
+         (skill (mevedel-skills-test--stateful-skill :name "visible")))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list skill))
@@ -4043,7 +4066,7 @@ spanning lines")))
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create
+         (skill (mevedel-skills-test--stateful-skill
                  :name "visible"
                  :description "Visible description"
                  :source 'project))
@@ -4096,7 +4119,7 @@ spanning lines")))
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
-         (skill (mevedel-skill--create :name "visible"))
+         (skill (mevedel-skills-test--stateful-skill :name "visible"))
          message-text)
     (unwind-protect
         (progn
@@ -4113,6 +4136,24 @@ spanning lines")))
               (should (string-match-p "enabled" message-text))
               (should (mevedel-skills--skill-enabled-p skill)))))
       (delete-directory user-dir t)))
+
+  :doc "enable and disable reject unknown skills"
+  (let ((session (mevedel-skills-test--make-session)))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (should-error (mevedel-cmd--skills "disable missing")
+                    :type 'user-error)
+      (should-error (mevedel-cmd--skills "enable missing")
+                    :type 'user-error)))
+
+  :doc "disable rejects skills without a stable source file"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "inline")))
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (should-error (mevedel-cmd--skills "disable inline")
+                    :type 'user-error)))
 
   :doc "disable follows a file-backed skill through generated renaming"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
@@ -4140,32 +4181,24 @@ spanning lines")))
                          (setq message-text (apply #'format fmt args)))))
               (mevedel-cmd--skills "disable shared")
               (should (string-match-p "disabled" message-text))
-              (should-not (mevedel-skills--disabled-names))
               (should (mevedel-skills--disabled-keys))
               (should-not (mevedel-skills--skill-enabled-p renamed))
               (should (mevedel-skills--skill-enabled-p other)))))
       (delete-directory user-dir t)
       (delete-directory root t)))
 
-  :doc "legacy disabled names match generated local prefixes"
+  :doc "obsolete name-based state is rejected"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
-         (mevedel-user-dir (file-name-as-directory user-dir))
-         (root (make-temp-file "mevedel-skills-state-root-" t))
-         (skill-file (mevedel-skills-test--write-skill
-                      root "shared" "description: Shared\n" "Body"))
-         (skill (mevedel-skill--create
-                 :name "user:shared"
-                 :source 'user
-                 :source-file skill-file)))
+         (mevedel-user-dir (file-name-as-directory user-dir)))
     (unwind-protect
         (progn
-          (mevedel-skills--set-enabled "shared" nil)
-          (should-not (mevedel-skills--skill-enabled-p skill))
-          (mevedel-skills--set-enabled skill t)
-          (should (mevedel-skills--skill-enabled-p skill))
-          (should-not (mevedel-skills--disabled-names)))
-      (delete-directory user-dir t)
-      (delete-directory root t))))
+          (make-directory (file-name-directory
+                           (mevedel-skills--state-file))
+                          t)
+          (with-temp-file (mevedel-skills--state-file)
+            (prin1 '(:disabled ("shared")) (current-buffer)))
+          (should-error (mevedel-skills--read-state) :type 'error))
+      (delete-directory user-dir t))))
 
 (mevedel-deftest mevedel-cmd--tools ()
   ,test
@@ -4192,7 +4225,7 @@ spanning lines")))
   :doc "returns enabled/total skills for a session"
   (let* ((session (mevedel-skills-test--make-session))
          (enabled (mevedel-skill--create :name "enabled"))
-         (disabled (mevedel-skill--create :name "disabled")))
+         (disabled (mevedel-skills-test--stateful-skill :name "disabled")))
     (setf (mevedel-session-skills session) (list enabled disabled))
     (mevedel-skills--set-enabled disabled nil)
     (should (equal "1/2" (mevedel-skills-count-label session))))
@@ -4213,7 +4246,7 @@ spanning lines")))
          (active (mevedel-skill--create
                   :name "active" :description "Active description"
                   :source 'project :source-file source-file))
-         (disabled (mevedel-skill--create
+         (disabled (mevedel-skills-test--stateful-skill
                     :name "disabled" :description "Disabled description"
                     :source 'user))
          (plugin (mevedel-skill--create
@@ -4294,7 +4327,7 @@ spanning lines")))
   :doc "formats enabled and disabled status cells"
   (let* ((user-dir (make-temp-file "mevedel-skills-status-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (skill (mevedel-skill--create :name "visible")))
+         (skill (mevedel-skills-test--stateful-skill :name "visible")))
     (unwind-protect
         (progn
           (should (equal (substring-no-properties
@@ -4312,7 +4345,7 @@ spanning lines")))
   :doc "builds table cells from skill state, name, source, and description"
   (let* ((user-dir (make-temp-file "mevedel-skills-entry-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
-         (skill (mevedel-skill--create
+         (skill (mevedel-skills-test--stateful-skill
                  :name "visible"
                  :description "Visible description"
                  :source 'plugin))
@@ -4352,7 +4385,7 @@ spanning lines")))
   (let* ((user-dir (make-temp-file "mevedel-skills-header-" t))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (enabled (mevedel-skill--create :name "enabled"))
-         (disabled (mevedel-skill--create :name "disabled")))
+         (disabled (mevedel-skills-test--stateful-skill :name "disabled")))
     (unwind-protect
         (with-temp-buffer
           (mevedel-skills-list-mode)
@@ -4401,7 +4434,8 @@ spanning lines")))
          (session (mevedel-skills-test--make-session))
          (view-buffer (generate-new-buffer " *skills-toggle-view*"))
          (data-buffer (generate-new-buffer " *skills-toggle-data*"))
-         (skill (mevedel-skill--create :name "visible" :source 'project))
+         (skill (mevedel-skills-test--stateful-skill
+                 :name "visible" :source 'project))
          refreshed-buffer
          message-text)
     (unwind-protect
@@ -5092,11 +5126,11 @@ spanning lines")))
          (mevedel-user-dir (file-name-as-directory user-dir))
          (session (mevedel-skills-test--make-session))
          (visible (mevedel-skill--create :name "visible"))
-         (hidden (mevedel-skill--create :name "hidden")))
+         (hidden (mevedel-skills-test--stateful-skill :name "hidden")))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list visible hidden))
-          (mevedel-skills--set-enabled "hidden" nil)
+          (mevedel-skills--set-enabled hidden nil)
           (mevedel-skills-test--with-chat-buffer session
             (let ((mevedel-slash-commands nil))
               (insert "### $")
@@ -5455,13 +5489,13 @@ spanning lines")))
          (enabled (mevedel-skill--create
                    :name "enabled" :description "E"
                    :model-invocable-p t :active-p t))
-         (disabled (mevedel-skill--create
+         (disabled (mevedel-skills-test--stateful-skill
                     :name "disabled" :description "D"
                     :model-invocable-p t :active-p t)))
     (unwind-protect
         (progn
           (setf (mevedel-session-skills session) (list enabled disabled))
-          (mevedel-skills--set-enabled "disabled" nil)
+          (mevedel-skills--set-enabled disabled nil)
           (let ((names (mapcar #'mevedel-skill-name
                                (mevedel-skills--listing-candidates session))))
             (should (equal '("enabled") names))))
@@ -5772,7 +5806,7 @@ spanning lines")))
          (user-only (mevedel-skill--create
                      :name "user-only" :path-patterns '("*.el")
                      :active-p nil :model-invocable-p nil))
-         (disabled (mevedel-skill--create
+         (disabled (mevedel-skills-test--stateful-skill
                     :name "disabled" :path-patterns '("*.el")
                     :active-p nil :model-invocable-p t))
          (fake-tool (mevedel-tool--create
@@ -5783,7 +5817,7 @@ spanning lines")))
         (progn
           (setf (mevedel-session-skills session)
                 (list skill user-only disabled))
-          (mevedel-skills--set-enabled "disabled" nil)
+          (mevedel-skills--set-enabled disabled nil)
           (cl-letf (((symbol-function 'mevedel-tool-get)
                      (lambda (_name &optional _cat) fake-tool)))
             (with-temp-buffer

@@ -1172,9 +1172,10 @@ feedback string when :note has a value, otherwise nil."
                         (length created)
                         (if (= 1 (length created)) "" "s")
                         (mevedel-tool-task--format-for-llm created))))
-      (if note-feedback
-          (concat base "\n" note-feedback)
-        base))))
+      (list :result
+            (if note-feedback
+                (concat base "\n" note-feedback)
+              base)))))
 
 (defun mevedel-tool-task--handle-update (args)
   "Handler for TaskUpdate.  ARGS has :id and zero or more update fields."
@@ -1199,9 +1200,10 @@ feedback string when :note has a value, otherwise nil."
       (let ((base (format "Updated task:\n%s"
                           (mevedel-tool-task--format-for-llm
                            (list task)))))
-        (if note-feedback
-            (concat base "\n" note-feedback)
-          base)))))
+        (list :result
+              (if note-feedback
+                  (concat base "\n" note-feedback)
+                base))))))
 
 (defun mevedel-tool-task--handle-note (args)
   "Handler for TaskNote.  ARGS has :note and optional :owner."
@@ -1212,7 +1214,7 @@ feedback string when :note has a value, otherwise nil."
             (mevedel-tool-task--apply-note-arg session args '(:owner))))
       (mevedel-tool-task--mark-write session)
       (mevedel-tool-task--refresh-display)
-      feedback)))
+      (list :result feedback))))
 
 (defun mevedel-tool-task--handle-list (args)
   "Handler for TaskList.  ARGS may include :status filter."
@@ -1227,11 +1229,12 @@ feedback string when :note has a value, otherwise nil."
                         tasks)
                      tasks)))
     (mevedel-tool-task--refresh-display)
-    (if filter
-        (format "Tasks with status %s:\n%s"
-                (mevedel-tool-task--status-string filter)
-                (mevedel-tool-task--format-for-llm filtered))
-      (mevedel-tool-task--format-for-llm filtered))))
+    (list :result
+          (if filter
+              (format "Tasks with status %s:\n%s"
+                      (mevedel-tool-task--status-string filter)
+                      (mevedel-tool-task--format-for-llm filtered))
+            (mevedel-tool-task--format-for-llm filtered)))))
 
 (defun mevedel-tool-task--handle-get (args)
   "Handler for TaskGet.  ARGS has :id."
@@ -1260,7 +1263,7 @@ feedback string when :note has a value, otherwise nil."
                           (mapconcat #'number-to-string bl ", "))))
         (when-let* ((m (mevedel-task-metadata task)))
           (insert (format "Metadata: %S\n" m)))
-        (buffer-string)))))
+        (list :result (buffer-string))))))
 
 
 ;;

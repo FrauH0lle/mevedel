@@ -1771,7 +1771,7 @@ PID preserves the process group id after PROCESS exits."
 
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
-CALLBACK receives the result string.  ARGS is a plist with :command
+CALLBACK receives the result envelope.  ARGS is a plist with :command
 and optional :timeout_seconds."
   (let ((command (plist-get args :command)))
     (unless (stringp command)
@@ -1818,8 +1818,9 @@ and optional :timeout_seconds."
                        (cleanup-buffer)
                        (funcall
                         callback
-                        (mevedel-tool-exec--bash-format-result
-                         exit-code output timed-out timeout))))))
+                        (list :result
+                              (mevedel-tool-exec--bash-format-result
+                               exit-code output timed-out timeout)))))))
               (setq proc
                     (let ((default-directory workdir))
                       (with-current-buffer output-buffer
@@ -1838,8 +1839,9 @@ and optional :timeout_seconds."
                            (error
                             (cleanup-buffer)
                             (funcall callback
-                                     (format "Error in sentinel: %s"
-                                             sentinel-err))))))))
+                                     (list :result
+                                           (format "Error in sentinel: %s"
+                                                   sentinel-err)))))))))
               (setq proc-pid (process-id proc))
               (when timeout
                 (setq timer
@@ -1869,7 +1871,9 @@ and optional :timeout_seconds."
                                             (delete-process proc)))))))))))))
               proc))
         (error
-         (funcall callback (format "Failed to start process: %s" err))
+         (funcall callback
+                  (list :result
+                        (format "Failed to start process: %s" err)))
          nil)))))
 
 
@@ -1916,7 +1920,7 @@ and optional :timeout_seconds."
 
 (defun mevedel-tool-exec--eval-live (callback expression result-format preserve-ui)
   "Evaluate EXPRESSION in the live Emacs process.
-CALLBACK receives the formatted result string.  RESULT-FORMAT controls
+CALLBACK receives the result envelope.  RESULT-FORMAT controls
 the model-facing shape.  PRESERVE-UI restores the selected frame's
 window configuration after evaluation."
   (let ((standard-output (generate-new-buffer " *mevedel-eval-elisp*"))
@@ -1946,7 +1950,7 @@ window configuration after evaluation."
         (ignore-errors
           (set-window-configuration window-configuration)))
       (kill-buffer standard-output))
-    (funcall callback response)))
+    (funcall callback (list :result response))))
 
 (defun mevedel-tool-exec--eval-batch-script
     (expression result-file workdir load-path-value result-format)
@@ -2057,22 +2061,30 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
                           (cond
                            ((eq (plist-get payload :status) 'ok)
                             (funcall callback
-                                     (mevedel-tool-exec--truncate-output
-                                      (or (plist-get payload :text) ""))))
+                                     (list
+                                      :result
+                                      (mevedel-tool-exec--truncate-output
+                                       (or (plist-get payload :text) "")))))
                            ((eq (plist-get payload :status) 'error)
                             (funcall callback
-                                     (mevedel-tool-exec--truncate-output
-                                      (or (plist-get payload :text)
-                                          "Error: Eval failed"))))
+                                     (list
+                                      :result
+                                      (mevedel-tool-exec--truncate-output
+                                       (or (plist-get payload :text)
+                                           "Error: Eval failed")))))
                            (t
                             (funcall callback
-                                     (mevedel-tool-exec--truncate-output
-                                      (format
-                                       "Error: Eval batch process failed with exit code %d%s"
-                                       exit-code
-                                       (if (string-empty-p (or diagnostics ""))
-                                           ""
-                                         (format ":\n%s" diagnostics)))))))
+                                     (list
+                                      :result
+                                      (mevedel-tool-exec--truncate-output
+                                       (format
+                                        "Error: Eval batch process failed with exit code %d%s"
+                                        exit-code
+                                        (if (string-empty-p
+                                             (or diagnostics ""))
+                                            ""
+                                          (format ":\n%s"
+                                                  diagnostics))))))))
                         (when (buffer-live-p output-buffer)
                           (kill-buffer output-buffer))
                         (ignore-errors (delete-file script-file))
@@ -2084,12 +2096,13 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
        (ignore-errors (delete-file script-file))
        (ignore-errors (delete-file result-file))
        (funcall callback
-                (format "Failed to start Eval batch process: %s" err))
+                (list :result
+                      (format "Failed to start Eval batch process: %s" err)))
        nil))))
 
 (defun mevedel-tool-exec--eval (callback args)
   "Evaluate an Elisp expression and return the result.
-CALLBACK receives the result string.  ARGS is a plist with :expression."
+CALLBACK receives the result envelope.  ARGS is a plist with :expression."
   (let ((expression (plist-get args :expression))
         (result-format (plist-get args :result-format))
         (mode (mevedel-tool-exec--eval-mode args)))

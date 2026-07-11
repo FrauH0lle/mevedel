@@ -510,14 +510,7 @@ priorities."
 (defun mevedel-view-zone--input-start ()
   "Return the first editable composer position."
   (when (mevedel-view-zone--composer-live-p)
-    (if (fboundp 'mevedel-view--input-start)
-        (mevedel-view--input-start)
-      (save-excursion
-        (goto-char mevedel-view--input-marker)
-        (while (and (< (point) (point-max))
-                    (get-text-property (point) 'mevedel-view-prompt))
-          (forward-char 1))
-        (point)))))
+    (mevedel-view--input-start)))
 
 (defun mevedel-view-zone--input-offset (position)
   "Return POSITION's composer-relative offset, or nil."
