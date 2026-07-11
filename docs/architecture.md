@@ -74,6 +74,11 @@ for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md plus optional AGENTS.local.md), persistent memory,
 environment, then the dynamic skill roster.
 
+`mevedel-view-stream.el` isolates gptel stream advice, incremental-render
+scheduling, pending-tool live rows, and foreground request-progress state.
+It delegates transcript rendering to `mevedel-view.el`; the authoritative
+text remains in the gptel data buffer.
+
 Successful top-level turns have one completion boundary in the preset
 lifecycle.  The ordinary gptel `DONE` state and direct foreground fork skills
 both call it after response hooks, while error and abort terminals retain
@@ -140,8 +145,10 @@ scaffolding.
 
 `mevedel-transcript-normalize-properties` applies those same canonical ranges
 when a live or restored Org transcript needs its structural `gptel`
-properties repaired. Persistence, the view, and compaction consume this
-module instead of maintaining their own transcript grammars.
+properties repaired. `mevedel-transcript-restore.el` owns restoration of
+persisted bounds and invokes that normalizer, so persistence and the view do
+not maintain their own transcript grammars. Compaction consumes the same
+canonical spans directly.
 
 View rendering, session prompt indexing/rewind, and compaction all read
 these shared spans. They keep their own policies: the view groups and

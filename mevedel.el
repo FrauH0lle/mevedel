@@ -56,7 +56,9 @@
 (require 'mevedel-agents)
 (require 'mevedel-presets)
 (require 'mevedel-transcript)
+(require 'mevedel-transcript-restore)
 (require 'mevedel-compact)
+(require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
 (require 'mevedel-reminders)
 (require 'mevedel-skills)
@@ -107,9 +109,9 @@
 (declare-function mevedel-tool-repair-uninstall-shape-adapter
                   "mevedel-tool-repair" ())
 
-;; `mevedel-view'
-(declare-function mevedel-view-install-gptel-stream-advice "mevedel-view" ())
-(declare-function mevedel-view-uninstall-gptel-stream-advice "mevedel-view" ())
+;; `mevedel-view-stream'
+(declare-function mevedel-view-stream-install "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-uninstall "mevedel-view-stream" ())
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-install-slash-command "mevedel-worktree" ())
@@ -554,8 +556,7 @@ always prompt for the session name."
   (mevedel-skills-install-hot-reload)
 
   ;; Install view-specific gptel stream repair advice.
-  (require 'mevedel-view)
-  (mevedel-view-install-gptel-stream-advice)
+  (mevedel-view-stream-install)
 
   ;; Best-effort save of live sessions on Emacs exit.  The hook itself
   ;; is installed at `mevedel-session-persistence' file-load time so
@@ -615,8 +616,8 @@ always prompt for the session name."
   (mevedel-skills-uninstall-hot-reload)
 
   ;; Remove view-specific gptel stream repair advice
-  (when (featurep 'mevedel-view)
-    (mevedel-view-uninstall-gptel-stream-advice))
+  (when (featurep 'mevedel-view-stream)
+    (mevedel-view-stream-uninstall))
 
   ;; Remove main-agent error termination advice
   (advice-remove 'gptel--handle-error #'mevedel--main-fsm-on-error)

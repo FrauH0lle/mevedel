@@ -148,6 +148,8 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
   (mevedel-tools--validate-params callback mevedel-tools--ask-user
     (questions (vectorp . "array")))
 
+          (require 'mevedel-interaction-prompt)
+
           (let* ((source-buffer (current-buffer))
                  (questions-list (append questions nil)) ; Convert vector to list
                  (answers (make-vector (length questions-list) nil))

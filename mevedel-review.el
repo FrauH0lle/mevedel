@@ -112,10 +112,15 @@
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view"
                   (input display-text &optional hook-context))
-(declare-function mevedel-view--ensure-request-progress
-                  "mevedel-view" (&optional data-buf status))
-(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view--ensure-request-progress
+                  "mevedel-view-stream" (&optional data-buf status))
+(declare-function mevedel-view--stop-request-progress
+                  "mevedel-view-stream" ())
+
+;; `mevedel-view-history'
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
 
 

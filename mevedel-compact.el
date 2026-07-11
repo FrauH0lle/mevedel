@@ -124,9 +124,13 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
-(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view" ())
-(declare-function mevedel-view--update-spinner "mevedel-view" (status))
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view--stop-request-progress
+                  "mevedel-view-stream" ())
+(declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
+(declare-function mevedel-view--update-spinner
+                  "mevedel-view-stream" (status))
 
 
 (defcustom mevedel-compact-context-limit nil

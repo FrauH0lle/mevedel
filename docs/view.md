@@ -1,9 +1,10 @@
 # View Buffer
 
 `mevedel-view.el` renders a compact user-facing projection of the
-authoritative gptel data buffer. The data buffer remains the
-model-visible transcript; the view buffer owns display, interaction
-controls, and the input zone.
+authoritative gptel data buffer. `mevedel-view-stream.el` owns streaming,
+request progress, and gptel stream integration. The data buffer remains the
+model-visible transcript; the view buffer owns display, interaction controls,
+and the input zone.
 
 ## Buffer Roles
 
@@ -45,6 +46,10 @@ hook-context, render-data, prompt, and ignored-range recognition live in
 view of the buffer. Hidden audit record grammar and
 attachment spans live in `mevedel-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
+
+Before rendering a restored transcript, `mevedel-transcript-restore.el`
+recovers gptel bounds and normalizes their text properties through that same
+canonical transcript grammar. Restoration does not maintain a second parser.
 
 ## Zones
 
@@ -174,7 +179,9 @@ are intentionally outside this chrome-fragment model even when they are
 clickable or collapsible. They are projections of the authoritative data
 buffer and keep source-coordinate disclosure state. The incremental renderer
 (`mevedel-view--render-incremental`) remains the correctness path for streaming
-assistant text; fragment updates should not bypass the data-buffer transcript.
+assistant text. `mevedel-view-stream.el` schedules those updates and owns the
+gptel stream advice, request-progress state, and pending-tool live rows;
+fragment updates should not bypass the data-buffer transcript.
 Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
@@ -444,9 +451,10 @@ buffer while that buffer is available. Terminal agents open a rendered
 read-only transcript view from the saved transcript file through
 `mevedel-view-open-agent-transcript`.
 
-Transcript views restore only the gptel bounds/properties needed for
-rendering. They do not restore backend/tool objects or become live agent
-buffers themselves.
+`mevedel-transcript-restore.el` restores only the gptel bounds/properties
+needed for rendering and normalizes them through `mevedel-transcript.el`'s
+canonical grammar. Transcript views do not restore backend/tool objects or
+become live agent buffers themselves.
 
 When `SubagentStart` injects hook context, the parent transcript renders a
 compact audit note on the Agent tool row, and the child transcript renders

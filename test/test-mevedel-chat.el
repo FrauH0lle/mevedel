@@ -72,7 +72,7 @@
 			      #'ignore)
 			     ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber)
 			      #'ignore)
-			     ((symbol-function 'mevedel-view-uninstall-gptel-stream-advice)
+			     ((symbol-function 'mevedel-view-stream-uninstall)
 			      #'ignore))
 		     (mevedel-uninstall))
 		   (should called)))
@@ -208,6 +208,16 @@
 				       gptel-post-tool-call-functions))
 			 (should (memq #'mevedel-tool-repair-clear-ledger
 				       gptel-post-response-functions))
+			 (should (memq #'mevedel-view-stream-render-response
+				       gptel-post-response-functions))
+			 (should (memq #'mevedel-view-stream-spinner-hook
+				       gptel-pre-tool-call-functions))
+			 (should (memq #'mevedel-view-stream-pre-tool
+				       gptel-pre-tool-call-functions))
+			 (should (memq #'mevedel-view-stream-post-tool
+				       gptel-post-tool-call-functions))
+			 (should (memq #'mevedel-view-stream-schedule
+				       gptel-post-stream-hook))
 			 (should (memq #'mevedel-tool-repair-clear-ledger
 				       kill-buffer-hook)))
 		     (delete-directory root t))))
