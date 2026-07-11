@@ -140,18 +140,22 @@
 (declare-function mevedel-session-persistence-header-segment
                   "mevedel-session-persistence" ())
 
-;; `mevedel-skills'
-(declare-function mevedel-skills--refresh-view-input-prompt
-                  "mevedel-skills" ())
-(declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
-(declare-function mevedel-skills-install-reminder "mevedel-skills" (session))
-(declare-function mevedel-slash-capf "mevedel-skills" ())
-
 ;; `mevedel-skills-core'
 (declare-function mevedel-skills--release-on-kill
                   "mevedel-skills-core" ())
 (declare-function mevedel-skills-install "mevedel-skills-core"
                   (session &optional buffer))
+
+;; `mevedel-skills-prompt'
+(declare-function mevedel-skills-install-activation-hook
+                  "mevedel-skills-prompt" ())
+(declare-function mevedel-skills-install-reminder
+                  "mevedel-skills-prompt" (session))
+
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills--refresh-view-input-prompt
+                  "mevedel-skills-ui" ())
+(declare-function mevedel-slash-capf "mevedel-skills-ui" ())
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))

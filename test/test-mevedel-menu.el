@@ -20,7 +20,7 @@
 (require 'mevedel-menu)
 (require 'mevedel-mentions)
 (require 'mevedel-plugins)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
 (require 'mevedel-tools-list)

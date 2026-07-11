@@ -12,7 +12,7 @@
 (require 'mevedel-mentions)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-worktree)
 (require 'gptel-request)
 (require 'helpers

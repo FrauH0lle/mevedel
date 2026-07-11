@@ -12,7 +12,7 @@
   (require 'cl-lib))
 
 (require 'subr-x)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 (require 'mevedel-system)
 

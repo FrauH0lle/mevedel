@@ -25,7 +25,7 @@
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-registry)
 (require 'mevedel-mentions)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-workspace)
 (require 'mevedel-file-state)
 (require 'mevedel-session-persistence)

@@ -18,7 +18,7 @@
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
 (require 'mevedel-hooks)
-(require 'mevedel-skills)
+(require 'mevedel-skills-prompt)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
 (require 'helpers

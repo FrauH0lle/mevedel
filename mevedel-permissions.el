@@ -40,9 +40,9 @@
 (declare-function mevedel-reminders-make-auto-mode-exit
                   "mevedel-reminders" ())
 
-;; `mevedel-skills'
+;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
-                  "mevedel-skills" ())
+                  "mevedel-skills-ui" ())
 
 ;; `mevedel-tool-plan'
 (declare-function mevedel-plan-mode-enter

@@ -14,7 +14,7 @@
 
 (require 'json)
 (require 'subr-x)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-structs)
 
 ;; `gptel'
@@ -59,9 +59,6 @@
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
 
-;; `mevedel-skills'
-(defvar mevedel-slash-commands)
-
 ;; `mevedel-skills-core'
 (declare-function copy-mevedel-skill "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill--create "mevedel-skills-core" (&rest slots))
@@ -82,6 +79,9 @@
 (declare-function mevedel-skills--insert-fork-result
                   "mevedel-skills-invoke" (outcome))
 (declare-function mevedel-skills-invoke "mevedel-skills-invoke" t t)
+
+;; `mevedel-skills-ui'
+(defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin

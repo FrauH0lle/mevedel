@@ -72,9 +72,9 @@
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
 
-;; `mevedel-skills'
-(declare-function mevedel-skills-count-label "mevedel-skills" (session))
-(declare-function mevedel-skills-list-open "mevedel-skills"
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills-count-label "mevedel-skills-ui" (session))
+(declare-function mevedel-skills-list-open "mevedel-skills-ui"
                   (&optional context))
 
 ;; `mevedel-structs'
@@ -258,7 +258,7 @@
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
-  (require 'mevedel-skills)
+  (require 'mevedel-skills-ui)
   (let ((context (mevedel-menu--context)))
     (mevedel-menu--state-description
      "Skills"
@@ -406,7 +406,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
       ('model
        (transient-setup 'mevedel-menu--model))
       ('skills
-       (require 'mevedel-skills)
+       (require 'mevedel-skills-ui)
        (mevedel-cockpit-call-in-data
         context #'mevedel-skills-list-open context))
       ('plugins

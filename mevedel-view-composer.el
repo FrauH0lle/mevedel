@@ -80,16 +80,6 @@
 (defvar mevedel-session--fork-pending)
 (defvar mevedel-session--read-only-mode)
 
-;; `mevedel-skills'
-(declare-function mevedel-skills--parse-slash-line "mevedel-skills" (text))
-(declare-function mevedel-skills--remaining-argument-hint
-                  "mevedel-skills" (skill arguments))
-(declare-function mevedel-skills--slash-capf
-                  "mevedel-skills"
-                  (buffer session local-commands &optional input-start))
-(declare-function mevedel-skills-install-font-lock "mevedel-skills" ())
-(defvar mevedel-slash-commands)
-
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill
                   "mevedel-skills-core" (session name))
@@ -115,6 +105,16 @@
 (declare-function mevedel-skills-inline-display-text
                   "mevedel-skills-invoke" (name arguments))
 (declare-function mevedel-skills-invoke "mevedel-skills-invoke" t t)
+
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills--parse-slash-line "mevedel-skills-ui" (text))
+(declare-function mevedel-skills--remaining-argument-hint
+                  "mevedel-skills-ui" (skill arguments))
+(declare-function mevedel-skills--slash-capf
+                  "mevedel-skills-ui"
+                  (buffer session local-commands &optional input-start))
+(declare-function mevedel-skills-install-font-lock "mevedel-skills-ui" ())
+(defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -720,7 +720,7 @@ ARG is passed through from the interactive prefix."
   "Initialize composer editing support in the current chat view."
   (unless mevedel-view--agent-transcript-p
     (require 'mevedel-mentions)
-    (require 'mevedel-skills)
+    (require 'mevedel-skills-ui)
     (require 'mevedel-transcript)
     (require 'mevedel-transcript-audit)
     (require 'mevedel-utilities)

@@ -189,8 +189,9 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel-session-persistence)
 
-;; `mevedel-skills'
-(declare-function mevedel-skills-install-activation-hook "mevedel-skills" ())
+;; `mevedel-skills-prompt'
+(declare-function mevedel-skills-install-activation-hook
+                  "mevedel-skills-prompt" ())
 
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task--refresh-display "mevedel-tool-task" ())
@@ -368,7 +369,7 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
       (when parent-agent-specs
         (setq-local mevedel-agent-exec--agents parent-agent-specs))
       (setq-local mevedel--agent-invocation invocation)
-      (when (require 'mevedel-skills nil t)
+      (when (require 'mevedel-skills-prompt nil t)
         (mevedel-skills-install-activation-hook))
       (require 'mevedel-tool-repair)
       (add-hook 'gptel-pre-tool-call-functions

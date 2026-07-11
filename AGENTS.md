@@ -106,7 +106,8 @@ Data model
   mevedel-reminders.el        system-reminder injection
   mevedel-skills-core.el      skill model, discovery, state, reload
   mevedel-skills-invoke.el    skill preparation, invocation, model tools
-  mevedel-skills.el           slash/editor UI, roster, reminders
+  mevedel-skills-prompt.el    model-visible roster, reminders, activation
+  mevedel-skills-ui.el        slash commands, cockpit, completion, font-lock
 
 Chat / view
   mevedel-chat.el             session lifecycle

@@ -72,8 +72,9 @@
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
 
-;; `mevedel-skills'
-(declare-function mevedel-skills--refresh-view-input-prompt "mevedel-skills" ())
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills--refresh-view-input-prompt
+                  "mevedel-skills-ui" ())
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)

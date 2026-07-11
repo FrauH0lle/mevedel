@@ -32,7 +32,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-view)
 (require 'mevedel-mentions)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 
 (defun test-pq--make-session (&optional rules)
   "Create a fresh queue-test session, optionally with RULES."

@@ -10,7 +10,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-presets)
-(require 'mevedel-skills)
+(require 'mevedel-skills-ui)
 (require 'mevedel-reminders)
 (require 'mevedel-view)
 (require 'mevedel-view-history)
