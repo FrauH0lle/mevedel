@@ -21,27 +21,37 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-queue)
 
-(declare-function mevedel-permission--prompt-async-attributed "mevedel-tool-ui"
+;; `mevedel-permission-prompt'
+(declare-function mevedel-permission--prompt-async-attributed
+                  "mevedel-permission-prompt"
                   (tool-name path include-always origin cont
                              &optional count entry))
-(declare-function mevedel-permission--prompt-async-bash "mevedel-tool-ui"
+(declare-function mevedel-permission--prompt-async-bash
+                  "mevedel-permission-prompt"
                   (command dangerous include-always origin cont
                            &optional count entry))
-(declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
-                  (expression callback &optional origin count entry
-                              mode preserve-ui))
+
+;; `mevedel-permissions'
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
 (declare-function mevedel-permission--checker-args
                   "mevedel-permissions" (context))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
+
+;; `mevedel-structs'
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+
+;; `mevedel-tool-exec'
+(declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
+                  (expression callback &optional origin count entry
+                              mode preserve-ui))
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &rest args))
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+
+;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
-
-(defvar mevedel--session)
 
 (defvar mevedel-permission-queue--spec
   (mevedel-queue-spec--create
@@ -169,6 +179,7 @@ Dispatches on entry's `:kind' via `--render-entry'."
 
 (defun mevedel-permission-queue--render-generic (entry)
   "Render a generic-kind permission ENTRY as the visible head."
+  (require 'mevedel-permission-prompt)
   (let ((tool-name (plist-get entry :tool-name))
         (path (plist-get entry :specifier-value))
         (include-always (plist-get entry :include-always))
@@ -188,6 +199,7 @@ non-dangerous commands, `allow-session' / `always-allow' produce
 pattern rules.  If the helper is unavailable, signal so the shared
 queue engine removes the head and returns the pinned tool-level
 denial."
+  (require 'mevedel-permission-prompt)
   (let ((command (plist-get entry :command))
         (dangerous (plist-get entry :dangerous))
         (include-always (plist-get entry :include-always))

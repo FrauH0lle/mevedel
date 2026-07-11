@@ -135,7 +135,11 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-code.el        XrefReferences, XrefDefinitions, Imenu, Treesitter
   mevedel-tool-exec.el        Bash, Eval
   mevedel-tool-web.el         WebSearch, WebFetch, YouTube
-  mevedel-tool-ui.el          Ask, RequestAccess, Agent, SendMessage, ToolSearch
+  mevedel-interaction-prompt.el  shared interaction overlay lifecycle
+  mevedel-permission-prompt.el   generic, Bash, and Eval permission prompt UI
+  mevedel-tool-access.el      RequestAccess prompt, dedup, handler, renderer
+  mevedel-tool-ask.el         Ask questionnaire, handler, renderer
+  mevedel-tool-ui.el          Agent/StopAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-plan.el        conversational Plan mode and plan approval queue
   mevedel-tool-tutor.el       GetHints, RecordHint

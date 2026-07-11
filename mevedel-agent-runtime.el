@@ -105,6 +105,10 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
+;; `mevedel-interaction-prompt'
+(declare-function mevedel--prompt--data-buffer
+                  "mevedel-interaction-prompt" (&optional buffer))
+
 ;; `mevedel-models'
 (declare-function mevedel-model-tier-selector "mevedel-models" (tier))
 

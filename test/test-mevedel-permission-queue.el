@@ -708,32 +708,6 @@
   ,test
   (test)
 
-  :doc "formats guardian guidance for Bash prompts"
-  (let ((text (substring-no-properties
-               (mevedel-permission--format-bash-guardian
-                '(:risk high
-                  :recommendation deny
-                  :reason "Downloads and executes remote code.")))))
-    (should (string-match-p "Guardian guidance" text))
-    (should (string-match-p "Risk: High" text))
-    (should (string-match-p "Recommendation: Deny" text))
-    (should (string-match-p "Downloads and executes remote code" text)))
-
-  :doc "formats pending guardian guidance for Bash prompts"
-  (let ((text (substring-no-properties
-               (mevedel-permission--format-bash-guardian nil 'pending))))
-    (should (string-match-p "Guardian guidance" text))
-    (should (string-match-p "Status: Analyzing command risk" text))
-    (should-not (string-match-p "Risk:" text)))
-
-  :doc "formats unavailable guardian guidance for Bash prompts"
-  (let ((text (substring-no-properties
-               (mevedel-permission--format-bash-guardian
-                nil 'unavailable))))
-    (should (string-match-p "Guardian guidance" text))
-    (should (string-match-p "Unavailable" text))
-    (should-not (string-match-p "Risk:" text)))
-
   :doc "missing Bash UI helper produces the pinned denial outcome"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)

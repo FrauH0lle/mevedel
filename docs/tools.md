@@ -135,6 +135,20 @@ newly loaded tool in its next tool call. Search terms can be exact tool
 names (`XrefReferences`, `Imenu`, `function_source`) or capability
 families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
 
+### Interaction tool ownership
+
+`mevedel-tool-ui.el` assembles the user-interaction tool surface and owns only
+the Agent, StopAgent, ToolSearch, and SendMessage adapters. Ask's questionnaire,
+handler, renderer, and schema live in `mevedel-tool-ask.el`. RequestAccess's
+deduplication cache, access grant, diagnostics, prompt, handler, renderer, and
+schema live in `mevedel-tool-access.el`.
+
+All direct user interactions share the settlement and cancellation primitive in
+`mevedel-interaction-prompt.el`. Domain owners supply their own text, keymaps,
+outcome translation, and persistence effects; the shared primitive owns only
+overlay identity, exactly-once settlement, request-local cancellation, and the
+standard frame.
+
 ## Native Tools Surface
 
 The session cockpit `t Tools` row opens the native `*mevedel tools*` surface

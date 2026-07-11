@@ -83,6 +83,10 @@
 (declare-function mevedel-agent-runtime--bwait-injected-table
                   "mevedel-agent-runtime" (source))
 
+;; `mevedel-tool-access'
+(declare-function mevedel--clear-pending-access-requests
+                  "mevedel-tool-access" (&rest _))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-resolve "mevedel-tool-registry" (specs))
 (declare-function mevedel-tool-resolve-gptel "mevedel-tool-registry" (specs))
@@ -90,9 +94,6 @@
 (declare-function mevedel-tool-description "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-category "mevedel-tool-registry" (cl-x) t)
-
-;; `mevedel-tool-ui'
-(declare-function mevedel--clear-pending-access-requests "mevedel-tool-ui" (&rest _))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agents--setup-for-request "mevedel-agents"

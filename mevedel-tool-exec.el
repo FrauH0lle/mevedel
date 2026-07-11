@@ -29,74 +29,79 @@
 (defvar gptel-use-tools)
 (defvar read-eval)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-agent-id
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-skill-permission-rules
+                  "mevedel-agents" (cl-x) t)
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-selector
                   "mevedel-models" (selector &optional noerror))
 (declare-function mevedel-model-workload-default-selector
                   "mevedel-models" (workload))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--collect-buckets
-                  "mevedel-permissions"
-                  (invocation-rules request-rules
-                                    session-rules persistent-rules))
-(declare-function mevedel-permission--any-deny "mevedel-permissions"
-                  (buckets tool-name path pattern domain name))
-(declare-function mevedel-permission--first-non-nil-action
-                  "mevedel-permissions"
-                  (buckets tool-name path pattern domain name skip-keys))
-(declare-function mevedel-permission--rules-action "mevedel-permissions"
-                  (rules tool-name &rest keys))
-(declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
-                  (workspace))
-(declare-function mevedel-permission--plan-mode-skip-keys
-                  "mevedel-permissions" (mode read-only-p))
-(declare-function mevedel-permission--path-protected-p
-                  "mevedel-permissions" (path))
-(declare-function mevedel-permission--normalize-outcome
-                  "mevedel-permissions" (outcome))
-(defvar mevedel-permission-rules)
-(defvar mevedel-permission-mode)
-(defvar mevedel-protected-paths)
-(defvar mevedel-bash-dangerous-commands)
+;; `mevedel-permission-prompt'
+(declare-function mevedel-permission--build-attribution-line
+                  "mevedel-permission-prompt" (origin))
+(declare-function mevedel-permission--prompt-async-eval
+                  "mevedel-permission-prompt"
+                  (content cont &optional count entry))
 
-;; `mevedel-structs'
-(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--session)
-(defvar mevedel--workspace)
-
-;; `mevedel-tool-ui'
+;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
                   (entry &optional session))
 (declare-function mevedel-permission-queue--current-session
                   "mevedel-permission-queue" ())
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+
+;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" t t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-skill-permission-rules
-                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-permission--any-deny "mevedel-permissions"
+                  (buckets tool-name path pattern domain name))
+(declare-function mevedel-permission--collect-buckets
+                  "mevedel-permissions"
+                  (invocation-rules request-rules
+                                    session-rules persistent-rules))
+(declare-function mevedel-permission--first-non-nil-action
+                  "mevedel-permissions"
+                  (buckets tool-name path pattern domain name skip-keys))
+(declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
+                  (workspace))
+(declare-function mevedel-permission--normalize-outcome
+                  "mevedel-permissions" (outcome))
+(declare-function mevedel-permission--path-protected-p
+                  "mevedel-permissions" (path))
+(declare-function mevedel-permission--plan-mode-skip-keys
+                  "mevedel-permissions" (mode read-only-p))
+(declare-function mevedel-permission--rules-action "mevedel-permissions"
+                  (rules tool-name &rest keys))
+(defvar mevedel-bash-dangerous-commands)
+(defvar mevedel-permission-mode)
+(defvar mevedel-permission-rules)
+(defvar mevedel-protected-paths)
+
+;; `mevedel-structs'
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
-(defvar mevedel--agent-invocation)
-(declare-function mevedel-permission--build-attribution-line
-                  "mevedel-tool-ui" (origin))
-(declare-function mevedel-permission--prompt-async-eval
-                  "mevedel-tool-ui" (content cont &optional count entry))
-
-;; `mevedel-view'
-(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--session)
+(defvar mevedel--workspace)
 
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
+
+;; `mevedel-view'
+(declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 
 
 ;;
@@ -1247,6 +1252,8 @@ renders the same attribution line used by generic and Bash permission
 prompts.  COUNT is the permission queue depth for the composite
 interaction-zone counter.  ENTRY identifies the queued prompt.  MODE and
 PRESERVE-UI describe the requested execution scope."
+  (unless (fboundp 'mevedel-permission--prompt-async-eval)
+    (require 'mevedel-permission-prompt))
   (let* ((lines (split-string expression "\n"))
          (long-p (> (length lines) mevedel-eval-expression-display-limit))
          (display-expr (if long-p

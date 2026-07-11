@@ -20,15 +20,19 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
 
-;; `mevedel-structs'
-(defvar mevedel--session)
-(defvar mevedel--view-buffer)
-(defvar mevedel--agent-invocation)
+;; `mevedel-agent-runtime'
+(declare-function mevedel-agent-runtime-display-label
+                  "mevedel-agent-runtime" (agent-id))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
+
+;; `mevedel-structs'
+(defvar mevedel--agent-invocation)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-view'
 (defvar mevedel-view--status-marker)
@@ -40,10 +44,6 @@
                   "mevedel-view-zone" (key &optional default))
 (declare-function mevedel-view-zone-set-collapse-state
                   "mevedel-view-zone" (key collapsed))
-
-;; `mevedel-tool-ui'
-(declare-function mevedel-agent-runtime-display-label
-                  "mevedel-tool-ui" (agent-id))
 
 
 ;;
