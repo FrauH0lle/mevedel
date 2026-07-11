@@ -1572,49 +1572,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
         (test-mevedel-session-persistence--reset-instructions)
         (mevedel-workspace-clear-registry)))))
 
-(mevedel-deftest mevedel-session-persistence--sanitize-gptel-bounds ()
-  ,test
-  (test)
-  :doc "clamps stale GPTEL_BOUNDS ranges before gptel restore"
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n"
-            ":GPTEL_BOUNDS: ((response (2 999) (999 1000)) (ignore (1 2)))\n"
-            ":END:\n"
-            "Body\n")
-    (mevedel-session-persistence--sanitize-gptel-bounds)
-    (let* ((max (point-max))
-           (bounds (read (org-entry-get (point-min) "GPTEL_BOUNDS")))
-           (response (alist-get 'response bounds)))
-      (should (= max (cadar response)))
-      (should (= 1 (length response)))
-      (dolist (entry bounds)
-        (dolist (range (cdr entry))
-          (should (<= (cadr range) max))))))
-  :doc "deletes unreadable GPTEL_BOUNDS"
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n"
-            ":GPTEL_BOUNDS: #<marker>\n"
-            ":END:\n"
-            "Body\n")
-    (mevedel-session-persistence--sanitize-gptel-bounds)
-    (should-not (org-entry-get (point-min) "GPTEL_BOUNDS")))
-  :doc "does not mark resumed buffers modified while clamping bounds"
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n"
-            ":GPTEL_BOUNDS: ((response (2 999)))\n"
-            ":END:\n"
-            "Body\n")
-    (set-buffer-modified-p nil)
-    (mevedel-session-persistence--sanitize-gptel-bounds)
-    (should-not (buffer-modified-p))
-    (pcase-let ((`((response (,beg ,end)))
-                 (read (org-entry-get (point-min) "GPTEL_BOUNDS"))))
-      (should (= beg 2))
-      (should (= end (point-max))))))
-
 (mevedel-deftest mevedel-session-persistence--restore-gptel-state ()
   ,test
   (test)
@@ -1654,49 +1611,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
       (search-forward "Focused tests")
       (should (eq (get-text-property (match-beginning 0) 'gptel)
                   'response)))))
-
-:doc "preserves nested reasoning tools when restore order overwrites props"
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n"
-            ":GPTEL_BOUNDS: ((tool (1 999 \"call_read\")))\n"
-            ":END:\n")
-    (let (reasoning-start tool-start tool-end reasoning-tail-start reasoning-end)
-      (setq reasoning-start (point))
-      (insert "#+begin_reasoning\nBefore tool.\n")
-      (setq tool-start (point))
-      (insert "#+begin_tool (Read :file_path \"a.el\")\n"
-              "(:name \"Read\" :args (:file_path \"a.el\"))\n\n"
-              "contents\n"
-              "#+end_tool\n")
-      (setq tool-end (point))
-      (setq reasoning-tail-start (point))
-      (insert "After tool.\n#+end_reasoning\n")
-      (setq reasoning-end (point))
-      (put-text-property reasoning-start reasoning-end 'gptel 'ignore)
-      (mevedel-transcript-normalize-properties)
-      (cl-labels
-          ((all-prop-p
-            (start end expected)
-            (let ((pos start)
-                  (ok t))
-              (while (and ok (< pos end))
-                (unless (equal (get-text-property pos 'gptel) expected)
-                  (setq ok nil))
-                (setq pos (or (next-single-property-change
-                               pos 'gptel nil end)
-                              end)))
-              ok)))
-        (should (all-prop-p reasoning-start tool-start 'ignore))
-        (pcase-let ((`(:prefix-start ,prefix-start :prefix-end ,prefix-end
-                       :tool-start ,body-start :tool-end ,body-end
-                       :suffix-start ,suffix-start :suffix-end ,suffix-end)
-                     (mevedel-transcript--org-tool-block-parts
-                      tool-start tool-end)))
-          (should (all-prop-p prefix-start prefix-end 'ignore))
-          (should (all-prop-p body-start body-end '(tool . "call_read")))
-          (should (all-prop-p suffix-start suffix-end 'ignore)))
-        (should (all-prop-p reasoning-tail-start reasoning-end 'ignore)))))
 
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test

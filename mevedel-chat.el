@@ -182,17 +182,20 @@
                   (display-text data-turn-start &optional kind hook-context
                                 no-spinner))
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
-(declare-function mevedel-view--post-tool-hook "mevedel-view" (args))
-(declare-function mevedel-view--pre-tool-hook "mevedel-view" (args))
-(declare-function mevedel-view--render-response "mevedel-view" (start end))
-(declare-function mevedel-view--schedule-stream-render "mevedel-view" ())
-(declare-function mevedel-view--spinner-hook "mevedel-view" (info))
-(declare-function mevedel-view--stop-request-progress "mevedel-view" ())
-(declare-function mevedel-view--stop-spinner "mevedel-view" ())
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 (defvar mevedel-agent-runtime--fsms)
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view-stream-post-tool "mevedel-view-stream" (args))
+(declare-function mevedel-view-stream-pre-tool "mevedel-view-stream" (args))
+(declare-function mevedel-view-stream-render-response
+                  "mevedel-view-stream" (start end))
+(declare-function mevedel-view-stream-schedule "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-spinner-hook
+                  "mevedel-view-stream" (info))
+(declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
@@ -426,6 +429,7 @@ session struct."
     ;; here pulls in `kill-buffer-hook' and
     ;; ensures handlers can reach the save function.
     (require 'mevedel-session-persistence)
+    (require 'mevedel-view-stream)
     ;; gptel owns its `before-save-hook'; mevedel advises the save
     ;; function so dynamic preset system prompts are not serialized as
     ;; frozen `GPTEL_SYSTEM' strings.
@@ -438,7 +442,8 @@ session struct."
     ;; Rendering hooks for the view buffer.  Plan detection runs after the
     ;; normal view render so the approval prompt cannot be cleared by the
     ;; render path's interaction-zone rebuild.
-    (add-hook 'gptel-post-response-functions #'mevedel-view--render-response nil t)
+    (add-hook 'gptel-post-response-functions
+              #'mevedel-view-stream-render-response nil t)
     (add-hook 'gptel-post-response-functions
               #'mevedel-plan-mode--post-response t t)
     ;; Repair raw model input before view hooks observe the call and before
@@ -451,16 +456,19 @@ session struct."
     (add-hook 'gptel-post-response-functions
               #'mevedel-tool-repair-clear-ledger nil t)
     (add-hook 'kill-buffer-hook #'mevedel-tool-repair-clear-ledger nil t)
-    (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--spinner-hook nil t)
+    (add-hook 'gptel-pre-tool-call-functions
+              #'mevedel-view-stream-spinner-hook nil t)
     ;; Incremental view updates on tool boundaries so the user sees
     ;; progress per tool call, not only at turn end.
-    (add-hook 'gptel-pre-tool-call-functions #'mevedel-view--pre-tool-hook nil t)
-    (add-hook 'gptel-post-tool-call-functions #'mevedel-view--post-tool-hook nil t)
+    (add-hook 'gptel-pre-tool-call-functions
+              #'mevedel-view-stream-pre-tool nil t)
+    (add-hook 'gptel-post-tool-call-functions
+              #'mevedel-view-stream-post-tool nil t)
     ;; Debounced mid-turn text update: streams text chunks into the
     ;; view a few times per second while the LLM is producing text.
     ;; Tool-boundary hooks cancel the pending timer and render
     ;; immediately, so this never delays tool-call feedback.
-    (add-hook 'gptel-post-stream-hook #'mevedel-view--schedule-stream-render nil t)
+    (add-hook 'gptel-post-stream-hook #'mevedel-view-stream-schedule nil t)
     ;; Install slash-command and $skill completion-at-point.
     (add-hook 'completion-at-point-functions #'mevedel-slash-capf nil t)
     ;; Populate session skills from workspace skill dirs
@@ -1178,11 +1186,7 @@ BUF defaults to the current buffer if not specified."
                                                 chat-buffer))
                   (_ (buffer-live-p view-buf)))
         (with-current-buffer view-buf
-          (cond
-           ((fboundp 'mevedel-view--stop-request-progress)
-            (mevedel-view--stop-request-progress))
-           ((fboundp 'mevedel-view--stop-spinner)
-            (mevedel-view--stop-spinner)))))
+          (mevedel-view-stream-stop)))
       ;; Phase 1: drain the request's cancellers.  Each canceller
       ;; settles its owned overlays with `aborted' so FSMs parked in
       ;; TOOL can advance out; preview-mode's canceller invokes

@@ -134,6 +134,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
     (content include-always cont
              &optional count entry suppress-allow-session once-only)
   "Display a permission prompt for CONTENT and call CONT with its outcome."
+  (require 'mevedel-interaction-prompt)
   (let* ((source-buffer (current-buffer))
          (target-buf
           (if (fboundp 'mevedel-view--interaction-target-buffer)

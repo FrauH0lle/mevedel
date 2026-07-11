@@ -46,6 +46,12 @@
 
 (require 'mevedel-transcript)
 
+;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-restore-properties
+                  "mevedel-transcript-restore" (&optional only-if-missing))
+(declare-function mevedel-transcript-restore-sanitize-bounds
+                  "mevedel-transcript-restore" ())
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -1126,10 +1132,11 @@ look like it needs saving."
   (let ((was-modified (buffer-modified-p)))
     (unwind-protect
         (progn
-          (mevedel-session-persistence--sanitize-gptel-bounds)
+          (require 'mevedel-transcript-restore)
+          (mevedel-transcript-restore-sanitize-bounds)
           (unless (bound-and-true-p gptel-mode)
             (gptel-mode +1))
-          (mevedel-transcript-normalize-properties))
+          (mevedel-transcript-restore-properties t))
       (set-buffer-modified-p was-modified))))
 
 ;;
@@ -1727,73 +1734,6 @@ buffers are locked to `org-mode' by `mevedel--chat-buffer-setup')."
                     (or (mevedel-session-current-segment session) 1)))
     (org-entry-put (point-min) "MEVEDEL_SEGMENT_CREATED_AT"
                    (format-time-string "%FT%H-%M-%S"))))
-
-(defun mevedel-session-persistence--sanitize-gptel-bounds-once ()
-  "Run one `GPTEL_BOUNDS' sanitation pass.
-Return non-nil when the property drawer changed."
-  (when-let* ((raw (org-entry-get (point-min) "GPTEL_BOUNDS")))
-    (let* ((invalid (make-symbol "invalid"))
-           (bounds (condition-case nil
-                       (read raw)
-                     (error invalid)))
-           changed)
-      (if (or (eq bounds invalid)
-              (not (listp bounds)))
-          (progn
-            (org-entry-delete (point-min) "GPTEL_BOUNDS")
-            (setq changed t))
-        (cl-labels
-            ((sanitize-range (range)
-               (when (and (consp range)
-                          (integerp (car range))
-                          (integerp (cadr range)))
-                 (let ((start (max (point-min)
-                                   (min (car range) (point-max))))
-                       (end (max (point-min)
-                                 (min (cadr range) (point-max)))))
-                   (when (< start end)
-                     (append (list start end) (cddr range))))))
-             (sanitize-entry (entry)
-               (when (consp entry)
-                 (let (ranges)
-                   (dolist (range (cdr entry))
-                     (when-let* ((sanitized (sanitize-range range)))
-                       (push sanitized ranges)))
-                   (when ranges
-                     (cons (car entry) (nreverse ranges)))))))
-          (let (sanitized)
-            (dolist (entry bounds)
-              (when-let* ((sanitized-entry (sanitize-entry entry)))
-                (push sanitized-entry sanitized)))
-            (setq sanitized (nreverse sanitized))
-            (unless (equal sanitized bounds)
-              (if sanitized
-                  (org-entry-put (point-min) "GPTEL_BOUNDS"
-                                 (prin1-to-string sanitized))
-                (org-entry-delete (point-min) "GPTEL_BOUNDS"))
-              (setq changed t)))))
-      changed)))
-
-(defun mevedel-session-persistence--sanitize-gptel-bounds ()
-  "Clamp malformed top-level `GPTEL_BOUNDS' ranges to the current buffer.
-
-Older snapshots can contain byte-oriented or otherwise stale bounds.
-`gptel-org--restore-state' applies them as character positions, so any
-range past `point-max' aborts state restoration during resume.  Rewriting
-the drawer can itself move `point-max', so repeat until the serialized
-bounds settle."
-  (when (derived-mode-p 'org-mode)
-    (let ((was-modified (buffer-modified-p))
-          (changed nil)
-          (again t)
-          (attempts 0))
-      (unwind-protect
-          (while (and again (< attempts 8))
-            (setq attempts (1+ attempts)
-                  again (mevedel-session-persistence--sanitize-gptel-bounds-once)
-                  changed (or changed again)))
-        (set-buffer-modified-p was-modified))
-      changed)))
 
 (defun mevedel-session-persistence--segment-summary-bounds ()
   "Return bounds for the leading segment compaction summary, or nil.
@@ -3219,13 +3159,14 @@ have been excluded."
               (mevedel--chat-buffer-disable-org-element-cache))
             ;; Force re-restoration of GPTEL_BOUNDS from the org property.
             (when (fboundp 'gptel-org--restore-state)
-              (mevedel-session-persistence--sanitize-gptel-bounds)
+              (require 'mevedel-transcript-restore)
+              (mevedel-transcript-restore-sanitize-bounds)
               (gptel-org--restore-state))))
         (let ((cutoff
                (mevedel-session-persistence--find-turn-cutoff file-turn-n)))
           (when (and cutoff (< cutoff (point-max)))
             (delete-region cutoff (point-max))))
-        (mevedel-transcript-normalize-properties))
+        (mevedel-transcript-restore-properties t))
       ;; Disconnect from the original file so saves can't corrupt it.
       (setq buffer-file-name nil)
       (set-buffer-modified-p nil)

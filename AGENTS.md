@@ -109,7 +109,9 @@ Chat / view
   mevedel-chat.el             session lifecycle
   mevedel-transcript.el       transcript span classification for view/persistence/compaction
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
+  mevedel-transcript-restore.el  transcript property restoration via the canonical grammar
   mevedel-view.el             compact user-facing view buffer
+  mevedel-view-stream.el      streaming, request progress, and gptel stream integration
   mevedel-view-audit.el       audit disclosure rendering
   mevedel-view-zone.el        managed view-zone lifecycle + fragments
   mevedel-view-history.el     view input history ring and persistence
