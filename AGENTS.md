@@ -124,6 +124,7 @@ Chat / view
 Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-presets.el          gptel presets (discuss/implement/revise/tutor)
+  mevedel-specialist-nudges.el  generic-tool specialist prompting policy
   mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
   mevedel-agent-exec.el       sub-agent task runner, FSM handlers, registry
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
