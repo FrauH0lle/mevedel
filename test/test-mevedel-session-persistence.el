@@ -590,6 +590,27 @@ TOOL-PROP."
   (let ((id (mevedel-session-persistence--compute-id "my session")))
     (should (string-prefix-p "my_session-" id))))
 
+(mevedel-deftest mevedel-session-persistence--allocate-session-id ()
+  ,test
+  (test)
+  :doc "retries until the generated id has no session directory"
+  (let ((sessions-dir (make-temp-file "mevedel-id-allocation-" t))
+        (calls 0))
+    (unwind-protect
+        (progn
+          (write-region "occupied\n" nil
+                        (file-name-concat sessions-dir "taken") nil 'silent)
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence--compute-id)
+                     (lambda (_name)
+                       (if (= (cl-incf calls) 1) "taken" "fresh"))))
+            (should (equal
+                     "fresh"
+                     (mevedel-session-persistence--allocate-session-id
+                      "main" sessions-dir)))
+            (should (= calls 2))))
+      (delete-directory sessions-dir t))))
+
 (mevedel-deftest mevedel-session-persistence--segment-path ()
   ,test
   (test)
@@ -4617,135 +4638,457 @@ workspace tree."
 ;;
 ;;; Phase 9: fork-on-send + rename-session
 
+(defun test-mevedel-session-persistence--make-fork-ready ()
+  "Return a real saved session rewound and ready to fork.
+The result is a plist whose :tempdir owns every created file."
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (buf (generate-new-buffer "*test-data-buf*"))
+           parent-path
+           parent-id)
+      (with-current-buffer buf
+        (org-mode)
+        (setq-local mevedel--session session)
+        (add-hook 'kill-buffer-hook
+                  #'mevedel-session-persistence--release-on-kill nil t)
+        (insert "Segment one prompt\n")
+        (mevedel-session-persistence-save session buf)
+        (mevedel-session-persistence-rotate-segment
+         session buf "Summary 1.")
+        (insert "Segment two prompt\n")
+        (mevedel-session-persistence-save session buf)
+        (mevedel-session-persistence-rotate-segment
+         session buf "Summary 2.")
+        (insert "Future segment prompt\n")
+        (mevedel-session-persistence-save session buf)
+        (setq parent-path (mevedel-session-save-path session)
+              parent-id (mevedel-session-session-id session))
+        (make-directory (file-name-concat parent-path "agents") t)
+        (make-directory (file-name-concat parent-path "plans") t)
+        (write-region "# Parent plan\n" nil
+                      (file-name-concat parent-path "plans/current.md")
+                      nil 'silent)
+        (write-region "eligible transcript\n" nil
+                      (file-name-concat parent-path
+                                        "agents/eligible.chat.org")
+                      nil 'silent)
+        (write-region "future transcript\n" nil
+                      (file-name-concat parent-path
+                                        "agents/future.chat.org")
+                      nil 'silent)
+        (write-region "kept backup\n" nil
+                      (mevedel-file-history--backup-path
+                       parent-path "keep@v1") nil 'silent)
+        (write-region "future backup\n" nil
+                      (mevedel-file-history--backup-path
+                       parent-path "future@v2") nil 'silent)
+        (setf (mevedel-session-plan-metadata session)
+              '(:path "plans/current.md" :status presented))
+        (setf (mevedel-session-prompt-index session)
+              '((1 . ((:turn 1 :cum-turn 1)))
+                (2 . ((:turn 1 :cum-turn 2)))
+                (3 . ((:turn 1 :cum-turn 3)))))
+        (setf (mevedel-session-file-snapshots session)
+              '((1 . (("/tmp/kept.el"
+                       . (:backup-name "keep@v1" :version 1))))
+                (3 . (("/tmp/future.el"
+                       . (:backup-name "future@v2" :version 2))))))
+        (setf (mevedel-session-agent-transcripts session)
+              '(("eligible--1" :parent-turn 2
+                 :path "agents/eligible.chat.org")
+                ("future--2" :parent-turn 3
+                 :path "agents/future.chat.org")
+                ("poison--3" :parent-turn 2
+                 :path "../poison.chat.org")))
+        (setf (mevedel-session-turn-count session) 3)
+        (mevedel-session-persistence-write
+         (mevedel-session-persistence--sidecar-path parent-path)
+         (mevedel-session-persistence--build-sidecar session buf))
+        (mevedel-session-persistence--load-truncated
+         session buf 2 1 2 1))
+      (let* ((sessions-dir
+              (mevedel-session-persistence--sessions-dir workspace))
+             (parent-lock
+              (mevedel-session-persistence--lock-path parent-path)))
+        (list
+         :workspace workspace
+         :tempdir tempdir
+         :session session
+         :buffer buf
+         :sessions-dir sessions-dir
+         :parent-id parent-id
+         :parent-path parent-path
+         :parent-lock parent-lock
+         :parent-lock-state
+         (mevedel-session-persistence--read-lock parent-lock)
+         :parent-sidecar-text
+         (mevedel-session-persistence--file-text
+          (mevedel-session-persistence--sidecar-path parent-path))
+         :parent-segment-1-text
+         (mevedel-session-persistence--file-text
+          (mevedel-session-persistence--segment-path parent-path 1))
+         :parent-segment-2-text
+         (mevedel-session-persistence--file-text
+          (mevedel-session-persistence--segment-path parent-path 2))
+         :session-state
+         (copy-tree (mevedel-session-persistence-serialize session))
+         :session-save-path (mevedel-session-save-path session)
+         :buffer-text
+         (with-current-buffer buf
+           (buffer-substring (point-min) (point-max)))
+         :buffer-point (with-current-buffer buf (point))
+         :buffer-modified-p (with-current-buffer buf (buffer-modified-p))
+         :buffer-file-name (with-current-buffer buf buffer-file-name)
+         :rewind-context
+         (with-current-buffer buf (copy-tree mevedel-session--rewind-context)))))))
+
+(defun test-mevedel-session-persistence--assert-fork-rolled-back (fixture)
+  "Assert failed fork restored every parent invariant in FIXTURE."
+  (let ((session (plist-get fixture :session))
+        (buf (plist-get fixture :buffer))
+        (parent-path (plist-get fixture :parent-path))
+        (parent-lock (plist-get fixture :parent-lock))
+        (sessions-dir (plist-get fixture :sessions-dir)))
+    (should (equal (plist-get fixture :session-state)
+                   (mevedel-session-persistence-serialize session)))
+    (should (equal (plist-get fixture :session-save-path)
+                   (mevedel-session-save-path session)))
+    (should (equal (plist-get fixture :parent-lock-state)
+                   (mevedel-session-persistence--read-lock parent-lock)))
+    (should (equal (plist-get fixture :parent-sidecar-text)
+                   (mevedel-session-persistence--file-text
+                    (mevedel-session-persistence--sidecar-path parent-path))))
+    (with-current-buffer buf
+      (should (eq session mevedel--session))
+      (should (equal (plist-get fixture :buffer-text)
+                     (buffer-substring (point-min) (point-max))))
+      (should (= (plist-get fixture :buffer-point) (point)))
+      (should (eq (plist-get fixture :buffer-modified-p)
+                  (buffer-modified-p)))
+      (should (equal (plist-get fixture :buffer-file-name) buffer-file-name))
+      (should mevedel-session--fork-pending)
+      (should (equal (plist-get fixture :rewind-context)
+                     mevedel-session--rewind-context)))
+    (should
+     (equal (list (file-name-nondirectory
+                   (directory-file-name parent-path)))
+            (sort
+             (directory-files sessions-dir nil
+                              directory-files-no-dot-files-regexp)
+             #'string<)))))
+
+(defun test-mevedel-session-persistence--cleanup-fork-fixture (fixture)
+  "Delete the real files and buffer owned by FIXTURE."
+  (when-let ((buf (plist-get fixture :buffer)))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf (set-buffer-modified-p nil))
+      (kill-buffer buf)))
+  (when-let ((tempdir (plist-get fixture :tempdir)))
+    (when (file-directory-p tempdir)
+      (delete-directory tempdir t)))
+  (mevedel-workspace-clear-registry))
+
+(mevedel-deftest mevedel-session-persistence--fork-candidate ()
+  ,test
+  (test)
+  :doc "copies and reduces fork state without mutating the parent"
+  (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
+    (unwind-protect
+        (let* ((session (plist-get fixture :session))
+               (before (mevedel-session-persistence-serialize session))
+               (child
+                (mevedel-session-persistence--fork-candidate
+                 session "/tmp/staged-fork/" "child-id"
+                 (plist-get fixture :parent-id) 2 2 "now")))
+          (should-not (eq child session))
+          (should (equal before
+                         (mevedel-session-persistence-serialize session)))
+          (should (equal "/tmp/staged-fork/"
+                         (mevedel-session-save-path child)))
+          (should (= 2 (mevedel-session-turn-count child)))
+          (should-not (assoc 3 (mevedel-session-prompt-index child)))
+          (should-not (assoc 3 (mevedel-session-file-snapshots child)))
+          (should-not (assoc "future--2"
+                             (mevedel-session-agent-transcripts child))))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
+(mevedel-deftest mevedel-session-persistence--stage-fork ()
+  ,test
+  (test)
+  :doc "materializes and validates a complete child in staging"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (session (plist-get fixture :session))
+         (buf (plist-get fixture :buffer))
+         (staging-path
+          (file-name-as-directory
+           (make-temp-file
+            (expand-file-name ".stage-test-"
+                              (plist-get fixture :sessions-dir))
+            t)))
+         (child
+          (mevedel-session-persistence--fork-candidate
+           session staging-path "child-id"
+           (plist-get fixture :parent-id) 2 2 "now"))
+         (staging-buffer
+          (with-current-buffer buf
+            (clone-buffer " *mevedel-stage-test*" nil))))
+    (unwind-protect
+        (progn
+          (with-current-buffer staging-buffer
+            (setq-local kill-buffer-hook nil))
+          (mevedel-session-persistence--stage-fork
+           child buf staging-buffer (plist-get fixture :parent-path)
+           staging-path 2 2)
+          (should (file-exists-p
+                   (mevedel-session-persistence--segment-path
+                    staging-path 1)))
+          (should (file-exists-p
+                   (mevedel-session-persistence--segment-path
+                    staging-path 2)))
+          (should (file-exists-p
+                   (mevedel-session-persistence--sidecar-path staging-path)))
+          (should (file-exists-p
+                   (mevedel-session-persistence--instructions-current-path
+                    staging-path)))
+          (should (file-exists-p
+                   (mevedel-session-persistence--lock-path staging-path))))
+      (when (buffer-live-p staging-buffer)
+        (with-current-buffer staging-buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer staging-buffer))
+      (when (file-directory-p staging-path)
+        (delete-directory staging-path t))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
+
 (mevedel-deftest mevedel-session-persistence-fork-now ()
   ,test
   (test)
-  :doc "creates a fresh session directory and copies predecessor segments"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
+  :doc "success preserves segments, history, plans, agents, metadata, and locks"
+  (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
     (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (setq-local mevedel--session session)
-                (insert "Original prompt\n")
-                (insert
-                 (mevedel--format-hook-audit-record
-                  '(:type prompt-rewrite
-                    :event "UserPromptSubmit"
-                    :original "original prompt"
-                    :submitted "Original prompt")))
-                (mevedel-session-persistence-save session buf)
-                (mevedel-session-persistence-rotate-segment
-                 session buf "Summary 1.")
-                (insert "Live prompt\n")
-                (mevedel-session-persistence-save session buf)
-                ;; Capture parent state, then simulate a rewind to S1 T1.
-                (let ((parent-id   (mevedel-session-session-id session))
-                      (parent-path (mevedel-session-save-path session)))
-                  (make-directory (file-name-concat parent-path "agents") t)
-                  (make-directory (file-name-concat parent-path "plans") t)
-                  (write-region
-                   "# Parent plan\n" nil
-                   (file-name-concat parent-path "plans/current.md")
-                   nil 'silent)
-                  (write-region
-                   "session-local history\n" nil
-                   (file-name-concat parent-path "input-history.el")
-                   nil 'silent)
-                  (setf (mevedel-session-plan-metadata session)
-                        '(:path "plans/current.md" :status presented))
-                  (write-region
-                   "copied transcript\n" nil
-                   (file-name-concat parent-path "agents/copy.chat.org")
-                   nil 'silent)
-                  (write-region
-                   "future transcript\n" nil
-                   (file-name-concat parent-path "agents/future.chat.org")
-                   nil 'silent)
-                  (setf (mevedel-session-prompt-index session)
-                        '((1 . ((:turn 1 :cum-turn 1)))
-                          (2 . ((:turn 1 :cum-turn 2)))))
-                  (setf (mevedel-session-agent-transcripts session)
-                        '(("copy--1" :parent-turn 1
-                           :path "agents/copy.chat.org")
-                          ("future--2" :parent-turn 2
-                           :path "agents/future.chat.org")
-                          ("poison--3" :parent-turn 1
-                           :path "../poison.chat.org")))
-                  (mevedel-session-persistence--load-truncated
-                   session buf 1 1 1)
-                  (let ((new-path
-                         (mevedel-session-persistence-fork-now buf)))
-                    (should new-path)
-                    (should-not (equal parent-path new-path))
-                    ;; Fork has its own session-id (different from parent).
-                    (should-not (equal parent-id
-                                       (mevedel-session-session-id session)))
-                    ;; Forked-from fields populated.
-                    (should (equal parent-id
-                                   (mevedel-session-forked-from-session-id
-                                    session)))
-                    ;; Predecessor segment 1 doesn't exist (we picked
-                    ;; segment 1, so there's no segment < 1 to copy).
-                    ;; The picked-segment file does exist with the
-                    ;; truncated content.
-                    (should (file-exists-p
-                             (mevedel-session-persistence--segment-path
-                              new-path 1)))
-                    (with-temp-buffer
-                      (insert-file-contents
-                       (mevedel-session-persistence--segment-path
-                        new-path 1))
-                      (should (string-match-p
-                               "<!-- mevedel-hook-audit -->"
-                               (buffer-string)))
-                      (should (string-match-p
-                               "original prompt"
-                               (buffer-string))))
-                    (should (file-exists-p
-                             (file-name-concat
-                              new-path "plans/current.md")))
-                    (should-not (file-exists-p
-                                 (file-name-concat
-                                  new-path "input-history.el")))
-                    (with-temp-buffer
-                      (insert-file-contents
-                       (file-name-concat new-path "plans/current.md"))
-                      (should (equal "# Parent plan\n"
-                                     (buffer-string))))
-                    ;; Fork-pending cleared.
-                    (should-not mevedel-session--fork-pending)
-                    (should-not mevedel-session--rewind-context)
-                    ;; Buffer-file-name pointing at fork's segment.
-                    (should (string-prefix-p
-                             new-path
-                             (expand-file-name buffer-file-name)))
-                    ;; Agent transcript files are copied only when they
-                    ;; belong to the forked turn range and pass path
-                    ;; validation.  Later transcripts are pruned from
-                    ;; the fork's sidecar state.
-                    (should (file-exists-p
-                             (file-name-concat
-                              new-path "agents/copy.chat.org")))
-                    (should-not (file-exists-p
-                                 (file-name-concat
-                                  new-path "agents/future.chat.org")))
-                    (should-not (file-exists-p
-                                 (expand-file-name
-                                  "../poison.chat.org" new-path)))
-                    (should (assoc "copy--1"
-                                   (mevedel-session-agent-transcripts
-                                    session)))
-                    (should-not (assoc "future--2"
-                                       (mevedel-session-agent-transcripts
-                                        session))))))
-            (test-mevedel-session-persistence--release-and-kill
-             buf session)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
+        (let* ((session (plist-get fixture :session))
+               (buf (plist-get fixture :buffer))
+               (parent-path (plist-get fixture :parent-path))
+               (new-path (mevedel-session-persistence-fork-now buf))
+               (sidecar
+                (mevedel-session-persistence-read
+                 (mevedel-session-persistence--sidecar-path new-path))))
+          (should (equal (plist-get fixture :parent-segment-1-text)
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--segment-path
+                           new-path 1))))
+          (should (string-match-p
+                   "Segment two prompt"
+                   (mevedel-session-persistence--file-text
+                    (mevedel-session-persistence--segment-path new-path 2))))
+          (should (equal "kept backup\n"
+                         (mevedel-session-persistence--file-text
+                          (mevedel-file-history--backup-path
+                           new-path "keep@v1"))))
+          (should-not (file-exists-p
+                       (mevedel-file-history--backup-path
+                        new-path "future@v2")))
+          (should (equal "# Parent plan\n"
+                         (mevedel-session-persistence--file-text
+                          (file-name-concat new-path "plans/current.md"))))
+          (should (file-exists-p
+                   (file-name-concat new-path "agents/eligible.chat.org")))
+          (should-not (file-exists-p
+                       (file-name-concat new-path "agents/future.chat.org")))
+          (should-not (file-exists-p
+                       (expand-file-name "../poison.chat.org" new-path)))
+          (should (equal (plist-get fixture :parent-id)
+                         (plist-get sidecar :forked-from-session-id)))
+          (should (= 2 (plist-get sidecar :forked-from-turn)))
+          (should (equal '(:path "plans/current.md" :status presented)
+                         (plist-get sidecar :plan-metadata)))
+          (should (assoc "eligible--1"
+                         (plist-get sidecar :agent-transcripts)))
+          (should-not (assoc "future--2"
+                             (plist-get sidecar :agent-transcripts)))
+          (should (assoc 1 (plist-get sidecar :file-snapshots)))
+          (should-not (assoc 3 (plist-get sidecar :file-snapshots)))
+          (should (file-exists-p
+                   (mevedel-session-persistence--lock-path new-path)))
+          (should-not (file-exists-p (plist-get fixture :parent-lock)))
+          (with-current-buffer buf
+            (should-not mevedel-session--fork-pending)
+            (should-not mevedel-session--rewind-context)
+            (should (string-prefix-p new-path buffer-file-name)))
+          (should (equal (plist-get fixture :parent-sidecar-text)
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--sidecar-path
+                           parent-path))))
+          (should (equal (plist-get fixture :parent-segment-1-text)
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--segment-path
+                           parent-path 1))))
+          (should (equal (plist-get fixture :parent-segment-2-text)
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--segment-path
+                           parent-path 2))))
+          (should (= 2 (length
+                        (directory-files
+                         (plist-get fixture :sessions-dir) nil
+                         directory-files-no-dot-files-regexp))))
+          (should (equal new-path (mevedel-session-save-path session))))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "retries a colliding session id before staging publication"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer))
+         (parent-id (plist-get fixture :parent-id))
+         (calls 0))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-persistence--compute-id)
+                   (lambda (_name)
+                     (if (= (cl-incf calls) 1)
+                         parent-id
+                       "fork-child"))))
+          (let ((new-path (mevedel-session-persistence-fork-now buf)))
+            (should (= calls 2))
+            (should (equal "fork-child"
+                           (file-name-nondirectory
+                            (directory-file-name new-path))))
+            (should (file-exists-p
+                     (mevedel-session-persistence--lock-path new-path)))
+            (should-not
+             (directory-files new-path nil "\\`\\.mevedel-fork-"))))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "publish race preserves the competing session directory"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer))
+         (sessions-dir (plist-get fixture :sessions-dir))
+         (final-path (file-name-concat sessions-dir "raced-child"))
+         (sentinel (file-name-concat final-path "sentinel"))
+         (real-rename (symbol-function 'rename-file))
+         raced)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence--compute-id)
+              (lambda (_name) "raced-child"))
+             ((symbol-function 'rename-file)
+              (lambda (src dst &rest args)
+                (when (and (not raced)
+                           (file-directory-p src)
+                           (equal (expand-file-name dst)
+                                  (expand-file-name final-path)))
+                  (setq raced t)
+                  (make-directory final-path)
+                  (write-region "owned by competitor\n" nil sentinel
+                                nil 'silent))
+                (apply real-rename src dst args))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (should (equal '("sentinel")
+                         (directory-files
+                          final-path nil
+                          directory-files-no-dot-files-regexp)))
+          (delete-directory final-path t)
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  ;; These cases inject deterministic failures only at explicit transaction
+  ;; phase seams.  Session state, buffers, directories, files, and locks
+  ;; remain real so every rollback assertion observes actual filesystem state.
+  :doc "candidate failure removes staging before artifact assembly"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-persistence--reduce-prompt-index)
+                   (lambda (&rest _) (error "Injected candidate failure"))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "copy failure restores the parent and removes all fork artifacts"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer))
+         (source (file-name-concat (plist-get fixture :parent-path)
+                                   "agents/eligible.chat.org"))
+         (real-copy (symbol-function 'copy-file)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'copy-file)
+                   (lambda (src dst &rest args)
+                     (if (equal (expand-file-name src)
+                                (expand-file-name source))
+                         (error "Injected fork copy failure")
+                       (apply real-copy src dst args)))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "sidecar failure restores the parent and removes staging"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-session-persistence-write)
+                   (lambda (&rest _) (error "Injected sidecar failure"))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "instruction persistence failure rolls a complete candidate back"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function
+                    'mevedel-session-persistence--save-instructions)
+                   (lambda (&rest _) (error "Injected instruction failure"))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "child lock failure preserves the parent lock and rewind state"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer))
+         (parent-path (plist-get fixture :parent-path))
+         (real-acquire
+          (symbol-function 'mevedel-session-persistence-lock-acquire)))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-lock-acquire)
+              (lambda (path buffer-name)
+                (if (equal (file-truename path)
+                           (file-truename parent-path))
+                    (funcall real-acquire path buffer-name)
+                  (error "Injected child lock failure")))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "parent release failure after deletion reacquires the parent lock"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer))
+         (parent-path (plist-get fixture :parent-path))
+         (real-release
+          (symbol-function 'mevedel-session-persistence-lock-release))
+         injected)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'mevedel-session-persistence-lock-release)
+              (lambda (path)
+                (funcall real-release path)
+                (when (and (not injected)
+                           (equal (file-truename path)
+                                  (file-truename parent-path)))
+                  (setq injected t)
+                  (error "Injected parent release failure")))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "publish rename failure removes staging and preserves the parent"
+  (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
+         (buf (plist-get fixture :buffer))
+         (sessions-dir (plist-get fixture :sessions-dir))
+         (real-rename (symbol-function 'rename-file)))
+    (unwind-protect
+        (cl-letf
+            (((symbol-function 'rename-file)
+              (lambda (src dst &rest args)
+                (if (and (file-directory-p src)
+                         (file-equal-p (file-name-directory dst)
+                                       sessions-dir))
+                    (error "Injected fork publish failure")
+                  (apply real-rename src dst args)))))
+          (should-error (mevedel-session-persistence-fork-now buf))
+          (test-mevedel-session-persistence--assert-fork-rolled-back fixture))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
   :doc "errors when buffer is not in rewind preview state"
   (with-temp-buffer
     (let ((mevedel-session--fork-pending nil))

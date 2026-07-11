@@ -634,6 +634,15 @@ holds the lock and rewriting would corrupt its audit log."
       (mevedel-permission-log--persist session entry))
     (setf (mevedel-session-permission-log-pending session) nil)))
 
+(defun mevedel-session-persistence--allocate-session-id (name sessions-dir)
+  "Return a fresh session id for NAME below SESSIONS-DIR."
+  (cl-loop repeat 33
+           for candidate = (mevedel-session-persistence--compute-id name)
+           for path = (file-name-concat sessions-dir candidate)
+           unless (or (file-exists-p path) (file-symlink-p path))
+           return candidate
+           finally (error "Could not allocate a unique session id after 33 attempts")))
+
 (defun mevedel-session-persistence--shallow-ensure-files (session buffer)
   "Materialize SESSION and BUFFER paths without writing the sidecar.
 
@@ -654,19 +663,8 @@ persistence is disabled.  Idempotent."
           (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
                                 (mevedel-session-workspace session)))
                  (session-id
-                  (let ((base (mevedel-session-name session))
-                        (attempts 0)
-                        candidate)
-                    (while (progn
-                             (setq candidate
-                                   (mevedel-session-persistence--compute-id base))
-                             (file-directory-p
-                              (file-name-concat sessions-dir candidate)))
-                      (cl-incf attempts)
-                      (when (> attempts 32)
-                        (error "Could not allocate a unique session id after %d attempts"
-                               attempts)))
-                    candidate))
+                  (mevedel-session-persistence--allocate-session-id
+                   (mevedel-session-name session) sessions-dir))
                  (save-path (file-name-as-directory
                              (file-name-concat sessions-dir session-id)))
                  (segment-path (mevedel-session-persistence--segment-path
@@ -1056,26 +1054,9 @@ when persistence is disabled."
                 (let* ((sessions-dir
                         (mevedel-session-persistence--sessions-dir
                          (mevedel-session-workspace session)))
-                       ;; Regenerate the short UUID suffix until the computed
-                       ;; id maps to a non-existent directory.  Prevents
-                       ;; silent collision into another session's directory
-                       ;; when two sessions generated within the same second
-                       ;; happen to pick the same 4-hex UUID.
                        (session-id
-                        (let ((base (mevedel-session-name session))
-                              (attempts 0)
-                              candidate)
-                          (while (progn
-                                   (setq candidate
-                                         (mevedel-session-persistence--compute-id
-                                          base))
-                                   (file-directory-p
-                                    (file-name-concat sessions-dir candidate)))
-                            (cl-incf attempts)
-                            (when (> attempts 32)
-                              (error "Could not allocate a unique session id after %d attempts"
-                                     attempts)))
-                          candidate))
+                        (mevedel-session-persistence--allocate-session-id
+                         (mevedel-session-name session) sessions-dir))
                        (new-save-path
                         (file-name-as-directory
                          (file-name-concat sessions-dir session-id)))
@@ -3834,6 +3815,105 @@ only through PICKED-CUM-TURN.  Entries with non-integer
                                 ranges))
              collect entry)))
 
+(defun mevedel-session-persistence--fork-candidate
+    (session staging-path new-id parent-id picked-segment picked-cum-turn now)
+  "Return a staged fork copy of SESSION reduced to the picked turn."
+  (let ((child (copy-mevedel-session session)))
+    (setf (mevedel-session-prompt-index child)
+          (mevedel-session-persistence--reduce-prompt-index
+           (mevedel-session-prompt-index session)
+           picked-segment picked-cum-turn)
+          (mevedel-session-file-snapshots child)
+          (mevedel-session-persistence--reduce-file-snapshots
+           (mevedel-session-file-snapshots session)
+           picked-cum-turn))
+    (when picked-cum-turn
+      (mevedel-session-persistence--prune-agent-transcripts-after-fork
+       child picked-cum-turn)
+      (setf (mevedel-session-turn-count child) picked-cum-turn))
+    (setf (mevedel-session-session-id child) new-id
+          (mevedel-session-save-path child) staging-path
+          (mevedel-session-created-at child) now
+          (mevedel-session-updated-at child) now
+          (mevedel-session-current-segment child) picked-segment
+          (mevedel-session-forked-from-session-id child) parent-id
+          (mevedel-session-forked-from-turn child) picked-cum-turn)
+    child))
+
+(defun mevedel-session-persistence--stage-fork
+    (child buffer staging-buffer parent-save-path staging-path
+           picked-segment picked-cum-turn)
+  "Materialize CHILD under STAGING-PATH using STAGING-BUFFER."
+  (make-directory (file-name-concat staging-path "agents") t)
+  (make-directory (file-name-concat staging-path "file-history") t)
+  (when-let* ((parent-plans-dir
+               (and parent-save-path
+                    (file-name-concat parent-save-path "plans")))
+              ((file-directory-p parent-plans-dir)))
+    (copy-directory parent-plans-dir
+                    (file-name-concat staging-path "plans")
+                    nil t t))
+  (cl-loop for i from 1 below picked-segment do
+           (let ((src (mevedel-session-persistence--segment-path
+                       parent-save-path i))
+                 (dst (mevedel-session-persistence--segment-path
+                       staging-path i)))
+             (when (file-exists-p src)
+               (copy-file src dst))))
+  (with-current-buffer staging-buffer
+    (setq-local mevedel--session child)
+    (setq buffer-file-name
+          (mevedel-session-persistence--segment-path
+           staging-path picked-segment)
+          buffer-file-truename nil)
+    (set-buffer-modified-p t)
+    (save-buffer))
+  (when picked-cum-turn
+    (dolist (entry
+             (mevedel-session-persistence--state-at-turn
+              child picked-cum-turn))
+      (when-let* ((backup-name (plist-get (cdr entry) :backup-name))
+                  (src (mevedel-file-history--backup-path
+                        parent-save-path backup-name))
+                  ((file-exists-p src)))
+        (copy-file src
+                   (mevedel-file-history--backup-path
+                    staging-path backup-name)))))
+  (when (and picked-cum-turn parent-save-path)
+    (dolist (entry
+             (mevedel-session-persistence--agent-files-for-segments
+              (mevedel-session-prompt-index child)
+              (mevedel-session-agent-transcripts child)
+              picked-segment picked-cum-turn))
+      (let* ((rel-path (plist-get (cdr entry) :path))
+             (src (and rel-path
+                       (expand-file-name rel-path parent-save-path)))
+             (dst (and rel-path
+                       (expand-file-name rel-path staging-path))))
+        (when (and rel-path
+                   (mevedel-session-persistence--validate-transcript-path
+                    rel-path parent-save-path)
+                   (mevedel-session-persistence--validate-transcript-path
+                    rel-path staging-path)
+                   (file-exists-p src))
+          (make-directory (file-name-directory dst) t)
+          (copy-file src dst)))))
+  (mevedel-session-persistence-write
+   (mevedel-session-persistence--sidecar-path staging-path)
+   (mevedel-session-persistence--build-sidecar child buffer))
+  (mevedel-session-persistence--save-instructions child buffer)
+  (unless (mevedel-session-persistence-lock-acquire
+           staging-path (buffer-name buffer))
+    (error "Could not acquire fork session lock"))
+  (let* ((saved
+          (mevedel-session-persistence-read
+           (mevedel-session-persistence--sidecar-path staging-path)))
+         (restored (mevedel-session-persistence-deserialize saved)))
+    (unless (equal (mevedel-session-session-id
+                    (plist-get restored :session))
+                   (mevedel-session-session-id child))
+      (error "Fork staging validation failed"))))
+
 (defun mevedel-session-persistence-fork-now (buffer)
   "Materialize a fork from BUFFER's rewind preview state.
 
@@ -3857,158 +3937,136 @@ fork's save-path."
       (user-error "Buffer is not in rewind preview state"))
     (unless mevedel-session--rewind-context
       (user-error "Rewind context missing"))
-    (let* ((ctx              mevedel-session--rewind-context)
-           (parent-id        (plist-get ctx :parent-session-id))
+    (let* ((ctx mevedel-session--rewind-context)
+           (parent-id (plist-get ctx :parent-session-id))
            (parent-save-path (plist-get ctx :parent-save-path))
-           (picked-segment   (plist-get ctx :picked-segment))
-           (picked-cum-turn  (plist-get ctx :picked-cum-turn))
-           (session          mevedel--session)
-           (sessions-dir     (mevedel-session-persistence--sessions-dir
-                              (mevedel-session-workspace session)))
-           (new-id           (mevedel-session-persistence--compute-id
-                              (mevedel-session-name session)))
-           (new-save-path    (file-name-as-directory
-                              (file-name-concat sessions-dir new-id)))
+           (picked-segment (plist-get ctx :picked-segment))
+           (picked-cum-turn (plist-get ctx :picked-cum-turn))
+           (session mevedel--session)
+           (sessions-dir (mevedel-session-persistence--sessions-dir
+                          (mevedel-session-workspace session)))
+           (new-id
+            (mevedel-session-persistence--allocate-session-id
+             (mevedel-session-name session) sessions-dir))
+           (new-save-path (file-name-as-directory
+                           (file-name-concat sessions-dir new-id)))
            (new-segment-path (mevedel-session-persistence--segment-path
                               new-save-path picked-segment))
-           (now              (format-time-string "%FT%H-%M-%S")))
-      ;; Create the fork's directory tree.
-      (make-directory new-save-path t)
-      (make-directory (file-name-concat new-save-path "agents") t)
-      (make-directory (file-name-concat new-save-path "file-history") t)
-      (when-let* ((parent-plans-dir
-                   (and parent-save-path
-                        (file-name-concat parent-save-path "plans")))
-                  ((file-directory-p parent-plans-dir)))
-        (copy-directory parent-plans-dir
-                        (file-name-concat new-save-path "plans")
-                        nil t t))
-      ;; Copy predecessor segment files (1 .. picked-segment-1).
-      (cl-loop for i from 1 below picked-segment do
-               (let ((src (mevedel-session-persistence--segment-path
-                           parent-save-path i))
-                     (dst (mevedel-session-persistence--segment-path
-                           new-save-path i)))
-                 (when (file-exists-p src)
-                   (copy-file src dst))))
-      ;; Save the live (truncated) buffer content into the fork's picked-segment.
-      (setq buffer-file-name new-segment-path)
-      (set-buffer-modified-p t)
-      (save-buffer)
-      ;; Copy file-history backups referenced by the target state.
-      (when picked-cum-turn
-        (let ((target-state
-               (mevedel-session-persistence--state-at-turn
-                session picked-cum-turn)))
-          (dolist (entry target-state)
-            (when-let* ((bn  (plist-get (cdr entry) :backup-name))
-                        (src (mevedel-file-history--backup-path
-                              parent-save-path bn))
-                        ((file-exists-p src)))
-              (let ((dst (mevedel-file-history--backup-path
-                          new-save-path bn)))
-                (unless (file-exists-p dst)
-                  (copy-file src dst)))))))
-      ;; Copy agent transcript files for any agent whose
-      ;; :parent-turn falls at or before picked-cum-turn (those
-      ;; agents were spawned within the segments being copied to
-      ;; the fork).  Agents spawned after picked-cum-turn don't
-      ;; belong in the fork.  The agent-id list comes from a pure
-      ;; helper so the derivation is testable in isolation.
-      ;;
-      ;; Each entry is gated on
-      ;; `mevedel-session-persistence--validate-transcript-path' to
-      ;; prevent a poisoned sidecar with `:path "../../etc/passwd"'
-      ;; from copying outside the fork's `agents/' directory.
-      ;; Per-entry errors warn and continue rather than abort the
-      ;; fork mid-way.
-      (when (and picked-cum-turn parent-save-path)
-        (let ((entries
-               (mevedel-session-persistence--agent-files-for-segments
-                (mevedel-session-prompt-index session)
-                (mevedel-session-agent-transcripts session)
-                picked-segment
-                picked-cum-turn)))
-          (dolist (entry entries)
-            (let* ((plist (cdr entry))
-                   (rel-path (plist-get plist :path)))
-              (when (and rel-path
-                         (mevedel-session-persistence--validate-transcript-path
-                          rel-path parent-save-path)
-                         (mevedel-session-persistence--validate-transcript-path
-                          rel-path new-save-path))
-                (condition-case err
-                    (let ((src (expand-file-name rel-path parent-save-path))
-                          (dst (expand-file-name rel-path new-save-path)))
-                      (when (file-exists-p src)
-                        (let ((dst-dir (file-name-directory dst)))
-                          (when (and dst-dir (not (file-directory-p dst-dir)))
-                            (make-directory dst-dir t)))
-                        (unless (file-exists-p dst)
-                          (copy-file src dst))))
-                  (error
-                   (display-warning
-                    'mevedel
-                    (format "Fork: failed to copy transcript %s: %S"
-                            rel-path err)
-                    :warning))))))))
-      ;; Release the parent's lock before overwriting `save-path' so
-      ;; the kill-buffer hook can't leak it.  Only release our own
-      ;; lock (the helper checks PID+hostname and is a no-op if
-      ;; another process holds it).
-      (when parent-save-path
-        (condition-case _
-            (mevedel-session-persistence-lock-release parent-save-path)
-          (error nil)))
-      ;; Reduce session state to the picked turn.  Drop prompt-index
-      ;; entries for segments past the picked one and turn entries
-      ;; beyond the picked-cum-turn in the live segment.  Trim
-      ;; file-snapshots to `<= picked-cum-turn'.  Clamp the turn count
-      ;; so the restore-plan math lines up.
-      (setf (mevedel-session-prompt-index session)
-            (mevedel-session-persistence--reduce-prompt-index
-             (mevedel-session-prompt-index session)
-             picked-segment picked-cum-turn))
-      (setf (mevedel-session-file-snapshots session)
-            (mevedel-session-persistence--reduce-file-snapshots
-             (mevedel-session-file-snapshots session)
-             picked-cum-turn))
-      (when picked-cum-turn
-        ;; drop transcript entries spawned after the fork point.
-        (mevedel-session-persistence--prune-agent-transcripts-after-fork
-         session picked-cum-turn)
-        (setf (mevedel-session-turn-count session) picked-cum-turn))
-      ;; Update the session struct in place.
-      (setf (mevedel-session-session-id session)             new-id)
-      (setf (mevedel-session-save-path session)              new-save-path)
-      (setf (mevedel-session-created-at session)             now)
-      (setf (mevedel-session-updated-at session)             now)
-      (setf (mevedel-session-current-segment session)        picked-segment)
-      (setf (mevedel-session-forked-from-session-id session) parent-id)
-      (setf (mevedel-session-forked-from-turn session)       picked-cum-turn)
-      ;; Acquire the fork's lock.
-      (mevedel-session-persistence-lock-acquire
-       new-save-path (buffer-name buffer))
-      ;; Write the fork's sidecar.
-      (mevedel-session-persistence-write
-       (mevedel-session-persistence--sidecar-path new-save-path)
-       (mevedel-session-persistence--build-sidecar session buffer))
-      (mevedel-session-persistence--save-instructions session buffer)
-      ;; Forking changes the branch identity; live activity previews
-      ;; belong to the parent branch and must not bleed into the fork.
-      (when (boundp 'mevedel-tools--agents-fsm)
-        (dolist (pair mevedel-tools--agents-fsm)
-          (when-let* ((inv (and (fboundp 'mevedel-tools--agent-invocation-at)
-                                (mevedel-tools--agent-invocation-at
-                                 (cdr pair)))))
-            (mevedel-agent-invocation-set-activity inv nil))))
-      (when-let* ((vb (and (boundp 'mevedel--view-buffer) mevedel--view-buffer))
-                  ((buffer-live-p vb)))
-        (when (fboundp 'mevedel-view-reset-agent-ephemeral-state)
-          (mevedel-view-reset-agent-ephemeral-state vb)))
-      ;; Clear rewind state.
-      (setq mevedel-session--fork-pending nil)
-      (setq mevedel-session--rewind-context nil)
+           (parent-lock-path
+            (and parent-save-path
+                 (mevedel-session-persistence--lock-path parent-save-path)))
+           (parent-lock
+            (and parent-lock-path
+                 (mevedel-session-persistence--read-lock parent-lock-path)))
+           (old-point (point))
+           (old-modified-p (buffer-modified-p))
+           (old-file-name buffer-file-name)
+           (old-file-truename buffer-file-truename)
+           staging-path
+           child
+           staging-buffer
+           rollback-buffer
+           published
+           buffer-installed
+           committed)
+      (unwind-protect
+          (progn
+            (setq staging-path
+                  (file-name-as-directory
+                   (make-temp-file
+                    (expand-file-name ".mevedel-fork-" sessions-dir) t))
+                  child
+                  (mevedel-session-persistence--fork-candidate
+                   session staging-path new-id parent-id picked-segment
+                   picked-cum-turn (format-time-string "%FT%H-%M-%S")))
+            (setq staging-buffer
+                  (clone-buffer
+                   (generate-new-buffer-name " *mevedel-fork-staging*")
+                   nil))
+            (mevedel-session-persistence--stage-fork
+             child buffer staging-buffer parent-save-path staging-path
+             picked-segment picked-cum-turn)
+            (rename-file (directory-file-name staging-path)
+                         (directory-file-name new-save-path))
+            (setq published t)
+            (setq rollback-buffer
+                  (clone-buffer
+                   (generate-new-buffer-name " *mevedel-fork-rollback*")
+                   nil))
+            (let ((inhibit-quit t)
+                  (inhibit-read-only t))
+              (setq buffer-installed t)
+              (replace-buffer-contents staging-buffer)
+              (setq buffer-file-name new-segment-path
+                    buffer-file-truename (file-truename new-segment-path))
+              (goto-char (min old-point (point-max)))
+              (set-buffer-modified-p nil)
+              (set-visited-file-modtime)
+              (when parent-save-path
+                (mevedel-session-persistence-lock-release parent-save-path))
+              (setf (mevedel-session-prompt-index session)
+                    (mevedel-session-prompt-index child)
+                    (mevedel-session-file-snapshots session)
+                    (mevedel-session-file-snapshots child)
+                    (mevedel-session-agent-transcripts session)
+                    (mevedel-session-agent-transcripts child)
+                    (mevedel-session-turn-count session)
+                    (mevedel-session-turn-count child)
+                    (mevedel-session-session-id session)
+                    (mevedel-session-session-id child)
+                    (mevedel-session-save-path session) new-save-path
+                    (mevedel-session-created-at session)
+                    (mevedel-session-created-at child)
+                    (mevedel-session-updated-at session)
+                    (mevedel-session-updated-at child)
+                    (mevedel-session-current-segment session)
+                    (mevedel-session-current-segment child)
+                    (mevedel-session-forked-from-session-id session)
+                    (mevedel-session-forked-from-session-id child)
+                    (mevedel-session-forked-from-turn session)
+                    (mevedel-session-forked-from-turn child))
+              (setq mevedel-session--fork-pending nil
+                    mevedel-session--rewind-context nil
+                    committed t)))
+        (unless committed
+          (when buffer-installed
+            (let ((inhibit-read-only t))
+              (replace-buffer-contents rollback-buffer)
+              (goto-char (min old-point (point-max)))
+              (setq buffer-file-name old-file-name
+                    buffer-file-truename old-file-truename)
+              (set-buffer-modified-p old-modified-p)))
+          (when (and parent-lock
+                     parent-lock-path
+                     (not (file-exists-p parent-lock-path)))
+            (ignore-errors
+              (mevedel-session-persistence--write-lock
+               parent-lock-path (plist-get parent-lock :buffer))))
+          (when published
+            (ignore-errors (delete-directory new-save-path t)))
+          (when staging-path
+            (ignore-errors (delete-directory staging-path t))))
+        (dolist (internal-buffer (list rollback-buffer staging-buffer))
+          (when (buffer-live-p internal-buffer)
+            (with-current-buffer internal-buffer
+              (set-buffer-modified-p nil)
+              (setq-local kill-buffer-hook nil))
+            (kill-buffer internal-buffer))))
+      ;; UI-only branch state cannot invalidate a committed fork.
+      (ignore-errors
+        (when (boundp 'mevedel-tools--agents-fsm)
+          (dolist (pair mevedel-tools--agents-fsm)
+            (when-let* ((inv
+                         (and (fboundp 'mevedel-tools--agent-invocation-at)
+                              (mevedel-tools--agent-invocation-at
+                               (cdr pair)))))
+              (mevedel-agent-invocation-set-activity inv nil))))
+        (when-let* ((view-buffer
+                     (and (boundp 'mevedel--view-buffer)
+                          mevedel--view-buffer))
+                    ((buffer-live-p view-buffer))
+                    ((fboundp 'mevedel-view-reset-agent-ephemeral-state)))
+          (mevedel-view-reset-agent-ephemeral-state view-buffer)))
       new-save-path)))
 
 (defun mevedel-session-persistence--reduce-prompt-index
@@ -4330,17 +4388,8 @@ repoints the DATA-BUF at the clone."
               (user-error "Empty session name")))
          (parent-dir (file-name-directory
                       (directory-file-name old-save-path)))
-         (new-id (let ((attempts 0) candidate)
-                   (while (progn
-                            (setq candidate
-                                  (mevedel-session-persistence--compute-id
-                                   sanitized))
-                            (file-directory-p
-                             (file-name-concat parent-dir candidate)))
-                     (cl-incf attempts)
-                     (when (> attempts 32)
-                       (error "Could not allocate a unique session id")))
-                   candidate))
+         (new-id (mevedel-session-persistence--allocate-session-id
+                  sanitized parent-dir))
          (new-save-path (file-name-as-directory
                          (file-name-concat parent-dir new-id))))
     ;; Save any pending changes into the parent first.
