@@ -121,8 +121,8 @@
                                      ".mevedel/")
                    (mevedel-workspace-state-dir ws))))
 
-  :doc "expands legacy tilde roots"
-  (let* ((root "~/mevedel-legacy-root/")
+  :doc "expands tilde roots"
+  (let* ((root "~/mevedel-test-root/")
          (ws (mevedel-workspace--create :root root)))
     (should (equal (file-name-concat (expand-file-name root) ".mevedel/")
                    (mevedel-workspace-state-dir ws)))))

@@ -573,7 +573,7 @@ BODY-START-OFFSET and BODY-END-OFFSET bound the diff content inside OV."
   (overlay-put ov 'mevedel-inline-preview t)
   (overlay-put ov 'read-only t)
   ;; Interaction-zone stacking: previews 300 > plan 200 >
-  ;; permission 100.  Bumped from the legacy 10 so previews render
+  ;; permission 100 so previews render
   ;; above plan / permission overlays at the same anchor.
   (overlay-put ov 'priority 300)
   (overlay-put ov 'mevedel--diff-body-start-offset body-start-offset)

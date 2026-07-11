@@ -255,7 +255,8 @@ render-data.
 
 ### Render-data side channel
 
-When a handler returns `(:result STR :render-data DATA)`, the pipeline
+Every handler returns a plist containing `:result`; when it also includes
+`:render-data DATA`, the pipeline
 writes `:result` to the data buffer and appends a hidden block wrapped in
 `<!-- mevedel-render-data -->` delimiters, propertized
 `'gptel 'ignore` and `'invisible t`. Parser:

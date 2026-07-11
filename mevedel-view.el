@@ -3082,12 +3082,14 @@ self-heal on rerender."
          (eq (mevedel-agent-invocation-transcript-status inv)
              'running))))
 
-(defun mevedel-view--group-into-turns (segments &optional data-buf)
+(defun mevedel-view--group-into-turns (segments data-buf)
   "Group SEGMENTS by conversation role.
 A turn is a list of consecutive segments belonging to one role.
 A new user segment starts a new turn.  Returns a list of turns,
 where each turn is a plist (:role ROLE :segments SEGS :start S :end E).
 ROLE is `user' or `assistant'.
+
+DATA-BUF is the authoritative transcript buffer.
 
 A segment classified as `user' (gptel property nil) only starts a
 new turn when it follows another `user' or `response' segment.
@@ -3230,16 +3232,12 @@ real user message."
                (or review-action-p
                    (memq prev-type '(nil user response)))
                ;; Look-ahead: a scaffolding-only nil gap right after a
-               ;; response is assistant-side glue.  When followed by
-               ;; ignore/tool, treat missing DATA-BUF conservatively as
-               ;; the legacy mid-turn reasoning case; when followed by
-               ;; another response, require DATA-BUF proof so a real user
-               ;; prompt between two response runs remains a user turn.
+               ;; response is assistant-side glue.  Require DATA-BUF proof
+               ;; so a real user prompt remains a user turn.
                (not (and (eq prev-type 'response)
                          (or (and (memq next-type '(ignore tool))
-                                  (or (null data-buf)
-                                      (mevedel-view--scaffolding-only-p
-                                       data-buf seg-start (caddr seg))))
+                                  (mevedel-view--scaffolding-only-p
+                                   data-buf seg-start (caddr seg)))
                              (and (eq next-type 'response)
                                   data-buf
                                   (mevedel-view--scaffolding-only-p
@@ -4463,15 +4461,13 @@ historical Plan-mode protocol does not leak back into the view."
   "Return the boundary where transcript/live-tail text should be inserted.
 
 The history region ends at `mevedel-view--status-marker'.  Status and
-interaction UI live below that boundary and above the input prompt.
-Use `mevedel-view--input-marker' only for older buffers that do not yet
-have a live status marker."
-  (or (and (markerp mevedel-view--status-marker)
-           (marker-position mevedel-view--status-marker)
-           mevedel-view--status-marker)
-      (and (markerp mevedel-view--input-marker)
-           (marker-position mevedel-view--input-marker)
-           mevedel-view--input-marker)))
+interaction UI live below that boundary and above the input prompt."
+  (unless (and (markerp mevedel-view--status-marker)
+               (eq (marker-buffer mevedel-view--status-marker)
+                   (current-buffer))
+               (marker-position mevedel-view--status-marker))
+    (error "View status marker is not live"))
+  mevedel-view--status-marker)
 
 (defun mevedel-view--after-header-position ()
   "Return the first history position after the session header."
@@ -7621,8 +7617,8 @@ rerender)."
     ;; Render all content from data buffer
     (with-current-buffer data-buf
       (mevedel-view--restore-gptel-bounds-if-needed)
-      ;; Skip compacted region at the start.  Legacy in-buffer
-      ;; compaction leaves ignored/shadowed old content followed by a
+      ;; Skip compacted region at the start.  In-place compaction leaves
+      ;; ignored/shadowed old content followed by a
       ;; summary block; segment rotation starts directly with a summary
       ;; block followed by live tail content.
       (let ((scan-start (mevedel-transcript--skip-leading-properties-drawer
@@ -7946,25 +7942,13 @@ later prompt refreshes do not operate on the draft body."
 (defun mevedel-view--input-start ()
   "Return the buffer position where the user's editable input begins.
 This is the position immediately after the read-only `> ' prompt that
-follows `mevedel-view--input-marker'.  Degrades to the marker position
-when the prompt has not (yet) been installed, so a buffer created
-before this feature still works."
+follows `mevedel-view--input-marker'."
   (save-excursion
     (goto-char (or (mevedel-view--input-marker-position)
                    mevedel-view--input-marker))
-    (let ((start (point)))
-      (while (get-text-property (point) 'mevedel-view-prompt)
-        (forward-char 1))
-      (when (= (point) start)
-        (let* ((prompt (substring-no-properties
-                        (mevedel-view--input-prompt-string)))
-               (end (+ start (length prompt))))
-          (when (and (<= end (point-max))
-                     (get-text-property start 'read-only)
-                     (string= prompt
-                              (buffer-substring-no-properties start end)))
-            (goto-char end))))
-      (point))))
+    (while (get-text-property (point) 'mevedel-view-prompt)
+      (forward-char 1))
+    (point)))
 
 (defun mevedel-view-refresh-input-prompt ()
   "Refresh the input prompt to reflect the current permission mode."
@@ -9219,20 +9203,6 @@ Signals `user-error' when no transcript source can be opened."
                                          "unknown"))
                 entry)))))
 
-(defun mevedel-view--agent-transcript-openable-p (agent-id)
-  "Return non-nil when AGENT-ID names a known transcript target.
-This is intentionally looser than `mevedel-view--resolve-agent-transcript':
-the opener owns the final user-facing error for missing files or buffers,
-while this predicate separates known transcript targets from legacy
-Agent cards whose body should still expand inline."
-  (when agent-id
-    (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
-           (inv (mevedel-view--agent-invocation agent-id))
-           (status (mevedel-view--agent-effective-status inv entry)))
-      (or inv
-          (and entry
-               (mevedel-view--agent-terminal-status-p status))))))
-
 (defun mevedel-view--display-agent-transcript-view (view-buf)
   "Display transcript inspection VIEW-BUF in this view's singleton slot."
   (let ((parent-view (or (and (boundp 'mevedel-view--agent-transcript-parent-view)
@@ -9330,33 +9300,17 @@ PARENT-VIEW is the session view that opened the transcript."
           (format "Could not restore transcript GPTEL_BOUNDS: %s"
                   (error-message-string err))))))))
 
-(defun mevedel-view--toggle-agent-handle-inline (source collapsed)
-  "Toggle inline Agent card body for SOURCE based on COLLAPSED."
-  (if collapsed
-      (mevedel-view--expand-section source 'agent-handle)
-    (mevedel-view--collapse-section source 'agent-handle)))
-
 (defun mevedel-view-agent-handle-activate (&optional agent-id)
   "Open the rendered agent handle at point or AGENT-ID."
   (interactive)
-  (let* ((id (or agent-id
-                 (get-text-property (point) 'mevedel-view-agent-id)))
-         (source (get-text-property (point) 'mevedel-view-source))
-         (vtype (get-text-property (point) 'mevedel-view-type))
-         (collapsed (get-text-property (point) 'mevedel-view-collapsed)))
+  (let ((id (or agent-id
+                (get-text-property (point) 'mevedel-view-agent-id))))
     (unless id
       (user-error "No agent handle at point"))
-    (cond
-     ((mevedel-view--agent-transcript-openable-p id)
-      (condition-case err
-          (mevedel-view-open-agent-transcript id)
-        (user-error
-         (message "%s" (error-message-string err)))))
-     ((and source (eq vtype 'agent-handle))
-      (mevedel-view--toggle-agent-handle-inline source collapsed))
-     (t
-      (message "Transcript unavailable for %s"
-               (mevedel-view--display-label-for-agent id))))))
+    (condition-case err
+        (mevedel-view-open-agent-transcript id)
+      (user-error
+       (message "%s" (error-message-string err))))))
 
 (defun mevedel-view--open-agent-transcript-or-message
     (agent-id &optional _live-click-p calls)
@@ -9597,11 +9551,10 @@ invisible (with the `mailbox-delivery' vtype tag for downstream
   "Render agent result blocks from START to END as mailbox cards.
 Delegates to `mevedel-view--decorate-mailbox-block' so
 `<agent-message>' and `<agent-result>' render uniformly: same
-header, same collapse threshold, same vtype tag for downstream
-TAB toggling.  Accept both the canonical `agent-id' attribute and the
-older/live `from' attribute shape."
+header, same collapse threshold, and the same vtype tag for downstream
+TAB toggling."
   (mevedel-view--decorate-mailbox-block
-   "<agent-result\\s-+[^>]*\\(?:agent-id\\|from\\)=\"\\([^\"]+\\)\"[^>]*>"
+   "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-result>"
    start end
    'agent-result))
@@ -10537,20 +10490,6 @@ by a session queue.  Normal view rebuilds must keep them alive; explicit
 clear/teardown paths still remove them."
   (memq (plist-get descriptor :kind) '(preview request ask)))
 
-(defun mevedel-view--interaction-body-suffix (body)
-  "Return suffix needed to preserve legacy spacing after BODY.
-Interaction fragments normalize body text to one trailing newline.  The legacy
-renderer appended one newline after the original descriptor body, so a body that
-already ended in newlines needs the same number of newlines appended after
-fragment normalization."
-  (let ((pos (length body))
-        (count 0))
-    (while (and (> pos 0) (eq (aref body (1- pos)) ?\n))
-      (setq pos (1- pos)
-            count (1+ count)))
-    (when (> count 0)
-      (make-string count ?\n))))
-
 (defun mevedel-view--interaction-body (descriptor overlay)
   "Return DESCRIPTOR's body with standard interaction text properties.
 OVERLAY is stored on the text as the descriptor's callback handle."
@@ -10661,7 +10600,6 @@ OVERLAY is stored on the text as the descriptor's callback handle."
   "Return a fragment plist for interaction DESCRIPTOR ID."
   (let* ((overlay (mevedel-view--interaction-overlay-for id descriptor))
          (body (mevedel-view--interaction-body descriptor overlay))
-         (body-suffix (mevedel-view--interaction-body-suffix body))
          (fragment (list :namespace 'interaction
                          :id id
                          :priority (or (plist-get descriptor :priority)
@@ -10676,8 +10614,6 @@ OVERLAY is stored on the text as the descriptor's callback handle."
                          :navigatable (and (or (plist-get descriptor :activate)
                                                (plist-get descriptor :keymap))
                                            t))))
-    (when body-suffix
-      (setq fragment (plist-put fragment :body-suffix body-suffix)))
     (when (plist-member descriptor :read-only)
       (setq fragment (plist-put fragment :read-only
                                 (plist-get descriptor :read-only))))
@@ -10876,40 +10812,29 @@ This deletes only interaction UI overlays and never settles callbacks."
 
 (defun mevedel-view--interaction-anchor ()
   "Return the buffer position to anchor an interaction-zone overlay.
-Prefers `mevedel-view--interaction-marker' when populated, falls back
-to `mevedel-view--input-marker' for legacy view buffers without zone
-markers, and to `(point-max)' for
-non-view buffers (e.g. dispatch from a chat buffer that lacks a
-view).  Used by permission, preview, and access-request overlays
-so they all anchor at the interaction-zone boundary
-rather than just above the input prompt."
-  (let* ((header-end (mevedel-view--header-end-position))
-         (floor-pos (or header-end (point-min)))
-         (status-pos (and (boundp 'mevedel-view--status-marker)
-                          (mevedel-view--current-buffer-marker-position
-                           mevedel-view--status-marker)))
-         (interaction-pos
-          (and (boundp 'mevedel-view--interaction-marker)
-               (mevedel-view--current-buffer-marker-position
-                mevedel-view--interaction-marker)))
-         (input-pos (and (boundp 'mevedel-view--input-marker)
-                         (mevedel-view--current-buffer-marker-position
-                          mevedel-view--input-marker))))
-    (setq status-pos (and status-pos (>= status-pos floor-pos) status-pos))
-    (setq interaction-pos
-          (and interaction-pos (>= interaction-pos floor-pos) interaction-pos))
-    (setq input-pos (and input-pos (>= input-pos floor-pos) input-pos))
-    (or (and interaction-pos
-             (or (not status-pos) (>= interaction-pos status-pos))
-             (or (not input-pos) (<= interaction-pos input-pos))
-             interaction-pos)
-        (and input-pos
-             (or (not status-pos) (>= input-pos status-pos))
-             input-pos)
-        status-pos
-        input-pos
-        header-end
-        (point-max))))
+View buffers require a live `mevedel-view--interaction-marker'.  If its
+position has drifted outside the status/input boundaries, repair it to the
+current status anchor.  Non-view buffers use `(point-max)' so tool rendering
+can still build isolated fragments."
+  (if (not (derived-mode-p 'mevedel-view-mode))
+      (point-max)
+    (unless (and (markerp mevedel-view--interaction-marker)
+                 (eq (marker-buffer mevedel-view--interaction-marker)
+                     (current-buffer))
+                 (marker-position mevedel-view--interaction-marker))
+      (error "View interaction marker is not live"))
+    (let* ((input-pos (mevedel-view--input-marker-position))
+           (status-pos (mevedel-view--status-anchor))
+           (interaction-pos (marker-position
+                             mevedel-view--interaction-marker)))
+      (if (and (>= interaction-pos status-pos)
+               (or (not input-pos) (<= interaction-pos input-pos)))
+          interaction-pos
+        (let ((anchor (if input-pos
+                          (min status-pos input-pos)
+                        status-pos)))
+          (set-marker mevedel-view--interaction-marker anchor)
+          anchor)))))
 
 (defun mevedel-view--insert-attribution
     (agent-id &optional _live-click-p calls)

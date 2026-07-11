@@ -1111,24 +1111,15 @@ against the injected set."
   (when-let* ((ctx (mevedel-tools--current-deferred-context)))
     (mevedel-tools--ctx-record-used ctx (mevedel-tool-name tool))))
 
-(defun mevedel-pipeline--render-plist-p (value)
-  "Return non-nil when VALUE is a handler return plist carrying render-data.
-Recognizes a plist shape of the form (:result STRING :render-data DATA ...).
-Required: VALUE must be a proper list whose first element is a keyword and
-that contains a `:result' key."
-  (and (listp value)
-       (keywordp (car-safe value))
+(defun mevedel-pipeline--handler-return-p (value)
+  "Return non-nil when VALUE is a proper handler return plist.
+
+Every key must be a keyword and the plist must contain `:result'."
+  (and (proper-list-p value)
+       (zerop (% (length value) 2))
+       (cl-loop for tail on value by #'cddr
+                always (keywordp (car tail)))
        (plist-member value :result)))
-
-(defun mevedel-pipeline--split-handler-return (raw)
-  "Split handler return RAW into a (RESULT . RENDER-DATA) cons.
-
-When RAW matches `mevedel-pipeline--render-plist-p', destructure into its
-`:result' and `:render-data' fields.  Otherwise RAW is taken as the result
-with no render-data."
-  (if (mevedel-pipeline--render-plist-p raw)
-      (cons (plist-get raw :result) (plist-get raw :render-data))
-    (cons raw nil)))
 
 (defun mevedel-pipeline--normalize-tool-string (value)
   "Return VALUE as JSON-safe model text when VALUE is a string."
@@ -1136,25 +1127,17 @@ with no render-data."
       (mevedel--normalize-message-text value)
     value))
 
-(defun mevedel-pipeline--step-handler (context next _fail)
+(defun mevedel-pipeline--step-handler (context next fail)
   "Run the tool handler.
 
 For async tools (async-p is non-nil), the handler receives a callback as
 its first argument followed by the args plist.  For sync tools, the
 handler receives just the args plist and returns the result directly.
 
-A handler may return either a plain result string (legacy shape) or a
-plist of the form (:result STRING :render-data DATA :media ITEMS).
-In the latter case, the result string flows through the rest of the
-pipeline and side-channel data is carried alongside in CONTEXT so the
-attachment steps can embed it adjacent to the result for persistence,
-view rendering, and backend serialization boundaries.
-
-FAIL is unused -- handler-owned overlays (RequestAccess)
-embed their failure modes in the result string (`Error: ...').
-Adding a `fail' channel to the handler step would force every async
-tool handler to take one; keeping them string-shaped preserves the
-existing contract.
+A handler must return a plist of the form
+`(:result VALUE :render-data DATA :media ITEMS)'.  `:result' is required;
+the side-channel keys are optional.  Invalid returns are routed through
+FAIL so asynchronous handlers cannot strand the pipeline.
 
 Sets `:result' and `:render-data' in CONTEXT for downstream steps;
 NEXT is called on success."
@@ -1163,29 +1146,28 @@ NEXT is called on success."
          (args (plist-get context :args))
          (repair-entry (plist-get context :repair-entry))
          (store (lambda (raw)
-                  (let ((split (mevedel-pipeline--split-handler-return raw)))
-                    (let ((result
-                           (mevedel-pipeline--normalize-tool-string
-                            (car split)))
-                          (updated context))
-                      (setq updated
-                            (plist-put
-                             (plist-put
-                              (plist-put updated :result result)
-                              :raw-result result)
-                             :render-data (cdr split)))
-                      (when (mevedel-pipeline--render-plist-p raw)
-                        (setq updated
-                              (plist-put updated :media
-                                         (plist-get raw :media))))
-                      updated)))))
+                  (let ((result
+                         (mevedel-pipeline--normalize-tool-string
+                          (plist-get raw :result)))
+                        (updated context))
+                    (setq updated
+                          (plist-put
+                           (plist-put
+                            (plist-put updated :result result)
+                            :raw-result result)
+                           :render-data (plist-get raw :render-data)))
+                    (plist-put updated :media (plist-get raw :media)))))
+         (finish (lambda (raw)
+                   (if (mevedel-pipeline--handler-return-p raw)
+                       (funcall next (funcall store raw))
+                     (funcall fail
+                              (format "Tool %s handler returned invalid value; expected a plist containing :result"
+                                      (mevedel-tool-name tool)))))))
     (mevedel-tool-repair-mark-executed repair-entry)
     (mevedel-pipeline--record-use tool)
     (if (mevedel-tool-async-p tool)
-        (funcall handler
-                 (lambda (raw) (funcall next (funcall store raw)))
-                 args)
-      (funcall next (funcall store (funcall handler args))))))
+        (funcall handler finish args)
+      (funcall finish (funcall handler args)))))
 
 (defun mevedel-pipeline--step-repair-reminder (context next _fail)
   "Append one model-facing reminder for committed input repairs in CONTEXT."
@@ -1907,40 +1889,11 @@ unknown."
     parsed)
    (t parsed)))
 
-(defun mevedel-pipeline--strip-printed-string-properties (payload)
-  "Return PAYLOAD with printed propertized strings made plain.
-
-Older render-data blocks could contain printed strings of the form
-`#(\"...\" 0 N (PROP VAL ...))'.  If the saved text later changes
-length, Emacs' reader can reject those property ranges before the view
-can recover the payload.  The render-data side channel does not need
-string text properties, so replace those printed forms with ordinary
-string literals before retrying `read'."
-  (with-temp-buffer
-    (insert payload)
-    (goto-char (point-min))
-    (while (search-forward "#(\"" nil t)
-      (let ((hash-start (match-beginning 0)))
-        (condition-case nil
-            (let* ((string-start (+ hash-start 2))
-                   (form-end (scan-sexps (1+ hash-start) 1))
-                   string)
-              (goto-char string-start)
-              (setq string (read (current-buffer)))
-              (delete-region hash-start form-end)
-              (insert (prin1-to-string string)))
-          (error
-           (goto-char (min (1+ hash-start) (point-max)))))))
-    (buffer-string)))
-
 (defun mevedel-pipeline--read-render-data-payload (payload)
-  "Read render-data PAYLOAD, tolerating stale printed string properties."
-  (condition-case _
+  "Read render-data PAYLOAD or return a parse-failure sentinel."
+  (condition-case nil
       (read payload)
-    (error
-     (condition-case _
-         (read (mevedel-pipeline--strip-printed-string-properties payload))
-       (error :mevedel-parse-failed)))))
+    (error :mevedel-parse-failed)))
 
 (defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
   "Return bounds of the first render-data block for AGENT-ID.

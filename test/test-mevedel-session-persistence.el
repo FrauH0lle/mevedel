@@ -121,7 +121,8 @@ TOOL-PROP."
     (setf (mevedel-session-updated-at session) "2026-04-23T18-22-11")
     (setf (mevedel-session-current-segment session) 2)
     (setf (mevedel-session-prompt-index session)
-          '((1 . ((:turn 1 :pos 142 :preview "Refactor X" :timestamp "..."))) ))
+          '((1 . ((:turn 1 :file-turn 1 :cum-turn 1
+                   :pos 142 :preview "Refactor X" :timestamp "...")))))
     (setf (mevedel-session-file-snapshots session)
           '((1 . (("/tmp/foo.el"
                    . (:backup-name "abc@v1" :version 1
@@ -138,6 +139,40 @@ TOOL-PROP."
                  :owner "main" :blocks '(1) :blocked-by nil
                  :metadata '(:priority high))))
     session))
+
+(defun test-mevedel-session-persistence--complete-sidecar (plist)
+  "Return a current complete sidecar with PLIST values overriding defaults."
+  (let ((sidecar
+         (list :version (mevedel-version)
+               :session-id "test-session"
+               :session-name "x"
+               :workspace nil
+               :working-directory nil
+               :created-at "created"
+               :updated-at "updated"
+               :current-segment 1
+               :total-turn-count 0
+               :last-task-write-turn nil
+               :task-status-notes nil
+               :first-user-message nil
+               :latest-user-message nil
+               :forked-from-session-id nil
+               :forked-from-turn nil
+               :permission-mode 'default
+               :permission-rules nil
+               :last-observed-date "2026-01-01"
+               :agent-types-snapshot :uninitialized
+               :skills-snapshot :uninitialized
+               :additional-roots nil
+               :tasks nil
+               :prompt-index nil
+               :file-snapshots nil
+               :agent-transcripts nil
+               :plan-metadata nil
+               :messages nil)))
+    (while plist
+      (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
+    sidecar))
 
 
 ;;
@@ -181,7 +216,7 @@ TOOL-PROP."
     (should (equal "xyz" (mevedel-workspace-id recovered)))
     (should (equal (expand-file-name "/tmp/q")
                    (mevedel-workspace-root recovered))))
-  :doc "expands legacy tilde project paths"
+  :doc "expands tilde project paths"
   (mevedel-workspace-clear-registry)
   (let* ((root "~/mevedel-session-root/")
          (expected (expand-file-name root))
@@ -325,6 +360,28 @@ TOOL-PROP."
       (when (file-directory-p root)
         (delete-directory root t)))))
 
+(mevedel-deftest mevedel-session-persistence--validate-current-sidecar ()
+  ,test
+  (test)
+  :doc "accepts a complete current sidecar"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (should (eq plist
+                (mevedel-session-persistence--validate-current-sidecar
+                 plist))))
+  :doc "rejects a current-version sidecar with a missing required key"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (cl-remf plist :working-directory)
+    (should-error
+     (mevedel-session-persistence--validate-current-sidecar plist)
+     :type 'error))
+  :doc "rejects prompt entries without current turn coordinates"
+  (let ((plist
+         (test-mevedel-session-persistence--complete-sidecar
+          '(:prompt-index ((1 . ((:turn 1 :cum-turn 1))))))))
+    (should-error
+     (mevedel-session-persistence--validate-current-sidecar plist)
+     :type 'error)))
+
 (mevedel-deftest mevedel-session-persistence-deserialize ()
   ,test
   (test)
@@ -373,18 +430,6 @@ TOOL-PROP."
             (should (equal "test-id" (mevedel-workspace-id workspace)))))
       (when (file-directory-p root)
         (delete-directory root t))))
-  :doc "derives latest preview from old prompt indexes"
-  (let* ((plist (list :version (mevedel-version)
-                      :session-name "x"
-                      :first-user-message "First"
-                      :tasks nil
-                      :prompt-index
-                      '((1 . ((:turn 1 :cum-turn 1 :preview "First")
-                              (:turn 2 :cum-turn 2 :preview "Newest"))))
-                      :file-snapshots nil))
-         (result (mevedel-session-persistence-deserialize plist)))
-    (should (equal "First" (plist-get result :first-user-message)))
-    (should (equal "Newest" (plist-get result :latest-user-message))))
   :doc "drops permission rules with unknown actions"
   (let* ((plist (list :version (mevedel-version)
                       :session-name "x"
@@ -395,30 +440,10 @@ TOOL-PROP."
                       :prompt-index nil
                       :file-snapshots nil))
          (session (plist-get
-                   (mevedel-session-persistence-deserialize plist)
+                   (mevedel-session-persistence-deserialize
+                    (test-mevedel-session-persistence--complete-sidecar plist))
                    :session)))
     (should (= 1 (length (mevedel-session-permission-rules session)))))
-
-  :doc "restores old sidecars without working directory at workspace root"
-  (let* ((root (make-temp-file "mevedel-old-proj-" t))
-         (plist (list :version (mevedel-version)
-                      :session-name "x"
-                      :workspace (list :type 'project
-                                       :id (format "old-id-%s" (gensym))
-                                       :root root
-                                       :name "old-proj")
-                      :tasks nil
-                      :prompt-index nil
-                      :file-snapshots nil)))
-    (unwind-protect
-        (let ((session (plist-get
-                        (mevedel-session-persistence-deserialize plist)
-                        :session)))
-          (should (equal (file-name-as-directory root)
-                         (mevedel-session-working-directory session))))
-      (when (file-directory-p root)
-        (delete-directory root t))))
-
   :doc "preserves relocated working directories under the new workspace root"
   (let* ((old-root (make-temp-file "mevedel-old-root-" t))
          (new-root (make-temp-file "mevedel-new-root-" t))
@@ -441,7 +466,9 @@ TOOL-PROP."
           (mevedel-workspace-get-or-create
            'project workspace-id new-root "relocated-proj")
           (let ((session (plist-get
-                          (mevedel-session-persistence-deserialize plist)
+                          (mevedel-session-persistence-deserialize
+                           (test-mevedel-session-persistence--complete-sidecar
+                            plist))
                           :session)))
             (should (equal (file-name-as-directory new-cwd)
                            (mevedel-session-working-directory session)))))
@@ -474,7 +501,9 @@ TOOL-PROP."
           (mevedel-workspace-get-or-create
            'project workspace-id new-root "nested-proj")
           (let ((session (plist-get
-                          (mevedel-session-persistence-deserialize plist)
+                          (mevedel-session-persistence-deserialize
+                           (test-mevedel-session-persistence--complete-sidecar
+                            plist))
                           :session)))
             (should (equal new-root
                            (mevedel-session-working-directory session)))))
@@ -494,7 +523,8 @@ TOOL-PROP."
                      :prompt-index nil
                      :file-snapshots nil)))
     (should-error
-     (mevedel-session-persistence-deserialize plist)
+     (mevedel-session-persistence-deserialize
+      (test-mevedel-session-persistence--complete-sidecar plist))
      :type 'user-error)))
 
   :doc "rejects restored symlink working directories outside the workspace"
@@ -516,7 +546,8 @@ TOOL-PROP."
         (progn
           (make-symbolic-link outside link)
           (should-error
-           (mevedel-session-persistence-deserialize plist)
+           (mevedel-session-persistence-deserialize
+            (test-mevedel-session-persistence--complete-sidecar plist))
            :type 'user-error))
       (when (file-symlink-p link)
         (delete-file link))
@@ -1332,70 +1363,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
             (with-current-buffer data-buf
               (mevedel--clear-instruction-state workspace)
               (mevedel-session-persistence--load-instructions session data-buf))
-            (mevedel--instruction-activate-workspace workspace)
-            (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
-                   (directive (overlay-get ov 'mevedel-directive)))
-              (should (equal "Fix beta" directive))
-              (should-not (text-properties-at 0 directive))))
-        (when (and data-buf (buffer-live-p data-buf))
-          (test-mevedel-session-persistence--release-and-kill data-buf session))
-        (when (buffer-live-p source-buf)
-          (with-current-buffer source-buf (set-buffer-modified-p nil))
-          (kill-buffer source-buf))
-        (delete-directory tempdir t)
-        (test-mevedel-session-persistence--reset-instructions)
-        (mevedel-workspace-clear-registry))))
-  :doc "loads legacy snapshots with unreadable text-property values"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (let ((source-buf nil)
-          (data-buf nil)
-          (session nil))
-      (unwind-protect
-          (let* ((source-file (file-name-concat tempdir "source.el")))
-            (test-mevedel-session-persistence--reset-instructions)
-            (write-region "(defun beta () t)\n" nil source-file nil 'silent)
-            (setq source-buf (find-file-noselect source-file))
-            (with-current-buffer source-buf
-              (setq-local mevedel--workspace workspace))
-            (setq session (mevedel-session-create "main" workspace))
-            (setq data-buf (generate-new-buffer "*test-data-buf*"))
-            (with-current-buffer data-buf
-              (setq-local mevedel--workspace workspace)
-              (setq-local mevedel--session session)
-              (org-mode)
-              (insert "Explain beta\n")
-              (mevedel-session-persistence-save session data-buf))
-            (let* ((path (mevedel-session-persistence--instructions-current-path
-                          (mevedel-session-save-path session)))
-                   (end (with-current-buffer source-buf (point-max)))
-                   (placeholder 'mevedel-test-corrupt-directive)
-                   (save-file
-                    `(:version ,(mevedel-version)
-                      :ids (:id-counter 1 :used-ids (1) :retired-ids nil)
-                      :files (("source.el"
-                               :instructions
-                               ((:overlay-start 1
-                                 :overlay-end ,end
-                                 :anchor nil
-                                 :properties
-                                 (mevedel-instruction t
-                                  mevedel-id 1
-                                  mevedel-uuid "legacy"
-                                  mevedel-instruction-type directive
-                                  mevedel-directive ,placeholder)))))))
-                   (text
-                    (replace-regexp-in-string
-                     (regexp-quote (symbol-name placeholder))
-                     "#(\"Fix beta\" 0 8 (tabulated-list-id #<buffer source.el>))"
-                     (prin1-to-string save-file)
-                     t t)))
-              (write-region text nil path nil 'silent))
-            (with-current-buffer data-buf
-              (mevedel--load-instructions-file
-               (mevedel-session-persistence--instructions-current-path
-                (mevedel-session-save-path session))
-               tempdir nil t workspace))
             (mevedel--instruction-activate-workspace workspace)
             (let* ((ov (car (alist-get source-buf (mevedel--instruction-alist))))
                    (directive (overlay-get ov 'mevedel-directive)))
@@ -3243,7 +3210,8 @@ workspace tree."
     (unwind-protect
         (progn
           (mevedel-session-persistence-write
-           tmp `(:version ,(mevedel-version) :session-name "x"))
+           tmp (test-mevedel-session-persistence--complete-sidecar
+                '(:session-name "x")))
           (let ((plist (mevedel-session-persistence-load-sidecar tmp)))
             (should (equal (mevedel-version) (plist-get plist :version)))
             (should (equal "x" (plist-get plist :session-name)))))
@@ -3255,7 +3223,9 @@ workspace tree."
         (progn
           (mevedel-session-persistence-write
            tmp '(:version "v0.0.0" :session-name "x"))
-          (should-not (mevedel-session-persistence-load-sidecar tmp)))
+          (should-error
+           (mevedel-session-persistence-load-sidecar tmp)
+           :type 'error))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
 (mevedel-deftest mevedel-session-persistence-restore ()
@@ -4080,7 +4050,8 @@ workspace tree."
                 (org-mode)
                 ;; Pre-seed with a finalized segment 1 entry.
                 (setf (mevedel-session-prompt-index session)
-                      '((1 . ((:turn 1 :pos 1 :preview "old prompt")))))
+                      '((1 . ((:turn 1 :file-turn 1 :cum-turn 1
+                              :pos 1 :preview "old prompt")))))
                 (setf (mevedel-session-current-segment session) 2)
                 (insert "New live prompt\n")
                 (mevedel-session-persistence--update-prompt-index
@@ -4110,12 +4081,6 @@ workspace tree."
            '((2 . ((:turn 1 :cum-turn 3 :preview "third")))
              (1 . ((:turn 1 :cum-turn 1 :preview "first")
                    (:turn 2 :cum-turn 2 :preview "second")))))))
-  :doc "falls back to segment and turn ordering for old sidecars"
-  (should
-   (equal "newer segment"
-          (mevedel-session-persistence--latest-user-message-from-index
-           '((1 . ((:turn 2 :preview "older segment")))
-             (2 . ((:turn 1 :preview "newer segment")))))))
   :doc "ignores blank previews"
   (should
    (null (mevedel-session-persistence--latest-user-message-from-index
@@ -4129,10 +4094,14 @@ workspace tree."
                   "main" (mevedel-workspace-get-or-create
                           'project "x" "/tmp" "x"))))
     (setf (mevedel-session-prompt-index session)
-          '((1 . ((:turn 1 :pos 0 :preview "alpha")
-                  (:turn 2 :pos 100 :preview "beta")))
-            (2 . ((:turn 1 :pos 0 :preview "alpha")  ; same preview, different segment
-                  (:turn 2 :pos 50 :preview "gamma")))))
+          '((1 . ((:turn 1 :file-turn 1 :cum-turn 1
+                   :pos 0 :preview "alpha")
+                  (:turn 2 :file-turn 2 :cum-turn 2
+                   :pos 100 :preview "beta")))
+            (2 . ((:turn 1 :file-turn 1 :cum-turn 3
+                   :pos 0 :preview "alpha")
+                  (:turn 2 :file-turn 2 :cum-turn 4
+                   :pos 50 :preview "gamma")))))
     (let ((candidates
            (mevedel-session-persistence--prompt-candidates session)))
       (should (= 4 (length candidates)))
@@ -4157,34 +4126,7 @@ workspace tree."
            (plist (cdr candidate)))
       (should (= 1 (plist-get plist :turn)))
       (should (= 3 (plist-get plist :file-turn))))
-    (mevedel-workspace-clear-registry))
-  :doc "derives raw file turn from segment tail metadata for old sidecars"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let* ((session (mevedel-session-create "main" workspace))
-               (segment-2
-                (file-name-concat tempdir ".mevedel" "sessions"
-                                  "main-2026-05-07T00-00-0000"
-                                  "segment-0002.chat.org")))
-          (setf (mevedel-session-save-path session)
-                (file-name-directory segment-2))
-          (make-directory (file-name-directory segment-2) t)
-          (with-temp-file segment-2
-            (insert ":PROPERTIES:\n")
-            (insert ":MEVEDEL_SEGMENT_TAIL_PROMPTS: 2\n")
-            (insert ":END:\n"))
-          (setf (mevedel-session-prompt-index session)
-                '((2 . ((:turn 1 :cum-turn 11
-                         :pos 100 :preview "after tail")))))
-          (let* ((candidate
-                  (car (mevedel-session-persistence--prompt-candidates
-                        session)))
-                 (plist (cdr candidate)))
-            (should (= 1 (plist-get plist :turn)))
-            (should (= 3 (plist-get plist :file-turn)))))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+    (mevedel-workspace-clear-registry)))
 
 (mevedel-deftest mevedel-session-persistence--find-turn-cutoff ()
   ,test
@@ -4686,9 +4628,9 @@ The result is a plist whose :tempdir owns every created file."
         (setf (mevedel-session-plan-metadata session)
               '(:path "plans/current.md" :status presented))
         (setf (mevedel-session-prompt-index session)
-              '((1 . ((:turn 1 :cum-turn 1)))
-                (2 . ((:turn 1 :cum-turn 2)))
-                (3 . ((:turn 1 :cum-turn 3)))))
+              '((1 . ((:turn 1 :file-turn 1 :cum-turn 1)))
+                (2 . ((:turn 1 :file-turn 1 :cum-turn 2)))
+                (3 . ((:turn 1 :file-turn 1 :cum-turn 3)))))
         (setf (mevedel-session-file-snapshots session)
               '((1 . (("/tmp/kept.el"
                        . (:backup-name "keep@v1" :version 1))))
@@ -5201,38 +5143,16 @@ The result is a plist whose :tempdir owns every created file."
     (unwind-protect
         (progn
           (mevedel-session-persistence-write
-           tmp `(:version ,(mevedel-version)
-                          :session-name "demo"
-                          :session-id "demo-1234"
-                          :workspace nil
-                          :updated-at "2026-04-23T12-00-00"
-                          :first-user-message "Hello"
-                          :latest-user-message "Latest"
-                          :tasks nil
-                          :permission-rules nil))
+           tmp
+           (test-mevedel-session-persistence--complete-sidecar
+            `(:session-name "demo"
+              :session-id "demo-1234"
+              :updated-at "2026-04-23T12-00-00"
+              :first-user-message "Hello"
+              :latest-user-message "Latest")))
           (let ((s (mevedel-session-persistence--read-summary tmp)))
             (should (equal "demo" (plist-get s :session-name)))
             (should (equal "demo-1234" (plist-get s :session-id)))
-            (should (equal "Hello" (plist-get s :first-user-message)))
-            (should (equal "Latest" (plist-get s :latest-user-message)))))
-      (when (file-exists-p tmp) (delete-file tmp))))
-  :doc "derives latest preview from prompt index for old sidecars"
-  (let ((tmp (make-temp-file "mevedel-summary-test-" nil ".el")))
-    (unwind-protect
-        (progn
-          (mevedel-session-persistence-write
-           tmp `(:version ,(mevedel-version)
-                          :session-name "demo"
-                          :session-id "demo-1234"
-                          :workspace nil
-                          :updated-at "2026-04-23T12-00-00"
-                          :first-user-message "Hello"
-                          :prompt-index
-                          ((1 . ((:turn 1 :cum-turn 1 :preview "Hello")))
-                           (2 . ((:turn 1 :cum-turn 2 :preview "Latest"))))
-                          :tasks nil
-                          :permission-rules nil))
-          (let ((s (mevedel-session-persistence--read-summary tmp)))
             (should (equal "Hello" (plist-get s :first-user-message)))
             (should (equal "Latest" (plist-get s :latest-user-message)))))
       (when (file-exists-p tmp) (delete-file tmp))))
@@ -5623,7 +5543,7 @@ The result is a plist whose :tempdir owns every created file."
                                        (c (plist-get args :content)))
                                    (let ((coding-system-for-write 'utf-8-unix))
                                      (write-region c nil p nil 'silent))
-                                   "ok"))
+                                   '(:result "ok")))
                       :args '((path string :required "Path")
                               (content string :required "Content"))
                       :get-path (lambda (args) (plist-get args :path))

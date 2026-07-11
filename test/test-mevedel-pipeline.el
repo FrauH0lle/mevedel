@@ -343,7 +343,8 @@
 		 (let* ((tool (mevedel-tool--create
 			       :name "SyncTool"
 			       :handler (lambda (args)
-					  (format "got %s" (plist-get args :name)))
+					  (list :result
+						(format "got %s" (plist-get args :name))))
 			       :async-p nil))
 			(ctx (list :tool tool :args '(:name "test")))
 			result-ctx)
@@ -355,8 +356,9 @@
 			       :name "AsyncTool"
 			       :handler (lambda (callback args)
 					  (funcall callback
-						   (format "async %s"
-							   (plist-get args :val))))
+						   (list :result
+							 (format "async %s"
+								 (plist-get args :val)))))
 			       :async-p t))
 			(ctx (list :tool tool :args '(:val "data")))
 			result-ctx)
@@ -375,7 +377,7 @@
 		   (mevedel-pipeline--step-handler
 		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
 		   (should-not result-ctx)
-		   (funcall saved-cb "deferred-result")
+		   (funcall saved-cb '(:result "deferred-result"))
 		   (should (equal (plist-get result-ctx :result) "deferred-result"))))
 
 
@@ -1846,7 +1848,8 @@
 		 :doc "sync tool runs through pipeline"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Echo"
-			       :handler (lambda (args) (plist-get args :msg))
+			       :handler (lambda (args)
+					  (list :result (plist-get args :msg)))
 			       :args '((msg string :required "Message"))
 			       :read-only-p t
 			       :async-p nil))
@@ -1859,8 +1862,9 @@
 			       :name "Collect"
 			       :category "mevedel"
 			       :handler (lambda (args)
-					  (format "received %d name"
-						  (length (plist-get args :names))))
+					  (list :result
+						(format "received %d name"
+							(length (plist-get args :names)))))
 			       :args '((names array :required "Names"
 					     :items (:type string)))
 			       :read-only-p t
@@ -1897,7 +1901,8 @@
 			(tool (mevedel-tool--create
 			       :name "TelemetryEcho"
 			       :category "mevedel"
-			       :handler (lambda (_args) "sentinel tool result")
+			       :handler (lambda (_args)
+					  '(:result "sentinel tool result"))
 			       :args '((message string :required "Message"))
 			       :read-only-p t
 			       :async-p nil))
@@ -1929,7 +1934,7 @@
 				(tool (mevedel-tool--create
 				       :name "TelemetryFailure"
 				       :category "mevedel"
-				       :handler (lambda (_args) "delivered")
+				       :handler (lambda (_args) '(:result "delivered"))
 				       :args '((message string :required "Message"))
 				       :read-only-p t
 				       :async-p nil))
@@ -1959,7 +1964,7 @@
 			 (let* ((tool (mevedel-tool--create
 				       :name "AuditConstructionFailure"
 				       :category "mevedel"
-				       :handler (lambda (_args) "delivered")
+				       :handler (lambda (_args) '(:result "delivered"))
 				       :args '((names array :required "Names"
 						     :items (:type string)))
 				       :read-only-p t
@@ -2070,7 +2075,7 @@
 			       :handler (lambda (args)
 					  (setq handler-value
 						(plist-get args :file_path))
-					  "updated")
+					  '(:result "updated"))
 			       :args '((file_path path :required "File path"))
 			       :check-permission (lambda (_tool _args) 'allow)
 			       :get-path (lambda (args)
@@ -2111,7 +2116,9 @@
 		 :doc "async tool runs through pipeline"
 		 (let* ((tool (mevedel-tool--create
 			       :name "AsyncEcho"
-			       :handler (lambda (cb args) (funcall cb (plist-get args :msg)))
+			       :handler (lambda (cb args)
+					  (funcall cb
+						   (list :result (plist-get args :msg))))
 			       :args '((msg string :required "Message"))
 			       :read-only-p t
 			       :async-p t))
@@ -2128,7 +2135,8 @@
 					   :workspace ws))
 			(tool (mevedel-tool--create
 			       :name "PwdTool"
-			       :handler (lambda (_args) default-directory)
+			       :handler (lambda (_args)
+					  (list :result default-directory))
 			       :args nil
 			       :read-only-p t
 			       :async-p nil))
@@ -2150,7 +2158,8 @@
 					   :working-directory module-dir))
 			(tool (mevedel-tool--create
 			       :name "PwdTool"
-			       :handler (lambda (_args) default-directory)
+			       :handler (lambda (_args)
+					  (list :result default-directory))
 			       :args nil
 			       :read-only-p t
 			       :async-p nil))
@@ -2183,7 +2192,7 @@
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (_r) (setq result default-directory)) nil))
 			 (let ((default-directory other))
-			   (funcall saved-cb "done"))
+			   (funcall saved-cb '(:result "done")))
 			 (should (equal result (file-name-as-directory root))))
 		     (delete-directory root t)
 		     (delete-directory other t)))
@@ -2211,7 +2220,7 @@
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (_r) (setq result default-directory)) nil))
 			 (let ((default-directory other))
-			   (funcall saved-cb "done"))
+			   (funcall saved-cb '(:result "done")))
 			 (should (equal result (file-name-as-directory module-dir))))
 		     (delete-directory root t)
 		     (delete-directory other t)))
@@ -2254,7 +2263,8 @@
 			       :name "BigFromTemp"
 			       :handler (lambda (cb _args)
 					  (with-temp-buffer
-					    (funcall cb (make-string 500 ?y))))
+					    (funcall cb
+						     (list :result (make-string 500 ?y)))))
 			       :args nil
 			       :read-only-p t
 			       :async-p t
@@ -2322,7 +2332,7 @@
 		 ;; itself fired and refuses the next attempt.
 		 (let* ((tool (mevedel-tool--create
 			       :name "Signaling"
-			       :handler (lambda (_args) "payload")
+			       :handler (lambda (_args) '(:result "payload"))
 			       :args nil
 			       :read-only-p t
 			       :async-p nil))
@@ -2374,7 +2384,8 @@
 		     (mevedel-define-tool
 		      :name "TestEcho"
 		      :description "Echo test"
-		      :handler (lambda (args) (plist-get args :msg))
+		      :handler (lambda (args)
+				 (list :result (plist-get args :msg)))
 		      :args ((msg string :required "Message"))
 		      :read-only-p t
 		      :async-p nil)
@@ -2395,7 +2406,8 @@
 		     (mevedel-define-tool
 		      :name "TestStrict"
 		      :description "Strict test"
-		      :handler (lambda (args) (plist-get args :name))
+		      :handler (lambda (args)
+				 (list :result (plist-get args :name)))
 		      :args ((name string :required "Name"))
 		      :read-only-p t
 		      :async-p nil)
@@ -2648,39 +2660,28 @@
 ;;
 ;;; Render-data handling
 
-(mevedel-deftest mevedel-pipeline--render-plist-p ()
+(mevedel-deftest mevedel-pipeline--handler-return-p ()
 		 ,test
 		 (test)
 		 :doc "accepts plist with :result keyword"
-		 (should (mevedel-pipeline--render-plist-p '(:result "ok")))
+		 (should (mevedel-pipeline--handler-return-p '(:result "ok")))
 		 :doc "accepts plist with :result and :render-data"
-		 (should (mevedel-pipeline--render-plist-p
+		 (should (mevedel-pipeline--handler-return-p
 			  '(:result "ok" :render-data (:kind diff))))
 		 :doc "rejects bare string"
-		 (should-not (mevedel-pipeline--render-plist-p "just a string"))
+		 (should-not (mevedel-pipeline--handler-return-p "just a string"))
 		 :doc "rejects nil"
-		 (should-not (mevedel-pipeline--render-plist-p nil))
+		 (should-not (mevedel-pipeline--handler-return-p nil))
 		 :doc "rejects list with non-keyword head"
-		 (should-not (mevedel-pipeline--render-plist-p '("x" "y")))
+		 (should-not (mevedel-pipeline--handler-return-p '("x" "y")))
 		 :doc "rejects plist without :result"
-		 (should-not (mevedel-pipeline--render-plist-p '(:other 1))))
-
-(mevedel-deftest mevedel-pipeline--split-handler-return ()
-		 ,test
-		 (test)
-		 :doc "splits a full (:result :render-data) plist"
-		 (let ((split (mevedel-pipeline--split-handler-return
-			       '(:result "done" :render-data (:kind diff :patch "p")))))
-		   (should (equal "done" (car split)))
-		   (should (equal '(:kind diff :patch "p") (cdr split))))
-		 :doc "plist without :render-data yields nil render-data"
-		 (let ((split (mevedel-pipeline--split-handler-return '(:result "done"))))
-		   (should (equal "done" (car split)))
-		   (should (null (cdr split))))
-		 :doc "plain string becomes (RESULT . nil)"
-		 (let ((split (mevedel-pipeline--split-handler-return "legacy")))
-		   (should (equal "legacy" (car split)))
-		   (should (null (cdr split)))))
+		 (should-not (mevedel-pipeline--handler-return-p '(:other 1)))
+		 :doc "rejects odd and dotted lists"
+		 (should-not (mevedel-pipeline--handler-return-p '(:result)))
+		 (should-not (mevedel-pipeline--handler-return-p '(:result . "ok")))
+		 :doc "rejects non-keyword keys"
+		 (should-not
+		  (mevedel-pipeline--handler-return-p '(:result "ok" extra t))))
 
 (mevedel-deftest mevedel-pipeline--step-attach-render-data ()
 		 ,test
@@ -2982,15 +2983,6 @@
 		   (should (equal "some patch" extracted-patch))
 		   (should-not (text-properties-at 0 extracted-patch))
 		   (should-not (string-match-p "#(\"" result)))
-		 :doc "extract recovers stale printed string property ranges"
-		 (let* ((s (concat "visible"
-				   "\n" mevedel-pipeline--render-data-open
-				   "\n(:kind diff :patch #(\"abc\" 0 4 (fontified nil)) :rel-path \"f\")"
-				   "\n" mevedel-pipeline--render-data-close "\n"))
-			(extract (mevedel-pipeline-extract-render-data s)))
-		   (should (equal "visible" (car extract)))
-		   (should (equal '(:kind diff :patch "abc" :rel-path "f")
-				  (cdr extract))))
 		 :doc "string with no delimiter returns (STRING . nil)"
 		 (let ((extract (mevedel-pipeline-extract-render-data "just text")))
 		   (should (equal "just text" (car extract)))
@@ -3040,20 +3032,21 @@
 		   (should (equal "ok" (plist-get out :result)))
 		   (should (equal '((:path "/tmp/a.png" :mime "image/png"))
 				  (plist-get out :media))))
-		 :doc "handler returning a bare string leaves render-data nil"
+		 :doc "handler returning a bare string fails the step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "StringReturn"
-			       :handler (lambda (_args) "legacy")))
+			       :handler (lambda (_args) "invalid")))
 			(ctx (list :tool tool :args nil))
-			out)
-		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (equal "legacy" (plist-get out :result)))
-		   (should (null (plist-get out :render-data))))
+			failure)
+		   (mevedel-pipeline--step-handler
+		    ctx #'ignore (lambda (reason) (setq failure reason)))
+		   (should (string-match-p "expected a plist containing :result"
+					   failure)))
 		 :doc "normalizes raw byte result strings before callback"
 		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
 			(tool (mevedel-tool--create
 			       :name "RawByteReturn"
-			       :handler (lambda (_args) raw)))
+			       :handler (lambda (_args) (list :result raw))))
 			(ctx (list :tool tool :args nil))
 			out)
 		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)

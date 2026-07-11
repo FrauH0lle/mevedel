@@ -14,6 +14,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view-zone)
+(require 'mevedel-view)
 
 (defvar-local mevedel-view--agent-transcript-p nil)
 (defvar-local mevedel-view--input-marker nil)

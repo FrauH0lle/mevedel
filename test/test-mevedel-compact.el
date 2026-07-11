@@ -43,7 +43,7 @@
     (should (equal "## Goal\n- Continue"
                    (mevedel--compact-previous-summary)))))
 
-(mevedel-deftest mevedel--compact-apply-legacy ()
+(mevedel-deftest mevedel--compact-apply-in-place ()
   ,test
   (test)
   :doc "keeps PreCompact audit blocks gptel-ignored after summary cleanup"
@@ -54,7 +54,7 @@
           (audit '(:type compact-context
                    :event "PreCompact"
                    :context "compact note")))
-      (mevedel--compact-apply-legacy (point-max) summary (list audit))
+      (mevedel--compact-apply-in-place (point-max) summary (list audit))
       (goto-char (point-min))
       (search-forward "<!-- mevedel-hook-audit -->")
       (should (eq 'ignore

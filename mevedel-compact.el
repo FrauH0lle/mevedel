@@ -5,7 +5,7 @@
 ;; Summarizes older portions of a chat session to reduce token usage.  Persisted
 ;; sessions rotate to a new on-disk segment whose first block is an anchored
 ;; compaction summary followed by a preserved recent tail.  Non-persisted manual
-;; compaction falls back to the legacy in-buffer ignored-summary block.
+;; compaction uses an in-buffer ignored-summary block.
 
 ;;; Code:
 
@@ -1003,11 +1003,11 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
 Implements **split-on-compact**: when the session is materialized
 on disk, we finalize the current segment file and start a new one
 whose content is SUMMARY followed by TAIL-TEXT and PENDING-TEXT.
-Falls back to the legacy in-place approach when the session has no
+Uses the in-place approach when the session has no
 `save-path' (persistence disabled).
 
 BOUNDARY is unused in the segment-rotation path; it is preserved
-for the legacy fallback.  HOOK-AUDITS are persisted as ignored
+for in-place compaction.  HOOK-AUDITS are persisted as ignored
 side-channel records next to the summary."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (cond
@@ -1022,12 +1022,12 @@ side-channel records next to the summary."
        session (current-buffer) summary
        :tail-text tail-text
        :pending-text pending-text))
-     ;; Legacy path: in-place ignore marking (no on-disk persistence).
+     ;; In-place path: ignore marking without on-disk persistence.
      (t
-      (mevedel--compact-apply-legacy boundary summary hook-audits)))))
+      (mevedel--compact-apply-in-place boundary summary hook-audits)))))
 
-(defun mevedel--compact-apply-legacy (boundary summary &optional hook-audits)
-  "Legacy in-place compaction: mark content before BOUNDARY as ignored.
+(defun mevedel--compact-apply-in-place (boundary summary &optional hook-audits)
+  "Mark content before BOUNDARY as ignored for in-place compaction.
 
 Used when no on-disk session exists (`mevedel-session-persistence' is
 nil or the session has not yet been materialized).  Inserts SUMMARY at

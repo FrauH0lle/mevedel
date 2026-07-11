@@ -72,7 +72,9 @@
       (accept-process-output nil 0.01))
     (unless done
       (ert-fail "Timed out waiting for tool callback"))
-    result))
+    (should (and (proper-list-p result)
+                 (plist-member result :result)))
+    (plist-get result :result)))
 
 
 ;;
@@ -2044,12 +2046,7 @@
     (should (equal "MkDir: src/foo/ (created)"
                    (plist-get plist :header))))
 
-  :doc "detects exists from legacy result without render-data"
-  (let* ((plist (mevedel-tool-fs--render-mkdir
-                 "MkDir" '(:path "foo")
-                 "Directory already exists: /tmp/proj/foo"
-                 nil)))
-    (should (equal "MkDir: foo/ (exists)" (plist-get plist :header)))))
+)
 
 (provide 'test-mevedel-tool-fs)
 ;;; test-mevedel-tool-fs.el ends here

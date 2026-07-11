@@ -354,13 +354,21 @@ skills."
   (let ((file (mevedel-skills--state-file)))
     (if (not (file-readable-p file))
         nil
-      (condition-case nil
+      (condition-case err
           (with-temp-buffer
             (let ((read-eval nil))
               (insert-file-contents file)
               (let ((state (read (current-buffer))))
-                (and (listp state) state))))
-        (error nil)))))
+                (unless (and (proper-list-p state)
+                             (= (length state) 2)
+                             (eq (car state) :disabled-keys)
+                             (listp (cadr state))
+                             (cl-every #'stringp (cadr state)))
+                  (error "Unsupported skill state format"))
+                state)))
+        (error
+         (error "Could not read skill state %s: %s"
+                file (error-message-string err)))))))
 
 (defun mevedel-skills--write-state (state)
   "Write global skill STATE plist."
@@ -373,17 +381,9 @@ skills."
       (insert ";; Auto-generated, safe to edit\n\n")
       (pp state (current-buffer)))))
 
-(defun mevedel-skills--disabled-names ()
-  "Return persisted disabled skill names."
-  (cl-remove-if-not
-   #'stringp
-   (plist-get (mevedel-skills--read-state) :disabled)))
-
 (defun mevedel-skills--disabled-keys ()
   "Return persisted disabled stable skill keys."
-  (cl-remove-if-not
-   #'stringp
-   (plist-get (mevedel-skills--read-state) :disabled-keys)))
+  (plist-get (mevedel-skills--read-state) :disabled-keys))
 
 (defun mevedel-skills--state-key (skill)
   "Return stable persisted state key for SKILL."
@@ -392,63 +392,28 @@ skills."
     (concat "file:" (or (ignore-errors (file-truename file))
                         (expand-file-name file)))))
 
-(defun mevedel-skills--state-name-variants (skill name)
-  "Return persisted disabled-name variants for SKILL named NAME."
-  (let ((names (and (stringp name) (list name))))
-    (when (and skill
-               (stringp name)
-               (not (eq (mevedel-skill-source skill) 'plugin))
-               (string-match "\\`[^:]+:\\(.+\\)\\'" name))
-      (push (match-string 1 name) names))
-    (delete-dups names)))
-
-(defun mevedel-skills--set-enabled (skill-or-name enabled)
-  "Persist SKILL-OR-NAME as enabled or disabled according to ENABLED."
-  (let* ((skill (and (mevedel-skill-p skill-or-name) skill-or-name))
-         (name (if skill
-                   (mevedel-skill-name skill)
-                 skill-or-name))
-         (key (and skill (mevedel-skills--state-key skill))))
-    (unless (and (stringp name) (not (string-empty-p name)))
-      (user-error "Skill name is required"))
-    (let* ((state (or (mevedel-skills--read-state) nil))
-           (disabled (mevedel-skills--disabled-names))
-           (disabled-keys (if key
-                              (cl-remove key
-                                         (mevedel-skills--disabled-keys)
-                                         :test #'equal)
-                            (mevedel-skills--disabled-keys))))
-      (dolist (variant (mevedel-skills--state-name-variants skill name))
-        (setq disabled (cl-remove variant disabled :test #'equal)))
+(defun mevedel-skills--set-enabled (skill enabled)
+  "Persist file-backed SKILL as enabled or disabled according to ENABLED."
+  (unless (mevedel-skill-p skill)
+    (user-error "Loaded skill is required"))
+  (let ((key (mevedel-skills--state-key skill)))
+    (unless key
+      (user-error "Skill has no stable source file: %s"
+                  (mevedel-skill-name skill)))
+    (let* ((state (or (mevedel-skills--read-state)
+                      '(:disabled-keys nil)))
+           (disabled-keys
+            (cl-remove key (plist-get state :disabled-keys) :test #'equal)))
       (unless enabled
-        (if key
-            (push key disabled-keys)
-          (push name disabled)))
-      (setq disabled (sort (delete-dups disabled) #'string<))
-      (setq disabled-keys (sort (delete-dups disabled-keys) #'string<))
-      (setq state (plist-put state :disabled disabled))
-      (setq state (plist-put state :disabled-keys disabled-keys))
+        (push key disabled-keys))
+      (setf (plist-get state :disabled-keys)
+            (sort (delete-dups disabled-keys) #'string<))
       (mevedel-skills--write-state state))))
 
-(defun mevedel-skills--skill-enabled-p (skill-or-name)
-  "Return non-nil when SKILL-OR-NAME is not user-disabled."
-  (let* ((skill (and (mevedel-skill-p skill-or-name) skill-or-name))
-         (name (if skill
-                   (mevedel-skill-name skill)
-                 skill-or-name))
-         (key (and skill (mevedel-skills--state-key skill)))
-         (disabled (mevedel-skills--disabled-names))
-         (disabled-keys (mevedel-skills--disabled-keys)))
-    (not (or (cl-some
-              (lambda (variant)
-                (member variant disabled))
-              (mevedel-skills--state-name-variants skill name))
-             (and key (member key disabled-keys))))))
-
-(defun mevedel-skills--session-skill-or-name (session name)
-  "Return SESSION skill named NAME, or NAME when it is not loaded."
-  (or (and session (mevedel-session-get-skill session name))
-      name))
+(defun mevedel-skills--skill-enabled-p (skill)
+  "Return non-nil when SKILL is not user-disabled."
+  (let ((key (mevedel-skills--state-key skill)))
+    (not (and key (member key (mevedel-skills--disabled-keys))))))
 
 
 ;;
@@ -3175,26 +3140,28 @@ returns the body; error returns a `Error: ' prefixed message."
   (let* ((name (plist-get args :name))
          (arguments (plist-get args :arguments))
          (session (and (boundp 'mevedel--session) mevedel--session))
-         (skill (and session (mevedel-session-get-skill session name))))
+         (skill (and session (mevedel-session-get-skill session name)))
+         (return (lambda (result)
+                   (funcall callback (list :result result)))))
     (cond
      ((not (stringp name))
-      (funcall callback "Error: Skill name is required."))
+      (funcall return "Error: Skill name is required."))
      ((not session)
-      (funcall callback "Error: No active mevedel session."))
+      (funcall return "Error: No active mevedel session."))
      ((not skill)
-      (funcall callback (format "Error: Unknown skill '%s'." name)))
+      (funcall return (format "Error: Unknown skill '%s'." name)))
      (t
       (mevedel-skills-invoke
        skill arguments
        (lambda (outcome)
          (pcase (plist-get outcome :status)
            ('ok
-            (funcall callback
+            (funcall return
                      (or (plist-get outcome :body)
                          (plist-get outcome :result)
                          (format "Skill '%s' produced no body." name))))
            ('error
-            (funcall callback
+            (funcall return
                      (format "Error: %s"
                              (or (plist-get outcome :message)
                                  "skill invocation failed"))))))
@@ -3247,12 +3214,14 @@ When ACTIVE-ONLY is non-nil, dormant path-scoped skills are excluded."
   "Pipeline handler for the `ListSkills' tool.
 CALLBACK is the async tool callback.  ARGS is a plist with optional :query."
   (let* ((query (plist-get args :query))
-         (session (and (boundp 'mevedel--session) mevedel--session)))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (return (lambda (result)
+                   (funcall callback (list :result result)))))
     (cond
      ((not session)
-      (funcall callback "Error: No active mevedel session."))
+      (funcall return "Error: No active mevedel session."))
      ((and query (not (stringp query)))
-      (funcall callback "Error: query must be a string."))
+      (funcall return "Error: query must be a string."))
      (t
       (when (buffer-live-p (current-buffer))
         (mevedel-skills--ensure-fresh (current-buffer) session))
@@ -3272,7 +3241,7 @@ CALLBACK is the async tool callback.  ARGS is a plist with optional :query."
                                 (min (length matches)
                                      mevedel-skills--list-tool-limit)))
              (omitted (max 0 (- (length matches) (length shown)))))
-        (funcall callback
+        (funcall return
                  (mevedel-skills--format-list-tool-result
                   shown omitted narrowed)))))))
 
@@ -3768,14 +3737,16 @@ Routes through the lifecycle-aware permission transition path."
       ("enable"
        (setq name (mevedel-cmd--skills--require-name name "enable"))
        (mevedel-skills--set-enabled
-        (mevedel-skills--session-skill-or-name mevedel--session name)
+        (or (mevedel-session-get-skill mevedel--session name)
+            (user-error "Unknown skill: %s" name))
         t)
        (mevedel-skills--refresh-view-input-prompt)
        (message "Skill %s enabled" name))
       ("disable"
        (setq name (mevedel-cmd--skills--require-name name "disable"))
        (mevedel-skills--set-enabled
-        (mevedel-skills--session-skill-or-name mevedel--session name)
+        (or (mevedel-session-get-skill mevedel--session name)
+            (user-error "Unknown skill: %s" name))
         nil)
        (mevedel-skills--refresh-view-input-prompt)
        (message "Skill %s disabled" name))

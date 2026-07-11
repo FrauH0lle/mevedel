@@ -38,6 +38,11 @@
           (end-of-file nil))))
     (nreverse entries)))
 
+(defun test-bash-permissions--handler-result (envelope)
+  "Return the result from a canonical handler ENVELOPE."
+  (should (mevedel-pipeline--handler-return-p envelope))
+  (plist-get envelope :result))
+
 
 ;;
 ;;; Quote Balancing Tests
@@ -1060,7 +1065,7 @@
                    (plist-get captured :commands-summary))))
   :doc "prompts user and returns allow when pattern says ask and user approves"
   ;; Bash prompts through the queue's 5-button overlay instead of the
-  ;; legacy direct prompt primitive.  Mock the queued entry point and
+  ;; direct prompt primitive.  Mock the queued entry point and
   ;; exercise the allow-once outcome.
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "*" :action allow)))
@@ -1317,7 +1322,9 @@
   (let ((result nil)
         (done nil))
     (mevedel-tool-exec--bash
-     (lambda (r) (setq result r done t))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)
+	     done t))
      (list :command "echo hello"))
     ;; Wait for async process
     (with-timeout (5 (error "Timed out"))
@@ -1328,7 +1335,9 @@
   (let ((result nil)
         (done nil))
     (mevedel-tool-exec--bash
-     (lambda (r) (setq result r done t))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)
+	     done t))
      (list :command "exit 42"))
     (with-timeout (5 (error "Timed out"))
       (while (not done)
@@ -1350,7 +1359,9 @@
     (unwind-protect
         (progn
           (mevedel-tool-exec--bash
-           (lambda (r) (setq result r done t))
+	   (lambda (r)
+	     (setq result (test-bash-permissions--handler-result r)
+		   done t))
            (list :command "pwd"))
           (with-timeout (5 (error "Timed out"))
             (while (not done)
@@ -1365,7 +1376,9 @@
         (done nil)
         (mevedel-bash-timeout 30))
     (mevedel-tool-exec--bash
-     (lambda (r) (setq result r done t))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)
+             done t))
      (list :command "echo started; sleep 5; echo done"
            :timeout_seconds 1))
     (with-timeout (6 (error "Timed out"))
@@ -1380,7 +1393,9 @@
         (done nil)
         (mevedel-bash-timeout 1))
     (mevedel-tool-exec--bash
-     (lambda (r) (setq result r done t))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)
+             done t))
      (list :command "echo default-started; sleep 5; echo default-done"))
     (with-timeout (6 (error "Timed out"))
       (while (not done)
@@ -1718,25 +1733,29 @@
   :doc "evaluates simple expression"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(+ 1 2 3)"))
     (should (string-match-p "Result:\n6" result)))
   :doc "captures printed output"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(princ \"hello world\")"))
     (should (string-match-p "STDOUT:\nhello world" result)))
   :doc "reports eval errors"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(error \"test error\")"))
     (should (string-match-p "Error:.*test error" result)))
   :doc "returns string results with %S formatting"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "\"hello\""))
     (should (string-match-p "Result:\n\"hello\"" result)))
   :doc "evaluates with the session working directory bound"
@@ -1751,7 +1770,8 @@
     (unwind-protect
         (progn
           (mevedel-tool-exec--eval
-           (lambda (r) (setq result r))
+	   (lambda (r)
+	     (setq result (test-bash-permissions--handler-result r)))
            (list :expression "default-directory"))
           (should (string-match-p
                    (regexp-quote
@@ -1770,7 +1790,7 @@
           (should (= 2 (length (window-list))))
           (mevedel-tool-exec--eval
            (lambda (r)
-             (setq result r)
+	     (setq result (test-bash-permissions--handler-result r))
              (should (= 2 (length (window-list)))))
            (list :expression "(delete-other-windows)"))
           (should (string-match-p "Result:" result))
@@ -1785,7 +1805,8 @@
           (split-window-right)
           (should (= 2 (length (window-list))))
           (mevedel-tool-exec--eval
-           (lambda (r) (setq result r))
+	   (lambda (r)
+	     (setq result (test-bash-permissions--handler-result r)))
            (list :expression "(delete-other-windows)"
                  :preserve_ui :json-false))
           (should (string-match-p "Result:" result))
@@ -1794,7 +1815,8 @@
   :doc "evaluates simple expressions in batch mode"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(+ 4 5)" :mode "batch"))
     (while (null result)
       (accept-process-output nil 0.1))
@@ -1802,7 +1824,8 @@
   :doc "captures printed output in batch mode"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(princ \"batch hello\")" :mode "batch"))
     (while (null result)
       (accept-process-output nil 0.1))
@@ -1811,7 +1834,8 @@
   (let (result)
     (makunbound 'mevedel-test-batch-parent-mutation)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(setq mevedel-test-batch-parent-mutation 99)"
            :mode "batch"))
     (while (null result)
@@ -1821,7 +1845,8 @@
   :doc "batch mode does not expose bootstrap locals"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression
            "(list (boundp 'result-file) (boundp 'stdout-buffer) (boundp 'max-output-bytes))"
            :mode "batch"))
@@ -1831,7 +1856,8 @@
   :doc "batch mode bootstrap locals cannot be corrupted by evaluated code"
   (let (result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(progn (setq result-file nil) 42)"
            :mode "batch"))
     (while (null result)
@@ -1849,7 +1875,8 @@
     (unwind-protect
         (progn
           (mevedel-tool-exec--eval
-           (lambda (r) (setq result r))
+	   (lambda (r)
+	     (setq result (test-bash-permissions--handler-result r)))
            (list :expression "default-directory" :mode "batch"))
           (while (null result)
             (accept-process-output nil 0.1))
@@ -1864,7 +1891,8 @@
   (let ((mevedel-tool-exec--max-output-bytes 128)
         result)
     (mevedel-tool-exec--eval
-     (lambda (r) (setq result r))
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(progn (princ (make-string 2048 ?a)) (error \"boom\"))"
            :mode "batch"))
     (while (null result)

@@ -54,8 +54,7 @@ permission rules, tasks, prompt-index (driving the rewind picker and
 latest resume preview), `:file-snapshots` (per-turn map of tracked files
 to backup names), workspace identity, `:working-directory`, fork lineage
 (`:forked-from-session-id` / `:forked-from-turn`), and
-`:agent-transcripts` metadata. Older sidecars without
-`:working-directory` restore at the workspace root.
+`:agent-transcripts` metadata.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree

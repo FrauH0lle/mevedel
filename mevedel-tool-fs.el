@@ -379,11 +379,10 @@ Header shows the directory path with a created, exists, or error suffix."
            (status
             (cond
              ((string-prefix-p "Error" result) "error")
-             ((and (listp render-data)
+             ((and (proper-list-p render-data)
                    (eq (plist-get render-data :kind) 'mkdir))
               (if (plist-get render-data :created) "created" "exists"))
-             ((string-match-p "already exists" result) "exists")
-             (t "created"))))
+             (t (error "Invalid MkDir render data")))))
       (list :header (format "%s: %s (%s)"
                             (or name "MkDir")
                             shown
@@ -790,6 +789,12 @@ SOURCE is the original source path when PATH points to a generated file."
 (defun mevedel-tool-fs--media-read-result (text media)
   "Return Read media TEXT with MEDIA side-channel data."
   (list :result text :media media))
+
+(defun mevedel-tool-fs--handler-result (result)
+  "Return RESULT as a canonical native handler envelope."
+  (if (and (proper-list-p result) (plist-member result :result))
+      result
+    (list :result result)))
 
 (defun mevedel-tool-fs--media-dedup-key (args)
   "Return a stable key for media Read options in ARGS."
@@ -1266,6 +1271,10 @@ content, not a read failure.\n</system-reminder>" filename))
              mevedel--session filename 'read offset limit))
           content))))))
 
+(defun mevedel-tool-fs--read (args)
+  "Return the Read result for ARGS in a canonical handler envelope."
+  (mevedel-tool-fs--handler-result (mevedel-tool-fs--read-file args)))
+
 (defun mevedel-tool-fs--finalize-glob-buffer ()
   "Bound current buffer and return the model-visible Glob result."
   (unless (save-excursion
@@ -1293,7 +1302,7 @@ content, not a read failure.\n</system-reminder>" filename))
 
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.
-CALLBACK receives the result string.  ARGS is a plist with :pattern
+CALLBACK receives the result envelope.  ARGS is a plist with :pattern
 and optional :path."
   (let* ((pattern (plist-get args :pattern))
          (path (plist-get args :path)))
@@ -1336,7 +1345,9 @@ and optional :path."
                      (setq result (mevedel-tool-fs--finalize-glob-buffer))))
                  (when (buffer-live-p output-buffer)
                    (kill-buffer output-buffer))
-                 (funcall callback (or result ""))))))
+                 (funcall callback
+                          (mevedel-tool-fs--handler-result
+                           (or result "")))))))
         (error
          (when (buffer-live-p output-buffer)
            (kill-buffer output-buffer))
@@ -1344,7 +1355,7 @@ and optional :path."
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
-CALLBACK receives the result string.  ARGS is a plist with :pattern and
+CALLBACK receives the result envelope.  ARGS is a plist with :pattern and
 optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
 :type, :multiline, :context, :-A, :-B, :-C."
   (let* ((pattern (plist-get args :pattern))
@@ -1470,7 +1481,9 @@ Narrow your search with :glob, :type, or a more specific :pattern."
                                                      (buffer-string)))))
                  (when (buffer-live-p output-buffer)
                    (kill-buffer output-buffer))
-                 (funcall callback (or result ""))))))
+                 (funcall callback
+                          (mevedel-tool-fs--handler-result
+                           (or result "")))))))
         (error
          (when (buffer-live-p output-buffer)
            (kill-buffer output-buffer))
@@ -1482,7 +1495,7 @@ Narrow your search with :glob, :type, or a more specific :pattern."
 
 (defun mevedel-tool-fs--write (callback args)
   "Write a file to the local filesystem.
-CALLBACK receives the result string.  ARGS is a plist with :file_path
+CALLBACK receives the result envelope.  ARGS is a plist with :file_path
 and :content."
   (let* ((file-path (plist-get args :file_path))
          (content (plist-get args :content))
@@ -1503,19 +1516,23 @@ and :content."
            :temp-file temp-file
            :original-content original-content
            :path full-path
-           :callback callback
+           :callback (lambda (result)
+                       (funcall callback
+                                (mevedel-tool-fs--handler-result result)))
            :tool-name "Write"
            ;; Write replaces the entire file -- no need for diff-apply
            :apply-fn (lambda ()
                        (make-directory dir t)
                        (copy-file temp-file full-path t))))
       (error
-       (funcall callback (format "Error writing file %s: %s"
-                                 file-path (error-message-string err)))))))
+       (funcall callback
+                (mevedel-tool-fs--handler-result
+                 (format "Error writing file %s: %s"
+                         file-path (error-message-string err))))))))
 
 (defun mevedel-tool-fs--edit (callback args)
   "Edit a file by performing exact string replacement.
-CALLBACK receives the result string.  ARGS is a plist with :file_path,
+CALLBACK receives the result envelope.  ARGS is a plist with :file_path,
 :old_string, :new_string, and optionally :replace_all."
   (let* ((file-path (plist-get args :file_path))
          (old-string (plist-get args :old_string))
@@ -1551,17 +1568,24 @@ CALLBACK receives the result string.  ARGS is a plist with :file_path,
                  ;; Error -- clean up and report
                  (progn
                    (delete-file temp-file)
-                   (funcall callback success-or-error))
+                   (funcall callback
+                            (mevedel-tool-fs--handler-result
+                             success-or-error)))
                ;; Success -- show diff and confirm
                (mevedel-preview-mode-add-preview
                 :temp-file temp-file
                 :original-content original-content
                 :path full-path
-                :callback callback
+                :callback (lambda (result)
+                            (funcall
+                             callback
+                             (mevedel-tool-fs--handler-result result)))
                 :tool-name "Edit")))))
       (error
-       (funcall callback (format "Error editing file %s: %s"
-                                 file-path (error-message-string err)))))))
+       (funcall callback
+                (mevedel-tool-fs--handler-result
+                 (format "Error editing file %s: %s"
+                         file-path (error-message-string err))))))))
 
 (defun mevedel-tool-fs--apply-string-replacement (temp-file old-string new-string replace-all callback)
   "Apply string replacement to TEMP-FILE.
@@ -1612,7 +1636,7 @@ failure."
 
 (defun mevedel-tool-fs--mkdir (callback args)
   "Create a directory at the given path.
-CALLBACK receives the result string or a plist carrying render-data.
+CALLBACK receives the result envelope, including render-data on success.
 ARGS is a plist with :path."
   (let ((path (plist-get args :path)))
     (unless (stringp path)
@@ -1639,8 +1663,10 @@ ARGS is a plist with :path."
                                :path full-path
                                :rel-path rel-path))))
       (error
-       (funcall callback (format "Error creating directory %s: %s"
-                                 path (error-message-string err)))))))
+       (funcall callback
+                (mevedel-tool-fs--handler-result
+                 (format "Error creating directory %s: %s"
+                         path (error-message-string err))))))))
 
 
 ;;
@@ -1669,7 +1695,7 @@ ARGS is a plist with :path."
     :name "Read"
     :description "Read a file from the local filesystem."
     :prompt-file "tools/read.md"
-    :handler #'mevedel-tool-fs--read-file
+    :handler #'mevedel-tool-fs--read
     :args ((file_path path :required "Absolute or relative path to the file to read. Relative paths are resolved from the session working directory.")
            (offset integer :optional
                   "Text-file line number to start reading from. Do not provide for images or PDFs.")

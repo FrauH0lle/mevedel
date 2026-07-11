@@ -61,6 +61,18 @@
   (mevedel-tool-introspect--register)
   (mevedel-skills--register))
 
+(defun mevedel-tools-test--register-agent-fsm (invocation fsm)
+  "Register FSM like the canonical agent runner for INVOCATION."
+  (setf (gptel-fsm-info fsm)
+        (plist-put (gptel-fsm-info fsm)
+                   :mevedel-agent-invocation invocation))
+  (with-current-buffer
+      (mevedel-agent-invocation-parent-data-buffer invocation)
+    (setf (alist-get (mevedel-agent-invocation-agent-id invocation)
+                     mevedel-tools--agents-fsm nil nil #'equal)
+          fsm))
+  fsm)
+
 ;;
 ;;; Polymorphic deferred accessors
 
@@ -822,7 +834,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (insert "x")
                      (make-overlay (point-min) (point-max))))
                (fsm (gptel-make-fsm :info (list :context ov))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :mevedel-agent-invocation inv))
           (setf (mevedel-agent-invocation-buffer inv) ov-buf)
           (with-current-buffer buf
             (setq-local mevedel--session
@@ -876,7 +890,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (insert "x")
                      (make-overlay (point-min) (point-max))))
                (fsm (gptel-make-fsm :info (list :context ov))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :mevedel-agent-invocation inv))
           (setf (mevedel-agent-invocation-buffer inv) ov-buf)
           (with-current-buffer buf
             (setq-local mevedel--session
@@ -969,7 +985,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      :info (list :context ov
                                  :backend nil
                                  :data data))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :mevedel-agent-invocation inv))
           (with-current-buffer agent-buf
             (insert "* Agent Task: do work\nbody\n"))
           (setf (mevedel-agent-invocation-messages inv)
@@ -1014,7 +1032,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      :info (list :context ov
                                  :backend nil
                                  :data data))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :mevedel-agent-invocation inv))
           (with-current-buffer agent-buf
             (insert "* Agent Task: do work\nbody\n"))
           (setf (mevedel-agent-invocation-turn-count inv) 1)
@@ -1228,7 +1248,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      :info (list :context ov
                                  :backend nil
                                  :data data))))
-          (overlay-put ov 'mevedel-agent-invocation inv)
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :mevedel-agent-invocation inv))
           (mevedel-tools--handle-message-inject fsm)
           (should (equal 0 (length (plist-get data :messages)))))
       (kill-buffer ov-buf)))
@@ -1274,13 +1296,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      (fake-fsm (gptel-make-fsm
                                 :info (list :context ov :buffer buf)))
                      ((symbol-function 'mevedel-agent-exec--run)
-                      (lambda (_cb _type _desc _prompt &rest _)
-                        fake-fsm)))
+                      (lambda (_cb _type _desc _prompt invocation _agent-buffer)
+                        (mevedel-tools-test--register-agent-fsm
+                         invocation fake-fsm))))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task-by-name
+              (mevedel-tools--task
                (lambda (resp &rest _) (setq result resp))
-               "explorer" "survey" "survey files"
-               t))
+               (mevedel-agent-get "explorer") "survey" "survey files"
+               :background t))
             ;; main-cb should have been called synchronously.
             ;; The launch status may be wrapped with render-data for
             ;; the running-handle badge when a transcript path is set
@@ -1319,9 +1342,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task-by-name
-               #'ignore "explorer" "survey" "survey files"
-               t))
+              (mevedel-tools--task
+               #'ignore (mevedel-agent-get "explorer") "survey" "survey files"
+               :background t))
             ;; Simulate sub-agent completing
             (funcall captured-cb "The exploration found 5 issues.")
             ;; Result should be in the parent session's mailbox
@@ -1347,10 +1370,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (lambda (cb _type _desc _prompt &rest _)
                         (setq captured-cb cb)
                         fake-fsm)))
-            (mevedel-tools--task-by-name
+            (mevedel-tools--task
              (lambda (resp &rest _) (setq result resp))
-             "explorer" "survey" "survey files"
-             nil)
+             (mevedel-agent-get "explorer") "survey" "survey files")
             ;; main-cb should NOT have been called yet
             (should (null result))
             ;; Simulate sub-agent completing
@@ -1384,7 +1406,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                            :mevedel-agent-invocation inv
                                            :callback #'ignore)
                                :state 'WAIT))
-                        child-fsm))
+                        (mevedel-tools-test--register-agent-fsm
+                         inv child-fsm)))
                      ((symbol-function
                        'mevedel-agent-exec--save-transcript-buffer)
                       (lambda (_invocation) t))
@@ -1398,12 +1421,11 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                      ((symbol-function
                        'mevedel-session-persistence--write-sidecar-now)
                       (lambda (_session _buffer) t)))
-            (mevedel-tools--task-by-name
+            (mevedel-tools--task
              (lambda (resp &rest _)
                (cl-incf main-calls)
                (setq result resp))
-             "explorer" "survey" "survey files"
-             nil)
+             (mevedel-agent-get "explorer") "survey" "survey files")
             (should inv)
             (should (functionp
                      (mevedel-agent-invocation-parent-tool-callback inv)))
@@ -1449,21 +1471,21 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             ;; launch-status string must NOT be returned synchronously.
             (should (null result))
             (funcall captured-cb "Done.")
-            (should (equal "Done." result))))
+            (should (equal "Done." (plist-get result :result)))))
       (kill-buffer buf)))
 
   :doc "Agent handler forwards optional model tier"
   (require 'mevedel-tool-ui)
   (let ((captured nil)
         (result nil))
-    (cl-letf (((symbol-function 'mevedel-tools--task-by-name)
-               (lambda (_cb agent-type description prompt background model-tier)
+    (cl-letf (((symbol-function 'mevedel-tools--task)
+               (lambda (_cb agent description prompt &rest options)
                  (setq captured
-                       (list :agent-type agent-type
+                       (list :agent-type (mevedel-agent-name agent)
                              :description description
                              :prompt prompt
-                             :background background
-                             :model-tier model-tier)))))
+                             :background (plist-get options :background)
+                             :model-tier (plist-get options :model-tier))))))
       (mevedel-tool-ui--agent
        (lambda (resp &rest _) (setq result resp))
        '(:subagent_type "explorer"
@@ -1478,7 +1500,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   (require 'mevedel-tool-ui)
   (let ((called nil)
         (result nil))
-    (cl-letf (((symbol-function 'mevedel-tools--task-by-name)
+    (cl-letf (((symbol-function 'mevedel-tools--task)
                (lambda (&rest _)
                  (setq called t))))
       (mevedel-tool-ui--agent
@@ -1488,7 +1510,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
          :prompt "survey files"
          :model "Claude:claude-sonnet-4-5"))
       (should (null called))
-      (should (string-match-p "Unknown model tier" result))))
+      (should (string-match-p "Unknown model tier"
+                              (plist-get result :result)))))
 
   :doc "unknown agent type is rejected up front with an Error response"
   (let* ((session (mevedel-tools-test--make-session))
@@ -1503,13 +1526,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 	                     (lambda (&rest _)
 	                       (setq runner-called t)
 	                       (error "Runner must not be called for unknown agent"))))
-            (mevedel-tools--task-by-name
+            (mevedel-tool-ui--agent
              (lambda (resp &rest _) (setq result resp))
-             "no-such-agent-type" "oops" "do nothing")
+             '(:subagent_type "no-such-agent-type"
+               :description "oops" :prompt "do nothing"))
             (should (null runner-called))
-            (should (stringp result))
+            (should (stringp (plist-get result :result)))
             (should (string-match-p "Unknown agent type: no-such-agent-type"
-                                    result))
+                                    (plist-get result :result)))
             ;; No background tracking should have been created.
             (should (null (mevedel-session-background-agents session)))
             (should (null mevedel-tools--agents-fsm))))
@@ -1527,8 +1551,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 	                       (error "Boom"))))
             (let ((mevedel-tools--current-fsm nil))
               (should-error
-               (mevedel-tools--task-by-name
-                #'ignore "explorer" "survey" "survey files" t))))
+               (mevedel-tools--task
+                #'ignore (mevedel-agent-get "explorer")
+                "survey" "survey files" :background t))))
           (should (null (mevedel-session-background-agents session)))
           (should (null (mevedel-session-pending-reminders session)))
           (should (null mevedel-tools--agents-fsm)))
@@ -1664,9 +1689,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (lambda (_cb _type _desc _prompt &rest _)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task-by-name
-               #'ignore "explorer" "survey" "survey files"
-               t))
+              (mevedel-tools--task
+               #'ignore (mevedel-agent-get "explorer") "survey" "survey files"
+               :background t))
             ;; Agent ID should be tracked on the session.
             (should (= 1 (length (mevedel-session-background-agents session))))))
       (kill-buffer buf)))
@@ -1688,9 +1713,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task-by-name
-               #'ignore "explorer" "survey" "survey files"
-               t))
+              (mevedel-tools--task
+               #'ignore (mevedel-agent-get "explorer") "survey" "survey files"
+               :background t))
             ;; Complete the background agent.
             (funcall captured-cb "Done.")
             ;; Agent should be removed from tracking.
@@ -1722,9 +1747,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         fake-fsm)))
             ;; Simulate parent FSM dispatching a background agent.
             (let ((mevedel-tools--current-fsm parent-fsm))
-              (mevedel-tools--task-by-name
-               #'ignore "explorer" "survey" "survey files"
-               t))
+              (mevedel-tools--task
+               #'ignore (mevedel-agent-get "explorer") "survey" "survey files"
+               :background t))
             ;; Park the parent FSM in BWAIT.
             (setf (gptel-fsm-state parent-fsm) 'BWAIT)
             ;; Complete the background agent.
@@ -1848,14 +1873,13 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (lambda (cb _type _desc _prompt &optional invocation _agent-buffer)
                         (setq coordinator-cb cb
                               inv invocation)
-                        (when inv
-                          (overlay-put ov 'mevedel-agent-invocation inv))
-                        fake-coordinator-fsm)))
-            (mevedel-tools--task-by-name
+                        (mevedel-tools-test--register-agent-fsm
+                         inv fake-coordinator-fsm))))
+            (mevedel-tools--task
              (lambda (resp &rest _)
                (cl-incf call-count)
                (setq result resp))
-             "coordinator" "orchestrate" "do stuff")
+             (mevedel-agent-get "coordinator") "orchestrate" "do stuff")
             (should inv)
             ;; Step 2: Simulate the coordinator spawning a background
             ;; agent.  Directly push onto the invocation's
@@ -1906,14 +1930,13 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                       (lambda (cb _type _desc _prompt &optional invocation _agent-buffer)
                         (setq coordinator-cb cb
                               inv invocation)
-                        (when inv
-                          (overlay-put ov 'mevedel-agent-invocation inv))
-                        fake-coordinator-fsm)))
-            (mevedel-tools--task-by-name
+                        (mevedel-tools-test--register-agent-fsm
+                         inv fake-coordinator-fsm))))
+            (mevedel-tools--task
              (lambda (resp &rest _)
                (cl-incf call-count)
                (setq result resp))
-             "coordinator" "orchestrate" "do stuff")
+             (mevedel-agent-get "coordinator") "orchestrate" "do stuff")
             (should inv)
             ;; Race: the background child finished BEFORE the parent
             ;; produced its text-only turn, so by callback time
@@ -1962,12 +1985,11 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                                     &optional invocation _agent-buffer)
                           (setq coordinator-cb cb
                                 inv invocation)
-                          (when inv
-                            (overlay-put ov 'mevedel-agent-invocation inv))
-                          fake-coordinator-fsm)))
-              (mevedel-tools--task-by-name
+                          (mevedel-tools-test--register-agent-fsm
+                           inv fake-coordinator-fsm))))
+              (mevedel-tools--task
                (lambda (resp &rest _) (setq result resp))
-               "coordinator" "orchestrate" "do stuff")
+               (mevedel-agent-get "coordinator") "orchestrate" "do stuff")
               (should inv)
               (should (assoc (mevedel-agent-invocation-agent-id inv)
                              mevedel-tools--agents-fsm))))
@@ -2007,11 +2029,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq coordinator-cb cb
                               inv invocation)
                         (when inv
-                          (overlay-put ov 'mevedel-agent-invocation inv))
+                          (setf (gptel-fsm-info fake-coordinator-fsm)
+                                (plist-put
+                                 (gptel-fsm-info fake-coordinator-fsm)
+                                 :mevedel-agent-invocation inv)))
                         fake-coordinator-fsm)))
-            (mevedel-tools--task-by-name
+            (mevedel-tools--task
              (lambda (resp &rest _) (setq result resp))
-             "coordinator" "orchestrate" "do stuff")
+             (mevedel-agent-get "coordinator") "orchestrate" "do stuff")
             (mevedel-tools--ctx-push-background-agent inv "explorer--fake")
             ;; Error response must forward immediately so the parent
             ;; tool call doesn't hang on a dead child.
@@ -2627,7 +2652,9 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         (setq captured-cb cb)
                         fake-fsm)))
             (let ((mevedel-tools--current-fsm nil))
-              (mevedel-tools--task-by-name #'ignore "explorer" "survey" "go" t))
+              (mevedel-tools--task
+               #'ignore (mevedel-agent-get "explorer") "survey" "go"
+               :background t))
             (should (= 1 (length (mevedel-session-background-agents session))))
             ;; Break push-message so the bg callback's push branch raises;
             ;; remove-background-agent MUST still run so the parent isn't

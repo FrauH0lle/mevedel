@@ -374,7 +374,7 @@ session progress."
 (defun mevedel-tool-tutor--get-hints (callback _args)
   "Retrieve hint history for the current tutoring session.
 CALLBACK receives the formatted hint history.  _ARGS is unused."
-  (funcall callback (mevedel-tools--get-hints)))
+  (funcall callback (list :result (mevedel-tools--get-hints))))
 
 (defun mevedel-tool-tutor--record-hint (callback args)
   "Record a hint given during tutoring.
@@ -393,7 +393,9 @@ CALLBACK receives confirmation.  ARGS is a plist with :hint_type,
     (unless (numberp depth)
       (error "Parameter depth is required"))
     (funcall callback
-             (mevedel-tools--record-hint hint_type concept hint_summary depth))))
+             (list :result
+                   (mevedel-tools--record-hint
+                    hint_type concept hint_summary depth)))))
 
 
 ;;

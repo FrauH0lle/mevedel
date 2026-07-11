@@ -120,7 +120,7 @@ unless it was modified."
 
 (defun mevedel-tool-code--xref-references (callback args)
   "Find references to an identifier using xref.
-CALLBACK receives the result string.  ARGS is a plist with :identifier
+CALLBACK receives the result envelope.  ARGS is a plist with :identifier
 and :file_path."
   (require 'xref)
   (let ((identifier (plist-get args :identifier))
@@ -141,17 +141,22 @@ and :file_path."
                (let ((xref-items (mevedel-tool-code--with-quiet-file-visit
                                     (xref-backend-references backend identifier))))
                  (funcall callback
-                          (if xref-items
-                              (mevedel-tool-code--format-xref-items xref-items)
-                            (format "No references found for '%s'" identifier)))))
+                          (list :result
+                                (if xref-items
+                                    (mevedel-tool-code--format-xref-items
+                                     xref-items)
+                                  (format "No references found for '%s'"
+                                          identifier))))))
            (error
-            (funcall callback (format "Error searching for '%s' in %s: %s"
-                                      identifier file-path
-                                      (error-message-string err))))))))))
+            (funcall callback
+                     (list :result
+                           (format "Error searching for '%s' in %s: %s"
+                                   identifier file-path
+                                   (error-message-string err)))))))))))
 
 (defun mevedel-tool-code--xref-definitions (callback args)
   "Find symbols matching a pattern using `xref-backend-apropos'.
-CALLBACK receives the result string.  ARGS is a plist with :pattern
+CALLBACK receives the result envelope.  ARGS is a plist with :pattern
 and :file_path."
   (require 'xref)
   ;; `xref-apropos-regexp' calls into apropos without loading it.
@@ -172,7 +177,9 @@ and :file_path."
                (cond
                 ((not backend)
                  (funcall callback
-                          (format "No xref backend available for %s" file-path)))
+                          (list :result
+                                (format "No xref backend available for %s"
+                                        file-path))))
                 ;; Special handling for etags without tags table
                 ((and (eq backend 'etags)
                       (not (or (and (boundp 'tags-file-name) tags-file-name
@@ -180,19 +187,27 @@ and :file_path."
                                (and (boundp 'tags-table-list) tags-table-list
                                     (cl-some #'file-exists-p tags-table-list)))))
                  (funcall callback
-                          (format "No tags table available for %s" file-path)))
+                          (list :result
+                                (format "No tags table available for %s"
+                                        file-path))))
                 (t
                  (let ((xref-items (mevedel-tool-code--with-quiet-file-visit
                                       (xref-backend-apropos backend pattern))))
                    (funcall callback
-                            (if xref-items
-                                (mevedel-tool-code--format-xref-items xref-items)
-                              (format "No symbols found matching pattern '%s'"
-                                      pattern)))))))
+                            (list :result
+                                  (if xref-items
+                                      (mevedel-tool-code--format-xref-items
+                                       xref-items)
+                                    (format
+                                     "No symbols found matching pattern '%s'"
+                                     pattern))))))))
            (error
-            (funcall callback (format "Error searching for pattern '%s' in %s: %s"
-                                      pattern file-path
-                                      (error-message-string err))))))))))
+            (funcall callback
+                     (list :result
+                           (format
+                            "Error searching for pattern '%s' in %s: %s"
+                            pattern file-path
+                            (error-message-string err)))))))))))
 
 
 ;;
@@ -200,7 +215,7 @@ and :file_path."
 
 (defun mevedel-tool-code--imenu (callback args)
   "List symbols in a file using imenu.
-CALLBACK receives the result string.  ARGS is a plist with :file_path."
+CALLBACK receives the result envelope.  ARGS is a plist with :file_path."
   (require 'imenu)
   (let ((file-path (plist-get args :file_path)))
     (mevedel-tool-code--with-file-buffer
@@ -242,15 +257,22 @@ CALLBACK receives the result string.  ARGS is a plist with :file_path."
                                            category (car subitem))
                                    results)))))))
                    (funcall callback
-                            (if results
-                                (string-join (nreverse results) "\n")
-                              (format "No symbols found in %s" file-path))))
+                            (list :result
+                                  (if results
+                                      (string-join (nreverse results) "\n")
+                                    (format "No symbols found in %s"
+                                            file-path)))))
                (funcall callback
-                        (format "No imenu support or no symbols found in %s"
-                                file-path))))
+                        (list :result
+                              (format
+                               "No imenu support or no symbols found in %s"
+                               file-path)))))
          (error
-          (funcall callback (format "Error listing symbols in %s: %s"
-                                    file-path (error-message-string err)))))))))
+          (funcall callback
+                   (list :result
+                         (format "Error listing symbols in %s: %s"
+                                 file-path
+                                 (error-message-string err))))))))))
 
 
 ;;
@@ -258,7 +280,7 @@ CALLBACK receives the result string.  ARGS is a plist with :file_path."
 
 (defun mevedel-tool-code--treesitter (callback args)
   "Get tree-sitter syntax tree information for a file.
-CALLBACK receives the result string.  ARGS is a plist with :file_path
+CALLBACK receives the result envelope.  ARGS is a plist with :file_path
 and optional :line, :column, :whole_file, :include_ancestors,
 :include_children."
   (let ((file-path (plist-get args :file_path))
@@ -291,8 +313,9 @@ and optional :line, :column, :whole_file, :include_ancestors,
                    (error "No tree-sitter node found"))
                  (if whole-file
                      (funcall callback
-                              (mevedel-tool-code--treesit-format-tree
-                               root-node 0 20))
+                              (list :result
+                                    (mevedel-tool-code--treesit-format-tree
+                                     root-node 0 20)))
                    (let ((results nil))
                      (push (format "Node Type: %s" (treesit-node-type node))
                            results)
@@ -347,10 +370,15 @@ and optional :line, :column, :whole_file, :include_ancestors,
                                            (- child-count 20))
                                    results)))))
                      (funcall callback
-                              (string-join (nreverse results) "\n")))))))
+                              (list :result
+                                    (string-join (nreverse results)
+                                                 "\n"))))))))
          (error
-          (funcall callback (format "Error getting tree-sitter info for %s: %s"
-                                    file-path (error-message-string err)))))))))
+          (funcall callback
+                   (list :result
+                         (format
+                          "Error getting tree-sitter info for %s: %s"
+                          file-path (error-message-string err))))))))))
 
 (defun mevedel-tool-code--treesit-format-tree (node level max-depth)
   "Format NODE and its children as a tree string.

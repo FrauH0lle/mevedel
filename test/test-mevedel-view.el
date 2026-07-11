@@ -788,18 +788,24 @@ PROPS is the value for the `gptel' property."
 ;;
 ;;; Turn grouping
 
+(defun mevedel-view-test--group-synthetic-segments (segments)
+  "Group synthetic SEGMENTS against a sufficiently large data buffer."
+  (with-temp-buffer
+    (insert (make-string 300 ?x))
+    (mevedel-view--group-into-turns segments (current-buffer))))
+
 (mevedel-deftest mevedel-view--group-into-turns ()
   ,test
   (test)
   :doc "single user turn"
   (let* ((segs '((user 1 10)))
-         (turns (mevedel-view--group-into-turns segs)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
     (should (= 1 (length turns)))
     (should (eq 'user (plist-get (car turns) :role))))
 
   :doc "user then assistant turn"
   (let* ((segs '((user 1 10) (response 10 30) (tool 30 50)))
-         (turns (mevedel-view--group-into-turns segs)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
     (should (= 2 (length turns)))
     (should (eq 'user (plist-get (car turns) :role)))
     (should (eq 'assistant (plist-get (cadr turns) :role)))
@@ -807,7 +813,7 @@ PROPS is the value for the `gptel' property."
 
   :doc "multiple user-assistant pairs"
   (let* ((segs '((user 1 10) (response 10 20) (user 20 30) (response 30 40)))
-         (turns (mevedel-view--group-into-turns segs)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
     (should (= 4 (length turns)))
     (should (eq 'user (plist-get (car turns) :role)))
     (should (eq 'assistant (plist-get (cadr turns) :role)))
@@ -817,26 +823,28 @@ PROPS is the value for the `gptel' property."
   :doc "reasoning text (nil segments) inside assistant turn absorbed"
   (let* ((segs '((user 1 10) (ignore 10 20) (user 20 40) (tool 40 80)
                  (user 80 90) (ignore 90 100) (response 100 150)))
-         (turns (mevedel-view--group-into-turns segs)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
     (should (= 2 (length turns)))
     (should (eq 'user (plist-get (car turns) :role)))
     (should (eq 'assistant (plist-get (cadr turns) :role)))
     (should (= 6 (length (plist-get (cadr turns) :segments)))))
 
   :doc "mid-turn nil gap after response absorbed when next is ignore/tool"
-  (let* ((segs '((user 1 10) (response 10 50) (user 50 60)
-                 (ignore 60 80) (tool 80 120) (response 120 200)))
-         (turns (mevedel-view--group-into-turns segs)))
-    (should (= 2 (length turns)))
-    (should (eq 'user (plist-get (car turns) :role)))
-    (should (eq 'assistant (plist-get (cadr turns) :role)))
-    ;; All 5 non-user segments belong to one assistant turn
-    (should (= 5 (length (plist-get (cadr turns) :segments)))))
+  (with-temp-buffer
+    (insert (make-string 200 ?\s))
+    (let* ((segs '((user 1 10) (response 10 50) (user 50 60)
+                   (ignore 60 80) (tool 80 120) (response 120 200)))
+           (turns (mevedel-view--group-into-turns segs (current-buffer))))
+      (should (= 2 (length turns)))
+      (should (eq 'user (plist-get (car turns) :role)))
+      (should (eq 'assistant (plist-get (cadr turns) :role)))
+      ;; All 5 non-user segments belong to one assistant turn
+      (should (= 5 (length (plist-get (cadr turns) :segments))))))
 
   :doc "nil gap after response starts new user turn when next is response"
   (let* ((segs '((user 1 10) (response 10 50) (user 50 60)
                  (response 60 100)))
-         (turns (mevedel-view--group-into-turns segs)))
+         (turns (mevedel-view-test--group-synthetic-segments segs)))
     ;; user | assistant(response) | user | assistant(response)
     (should (= 4 (length turns)))
     (should (eq 'user (plist-get (car turns) :role)))
@@ -2182,31 +2190,7 @@ PROPS is the value for the `gptel' property."
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Full hidden prompt" text))
-          (should (string-match-p "Assistant answer" text))))))
-
-  :doc "tolerates detached status-marker without crashing"
-  ;; A detached marker passes `markerp' but `marker-position' returns
-  ;; nil; downstream uses (`<=', `delete-region', `apply-collapse-states')
-  ;; would otherwise signal `wrong-type-argument: integer-or-marker-p, nil'.
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Hello\n" nil)
-    (mevedel-view-test--insert-data data-buf "Hi.\n" 'response)
-    (with-current-buffer view-buf
-      (set-marker mevedel-view--status-marker nil))
-    (with-current-buffer data-buf
-      (should
-       (progn (mevedel-view--render-response (point-min) (point-max)) t))))
-
-  :doc "tolerates nil status-marker without crashing"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "*** Hello\n" nil)
-    (mevedel-view-test--insert-data data-buf "Hi.\n" 'response)
-    (with-current-buffer view-buf
-      (setq mevedel-view--status-marker nil))
-    (with-current-buffer data-buf
-      (should
-       (progn (mevedel-view--render-response (point-min) (point-max)) t)))))
-
+          (should (string-match-p "Assistant answer" text)))))))
 
 ;;
 ;;; Spinner
@@ -5372,7 +5356,7 @@ PROPS is the value for the `gptel' property."
       (should (overlayp (mevedel-view-zone-region 'interaction)))
       (should (string-match-p "plan" (buffer-string)))
       (should (string-match-p "permission" (buffer-string)))
-      (should (string-match-p "plan\n\n\npermission" (buffer-string)))
+      (should (string-match-p "plan\n\npermission" (buffer-string)))
       (maphash
        (lambda (_id overlay)
          (should (< (overlay-start overlay) (overlay-end overlay)))
@@ -5437,7 +5421,7 @@ PROPS is the value for the `gptel' property."
             (should (= 0 (mevedel-view-test--count-substring
                           "old body text" text))))))))
 
-  :doc "fragment migration preserves legacy spacing for body without trailing newline"
+  :doc "fragment rendering normalizes body without trailing newline"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (let ((overlay
@@ -5574,7 +5558,7 @@ PROPS is the value for the `gptel' property."
                :activate #'ignore))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
-                     (list (list :agent-id "verifier--abcdef123456"
+                     (list (list :agent-id "verifier--abcdef0123456789abcdef0123456789"
                                  :status 'blocked
                                  :agent-type "verifier"
                                  :description "Verify tracked diff"
@@ -5623,7 +5607,7 @@ PROPS is the value for the `gptel' property."
         (setq-local mevedel--session session)
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
-                     (list (list :agent-id "verifier--abcdef123456"
+                     (list (list :agent-id "verifier--abcdef0123456789abcdef0123456789"
                                  :status 'blocked
                                  :agent-type "verifier"
                                  :description "Verify tracked diff"
@@ -5640,7 +5624,7 @@ PROPS is the value for the `gptel' property."
                :specifier-key :path
                :specifier-value "/tmp/after-status.txt"
                :include-always nil
-               :origin "verifier--abcdef123456"
+               :origin "verifier--abcdef0123456789abcdef0123456789"
                :callback (lambda (outcome) (push outcome outcomes)))
          session))
       (with-current-buffer view-buf
@@ -6005,7 +5989,8 @@ PROPS is the value for the `gptel' property."
              (outcomes nil))
         (unwind-protect
             (progn
-              (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+              (setf (mevedel-agent-invocation-agent-id inv)
+                    "verifier--0123456789abcdef0123456789abcdef")
               (setf (mevedel-agent-invocation-parent-data-buffer inv)
                     data-buf)
               (setf (mevedel-agent-invocation-parent-session inv)
@@ -6029,7 +6014,7 @@ PROPS is the value for the `gptel' property."
                          :specifier-key :path
                          :specifier-value "/tmp/from-agent.txt"
                          :include-always nil
-                         :origin "verifier--abc"
+                         :origin "verifier--0123456789abcdef0123456789abcdef"
                          :callback
                          (lambda (outcome)
                            (push outcome outcomes)))
@@ -6283,81 +6268,6 @@ PROPS is the value for the `gptel' property."
             (should (eq (get-text-property (point)
                                            'mevedel-view-collapsed)
                         nil))))))))
-
-  :doc "agent handles without transcript ids still expand inline"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer data-buf
-      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
-    (with-current-buffer view-buf
-      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
-             (rendering (mevedel-tool-ui--render-agent
-                         "Agent"
-                         '(:subagent_type "explorer"
-                           :description "Legacy no-id task")
-                         "rendered legacy body\n"
-                         nil)))
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering source)
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
-                   (lambda (buf start end &optional _collapsed-only)
-                     (should (eq buf data-buf))
-                     (should (= start (car source)))
-                     (should (= end (cdr source)))
-                     rendering)))
-          (goto-char (point-min))
-          (search-forward "Agent: explorer")
-          (goto-char (match-beginning 0))
-          (should (eq (get-text-property (point) 'mevedel-view-type)
-                      'agent-handle))
-          (should (eq (get-text-property (point)
-                                         'mevedel-view-collapsed)
-                      t))
-          (mevedel-view-toggle-section)
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "rendered legacy body" text))
-            (should-not (string-match-p "raw launch payload" text)))
-          (goto-char (point-min))
-          (search-forward "Agent: explorer")
-          (goto-char (match-beginning 0))
-          (mevedel-view-toggle-section)
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
-            (should-not (string-match-p "rendered legacy body" text)))))))
-
-  :doc "agent handles with unopenable ids still expand inline"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer data-buf
-      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
-    (with-current-buffer view-buf
-      (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
-             (rendering (mevedel-tool-ui--render-agent
-                         "Agent"
-                         '(:subagent_type "explorer"
-                           :description "Malformed render-data task")
-                         "rendered malformed body\n"
-                         '(:kind something-else
-                           :agent-id "explorer--badid"))))
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering source)
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (cl-letf (((symbol-function 'mevedel-view--segment-rendering)
-                   (lambda (_buf _start _end) rendering)))
-          (goto-char (point-min))
-          (search-forward "Agent: explorer")
-          (goto-char (match-beginning 0))
-          (mevedel-view-toggle-section)
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "rendered malformed body" text))
-            (should-not (string-match-p "raw launch payload" text)))))))
 
   :doc "agent handles with missing saved transcripts report unavailable"
   (mevedel-view-test--with-buffers
@@ -9408,60 +9318,6 @@ state of its inner sections"
         (with-current-buffer view-buf
           (mevedel-view--cancel-tool-boundary-render)))))
 
-  :doc "pending live tail tolerates detached status and input markers"
-  (mevedel-view-test--with-buffers
-    (let ((render-count 0)
-          (mevedel-view-tool-boundary-render-delay 60))
-      (with-current-buffer view-buf
-        (let ((inhibit-read-only t))
-          (goto-char (marker-position mevedel-view--status-marker))
-          (insert "TASK STATUS\n")
-          (set-marker mevedel-view--status-marker nil)
-          (set-marker mevedel-view--input-marker nil)
-          (mevedel-view--set-in-flight-turn-start (point-min))
-          (setq mevedel-view--data-turn-start
-                (with-current-buffer data-buf
-                  (copy-marker (point-min))))))
-      (unwind-protect
-          (cl-letf (((symbol-function 'mevedel-view--render-incremental)
-                     (lambda (&rest _) (cl-incf render-count))))
-            (with-current-buffer data-buf
-              (should-not
-               (mevedel-view--pre-tool-hook
-                '(:id "call-1" :name "Read" :args (:file_path "a")))))
-            (with-current-buffer view-buf
-              (let* ((text (buffer-substring-no-properties
-                            (point-min) (point-max)))
-                     (calling (string-match-p "Calling Read: a" text))
-                     (header (string-match-p "mevedel" text)))
-                (should (numberp calling))
-                (should (numberp header))
-                (should (< header calling))
-                (should (= 0 render-count)))))
-        (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
-
-  :doc "incremental render tolerates detached status and input markers"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "assistant text\n" 'response)
-    (with-current-buffer view-buf
-      (let ((inhibit-read-only t))
-        (set-marker mevedel-view--status-marker nil)
-        (set-marker mevedel-view--input-marker nil)
-        (mevedel-view--set-in-flight-turn-start (point-min))
-        (setq mevedel-view--data-turn-start
-              (with-current-buffer data-buf
-                (copy-marker (point-min))))
-        (setq mevedel-view--pending-tool-calls
-              (list (cons "call-1" "Calling Read: a")))
-        (should (progn (mevedel-view--render-incremental data-buf) t))
-        (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
-               (header (string-match-p "mevedel" text))
-               (calling (string-match-p "Calling Read: a" text)))
-          (should (numberp header))
-          (should (numberp calling))
-          (should (< header calling))))))
-
   :doc "tool hooks do not return rendered agent-status strings to gptel"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
@@ -9683,21 +9539,6 @@ state of its inner sections"
         (should (eq (mevedel-view-zone-region 'history-live)
                     (get-text-property
                      fragment-pos 'mevedel-view-zone-region))))))
-
-  :doc "cleanup ignores legacy spinner-frame-only live tails"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (let ((inhibit-read-only t))
-        (goto-char mevedel-view--input-marker)
-        (insert (propertize "⠸"
-                            'mevedel-view-inline-spinner-frame t
-                            'font-lock-face 'mevedel-view-ephemeral)
-                (propertize " Calling Agent: explorer...\n"
-                            'font-lock-face 'mevedel-view-ephemeral)))
-      (mevedel-view--delete-pending-tool-live-lines)
-      (should (string-match-p "Calling Agent"
-                              (buffer-substring-no-properties
-                               (point-min) (point-max))))))
 
   :doc "cleanup ignores stale pending regions without live fragments"
   (mevedel-view-test--with-buffers
@@ -12034,21 +11875,6 @@ finds it during `$' skill dispatch."
                  "✓ finished worker--blank\n\n    │ first"
                  text))
         (should (string-match-p "│ first\n    │ \n    │ second" text)))))
-
-  :doc "legacy agent-result from attribute renders as a mailbox card"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data
-     data-buf
-     "<agent-result from=\"reviewer--abc123\">\nfindings\n</agent-result>\n"
-     nil)
-    (with-current-buffer view-buf
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✓ finished reviewer--abc123" text))
-        (should (string-match-p "findings" text))
-        (should-not (string-match-p "<agent-result" text))
-        (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
 
   :doc "long agent-result delivery expands to the final response body"
   (mevedel-view-test--with-buffers

@@ -38,15 +38,16 @@ flowchart TD
 
 ## Handler return shape
 
-Callbacks fire with plist:
+Every native mevedel handler returns, or fires its callback with, a plist:
 
 ```
 (:result STR :render-data (:kind diff :patch PATCH :path PATH :rel-path REL))
 ```
 
 The pipeline splits `:result` (LLM-facing) from `:render-data`
-(LLM-invisible side channel). Plain strings still work for legacy
-handlers.
+(LLM-invisible side channel). `:result` is required, even when no render data
+is present. Wrapped external gptel tools are converted to this shape by the
+tool registry before entering the pipeline.
 
 ## Overlay-preserving apply
 
