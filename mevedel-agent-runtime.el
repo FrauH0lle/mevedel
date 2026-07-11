@@ -150,24 +150,27 @@
                   "mevedel-tool-task" (session owner status))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--insert-attribution "mevedel-view"
-                  (agent-id &optional live-click-p calls))
-(declare-function mevedel-view--interaction-anchor "mevedel-view" ())
-(declare-function mevedel-view--interaction-register "mevedel-view"
-                  (descriptor))
-(declare-function mevedel-view--interaction-target-buffer "mevedel-view"
-                  (&optional data-buffer))
-(declare-function mevedel-view--interaction-unregister "mevedel-view"
-                  (id))
-(declare-function mevedel-view-agent-live-transcript-finalize
-                  "mevedel-view" (invocation))
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
-(defvar mevedel-view--interaction-marker)
-(defvar mevedel-view--interaction-overlays)
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view--insert-attribution "mevedel-view-agent"
+                  (agent-id &optional live-click-p calls))
+(declare-function mevedel-view-agent-live-transcript-finalize
+                  "mevedel-view-agent" (invocation))
 
 ;; `mevedel-view-composer'
 (defvar mevedel-view--input-marker)
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-anchor
+                  "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-register
+                  "mevedel-view-interaction" (descriptor))
+(declare-function mevedel-view--interaction-target-buffer
+                  "mevedel-view-interaction" (&optional data-buffer))
+(declare-function mevedel-view--interaction-unregister
+                  "mevedel-view-interaction" (id))
 
 (defun mevedel-agent-runtime--ctx-messages (ctx)
   "Return CTX's inbound message queue."

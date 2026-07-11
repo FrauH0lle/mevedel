@@ -16,7 +16,9 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
-(declare-function mevedel-view--interaction-unregister "mevedel-view" (id))
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-unregister
+                  "mevedel-view-interaction" (id))
 
 (cl-defstruct (mevedel-queue-spec (:constructor mevedel-queue-spec--create))
   name

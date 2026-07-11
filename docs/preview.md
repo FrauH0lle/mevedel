@@ -18,6 +18,9 @@ trust-rest (`S`), toggle (`TAB`).
 a preview leaves point where it was instead of auto-focusing the preview, and
 adds a canceller to the active request's `cancellers` list, so `mevedel-abort`
 tears everything down cleanly.
+Interactive preview controls register with `mevedel-view-interaction.el`;
+preview mode owns their callbacks while the interaction module owns ordering,
+callback-overlay placement, and redraw.
 
 ## Preview flow
 

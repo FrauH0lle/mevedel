@@ -97,12 +97,17 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
-(declare-function mevedel-view--interaction-anchor "mevedel-view" ())
-(declare-function mevedel-view--interaction-register "mevedel-view"
-                  (descriptor))
-(declare-function mevedel-view--interaction-target-buffer "mevedel-view"
-                  (&optional data-buffer))
 (defvar mevedel--view-buffer)
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-anchor
+                  "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-register
+                  "mevedel-view-interaction"
+                  (descriptor))
+(declare-function mevedel-view--interaction-target-buffer
+                  "mevedel-view-interaction"
+                  (&optional data-buffer))
 
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree-create-session

@@ -111,7 +111,9 @@ Chat / view
   mevedel-transcript-audit.el hidden audit record encoding and structural parsing
   mevedel-transcript-restore.el  transcript property restoration via the canonical grammar
   mevedel-view.el             view mode, zones, and session coordination
+  mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
+  mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-render.el      transcript rendering, folding, source mapping, navigation
   mevedel-view-stream.el      streaming, request progress, and gptel stream integration
   mevedel-view-audit.el       audit disclosure rendering

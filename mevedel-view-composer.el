@@ -156,12 +156,11 @@
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--interaction-rebuild "mevedel-view" ())
-(declare-function mevedel-view--interaction-register
-                  "mevedel-view" (descriptor))
-(defvar mevedel-view--agent-transcript-p)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
+
+;; `mevedel-view-agent'
+(defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-audit'
 (declare-function mevedel-view--prompt-rewrite-audit-record
@@ -171,6 +170,12 @@
 (declare-function mevedel-view-history-add "mevedel-view-history" (input))
 (declare-function mevedel-view-history-load "mevedel-view-history"
                   (&optional session))
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-rebuild
+                  "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-register
+                  "mevedel-view-interaction" (descriptor))
 
 ;; `mevedel-view-markdown'
 (autoload 'mevedel-view--normalize-local-file-uri-path

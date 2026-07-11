@@ -21,12 +21,15 @@
                   (&optional source-buffer overlay))
 (defvar mevedel--prompt-overlays)
 
-;; `mevedel-view'
-(declare-function mevedel-view--interaction-register "mevedel-view"
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-register
+                  "mevedel-view-interaction"
                   (descriptor))
-(declare-function mevedel-view--interaction-target-buffer "mevedel-view"
+(declare-function mevedel-view--interaction-target-buffer
+                  "mevedel-view-interaction"
                   (&optional data-buffer))
-(declare-function mevedel-view--interaction-unregister "mevedel-view" (id))
+(declare-function mevedel-view--interaction-unregister
+                  "mevedel-view-interaction" (id))
 
 
 ;;

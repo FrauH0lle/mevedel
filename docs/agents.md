@@ -178,16 +178,18 @@ parent session's `agents/` directory. The parent session mirrors an
 `agent-transcripts` alist into the sidecar with agent id, type,
 description, path, status, timestamps, parent turn, and call count.
 
-The main view renders compact one-line agent handles from tool
-render-data and sidecar state. Handles show type, shortened task,
-status, call count, and transcript attribution; recent ephemeral
+`mevedel-view-agent.el` owns transcript lookup and inspection views plus the
+aggregate live-agent status and targeted handle refresh. The main view renders
+compact one-line agent handles from tool render-data and sidecar state.
+Handles show type, shortened task, status, call count, and transcript
+attribution; recent ephemeral
 activity is kept out of the default view to avoid churn. Terminal
 handles open a rendered read-only transcript view from the saved
 transcript file. Running handles open a rendered read-only view over
 the live agent buffer when that buffer is available.
 
-The status zone can show aggregate running or blocked agent rows so
-the user can locate active handles without scanning the whole
+The agent view owner supplies aggregate running or blocked rows to the status
+zone so the user can locate active handles without scanning the whole
 transcript. Terminal agent outcomes stay in their inline tool handles
 and transcript views instead of being repeated in the aggregate status
 zone.

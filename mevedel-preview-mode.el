@@ -44,11 +44,6 @@
 (declare-function mevedel-request-push-canceller "mevedel-structs" (request canceller))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 
-;; `mevedel-view'
-(declare-function mevedel-view--interaction-anchor "mevedel-view" ())
-(declare-function mevedel-view--interaction-register "mevedel-view" (descriptor))
-(declare-function mevedel-view--interaction-unregister "mevedel-view" (id))
-
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
                   (temp-file real-path workspace root
@@ -57,6 +52,14 @@
 ;; `mevedel-utilities'
 (declare-function mevedel-ediff-patch "mevedel-utilities" ())
 (defvar mevedel--ediff-finished-hook)
+
+;; `mevedel-view-interaction'
+(declare-function mevedel-view--interaction-anchor
+                  "mevedel-view-interaction" ())
+(declare-function mevedel-view--interaction-register
+                  "mevedel-view-interaction" (descriptor))
+(declare-function mevedel-view--interaction-unregister
+                  "mevedel-view-interaction" (id))
 
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
