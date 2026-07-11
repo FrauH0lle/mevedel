@@ -47,7 +47,7 @@ the maintained docs, a design note, or a commit instead.
 
 ### Markdown view affordances use regex scanning
 
-- **Location:** `mevedel-view.el` (`mevedel-view--decorate-markdown-in-range`)
+- **Location:** `mevedel-view-markdown.el` (`mevedel-view--decorate-markdown-in-range`)
 - **What's owed:** Replace the small regex scanners for fenced blocks,
   pipe tables, local images, and local links if real transcripts show
   false positives or missed Markdown forms.

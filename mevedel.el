@@ -58,6 +58,7 @@
 (require 'mevedel-transcript)
 (require 'mevedel-transcript-restore)
 (require 'mevedel-compact)
+(require 'mevedel-view-render)
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
 (require 'mevedel-reminders)

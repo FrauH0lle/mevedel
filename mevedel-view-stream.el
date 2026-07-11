@@ -10,6 +10,9 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `cl-extra'
+(declare-function cl-subseq "cl-extra" (sequence start &optional end))
+
 ;; `gptel'
 (declare-function gptel-curl--stream-filter "ext:gptel-request" (process output))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -34,19 +37,10 @@
 ;; `mevedel-view'
 (declare-function mevedel-view--agent-fsm-p "mevedel-view" (info data-buffer))
 (declare-function mevedel-view--agent-status-counts "mevedel-view" ())
-(declare-function mevedel-view--append-request-summary "mevedel-view" (data-buf start))
 (declare-function mevedel-view--call-preserving-input-point "mevedel-view" (thunk))
 (declare-function mevedel-view--call-preserving-user-view-state
                   "mevedel-view" (thunk))
-(declare-function mevedel-view--debug-log "mevedel-view" (event &rest data))
-(declare-function mevedel-view--debug-spinner-state "mevedel-view" ())
-(declare-function mevedel-view--debug-state "mevedel-view" (&optional data-buf start end))
-(declare-function mevedel-view--history-insertion-marker "mevedel-view" ())
-(declare-function mevedel-view--pending-tool-fragments "mevedel-view" (entries))
-(declare-function mevedel-view--pending-tool-insertion-target "mevedel-view" ())
 (declare-function mevedel-view--render-agent-status "mevedel-view" ())
-(declare-function mevedel-view--render-incremental "mevedel-view" (data-buf &optional start end))
-(declare-function mevedel-view--request-progress-anchor "mevedel-view" ())
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
 (defvar mevedel-view--agent-transcript-p)
 (defvar mevedel-view--display-map)
@@ -57,6 +51,26 @@
 (defvar mevedel-view-spinner-animate)
 (defvar mevedel-view-spinner-frames)
 (defvar mevedel-view-spinner-interval)
+
+;; `mevedel-view-render'
+(declare-function mevedel-view--append-request-summary
+                  "mevedel-view-render" (data-buf start))
+(declare-function mevedel-view--debug-log
+                  "mevedel-view-render" (event &rest data))
+(declare-function mevedel-view--debug-spinner-state
+                  "mevedel-view-render" ())
+(declare-function mevedel-view--debug-state
+                  "mevedel-view-render" (&optional data-buf start end))
+(declare-function mevedel-view--history-insertion-marker
+                  "mevedel-view-render" ())
+(declare-function mevedel-view--pending-tool-fragments
+                  "mevedel-view-render" (entries))
+(declare-function mevedel-view--pending-tool-insertion-target
+                  "mevedel-view-render" ())
+(declare-function mevedel-view--render-incremental
+                  "mevedel-view-render" (data-buf &optional start end))
+(declare-function mevedel-view--request-progress-anchor
+                  "mevedel-view-render" ())
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-clear "mevedel-view-zone" (namespace))
