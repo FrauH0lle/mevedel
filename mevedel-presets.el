@@ -41,11 +41,11 @@
                   "mevedel-chat" ())
 (defvar mevedel--current-directive-uuid)
 
-;; `mevedel-view'
+;; `mevedel-view-composer'
 (declare-function mevedel-view--handle-queued-user-message-inject
-                  "mevedel-view" (fsm))
+                  "mevedel-view-composer" (fsm))
 (declare-function mevedel-view--schedule-queued-user-message-drain
-                  "mevedel-view" (fsm))
+                  "mevedel-view-composer" (fsm))
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm

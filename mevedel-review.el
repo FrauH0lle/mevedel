@@ -100,18 +100,20 @@
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 
-;; `mevedel-view'
-(declare-function mevedel-view--fork-if-pending "mevedel-view" ())
+;; `mevedel-view-composer'
+(declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
 (declare-function mevedel-view--forward-input
-                  "mevedel-view"
+                  "mevedel-view-composer"
                   (input &optional display-text before-send prompt-checked
-                         on-block hook-context))
+                         on-block hook-context hook-audits))
 (declare-function mevedel-view--run-prompt-submit-hook
-                  "mevedel-view"
+                  "mevedel-view-composer"
                   (input display-text callback &optional blocked-callback))
 (declare-function mevedel-view--start-fork-skill-turn
-                  "mevedel-view"
+                  "mevedel-view-composer"
                   (input display-text &optional hook-context))
+
+;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 
 ;; `mevedel-view-stream'

@@ -176,11 +176,13 @@
 (declare-function mevedel--optimize-transcript-buffer
                   "mevedel-utilities" ())
 
-;; `mevedel-view'
+;; `mevedel-view-composer'
 (declare-function mevedel-view--begin-external-turn
-                  "mevedel-view"
+                  "mevedel-view-composer"
                   (display-text data-turn-start &optional kind hook-context
                                 no-spinner))
+
+;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)

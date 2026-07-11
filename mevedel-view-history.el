@@ -23,10 +23,12 @@
 (declare-function mevedel-workspace-ensure-generated-state-ignored
                   "mevedel-workspace" (workspace))
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view-abort "mevedel-view-composer" ())
+(declare-function mevedel-view--clear-input "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
+
 ;; `mevedel-view'
-(declare-function mevedel-view-abort "mevedel-view" ())
-(declare-function mevedel-view--clear-input "mevedel-view" ())
-(declare-function mevedel-view--input-start "mevedel-view" ())
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel-view--agent-transcript-p)

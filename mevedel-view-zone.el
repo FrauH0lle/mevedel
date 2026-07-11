@@ -19,10 +19,11 @@
 (eval-when-compile
   (require 'cl-lib))
 
-;; `mevedel-view'
-(declare-function mevedel-view--input-start "mevedel-view" ())
-
+;; `mevedel-view-composer'
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (defvar mevedel-view--input-marker)
+
+;; `mevedel-view'
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-marker)
 

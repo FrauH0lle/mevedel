@@ -163,9 +163,11 @@
                   "mevedel-view" (invocation))
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
 (declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
-(defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--interaction-overlays)
+
+;; `mevedel-view-composer'
+(defvar mevedel-view--input-marker)
 
 (defun mevedel-agent-runtime--ctx-messages (ctx)
   "Return CTX's inbound message queue."

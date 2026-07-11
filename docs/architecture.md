@@ -77,8 +77,10 @@ environment, then the dynamic skill roster.
 `mevedel-view-stream.el` isolates gptel stream advice, incremental-render
 scheduling, pending-tool live rows, and foreground request-progress state.
 It delegates transcript rendering to `mevedel-view-render.el`, while
-`mevedel-view.el` coordinates the view mode, zones, composer, and session
-lifecycle. The authoritative text remains in the gptel data buffer.
+`mevedel-view-composer.el` owns the editable input, submission hooks, queued
+follow-ups, and send/fork dispatch. `mevedel-view.el` coordinates the view
+mode, zones, and session lifecycle. The authoritative text remains in the
+gptel data buffer.
 
 Successful top-level turns have one completion boundary in the preset
 lifecycle.  The ordinary gptel `DONE` state and direct foreground fork skills

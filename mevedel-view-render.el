@@ -109,18 +109,10 @@
                   "mevedel-transcript-restore" (&optional only-if-missing))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--call-preserving-input-text
-                  "mevedel-view" (thunk))
-(declare-function mevedel-view--call-preserving-window-state
-                  "mevedel-view" (thunk))
-(declare-function mevedel-view--call-with-render-boundaries-advancing
-                  "mevedel-view" (thunk))
 (declare-function mevedel-view--display-label-for-agent
                   "mevedel-view" (agent-id))
 (declare-function mevedel-view--header-string
                   "mevedel-view" (data-buf))
-(declare-function mevedel-view--input-marker-position
-                  "mevedel-view" ())
 (declare-function mevedel-view--insert-attribution
                   "mevedel-view" (agent-id &optional live-click-p calls))
 (declare-function mevedel-view--interaction-rebuild
@@ -133,17 +125,29 @@
                   "mevedel-view" (&optional agent-id))
 (declare-function mevedel-view-agent-status-toggle
                   "mevedel-view" ())
-(declare-function mevedel-view-refresh-input-prompt
-                  "mevedel-view" ())
 (defvar mevedel-view--agent-handle-map)
 (defvar mevedel-view--agent-label-map)
 (defvar mevedel-view--agent-transcript-p)
 (defvar mevedel-view--display-map)
-(defvar mevedel-view--input-marker)
 (defvar mevedel-view--interaction-marker)
 (defvar mevedel-view--status-agent-collapse-key)
 (defvar mevedel-view--status-marker)
 (defvar mevedel-view-pending-tools-visible-max)
+
+;; `mevedel-view-composer'
+(declare-function mevedel-view--call-preserving-input-text
+                  "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-preserving-window-state
+                  "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--call-with-render-boundaries-advancing
+                  "mevedel-view-composer" (thunk))
+(declare-function mevedel-view--ensure-interactive-chat-view
+                  "mevedel-view-composer" ())
+(declare-function mevedel-view--input-marker-position
+                  "mevedel-view-composer" ())
+(declare-function mevedel-view-refresh-input-prompt
+                  "mevedel-view-composer" ())
+(defvar mevedel-view--input-marker)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--delete-pending-tool-live-lines
@@ -5150,6 +5154,67 @@ rerender)."
                last-current-assistant-turn-start
                :elapsed (- (float-time) start-time)
                :state (mevedel-view--debug-state data-buf))))))))))))
+
+
+;;
+;;; Optimistic user turn rendering
+
+(defun mevedel-view--insert-user-message
+    (text &optional kind hook-context prompt-summary-body
+          prompt-summary-source hook-audits)
+  "Render TEXT as a user message in the history region.
+Inserts at the history boundary with read-only protection.
+KIND may be `directive' to fontify directive-specific display text.
+HOOK-CONTEXT is model-visible hook context to summarize in the view.
+PROMPT-SUMMARY-BODY, when non-nil, is shown as a collapsed Prompt
+section backed by PROMPT-SUMMARY-SOURCE when available.  HOOK-AUDITS
+is a list of hook audit records to render under the user turn.
+
+Sets `mevedel-view--user-pre-rendered' so the post-response render
+path knows to skip the user turn it would otherwise extract for this
+same exchange -- see `mevedel-view-stream-render-response'.  Returns a
+marker at the end of the inserted block."
+  (mevedel-view--ensure-interactive-chat-view)
+  (save-excursion
+    (goto-char (mevedel-view--history-insertion-marker))
+    (mevedel-view-render--with-boundaries-advancing
+      (let ((inhibit-read-only t)
+            (start (point))
+            user-end)
+        (insert (propertize "You\n" 'font-lock-face 'mevedel-view-user-header))
+        (insert (if (eq kind 'directive)
+                    (mevedel-view--fontify-directive-display-text text)
+                  text))
+        (unless (eq (char-before) ?\n)
+          (insert "\n"))
+        (setq user-end (point))
+        (when-let* ((events (mevedel-view--hook-context-events-from-text
+                             hook-context)))
+          (mevedel-view--insert-hook-context-block events))
+        (dolist (audit hook-audits)
+          (mevedel-view--insert-hook-audit-block
+           audit
+           (plist-get audit :source)))
+        (let ((prompt-body (and (stringp prompt-summary-body)
+                                (string-trim prompt-summary-body))))
+          (when (and prompt-body
+                     (not (string-empty-p prompt-body)))
+            (mevedel-view--insert-rendered-tool
+             (list :header "Prompt"
+                   :body prompt-body
+                   :body-mode 'markdown-mode
+                   :vtype 'prompt-summary
+                   :initially-collapsed-p t)
+             prompt-summary-source)))
+        (insert (propertize "\n" 'font-lock-face 'mevedel-view-separator))
+        (add-text-properties start (point)
+                             `(read-only t
+                               keymap ,mevedel-view--display-map
+                               front-sticky (read-only keymap)
+                               rear-nonsticky (read-only keymap)))
+        (put-text-property start user-end 'mevedel-view-type 'user)
+        (setq mevedel-view--user-pre-rendered t)
+        (copy-marker (point) nil)))))
 
 
 (provide 'mevedel-view-render)
