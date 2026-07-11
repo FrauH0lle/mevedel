@@ -11,6 +11,8 @@
 (require 'mevedel-view)
 (require 'mevedel-tool-fs)
 (require 'mevedel-preview-mode)
+(require 'mevedel-workspace)
+(require 'gptel-agent-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -20,6 +22,8 @@
           "helpers"))
 
 (defvar gptel-backend)
+(defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
+(defvar mevedel-plans-directory)
 
 
 ;;
@@ -1360,21 +1364,61 @@
   (should-error
    (mevedel-tool-fs--write #'ignore (list :file_path "/tmp/test.txt"))
    :type 'error)
-  :doc "creates parent directories"
-  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
-         (nested-path (file-name-concat tmp-dir "a" "b" "c" "file.txt")))
+  :doc "approval is the filesystem mutation boundary"
+  (let* ((mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
+         (mevedel-plans-directory (file-name-concat ".mevedel" "plans"))
+         (root (make-temp-file "mevedel-test-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "write-test"))
+         (data-buf (generate-new-buffer " *mevedel-write-data*"))
+         (reject-parent (file-name-concat root "reject" "nested"))
+         (abort-parent (file-name-concat root "abort" "nested"))
+         (approve-parent (file-name-concat root "approve" "nested"))
+         (reject-path (file-name-concat reject-parent "file.txt"))
+         (abort-path (file-name-concat abort-parent "file.txt"))
+         (approve-path (file-name-concat approve-parent "file.txt"))
+         result)
     (unwind-protect
         (progn
-          ;; The handler will create dirs, then call mevedel-preview-mode-add-preview
-          ;; which will error because there's no chat buffer context. That's
-          ;; fine -- we just want to verify the directories were created.
-          (condition-case _err
-              (mevedel-tool-fs--write #'ignore
-                                      (list :file_path nested-path
-                                            :content "hello"))
-            (error nil))
-          (should (file-directory-p (file-name-concat tmp-dir "a" "b" "c"))))
-      (delete-directory tmp-dir t)))
+          (with-current-buffer data-buf
+            (fundamental-mode)
+            (setq-local default-directory (file-name-as-directory root))
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel--session
+                        (mevedel-session-create "write-test" workspace)))
+          (with-current-buffer data-buf
+            (mevedel-tool-fs--write (lambda (value) (setq result value))
+                                    (list :file_path reject-path
+                                          :content "hello"))
+            (should-not result)
+            (should-not (file-exists-p reject-parent))
+            (mevedel-preview-mode--reject-overlay
+             (car mevedel-preview-mode--pending)))
+          (should-not (file-exists-p reject-parent))
+
+          (with-current-buffer data-buf
+            (mevedel-tool-fs--write #'ignore
+                                    (list :file_path abort-path
+                                          :content "hello"))
+            (should-not (file-exists-p abort-parent))
+            (mevedel-preview-mode-dismiss-all))
+          (should-not (file-exists-p abort-parent))
+
+          (with-current-buffer data-buf
+            (mevedel-tool-fs--write #'ignore
+                                    (list :file_path approve-path
+                                          :content "hello"))
+            (should-not (file-exists-p approve-parent))
+            (mevedel-preview-mode--approve-overlay
+             (car mevedel-preview-mode--pending)))
+          (should (file-directory-p approve-parent))
+          (should (equal "hello"
+                         (with-temp-buffer
+                           (insert-file-contents approve-path)
+                           (buffer-string)))))
+      (when (buffer-live-p data-buf)
+        (kill-buffer data-buf))
+      (delete-directory root t)))
   :doc "writes temp file with correct content"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (target (file-name-concat tmp-dir "output.txt"))

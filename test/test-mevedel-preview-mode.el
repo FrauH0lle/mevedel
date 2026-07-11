@@ -462,6 +462,77 @@ cleanup."
             (should (file-exists-p stub))))
       (when (file-exists-p stub) (delete-file stub)))))
 
+(mevedel-deftest mevedel-preview-mode--prepare-ediff-target ()
+  ,test
+  (test)
+  :doc "records and removes the stub and directories created for Ediff"
+  (let* ((root (make-temp-file "mevedel-preview-edit-" t))
+         (parent (file-name-concat root "new" "nested"))
+         (target (file-name-concat parent "file.txt")))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((ov (mevedel-preview-test--make-overlay
+                     (current-buffer)
+                     `((mevedel--real-path . ,target)))))
+            (mevedel-preview-mode--register ov)
+            (mevedel-preview-mode--prepare-ediff-target ov target)
+            (should (file-exists-p target))
+            (should (file-directory-p parent))
+            (mevedel-preview-mode--reject-overlay ov)
+            (should-not (file-exists-p target))
+            (should-not (file-exists-p (file-name-concat root "new")))))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
+(mevedel-deftest mevedel-preview-mode--return-after-ediff ()
+  ,test
+  (test)
+  :doc "replacement preview retains Ediff stub directory ownership"
+  (let* ((mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
+         (root (make-temp-file "mevedel-preview-return-" t))
+         (parent (file-name-concat root "new" "nested"))
+         (target (file-name-concat parent "file.txt"))
+         (temp (make-temp-file "mevedel-preview-return-content-"
+                               nil nil "new content\n"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "return-test"))
+         diff-buffer)
+    (unwind-protect
+        (with-temp-buffer
+          (let ((ov (mevedel-preview-test--make-overlay
+                     (current-buffer)
+                     `((mevedel--temp-file . ,temp)
+                       (mevedel--real-path . ,target)
+                       (mevedel--data-buffer . ,(current-buffer))
+                       (mevedel--workspace . ,workspace)
+                       (mevedel--root . ,root)))))
+            (mevedel-preview-mode--register ov)
+            (mevedel-preview-mode--prepare-ediff-target ov target)
+            (overlay-put
+             ov 'mevedel--diff-buffer
+             (mevedel-tool-fs--setup-diff-buffer
+              temp target workspace root (current-buffer) t))
+            (setq mevedel-preview-mode--current-overlay ov)
+            (mevedel-preview-mode--return-after-ediff)
+            (let ((replacement (car mevedel-preview-mode--pending)))
+              (setq diff-buffer
+                    (overlay-get replacement 'mevedel--diff-buffer))
+              (should-not (eq replacement ov))
+              (should (overlay-get replacement 'mevedel--ediff-created-stub))
+              (should (equal (file-name-as-directory parent)
+                             (overlay-get
+                              replacement
+                              'mevedel--ediff-created-directory)))
+              (mevedel-preview-mode--reject-overlay replacement)
+              (should-not (file-exists-p target))
+              (should-not (file-exists-p (file-name-concat root "new"))))))
+      (when (buffer-live-p diff-buffer)
+        (kill-buffer diff-buffer))
+      (when (file-exists-p temp)
+        (delete-file temp))
+      (when (file-directory-p root)
+        (delete-directory root t)))))
+
 
 ;;
 ;;; Canceller wiring

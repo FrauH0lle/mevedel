@@ -619,11 +619,14 @@ pending approval."
   "Delete OV and its region, remove its temp file, unregister from the mode.
 If `mevedel--ediff-created-stub' is set on the overlay (we created an
 empty file at `real-path' to make ediff work on a new-file preview),
-delete that stub as part of cleanup.  The approve path clears the flag
-before calling here so that successfully-applied content is preserved."
+delete that stub and its still-empty created parent directories as part
+of cleanup.  The approve path clears the flag before calling here so
+that successfully-applied content is preserved."
   (let ((temp-file (overlay-get ov 'mevedel--temp-file))
         (real-path (overlay-get ov 'mevedel--real-path))
         (stub-p (overlay-get ov 'mevedel--ediff-created-stub))
+        (created-dir (overlay-get ov 'mevedel--ediff-created-directory))
+        (existing-dir (overlay-get ov 'mevedel--ediff-existing-directory))
         (interaction-id (overlay-get ov 'mevedel--interaction-id))
         (buffer (overlay-buffer ov))
         (start (overlay-start ov))
@@ -632,6 +635,13 @@ before calling here so that successfully-applied content is preserved."
       (ignore-errors (delete-file temp-file)))
     (when (and stub-p real-path (file-exists-p real-path))
       (ignore-errors (delete-file real-path)))
+    (while (and stub-p
+                created-dir
+                (not (equal created-dir existing-dir))
+                (ignore-errors (directory-empty-p created-dir)))
+      (ignore-errors (delete-directory created-dir))
+      (setq created-dir
+            (file-name-directory (directory-file-name created-dir))))
     (mevedel-preview-mode--unregister ov)
     (if (and interaction-id buffer (buffer-live-p buffer)
              (fboundp 'mevedel-view--interaction-unregister))
@@ -772,6 +782,21 @@ expresses \"stop the whole sequence,\" not \"this one tool failed\"."
     (let ((feedback (read-string "What should be changed? ")))
       (mevedel-preview-mode--reject-overlay ov feedback))))
 
+(defun mevedel-preview-mode--prepare-ediff-target (ov real-path)
+  "Create and record a temporary Ediff target for OV at REAL-PATH."
+  (unless (file-exists-p real-path)
+    (let* ((parent (file-name-directory (expand-file-name real-path)))
+           (existing-dir parent))
+      (while (not (file-exists-p existing-dir))
+        (setq existing-dir
+              (file-name-directory (directory-file-name existing-dir))))
+      (unless (file-directory-p parent)
+        (make-directory parent t)
+        (overlay-put ov 'mevedel--ediff-created-directory parent)
+        (overlay-put ov 'mevedel--ediff-existing-directory existing-dir)))
+    (with-temp-file real-path)
+    (overlay-put ov 'mevedel--ediff-created-stub t)))
+
 (defun mevedel-preview-mode-edit ()
   "Edit the inline preview at point using ediff."
   (interactive)
@@ -788,12 +813,7 @@ expresses \"stop the whole sequence,\" not \"this one tool failed\"."
     ;; deletes the stub if the user rejects, and `apply-overlay' clears
     ;; the flag so approve keeps the stub (now holding real content).
     ;; Also ensure the parent directory exists.
-    (unless (file-exists-p real-path)
-      (let ((parent (file-name-directory (expand-file-name real-path))))
-        (unless (file-directory-p parent)
-          (make-directory parent t)))
-      (with-temp-file real-path)
-      (overlay-put ov 'mevedel--ediff-created-stub t))
+    (mevedel-preview-mode--prepare-ediff-target ov real-path)
     (overlay-put ov 'mevedel--user-modified t)
     (setq mevedel-preview-mode--current-overlay ov)
     ;; Kill any existing diff buffer so the new one gets the canonical
@@ -836,6 +856,10 @@ scratch for a clean, well-formed diff."
              (tool-name (overlay-get ov 'mevedel--tool-name))
              (apply-fn (overlay-get ov 'mevedel--apply-fn))
              (stub-p (overlay-get ov 'mevedel--ediff-created-stub))
+             (created-dir
+              (overlay-get ov 'mevedel--ediff-created-directory))
+             (existing-dir
+              (overlay-get ov 'mevedel--ediff-existing-directory))
              (rel-path (file-relative-name real-path root))
              ;; Kill old diff buffer and regenerate from the updated temp
              ;; file vs the (restored) real file on disk.
@@ -869,7 +893,9 @@ scratch for a clean, well-formed diff."
                        :collapsed (mevedel-preview-mode--should-collapse-p
                                    updated-diff view-buffer))))
           (when stub-p
-            (overlay-put new-ov 'mevedel--ediff-created-stub t)))
+            (overlay-put new-ov 'mevedel--ediff-created-stub t)
+            (overlay-put new-ov 'mevedel--ediff-created-directory created-dir)
+            (overlay-put new-ov 'mevedel--ediff-existing-directory existing-dir)))
 
         (display-buffer view-buffer gptel-display-buffer-action))
 
