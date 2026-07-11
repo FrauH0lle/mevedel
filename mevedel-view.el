@@ -241,17 +241,18 @@
                   "mevedel-transcript-audit" (text))
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-tool-ui--display-label-from-canonical
-                  "mevedel-tool-ui" (agent-id))
 (declare-function mevedel-tool-ui--handle-badge "mevedel-tool-ui" (render-data))
 (declare-function mevedel-tool-ui--render-agent
                   "mevedel-tool-ui" (name args result render-data))
 
-;; `mevedel-tools'
-(declare-function mevedel-tools--agent-invocation-at "mevedel-tools" (fsm))
-(declare-function mevedel-tools--prune-stale-agents-fsm
-                  "mevedel-tool-ui" ())
-(defvar mevedel-tools--agents-fsm nil)
+;; `mevedel-agent-runtime'
+(declare-function mevedel-agent-runtime--agent-invocation-at
+                  "mevedel-agent-runtime" (fsm))
+(declare-function mevedel-agent-runtime--prune-stale-agents-fsm
+                  "mevedel-agent-runtime" ())
+(declare-function mevedel-agent-runtime-display-label
+                  "mevedel-agent-runtime" (agent-id))
+(defvar mevedel-agent-runtime--fsms nil)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data
@@ -3764,10 +3765,10 @@ buffer's font-lock refontification cycles."
         (when (and buf (buffer-live-p buf))
           (with-current-buffer buf
             (catch 'found
-              (dolist (pair mevedel-tools--agents-fsm)
+              (dolist (pair mevedel-agent-runtime--fsms)
                 (when (id-match-p (car pair))
                   (when-let* ((inv (ignore-errors
-                                      (mevedel-tools--agent-invocation-at
+                                      (mevedel-agent-runtime--agent-invocation-at
                                        (cdr pair)))))
                     (throw 'found inv))))
               nil)))))
@@ -9098,8 +9099,8 @@ See `mevedel-view--lookup-transcript-pair' for accepted id forms."
 
 (defun mevedel-view--display-label-for-agent (agent-id)
   "Return the short display label for AGENT-ID."
-  (or (and (fboundp 'mevedel-tool-ui--display-label-from-canonical)
-           (mevedel-tool-ui--display-label-from-canonical agent-id))
+  (or (and (fboundp 'mevedel-agent-runtime-display-label)
+           (mevedel-agent-runtime-display-label agent-id))
       agent-id))
 
 (defun mevedel-view--resolve-agent-transcript (agent-id)
@@ -9617,10 +9618,10 @@ TAB toggling."
                         'running))))))
       (when (and data-buf (buffer-live-p data-buf))
         (with-current-buffer data-buf
-          (dolist (pair mevedel-tools--agents-fsm)
+          (dolist (pair mevedel-agent-runtime--fsms)
             (let* ((agent-id (car pair))
                    (inv (ignore-errors
-                         (mevedel-tools--agent-invocation-at (cdr pair))))
+                         (mevedel-agent-runtime--agent-invocation-at (cdr pair))))
                    (entry (cdr (assoc agent-id entries)))
                    (status (mevedel-view--agent-effective-status inv entry)))
               (when (eq status 'running)
@@ -9652,22 +9653,22 @@ TAB toggling."
         ;; Preserve the ids of terminal live invocations before pruning
         ;; removes their FSMs, so stale running sidecar metadata cannot
         ;; reappear as aggregate status rows.
-        (dolist (pair mevedel-tools--agents-fsm)
+        (dolist (pair mevedel-agent-runtime--fsms)
           (let* ((agent-id (car pair))
                  (inv (ignore-errors
-                         (mevedel-tools--agent-invocation-at (cdr pair))))
+                         (mevedel-agent-runtime--agent-invocation-at (cdr pair))))
                  (status (and inv
                               (mevedel-agent-invocation-transcript-status
                                inv))))
             (when (mevedel-view--agent-terminal-status-p status)
               (push agent-id live-ids))))
-        (when (fboundp 'mevedel-tools--prune-stale-agents-fsm)
-          (mevedel-tools--prune-stale-agents-fsm))
-        (dolist (pair mevedel-tools--agents-fsm)
+        (when (fboundp 'mevedel-agent-runtime--prune-stale-agents-fsm)
+          (mevedel-agent-runtime--prune-stale-agents-fsm))
+        (dolist (pair mevedel-agent-runtime--fsms)
           (let* ((agent-id (car pair))
                  (fsm (cdr pair))
                  (inv (ignore-errors
-                        (mevedel-tools--agent-invocation-at fsm)))
+                        (mevedel-agent-runtime--agent-invocation-at fsm)))
                  (entry (cdr (assoc agent-id entries)))
                  (status (mevedel-view--agent-effective-status inv entry)))
             (when inv

@@ -12537,10 +12537,10 @@ finds it during `$' skill dispatch."
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-tools--agents-fsm
+        (setq-local mevedel-agent-runtime--fsms
                     (list (cons agent-id fake-fsm))))
       (with-current-buffer view-buf
-        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+        (cl-letf (((symbol-function 'mevedel-agent-runtime--agent-invocation-at)
                    (lambda (fsm)
                      (and (eq fsm fake-fsm) inv))))
           (mevedel-view--render-agent-status)
@@ -12613,11 +12613,11 @@ finds it during `$' skill dispatch."
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-tools--agents-fsm
+        (setq-local mevedel-agent-runtime--fsms
                     (list (cons first-id first-fsm)
                           (cons second-id second-fsm))))
       (with-current-buffer view-buf
-        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+        (cl-letf (((symbol-function 'mevedel-agent-runtime--agent-invocation-at)
                    (lambda (fsm)
                      (cond
                       ((eq fsm first-fsm) first-inv)
@@ -12735,10 +12735,10 @@ finds it during `$' skill dispatch."
               (setq-local mevedel--session session))
             (with-current-buffer agent-buf
               (setq-local mevedel--session session)
-              (setq-local mevedel-tools--agents-fsm
+              (setq-local mevedel-agent-runtime--fsms
                           (list (cons agent-id fake-fsm))))
             (with-current-buffer view-buf
-              (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+              (cl-letf (((symbol-function 'mevedel-agent-runtime--agent-invocation-at)
                          (lambda (fsm)
                            (and (eq fsm fake-fsm) inv))))
                 (should (eq inv (mevedel-view--agent-invocation
@@ -13086,10 +13086,10 @@ finds it during `$' skill dispatch."
             (list (list :origin agent-id)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-tools--agents-fsm
+        (setq-local mevedel-agent-runtime--fsms
                     (list (cons agent-id fake-fsm))))
       (with-current-buffer view-buf
-        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+        (cl-letf (((symbol-function 'mevedel-agent-runtime--agent-invocation-at)
                    (lambda (fsm)
                      (and (eq fsm fake-fsm) inv))))
           (let ((rows (mevedel-view--agent-status-collect)))
@@ -13124,13 +13124,13 @@ finds it during `$' skill dispatch."
                           :reason "HTTP/2 503"))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-tools--agents-fsm
+        (setq-local mevedel-agent-runtime--fsms
                     (list (cons agent-id fsm))))
       (with-current-buffer view-buf
         (let ((rows (mevedel-view--agent-status-collect)))
           (should (null rows))))
       (with-current-buffer data-buf
-        (should-not (assoc agent-id mevedel-tools--agents-fsm)))))
+        (should-not (assoc agent-id mevedel-agent-runtime--fsms)))))
 
   :doc "current-turn errored sidecar entries do not produce aggregate rows"
   (mevedel-view-test--with-buffers
@@ -13176,10 +13176,10 @@ finds it during `$' skill dispatch."
            (session (mevedel-session-create "main" workspace)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-tools--agents-fsm
+        (setq-local mevedel-agent-runtime--fsms
                     (list (cons agent-id fake-fsm))))
       (with-current-buffer view-buf
-        (cl-letf (((symbol-function 'mevedel-tools--agent-invocation-at)
+        (cl-letf (((symbol-function 'mevedel-agent-runtime--agent-invocation-at)
                    (lambda (fsm)
                      (and (eq fsm fake-fsm) inv))))
           (let ((rows (mevedel-view--agent-status-collect)))
@@ -13401,7 +13401,7 @@ finds it during `$' skill dispatch."
                           :calls 1))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-tools--agents-fsm
+        (setq-local mevedel-agent-runtime--fsms
                     (list (cons agent-id (cons 'bad 'fsm)))))
       (with-current-buffer view-buf
         (should (equal (mevedel-view--agent-status-counts)

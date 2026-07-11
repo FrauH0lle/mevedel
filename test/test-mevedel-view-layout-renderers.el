@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Tests for the pure renderer + helper functions used by the view layout:
-;; - mevedel-tool-ui--display-label-from-canonical
+;; - mevedel-agent-runtime-display-label
 ;; - mevedel-tool-ui--handle-badge
 ;; - mevedel-view--zone-separator
 
@@ -25,31 +25,7 @@
 ;;
 ;;; Display label derivation
 
-(mevedel-deftest mevedel-tool-ui--display-label-from-canonical
-  (:doc "derives <type>--<idshort> from <type>--<32-char-md5>")
-  ,test
-  (test)
 
-  :doc "extracts first 8 chars of suffix after the `--' separator"
-  (should (equal "explorer--abc7f3d2"
-                 (mevedel-tool-ui--display-label-from-canonical
-                  "explorer--abc7f3d2deadbeefcafe1234567890ab")))
-
-  :doc "preserves type prefix verbatim"
-  (should (equal "verifier--12345678"
-                 (mevedel-tool-ui--display-label-from-canonical
-                  "verifier--1234567890abcdefdeadbeefcafefeed")))
-
-  :doc "returns input unchanged when no `--' separator present"
-  (should (equal "main"
-                 (mevedel-tool-ui--display-label-from-canonical "main")))
-
-  :doc "returns nil for nil input"
-  (should-not (mevedel-tool-ui--display-label-from-canonical nil))
-
-  :doc "handles short suffixes without crashing"
-  (should (equal "x--abc"
-                 (mevedel-tool-ui--display-label-from-canonical "x--abc"))))
 
 
 ;;

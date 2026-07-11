@@ -121,12 +121,13 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-set-activity
                   "mevedel-agents" (invocation activity))
-(declare-function mevedel-tools--agent-invocation-at "mevedel-tool-ui" (fsm))
+(declare-function mevedel-agent-runtime--agent-invocation-at
+                  "mevedel-agent-runtime" (fsm))
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
 (defvar mevedel-workspace-additional-roots)
-(defvar mevedel-tools--agents-fsm)
+(defvar mevedel-agent-runtime--fsms)
 (defvar gptel-mode)
 (defvar gptel-display-buffer-action)
 (defvar gptel--preset)
@@ -3290,14 +3291,14 @@ no-op."
     ;; fork materialization -- abort them first.  Their ABRT handlers
     ;; finalize transcripts and remove themselves from the registry,
     ;; so a quick poll suffices to wait for the teardown to settle.
-    (when (and (buffer-local-value 'mevedel-tools--agents-fsm buffer)
+    (when (and (buffer-local-value 'mevedel-agent-runtime--fsms buffer)
                (fboundp 'mevedel-abort))
       (let ((deadline (+ (float-time) 5.0)))
         (mevedel-abort buffer)
-        (while (and (buffer-local-value 'mevedel-tools--agents-fsm buffer)
+        (while (and (buffer-local-value 'mevedel-agent-runtime--fsms buffer)
                     (< (float-time) deadline))
           (sit-for 0.05))
-        (when (buffer-local-value 'mevedel-tools--agents-fsm buffer)
+        (when (buffer-local-value 'mevedel-agent-runtime--fsms buffer)
           (user-error "Sub-agents did not finalize within 5s; \
 retry rewind"))))
     (let* ((candidates
@@ -3666,11 +3667,11 @@ fork's save-path."
             (kill-buffer internal-buffer))))
       ;; UI-only branch state cannot invalidate a committed fork.
       (ignore-errors
-        (when (boundp 'mevedel-tools--agents-fsm)
-          (dolist (pair mevedel-tools--agents-fsm)
+        (when (boundp 'mevedel-agent-runtime--fsms)
+          (dolist (pair mevedel-agent-runtime--fsms)
             (when-let* ((inv
-                         (and (fboundp 'mevedel-tools--agent-invocation-at)
-                              (mevedel-tools--agent-invocation-at
+                         (and (fboundp 'mevedel-agent-runtime--agent-invocation-at)
+                              (mevedel-agent-runtime--agent-invocation-at
                                (cdr pair)))))
               (mevedel-agent-invocation-set-activity inv nil))))
         (when-let* ((view-buffer
@@ -3950,8 +3951,8 @@ To rename the current session in place, use `mevedel-rename-session'."
       (user-error "Active buffer has no mevedel session"))
     (when (and arg
                (with-current-buffer data-buf
-                 (and (boundp 'mevedel-tools--agents-fsm)
-                      mevedel-tools--agents-fsm))
+                 (and (boundp 'mevedel-agent-runtime--fsms)
+                      mevedel-agent-runtime--fsms))
                (fboundp 'mevedel-abort))
       ;; Save-as copies the session directory; a live sub-agent
       ;; would still be writing into the source dir mid-copy.
@@ -3959,10 +3960,10 @@ To rename the current session in place, use `mevedel-rename-session'."
       (with-current-buffer data-buf
         (let ((deadline (+ (float-time) 5.0)))
           (mevedel-abort data-buf)
-          (while (and mevedel-tools--agents-fsm
+          (while (and mevedel-agent-runtime--fsms
                       (< (float-time) deadline))
             (sit-for 0.05))
-          (when mevedel-tools--agents-fsm
+          (when mevedel-agent-runtime--fsms
             (user-error "Sub-agents did not finalize within 5s; \
 retry save-as")))))
     (cond

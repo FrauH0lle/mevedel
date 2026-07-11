@@ -175,7 +175,7 @@
 				     'mevedel-preset--build-handlers)
 				    #'identity)
 				   ((symbol-function
-				     'mevedel-tools--bwait-injected-table)
+				     'mevedel-agent-runtime--bwait-injected-table)
 				    #'identity)
 				   ((symbol-function
 				     'mevedel-session-persistence--install-gptel-save-state-advice)
@@ -818,26 +818,26 @@
 				  (stopped nil)
 				  (gptel--request-alist nil))
 			     (setq-local mevedel--session session)
-			     (setq-local mevedel-tools--agents-fsm
+			     (setq-local mevedel-agent-runtime--fsms
 					 (list (cons "explorer--parked"
 						     (gptel-make-fsm
 						      :info
 						      (list
 						       :mevedel-agent-invocation
 						       invocation)))))
-			     (cl-letf (((symbol-function 'mevedel-tools-stop-agent)
+			     (cl-letf (((symbol-function 'mevedel-agent-runtime-stop)
 					(lambda (agent-id reason parent-buffer)
 					  (push (list agent-id reason parent-buffer)
 						stopped)
-					  (setq mevedel-tools--agents-fsm
+					  (setq mevedel-agent-runtime--fsms
 						(assoc-delete-all
 						 agent-id
-						 mevedel-tools--agents-fsm)))))
+						 mevedel-agent-runtime--fsms)))))
 			       (mevedel-abort (current-buffer)))
 			     (should (equal "explorer--parked" (caar stopped)))
 			     (should (equal "parent request aborted" (cadar stopped)))
 			     (should (eq (caddar stopped) (current-buffer)))
-			     (should (null mevedel-tools--agents-fsm)))))
+			     (should (null mevedel-agent-runtime--fsms)))))
 
 
 ;;
