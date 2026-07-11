@@ -81,9 +81,6 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-skills'
-(declare-function mevedel-session-get-skill "mevedel-skills" (session name))
-(declare-function mevedel-skill-context "mevedel-skills" (cl-x) t)
-(declare-function mevedel-skill-user-invocable-p "mevedel-skills" (cl-x) t)
 (declare-function mevedel-skills--clear-pending-inline-attachments
                   "mevedel-skills" ())
 (declare-function mevedel-skills--inline-skill-mentions
@@ -107,6 +104,13 @@
 (declare-function mevedel-skills-install-font-lock "mevedel-skills" ())
 (declare-function mevedel-skills-invoke "mevedel-skills" t t)
 (defvar mevedel-slash-commands)
+
+;; `mevedel-skills-core'
+(declare-function mevedel-session-get-skill
+                  "mevedel-skills-core" (session name))
+(declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-user-invocable-p
+                  "mevedel-skills-core" (cl-x) t)
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin "mevedel-structs"

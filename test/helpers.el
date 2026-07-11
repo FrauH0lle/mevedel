@@ -18,6 +18,65 @@
 
 (defvar tabulated-list-entries)
 
+
+;;
+;;; Skill test helpers
+
+(defun mevedel-skills-test--write-skill (dir name frontmatter &optional body)
+  "Create DIR/NAME/SKILL.md with FRONTMATTER and optional BODY."
+  (let* ((skill-dir (file-name-as-directory (file-name-concat dir name)))
+         (skill-file (file-name-concat skill-dir "SKILL.md")))
+    (make-directory skill-dir t)
+    (with-temp-file skill-file
+      (insert "---\n")
+      (insert frontmatter)
+      (unless (string-suffix-p "\n" frontmatter)
+        (insert "\n"))
+      (insert "---\n")
+      (when body
+        (insert body)))
+    skill-file))
+
+(defun mevedel-skills-test--write-plugin-manifest (_user-dir repo json)
+  "Create a test plugin manifest JSON for REPO in the install directory.
+Return the plugin root directory."
+  (let ((root (file-name-concat mevedel-plugin-install-directory repo)))
+    (make-directory (file-name-concat root ".codex-plugin") t)
+    (with-temp-file (file-name-concat root ".codex-plugin" "plugin.json")
+      (insert json))
+    root))
+
+(defun mevedel-skills-test--hook-fn (_event)
+  "Test hook used by skill hook normalization."
+  '(:additional-context "skill hook ran"))
+
+(defun mevedel-skills-test--make-workspace (root)
+  "Return a minimal workspace struct rooted at ROOT."
+  (mevedel-workspace--create
+   :type 'test :id root :root root :name "test"
+   :file-cache (mevedel-file-cache--create
+                :table (make-hash-table :test #'equal)
+                :order nil :total-bytes 0)))
+
+(defun mevedel-skills-test--stateful-skill (&rest slots)
+  "Create a file-backed test skill from SLOTS."
+  (unless (plist-member slots :source-file)
+    (setq slots
+          (plist-put slots :source-file
+                     (format "/tmp/mevedel-test-skills/%s/SKILL.md"
+                             (or (plist-get slots :name) "unnamed")))))
+  (apply #'mevedel-skill--create slots))
+
+(defun mevedel-skills-test--reset-watchers ()
+  "Clear the skill modification-detection global registries."
+  (maphash (lambda (_dir desc)
+             (ignore-errors (file-notify-rm-watch desc)))
+           mevedel-skills--watchers)
+  (clrhash mevedel-skills--watchers)
+  (clrhash mevedel-skills--dir-buffers)
+  (clrhash mevedel-skills--dirty-buffers)
+  (clrhash mevedel-skills--mtime-cache))
+
 (defun mevedel-test-file-cache-create ()
   "Return an empty file cache for tests."
   (mevedel-file-cache--create

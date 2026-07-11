@@ -35,8 +35,7 @@
   "Restore bundled agent definitions after tests that clear the registry."
   (unless (mevedel-agent-get "explorer")
     (load-file (locate-library "mevedel-agents")))
-  (mevedel-tools--register-builtins)
-  (mevedel-skills--register))
+  (mevedel-tools-register))
 
 (mevedel-deftest mevedel-agent--effective-specs/test
   (:before-each (test-mevedel-agents--restore-builtins))

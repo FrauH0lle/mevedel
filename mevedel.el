@@ -65,6 +65,7 @@
 (require 'mevedel-view-stream)
 (require 'mevedel-view-zone)
 (require 'mevedel-reminders)
+(require 'mevedel-skills-core)
 (require 'mevedel-skills)
 (require 'mevedel-cockpit)
 (require 'mevedel-plugins)
@@ -104,8 +105,12 @@
                   "mevedel-skills" (fsm))
 (declare-function mevedel-skills--transform-expand-inline-attachments
                   "mevedel-skills" (fsm))
-(declare-function mevedel-skills-install-hot-reload "mevedel-skills" ())
-(declare-function mevedel-skills-uninstall-hot-reload "mevedel-skills" ())
+
+;; `mevedel-skills-core'
+(declare-function mevedel-skills-install-hot-reload
+                  "mevedel-skills-core" ())
+(declare-function mevedel-skills-uninstall-hot-reload
+                  "mevedel-skills-core" ())
 
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair-install-shape-adapter
@@ -511,8 +516,7 @@ always prompt for the session name."
   (interactive)
 
   ;; Define custom tools
-  (mevedel-tools--register-builtins)
-  (mevedel-skills--register)
+  (mevedel-tools-register)
 
   ;; Define gptel presets
   (mevedel--define-presets)

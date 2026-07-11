@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Tool aggregator.  `require's every `mevedel-tool-*' module and exposes
-;; `mevedel-tools--register-builtins' so downstream code has one place to
-;; load and register the built-in tool surface.
+;; `mevedel-tools-register' as the single initializer for the complete
+;; built-in tool surface, including Skill and ListSkills.
 ;;
 ;; Also hosts the deferred-tool (ToolSearch) infrastructure that does
 ;; not yet belong to any single tool module: the polymorphic
@@ -16,9 +16,7 @@
 ;;; Code:
 
 (require 'cl-lib)
-
-(eval-when-compile
-  (require 'mevedel-tool-registry))
+(require 'mevedel-tool-registry)
 
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
@@ -34,6 +32,7 @@
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-introspect)
 (require 'mevedel-tool-plan)
+(require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-tutor)
 (require 'mevedel-tool-ui)
@@ -55,8 +54,6 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-get-tool "ext:gptel-request" (path))
 (declare-function gptel-make-tool "ext:gptel-request" (&rest slots))
-(declare-function gptel-tool-category "ext:gptel-request" (cl-x) t)
-(declare-function gptel-tool-description "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel--ersatz-json-tool)
 
@@ -81,9 +78,7 @@
                   (invocation item &optional reserved))
 
 ;; `mevedel-structs'
-(defvar mevedel--data-buffer)
 (defvar mevedel--session)
-(defvar mevedel--view-buffer)
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
@@ -99,14 +94,16 @@
 ;;
 ;;; Tool registration
 
-(defun mevedel-tools--register-builtins ()
-  "Register built-in non-skill tools with the mevedel registry."
+;;;###autoload
+(defun mevedel-tools-register ()
+  "Register the complete built-in tool surface with the mevedel registry."
   (mevedel-tool-web--register)
   (mevedel-tool-fs--register)
   (mevedel-tool-code--register)
   (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)
   (mevedel-tool-ui--register)
+  (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
   (mevedel-tool-introspect--register))
 

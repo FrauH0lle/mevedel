@@ -1,9 +1,11 @@
 # Skills
 
 Skills are reusable prompt packages loaded from `SKILL.md` files.
-`mevedel-skills.el` owns discovery, command/skill completion, model-visible
-Skill tool invocation, context activation, hot reload, prompt roster rendering,
-and event-shaped skill reminders.
+`mevedel-skills-core.el` owns the skill model, discovery, persisted enablement,
+session installation, path-scoped activation state, and hot reload.
+`mevedel-tool-skills.el` registers the model-visible Skill tool schemas.
+`mevedel-skills.el` consumes the core for their behavior, command/skill
+completion, prompt roster rendering, and event-shaped skill reminders.
 
 ## Skill flow
 

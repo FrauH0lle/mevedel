@@ -110,6 +110,24 @@ created as a side effect of registration and handles serialization."
 (defvar mevedel-tool--registry (make-hash-table :test #'equal)
   "Hash-table mapping (CATEGORY NAME) lists to `mevedel-tool' structs.")
 
+(defconst mevedel-tool--builtin-registrars
+  '(("Agent" "SendMessage" "StopAgent" "ToolSearch"
+     mevedel-tool-ui mevedel-tool-ui--register)
+    ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
+    ("Bash" "Eval" mevedel-tool-exec mevedel-tool-exec--register)
+    ("Edit" "Glob" "Grep" "MkDir" "Read" "Write"
+     mevedel-tool-fs mevedel-tool-fs--register)
+    ("GetHints" "RecordHint" mevedel-tool-tutor mevedel-tool-tutor--register)
+    ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
+     mevedel-tool-code mevedel-tool-code--register)
+    ("RequestAccess" mevedel-tool-access mevedel-tool-access-register)
+    ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
+    ("TaskCreate" "TaskGet" "TaskList" "TaskNote" "TaskUpdate"
+     mevedel-tool-task mevedel-tool-task--register)
+    ("WebFetch" "WebSearch" "YouTube"
+     mevedel-tool-web mevedel-tool-web--register))
+  "Built-in tool names followed by their feature and registrar.")
+
 (defun mevedel-tool-get (name &optional category)
   "Look up a mevedel-tool by NAME, optionally scoped to CATEGORY.
 
@@ -123,6 +141,18 @@ CATEGORY is nil, search all entries for the first matching NAME."
                    (setq found tool)))
                mevedel-tool--registry)
       found)))
+
+(defun mevedel-tool-ensure (name)
+  "Return tool NAME, loading its built-in registrar when necessary."
+  (or (mevedel-tool-get name)
+      (when-let* ((entry (cl-find-if (lambda (candidate)
+                                       (member name (butlast candidate 2)))
+                                     mevedel-tool--builtin-registrars))
+                  (feature (nth (- (length entry) 2) entry))
+                  (registrar (car (last entry))))
+        (require feature)
+        (funcall registrar)
+        (mevedel-tool-get name))))
 
 (defun mevedel-tool-register (tool)
   "Register TOOL in the mevedel tool registry.

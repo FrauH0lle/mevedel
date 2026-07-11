@@ -103,7 +103,8 @@ Data model
   mevedel-queue.el            shared FIFO queue machinery
   mevedel-permission-queue.el permission/Bash/Eval queue
   mevedel-reminders.el        system-reminder injection
-  mevedel-skills.el           SKILL.md discovery, slash commands
+  mevedel-skills-core.el      skill model, discovery, state, reload
+  mevedel-skills.el           invocation, tools, slash/editor UI, roster
 
 Chat / view
   mevedel-chat.el             session lifecycle
@@ -148,9 +149,10 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ui.el          Agent/StopAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-plan.el        conversational Plan mode and plan approval queue
+  mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-tutor.el       GetHints, RecordHint
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools
-  mevedel-tools.el            tool aggregator + deferred-tool machinery
+  mevedel-tools.el            complete tool registration + deferred-tool machinery
   mevedel-tools-list.el       native tools cockpit list
 
 Support
