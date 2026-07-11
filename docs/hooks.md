@@ -260,6 +260,15 @@ return nil or a decision plist.  Elisp hooks are trusted in-process code
 and should usually be configured by the user, packages, or skills rather
 than accepted blindly from untrusted project files.
 
+Native abnormal `*-functions` hooks and declarative `elisp` handlers enter
+one ordered handler engine. Native functions are represented as Elisp handler
+records ahead of the declarative layers while retaining Emacs buffer-local,
+global-inheritance, and hook-depth ordering. The shared engine owns decision
+normalization, one log record per handler, serial payload mutation, decision
+merging, error policy, and event-specific terminal short-circuiting. Normal
+zero-argument `mevedel-session-start-hook` and `mevedel-session-end-hook`
+remain notification hooks outside this decision engine.
+
 HTTP, prompt, MCP-tool, and agent hook handlers are deferred.  They are
 useful later, but each one adds a separate permission/cancellation story.
 

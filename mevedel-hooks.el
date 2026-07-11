@@ -745,16 +745,25 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
                 (setq handlers
                       (append (reverse hooks) handlers))))))))))
 
-(defun mevedel-hooks--native-functions-for-event (event)
-  "Return native Emacs hook functions configured for EVENT."
+(defun mevedel-hooks--native-handlers-for-event (event)
+  "Return native handlers for EVENT in effective Emacs hook order."
   (when-let* ((hook-var (alist-get event mevedel-hooks--function-hook-alist))
               (_ (boundp hook-var)))
-    (let ((value (symbol-value hook-var)))
-      (cond
-       ((null value) nil)
-       ((functionp value) (list value))
-       ((listp value) value)
-       (t nil)))))
+    (let (handlers)
+      (run-hook-wrapped
+       hook-var
+       (lambda (fn)
+         (push (list :type 'elisp
+                     :function fn
+                     :source 'native)
+               handlers)
+         nil))
+      (nreverse handlers))))
+
+(defun mevedel-hooks--handlers-for-event (event event-plist rules)
+  "Return all handlers for EVENT and EVENT-PLIST from RULES."
+  (append (mevedel-hooks--native-handlers-for-event event)
+          (mevedel-hooks--matching-handlers event event-plist rules)))
 
 
 ;;
@@ -1480,51 +1489,13 @@ record only that context was added, without duplicating the body."
 ;;
 ;;; Handler runner
 
-(defun mevedel-hooks--run-native-functions
-    (event event-plist session decision)
-  "Run native hook functions for EVENT with EVENT-PLIST, SESSION, and DECISION.
-
-Returns (DECISION . EVENT-PLIST) after serial mutations."
-  (if-let* ((hook-var (alist-get event mevedel-hooks--function-hook-alist)))
-      (let ((merged decision)
-            (payload event-plist))
-        (run-hook-wrapped
-         hook-var
-         (lambda (fn)
-           (let ((handler (list :type 'elisp :function fn)))
-             (condition-case err
-                 (let* ((result (funcall fn payload))
-                        (normalized
-                         (mevedel-hooks--normalize-decision result)))
-                   (if-let* ((reason (plist-get normalized :hook-error)))
-                       (mevedel-hooks--log
-                        session
-                        (mevedel-hooks--log-entry
-                         event handler 'error
-                         :decision result
-                         :error reason))
-                     (setq merged
-                           (mevedel-hooks-merge-decisions merged result))
-                     (setq payload
-                           (mevedel-hooks--apply-decision-to-event-plist
-                            event payload merged))
-                     (mevedel-hooks--log
-                      session
-                      (mevedel-hooks--log-entry
-                       event handler 'ok :decision result))))
-	       (error
-	        (mevedel-hooks--log
-	         session
-                 (mevedel-hooks--log-entry
-                  event handler 'error
-                  :error (error-message-string err))))))
-	   (mevedel-hooks-terminal-decision-p merged event)))
-        (cons merged payload))
-    (cons decision event-plist)))
-
 (defun mevedel-hooks--elisp-event-plist (event-plist handler)
-  "Return EVENT-PLIST annotated with HANDLER metadata."
-  (plist-put (copy-sequence event-plist) :hook-handler handler))
+  "Return EVENT-PLIST prepared for Elisp HANDLER.
+Declarative handlers receive handler metadata; native hooks retain the
+stable public event payload."
+  (if (eq (plist-get handler :source) 'native)
+      event-plist
+    (plist-put (copy-sequence event-plist) :hook-handler handler)))
 
 (defun mevedel-hooks--run-elisp-handler
     (event handler event-plist session)
@@ -1537,10 +1508,6 @@ Returns (DECISION . EVENT-PLIST) after serial mutations."
                                        event-plist handler)))
                    (normalized (mevedel-hooks--normalize-decision
                                 decision)))
-              (mevedel-hooks--log
-               session
-               (mevedel-hooks--log-entry
-                event handler 'ok :decision decision))
               (if-let* ((reason (plist-get normalized :hook-error)))
                   (progn
                     (mevedel-hooks--log
@@ -1548,6 +1515,10 @@ Returns (DECISION . EVENT-PLIST) after serial mutations."
                      (mevedel-hooks--log-entry
                       event handler 'error :error reason))
                     (mevedel-hooks--failure-decision handler reason))
+                (mevedel-hooks--log
+                 session
+                 (mevedel-hooks--log-entry
+                  event handler 'ok :decision decision))
                 decision))
           (let ((reason (format "Unknown hook function: %S" fn)))
             (mevedel-hooks--log
@@ -1564,7 +1535,7 @@ Returns (DECISION . EVENT-PLIST) after serial mutations."
 
 (defun mevedel-hooks--run-handlers
     (event handlers event-plist session decision callback &optional dispatch-buffer)
-  "Run declarative HANDLERS for EVENT, then call CALLBACK."
+  "Run HANDLERS for EVENT serially, then call CALLBACK."
   (if (and dispatch-buffer
            (buffer-live-p dispatch-buffer)
            (not (eq (current-buffer) dispatch-buffer)))
@@ -1575,35 +1546,25 @@ Returns (DECISION . EVENT-PLIST) after serial mutations."
             (mevedel-hooks-terminal-decision-p decision event))
         (funcall callback decision)
       (let ((handler (car handlers)))
-        (pcase (plist-get handler :type)
-          ('elisp
-           (let* ((handler-decision
-                   (mevedel-hooks--run-elisp-handler
-                    event handler event-plist session))
-                  (next (mevedel-hooks-merge-decisions
-                         decision handler-decision))
-                  (next-plist
-                   (mevedel-hooks--apply-decision-to-event-plist
-                    event event-plist next)))
-             (mevedel-hooks--run-handlers
-              event (cdr handlers) next-plist session next callback
-              dispatch-buffer)))
-          ('command
-           (mevedel-hooks--run-command-handler
-            event handler event-plist session
-            (lambda (handler-decision)
-              (let* ((next (mevedel-hooks-merge-decisions
-                            decision handler-decision))
-                     (next-plist
-                      (mevedel-hooks--apply-decision-to-event-plist
-                       event event-plist next)))
-                (mevedel-hooks--run-handlers
-                 event (cdr handlers) next-plist session next callback
-                 dispatch-buffer)))))
-          (_
-           (mevedel-hooks--run-handlers
-            event (cdr handlers) event-plist session decision callback
-            dispatch-buffer)))))))
+        (cl-labels
+            ((advance (handler-decision)
+               (let* ((next (mevedel-hooks-merge-decisions
+                             decision handler-decision))
+                      (next-plist
+                       (mevedel-hooks--apply-decision-to-event-plist
+                        event event-plist next)))
+                 (mevedel-hooks--run-handlers
+                  event (cdr handlers) next-plist session next callback
+                  dispatch-buffer))))
+          (pcase (plist-get handler :type)
+            ('elisp
+             (advance
+              (mevedel-hooks--run-elisp-handler
+               event handler event-plist session)))
+            ('command
+             (mevedel-hooks--run-command-handler
+              event handler event-plist session #'advance))
+            (_ (advance nil))))))))
 
 (defun mevedel-hooks-run-event
     (event event-plist callback &optional session workspace request invocation)
@@ -1630,9 +1591,7 @@ decision plist."
                                  :hook-event-name event))
              (rules (mevedel-hooks-effective-rules
                      session workspace request invocation))
-             (native-functions (mevedel-hooks--native-functions-for-event
-                                event))
-             (handlers (mevedel-hooks--matching-handlers
+             (handlers (mevedel-hooks--handlers-for-event
                         event payload rules))
              (settled nil)
              slow-timer)
@@ -1654,7 +1613,7 @@ decision plist."
                             event session decision)
                            (funcall callback decision)))))
           (when (and mevedel-hooks-slow-threshold
-                     (or native-functions handlers))
+                     handlers)
             (setq slow-timer
                   (run-at-time
                    mevedel-hooks-slow-threshold nil
@@ -1667,12 +1626,8 @@ decision plist."
                         (format "Running %s hook..."
                                 (mevedel-hooks--event-display-name
                                  event))))))))
-          (pcase-let ((`(,decision . ,payload)
-                       (mevedel-hooks--run-native-functions
-                        event payload session nil)))
-	            (mevedel-hooks--run-handlers
-	             event handlers payload session decision #'finish
-                     dispatch-buffer)))))))
+          (mevedel-hooks--run-handlers
+           event handlers payload session nil #'finish dispatch-buffer))))))
 
 (defun mevedel-hooks--target-key-for-event (event)
   "Return the primary matcher payload key for EVENT, or nil."
@@ -1738,14 +1693,11 @@ display the dry-run result."
          (payload (plist-put event-plist :hook-event-name event))
          (rules (mevedel-hooks-effective-rules
                  session workspace request invocation))
-         (native-functions (mevedel-hooks--native-functions-for-event event))
-         (handlers (mevedel-hooks--matching-handlers event payload rules))
+         (handlers (mevedel-hooks--handlers-for-event event payload rules))
          (result
           (list :event event
                 :payload payload
                 :matcher-target (mevedel-hooks--matcher-target event payload)
-                :native-functions
-                (mapcar #'mevedel-hooks--printable-value native-functions)
                 :handlers (mevedel-hooks--printable-value handlers)
                 :handler-count (length handlers))))
     (when interactive-p
