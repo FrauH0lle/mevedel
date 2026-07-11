@@ -32,6 +32,16 @@ pipeline handles all cross-cutting concerns; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
 
+Tool-result media has one focused boundary in `mevedel-tool-media.el`.
+It validates and sanitizes captured media records, stores their bytes behind
+opaque transcript references, restores trusted records during replay, removes
+media from hook-visible text, and converts restored records into each
+provider's native payload shape. `mevedel-pipeline.el` supplies the session's
+tool-results directory and calls that boundary from the attach, hook, render,
+and gptel parse steps; it does not construct provider-specific media blocks.
+The transcript reference contains only an opaque record id and its owning tool
+use id. Replay never rereads the original filesystem path.
+
 Important tool metadata:
 
 - Behavior: `:read-only-p`, `:destructive-p`, `:async-p`

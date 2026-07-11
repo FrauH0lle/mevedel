@@ -95,6 +95,7 @@ Data model
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
+  mevedel-tool-media.el       tool media storage, scrubbing, provider payloads
   mevedel-tool-registry.el    mevedel-tool struct, mevedel-define-tool macro
   mevedel-tool-repair.el      structured validation and atomic input repair
   mevedel-tool-repair-gptel.el  lossless gptel argument decoding bridge

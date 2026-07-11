@@ -81,18 +81,31 @@
 
 (defvar mevedel--session)
 (defvar mevedel--workspace)
-(defvar read-eval)
 
 ;; `gptel-request'
-(declare-function gptel--model-capable-p "ext:gptel-request"
-                  (cap &optional model))
-(declare-function gptel--model-mime-capable-p "ext:gptel-request"
-                  (mime &optional model))
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
+
+;; `mevedel-tool-media'
+(declare-function mevedel-tool-media-add-to-provider-result
+                  "mevedel-tool-media" (backend parsed media-by-index))
+(declare-function mevedel-tool-media-attach-result
+                  "mevedel-tool-media"
+                  (result media tool-results-dir tool-use-id))
+(declare-function mevedel-tool-media-extract
+                  "mevedel-tool-media"
+                  (result-string &optional tool-results-dir expected-tool-use-id
+                                 allow-payload-tool-use-id))
+(declare-function mevedel-tool-media-prepare-tool-result
+                  "mevedel-tool-media"
+                  (backend tool-call tool-results-dir))
+(declare-function mevedel-tool-media-result-for-hooks
+                  "mevedel-tool-media" (result))
+(declare-function mevedel-tool-media-strip-blocks
+                  "mevedel-tool-media" (string))
 
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
@@ -1198,12 +1211,6 @@ the serialized render-data without re-running the tool.")
 (defconst mevedel-pipeline--render-data-close "<!-- /mevedel-render-data -->"
   "Closing delimiter marking the end of a render-data side-channel block.")
 
-(defconst mevedel-pipeline--media-data-open "<!-- mevedel-media-data -->"
-  "Opening delimiter marking a hidden tool media side-channel block.")
-
-(defconst mevedel-pipeline--media-data-close "<!-- /mevedel-media-data -->"
-  "Closing delimiter marking the end of a tool media side-channel block.")
-
 (defun mevedel-pipeline--plain-render-data (value)
   "Return VALUE with text properties stripped from all contained strings."
   (cond
@@ -1296,115 +1303,6 @@ display."
            "\n" mevedel-pipeline--render-data-close "\n")
    'invisible t))
 
-(defvar mevedel-pipeline--media-store (make-hash-table :test #'equal)
-  "In-memory lookup table for media side-channel records.")
-
-(defun mevedel-pipeline--media-store-id ()
-  "Return a fresh opaque id for a media side-channel record."
-  (secure-hash 'sha256
-               (format "%S:%S:%S" (current-time) (emacs-pid) (random t))))
-
-(defun mevedel-pipeline--media-store-dir (session buffer)
-  "Return a persistent media side-channel directory for SESSION in BUFFER."
-  (when-let* ((dir (mevedel-pipeline--tool-results-dir session buffer)))
-    (let ((media-dir (file-name-concat dir "media")))
-      (make-directory media-dir t)
-      media-dir)))
-
-(defun mevedel-pipeline--write-media-store-record
-    (id items session buffer tool-use-id)
-  "Persist ITEMS under ID for SESSION and BUFFER, returning the file path.
-
-TOOL-USE-ID records the tool call that owns the media."
-  (when-let* ((dir (mevedel-pipeline--media-store-dir session buffer)))
-    (let ((file (file-name-concat dir (concat "media-" id ".el"))))
-      (with-temp-buffer
-        (let ((print-level nil)
-              (print-length nil)
-              (print-circle t))
-          (prin1 (list :version 1 :id id
-                       :tool-use-id tool-use-id
-                       :items items)
-                 (current-buffer)))
-        (let ((coding-system-for-write 'utf-8-unix))
-          (write-region nil nil file nil 'silent)))
-      file)))
-
-(defun mevedel-pipeline--read-media-store-record
-    (id session buffer expected-tool-use-id)
-  "Return media items for ID from SESSION's trusted media store.
-
-BUFFER selects the store directory.  EXPECTED-TOOL-USE-ID rejects stale
-records when non-nil."
-  (when-let* ((id (and (stringp id) id))
-              (dir (mevedel-pipeline--media-store-dir session buffer))
-              (file (file-name-concat dir (concat "media-" id ".el"))))
-    (when (and (file-readable-p file)
-               (string-match-p (rx string-start (+ hex) string-end) id))
-      (condition-case _
-          (let* ((read-eval nil)
-                 (record (with-temp-buffer
-                           (insert-file-contents-literally file)
-                           (read (current-buffer))))
-                 (items (and (equal id (plist-get record :id))
-                             (equal expected-tool-use-id
-                                    (plist-get record :tool-use-id))
-                             (plist-get record :items))))
-            (when (mevedel-pipeline--valid-media-items-p items)
-              (mevedel-pipeline--sanitize-media-items items)))
-        (error nil)))))
-
-(defun mevedel-pipeline--media-store-record-items
-    (record id payload-tool-use-id expected-tool-use-id)
-  "Return media items from RECORD when provenance matches.
-ID and PAYLOAD-TOOL-USE-ID come from the model-visible side-channel
-payload.  EXPECTED-TOOL-USE-ID comes from the gptel tool-call record."
-  (let ((items (and (equal id (plist-get record :id))
-                    (equal payload-tool-use-id
-                           (plist-get record :tool-use-id))
-                    (or (null expected-tool-use-id)
-                        (equal expected-tool-use-id payload-tool-use-id))
-                    (plist-get record :items))))
-    (when (mevedel-pipeline--valid-media-items-p items)
-      (mevedel-pipeline--sanitize-media-items items))))
-
-(defun mevedel-pipeline--store-media-data
-    (media &optional session buffer tool-use-id)
-  "Store MEDIA for SESSION and BUFFER, returning a side-channel reference.
-
-TOOL-USE-ID records the tool call that owns the media."
-  (when (mevedel-pipeline--valid-media-items-p media)
-    (let* ((items (mevedel-pipeline--sanitize-media-items media))
-           (id (mevedel-pipeline--media-store-id))
-           (record (list :version 1 :id id
-                         :tool-use-id tool-use-id
-                         :items items)))
-      (mevedel-pipeline--write-media-store-record
-       id items session buffer tool-use-id)
-      (puthash id record mevedel-pipeline--media-store)
-      (append (list :id id)
-              (when tool-use-id
-                (list :tool-use-id tool-use-id))))))
-
-(defun mevedel-pipeline--format-media-data-block
-    (media &optional session buffer tool-use-id)
-  "Return serialized side-channel block for MEDIA.
-
-SESSION, BUFFER, and TOOL-USE-ID describe the tool call owner."
-  (if-let* ((ref (mevedel-pipeline--store-media-data
-                  media session buffer tool-use-id)))
-      (propertize
-       (concat "\n" mevedel-pipeline--media-data-open "\n"
-               (let ((print-level nil)
-                     (print-length nil)
-                     (print-circle t))
-                 (prin1-to-string
-                  (mevedel-pipeline--plain-render-data ref)))
-               "\n" mevedel-pipeline--media-data-close "\n")
-       'invisible t
-       'mevedel-media-data t)
-    ""))
-
 (defun mevedel-pipeline--render-data-regexp ()
   "Return the regexp matching a render-data side-channel block.
 Matches the delimiters (with their newline wrappers) and everything in
@@ -1417,477 +1315,21 @@ between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
 
 (defun mevedel-pipeline--strip-render-data-blocks (string)
   "Return STRING with every render-data side-channel block removed."
-  (replace-regexp-in-string
-   (mevedel-pipeline--render-data-regexp) "" string t t))
-
-(defun mevedel-pipeline--strip-media-data-blocks (string)
-  "Return STRING with generated media side-channel blocks removed.
-Literal delimiter text is left intact; only blocks carrying the
-pipeline-owned `mevedel-media-data' text property are treated as hidden
-side-channel data."
-  (if (not (stringp string))
-      string
-    (let ((last 0)
-          (search 0)
-          (chunks nil)
-          open)
-      (while (setq open (string-search mevedel-pipeline--media-data-open
-                                       string search))
-        (if (not (get-text-property open 'mevedel-media-data string))
-            (setq search (+ open (length mevedel-pipeline--media-data-open)))
-          (let ((close (string-search mevedel-pipeline--media-data-close
-                                      string open)))
-            (if (null close)
-                (setq search (+ open (length mevedel-pipeline--media-data-open)))
-              (let* ((strip-start
-                      (if (and (> open 0)
-                               (= (aref string (1- open)) ?\n)
-                               (get-text-property (1- open)
-                                                  'mevedel-media-data string))
-                          (1- open)
-                        open))
-                     (after-close (+ close
-                                     (length
-                                      mevedel-pipeline--media-data-close)))
-                     (strip-end
-                      (if (and (< after-close (length string))
-                               (= (aref string after-close) ?\n)
-                               (get-text-property after-close
-                                                  'mevedel-media-data string))
-                          (1+ after-close)
-                        after-close)))
-                (push (substring string last strip-start) chunks)
-                (setq last strip-end)
-                (setq search strip-end))))))
-      (push (substring string last) chunks)
-      (apply #'concat (nreverse chunks)))))
+  (if (stringp string)
+      (replace-regexp-in-string
+       (mevedel-pipeline--render-data-regexp) "" string t t)
+    string))
 
 (defun mevedel-pipeline--strip-side-channel-blocks (string)
   "Return STRING with mevedel side-channel blocks removed."
+  (require 'mevedel-tool-media)
+  (mevedel-tool-media-strip-blocks
+   (mevedel-pipeline--strip-non-media-side-channel-blocks string)))
+
+(defun mevedel-pipeline--strip-non-media-side-channel-blocks (string)
+  "Return STRING with non-media mevedel side-channel blocks removed."
   (mevedel--strip-hook-audit-blocks
-   (mevedel-pipeline--strip-media-data-blocks
-    (mevedel-pipeline--strip-render-data-blocks string))))
-
-(defun mevedel-pipeline--read-media-data-payload
-    (payload &optional session buffer expected-tool-use-id)
-  "Read media side-channel PAYLOAD, returning stored media items.
-
-The payload is read with `read-eval' disabled.  It contains only an
-opaque store reference; media bytes are loaded from pipeline-owned
-state, never from a model-visible transcript block.  SESSION, BUFFER, and
-EXPECTED-TOOL-USE-ID select the trusted store record."
-  (condition-case _
-      (let* ((read-eval nil)
-             (data (read payload))
-             (id (plist-get data :id))
-             (tool-use-id (plist-get data :tool-use-id)))
-        (or (and (stringp id)
-                 (mevedel-pipeline--media-store-record-items
-                  (gethash id mevedel-pipeline--media-store)
-                  id tool-use-id expected-tool-use-id))
-            (and expected-tool-use-id
-                 (equal expected-tool-use-id tool-use-id)
-                 (mevedel-pipeline--read-media-store-record
-                  id session buffer expected-tool-use-id))))
-    (error nil)))
-
-(defun mevedel-pipeline--media-data-payload-tool-use-id (payload)
-  "Return the tool-use id declared by media side-channel PAYLOAD."
-  (condition-case _
-      (let* ((read-eval nil)
-             (data (read payload)))
-        (plist-get data :tool-use-id))
-    (error nil)))
-
-(defun mevedel-pipeline-extract-media-data
-    (result-string &optional session buffer expected-tool-use-id
-                   allow-payload-tool-use-id)
-  "Return (VISIBLE-PART . MEDIA) parsed from RESULT-STRING.
-VISIBLE-PART is the tool result with media side-channel blocks stripped.
-MEDIA is the Lisp object deserialized from inside the block, or nil.
-SESSION, BUFFER, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
-control trusted side-channel lookup."
-  (if (not (stringp result-string))
-      (cons result-string nil)
-    (let ((open nil)
-          (close nil)
-          (data nil)
-          (search 0))
-      (while (and (not open)
-                  (setq open (string-search mevedel-pipeline--media-data-open
-                                            result-string search)))
-        (let* ((payload-start (+ open (length
-                                       mevedel-pipeline--media-data-open)))
-               (candidate-close
-                (string-search mevedel-pipeline--media-data-close
-                               result-string payload-start))
-               (candidate-payload
-                (and candidate-close
-                     (string-trim
-                      (substring result-string payload-start
-                                 candidate-close))))
-               (candidate-terminal-p
-                (and candidate-close
-                     (string-match-p
-                      "\\`[ \t\n\r]*\\'"
-                      (substring result-string
-                                 (+ candidate-close
-                                    (length
-                                     mevedel-pipeline--media-data-close))))))
-               (payload-tool-use-id
-                (and candidate-payload
-                     allow-payload-tool-use-id
-                     candidate-terminal-p
-                     (mevedel-pipeline--media-data-payload-tool-use-id
-                      candidate-payload)))
-               (candidate-data
-                (and candidate-payload
-                     (or
-                      (and expected-tool-use-id
-                           (mevedel-pipeline--read-media-data-payload
-                            candidate-payload session buffer
-                            expected-tool-use-id))
-                      (and payload-tool-use-id
-                           (mevedel-pipeline--read-media-data-payload
-                            candidate-payload session buffer
-                            payload-tool-use-id)))))
-               (property-data
-                (and expected-tool-use-id
-                     candidate-close
-                     (get-text-property open 'mevedel-media-data result-string)
-                     candidate-payload
-                     (mevedel-pipeline--read-media-data-payload
-                      candidate-payload session buffer
-                      expected-tool-use-id))))
-          (if (or candidate-data property-data)
-              (setq close candidate-close
-                    data (or candidate-data
-                             property-data
-                             (and expected-tool-use-id
-                                  (mevedel-pipeline--read-media-data-payload
-                                   candidate-payload session buffer
-                                   expected-tool-use-id))
-                             (and payload-tool-use-id
-                                  (mevedel-pipeline--read-media-data-payload
-                                   candidate-payload session buffer
-                                   payload-tool-use-id))))
-            (setq search (+ open
-                            (length mevedel-pipeline--media-data-open))
-                  open nil))))
-      (if open
-          (let* ((strip-start (if (and (> open 0)
-                                       (= (aref result-string (1- open)) ?\n))
-                                  (1- open)
-                                open))
-                 (after-close (+ close
-                                 (length
-                                  mevedel-pipeline--media-data-close)))
-                 (trail-end (if (and (< after-close (length result-string))
-                                     (= (aref result-string after-close) ?\n))
-                                (1+ after-close)
-                              after-close)))
-            (cons (concat (substring result-string 0 strip-start)
-                          (substring result-string trail-end))
-                  data))
-        (cons result-string nil)))))
-
-(defun mevedel-pipeline--media-item-data (item)
-  "Return stable base64 data from media ITEM.
-Media side-channel entries carry `:data' so serialization replays the
-bytes captured at tool execution time.  `:path' is metadata only; it is
-not reread here because serialized tool output is not a permissioned
-file-read channel."
-  (plist-get item :data))
-
-(defun mevedel-pipeline--valid-media-item-p (item)
-  "Return non-nil when ITEM is a well-formed media side-channel plist."
-  (let ((mime (and (listp item) (plist-get item :mime)))
-        (kind (and (listp item) (plist-get item :kind)))
-        (data (and (listp item) (plist-get item :data))))
-    (and (listp item)
-         (memq kind '(image document))
-         (stringp mime)
-         (member mime '("application/pdf"
-                        "image/png" "image/jpeg" "image/gif" "image/webp"))
-         (stringp data)
-         (> (length data) 0))))
-
-(defun mevedel-pipeline--valid-media-items-p (items)
-  "Return non-nil when ITEMS is a non-empty list of valid media items."
-  (and (consp items)
-       (cl-every #'mevedel-pipeline--valid-media-item-p items)))
-
-(defun mevedel-pipeline--sanitize-media-items (items)
-  "Return ITEMS with only supported media side-channel keys retained."
-  (mapcar
-   (lambda (item)
-     (let ((clean (list :mime (plist-get item :mime)
-                        :kind (plist-get item :kind)
-                        :data (plist-get item :data))))
-       (when-let* ((path (plist-get item :path)))
-         (when (stringp path)
-           (setq clean (plist-put clean :path path))))
-       (when-let* ((source (plist-get item :source)))
-         (when (stringp source)
-           (setq clean (plist-put clean :source source))))
-       (when-let* ((page (plist-get item :page)))
-         (when (integerp page)
-           (setq clean (plist-put clean :page page))))
-       clean))
-   items))
-
-(defun mevedel-pipeline--media-envelope-summary (text &optional replacement)
-  "Return TEXT with base64 media payload bodies replaced by REPLACEMENT."
-  (let ((body-start-marker "data:\n")
-        (body-end-marker "\n</media-file>")
-        (summary (or replacement "<native media block attached>"))
-        (pos 0)
-        (chunks nil)
-        (done nil))
-    (while (not done)
-      (let ((body-start (string-search body-start-marker text pos)))
-        (if (not body-start)
-            (setq done t)
-          (let* ((payload-start (+ body-start (length body-start-marker)))
-                 (body-end (string-search body-end-marker text payload-start)))
-            (if (not body-end)
-                (setq done t)
-              (push (substring text pos payload-start) chunks)
-              (push summary chunks)
-              (setq pos body-end))))))
-    (if chunks
-        (mapconcat #'identity (nreverse (cons (substring text pos) chunks)) "")
-      text)))
-
-(defun mevedel-pipeline--media-result-for-hooks (result)
-  "Return RESULT with side-channel data and media payloads hidden from hooks."
-  (if (not (stringp result))
-      result
-    (mevedel-pipeline--media-envelope-summary
-     (mevedel-pipeline--strip-side-channel-blocks result)
-     "<media omitted: media payload not exposed to hooks>")))
-
-(defun mevedel-pipeline--anthropic-media-block (item)
-  "Return an Anthropic content block for media ITEM."
-  (let* ((mime (plist-get item :mime))
-         (data (mevedel-pipeline--media-item-data item))
-         (type (cond
-                ((and mime (string-prefix-p "image/" mime)) "image")
-                ((equal mime "application/pdf") "document")
-                (t nil))))
-    (when (and type data)
-      `(:type ,type
-        :source (:type "base64"
-                 :media_type ,mime
-                 :data ,data)))))
-
-(defun mevedel-pipeline--bedrock-media-block (item)
-  "Return a Bedrock content block for media ITEM."
-  (let* ((mime (plist-get item :mime))
-         (path (plist-get item :path))
-         (data (mevedel-pipeline--media-item-data item))
-         (image-format (cdr (assoc mime '(("image/jpg" . "jpeg")
-                                          ("image/jpeg" . "jpeg")
-                                          ("image/png" . "png")
-                                          ("image/gif" . "gif")
-                                          ("image/webp" . "webp")))))
-         (doc-format (and (equal mime "application/pdf") "pdf")))
-    (cond
-     ((and image-format data)
-      `(:image (:format ,image-format
-                :source (:bytes ,data))))
-     ((and doc-format data)
-      `(:document (:format ,doc-format
-                   :name ,(file-name-base (or path "document.pdf"))
-                   :source (:bytes ,data)))))))
-
-(defun mevedel-pipeline--media-data-url (item)
-  "Return a data URL for media ITEM."
-  (when-let* ((mime (plist-get item :mime))
-              (data (mevedel-pipeline--media-item-data item)))
-    (concat "data:" mime ";base64," data)))
-
-(defun mevedel-pipeline--openai-image-media-p (item)
-  "Return non-nil when ITEM can be sent through gptel's OpenAI image path."
-  (and (eq (plist-get item :kind) 'image)
-       (string-prefix-p "image/" (or (plist-get item :mime) ""))))
-
-(defun mevedel-pipeline--openai-image-media-supported-p (backend media)
-  "Return non-nil when BACKEND can receive MEDIA as OpenAI image messages."
-  (and (or (mevedel-pipeline--backend-class-p backend 'gptel-openai)
-           (mevedel-pipeline--backend-class-p backend 'gptel-openai-responses))
-       (mevedel-pipeline--media-model-capable-p media)
-       (cl-every #'mevedel-pipeline--openai-image-media-p media)))
-
-(defun mevedel-pipeline--openai-responses-media-block (item)
-  "Return an OpenAI Responses input_image block for media ITEM."
-  (when-let* (((mevedel-pipeline--openai-image-media-p item))
-              (url (mevedel-pipeline--media-data-url item)))
-    `(:type "input_image" :image_url ,url)))
-
-(defun mevedel-pipeline--openai-media-block (item)
-  "Return an OpenAI chat-completions image_url block for media ITEM."
-  (when-let* (((mevedel-pipeline--openai-image-media-p item))
-              (url (mevedel-pipeline--media-data-url item)))
-    `(:type "image_url" :image_url (:url ,url))))
-
-(defun mevedel-pipeline--media-message-text (media)
-  "Return a short model-facing description for attached MEDIA."
-  (let ((paths (delq nil (mapcar (lambda (item) (plist-get item :path)) media))))
-    (concat "Media returned by Read is attached as native input."
-            (when paths
-              (concat " Source: " (mapconcat #'identity paths ", "))))))
-
-(defun mevedel-pipeline--openai-responses-media-message (media)
-  "Return an OpenAI Responses user message carrying MEDIA."
-  (when-let* ((blocks (delq nil
-                            (mapcar
-                             #'mevedel-pipeline--openai-responses-media-block
-                             media))))
-    (list :role "user"
-          :content (vconcat
-                    (list (list :type "input_text"
-                                :text (mevedel-pipeline--media-message-text
-                                       media)))
-                    blocks))))
-
-(defun mevedel-pipeline--openai-media-message (media)
-  "Return an OpenAI chat-completions user message carrying MEDIA."
-  (when-let* ((blocks (delq nil
-                            (mapcar #'mevedel-pipeline--openai-media-block
-                                    media))))
-    (list :role "user"
-          :content (vconcat
-                    (list (list :type "text"
-                                :text (mevedel-pipeline--media-message-text
-                                       media)))
-                    blocks))))
-
-(defun mevedel-pipeline--backend-class-p (backend class)
-  "Return non-nil when BACKEND is a cl-struct of CLASS."
-  (and backend (ignore-errors (cl-typep backend class))))
-
-(defun mevedel-pipeline--native-media-backend-p (backend)
-  "Return non-nil when BACKEND supports native media in tool results."
-  (or (mevedel-pipeline--backend-class-p backend 'gptel-anthropic)
-      (mevedel-pipeline--backend-class-p backend 'gptel-bedrock)))
-
-(defun mevedel-pipeline--media-model-capable-p (media)
-  "Return non-nil when the current model can accept all MEDIA items."
-  (and (fboundp 'gptel--model-capable-p)
-       (gptel--model-capable-p 'media)
-       (cl-every
-        (lambda (item)
-          (let ((mime (plist-get item :mime)))
-            (or (not (fboundp 'gptel--model-mime-capable-p))
-                (gptel--model-mime-capable-p mime))))
-        media)))
-
-(defun mevedel-pipeline--native-media-supported-p (backend media)
-  "Return non-nil when BACKEND and current model support MEDIA."
-  (and (mevedel-pipeline--native-media-backend-p backend)
-       (mevedel-pipeline--media-model-capable-p media)))
-
-(defun mevedel-pipeline--media-supported-p (backend media)
-  "Return non-nil when BACKEND and current model can receive MEDIA natively."
-  (or (mevedel-pipeline--native-media-supported-p backend media)
-      (mevedel-pipeline--openai-image-media-supported-p backend media)))
-
-(defun mevedel-pipeline--media-result-for-model (result media backend)
-  "Return model-visible text for RESULT with MEDIA under BACKEND."
-  (cond
-   ((not (stringp result)) result)
-   ((and media (mevedel-pipeline--media-supported-p backend media))
-    (mevedel-pipeline--media-envelope-summary result))
-   ((and media (not (mevedel-pipeline--media-model-capable-p media)))
-    (mevedel-pipeline--media-envelope-summary
-     result
-     "<media omitted: current model does not support this media type>"))
-   (media
-    (mevedel-pipeline--media-envelope-summary
-     result
-     "<media omitted: backend cannot attach this media type>"))
-   (t result)))
-
-(defun mevedel-pipeline--maybe-add-native-media (backend parsed media-by-index)
-  "Attach MEDIA-BY-INDEX to PARSED tool results when BACKEND supports it.
-Returns PARSED unchanged for backends whose tool-result media shape is
-unknown."
-  (cond
-   ((mevedel-pipeline--backend-class-p backend 'gptel-openai-responses)
-    (append parsed
-            (delq nil
-                  (mapcar #'mevedel-pipeline--openai-responses-media-message
-                          media-by-index))))
-   ((mevedel-pipeline--backend-class-p backend 'gptel-openai)
-    (append parsed
-            (delq nil
-                  (mapcar #'mevedel-pipeline--openai-media-message
-                          media-by-index))))
-   ((mevedel-pipeline--backend-class-p backend 'gptel-anthropic)
-    (let* ((content (plist-get parsed :content))
-           (blocks (and (vectorp content) (append content nil)))
-           (i 0))
-      (when blocks
-        (plist-put
-         parsed :content
-         (vconcat
-          (mapcar
-           (lambda (block)
-             (prog1
-                 (if-let* ((media (nth i media-by-index)))
-                     (let* ((text (plist-get block :content))
-                            (native (delq nil
-                                          (mapcar
-                                           #'mevedel-pipeline--anthropic-media-block
-                                           media))))
-                       (if native
-                           (plist-put
-                            block :content
-                            (vconcat
-                             (list (list :type "text"
-                                         :text (if (stringp text)
-                                                   (mevedel-pipeline--media-envelope-summary text)
-                                                 (prin1-to-string text))))
-                             native))
-                         block))
-                   block)
-               (cl-incf i)))
-           blocks)))))
-    parsed)
-   ((mevedel-pipeline--backend-class-p backend 'gptel-bedrock)
-    (let* ((content (plist-get parsed :content))
-           (blocks (and (vectorp content) (append content nil)))
-           (i 0))
-      (when blocks
-        (plist-put
-         parsed :content
-         (vconcat
-          (mapcar
-           (lambda (block)
-             (prog1
-                 (if-let* ((media (nth i media-by-index))
-                           (tool-result (plist-get block :toolResult))
-                           (native (delq nil
-                                         (mapcar
-                                          #'mevedel-pipeline--bedrock-media-block
-                                          media))))
-                     (progn
-                       (plist-put
-                        tool-result :content
-                        (vconcat
-                         (list (list :text
-                                     (mevedel-pipeline--media-envelope-summary
-                                      (or (plist-get (aref (plist-get tool-result :content) 0)
-                                                     :text)
-                                          ""))))
-                         native))
-                       block)
-                   block)
-               (cl-incf i)))
-           blocks)))))
-    parsed)
-   (t parsed)))
+   (mevedel-pipeline--strip-render-data-blocks string)))
 
 (defun mevedel-pipeline--read-render-data-payload (payload)
   "Read render-data PAYLOAD or return a parse-failure sentinel."
@@ -1978,51 +1420,33 @@ builds its message from the scrubbed values, then restores the original
 `:result' values.  Everything downstream that consumes `:tool-use' or
 `:tool-result' for display (the gptel callback feeding the chat buffer,
 the view parser, persistence) keeps seeing the full block."
+  (require 'mevedel-tool-media)
   (let ((saved nil))
     (unwind-protect
-        (let ((media-by-index nil))
+        (let ((media-by-index nil)
+              (tool-results-dir
+               (when-let* ((session (bound-and-true-p mevedel--session))
+                           (save-path (mevedel-session-save-path session)))
+                 (file-name-concat save-path "tool-results"))))
           (dolist (tc tool-use)
             (let* ((orig (plist-get tc :result))
-                   (read-tool-p (equal (plist-get tc :name) "Read"))
-                   (tool-use-id (plist-get tc :id))
-                   (extracted
-                    (and read-tool-p
-                         tool-use-id
-                         (stringp orig)
-                         (mevedel-pipeline-extract-media-data
-                          orig
-                          (and (boundp 'mevedel--session) mevedel--session)
-                          nil
-                          tool-use-id)))
-                   (extracted-media (cdr extracted))
-                   (media (and read-tool-p
-                               tool-use-id
-                               (or
-                                (and (mevedel-pipeline--valid-media-items-p
-                                      (plist-get tc :media))
-                                     (mevedel-pipeline--sanitize-media-items
-                                      (plist-get tc :media)))
-                                extracted-media)))
-                   (cleaned (and (stringp orig)
-                                 (if (and read-tool-p tool-use-id)
-                                     (mevedel--strip-hook-audit-blocks
-                                      (mevedel-pipeline--strip-render-data-blocks
-                                       (car (or extracted (cons orig nil)))))
-                                   (mevedel-pipeline--strip-side-channel-blocks
-                                    orig))))
-                   (llm-result
-                    (mevedel-pipeline--media-result-for-model
-                     cleaned media backend))
-                   (native-media
-                    (and media
-                         (mevedel-pipeline--media-supported-p
-                          backend media)
-                         media)))
+                   (clean-tc (copy-sequence tc))
+                   (prepared
+                    (progn
+                      (when (stringp orig)
+                        (plist-put
+                         clean-tc :result
+                         (mevedel-pipeline--strip-non-media-side-channel-blocks
+                          orig)))
+                      (mevedel-tool-media-prepare-tool-result
+                       backend clean-tc tool-results-dir)))
+                   (llm-result (car prepared))
+                   (native-media (cdr prepared)))
               (push native-media media-by-index)
               (when (and llm-result (not (equal orig llm-result)))
                 (push (cons tc orig) saved)
                 (plist-put tc :result llm-result))))
-          (mevedel-pipeline--maybe-add-native-media
+          (mevedel-tool-media-add-to-provider-result
            backend
            (funcall orig-fun backend tool-use)
            (nreverse media-by-index)))
@@ -2031,6 +1455,7 @@ the view parser, persistence) keeps seeing the full block."
 
 (defun mevedel-pipeline-install-tool-result-scrubber ()
   "Install gptel interop advice for tool-result continuation paths."
+  (require 'mevedel-tool-media)
   (advice-add 'gptel--parse-tool-results :around
               #'mevedel--parse-tool-results-scrub-advice))
 
@@ -2040,47 +1465,55 @@ the view parser, persistence) keeps seeing the full block."
                  #'mevedel--parse-tool-results-scrub-advice))
 
 (defun mevedel-pipeline-extract-render-data
-    (result-string &optional session buffer expected-tool-use-id
+    (result-string &optional session expected-tool-use-id
                    allow-payload-tool-use-id)
   "Return (VISIBLE-PART . RENDER-DATA) parsed from RESULT-STRING.
 VISIBLE-PART is the tool result with the side-channel block stripped.
 RENDER-DATA is the Lisp object deserialized from inside the block, or
 nil when no valid block is present.  Unparseable payloads are treated as
 absent: the original string is returned verbatim in VISIBLE-PART.
-SESSION, BUFFER, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
+SESSION, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
 control trusted side-channel lookup."
-  (if (not (stringp result-string))
-      (cons result-string nil)
-    (let ((open (string-search mevedel-pipeline--render-data-open
-                               result-string)))
-      (if (null open)
-          (cons
-           (car (mevedel-pipeline-extract-media-data
-                 (mevedel-pipeline--strip-media-data-blocks result-string)
-                 session buffer expected-tool-use-id
-                 allow-payload-tool-use-id))
-           nil)
-        (let* ((payload-start (+ open (length mevedel-pipeline--render-data-open)))
-               (close (string-search mevedel-pipeline--render-data-close
-                                     result-string payload-start)))
-          (if (null close)
-              (cons result-string nil)
-            (let* ((payload (string-trim
-                             (substring result-string payload-start close)))
-                   (data (mevedel-pipeline--read-render-data-payload
-                          payload))
-                   (trail-end (+ close
-                                 (length mevedel-pipeline--render-data-close))))
-              (if (eq data :mevedel-parse-failed)
-                  (cons result-string nil)
-                (cons (string-trim-right
-                       (car (mevedel-pipeline-extract-media-data
-                             (mevedel-pipeline--strip-media-data-blocks
-                              (concat (substring result-string 0 open)
-                                      (substring result-string trail-end)))
-                             session buffer expected-tool-use-id
-                             allow-payload-tool-use-id)))
-                      data)))))))))
+  (require 'mevedel-tool-media)
+  (let ((tool-results-dir
+         (when-let* ((save-path (and session
+                                     (mevedel-session-save-path session))))
+           (file-name-concat save-path "tool-results"))))
+    (if (not (stringp result-string))
+        (cons result-string nil)
+      (let ((open (string-search mevedel-pipeline--render-data-open
+                                 result-string)))
+        (if (null open)
+            (cons
+             (car (mevedel-tool-media-extract
+                   (mevedel-tool-media-strip-blocks result-string)
+                   tool-results-dir
+                   expected-tool-use-id
+                   allow-payload-tool-use-id))
+             nil)
+          (let* ((payload-start
+                  (+ open (length mevedel-pipeline--render-data-open)))
+                 (close (string-search mevedel-pipeline--render-data-close
+                                       result-string payload-start)))
+            (if (null close)
+                (cons result-string nil)
+              (let* ((payload (string-trim
+                               (substring result-string payload-start close)))
+                     (data (mevedel-pipeline--read-render-data-payload
+                            payload))
+                     (trail-end
+                      (+ close (length mevedel-pipeline--render-data-close))))
+                (if (eq data :mevedel-parse-failed)
+                    (cons result-string nil)
+                  (cons (string-trim-right
+                         (car (mevedel-tool-media-extract
+                               (mevedel-tool-media-strip-blocks
+                                (concat (substring result-string 0 open)
+                                        (substring result-string trail-end)))
+                               tool-results-dir
+                               expected-tool-use-id
+                               allow-payload-tool-use-id)))
+                        data))))))))))
 
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed render-data from CONTEXT, then call NEXT.
@@ -2114,18 +1547,18 @@ and `:kind'.  The block is hidden in the data buffer and stripped at the
 gptel tool-result serialization boundary.  Backends that gain native
 tool-result media support can read this contract at that boundary
 without changing handler return shapes."
+  (require 'mevedel-tool-media)
   (let ((result (plist-get context :result))
         (media (plist-get context :media)))
     (if (and media (stringp result))
         (funcall next
                  (plist-put context :result
-                            (concat (mevedel-pipeline--media-envelope-summary
-                                     result)
-                                    (mevedel-pipeline--format-media-data-block
-                                     media
-                                     (plist-get context :session)
-                                     (plist-get context :buffer)
-                                     (plist-get context :tool-use-id)))))
+                            (mevedel-tool-media-attach-result
+                             result media
+                             (mevedel-pipeline--tool-results-dir
+                              (plist-get context :session)
+                              (plist-get context :buffer))
+                             (plist-get context :tool-use-id))))
       (funcall next context))))
 
 (defun mevedel-pipeline--step-persist (context next _fail)
@@ -2179,10 +1612,15 @@ possibly-updated context."
 
 Hooks receive both `:raw-result' and the final `:result'.  Only an
 explicit `:updated-result' changes the model-visible tool result."
+  (require 'mevedel-tool-media)
   (let* ((result (plist-get context :result))
-         (model-result (mevedel-pipeline--media-result-for-hooks result))
-         (raw-result (mevedel-pipeline--media-result-for-hooks
-                      (plist-get context :raw-result)))
+         (model-result
+          (mevedel-tool-media-result-for-hooks
+           (mevedel-pipeline--strip-non-media-side-channel-blocks result)))
+         (raw-result
+          (mevedel-tool-media-result-for-hooks
+           (mevedel-pipeline--strip-non-media-side-channel-blocks
+            (plist-get context :raw-result))))
          (event (if (and (stringp result)
                          (string-prefix-p "Error:" result))
                     'PostToolUseFailure
