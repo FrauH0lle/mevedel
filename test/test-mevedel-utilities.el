@@ -308,7 +308,7 @@
              (mevedel--format-hook-audit-record
               '(:type prompt-rewrite :event "UserPromptSubmit")))
             "after")
-    (mevedel--restore-render-data-gptel-properties
+    (mevedel-transcript-restore-ignored-properties
      (point-min) (point-max))
     (goto-char (point-min))
     (search-forward mevedel--hook-audit-open)
@@ -328,7 +328,7 @@
       'gptel '(tool . "call-1")))
     (insert (propertize "#+end_tool\nThe next response."
                         'gptel 'ignore))
-    (mevedel--restore-render-data-gptel-properties
+    (mevedel-transcript-restore-ignored-properties
      (point-min) (point-max))
     (goto-char (point-min))
     (search-forward mevedel--hook-audit-close)

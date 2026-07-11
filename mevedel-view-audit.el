@@ -91,7 +91,9 @@ PRIMARY records usually have source metadata and are preferred."
   (with-current-buffer data-buf
     (let (records)
       (dolist (seg segments)
-        (when (memq (car seg) '(user ignore))
+        (when (memq (car seg)
+                    '(user queued-message hook-context prompt
+                      render-data ignored))
           (let ((start (cadr seg)))
             (dolist (span
                      (mevedel-transcript-audit-spans

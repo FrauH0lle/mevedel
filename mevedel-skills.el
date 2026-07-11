@@ -141,6 +141,8 @@
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
                   "mevedel-transcript" ())
+(declare-function mevedel-transcript-restore-ignored-properties
+                  "mevedel-transcript" (start end))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -150,8 +152,6 @@
 (declare-function mevedel--hook-prompt-rewrite-audit-record
                   "mevedel-utilities"
                   (event original submitted &optional reason))
-(declare-function mevedel--restore-render-data-gptel-properties
-                  "mevedel-utilities" (start end))
 
 ;; `mevedel-view'
 (declare-function mevedel-view-refresh-input-prompt "mevedel-view" ())
@@ -4028,6 +4028,7 @@ foreground agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
   (require 'mevedel-utilities)
+  (require 'mevedel-transcript)
   (let* ((render-data (plist-get outcome :render-data))
          (hook-audits (plist-get outcome :hook-audits))
          (result (or (plist-get outcome :result)
@@ -4063,7 +4064,7 @@ observe the completed response."
         (insert "\n"))
       (let ((end (point)))
         (add-text-properties start end '(gptel response))
-        (mevedel--restore-render-data-gptel-properties start end)
+        (mevedel-transcript-restore-ignored-properties start end)
         (condition-case err
             (run-hook-with-args 'gptel-post-response-functions start end)
           (error
@@ -4072,7 +4073,7 @@ observe the completed response."
             (format "Fork post-response hook failed: %s"
                     (error-message-string err))
             :warning)))
-        (mevedel--restore-render-data-gptel-properties start end)
+        (mevedel-transcript-restore-ignored-properties start end)
         (require 'mevedel-presets)
         (mevedel--complete-turn
          (gptel-make-fsm :info (list :buffer (current-buffer))))
