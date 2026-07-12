@@ -602,7 +602,7 @@ cleanup."
   (with-temp-buffer
     (setq-local mevedel--session
                 (mevedel-session--create :permission-mode 'accept-edits))
-    (setq-local mevedel-permission-mode 'plan)
+    (setq-local mevedel-permission-mode 'default)
     (should (eq 'accept-edits (mevedel-preview-mode--effective-mode))))
   :doc "buffer-local variable used when session has no mode"
   (with-temp-buffer

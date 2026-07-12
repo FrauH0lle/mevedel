@@ -7,9 +7,11 @@ flowchart TD
     A[Tool call] --> B[Extract specifiers]
     B --> C{Any deny rule?}
     C -- Yes --> Z[Deny]
-    C -- No --> D{Protected path?}
-    D -- Yes --> E[Ask or plan-mode deny]
-    D -- No --> F[Tool-specific checker]
+    C -- No --> D{Goal planning or review<br/>and mutating tool?}
+    D -- Yes --> Z
+    D -- No --> E{Protected path?}
+    E -- Yes --> X[Ask]
+    E -- No --> F[Tool-specific checker]
     F --> G{Allow or ask rule?}
     G -- Yes --> H[Bucket decision]
     G -- No --> I{Permission mode denies?}
@@ -26,11 +28,11 @@ Single decision function `mevedel-check-permission`. Nine-step chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask, or deny when
-   Plan mode already hard-denies the non-read-only tool
+3. Active Goal planning or review with a non-read-only tool → deny;
+   otherwise protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask
 4. Tool's own `check-permission` slot
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
-6. Permission mode hard-deny, currently Plan mode for non-read-only tools
+6. Permission mode decision
 7. Inside allowed roots → allow (implicit)
 8. Outside allowed roots with no covering rule → ask
 9. Permission mode/default decision
@@ -71,11 +73,9 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
   decision wins.
-- Plan-mode exception: under `mode = plan`, the skill buckets are
-  suppressed from step 5 for non-read-only tools (skill grants cannot
-  bypass plan mode). Non-skill allow rules can still make an explicit
-  allow decision before the mode hard-deny step, but ask decisions and
-  implicit allowed-root grants cannot bypass plan mode.
+- Goal planning and review deny non-read-only tools before allow rules are
+  considered. This restriction is independent of the session permission mode,
+  so skill, session, persistent, and default allow rules cannot bypass it.
 
 ## Rule format
 
@@ -92,7 +92,7 @@ Rules live on `mevedel-permission-rules` with form
 Precedence: specifier rules outrank generic; within a group
 `deny > ask > allow`; protected paths always prompt.
 
-Modes: `default` / `accept-edits` / `plan` / `trust-all`. Slash-command
+Modes: `default` / `accept-edits` / `trust-all`. Slash-command
 aliases normalize `ask` to `default`, `edit` / `edits` to `accept-edits`,
 and `auto` to `trust-all`.
 
@@ -180,7 +180,8 @@ heuristics do not fire. Explicit deny rules still win.
 `mevedel-permission-guardian` can add model-reviewed risk guidance to
 Bash prompts. Outside `trust-all`, it is advisory only: the normal
 permission chain still decides `allow` / `ask` / `deny`, explicit deny
-rules still win, plan mode and protected-path policy are unchanged, and
+rules still win, Goal phase restrictions and protected-path policy are
+unchanged, and
 the user remains authoritative. In `trust-all`, the guardian is
 deny-only for commands that the normal classifier would have treated as
 suspicious; deny recommendations veto, while timeouts, failures, invalid
@@ -237,7 +238,7 @@ expression is author-written SKILL.md content, not model-generated Eval
 input. A trusted elisp injection may bypass the prompt only when an
 active unqualified `Eval` allow rule covers it, typically from the
 skill's `allowed-tools: [Eval]`. Eval deny rules still win absolutely,
-and plan mode suppresses skill-bucket Eval allows. Markers introduced
+and Goal planning/review suppress mutating Eval calls. Markers introduced
 by argument substitution are not trusted literals and are left as text.
 Literal markers may still contain substituted text in their expression
 body; only the marker syntax and delimiters carry the trusted-literal

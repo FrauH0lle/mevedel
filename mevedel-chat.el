@@ -164,13 +164,11 @@
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
 
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-mode--post-response
-                  "mevedel-tool-plan" (start end))
-(declare-function mevedel-plan-mode-restore-pending-approval
-                  "mevedel-tool-plan" (&optional session chat-buffer))
-(declare-function mevedel-plan-mode-restore-reminders
-                  "mevedel-tool-plan" (&optional session))
+;; `mevedel-goal'
+(declare-function mevedel-goal--post-response
+                  "mevedel-goal" (start end))
+(declare-function mevedel-goal-restore-pending-approval
+                  "mevedel-goal" (&optional session chat-buffer))
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime--bwait-injected-table
@@ -394,8 +392,7 @@ session struct."
     (setq-local gptel-org-branching-context nil)
     (mevedel-preset-restore-session mevedel--session buf)
     (mevedel-reminders-install-defaults mevedel--session)
-    (require 'mevedel-tool-plan)
-    (mevedel-plan-mode-restore-reminders mevedel--session)
+    (require 'mevedel-goal)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
     ;; `gptel-send--handlers' so every request from this buffer -- whether
     ;; driven by `gptel-send', `mevedel--process-directive', or
@@ -444,13 +441,12 @@ session struct."
               #'mevedel-session-persistence--release-on-kill nil t)
     (add-hook 'kill-buffer-hook
               #'mevedel--run-session-end-hooks nil t)
-    ;; Rendering hooks for the view buffer.  Plan detection runs after the
-    ;; normal view render so the approval prompt cannot be cleared by the
-    ;; render path's interaction-zone rebuild.
+    ;; Goal phase capture runs after normal rendering so a newly proposed
+    ;; plan approval cannot be cleared by interaction-zone rebuilding.
     (add-hook 'gptel-post-response-functions
               #'mevedel-view-stream-render-response nil t)
     (add-hook 'gptel-post-response-functions
-              #'mevedel-plan-mode--post-response t t)
+              #'mevedel-goal--post-response t t)
     ;; Repair raw model input before view hooks observe the call and before
     ;; gptel maps the arguments into the pipeline wrapper.
     (require 'mevedel-tool-repair)
@@ -491,8 +487,8 @@ session struct."
     ;; Create the companion view buffer
     (require 'mevedel-view)
     (mevedel-view--ensure buf)
-    (when (fboundp 'mevedel-plan-mode-restore-pending-approval)
-      (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
+    (when (fboundp 'mevedel-goal-restore-pending-approval)
+      (mevedel-goal-restore-pending-approval mevedel--session buf))
     (mevedel--run-session-start-hooks)))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
@@ -1312,10 +1308,10 @@ A no-op for sub-agent FSMs (their buffers carry
             :warning)))))))
 
 ;;
-;;; Plan implementation
+;;; Goal implementation
 
 (defvar-local mevedel--implementation-permission-mode-restore nil
-  "Wrapped permission mode to restore after plan implementation.")
+  "Wrapped permission mode to restore after Goal implementation.")
 
 (defun mevedel--implementation-permission-mode-apply (mode)
   "Temporarily apply implementation permission MODE for this request."
@@ -1329,7 +1325,7 @@ A no-op for sub-agent FSMs (their buffers carry
       (mevedel-skills--refresh-view-input-prompt))))
 
 (defun mevedel--implementation-permission-mode-restore ()
-  "Restore permission mode after a temporary plan implementation override."
+  "Restore permission mode after a temporary Goal implementation override."
   (when (and mevedel--implementation-permission-mode-restore
              (bound-and-true-p mevedel--session))
     (let ((restore (car mevedel--implementation-permission-mode-restore)))
@@ -1437,7 +1433,7 @@ with NO-SPINNER forwarded when non-nil."
   "Implement the plan described by ACTION-PLIST.
 
 ACTION-PLIST is a plist with keys:
-  :action        - `implement', `implement-clear', or `implement-worktree'
+  :action        - `implement' or `implement-clear'
   :plan-file     - Path to the saved plan file
   :permission-mode - Permission mode for implementation
 
@@ -1445,11 +1441,7 @@ For `implement', the plan is inserted into the chat buffer as a user
 message and sent via `gptel-send', including full conversation context.
 
 For `implement-clear', a fresh `gptel-request' is fired with the plan
-as a string prompt, without prior conversation context.
-
-For `implement-worktree', the target worktree buffer contains only its
-setup context; the plan is appended and sent with the implementation
-preset."
+as a string prompt, without prior conversation context."
   (require 'mevedel-utilities)
   (let* ((plan-file (plist-get action-plist :plan-file))
          (permission-mode (plist-get action-plist :permission-mode))
@@ -1480,12 +1472,6 @@ preset."
                                           gptel-prompt-transform-functions)
                       :fsm (gptel-make-fsm
                             :handlers gptel-send--handlers))))))
-              ('implement-worktree
-               (mevedel--send-plan-implementation-turn
-                prompt "Implement accepted plan in worktree"
-                (lambda ()
-                  (mevedel-with-preset 'mevedel-implement
-                    (gptel-send)))))
               (_
                (error "Unknown plan implementation action: %s"
                       (plist-get action-plist :action)))))

@@ -32,7 +32,7 @@
 (require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-exec)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-tool-task)
 (require 'mevedel-agents)
 (require 'mevedel-agent-runtime)
@@ -2352,7 +2352,7 @@ state of its inner sections"
   (test)
   :doc "fallback one-liner buttonizes existing file paths"
   (let* ((root (make-temp-file "mevedel-view-fallback-linkify-" t))
-         (file (file-name-concat root "mevedel-tool-plan.el"))
+         (file (file-name-concat root "mevedel-goal.el"))
          (workspace (mevedel-workspace--create
                      :type 'project :id "fallback-linkify"
                      :root root :name "fallback-linkify"))
@@ -2363,7 +2363,7 @@ state of its inner sections"
           (mevedel-view-test--with-buffers
             (with-current-buffer data-buf
               (erase-buffer)
-              (insert "(:name \"Edit\" :args (:file_path \"mevedel-tool-plan.el\"))\n"
+              (insert "(:name \"Edit\" :args (:file_path \"mevedel-goal.el\"))\n"
                       "Error: nope\n"))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
@@ -2375,9 +2375,9 @@ state of its inner sections"
                    (list (list 'tool 1 (with-current-buffer data-buf (point-max))))
                    data-buf)))
               (goto-char (point-min))
-              (should (search-forward "! Edit: mevedel-tool-plan.el (1 lines)" nil t))
+              (should (search-forward "! Edit: mevedel-goal.el (1 lines)" nil t))
               (goto-char (point-min))
-              (search-forward "mevedel-tool-plan.el")
+              (search-forward "mevedel-goal.el")
               (let ((button (button-at (match-beginning 0))))
                 (should button)
                 (should (equal file
@@ -2737,11 +2737,11 @@ state of its inner sections"
       :display-arg :file_path
       :renderer (lambda (_name _args _result _data) nil)))
     (with-temp-buffer
-      (insert "(:name \"Edit\" :args (:file_path \"mevedel-tool-plan.el\"))\n"
+      (insert "(:name \"Edit\" :args (:file_path \"mevedel-goal.el\"))\n"
               "Error: Could not find old_string in file: x\n")
       (let ((rendering (mevedel-view--segment-rendering
                         (current-buffer) (point-min) (point-max))))
-        (should (equal "Edit: mevedel-tool-plan.el (error)"
+        (should (equal "Edit: mevedel-goal.el (error)"
                        (plist-get rendering :header)))
         (should (eq 'error (plist-get rendering :status)))
         (should (string-prefix-p "Error:" (plist-get rendering :body))))))

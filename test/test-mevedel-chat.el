@@ -9,7 +9,7 @@
 (require 'mevedel-chat)
 (require 'mevedel)
 (require 'mevedel-permission-queue)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-view-zone)
 (require 'helpers
          (file-name-concat
@@ -165,11 +165,8 @@
 			 (setq-local mevedel--session session)
 			 (require 'mevedel-session-persistence)
 			 (require 'mevedel-view)
-			 (cl-letf (((symbol-function
+			   (cl-letf (((symbol-function
 				     'mevedel-reminders-install-defaults)
-				    #'ignore)
-				   ((symbol-function
-				     'mevedel-plan-mode-restore-reminders)
 				    #'ignore)
 				   ((symbol-function
 				     'mevedel-preset--build-handlers)
@@ -189,9 +186,6 @@
 				     'mevedel-skills-install-activation-hook)
 				    #'ignore)
 				   ((symbol-function 'mevedel-view--ensure)
-				    #'ignore)
-				   ((symbol-function
-				     'mevedel-plan-mode-restore-pending-approval)
 				    #'ignore)
 				   ((symbol-function 'mevedel--run-session-start-hooks)
 				    #'ignore)
@@ -353,15 +347,10 @@
 (mevedel-deftest mevedel--implement-plan ()
   ,test
   (test)
-
-  :doc "starts worktree implementation with setup context and the implement preset"
-  (let ((plan-file (make-temp-file "mevedel-worktree-plan-"))
-        (buffer (generate-new-buffer " *mevedel-worktree-plan*"))
-        (gptel--known-presets
-         (cons '(mevedel-implement :description "test")
-               gptel--known-presets))
-        sent-preset
-        sent-text)
+  :doc "sends an accepted plan with the current conversation context"
+  (let ((plan-file (make-temp-file "mevedel-plan-"))
+        (buffer (generate-new-buffer " *mevedel-plan-implementation*"))
+        sent)
     (unwind-protect
         (progn
           (write-region "# Plan\n\nDo it." nil plan-file nil 'silent)
@@ -370,61 +359,20 @@
             (setq-local gptel-response-separator "\n\n")
             (setq-local gptel-prompt-prefix-alist
                         '((org-mode . "* User\n")))
-            (setq-local mevedel--session
-                        (mevedel-session--create
-                         :name "worktree"
-                         :workspace nil
-                         :permission-mode 'default
-                         :permission-rules nil
-                         :permission-queue nil
-                         :plan-queue nil))
-            (insert "* User\nSetup context for this worktree session.\n"))
-          (cl-letf (((symbol-function 'gptel-send)
-                     (lambda (&optional _arg)
-                       (setq sent-preset gptel--preset)
-                       (setq sent-text
-                             (buffer-substring-no-properties
-                              (point-min) (point-max)))))
-                    ((symbol-function
-                      'mevedel-skills--refresh-view-input-prompt)
-                     #'ignore))
-            (with-current-buffer buffer
+            (insert "* User\nPlanning context.\n")
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&optional _arg)
+                         (setq sent (buffer-string))))
+                      ((symbol-function
+                        'mevedel--implementation-permission-mode-apply)
+                       #'ignore))
               (mevedel--implement-plan
-               (list :action 'implement-worktree
+               (list :action 'implement
                      :plan-file plan-file
-                     :permission-mode 'trust-all))))
-          (should (eq 'mevedel-implement sent-preset))
-          (should (string-match-p "Setup context" sent-text))
-          (should (string-match-p "Implement the following plan" sent-text))
-          (should (string-match-p "# Plan" sent-text)))
-      (when (buffer-live-p buffer) (kill-buffer buffer))
-      (when (file-exists-p plan-file) (delete-file plan-file))))
-
-  :doc "rolls back a worktree implementation turn when request startup fails"
-  (let ((plan-file (make-temp-file "mevedel-worktree-plan-"))
-        (buffer (generate-new-buffer " *mevedel-worktree-plan-error*"))
-        (gptel--known-presets
-         (cons '(mevedel-implement :description "test")
-               gptel--known-presets)))
-    (unwind-protect
-        (progn
-          (write-region "# Plan\n\nDo it." nil plan-file nil 'silent)
-          (with-current-buffer buffer
-            (org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist
-                        '((org-mode . "* User\n")))
-            (insert "* User\nSetup context.\n")
-            (let ((before (buffer-string)))
-              (cl-letf (((symbol-function 'gptel-send)
-                         (lambda (&optional _arg) (error "No API key")))
-                        ((symbol-function 'mevedel-view--full-rerender)
-                         #'ignore))
-                (should-error
-                 (mevedel--implement-plan
-                  (list :action 'implement-worktree
-                        :plan-file plan-file))))
-              (should (equal before (buffer-string))))))
+                     :permission-mode 'default))))
+          (should (string-match-p "Planning context" sent))
+          (should (string-match-p "Implement the following plan" sent))
+          (should (string-match-p "# Plan" sent)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (when (file-exists-p plan-file) (delete-file plan-file)))))
 

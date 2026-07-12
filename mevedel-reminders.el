@@ -371,8 +371,7 @@ Falls back to the global `mevedel-permission-mode' default."
       'default))
 
 (defvar mevedel-reminders--mode-constraint-messages
-  '((plan . "Permission mode: `plan'. File modifications and destructive operations are denied. Explore the codebase with read-only tools and propose changes in your response rather than applying them.")
-    (accept-edits . "Permission mode: `accept-edits'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
+  '((accept-edits . "Permission mode: `accept-edits'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
     (trust-all . "Permission mode: `trust-all'. Most confirmation prompts are skipped. Double-check destructive operations before calling tools; protected paths still prompt."))
   "Alist mapping permission mode symbols to reminder body strings.")
 
@@ -435,66 +434,6 @@ sparsely while that mode remains active."
     (with-temp-buffer
       (insert-file-contents path nil 0 12000)
       (buffer-string))))
-
-(defun mevedel-reminders-make-plan-mode (&optional interval)
-  "Create the `plan-mode' workflow reminder with INTERVAL.
-The first firing carries the full workflow.  Later firings are sparse
-because reminder interval state is tracked on the reminder struct."
-  (mevedel-reminder-create
-   :type 'plan-mode
-   :trigger (lambda (session)
-              (eq (mevedel-reminders--session-mode session) 'plan))
-   :content (lambda (session)
-              (let* ((path (mevedel-reminders--plan-path session))
-                     (full-p
-                      (null (mevedel-reminder-last-fired
-                             (cl-find 'plan-mode
-                                      (mevedel-session-reminders session)
-                                      :key #'mevedel-reminder-type)))))
-                (if full-p
-                    (concat
-                     "Plan mode is active. The user does not want execution yet. Do not edit files, run mutating commands, commit, or otherwise change the system. Use read-only exploration to understand the code, ask the user only for decisions that cannot be discovered, and finalize by emitting exactly one <proposed_plan> block.\n\n"
-                     "The proposed plan must be decision-complete and formatted as Markdown inside exact line-oriented tags:\n"
-                     "<proposed_plan>\n# Concrete Plan Title\n\n## Summary\n- State the root cause or goal, intended behavior change, and important non-goals.\n\n## Key Changes\n- Group implementation bullets by subsystem or behavior, not by file inventory. Mention files, public APIs, interfaces, or data shape changes only when needed to remove ambiguity.\n\n## Regression Coverage\n- List the user-visible flows, edge cases, and failure scenarios that tests must cover.\n\n## Validation\n- List exact focused test/build commands to run.\n\n## Assumptions\n- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n</proposed_plan>\n\n"
-                     "Keep bullets short and high-signal. Do not use task/progress tools as the plan artifact, and do not ask for approval outside the proposed-plan block."
-                     (if path
-                         (format "\n\nLatest plan artifact: %s" path)
-                       ""))
-                  (concat
-                   "Plan mode is still active. Stay read-only, continue resolving unknowns, and end with either user clarification or exactly one <proposed_plan> block for approval. Do not ask for plan approval in plain text."
-                   (if path
-                       (format " Latest plan artifact: %s." path)
-                     "")))))
-   :interval (or interval 5)))
-
-(defun mevedel-reminders-make-plan-mode-reentry ()
-  "Create the one-shot `plan-mode-reentry' reminder."
-  (mevedel-reminder-create
-   :type 'plan-mode-reentry
-   :trigger (lambda (session)
-              (eq (mevedel-reminders--session-mode session) 'plan))
-   :content (lambda (session)
-              (let ((path (or (mevedel-reminders--plan-path session)
-                              "the latest plan artifact")))
-                (format
-                 "Re-entering Plan mode. A previous plan exists at %s. Before presenting a new plan, evaluate whether the current user request continues that exact task. If it does, emit a full replacement <proposed_plan> that incorporates the revision; if not, emit a fresh replacement plan. Treat plan artifacts as reference-only, not files to edit. Do not request implementation until the presented plan matches the current request."
-                 path)))
-   :interval 'one-shot))
-
-(defun mevedel-reminders-make-plan-mode-exit ()
-  "Create the one-shot `plan-mode-exit' reminder."
-  (mevedel-reminder-create
-   :type 'plan-mode-exit
-   :trigger (lambda (session)
-              (not (eq (mevedel-reminders--session-mode session) 'plan)))
-   :content (lambda (session)
-              (let ((path (mevedel-reminders--plan-path session)))
-                (concat
-                 "Plan mode has ended. You may now execute implementation work under the restored permission mode."
-                 (if path
-                     (format " The approved/latest plan artifact is %s; refer back to it when needed." path)
-                   ""))))
-   :interval 'one-shot))
 
 (defun mevedel-reminders-make-plan-reference ()
   "Create the one-shot `plan-reference' reminder."

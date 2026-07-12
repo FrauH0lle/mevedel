@@ -1,11 +1,10 @@
-;;; mevedel-tool-plan.el -- Planning tool -*- lexical-binding: t -*-
+;;; mevedel-goal.el -- Supervised goal workflow -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Conversational Plan-mode support.  The model emits
-;; <proposed_plan>...</proposed_plan>; mevedel extracts the block,
-;; persists the latest plan as a session artifact, and displays it
-;; inline with interactive controls for the user.
+;; A session-owned Goal drives one supervised planning, approval,
+;; implementation, and review cycle.  Plans use the lifecycle-neutral
+;; artifact operations in `mevedel-plan'.
 
 ;;; Code:
 
@@ -18,34 +17,26 @@
 (require 'mevedel-utilities)
 
 ;; `gptel'
+(declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-backend)
 (defvar gptel-model)
 (defvar gptel-prompt-prefix-alist)
+(defvar gptel-reasoning-effort)
 (defvar gptel-response-separator)
 
 ;; `mevedel-chat'
-(declare-function mevedel--active-chat-buffer "mevedel-chat"
-                  (&optional workspace))
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
-(declare-function mevedel--insert-local-user-turn
-                  "mevedel-chat"
-                  (prompt &optional display-text kind hook-context no-spinner))
 (defvar mevedel--session)
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-apply-auto-lifecycle
-                  "mevedel-permissions"
-                  (previous-mode target-mode &optional session))
-(declare-function mevedel-permission-mode-normalize
-                  "mevedel-permissions" (mode))
-(declare-function mevedel-permission-mode-set-raw
-                  "mevedel-permissions" (mode))
-(defvar mevedel-permission-mode)
+;; `mevedel-models'
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
@@ -54,11 +45,6 @@
                   (entry key value))
 
 ;; `mevedel-reminders'
-(declare-function mevedel-reminders-make-plan-mode "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-plan-mode-exit
-                  "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-plan-mode-reentry
-                  "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-plan-reference
                   "mevedel-reminders" ())
 (declare-function mevedel-session-ensure-reminder
@@ -72,21 +58,27 @@
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
 
-;; `mevedel-skills-ui'
-(declare-function mevedel-skills--refresh-view-input-prompt
-                  "mevedel-skills-ui" ())
-
 ;; `mevedel-structs'
+(declare-function mevedel-goal--create "mevedel-structs" (&rest args))
+(declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+
+;; `mevedel-view'
+(declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--begin-external-turn
@@ -95,10 +87,6 @@
                                 &optional kind hook-context no-spinner))
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
-
-;; `mevedel-view'
-(declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
-(defvar mevedel--view-buffer)
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-anchor
@@ -110,28 +98,26 @@
                   "mevedel-view-interaction"
                   (&optional data-buffer))
 
-;; `mevedel-worktree'
-(declare-function mevedel-worktree-create-session
-                  "mevedel-worktree" (&optional branch purpose clean))
-
-
 ;;
-;;; Planning
+;;; Lifecycle
 
-(defun mevedel-plan-mode--metadata-put (session key value)
-  "Set Plan-mode metadata KEY to VALUE in SESSION."
+(defvar mevedel-goal-dispatch-function #'mevedel-goal--dispatch-gptel
+  "Function called with PHASE, PROMPT, and DISPLAY-TEXT for a Goal request.")
+
+(defun mevedel-goal--plan-metadata-put (session key value)
+  "Set plan artifact metadata KEY to VALUE in SESSION."
   (let ((metadata (copy-sequence (or (mevedel-session-plan-metadata session)
                                      nil))))
     (setq metadata (plist-put metadata key value))
     (setf (mevedel-session-plan-metadata session) metadata)
     metadata))
 
-(defun mevedel-plan-mode--mark-rejected (session)
+(defun mevedel-goal--mark-rejected (session)
   "Mark SESSION's current plan as rejected."
-  (mevedel-plan-mode--metadata-put session :status 'rejected)
-  (mevedel-plan-mode--metadata-put session :verification-pending nil))
+  (mevedel-goal--plan-metadata-put session :status 'rejected)
+  (mevedel-goal--plan-metadata-put session :verification-pending nil))
 
-(defun mevedel-plan-mode--save-session-state (session buffer)
+(defun mevedel-goal--save-session-state (session buffer)
   "Persist SESSION state from BUFFER."
   (require 'mevedel-session-persistence)
   (condition-case err
@@ -142,95 +128,120 @@
       (format "Could not persist plan state: %S" err)
       :warning))))
 
-(defun mevedel-plan-mode--ensure-reference-reminder (session)
+(defun mevedel-goal--ensure-reference-reminder (session)
   "Install the accepted-plan reference reminder for SESSION."
   (require 'mevedel-reminders)
   (mevedel-session-remove-reminder session 'plan-reference)
   (mevedel-session-ensure-reminder
    session (mevedel-reminders-make-plan-reference)))
 
-(defun mevedel-plan-mode--set-mode (mode)
-  "Set permission MODE for current session and refresh the view prompt."
-  (require 'mevedel-permissions)
-  (mevedel-permission-mode-set-raw mode)
-  (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-    (mevedel-skills--refresh-view-input-prompt)))
+(defun mevedel-goal-read-only-phase-p (&optional session)
+  "Return non-nil when SESSION's active Goal phase must be read-only."
+  (when-let* ((session (or session mevedel--session))
+              (goal (mevedel-session-goal session)))
+    (and (eq (mevedel-goal-status goal) 'active)
+         (memq (mevedel-goal-phase goal) '(planning reviewing)))))
 
-(defun mevedel-plan-mode--effective-permission-mode (&optional session)
-  "Return the effective permission mode for SESSION."
-  (or (and session (mevedel-session-permission-mode session))
-      (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
-      'default))
+(defun mevedel-goal--planning-prompt (goal)
+  "Return the planning request for GOAL."
+  (format
+   "Goal objective:\n%s\n\nInvestigate the current repository state and propose a decision-complete implementation plan. This phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
+   (mevedel-goal-objective goal)))
 
-(defun mevedel-plan-mode-enter (&optional prompt display-text hook-context)
-  "Enter conversational Plan mode.
-When PROMPT is non-empty, send it as the first Plan-mode user turn.
-DISPLAY-TEXT and HOOK-CONTEXT control the visible turn when PROMPT
-contains model-only context."
-  (require 'mevedel-plan)
+(defun mevedel-goal--review-prompt (goal)
+  "Return the one-cycle completion review request for GOAL."
+  (format
+   "Goal objective:\n%s\n\nAccepted plan: %s\n\nReview the implementation against the whole objective and current repository evidence. This phase is read-only. Do not make changes. State whether the objective is fully complete and explain the evidence."
+   (mevedel-goal-objective goal)
+   (or (plist-get (mevedel-goal-current-plan goal) :absolute-path)
+       "unavailable")))
+
+(defun mevedel-goal--new-id ()
+  "Return a fresh compact Goal identifier."
+  (format "%s-%06x" (format-time-string "%Y%m%d-%H%M%S")
+          (random #x1000000)))
+
+(defun mevedel-goal--validate-objective (objective)
+  "Return normalized non-empty OBJECTIVE or signal `user-error'."
+  (unless (and (stringp objective)
+               (not (string-blank-p objective)))
+    (user-error "Goal objective must not be blank"))
+  (string-trim objective))
+
+(defun mevedel-goal-start (objective &optional display-text)
+  "Start a supervised Goal for OBJECTIVE in the current session.
+DISPLAY-TEXT is the user-facing form of the planning turn."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
-  (let ((previous
-         (mevedel-plan-mode--effective-permission-mode mevedel--session)))
-    (unless (eq previous 'plan)
-      (mevedel-plan-mode--metadata-put
-       mevedel--session :previous-permission-mode previous))
-    (require 'mevedel-reminders)
-    (mevedel-plan-mode--set-mode 'plan)
-    (mevedel-permission-mode-apply-auto-lifecycle
-     previous 'plan mevedel--session)
-    (mevedel-session-remove-reminder mevedel--session 'plan-mode-exit)
-    (mevedel-session-ensure-reminder
-     mevedel--session (mevedel-reminders-make-plan-mode))
-    (when (mevedel-plan-current-exists-p mevedel--session)
-      (mevedel-session-ensure-reminder
-       mevedel--session (mevedel-reminders-make-plan-mode-reentry)))
-    (message "mevedel: plan mode on")
-    (when (and prompt (not (string-blank-p prompt)))
-      (mevedel-plan-mode--insert-and-send prompt display-text hook-context))))
+  (when-let* ((existing (mevedel-session-goal mevedel--session)))
+    (unless (eq (mevedel-goal-status existing) 'complete)
+      (user-error "A non-complete Goal already owns this session")))
+  (let ((previous-goal (mevedel-session-goal mevedel--session))
+        (previous-plan-metadata
+         (mevedel-session-plan-metadata mevedel--session))
+        (goal
+         (mevedel-goal--create
+          :id (mevedel-goal--new-id)
+          :objective (mevedel-goal--validate-objective objective)
+          :status 'active
+          :phase 'planning
+          :approval-policy 'supervised
+          :owner-session (or (mevedel-session-session-id mevedel--session)
+                             (mevedel-session-name mevedel--session)))))
+    (setf (mevedel-session-goal mevedel--session) goal
+          (mevedel-session-plan-metadata mevedel--session) nil)
+    (condition-case err
+        (mevedel-goal--dispatch-phase
+         'planning (mevedel-goal--planning-prompt goal)
+         (or display-text (mevedel-goal-objective goal)))
+      (error
+       (setf (mevedel-session-goal mevedel--session) previous-goal
+             (mevedel-session-plan-metadata mevedel--session)
+             previous-plan-metadata)
+       (signal (car err) (cdr err))))
+    goal))
 
-(defun mevedel-plan-mode-exit (&optional target-mode)
-  "Exit Plan mode and restore TARGET-MODE or the recorded prior mode."
-  (require 'mevedel-plan)
-  (when (bound-and-true-p mevedel--session)
-    (require 'mevedel-reminders)
-    (require 'mevedel-permissions)
-    (let* ((previous
-            (mevedel-plan-mode--effective-permission-mode mevedel--session))
-           (metadata (mevedel-session-plan-metadata mevedel--session))
-           (restore (or target-mode
-                        (plist-get metadata :previous-permission-mode)
-                        'default)))
-      (setq restore (mevedel-permission-mode-normalize restore))
-      (when (eq restore 'plan)
-        (setq restore 'default))
-      (mevedel-plan-mode--metadata-put
-       mevedel--session :previous-permission-mode nil)
-      (mevedel-session-remove-reminder mevedel--session 'plan-mode)
-      (mevedel-session-remove-reminder mevedel--session 'plan-mode-reentry)
-      (mevedel-plan-mode--set-mode restore)
-      (mevedel-permission-mode-apply-auto-lifecycle
-       previous restore mevedel--session)
-      (mevedel-session-ensure-reminder
-       mevedel--session (mevedel-reminders-make-plan-mode-exit))
-      restore)))
+(defun mevedel-goal--dispatch-gptel (phase prompt display-text)
+  "Dispatch PHASE with PROMPT, showing DISPLAY-TEXT in the transcript."
+  (let ((workload (pcase phase
+                    ('planning 'planning)
+                    ('reviewing 'review)
+                    (_ (error "Goal phase cannot dispatch: %s" phase)))))
+    (mevedel-goal--call-with-workload
+     workload
+     (lambda ()
+       (let ((fsm (mevedel-goal--insert-and-send prompt display-text)))
+         (when fsm
+           (setf (gptel-fsm-info fsm)
+                 (plist-put (gptel-fsm-info fsm)
+                            :mevedel-goal-phase phase)))
+         fsm)))))
 
-(defun mevedel-plan-mode-restore-reminders (&optional session)
-  "Restore Plan-mode reminders for resumed SESSION when it is in Plan mode."
-  (require 'mevedel-plan)
-  (let ((session (or session mevedel--session)))
-    (when (and session
-               (eq (mevedel-session-permission-mode session) 'plan))
-      (require 'mevedel-reminders)
-      (mevedel-session-remove-reminder session 'plan-mode-exit)
-      (mevedel-session-ensure-reminder
-       session (mevedel-reminders-make-plan-mode))
-      (when (mevedel-plan-current-exists-p session)
-        (mevedel-session-ensure-reminder
-         session (mevedel-reminders-make-plan-mode-reentry))))))
+(defun mevedel-goal--call-with-workload (workload function)
+  "Call FUNCTION with WORKLOAD's resolved request policy."
+  (require 'mevedel-models)
+  (let* ((policy (mevedel-model-resolve-workload workload))
+         (old-backend gptel-backend)
+         (old-model gptel-model)
+         (old-effort (and (boundp 'gptel-reasoning-effort)
+                          gptel-reasoning-effort)))
+    (unwind-protect
+        (progn
+          (setq-local gptel-backend (plist-get policy :backend)
+                      gptel-model (plist-get policy :model)
+                      gptel-reasoning-effort (plist-get policy :effort))
+          (funcall function))
+      (setq-local gptel-backend old-backend
+                  gptel-model old-model
+                  gptel-reasoning-effort old-effort))))
 
-(defun mevedel-plan-mode--insert-and-send
-    (prompt &optional display-text hook-context)
+(defun mevedel-goal--dispatch-phase (phase prompt display-text)
+  "Dispatch Goal PHASE with PROMPT and DISPLAY-TEXT."
+  (unless (memq phase '(planning reviewing))
+    (error "Goal phase cannot dispatch: %s" phase))
+  (funcall mevedel-goal-dispatch-function phase prompt display-text))
+
+(defun mevedel-goal--insert-and-send (prompt &optional display-text hook-context)
   "Insert PROMPT as a user turn in the current data buffer and send it.
 DISPLAY-TEXT is shown in the view instead of PROMPT.  HOOK-CONTEXT is
 shown as a collapsed hook-context disclosure."
@@ -289,9 +300,9 @@ shown as a collapsed hook-context disclosure."
                               (or session
                                   (mevedel-plan-queue--current-session))))
 
-(defun mevedel-plan-mode--ensure-implementation-allowed (entry outcome)
+(defun mevedel-goal--ensure-implementation-allowed (entry outcome)
   "Signal when ENTRY may not be implemented with OUTCOME yet."
-  (when (and (mevedel-plan-mode--approval-action outcome)
+  (when (and (mevedel-goal--approval-action outcome)
              (mevedel-session-queued-user-messages
               (plist-get entry :session)))
     (user-error
@@ -299,7 +310,7 @@ shown as a collapsed hook-context disclosure."
 
 (defun mevedel-plan-queue--on-head-outcome (entry outcome)
   "Settle plan approval ENTRY with OUTCOME and render the next head."
-  (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
+  (mevedel-goal--ensure-implementation-allowed entry outcome)
   (mevedel-queue--pop mevedel-plan-queue--spec entry outcome))
 
 (defun mevedel-plan-queue-abort-all (&optional session)
@@ -311,33 +322,35 @@ shown as a collapsed hook-context disclosure."
   (mevedel-queue--sweep-origin
    mevedel-plan-queue--spec origin 'aborted session))
 
-(defconst mevedel-plan-mode--implementation-modes
+(defconst mevedel-goal--implementation-modes
   '(default accept-edits trust-all)
   "Plan implementation permission modes cycled by the approval prompt.")
 
-(defun mevedel-plan-mode--implementation-mode-label (mode)
+(defun mevedel-goal--implementation-mode-label (mode)
   "Return compact display label for implementation MODE."
   (pcase mode
     ('accept-edits "edit")
     ('trust-all "auto")
     (_ "default")))
 
-(defun mevedel-plan-mode--next-implementation-mode (mode)
+(defun mevedel-goal--next-implementation-mode (mode)
   "Return the next implementation mode after MODE."
-  (let* ((modes mevedel-plan-mode--implementation-modes)
+  (let* ((modes mevedel-goal--implementation-modes)
          (tail (memq mode modes)))
     (or (cadr tail) (car modes))))
 
 (defun mevedel-plan-queue--entry-implementation-mode (entry)
   "Return ENTRY's selected implementation permission mode."
   (or (mevedel-queue--entry-metadata-get entry :implementation-mode)
+      (when-let* ((session (plist-get entry :session)))
+        (mevedel-session-permission-mode session))
       'default))
 
 (defun mevedel-plan-queue--cycle-entry-implementation-mode (entry)
   "Cycle ENTRY's implementation mode and rerender the plan prompt."
   (mevedel-queue--entry-metadata-put
    entry :implementation-mode
-   (mevedel-plan-mode--next-implementation-mode
+   (mevedel-goal--next-implementation-mode
     (mevedel-plan-queue--entry-implementation-mode entry)))
   (mevedel-plan-queue--render-entry entry))
 
@@ -349,13 +362,11 @@ shown as a collapsed hook-context disclosure."
    " implement  "
    (propertize "I" 'font-lock-face 'help-key-binding)
    " implement (clear context)  "
-   (propertize "w" 'font-lock-face 'help-key-binding)
-   " implement in worktree  "
    (propertize "TAB" 'font-lock-face 'help-key-binding)
    "/"
    (propertize "m" 'font-lock-face 'help-key-binding)
    (format " mode: %s  "
-           (mevedel-plan-mode--implementation-mode-label
+           (mevedel-goal--implementation-mode-label
             implementation-mode))
    (propertize "f" 'font-lock-face 'help-key-binding)
    " feedback draft  "
@@ -367,67 +378,6 @@ shown as a collapsed hook-context disclosure."
   (if (fboundp 'mevedel-view--fontify-as)
       (mevedel-view--fontify-as plan-markdown 'markdown-mode)
     plan-markdown))
-
-(defun mevedel-plan-mode--prepare-worktree-outcome
-    (entry plan-markdown chat-buffer outcome)
-  "Prepare and return ENTRY's cached worktree implementation OUTCOME."
-  (require 'mevedel-plan)
-  (or (mevedel-queue--entry-metadata-get entry :prepared-outcome)
-      (let* ((backend (buffer-local-value 'gptel-backend chat-buffer))
-             (model (buffer-local-value 'gptel-model chat-buffer))
-             (state (or (mevedel-queue--entry-metadata-get
-                         entry :worktree-preparation)
-                        nil)))
-        (require 'mevedel-worktree)
-        (let* ((worktree
-                (or (plist-get state :worktree)
-                    (let ((created
-                           (with-current-buffer chat-buffer
-                             (mevedel-worktree-create-session))))
-                      (setq state (plist-put state :worktree created))
-                      (mevedel-queue--entry-metadata-put
-                       entry :worktree-preparation state)
-                      created)))
-               (buffer (plist-get worktree :buffer)))
-          (with-current-buffer buffer
-            (setq-local gptel-backend backend)
-            (setq-local gptel-model model)
-            (let* ((current-artifact
-                    (or (plist-get state :current-artifact)
-                        (let ((artifact
-                               (mevedel-plan-write-current
-                                plan-markdown mevedel--session buffer)))
-                          (setq state (plist-put state :current-artifact
-                                                 artifact))
-                          (mevedel-queue--entry-metadata-put
-                           entry :worktree-preparation state)
-                          artifact)))
-                   (target-accepted-plan
-                    (or (plist-get state :accepted-plan)
-                        (let ((accepted
-                               (mevedel-plan-archive-accepted
-                                current-artifact mevedel--session)))
-                          (setq state
-                                (plist-put state :accepted-plan accepted))
-                          (mevedel-queue--entry-metadata-put
-                           entry :worktree-preparation state)
-                          accepted))))
-              (unless (plist-get state :approved)
-                (mevedel-plan-mark-approved
-                 mevedel--session current-artifact target-accepted-plan)
-                (mevedel-plan-mode--ensure-reference-reminder
-                 mevedel--session)
-                (setq state (plist-put state :approved t))
-                (mevedel-queue--entry-metadata-put
-                 entry :worktree-preparation state))
-              (mevedel-plan-mode--save-session-state mevedel--session buffer)
-              (setq worktree
-                    (plist-put worktree :plan-file
-                               (plist-get current-artifact :absolute-path)))))
-          (let ((prepared (plist-put outcome :worktree worktree)))
-            (mevedel-queue--entry-metadata-put
-             entry :prepared-outcome prepared)
-            prepared)))))
 
 (defun mevedel-plan-queue--render-entry (entry)
   "Render plan approval queue ENTRY in the interaction zone."
@@ -446,20 +396,13 @@ shown as a collapsed hook-context disclosure."
          (implement-plan ()
            (interactive)
            (let ((outcome (implementation-outcome 'implement)))
-             (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
+             (mevedel-goal--ensure-implementation-allowed entry outcome)
              (settle outcome)))
          (implement-plan-clear ()
            (interactive)
            (let ((outcome (implementation-outcome 'implement-clear)))
-             (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
+             (mevedel-goal--ensure-implementation-allowed entry outcome)
              (settle outcome)))
-         (implement-plan-worktree ()
-           (interactive)
-           (let ((outcome (implementation-outcome 'implement-worktree)))
-             (mevedel-plan-mode--ensure-implementation-allowed entry outcome)
-             (settle
-              (mevedel-plan-mode--prepare-worktree-outcome
-               entry plan-markdown chat-buffer outcome))))
          (cycle-implementation-mode ()
            (interactive)
            (mevedel-plan-queue--cycle-entry-implementation-mode entry))
@@ -496,7 +439,6 @@ shown as a collapsed hook-context disclosure."
             (define-key keymap (kbd "i") #'implement-plan)
             (define-key keymap (kbd "C-c C-c") #'implement-plan)
             (define-key keymap (kbd "I") #'implement-plan-clear)
-            (define-key keymap (kbd "w") #'implement-plan-worktree)
             (define-key keymap (kbd "TAB") #'cycle-implementation-mode)
             (define-key keymap (kbd "<tab>") #'cycle-implementation-mode)
             (define-key keymap (kbd "m") #'cycle-implementation-mode)
@@ -532,7 +474,7 @@ shown as a collapsed hook-context disclosure."
                 (with-selected-window buf-win
                   (recenter-top-bottom 1))))))))))
 
-(defun mevedel-plan-mode--feedback-draft-text (plan-path &optional feedback)
+(defun mevedel-goal--feedback-draft-text (plan-path &optional feedback)
   "Return editable Plan feedback draft text referencing PLAN-PATH.
 When FEEDBACK is non-nil, prefill it in the feedback section."
   (format
@@ -540,7 +482,7 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
    (or feedback "")
    (or plan-path "latest plan artifact")))
 
-(defun mevedel-plan-mode--insert-feedback-draft
+(defun mevedel-goal--insert-feedback-draft
     (chat-buffer plan-path &optional feedback)
   "Insert an editable Plan feedback draft for PLAN-PATH in CHAT-BUFFER's view.
 When FEEDBACK is non-nil, prefill it in the feedback section."
@@ -554,138 +496,93 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
       (mevedel-view--clear-input)
       (goto-char (mevedel-view--input-start))
       (let ((start (point)))
-        (insert (mevedel-plan-mode--feedback-draft-text plan-path feedback))
+        (insert (mevedel-goal--feedback-draft-text plan-path feedback))
         (goto-char start))
       (when (search-forward "Plan feedback:\n\n" nil t)
         (goto-char (match-end 0)))
       (when-let* ((window (get-buffer-window target-buffer)))
         (select-window window)))))
 
-(defun mevedel-retry-plan-implementation ()
-  "Retry this session's failed worktree plan implementation request."
-  (interactive)
-  (require 'mevedel-chat)
-  (require 'mevedel-plan)
-  (let ((data-buffer (mevedel--active-chat-buffer)))
-    (unless (and data-buffer (buffer-live-p data-buffer))
-      (user-error "No mevedel session in this buffer"))
-    (with-current-buffer data-buffer
-      (let ((retry (mevedel-plan-retry-input mevedel--session)))
-        (unless retry
-          (user-error "No failed plan implementation to retry"))
-        (condition-case err
-            (progn
-              (mevedel--implement-plan retry)
-              (mevedel-plan-clear-retry mevedel--session)
-              (mevedel-plan-mode--save-session-state
-               mevedel--session data-buffer))
-          (error
-           (mevedel-plan-mode--save-session-state
-            mevedel--session data-buffer)
-           (signal (car err) (cdr err))))))))
-
-(defun mevedel-plan-mode--approval-action (outcome)
+(defun mevedel-goal--approval-action (outcome)
   "Return implementation action represented by OUTCOME, or nil."
   (cond
-   ((memq outcome '(implement implement-clear implement-worktree)) outcome)
+   ((memq outcome '(implement implement-clear)) outcome)
    ((and (consp outcome)
          (memq (plist-get outcome :action)
-               '(implement implement-clear implement-worktree)))
+               '(implement implement-clear)))
     (plist-get outcome :action))))
 
-(defun mevedel-plan-mode--approval-implementation-mode (outcome)
+(defun mevedel-goal--approval-implementation-mode (outcome)
   "Return implementation permission mode represented by OUTCOME."
   (let ((mode (and (consp outcome) (plist-get outcome :mode))))
-    (if (memq mode '(accept-edits trust-all))
+    (if (memq mode '(default accept-edits trust-all))
         mode
-      'default)))
+      (or (mevedel-session-permission-mode mevedel--session) 'default))))
 
-(defun mevedel-plan-mode--approval-callback
+(defun mevedel-goal--approval-callback
     (plan-markdown chat-buffer outcome)
   "Handle OUTCOME for a proposed PLAN-MARKDOWN in CHAT-BUFFER."
   (require 'mevedel-plan)
   (setq plan-markdown (mevedel--normalize-message-text plan-markdown))
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
-      (if-let* ((action (mevedel-plan-mode--approval-action outcome)))
-          (let* ((worktree (and (eq action 'implement-worktree)
-                                (plist-get outcome :worktree)))
-                (artifacts (mevedel-plan-accept
-                            plan-markdown mevedel--session chat-buffer
-                            (not (null worktree))))
-                (current-artifact (plist-get artifacts :current))
-                (implementation-mode
-                 (mevedel-plan-mode--approval-implementation-mode outcome)))
-            (mevedel-plan-mode--ensure-reference-reminder mevedel--session)
-            (mevedel-plan-mode-exit)
-            (if worktree
-                (let ((target-buffer (plist-get worktree :buffer)))
-                  (require 'mevedel-chat)
-                  (mevedel-plan-record-handoff
-                   mevedel--session
-                   (buffer-local-value 'mevedel--session target-buffer)
-                   worktree)
-                  (mevedel--insert-local-user-turn
-                   (format
-                    "Implementation handed off to worktree session %s.\n\nBranch: %s\nDirectory: %s"
-                    (with-current-buffer target-buffer
-                      (mevedel-session-name mevedel--session))
-                    (plist-get worktree :branch)
-                    (plist-get worktree :directory))
-                   nil 'worktree nil t)
-                  (mevedel-plan-mode--save-session-state
-                   mevedel--session chat-buffer)
-                  (with-current-buffer target-buffer
-                    (let ((implementation
-                           (mevedel-plan-implementation-input
-                            action
-                            (list :absolute-path
-                                  (plist-get worktree :plan-file))
-                            implementation-mode)))
-                      (condition-case err
-                          (mevedel--implement-plan implementation)
-                        (error
-                         (mevedel-plan-record-retry
-                          mevedel--session implementation)
-                         (mevedel--insert-local-user-turn
-                          (format
-                           "Implementation request failed to start: %s\n\nThe accepted plan remains in this worktree session. Run M-x mevedel-retry-plan-implementation to retry with the same implementation preset and permission mode."
-                           (error-message-string err))
-                          nil 'worktree nil t)
-                         (mevedel-plan-mode--save-session-state
-                          mevedel--session target-buffer))))))
-              (mevedel-plan-mode--save-session-state
-               mevedel--session chat-buffer)
-              (mevedel--implement-plan
-               (mevedel-plan-implementation-input
-                action current-artifact implementation-mode))))
+      (if-let* ((action (mevedel-goal--approval-action outcome)))
+          (let* ((goal (mevedel-session-goal mevedel--session)))
+            (unless (and goal
+                         (eq (mevedel-goal-status goal) 'active)
+                         (eq (mevedel-goal-phase goal) 'awaiting-approval))
+              (user-error "Goal is not awaiting plan approval"))
+            (let* ((artifacts (mevedel-plan-accept
+                               plan-markdown mevedel--session chat-buffer))
+                   (current-artifact (plist-get artifacts :current))
+                   (implementation-mode
+                    (mevedel-goal--approval-implementation-mode outcome)))
+              (mevedel-goal--ensure-reference-reminder mevedel--session)
+              (setf (mevedel-goal-current-plan goal) current-artifact
+                    (mevedel-goal-phase goal) 'implementing)
+              (mevedel-goal--save-session-state mevedel--session chat-buffer)
+              (let ((fsm
+                     (mevedel-goal--call-with-workload
+                      'implementation
+                      (lambda ()
+                        (mevedel--implement-plan
+                         (mevedel-plan-implementation-input
+                          action current-artifact implementation-mode))))))
+                (when fsm
+                  (setf (gptel-fsm-info fsm)
+                        (plist-put (gptel-fsm-info fsm)
+                                   :mevedel-goal-phase 'implementing))))))
         (pcase outcome
         (`(feedback . ,text)
          (let ((path (mevedel-plan-current-path
                       mevedel--session chat-buffer)))
-           (mevedel-plan-mode--mark-rejected mevedel--session)
-           (mevedel-plan-mode--save-session-state
+           (mevedel-goal--mark-rejected mevedel--session)
+           (setf (mevedel-goal-phase
+                  (mevedel-session-goal mevedel--session)) 'planning)
+           (mevedel-goal--save-session-state
             mevedel--session chat-buffer)
-           (mevedel-plan-mode--insert-feedback-draft chat-buffer path text)))
+           (mevedel-goal--insert-feedback-draft chat-buffer path text)))
         ('feedback-draft
          (let ((path (mevedel-plan-current-path
                       mevedel--session chat-buffer)))
-           (mevedel-plan-mode--mark-rejected mevedel--session)
-           (mevedel-plan-mode--save-session-state
+           (mevedel-goal--mark-rejected mevedel--session)
+           (setf (mevedel-goal-phase
+                  (mevedel-session-goal mevedel--session)) 'planning)
+           (mevedel-goal--save-session-state
             mevedel--session chat-buffer)
-           (mevedel-plan-mode--insert-feedback-draft chat-buffer path)))
+           (mevedel-goal--insert-feedback-draft chat-buffer path)))
         ('aborted
-         (mevedel-plan-mode--metadata-put
-          mevedel--session :status 'cancelled)
-         (mevedel-plan-mode--metadata-put
+         (setf (mevedel-goal-status
+                (mevedel-session-goal mevedel--session)) 'paused)
+         (mevedel-goal--plan-metadata-put
           mevedel--session :verification-pending nil)
-         (mevedel-plan-mode--save-session-state
+         (mevedel-goal--save-session-state
           mevedel--session chat-buffer)
-         (message "mevedel: plan approval cancelled"))
+         (message "mevedel: goal paused at plan approval"))
         (_
          (message "mevedel: unknown plan outcome %S" outcome)))))))
 
-(defun mevedel-plan-mode--approval-entry
+(defun mevedel-goal--approval-entry
     (plan-markdown chat-buffer session)
   "Return a plan approval queue entry for PLAN-MARKDOWN in CHAT-BUFFER SESSION."
   (list :body plan-markdown
@@ -694,10 +591,10 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
         :session session
         :callback
         (lambda (outcome)
-          (mevedel-plan-mode--approval-callback
+          (mevedel-goal--approval-callback
            plan-markdown chat-buffer outcome))))
 
-(defun mevedel-plan-mode-present (plan-markdown &optional chat-buffer)
+(defun mevedel-goal-present-plan (plan-markdown &optional chat-buffer)
   "Present PLAN-MARKDOWN for approval in CHAT-BUFFER.
 The latest presented plan is persisted to the session-local plan
 artifact before the approval prompt is displayed."
@@ -706,16 +603,16 @@ artifact before the approval prompt is displayed."
   (let ((chat-buffer (or chat-buffer (current-buffer))))
     (with-current-buffer chat-buffer
       (mevedel-tools--validate-params
-          nil mevedel-plan-mode-present
+          nil mevedel-goal-present-plan
         (plan-markdown (stringp . "string")))
       (unless (string-blank-p plan-markdown)
         (mevedel-plan-write-current
          plan-markdown mevedel--session chat-buffer)
         (mevedel-plan-queue--enqueue
-         (mevedel-plan-mode--approval-entry
+         (mevedel-goal--approval-entry
           plan-markdown chat-buffer mevedel--session))))))
 
-(defun mevedel-plan-mode-restore-pending-approval
+(defun mevedel-goal-restore-pending-approval
     (&optional session chat-buffer)
   "Restore pending approval for SESSION in CHAT-BUFFER if needed."
   (require 'mevedel-plan)
@@ -724,29 +621,74 @@ artifact before the approval prompt is displayed."
                                    mevedel--session)))
          (metadata (and session (mevedel-session-plan-metadata session))))
     (when (and session
+               (when-let* ((goal (mevedel-session-goal session)))
+                 (and (eq (mevedel-goal-status goal) 'active)
+                      (eq (mevedel-goal-phase goal) 'awaiting-approval)))
                (eq (plist-get metadata :status) 'presented)
                (null (mevedel-session-plan-queue session)))
       (when-let* ((plan-markdown
                    (mevedel-plan-current-body session))
                   ((not (string-blank-p plan-markdown))))
         (mevedel-plan-queue--enqueue
-         (mevedel-plan-mode--approval-entry
+         (mevedel-goal--approval-entry
           plan-markdown chat-buffer session))))))
 
-(defun mevedel-plan-mode--response-text (start end)
+(defun mevedel-goal--response-text (start end)
   "Return response text between START and END in the current buffer."
   (mevedel--normalize-message-text
    (buffer-substring-no-properties start end)))
 
-(defun mevedel-plan-mode--post-response (start end)
-  "Detect `<proposed_plan>' blocks between START and END."
+(defun mevedel-goal--post-response (start end)
+  "Capture phase output between START and END without settling the turn."
   (require 'mevedel-plan)
-  (when (and (bound-and-true-p mevedel--session)
-             (eq (mevedel-session-permission-mode mevedel--session) 'plan))
-    (when-let* ((plan (mevedel-plan-extract-proposed
-                       (mevedel-plan-mode--response-text start end))))
-      (mevedel-plan-mode-present plan (current-buffer)))))
+  (when-let* ((session (and (bound-and-true-p mevedel--session)
+                            mevedel--session))
+              (goal (mevedel-session-goal session))
+              ((eq (mevedel-goal-status goal) 'active)))
+    (let ((response (mevedel-goal--response-text start end)))
+      (pcase (mevedel-goal-phase goal)
+        ('planning
+         (when-let* ((plan (mevedel-plan-extract-proposed response)))
+           (mevedel-goal-present-plan plan (current-buffer))
+           (setf (mevedel-goal-phase goal) 'awaiting-approval)))
+        ('reviewing
+         (setf (mevedel-goal-review-summary goal) response))))))
+
+(defun mevedel-goal-settle-turn (fsm)
+  "Advance Goal state after FSM reaches a successful terminal boundary."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (phase (plist-get info :mevedel-goal-phase))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when-let* ((goal (and (bound-and-true-p mevedel--session)
+                             (mevedel-session-goal mevedel--session)))
+                  ((eq (mevedel-goal-status goal) 'active))
+                  ((eq phase (mevedel-goal-phase goal))))
+        (pcase phase
+          ('implementing
+           (setf (mevedel-goal-phase goal) 'reviewing))
+          ('reviewing
+           (when (and (stringp (mevedel-goal-review-summary goal))
+                      (not (string-blank-p
+                            (mevedel-goal-review-summary goal))))
+             (setf (mevedel-goal-status goal) 'complete))))))))
+
+(defun mevedel-goal-dispatch-after-turn (fsm)
+  "Dispatch Goal review after FSM's implementation turn has settled."
+  (when-let* ((info (gptel-fsm-info fsm))
+              ((eq (plist-get info :mevedel-goal-phase) 'implementing))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when-let* ((goal (and (bound-and-true-p mevedel--session)
+                             (mevedel-session-goal mevedel--session)))
+                  ((eq (mevedel-goal-status goal) 'active))
+                  ((eq (mevedel-goal-phase goal) 'reviewing)))
+        (mevedel-goal--dispatch-phase
+         'reviewing (mevedel-goal--review-prompt goal)
+         "Review Goal implementation")))))
 
 
-(provide 'mevedel-tool-plan)
-;;; mevedel-tool-plan.el ends here
+(provide 'mevedel-goal)
+;;; mevedel-goal.el ends here

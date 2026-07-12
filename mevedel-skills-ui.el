@@ -54,6 +54,10 @@
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-start
+                  "mevedel-goal" (objective &optional display-text))
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
@@ -96,6 +100,10 @@
                   "mevedel-skills-invoke" (text lookup &optional allow-root))
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -117,7 +125,6 @@
 (defconst mevedel-skills--mode-command-candidates
   '(("default" . " ask before write tools")
     ("accept-edits" . " auto-apply edit previews")
-    ("plan" . " read-only planning mode")
     ("trust-all" . " auto-allow tools")
     ("edit" . " alias for accept-edits")
     ("edits" . " alias for accept-edits")
@@ -157,8 +164,8 @@
   '(("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
-    ("plan" . " [command] optional first Plan-mode prompt")
-    ("mode" . " [command] default | accept-edits | plan | trust-all")
+    ("goal" . " [command] objective; bare command shows current Goal")
+    ("mode" . " [command] default | accept-edits | trust-all")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
     ("auto" . " [command] no args; toggle auto mode")
@@ -227,7 +234,7 @@ current buffer belongs to a live session pair."
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
 ARGS is the raw slash-command argument string.
-Recognized modes: default, accept-edits, plan, trust-all, and UI aliases.
+Recognized modes: default, accept-edits, trust-all, and UI aliases.
 
 Routes through the lifecycle-aware permission transition path."
   (if (and args (not (string-blank-p args)))
@@ -237,9 +244,20 @@ Routes through the lifecycle-aware permission transition path."
     (mevedel-skills--open-menu-or-message
      'mode "Current permission mode: %s" mevedel-permission-mode)))
 
-(defun mevedel-cmd--plan (args)
-  "Enter Plan mode, optionally sending ARGS as the first prompt."
-  (mevedel-permission-mode-transition 'plan args))
+(defun mevedel-cmd--goal (args)
+  "Show the current Goal, or start one from ARGS."
+  (if (and args (not (string-blank-p args)))
+      (progn
+        (require 'mevedel-goal)
+        (mevedel-goal-start args args)
+        'mevedel-view-sent)
+    (if-let* ((goal (and (bound-and-true-p mevedel--session)
+                         (mevedel-session-goal mevedel--session))))
+        (message "Goal [%s/%s]: %s"
+                 (mevedel-goal-status goal)
+                 (mevedel-goal-phase goal)
+                 (mevedel-goal-objective goal))
+      (message "No current Goal; use /goal <objective>"))))
 
 (defun mevedel-cmd--auto (_args)
   "Toggle trust-all auto mode for the current session."
@@ -592,7 +610,7 @@ Routes through the lifecycle-aware permission transition path."
   '(("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
     ("compact" . mevedel-cmd--compact)
-    ("plan"    . mevedel-cmd--plan)
+    ("goal"    . mevedel-cmd--goal)
     ("mode"    . mevedel-cmd--mode)
     ("skills"  . mevedel-cmd--skills)
     ("tools"   . mevedel-cmd--tools)

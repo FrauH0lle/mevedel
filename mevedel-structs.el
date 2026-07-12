@@ -13,7 +13,7 @@
                   "mevedel-permission-queue"
                   (origin &optional session no-render))
 (declare-function mevedel-plan-queue-abort-all
-                  "mevedel-tool-plan" (&optional session))
+                  "mevedel-goal" (&optional session))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
@@ -247,9 +247,25 @@ workspace."
   ;; differ from permission outcomes and never coalesce.
   ;; Transient.
   plan-queue
-  ;; Plan-mode lifecycle metadata.  Plist persisted in the session
-  ;; sidecar; plan text itself lives in the session-local plans/current.md.
-  plan-metadata)
+  ;; Plan artifact metadata.  Plan text lives in plans/current.md.
+  plan-metadata
+  ;; The session-owned current `mevedel-goal', or nil.
+  goal)
+
+
+;;
+;;; Goal struct
+
+(cl-defstruct (mevedel-goal (:constructor mevedel-goal--create))
+  "A session-owned completion contract and its current lifecycle position."
+  id                 ; stable string identifier
+  objective          ; non-empty free-form string
+  status             ; active, paused, blocked, or complete
+  phase              ; planning, awaiting-approval, implementing, or reviewing
+  approval-policy    ; supervised or automatic
+  owner-session      ; owning session id/name
+  current-plan       ; current accepted/presented artifact plist
+  review-summary)    ; latest review response text
 
 
 ;;

@@ -227,8 +227,8 @@ root name inserts a real argument separator so display-only skill hints
 cannot make `$skill [arg]` look typed when the buffer only contains
 `$skill`.
 Commands can also expose argument candidates based on the current
-argument position; `/mode` completes `default`, `accept-edits`, `plan`,
-`trust-all`, and the UI aliases `edit`, `edits`, and `auto`, while
+argument position; `/mode` completes `default`, `accept-edits`, `trust-all`,
+and the UI aliases `edit`, `edits`, and `auto`, while
 `/model` completes model names from the current gptel backend. `/plugin`
 completes subcommands, then installed plugin names for `enable`,
 `disable`, `update`, `remove`, `uninstall`, and supported `hooks` forms;
@@ -386,8 +386,8 @@ removes tools from the model and never denies unspecified tools.
 Parsed entries become skill-scoped permission rules on the active
 request or agent invocation. These buckets outrank session and
 persistent rules for allow/ask resolution, while deny remains absolute
-across all buckets. Plan mode suppresses skill allow grants for
-non-read-only tools.
+across all buckets. Active Goal planning and review phases deny non-read-only
+tools before skill allow grants are considered.
 
 ## Hooks
 

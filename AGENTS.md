@@ -45,7 +45,7 @@ lazily — read them when planning work in the relevant area. The
   `:groups`, renderers and render-data side channel, oversized result
   persistence
 - [`docs/permissions.md`](docs/permissions.md) — 9-step decision chain,
-  bucket precedence, plan-mode exception, Bash/Eval specifics,
+  bucket precedence, Goal phase restrictions, Bash/Eval specifics,
   sub-agent permission propagation, example config
 - [`docs/agents.md`](docs/agents.md) — explorer/coordinator/
   verifier/reviewer, background spawning + BWAIT, SendMessage mailboxes,
@@ -135,6 +135,7 @@ Prompt / presets / agents
   mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-runtime.el    Agent lifecycle, BWAIT, watchdogs, completion, stopping
+  mevedel-goal.el             supervised Goal controller and plan approval queue
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
@@ -148,7 +149,6 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-ask.el         Ask questionnaire, handler, renderer
   mevedel-tool-ui.el          Agent/StopAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
-  mevedel-tool-plan.el        conversational Plan mode and plan approval queue
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-tutor.el       GetHints, RecordHint
   mevedel-tool-introspect.el  wraps gptel-agent introspection tools

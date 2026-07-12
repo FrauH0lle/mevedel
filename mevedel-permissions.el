@@ -13,22 +13,15 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
+(defvar mevedel--agent-invocation)
 
-;; `mevedel-structs'
-(declare-function mevedel-request-skill-permission-rules
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-active-dropped-file-grants
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
-(defvar mevedel--session)
-(defvar mevedel--view-buffer)
-(defvar mevedel-user-dir)
+;; `mevedel-goal'
+(declare-function mevedel-goal-read-only-phase-p
+                  "mevedel-goal" (&optional session))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-session-ensure-reminder
@@ -44,12 +37,19 @@
 (declare-function mevedel-skills--refresh-view-input-prompt
                   "mevedel-skills-ui" ())
 
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-mode-enter
-                  "mevedel-tool-plan"
-                  (&optional prompt display-text hook-context))
-(declare-function mevedel-plan-mode-exit
-                  "mevedel-tool-plan" (&optional target-mode))
+;; `mevedel-structs'
+(declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-active-dropped-file-grants
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
+(defvar mevedel-user-dir)
 
 ;; setf expander for session struct
 (eval-when-compile
@@ -249,7 +249,6 @@ Accepts command-facing aliases used by the UI and slash commands."
       ((or 'default 'ask) 'default)
       ((or 'accept-edits 'edit 'edits) 'accept-edits)
       ((or 'trust-all 'auto) 'trust-all)
-      ('plan 'plan)
       (_ (user-error "Unknown permission mode: %s" mode)))))
 
 (defun mevedel-permission-mode-set-raw (mode)
@@ -305,7 +304,6 @@ DATA-BUFFER, the current buffer is used."
   (pcase (or mode 'default)
     ('accept-edits "edits")
     ('trust-all "auto!")
-    ('plan "plan")
     (_ "ask")))
 
 (defun mevedel-permission-mode-apply-auto-lifecycle
@@ -331,11 +329,9 @@ SESSION defaults to the current data buffer's session."
           (mevedel-session-ensure-reminder
            session (mevedel-reminders-make-auto-mode-exit))))))))
 
-(defun mevedel-permission-mode-transition
-    (mode &optional prompt display-text hook-context)
+(defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
-Runs mode-specific lifecycle hooks.  PROMPT, DISPLAY-TEXT, and
-HOOK-CONTEXT are forwarded when MODE enters Plan mode."
+Runs mode-specific lifecycle hooks."
   (let* ((target (mevedel-permission-mode-normalize mode))
          (data-buf (mevedel-permission--current-data-buffer))
          (session (and data-buf
@@ -345,15 +341,7 @@ HOOK-CONTEXT are forwarded when MODE enters Plan mode."
       (with-current-buffer data-buf
         (let ((previous (mevedel-permission-mode--effective-session-mode
                          session)))
-          (cond
-           ((eq target 'plan)
-            (require 'mevedel-tool-plan)
-            (mevedel-plan-mode-enter prompt display-text hook-context))
-           ((eq previous 'plan)
-            (require 'mevedel-tool-plan)
-            (mevedel-plan-mode-exit target))
-           (t
-            (mevedel-permission-mode-set-raw target)))
+          (mevedel-permission-mode-set-raw target)
           (mevedel-permission-mode-apply-auto-lifecycle
            previous target session)
           (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
@@ -456,7 +444,6 @@ Controls the default permission behavior when no explicit rules match.
   `accept-edits' - Same permission semantics as `default', but inline
                    diff previews from Write/Edit/MkDir are auto-applied
                    without an interactive overlay.
-  `plan'         - Deny non-read-only tools.
   `trust-all'    - Skip all prompts (except protected paths and
                    explicit hard policies such as denies).
 
@@ -488,7 +475,6 @@ old value.  See `mevedel-permission-mode--set' and
   :type '(choice
           (const :tag "Default -- prompt, interactive diff preview" default)
           (const :tag "Accept Edits -- auto-apply diff previews" accept-edits)
-          (const :tag "Plan -- read-only tools only" plan)
           (const :tag "Trust All -- skip prompts except hard policies" trust-all))
   :set #'mevedel-permission-mode--set
   :get #'mevedel-permission-mode--get
@@ -773,7 +759,6 @@ Returns `allow', `deny', or `ask'."
   (pcase mode
     ('trust-all 'allow)
     ('accept-edits (if read-only-p 'allow 'ask))
-    ('plan (if read-only-p 'allow 'deny))
     ('default (if read-only-p 'allow 'ask))
     ;; Unknown mode: fall through to ask
     (_ 'ask)))
@@ -822,27 +807,22 @@ BUCKETS is the alist from `mevedel-permission--collect-buckets'."
               buckets tool-name path pattern domain name))))
 
 (defun mevedel-permission--first-non-nil-action-with-bucket
-    (buckets tool-name path pattern domain name skip-keys)
+    (buckets tool-name path pattern domain name)
   "Walk BUCKETS for TOOL-NAME and return (ACTION . BUCKET).
 
-PATH, PATTERN, DOMAIN, and NAME are the specifier values.
-SKIP-KEYS is a list of bucket-key symbols to skip during the walk
-\\=(used for the plan-mode skill-bucket suppression)."
+PATH, PATTERN, DOMAIN, and NAME are the specifier values."
   (cl-loop for (key . rules) in buckets
-           unless (memq key skip-keys)
            for action = (mevedel-permission--bucket-action
                          rules tool-name path pattern domain name)
            when action return (cons action key)))
 
 (defun mevedel-permission--first-non-nil-action
-    (buckets tool-name path pattern domain name skip-keys)
+    (buckets tool-name path pattern domain name)
   "Walk BUCKETS for TOOL-NAME and return first non-nil bucket action.
 
-PATH, PATTERN, DOMAIN, and NAME are the specifier values.
-SKIP-KEYS is a list of bucket-key symbols to skip during the walk
-\\=(used for the plan-mode skill-bucket suppression)."
+PATH, PATTERN, DOMAIN, and NAME are the specifier values."
   (car (mevedel-permission--first-non-nil-action-with-bucket
-        buckets tool-name path pattern domain name skip-keys)))
+        buckets tool-name path pattern domain name)))
 
 (defun mevedel-permission--normalize-outcome (outcome)
   "Return the log-safe decision symbol for permission OUTCOME."
@@ -1016,25 +996,27 @@ happen for a non-read-only tool."
           :session-rules (plist-get context :session-rules)
           :persistent-rules (plist-get context :persistent-rules)
           :mode (plist-get context :mode)
+          :session (plist-get context :session)
           :workspace-root (plist-get context :workspace-root)
           :allowed-roots (plist-get context :allowed-roots)
           :exact-allowed-paths
           (plist-get context :exact-allowed-paths))))
 
-(defun mevedel-permission--plan-mode-skip-keys (mode read-only-p)
-  "Return bucket keys to suppress for MODE and READ-ONLY-P.
-
-Plan mode skips skill buckets for non-read-only tools.
-For read-only tools the plan-mode preview/permission paths converge
-on allow anyway, so the suppression has no effect there."
-  (when (and (eq mode 'plan)
-             (not read-only-p))
-    '(:invocation :request)))
+(defun mevedel-permission--goal-read-only-phase-p (&optional session)
+  "Return non-nil when the owning session's Goal phase is read-only."
+  (when (fboundp 'mevedel-goal-read-only-phase-p)
+    (mevedel-goal-read-only-phase-p
+     (or session
+         (and (boundp 'mevedel--session) mevedel--session)
+         (and (boundp 'mevedel--agent-invocation)
+              mevedel--agent-invocation
+              (mevedel-agent-invocation-parent-session
+               mevedel--agent-invocation))))))
 
 (cl-defun mevedel-permission--preflight
     (tool-name &key tool-struct path pattern domain name content
                invocation-rules request-rules session-rules persistent-rules
-               mode workspace-root allowed-roots exact-allowed-paths)
+               mode session workspace-root allowed-roots exact-allowed-paths)
   "Return normalized permission facts and any decision before the tool slot.
 
 This pure preflight owns specifier extraction, rule buckets, absolute
@@ -1071,6 +1053,9 @@ filesystem boundary."
            (deny-bucket
             (mevedel-permission--decision
              'deny 'deny-rule :bucket deny-bucket))
+           ((and (not read-only-p)
+                 (mevedel-permission--goal-read-only-phase-p session))
+            (mevedel-permission--decision 'deny 'goal-phase))
            ((mevedel-permission--path-protected-p path)
             (mevedel-permission--decision
              (if (eq (mevedel-permission--mode-decision mode read-only-p)
@@ -1126,13 +1111,12 @@ The 9-step decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Pass 1 -- absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
+       read-only Goal phase + mutating tool -> deny;
        protected path -> ask
   3. (folded into pass 1)
   4. Call tool check-permission if present -> use result or continue
   5. Pass 2 -- allow/ask resolution innermost-first:
        invocation -> request -> session -> persistent -> defcustom.
-       Plan-mode + non-read-only tool: skill buckets suppressed.
-       Plan-mode ask decisions for non-read-only tools hard-deny.
   6. Mode hard-deny -> deny
   7. Allowed roots/exact paths -> implicit allow for paths inside
   8. Outside allowed roots -> ask (workspace boundary)
@@ -1225,14 +1209,12 @@ function covers shared steps 5-9."
          (allowed-roots (plist-get context :allowed-roots))
          (exact-allowed-paths (plist-get context :exact-allowed-paths))
          (mode (plist-get context :mode))
-         (read-only-p (plist-get context :read-only-p))
-         (skip-keys
-          (mevedel-permission--plan-mode-skip-keys mode read-only-p)))
+         (read-only-p (plist-get context :read-only-p)))
     (cond
      ;; Step 5: pass 2 -- allow/ask innermost-first across buckets.
      ((when-let* ((action-bucket
                    (mevedel-permission--first-non-nil-action-with-bucket
-                    buckets tool-name path pattern domain name skip-keys)))
+                    buckets tool-name path pattern domain name)))
         (let ((action (car action-bucket))
               (bucket (cdr action-bucket)))
           (cond
@@ -1243,9 +1225,7 @@ function covers shared steps 5-9."
                     'deny)
                 (mevedel-permission--decision 'deny 'mode :bucket bucket)
               (mevedel-permission--decision 'ask 'rule :bucket bucket)))))))
-     ;; Step 6: mode hard-deny.  This lets explicit non-skill allows
-     ;; override plan mode, while keeping implicit workspace-root allows
-     ;; from bypassing plan mode's non-read-only tool block.
+     ;; Step 6: mode hard-deny.
      ((eq (mevedel-permission--mode-decision mode read-only-p) 'deny)
       (mevedel-permission--decision 'deny 'mode))
      ;; Step 7: allowed roots and exact paths implicit allow.

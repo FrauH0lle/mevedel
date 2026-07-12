@@ -27,29 +27,14 @@ flowchart TD
 
 ## Implemented
 
-### Plan-mode workflow reminders
-
-When permission mode is `plan`, `plan-mode` reminds the model to stay
-read-only, gather only needed context, ask only undiscoverable
-questions, and finish with exactly one `<proposed_plan>` block. The
-first firing includes the preferred plan shape: title, Summary, Key
-Changes, Regression Coverage, Validation, and Assumptions. Later
-firings are sparse.
-
-### Plan-mode reentry and exit reminders
-
-Entering Plan mode installs `plan-mode-reentry` when a current plan
-artifact already exists. Exiting Plan mode installs `plan-mode-exit`
-to mark that implementation permissions have resumed.
-
 ### Plan-file reference reminder
 
 Accepted plans are recorded in session `plan-metadata` and persisted
 as `plans/current.md` under the session directory. The one-shot
 `plan-reference` reminder surfaces bounded contents of the approved
-plan on later turns when it may still be relevant. When Plan mode hands
-implementation to a worktree session, both sessions retain an accepted-plan
-artifact, but only the worktree session keeps verification pending.
+plan on later turns when it may still be relevant. The Goal controller owns
+planning and review prompts directly; their read-only restriction is enforced
+by the permission system rather than by a reminder.
 
 ### Accepted-plan verification reminder
 

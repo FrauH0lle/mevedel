@@ -6,7 +6,7 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-permission-queue)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
 (require 'helpers

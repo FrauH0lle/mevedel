@@ -17,6 +17,7 @@
 (require 'gptel-openai)
 (require 'mevedel-cockpit)
 (require 'mevedel-file-state)
+(require 'mevedel-goal)
 (require 'mevedel-models)
 (require 'mevedel-permissions)
 (require 'mevedel-plugins)
@@ -1215,7 +1216,7 @@ spanning lines")))
              '(("tokens" . ignore)
                ("model" . ignore)
                ("compact" . ignore)
-               ("plan" . ignore)
+               ("goal" . ignore)
                ("mode" . ignore)
                ("auto" . ignore)
                ("clear" . ignore)
@@ -1249,19 +1250,19 @@ spanning lines")))
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands '(("mode" . ignore))))
-        (insert "### /mode pl")
+        (insert "### /mode tr")
         (goto-char (point-max))
         (let* ((capf (mevedel-slash-capf))
                (annot (and capf (plist-get (nthcdr 3 capf)
                                            :annotation-function))))
           (should capf)
-          (should (equal '("plan")
+          (should (equal '("trust-all")
                          (mevedel-skills-test--capf-candidates
-                          capf "pl")))
+                          capf "tr")))
           (should (member "accept-edits"
                           (mevedel-skills-test--capf-candidates capf)))
-          (should (string-match-p "read-only"
-                                  (funcall annot "plan")))))))
+          (should (string-match-p "auto-allow"
+                                  (funcall annot "trust-all")))))))
 
   :doc "plugin command completes first argument options"
   (let ((session (mevedel-skills-test--make-session)))
@@ -1759,16 +1760,10 @@ spanning lines")))
           (let ((session (mevedel-session--create
                           :name "test" :permission-mode 'default)))
             (setq-local mevedel--session session)
-            (mevedel-cmd--mode "plan")
-            (should (eq 'plan (mevedel-session-permission-mode session)))
-            (should (eq 'plan mevedel-permission-mode))
-            (should (eq 'default
-                        (plist-get
-                         (mevedel-session-plan-metadata session)
-                         :previous-permission-mode)))
-            (should (memq 'plan-mode
-                          (mapcar #'mevedel-reminder-type
-                                  (mevedel-session-reminders session))))))
+            (mevedel-cmd--mode "accept-edits")
+            (should (eq 'accept-edits
+                        (mevedel-session-permission-mode session)))
+            (should (eq 'accept-edits mevedel-permission-mode))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
   :doc "accepts UI aliases"
@@ -1815,6 +1810,31 @@ spanning lines")))
       (mevedel-cmd--mode ""))
     (should (eq 'accept-edits mevedel-permission-mode))))
 
+(mevedel-deftest mevedel-cmd--goal ()
+  ,test
+  (test)
+  :doc "starts a supervised Goal from a nonblank objective"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "main"))
+    (let (started)
+      (cl-letf (((symbol-function 'mevedel-goal-start)
+                 (lambda (objective display)
+                   (setq started (list objective display)))))
+        (should (eq 'mevedel-view-sent (mevedel-cmd--goal "Fix it"))))
+      (should (equal '("Fix it" "Fix it") started))))
+  :doc "bare command reports the current Goal"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :objective "Fix it" :status 'active :phase 'planning))
+           (session (mevedel-session--create :name "main" :goal goal))
+           shown)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq shown (apply #'format format-string args)))))
+        (mevedel-cmd--goal nil))
+      (should (equal "Goal [active/planning]: Fix it" shown)))))
+
 (mevedel-deftest mevedel-cmd--auto ()
   ,test
   (test)
@@ -1851,24 +1871,18 @@ spanning lines")))
               (should (memq 'auto-mode-exit types)))))
       (set-default-toplevel-value 'mevedel-permission-mode saved)))
 
-  :doc "toggles trust-all on from plan mode through plan exit"
+  :doc "toggles trust-all on from accept-edits mode"
   (let ((saved (default-toplevel-value 'mevedel-permission-mode)))
     (unwind-protect
         (with-temp-buffer
           (let ((session (mevedel-session--create
-                          :name "test" :permission-mode 'plan
-                          :plan-metadata
-                          '(:previous-permission-mode default))))
-            (setf (mevedel-session-reminders session)
-                  (list (mevedel-reminders-make-plan-mode)))
+                          :name "test" :permission-mode 'accept-edits)))
             (setq-local mevedel--session session)
             (mevedel-cmd--auto nil)
             (should (eq 'trust-all
                         (mevedel-session-permission-mode session)))
             (let ((types (mapcar #'mevedel-reminder-type
                                  (mevedel-session-reminders session))))
-              (should-not (memq 'plan-mode types))
-              (should (memq 'plan-mode-exit types))
               (should (memq 'auto-mode types)))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 

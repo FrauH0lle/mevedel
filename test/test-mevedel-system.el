@@ -52,7 +52,7 @@
     (should (string-match-p "update item statuses" mevedel-system--base-prompt))
     (should (string-match-p "Frontend work" mevedel-system--base-prompt))
     (should (string-match-p "explorer" mevedel-system--base-prompt))
-    (should (string-match-p "/plan" mevedel-system--base-prompt))))
+    (should (string-match-p "/goal" mevedel-system--base-prompt))))
 
 
 ;;

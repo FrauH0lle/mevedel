@@ -23,7 +23,7 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-view-zone)

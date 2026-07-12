@@ -27,6 +27,10 @@
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
+;; `mevedel-goal'
+(declare-function mevedel-plan-queue-abort-all
+                  "mevedel-goal" (&optional session))
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -49,10 +53,6 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
-
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-queue-abort-all
-                  "mevedel-tool-plan" (&optional session))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string "mevedel-tool-registry" (tool-name args))
@@ -299,11 +299,6 @@
 (defface mevedel-view-permission-mode-default
   '((t :inherit font-lock-keyword-face :weight bold))
   "Face for the default permission mode prompt label."
-  :group 'mevedel)
-
-(defface mevedel-view-permission-mode-plan
-  '((t :inherit font-lock-warning-face :weight bold))
-  "Face for the plan permission mode prompt label."
   :group 'mevedel)
 
 (defface mevedel-view-permission-mode-accept-edits

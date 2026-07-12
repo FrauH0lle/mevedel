@@ -1034,15 +1034,19 @@
 			   (should (eq 'permission-enqueued
 				       (plist-get (nth 1 entries) :event)))))
 		     (delete-directory dir t)))
-		 :doc "fails with Permission denied for non-read-only tool in plan mode"
+		 :doc "fails with Permission denied for mutation during Goal planning"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Edit"
 			       :read-only-p nil))
-			(ctx (list :tool tool :args nil))
+			(session (mevedel-session--create
+			          :name "goal" :permission-mode 'trust-all))
+			(ctx (list :tool tool :args nil :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'plan)
 			fail-reason)
+		   (setf (mevedel-session-goal session)
+			 (mevedel-goal--create
+			  :objective "test" :status 'active :phase 'planning))
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
 		   (should (equal fail-reason "Permission denied")))
@@ -1112,9 +1116,9 @@
 			       :name "Edit"
 			       :read-only-p nil))
 			(ctx (list :tool tool :args nil))
-			(mevedel-permission-rules nil)
+			(mevedel-permission-rules '(("Edit" :action deny)))
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'plan)
+			(mevedel-permission-mode 'default)
 			(mevedel--session (mevedel-session--create
 					   :name "phantom"
 					   :permission-rules '(("Edit" :action allow))))
@@ -1481,7 +1485,7 @@
 				   :session sub-agent-session-alias))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'plan)
+			(mevedel-permission-mode 'default)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
@@ -1505,9 +1509,12 @@
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
 			(mevedel-permission-mode 'default))
-		   ;; Parent flips to plan-mode mid-conversation; sub-agent's next
-		   ;; pipeline entry must observe the change.
-		   (setf (mevedel-session-permission-mode parent-session) 'plan)
+		   ;; Parent enters Goal planning mid-conversation; the sub-agent's
+		   ;; next pipeline entry must observe the read-only phase.
+		   (setf (mevedel-session-permission-mode parent-session) 'trust-all
+			 (mevedel-session-goal parent-session)
+			 (mevedel-goal--create
+			  :objective "test" :status 'active :phase 'planning))
 		   (let (fail-reason)
 		     (mevedel-pipeline--step-permission
 		      ctx #'ignore (lambda (r) (setq fail-reason r)))
