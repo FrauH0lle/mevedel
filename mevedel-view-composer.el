@@ -39,6 +39,10 @@
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-start
+                  "mevedel-goal" (objective &optional display-text))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision &optional event))
@@ -64,7 +68,7 @@
 (declare-function mevedel-permission-mode-label "mevedel-permissions"
                   (&optional mode))
 (declare-function mevedel-permission-mode-transition "mevedel-permissions"
-                  (mode &optional prompt display-text hook-context))
+                  (mode))
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-review'
@@ -315,13 +319,12 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
   (list
    (mevedel-permission-mode-label mode)
    (pcase mode
-     ('plan 'mevedel-view-permission-mode-plan)
      ('accept-edits 'mevedel-view-permission-mode-accept-edits)
      ('trust-all 'mevedel-view-permission-mode-trust-all)
      (_ 'mevedel-view-permission-mode-default))))
 
 (defconst mevedel-view--permission-mode-cycle
-  '(default accept-edits trust-all plan)
+  '(default accept-edits trust-all)
   "Permission modes cycled by `mevedel-view-cycle-permission-mode'.")
 
 (defun mevedel-view--next-permission-mode (&optional mode)
@@ -1052,8 +1055,7 @@ text to render in the view."
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (or (eq (mevedel-session-permission-mode sess) 'plan)
-        (mevedel-session-plan-queue sess))))
+    (mevedel-session-plan-queue sess)))
 
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
@@ -1511,10 +1513,10 @@ fork."
                  (local (assoc name mevedel-slash-commands)))
             (cond
              ((and local
-                   (string= name "plan")
+                   (string= name "goal")
                    args
                    (not (string-blank-p args)))
-              (mevedel-view--send-local-plan input args))
+              (mevedel-view--send-local-goal input args))
              (local
               (let ((result (with-current-buffer mevedel--data-buffer
                               (funcall (cdr local) args))))
@@ -1539,8 +1541,8 @@ fork."
   ;; Ensure point ends up in the input zone.
   (goto-char (point-max)))
 
-(defun mevedel-view--send-local-plan (input args)
-  "Run pre-send check and dispatch local `/plan' with ARGS.
+(defun mevedel-view--send-local-goal (input args)
+  "Run pre-send check and start local `/goal' with ARGS.
 INPUT is the original composer text, including the slash command."
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer))
@@ -1554,14 +1556,12 @@ INPUT is the original composer text, including the slash command."
            (mevedel-view--fork-if-pending)
            (mevedel-view--clear-input))
          (with-current-buffer data-buffer
-           (require 'mevedel-permissions)
-           (mevedel-permission-mode-transition
-            'plan
+           (require 'mevedel-goal)
+           (mevedel-goal-start
             (if context
                 (concat hook-input "\n\n" context)
               hook-input)
-            hook-input
-            context)))))))
+            hook-input)))))))
 
 (defun mevedel-view--fork-if-pending ()
   "Materialize the fork if the data buffer is in rewind preview state.

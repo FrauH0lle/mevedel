@@ -17,7 +17,6 @@
                   "mevedel-session-persistence" (session buffer))
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
@@ -252,7 +251,7 @@ Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
 ACTION identifies the implementation context, CURRENT-ARTIFACT is returned by
 `mevedel-plan-write-current', and PERMISSION-MODE is the implementation
 permission mode."
-  (unless (memq action '(implement implement-clear implement-worktree))
+  (unless (memq action '(implement implement-clear))
     (error "Unknown plan implementation action: %s" action))
   (unless (memq permission-mode '(default accept-edits trust-all))
     (error "Unknown implementation permission mode: %s" permission-mode))
@@ -262,31 +261,6 @@ permission mode."
     (list :action action
           :plan-file path
           :permission-mode permission-mode)))
-
-(defun mevedel-plan-retry-input (session)
-  "Return SESSION's saved implementation retry input, or nil."
-  (require 'mevedel-structs)
-  (plist-get (mevedel-session-plan-metadata session) :implementation-retry))
-
-(defun mevedel-plan-record-retry (session input)
-  "Record implementation retry INPUT in SESSION."
-  (mevedel-plan--metadata-put session :implementation-retry input))
-
-(defun mevedel-plan-clear-retry (session)
-  "Clear SESSION's implementation retry input."
-  (mevedel-plan--metadata-put session :implementation-retry nil))
-
-(defun mevedel-plan-record-handoff (session target-session worktree)
-  "Record SESSION's execution handoff to TARGET-SESSION in WORKTREE.
-Return the stored handoff plist."
-  (require 'mevedel-structs)
-  (let ((handoff
-         (list :session (mevedel-session-name target-session)
-               :branch (plist-get worktree :branch)
-               :directory (plist-get worktree :directory)
-               :plan-file (plist-get worktree :plan-file))))
-    (mevedel-plan--metadata-put session :execution-handoff handoff)
-    handoff))
 
 (defun mevedel-plan-clear-verification-pending (&optional session)
   "Clear SESSION's approved-plan verification pending flag."

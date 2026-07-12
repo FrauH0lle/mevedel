@@ -37,8 +37,8 @@ Key features:
 - Specialized sub-agents (explorer, coordinator, verifier, reviewer)
   for focused tasks via [gptel-agent](https://github.com/karthink/gptel-agent),
   with background dispatch and inter-agent messaging.
-- Conversational Plan mode (`/plan` or `/mode plan`) for read-only planning,
-  explicit approval, and persisted plan artifacts before implementation.
+- Supervised Goals (`/goal <objective>`) for read-only planning, explicit
+  approval, implementation, and read-only review in one session-owned cycle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, rewind to any prior prompt,
@@ -46,8 +46,7 @@ Key features:
 - Interactive inline diff previews with approve/reject/edit workflow directly in
   the chat view.
 - Unified permission system covering Bash, file paths, web domains, and
-  sub-agent dispatch, with `default` / `accept-edits` / `plan` / `trust-all`
-  modes.
+  sub-agent dispatch, with `default` / `accept-edits` / `trust-all` modes.
 - Project and user hooks for prompt, permission, tool, compaction, turn, and
   sub-agent lifecycle automation.
 - Conversation compaction that rotates segments rather than mutating the live
@@ -121,7 +120,8 @@ the chat buffer, only what is defined by the directive and its references.
 4. Type in the composer at the bottom of the view; use `/help` for local slash
    commands.
 5. Run `/init` or `M-x mevedel-init` to bootstrap or improve project guidance.
-6. Use `/plan` for read-only planning before larger changes.
+6. Use `/goal <objective>` for a supervised plan, approval, implementation,
+   and review cycle.
 7. Use `/review` or `/verify` to inspect changes before committing.
 
 ### Workflow map
@@ -563,13 +563,15 @@ override policy for one invocation.
 | `mevedel-tool-ui-agent-description-width` | Maximum one-line task text width in agent handle headers.        |
 | `mevedel-agent-runtime-debug`              | Log sub-agent dispatch handoffs to `*Messages*` when non-nil.       |
 
-### Plan Mode
+### Supervised Goals
 
-`/plan` enters read-only planning in the main conversation. The model can
-explore context with read-only tools, then emits a `<proposed_plan>` block.
-mevedel persists the latest proposal under the session directory as
-`plans/current.md` and shows an approval prompt in the interaction zone. When
-accepted, Plan mode exits and implementation starts from the approved plan.
+`/goal <objective>` starts a supervised Goal in the current session. The model
+first explores with read-only tools and emits a `<proposed_plan>` block.
+mevedel persists the proposal as `plans/current.md` and shows the existing plan
+approval prompt. Approval starts implementation with the selected session
+permission mode; after that request settles, mevedel starts a read-only review.
+A successful review completes the Goal. Goal status is one of `active`,
+`paused`, `blocked`, or `complete`.
 
 ### Review and Verify Commands
 
@@ -654,7 +656,6 @@ allow`. Protected paths (`mevedel-protected-paths`, default `.git/`, `~/.ssh/`,
   interactive approval.
 - `accept-edits` — same as `default`, but `Write`/`Edit` previews are
   auto-applied.
-- `plan` — deny non-read-only tools.
 - `trust-all` — skip most prompts, except protected paths, Eval, and Bash
   commands that are unknown or require extra scrutiny.
 
@@ -691,8 +692,9 @@ can override it per Bash call.
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or
 a custom function, and never overrides explicit deny rules, protected paths,
-Plan mode, or the user's decision. `mevedel-permission-guardian-timeout` caps how
-long the prompt waits for guidance.
+Goal phase restrictions, or the user's decision.
+`mevedel-permission-guardian-timeout` caps how long the prompt waits for
+guidance.
 
 Persistent rules accepted via the prompt's "always" choices are saved to
 `.mevedel/permissions.el` per workspace.
@@ -893,7 +895,7 @@ Useful commands:
 | `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
 | `mevedel-deferred-tool-ttl`                | Turns a ToolSearch-loaded deferred tool stays active after last use.     |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
-| `mevedel-permission-mode`                  | Default permission mode (`default` / `accept-edits` / `plan` / …).       |
+| `mevedel-permission-mode`                  | Default permission mode (`default` / `accept-edits` / `trust-all`).       |
 | `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
 | `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
 | `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
@@ -939,7 +941,7 @@ User skill invocations may block chat input while async preparation or a foregro
 fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
-`/compact`, `/mode`, `/auto`, `/plan`, `/init`, `/review`, and `/verify`.
+`/compact`, `/mode`, `/auto`, `/goal`, `/init`, `/review`, and `/verify`.
 Project and user skills add `$<skill-name>` invocations by name.
 
 Skill frontmatter can also declare file `paths`, shell commands, hooks, model and
@@ -1058,7 +1060,7 @@ or external setup encrypts them.
 | `.mevedel/permissions.el` | Persistent permission decisions. |
 | `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
 | `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |
-| `<session>/plans/current.md` | Current Plan mode artifact. |
+| `<session>/plans/current.md` | Current Goal plan artifact. |
 
 ## Documentation
 

@@ -32,12 +32,13 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
 (require 'mevedel-review)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-agents)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-hooks)
 (require 'mevedel-view-zone)
 (require 'mevedel-view-history)
+(require 'gptel-request)
 
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
@@ -130,12 +131,6 @@
     (should (eq 'mevedel-view-input-prompt
                 (get-text-property 0 'font-lock-face prompt))))
 
-  :doc "plan mode renders plan"
-  (let ((prompt (mevedel-view--input-prompt-string 'plan)))
-    (should (string= "\n[plan]  > " prompt))
-    (should (eq 'mevedel-view-permission-mode-plan
-                (get-text-property 2 'font-lock-face prompt))))
-
   :doc "accept-edits mode renders edits"
   (let ((prompt (mevedel-view--input-prompt-string 'accept-edits)))
     (should (string= "\n[edits] > " prompt))
@@ -161,13 +156,9 @@
   (should (eq 'trust-all
               (mevedel-view--next-permission-mode 'accept-edits)))
 
-  :doc "trust-all mode moves to plan"
-  (should (eq 'plan
-              (mevedel-view--next-permission-mode 'trust-all)))
-
-  :doc "plan mode wraps to default"
+  :doc "trust-all mode wraps to default"
   (should (eq 'default
-              (mevedel-view--next-permission-mode 'plan)))
+              (mevedel-view--next-permission-mode 'trust-all)))
 
   :doc "nil mode starts at accept-edits"
   (should (eq 'accept-edits
@@ -216,26 +207,12 @@
               (should (memq 'auto-mode
                             (mapcar #'mevedel-reminder-type
                                     (mevedel-session-reminders session))))
-              (should (eq 'plan
-                          (mevedel-view-cycle-permission-mode)))
-              (let ((types (mapcar #'mevedel-reminder-type
-                                   (mevedel-session-reminders session))))
-                (should (eq 'trust-all
-                            (plist-get
-                             (mevedel-session-plan-metadata session)
-                             :previous-permission-mode)))
-                (should (memq 'plan-mode types))
-                (should-not (memq 'auto-mode types))
-                (should (memq 'auto-mode-exit types)))
               (should (eq 'default
                           (mevedel-view-cycle-permission-mode)))
               (let ((types (mapcar #'mevedel-reminder-type
                                    (mevedel-session-reminders session))))
-                (should-not
-                 (plist-get (mevedel-session-plan-metadata session)
-                            :previous-permission-mode))
-                (should-not (memq 'plan-mode types))
-                (should (memq 'plan-mode-exit types)))
+                (should-not (memq 'auto-mode types))
+                (should (memq 'auto-mode-exit types)))
               (should (eq 'default
                           (mevedel-session-permission-mode session))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
@@ -427,7 +404,7 @@
 	                               capf "b"))))))
 	      (delete-directory root t)))
 
-  :doc "view mode command completes first argument options"
+  :doc "view completes Goal commands and permission-mode arguments"
   (let* ((root (make-temp-file "mevedel-view-mode-capf-" t))
          (ws (mevedel-workspace--create
               :type 'test :id root :root root :name "view-mode-capf"
@@ -441,14 +418,20 @@
             (setq-local mevedel--session session))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
-            (insert "/mode pl")
+            (insert "/go")
             (let ((capf (mevedel-view-slash-capf)))
               (should capf)
-              (should (equal '("plan")
+              (should (equal '("goal")
                              (mevedel-view-test--capf-candidates
-                              capf "pl")))
-              (should (member "trust-all"
-                              (mevedel-view-test--capf-candidates capf))))))
+                              capf "go"))))
+            (mevedel-view--clear-input)
+            (goto-char (mevedel-view--input-start))
+            (insert "/mode tr")
+            (let ((capf (mevedel-view-slash-capf)))
+              (should capf)
+              (should (equal '("trust-all")
+                             (mevedel-view-test--capf-candidates
+                              capf "tr"))))))
       (delete-directory root t)))
 
   :doc "view review command completes target arguments"
@@ -1870,7 +1853,7 @@ finds it during `$' skill dispatch."
           (should (string-match-p "second prepared"
                                   (buffer-string))))))))
 
-  :doc "WAIT drain preserves queued entries in Plan mode"
+  :doc "WAIT drain preserves queued entries during plan approval"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-wait-plan" :root "/tmp/vq" :name "vq"
@@ -1885,7 +1868,7 @@ finds it during `$' skill dispatch."
                  :info (list :buffer data-buf
                              :backend nil
                              :data data))))
-      (setf (mevedel-session-permission-mode session) 'plan)
+      (setf (mevedel-session-plan-queue session) (list 'approval))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--workspace ws))
@@ -2032,6 +2015,31 @@ finds it during `$' skill dispatch."
         (should-not (string-match-p "main follow-up prepared"
                                     (buffer-string))))))
 
+(mevedel-deftest mevedel-view--send-local-goal ()
+  ,test
+  (test)
+  :doc "applies prompt-hook context and starts the Goal in the data buffer"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "main"))
+          started
+          started-buffer)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                 (lambda (_args _input callback)
+                   (funcall callback "expanded" "hook context" nil)))
+                ((symbol-function 'mevedel-view-history-add) #'ignore)
+                ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
+                ((symbol-function 'mevedel-view--clear-input) #'ignore)
+                ((symbol-function 'mevedel-goal-start)
+                 (lambda (objective display)
+                   (setq started (list objective display)
+                         started-buffer (current-buffer)))))
+        (with-current-buffer view-buf
+          (mevedel-view--send-local-goal "/goal draft" "draft")))
+      (should (eq data-buf started-buffer))
+      (should (equal '("expanded\n\nhook context" "expanded") started)))))
+
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
   (test)
@@ -2072,7 +2080,7 @@ finds it during `$' skill dispatch."
 		(should (string-empty-p (buffer-string))))))
       (delete-directory root t)))
 
-  :doc "/plan prompts run UserPromptSubmit and materialize rewind forks"
+  :doc "/goal prompts run UserPromptSubmit and materialize rewind forks"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
          (workspace (mevedel-workspace-get-or-create
                      'project "view-plan-hooks" root "view-plan-hooks"))
@@ -2096,27 +2104,26 @@ finds it during `$' skill dispatch."
           (cl-letf (((symbol-function 'mevedel-session-persistence-fork-now)
                      (lambda (&rest _)
                        (push 'fork events)))
-                    ((symbol-function 'gptel-send)
-                     (lambda (&rest _)
-                       (push 'send events))))
+                    ((symbol-function 'mevedel-goal-start)
+                     (lambda (objective display)
+                       (push (list objective display) events))))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
-              (insert "/plan draft")
+              (insert "/goal draft")
               (mevedel-view-send)
               (should (equal "draft" mevedel-view-test--seen-prompt))
-              (should (equal '(fork send) (nreverse events)))
-              (should (string-empty-p (mevedel-view--input-text))))
-            (with-current-buffer data-buf
-              (let ((text (buffer-string)))
-                (should (string-match-p "rewritten prompt" text))
-                (should (string-match-p "model-only context" text))
-                (should-not (string-match-p "/plan draft" text)))))
+              (setq events (nreverse events))
+              (should (eq 'fork (car events)))
+              (should (equal "rewritten prompt" (cadr (cadr events))))
+              (should (string-match-p "rewritten prompt"
+                                      (car (cadr events))))
+              (should (string-match-p "model-only context"
+                                      (car (cadr events))))
+              (should (string-empty-p (mevedel-view--input-text)))))
           (with-current-buffer view-buf
             (let ((text (buffer-substring-no-properties
                          (point-min) mevedel-view--input-marker)))
-              (should (string-match-p "rewritten prompt" text))
-              (should (string-match-p "hook context added" text))
-              (should-not (string-match-p "model-only context" text)))))
+              (should-not (string-match-p "/goal draft" text)))))
       (delete-directory root t)))
 
   :doc "blocking UserPromptSubmit prevents expanded inline skill send"

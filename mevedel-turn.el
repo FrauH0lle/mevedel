@@ -22,6 +22,10 @@
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
+(declare-function mevedel-goal-settle-turn "mevedel-goal" (fsm))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-event-plist
                   "mevedel-hooks"
@@ -162,12 +166,14 @@
    fsm
    (list #'mevedel--turn-clear-access-state
          #'mevedel--turn-increment
+         #'mevedel-goal-settle-turn
          #'mevedel--compact-record-token-baseline
          #'mevedel--turn-autosave
          (lambda (machine)
            (mevedel--run-turn-terminal-hook machine 'Stop 'completed))
          #'mevedel--turn-restore-permission-mode
          #'mevedel--turn-end-request
+         #'mevedel-goal-dispatch-after-turn
          #'mevedel-view--schedule-queued-user-message-drain
          #'mevedel-tools--handle-terminal-mailbox)))
 

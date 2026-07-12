@@ -305,10 +305,6 @@
   (mevedel-menu--mode-choice-description
    'accept-edits "auto-apply edit previews"))
 
-(defun mevedel-menu--mode-plan-description ()
-  "Return the plan mode row description."
-  (mevedel-menu--mode-choice-description 'plan "read-only planning mode"))
-
 (defun mevedel-menu--mode-trust-all-description ()
   "Return the trust-all mode row description."
   (mevedel-menu--mode-choice-description 'trust-all "auto-allow tools"))
@@ -522,12 +518,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/skills enable NAME, disable NAME, help NAME"
      "/mode MODE, /model MODEL"
      "/worktree create [NAME] [--for \"purpose\"] [--clean]"
-     "/compact, /review, /verify, /plan ..., /auto, /clear, /init ..., /tokens"
+     "/goal OBJECTIVE, /compact, /review, /verify, /auto, /clear, /init ..., /tokens"
      ""
      "Modes"
      "default / ask       Ask before write tools."
      "accept-edits        Auto-apply edit previews."
-     "plan                Read-only planning mode."
      "trust-all / auto    Auto-allow tools."
      ""
      "View and data buffers"
@@ -626,8 +621,6 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      (lambda () (interactive) (mevedel-menu--set-mode 'default)))
     ("e" mevedel-menu--mode-accept-edits-description
      (lambda () (interactive) (mevedel-menu--set-mode 'accept-edits)))
-    ("p" mevedel-menu--mode-plan-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'plan)))
     ("a" mevedel-menu--mode-trust-all-description
      (lambda () (interactive) (mevedel-menu--set-mode 'trust-all)))]
    ["Navigation"

@@ -30,7 +30,7 @@
 (require 'mevedel-preview-mode)
 (require 'mevedel-permission-queue)
 (require 'mevedel-tool-exec)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-tool-task)
 (require 'mevedel-agents)
 (require 'mevedel-agent-runtime)
@@ -171,7 +171,7 @@
          (workspace (mevedel-workspace-get-or-create
                      'project (format "status-%s" root) root "mevedel"))
          (session (mevedel-session-create "main" workspace)))
-    (setf (mevedel-session-permission-mode session) 'plan)
+    (setf (mevedel-session-permission-mode session) 'default)
     (unwind-protect
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf
@@ -189,7 +189,7 @@
                          (directory-file-name root)))
                        line))
               (should (string-match-p
-                       (regexp-quote "plan · idle · gpt-5.5 · 2 tools")
+                        (regexp-quote "ask · idle · gpt-5.5 · 2 tools")
                        line))
               (should-not (string-match-p "mevedel:" line))
               (should-not (string-match-p "\\[gpt-5\\.5\\]" line))

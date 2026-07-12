@@ -501,9 +501,9 @@
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints)))
-    (setf (mevedel-session-permission-mode session) 'plan)
+    (setf (mevedel-session-permission-mode session) 'accept-edits)
     (should (mevedel-reminders--should-fire-p r 0 session))
-    (should (string-match-p "plan"
+    (should (string-match-p "accept-edits"
                             (funcall (mevedel-reminder-content r) session))))
 
   :doc "content varies by mode and falls back for unknown modes"
@@ -709,43 +709,6 @@
     (should (funcall (mevedel-reminder-trigger r) session))
     (should (string-match-p "plan"
                             (funcall (mevedel-reminder-content r) session)))))
-
-
-(mevedel-deftest mevedel-reminders-make-plan-mode
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "fires only while permission mode is plan"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/pm/" "/tmp/pm/" "pm"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-plan-mode)))
-    (setf (mevedel-session-permission-mode session) 'default)
-    (should-not (funcall (mevedel-reminder-trigger r) session))
-    (setf (mevedel-session-permission-mode session) 'plan)
-    (should (funcall (mevedel-reminder-trigger r) session)))
-
-  :doc "first content is full and later content is sparse"
-  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/pm/" "/tmp/pm/" "pm"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-plan-mode)))
-    (setf (mevedel-session-permission-mode session) 'plan)
-    (setf (mevedel-session-reminders session) (list r))
-    (let ((full (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "<proposed_plan>" full))
-      (should (string-match-p "decision-complete" full))
-      (should (string-match-p "# Concrete Plan Title" full))
-      (should (string-match-p "## Summary" full))
-      (should (string-match-p "## Key Changes" full))
-      (should (string-match-p "## Regression Coverage" full))
-      (should (string-match-p "## Validation" full))
-      (should (string-match-p "## Assumptions" full))
-      (should (string-match-p "Group implementation bullets by subsystem"
-                              full)))
-    (setf (mevedel-reminder-last-fired r) 1)
-    (let ((sparse (funcall (mevedel-reminder-content r) session)))
-      (should (string-match-p "still active" sparse))
-      (should-not (string-match-p "decision-complete" sparse)))))
 
 
 (mevedel-deftest mevedel-reminders-make-plan-reference

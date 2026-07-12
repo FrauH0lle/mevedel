@@ -24,7 +24,7 @@
 (require 'mevedel-skills-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-repair)
 (require 'mevedel-tool-task)
@@ -2949,7 +2949,7 @@
           (should-not (string-match-p "VERDICT: PASS" text))
           (should-not (string-match-p "</agent-result>" text))))))
 
-  :doc "keeps proposed-plan tags visible outside plan mode"
+  :doc "keeps proposed-plan tags visible outside Goal planning"
   (mevedel-view-stream-test--with-buffers
     (let ((session (mevedel-session--create
                     :name "test"
@@ -2971,12 +2971,16 @@
           (should (string-match-p "<proposed_plan>" text))
           (should (string-match-p "# Plan" text))))))
 
-  :doc "strips proposed-plan tags from visible plan-mode response text"
+  :doc "strips proposed-plan tags from visible Goal planning responses"
   (mevedel-view-stream-test--with-buffers
-    (let ((session (mevedel-session--create
-                    :name "test"
-                    :workspace nil
-                    :permission-mode 'plan)))
+    (let ((session
+           (mevedel-session--create
+            :name "test"
+            :workspace nil
+            :permission-mode 'default
+            :goal (mevedel-goal--create
+                   :status 'active
+                   :phase 'planning))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -2995,19 +2999,23 @@
 	  (should (string-match-p "Normal" text))
 	  (should (string-match-p "After" text))))))
 
-  :doc "strips an incomplete live proposed-plan block in plan mode"
+  :doc "strips an incomplete proposed-plan block during Goal planning"
   (mevedel-view-stream-test--with-buffers
-    (let ((session (mevedel-session--create
-                    :name "test"
-                    :workspace nil
-                    :permission-mode 'plan)))
+    (let ((session
+           (mevedel-session--create
+            :name "test"
+            :workspace nil
+            :permission-mode 'default
+            :goal (mevedel-goal--create
+                   :status 'active
+                   :phase 'planning))))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
         (should (equal "Normal"
                        (mevedel-view--visible-response-text
                         "Normal\n<proposed_plan>\n# Streaming\n"))))))
 
-  :doc "keeps historical plan-mode protocol hidden after exiting plan mode"
+  :doc "keeps historical proposed-plan protocol hidden after Goal planning"
   (mevedel-view-stream-test--with-buffers
     (let* ((tmp (make-temp-file "mevedel-view-plan-" t))
            (plan-path (file-name-concat tmp "plans" "current.md"))

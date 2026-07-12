@@ -8,7 +8,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-reminders)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -16,6 +16,29 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+
+(defmacro test-mevedel-permissions--with-goal-phase (phase &rest body)
+  "Run BODY with an active Goal in PHASE as the current session."
+  (declare (indent 1))
+  `(let* ((mevedel--session
+           (mevedel-session--create :name "goal" :permission-mode 'trust-all))
+          (goal (mevedel-goal--create
+                 :objective "test" :status 'active :phase ,phase)))
+     (setf (mevedel-session-goal mevedel--session) goal)
+     ,@body))
+
+(mevedel-deftest mevedel-permission--goal-read-only-phase-p ()
+  ,test
+  (test)
+  :doc "uses the explicit owning session when enforcing Goal phase policy"
+  (let ((session (mevedel-session--create :name "main"))
+        received)
+    (cl-letf (((symbol-function 'mevedel-goal-read-only-phase-p)
+               (lambda (candidate)
+                 (setq received candidate)
+                 t)))
+      (should (mevedel-permission--goal-read-only-phase-p session)))
+    (should (eq session received))))
 
 
 ;;
@@ -197,10 +220,6 @@
   (progn
     (should (eq (mevedel-permission--mode-decision 'trust-all nil) 'allow))
     (should (eq (mevedel-permission--mode-decision 'trust-all t) 'allow)))
-  :doc "plan allows read-only, denies write"
-  (progn
-    (should (eq (mevedel-permission--mode-decision 'plan t) 'allow))
-    (should (eq (mevedel-permission--mode-decision 'plan nil) 'deny)))
   :doc "accept-edits allows read-only, asks for write (auto-approval of file edits lives in mevedel-preview-mode, not the permission layer)"
   (progn
     (should (eq (mevedel-permission--mode-decision 'accept-edits t) 'allow))
@@ -257,18 +276,19 @@
       (should (eq 'deny-rule (plist-get decision :via)))
       (should (eq :session (plist-get decision :bucket)))))
 
-  :doc "protected paths produce the pre-tool decision after deny checks"
-  (let ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
-        (mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**")))
-    (let* ((context
-            (mevedel-permission--preflight
-             "Edit" :tool-struct tool :path "/repo/.git/config"
-             :mode 'plan))
-           (decision (plist-get context :early-decision)))
-      (should (eq 'deny
-                  (mevedel-permission-decision-raw-outcome decision)))
-      (should (eq 'protected-path (plist-get decision :via))))))
+  :doc "read-only Goal phase denies mutation before protected-path prompting"
+  (test-mevedel-permissions--with-goal-phase 'planning
+    (let ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+          (mevedel-permission-rules nil)
+          (mevedel-protected-paths '("**/.git/**")))
+      (let* ((context
+              (mevedel-permission--preflight
+               "Edit" :tool-struct tool :path "/repo/.git/config"
+               :mode 'trust-all))
+             (decision (plist-get context :early-decision)))
+        (should (eq 'deny
+                    (mevedel-permission-decision-raw-outcome decision)))
+        (should (eq 'goal-phase (plist-get decision :via)))))))
 
 (mevedel-deftest mevedel-check-permission-async-with-metadata ()
   ,test
@@ -289,7 +309,7 @@
             ("Read" :tool-struct ,read-tool
              :path "/repo/.git/config" :mode trust-all)
             ("Edit" :tool-struct ,edit-tool
-             :path "/repo/.git/config" :mode plan)
+             :path "/repo/.git/config" :mode default)
             ("Read" :tool-struct ,read-tool
              :path "/project/file.el" :allowed-roots ("/project")
              :mode default)
@@ -300,7 +320,7 @@
              :path "/outside/file.el" :allowed-roots ("/project")
              :mode default)
             ("Edit" :tool-struct ,edit-tool
-             :request-rules (("Edit" :action ask)) :mode plan)
+             :request-rules (("Edit" :action ask)) :mode accept-edits)
             ("Custom" :tool-struct ,deny-tool :mode trust-all))))
     (let ((mevedel-permission-rules nil)
           (mevedel-protected-paths '("**/.git/**")))
@@ -365,24 +385,26 @@
                   :path "/repo/.git/config"
                   :mode 'trust-all)
                 'ask)))
-  :doc "plan mode denies non-read-only protected paths without prompting"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**"))
-        (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
-    (should (eq (mevedel-check-permission "Edit"
-                  :tool-struct mock-tool
-                  :path "/repo/.git/config"
-                  :mode 'plan)
-                'deny)))
-  :doc "plan mode keeps read-only protected paths as ask"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**"))
-        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
-    (should (eq (mevedel-check-permission "Read"
-                  :tool-struct mock-tool
-                  :path "/repo/.git/config"
-                  :mode 'plan)
-                'ask)))
+  :doc "read-only Goal phase denies non-read-only protected paths"
+  (test-mevedel-permissions--with-goal-phase 'reviewing
+    (let ((mevedel-permission-rules nil)
+          (mevedel-protected-paths '("**/.git/**"))
+          (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+      (should (eq (mevedel-check-permission "Edit"
+                    :tool-struct mock-tool
+                    :path "/repo/.git/config"
+                    :mode 'trust-all)
+                  'deny))))
+  :doc "read-only Goal phase keeps read-only protected paths as ask"
+  (test-mevedel-permissions--with-goal-phase 'planning
+    (let ((mevedel-permission-rules nil)
+          (mevedel-protected-paths '("**/.git/**"))
+          (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+      (should (eq (mevedel-check-permission "Read"
+                    :tool-struct mock-tool
+                    :path "/repo/.git/config"
+                    :mode 'trust-all)
+                  'ask))))
   :doc "tool check-permission returning allow is respected"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -428,14 +450,15 @@
                   :tool-struct mock-tool
                   :mode 'default)
                 'ask)))
-  :doc "mode decision - plan denies non-read-only"
-  (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths nil)
-        (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
-    (should (eq (mevedel-check-permission "Edit"
-                  :tool-struct mock-tool
-                  :mode 'plan)
-                'deny)))
+  :doc "Goal planning denies mutation even under trust-all"
+  (test-mevedel-permissions--with-goal-phase 'planning
+    (let ((mevedel-permission-rules nil)
+          (mevedel-protected-paths nil)
+          (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+      (should (eq (mevedel-check-permission "Edit"
+                    :tool-struct mock-tool
+                    :mode 'trust-all)
+                  'deny))))
   :doc "read-only tool allowed in default mode"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -810,14 +833,14 @@ must restore the prior value to avoid cross-test pollution."
     (let ((data-buf (generate-new-buffer " *mev-effective-data*")))
       (unwind-protect
           (let ((session (mevedel-session--create
-                          :name "test" :permission-mode 'plan)))
+                          :name "test" :permission-mode 'default)))
             (set-default-toplevel-value 'mevedel-permission-mode 'trust-all)
             (with-current-buffer data-buf
               (setq-local mevedel--session
                           (mevedel-session--create
                            :name "data" :permission-mode 'accept-edits)))
             (should (eq (mevedel-permission-mode-effective session data-buf)
-                        'plan)))
+                        'default)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
   :doc "uses data-buffer session when no session is passed"
@@ -881,7 +904,6 @@ must restore the prior value to avoid cross-test pollution."
   (should (equal "ask" (mevedel-permission-mode-label 'default)))
   (should (equal "edits" (mevedel-permission-mode-label 'accept-edits)))
   (should (equal "auto!" (mevedel-permission-mode-label 'trust-all)))
-  (should (equal "plan" (mevedel-permission-mode-label 'plan)))
   (should (equal "ask" (mevedel-permission-mode-label 'unknown))))
 
 (mevedel-deftest mevedel-permission-mode--set ()
@@ -927,19 +949,13 @@ must restore the prior value to avoid cross-test pollution."
               (setq-local mevedel--data-buffer data-buf))
             (set-default-toplevel-value 'mevedel-permission-mode 'default)
             (with-current-buffer view-buf
-              (mevedel-permission-mode--set 'mevedel-permission-mode 'plan))
-            (should (eq (mevedel-session-permission-mode session) 'plan))
+              (mevedel-permission-mode--set
+               'mevedel-permission-mode 'accept-edits))
+            (should (eq (mevedel-session-permission-mode session) 'accept-edits))
             (should (eq (buffer-local-value 'mevedel-permission-mode data-buf)
-                        'plan))
+                        'accept-edits))
             (should (eq (buffer-local-value 'mevedel-permission-mode view-buf)
-                        'plan))
-            (should (eq 'default
-                        (plist-get
-                         (mevedel-session-plan-metadata session)
-                         :previous-permission-mode)))
-            (should (memq 'plan-mode
-                          (mapcar #'mevedel-reminder-type
-                                  (mevedel-session-reminders session))))
+                        'accept-edits))
             (should (eq (default-toplevel-value 'mevedel-permission-mode)
                         'default)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf))
@@ -968,7 +984,7 @@ must restore the prior value to avoid cross-test pollution."
           (let ((sess-a (mevedel-session--create
                          :name "a" :permission-mode 'default))
                 (sess-b (mevedel-session--create
-                         :name "b" :permission-mode 'plan)))
+                         :name "b" :permission-mode 'accept-edits)))
             (with-current-buffer data-a
               (setq-local mevedel--session sess-a))
             (with-current-buffer data-b
@@ -981,7 +997,7 @@ must restore the prior value to avoid cross-test pollution."
                           (mapcar #'mevedel-reminder-type
                                   (mevedel-session-reminders sess-a))))
             ;; Session B and the global default are untouched.
-            (should (eq (mevedel-session-permission-mode sess-b) 'plan))
+            (should (eq (mevedel-session-permission-mode sess-b) 'accept-edits))
             (should (eq (default-toplevel-value 'mevedel-permission-mode)
                         'default))
             ;; Buffer-local was set in data-a, not in data-b.
@@ -1019,13 +1035,13 @@ must restore the prior value to avoid cross-test pollution."
               (setq-local mevedel--session session))
             (with-current-buffer data-buf
               (mevedel-permission--set-session-scoped
-               'mevedel-permission-mode 'plan
+               'mevedel-permission-mode 'accept-edits
                (lambda (s v) (push (cons s v) calls)
                  (setf (mevedel-session-permission-mode s) v))))
             (should (= (length calls) 1))
-            (should (eq (cdar calls) 'plan))
+            (should (eq (cdar calls) 'accept-edits))
             (should (eq (car (car calls)) session))
-            (should (eq (mevedel-session-permission-mode session) 'plan)))
+            (should (eq (mevedel-session-permission-mode session) 'accept-edits)))
         (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
   :doc "generic helper updates global default when no session is current"
@@ -1055,13 +1071,13 @@ must restore the prior value to avoid cross-test pollution."
     (let ((data-buf (generate-new-buffer " *mev-test-data*")))
       (unwind-protect
           (let ((session (mevedel-session--create
-                          :name "test" :permission-mode 'plan)))
+                          :name "test" :permission-mode 'accept-edits)))
             (with-current-buffer data-buf
               (setq-local mevedel--session session))
             (set-default-toplevel-value 'mevedel-permission-mode 'default)
             (with-current-buffer data-buf
               (should (eq (mevedel-permission-mode--get 'mevedel-permission-mode)
-                          'plan))))
+                          'accept-edits))))
         (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
   :doc "from view buffer: back-pointer resolves to the session slot"
@@ -1374,30 +1390,18 @@ must restore the prior value to avoid cross-test pollution."
                  :session-rules
                  '(("Bash" :pattern "rm *" :action ask))))))
 
-  :doc "plan-mode suppresses skill bucket for non-read-only tools"
-  ;; Invocation/request rules are suppressed in pass 2 for non-read-only
-  ;; tools.  Bash is non-read-only and has no get-path, so the chain
-  ;; falls through to step 8 mode-decision which yields deny under plan.
-  (let ((mevedel-permission-rules nil))
-    (should (eq 'deny
-                (mevedel-check-permission
-                 "Bash"
-                 :pattern "echo hi"
-                 :invocation-rules '(("Bash" :action allow))
-                 :mode 'plan))))
-
-  :doc "plan-mode does not suppress non-skill buckets"
-  (let ((mevedel-permission-rules nil))
-    (should (eq 'allow
-                (mevedel-check-permission
-                 "Bash"
-                 :pattern "ls"
-                 ;; Skill says allow, but is suppressed under plan.
-                 :invocation-rules '(("Bash" :action allow))
-                 ;; Session says allow, NOT suppressed under plan.
-                 :session-rules
-                 '(("Bash" :pattern "ls" :action allow))
-                 :mode 'plan)))))
+  :doc "Goal planning denies mutation despite explicit allow buckets"
+  (test-mevedel-permissions--with-goal-phase 'planning
+    (let ((mevedel-permission-rules nil)
+          (bash (mevedel-tool--create :name "Bash" :read-only-p nil)))
+      (should (eq 'deny
+                  (mevedel-check-permission
+                   "Bash"
+                   :tool-struct bash
+                   :pattern "echo hi"
+                   :invocation-rules '(("Bash" :action allow))
+                   :session-rules '(("Bash" :action allow))
+                   :mode 'trust-all))))))
 
 (mevedel-deftest mevedel-check-permission/workspace-root ()
   ,test
@@ -1432,7 +1436,7 @@ must restore the prior value to avoid cross-test pollution."
                      :mode 'default)))
       (delete-directory root t)))
 
-  :doc "plan mode denies non-read-only tools inside the workspace"
+  :doc "Goal review denies non-read-only tools inside the workspace"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-workspace-plan-" t)))
          (child (file-name-concat root "file.el"))
@@ -1440,13 +1444,14 @@ must restore the prior value to avoid cross-test pollution."
          (mevedel-protected-paths nil)
          (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
     (unwind-protect
-        (should (eq 'deny
-                    (mevedel-check-permission
-                     "Edit"
-                     :tool-struct mock-tool
-                     :path child
-                     :workspace-root root
-                     :mode 'plan)))
+        (test-mevedel-permissions--with-goal-phase 'reviewing
+          (should (eq 'deny
+                      (mevedel-check-permission
+                       "Edit"
+                       :tool-struct mock-tool
+                       :path child
+                       :workspace-root root
+                       :mode 'trust-all))))
       (delete-directory root t)))
 
   :doc "additional allowed roots are treated as inside the workspace boundary"

@@ -29,7 +29,11 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
   queue, plan queue, selected preset and resolved mevedel preset settings,
-  and a transient bounded tool-input repair log.
+  the current session-owned Goal, and a transient bounded tool-input repair
+  log.
+- **`mevedel-goal`**: stable identity and objective, lifecycle status,
+  current phase, approval policy, owning session, accepted plan artifact, and
+  latest review summary.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
   rules, hook rules, model override, effort override.

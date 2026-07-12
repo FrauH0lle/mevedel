@@ -149,8 +149,8 @@ Before starting ANY task, run this mental checklist:
    **Quick guide:**
    - "how does...", "architecture", "trace flow", "find..." -> `explorer`
    - "find docs", "known issue", "search solutions" -> `explorer` (web mode)
-   - "create plan", "how to implement", "best approach" -> Plan mode
-     (`/plan`) for user approval
+   - "create plan", "how to implement", "best approach" -> supervised Goal
+     (`/goal <objective>`) for planning, user approval, implementation, and review
    - Know exact paths (1-2 files), simple lookups -> inline
 
    **Principle:** About to grep/glob unsure of results or need follow-ups?

@@ -72,23 +72,6 @@ visible setup-context user turn explaining the source session, source
 directory, worktree directory, branch, purpose, and warnings. That turn is
 not sent automatically.
 
-Plan approval also offers `w` to implement an accepted plan in a new
-worktree session. The action prompts for a branch, creates the session before
-settling approval, and caches that prepared target on the queue entry. The
-approval head is removed only after the plan-owned handoff callback succeeds,
-so callback failure retries the same prepared target instead of creating a
-second worktree. The handoff copies the source backend/model and selected
-implementation permission mode, then sends the setup context and accepted
-plan with the implementation preset. The source transcript records the handoff;
-the target receives its own accepted-plan artifact and owns pending
-verification. Creation or target-plan setup failures leave the Plan approval
-pending. A later request-start failure keeps the completed handoff and records
-retry guidance in the target session. `mevedel-retry-plan-implementation`
-replays that saved action with the same implementation preset and temporary
-permission mode, including after the target session is resumed. Synchronous
-request-start failure rolls back the attempted implementation turn before the
-retry is recorded, so retry does not duplicate transcript input.
-
 When a saved session's working directory no longer exists, resume prompts
 for an existing replacement inside the workspace and persists that directory
 after the session opens successfully.

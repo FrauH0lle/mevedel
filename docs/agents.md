@@ -13,10 +13,10 @@ Agents declared with `mevedel-define-agent`:
   `reviewer-read-only` reminder attached at invocation. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
 
-Interactive implementation planning is handled by Plan mode (`/plan` or
-`/mode plan`), not by a planner sub-agent. Plan mode keeps the main
-conversation read-only, extracts `<proposed_plan>` blocks, and routes
-accepted plans into implementation.
+Interactive implementation planning is the first phase of `/goal <objective>`,
+not a planner sub-agent. The Goal controller keeps planning and review
+read-only, extracts `<proposed_plan>` blocks, asks for approval, and routes an
+accepted plan through implementation and review in the same session.
 
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per

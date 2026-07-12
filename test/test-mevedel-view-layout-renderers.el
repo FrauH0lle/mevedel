@@ -17,7 +17,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-tool-ui)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-view)
 (require 'mevedel-structs)
 

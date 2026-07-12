@@ -184,7 +184,7 @@
       (should (equal "accepted.md" (plist-get metadata :accepted-path))))))
 
 (mevedel-deftest mevedel-plan-accept
-  (:doc "accepts a plan without depending on Plan mode")
+  (:doc "accepts a plan without depending on Goal controller state")
   ,test
   (test)
   (let ((save-dir (make-temp-file "mevedel-plan-accept-" t)))
@@ -227,52 +227,6 @@
            (mevedel-plan-implementation-input
             'unknown (list :absolute-path path) 'default)))
       (delete-file path))))
-
-(mevedel-deftest mevedel-plan-record-retry
-  (:doc "stores retry input independently of the approval callback")
-  ,test
-  (test)
-  (let* ((session (mevedel-session--create :name "test"))
-         (input '(:action implement :plan-file "/tmp/plan.md")))
-    (mevedel-plan-record-retry session input)
-    (should (equal input (mevedel-plan-retry-input session)))))
-
-(mevedel-deftest mevedel-plan-retry-input
-  (:doc "reads saved implementation retry input")
-  ,test
-  (test)
-  (let* ((input '(:action implement))
-         (session
-          (mevedel-session--create
-           :name "test" :plan-metadata (list :implementation-retry input))))
-    (should (equal input (mevedel-plan-retry-input session)))))
-
-(mevedel-deftest mevedel-plan-clear-retry
-  (:doc "clears saved retry input")
-  ,test
-  (test)
-  (let ((session
-         (mevedel-session--create
-          :name "test"
-          :plan-metadata '(:implementation-retry (:action implement)))))
-    (mevedel-plan-clear-retry session)
-    (should-not (mevedel-plan-retry-input session))))
-
-(mevedel-deftest mevedel-plan-record-handoff
-  (:doc "persists an explicit execution-home handoff record")
-  ,test
-  (test)
-  (let ((source (mevedel-session--create :name "source"))
-        (target (mevedel-session--create :name "target"))
-        (worktree '(:branch "goal/test"
-                    :directory "/tmp/worktree"
-                    :plan-file "/tmp/worktree/plans/current.md")))
-    (let ((handoff (mevedel-plan-record-handoff source target worktree)))
-      (should (equal handoff
-                     (plist-get (mevedel-session-plan-metadata source)
-                                :execution-handoff)))
-      (should (equal "target" (plist-get handoff :session)))
-      (should (equal "/tmp/worktree" (plist-get handoff :directory))))))
 
 (mevedel-deftest mevedel-plan-clear-verification-pending
   (:doc "clears the approved-plan verification flag")

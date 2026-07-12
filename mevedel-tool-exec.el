@@ -69,15 +69,13 @@
                                     session-rules persistent-rules))
 (declare-function mevedel-permission--first-non-nil-action
                   "mevedel-permissions"
-                  (buckets tool-name path pattern domain name skip-keys))
+                  (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
                   (workspace))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
-(declare-function mevedel-permission--plan-mode-skip-keys
-                  "mevedel-permissions" (mode read-only-p))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
 (defvar mevedel-bash-dangerous-commands)
@@ -219,8 +217,8 @@ with parser metadata and CALLBACK accepts either nil or a plist:
    :recommendation allow-once|ask|deny
    :reason \"short explanation\")
 
-The result is never used for enforcement.  Explicit deny, plan mode,
-protected-path policy, and the user's decision remain authoritative."
+The result is never used for enforcement.  Explicit deny, read-only Goal
+phases, protected-path policy, and the user's decision remain authoritative."
   :type '(choice (const :tag "Disabled" nil)
                  (const :tag "Use gptel reviewer" t)
                  function)
@@ -849,8 +847,7 @@ the Bash tool path because Bash had its own flattened resolver."
         (mevedel-permission--collect-buckets
          invocation-rules request-rules session-rules persistent))))
 
-(cl-defun mevedel-tools--bash-bucket-action
-    (buckets command &key skip-keys)
+(defun mevedel-tools--bash-bucket-action (buckets command)
   "Two-pass bucket resolution for COMMAND against BUCKETS.
 
 Pass 1 (deny absolute): if any bucket yields `deny', returns
@@ -858,22 +855,16 @@ Pass 1 (deny absolute): if any bucket yields `deny', returns
 returns the first non-nil bucket action.  Returns nil when no
 bucket matches the command pattern.
 
-SKIP-KEYS is forwarded to the allow/ask pass; under plan mode
-the pipeline asks the generic resolver to suppress the
-`:invocation' and `:request' buckets, and Bash must honor the
-same suppression so skill `allowed-tools' grants cannot bypass
-plan mode.  Deny resolution is absolute and ignores SKIP-KEYS.
-
 Mirrors `mevedel-check-permission' for the Bash tool's per-
 command precedence so skill rules win over session rules in
 allow/ask resolution but session denies still win over skill
 allows."
   (cond
    ((mevedel-permission--any-deny buckets "Bash" nil command nil nil)
-    'deny)
+   'deny)
    (t
     (mevedel-permission--first-non-nil-action
-     buckets "Bash" nil command nil nil skip-keys))))
+     buckets "Bash" nil command nil nil))))
 
 (cl-defun mevedel-tools--check-bash-permission
     (command &key trust-literal-p ignore-effective-trust-p
@@ -890,8 +881,6 @@ downgrade to `ask'.  Otherwise the full command is tested first, then
 each extracted sub-command for defence in depth.  Within the results,
 `deny' wins over `ask' which wins over `allow'.  If nothing matches,
 `ask' is returned unless the effective permission mode is `trust-all'.
-In `plan' mode, prompt-requiring `ask' outcomes are hard-denied after
-explicit non-skill allow rules have had their chance to decide.
 
 When TRUST-LITERAL-P is non-nil (skill body shell expansion
 path), the dangerous-commands blocklist and the fail-safe-
@@ -921,28 +910,25 @@ without requiring a session-level rule."
          (effective-trust-p
           (and (not ignore-effective-trust-p)
                (mevedel-tool-exec--effective-trust-p trust-literal-p mode)))
-         (trust-all-p (and effective-trust-p (eq mode 'trust-all)))
-         (plan-mode-p (eq mode 'plan)))
+         (trust-all-p (and effective-trust-p (eq mode 'trust-all))))
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
     (when (mevedel-tool-exec--bash-protected-path-p command)
-      (cl-return-from mevedel-tools--check-bash-permission
-        (if plan-mode-p 'deny 'ask)))
+      (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (when (and unparseable
                mevedel-bash-fail-safe-on-complex-syntax
                (not effective-trust-p))
       (cl-return-from mevedel-tools--check-bash-permission
-        (if plan-mode-p 'deny 'ask)))
+        'ask))
 
     (let* ((commands (or commands '()))
-           (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
            (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
            (segments (mevedel-tools--split-command-chain command))
            (has-nested-commands (> (length commands) (length segments)))
            (full-action (mevedel-tools--bash-bucket-action
-                         buckets command :skip-keys skip-keys))
+                         buckets command))
            (dangerous-p (and (not trust-literal-p)
                              (not effective-trust-p)
                              (seq-some
@@ -955,8 +941,7 @@ without requiring a session-level rule."
         (cl-return-from mevedel-tools--check-bash-permission 'allow))
 
       (when (null commands)
-        (cl-return-from mevedel-tools--check-bash-permission
-          (if plan-mode-p 'deny 'ask)))
+        (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
       (let ((decision
              (cond
@@ -975,8 +960,7 @@ without requiring a session-level rule."
                (let ((actions (if full-action (list full-action) nil)))
                  (dolist (segment segments)
                    (let* ((segment-action
-                           (mevedel-tools--bash-bucket-action
-                            buckets segment :skip-keys skip-keys))
+                          (mevedel-tools--bash-bucket-action buckets segment))
                           (segment-commands
                            (car (mevedel-tools--extract-commands segment)))
                           (commands-to-check
@@ -987,7 +971,7 @@ without requiring a session-level rule."
                            (mapcar
                             (lambda (cmd)
                               (mevedel-tools--bash-bucket-action
-                               buckets cmd :skip-keys skip-keys))
+                               buckets cmd))
                             commands-to-check)))
                      (when segment-action
                        (push segment-action actions))
@@ -999,9 +983,7 @@ without requiring a session-level rule."
                   ((memq nil actions) 'ask)
                   ((memq 'ask actions) 'ask)
                   (t 'allow)))))))
-        (if (and plan-mode-p (eq decision 'ask))
-            'deny
-          decision)))))
+        decision))))
 
 
 ;;
@@ -1304,22 +1286,17 @@ Normal model-requested Eval asks unless an explicit deny rule applies
 or the effective permission mode is `trust-all'.  When TRUST-LITERAL-P
 is non-nil, as with author-written skill body injections, an active
 allow rule for Eval may bypass the prompt.  Deny rules still win
-absolutely, and plan mode suppresses skill-bucket allows because Eval is
-not read-only.  In plan mode, Eval is denied unless an explicit
-non-skill allow rule returns an earlier `allow' decision."
+absolutely."
   (let* ((buckets (mevedel-tools--bash-buckets permission-context))
          (mode (mevedel-tool-exec--effective-permission-mode
                 permission-context))
-         (skip-keys (mevedel-permission--plan-mode-skip-keys mode nil))
          (action (mevedel-permission--first-non-nil-action
-                  buckets "Eval" nil nil nil nil skip-keys)))
+                  buckets "Eval" nil nil nil nil)))
     (cond
      ((mevedel-permission--any-deny buckets "Eval" nil nil nil nil)
       'deny)
      ((eq mode 'trust-all)
       'allow)
-     ((eq mode 'plan)
-      (if (eq action 'allow) 'allow 'deny))
      (trust-literal-p
       (or action 'ask))
      (t 'ask))))

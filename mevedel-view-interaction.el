@@ -14,6 +14,10 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-goal'
+(declare-function mevedel-plan-queue--render-head
+                  "mevedel-goal" (&optional session))
+
 ;; `mevedel-interaction-prompt'
 (defvar mevedel--prompt-overlays)
 
@@ -28,10 +32,6 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
-
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-queue--render-head
-                  "mevedel-tool-plan" (&optional session))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text
@@ -397,7 +397,7 @@ This deletes only interaction UI overlays and never settles callbacks."
                                    'mevedel--session
                                    mevedel--data-buffer)))))
       (when (mevedel-session-plan-queue session)
-        (require 'mevedel-tool-plan)
+        (require 'mevedel-goal)
         (mevedel-plan-queue--render-head session))
       (when (mevedel-session-permission-queue session)
         (require 'mevedel-permission-queue)

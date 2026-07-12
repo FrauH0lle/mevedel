@@ -41,11 +41,12 @@
                   "mevedel-review" (text))
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode
-                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
@@ -1919,12 +1920,13 @@ or org scaffolding markers)."
 
 (defun mevedel-view--strip-proposed-plans-p (text)
   "Return non-nil when TEXT's proposed-plan protocol blocks should be hidden.
-Plan-mode responses are hidden live while Plan mode is active.  After
-mode exit, full rerenders still hide previously presented plan bodies so
-historical Plan-mode protocol does not leak back into the view."
+Goal planning responses are hidden live.  Full rerenders also hide previously
+presented plan bodies so protocol markup does not leak into the view."
   (and (boundp 'mevedel--session)
        mevedel--session
-       (or (eq (mevedel-session-permission-mode mevedel--session) 'plan)
+       (or (when-let* ((goal (mevedel-session-goal mevedel--session)))
+             (and (eq (mevedel-goal-status goal) 'active)
+                  (eq (mevedel-goal-phase goal) 'planning)))
            (and (fboundp 'mevedel-plan-extract-proposed)
                 (fboundp 'mevedel-plan-known-p)
                 (let ((proposed

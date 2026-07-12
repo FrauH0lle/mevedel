@@ -3,7 +3,7 @@
 Entry point: `mevedel-preview-mode-add-preview` (keyword API). Dispatches
 on `mevedel-preview-mode--effective-mode`:
 
-- `default` / `plan` → interactive inline overlay
+- `default` → interactive inline overlay
 - `accept-edits` / `trust-all` → `--auto-apply` (runs `apply-fn`
   immediately, still produces a persistent diff summary in the view)
 
@@ -28,7 +28,7 @@ callback-overlay placement, and redraw.
 flowchart TD
     A[Edit or Write handler returns patch] --> B[Register preview]
     B --> C{Permission mode}
-    C -- default or plan --> D[Show inline overlay]
+    C -- default --> D[Show inline overlay]
     C -- accept-edits or trust-all --> E[Auto-apply patch]
     D --> F{User action}
     F -- Approve --> G[Apply patch]

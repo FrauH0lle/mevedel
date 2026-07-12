@@ -4,7 +4,7 @@
 
 ;; Provides the `/worktree' local slash command.  The command reports the
 ;; current Git worktree state and can create a fresh linked worktree under
-;; `.worktrees/' with a new mevedel session rooted there.  Plan mode reuses
+;; `.worktrees/' with a new mevedel session rooted there.  Goal execution reuses
 ;; the same creation interface for worktree-backed implementation handoffs.
 
 ;;; Code:

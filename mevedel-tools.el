@@ -31,7 +31,7 @@
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-introspect)
-(require 'mevedel-tool-plan)
+(require 'mevedel-goal)
 (require 'mevedel-tool-skills)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-tutor)
@@ -68,7 +68,7 @@
                   "mevedel-permission-queue"
                   (origin &optional session no-render))
 (declare-function mevedel-plan-queue-sweep-agent
-                  "mevedel-tool-plan" (origin &optional session))
+                  "mevedel-goal" (origin &optional session))
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-exec--insert-injected-prompt
