@@ -55,13 +55,11 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-mode-extract-proposed-plan
-                  "mevedel-tool-plan" (text))
-(declare-function mevedel-plan-mode-known-proposed-plan-p
-                  "mevedel-tool-plan" (plan-markdown &optional session))
-(declare-function mevedel-plan-mode-strip-proposed-plans
-                  "mevedel-tool-plan" (text))
+;; `mevedel-plan'
+(declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
+(declare-function mevedel-plan-known-p
+                  "mevedel-plan" (plan-markdown &optional session))
+(declare-function mevedel-plan-strip-proposed "mevedel-plan" (text))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-display-string
@@ -673,9 +671,9 @@ through font-lock refontification cycles.  Returns S."
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
   (let ((text (mevedel-view--strip-render-data-display-text text)))
-    (if (and (fboundp 'mevedel-plan-mode-strip-proposed-plans)
+    (if (and (fboundp 'mevedel-plan-strip-proposed)
              (mevedel-view--strip-proposed-plans-p text))
-        (mevedel-plan-mode-strip-proposed-plans text)
+        (mevedel-plan-strip-proposed text)
       text)))
 
 (defmacro mevedel-view--with-render-temp-buffer (&rest body)
@@ -1927,12 +1925,12 @@ historical Plan-mode protocol does not leak back into the view."
   (and (boundp 'mevedel--session)
        mevedel--session
        (or (eq (mevedel-session-permission-mode mevedel--session) 'plan)
-           (and (fboundp 'mevedel-plan-mode-extract-proposed-plan)
-                (fboundp 'mevedel-plan-mode-known-proposed-plan-p)
+           (and (fboundp 'mevedel-plan-extract-proposed)
+                (fboundp 'mevedel-plan-known-p)
                 (let ((proposed
-                       (mevedel-plan-mode-extract-proposed-plan text)))
+                       (mevedel-plan-extract-proposed text)))
                   (and proposed
-                       (mevedel-plan-mode-known-proposed-plan-p
+                       (mevedel-plan-known-p
                         proposed mevedel--session)))))))
 
 (defun mevedel-view--current-render-insertion-marker ()

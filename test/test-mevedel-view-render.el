@@ -1727,7 +1727,7 @@ response folding along with a dangerous best-guess preview path)."
                      :permission-mode 'default
                      :plan-metadata
                      (list :presented-plan-hashes
-                           (list (mevedel-plan-mode--plan-hash old-plan))))))
+                           (list (mevedel-plan-hash old-plan))))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf

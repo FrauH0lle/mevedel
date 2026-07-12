@@ -3012,7 +3012,7 @@
     (let* ((tmp (make-temp-file "mevedel-view-plan-" t))
            (plan-path (file-name-concat tmp "plans" "current.md"))
            (old-plan-hash
-            (mevedel-plan-mode--plan-hash "# Old plan\n"))
+            (mevedel-plan-hash "# Old plan\n"))
            (session (mevedel-session--create
                      :name "test"
                      :workspace nil
