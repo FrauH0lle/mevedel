@@ -184,6 +184,8 @@ workspace."
   touched-files     ; hash-table: filepath -> mevedel-file-interaction
   permission-rules  ; session-scoped permission rules
   permission-mode   ; current permission mode
+  preset-name       ; selected mevedel preset symbol
+  preset-settings   ; alist of resolved buffer-local mevedel variables
   turn-count        ; integer: for reminder throttling
   reminders         ; list of active mevedel-reminder structs
   last-observed-date ; YYYY-MM-DD string last advertised to the model

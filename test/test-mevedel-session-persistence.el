@@ -117,6 +117,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :forked-from-turn nil
                :permission-mode 'default
                :permission-rules nil
+               :preset-name nil
+               :preset-settings nil
                :last-observed-date "2026-01-01"
                :agent-types-snapshot :uninitialized
                :skills-snapshot :uninitialized
@@ -273,6 +275,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect
         (let* ((session (test-mevedel-session-persistence--make-session root))
+               (_ (setf (mevedel-session-preset-name session) 'test-preset
+                        (mevedel-session-preset-settings session)
+                        '((mevedel-test-setting . session))))
                (plist (mevedel-session-persistence-serialize
                        session
                        :first-user-message "Refactor X"
@@ -286,6 +291,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                           (file-name-concat root "packages" "api"))
                          (plist-get plist :working-directory)))
           (should (equal 'default (plist-get plist :permission-mode)))
+          (should (eq 'test-preset (plist-get plist :preset-name)))
+          (should (equal '((mevedel-test-setting . session))
+                         (plist-get plist :preset-settings)))
           (should (= 2 (plist-get plist :current-segment)))
           (should (= 5 (plist-get plist :total-turn-count)))
           (should (= 4 (plist-get plist :last-task-write-turn)))
@@ -346,6 +354,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect
         (let* ((source (test-mevedel-session-persistence--make-session root))
+               (_ (setf (mevedel-session-preset-name source) 'test-preset
+                        (mevedel-session-preset-settings source)
+                        '((mevedel-test-setting . restored))))
                (plist (mevedel-session-persistence-serialize
                        source
                        :first-user-message "Hi"
@@ -360,6 +371,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal "main-2026-04-23T14-30-a9f2"
                          (mevedel-session-session-id session)))
           (should (eq 'default (mevedel-session-permission-mode session)))
+          (should (eq 'test-preset (mevedel-session-preset-name session)))
+          (should (equal '((mevedel-test-setting . restored))
+                         (mevedel-session-preset-settings session)))
           (should (= 5 (mevedel-session-turn-count session)))
           (should (= 4 (mevedel-session-last-task-write-turn session)))
           (should (equal '(("alpha" . "Alpha helper"))
@@ -4118,6 +4132,9 @@ The result is a plist whose :tempdir owns every created file."
   (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
     (unwind-protect
         (let* ((session (plist-get fixture :session))
+               (_ (setf (mevedel-session-preset-name session) 'test-preset
+                        (mevedel-session-preset-settings session)
+                        '((mevedel-test-setting base))))
                (before (mevedel-session-persistence-serialize session))
                (child
                 (mevedel-session-persistence--fork-candidate
@@ -4132,7 +4149,14 @@ The result is a plist whose :tempdir owns every created file."
           (should-not (assoc 3 (mevedel-session-prompt-index child)))
           (should-not (assoc 3 (mevedel-session-file-snapshots child)))
           (should-not (assoc "future--2"
-                             (mevedel-session-agent-transcripts child))))
+                             (mevedel-session-agent-transcripts child)))
+          (setcar (cdr (assq 'mevedel-test-setting
+                             (mevedel-session-preset-settings child)))
+                  'child)
+          (should (equal '((mevedel-test-setting base))
+                         (mevedel-session-preset-settings session)))
+          (should (equal '((mevedel-test-setting child))
+                         (mevedel-session-preset-settings child))))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
 (mevedel-deftest mevedel-session-persistence--stage-fork ()

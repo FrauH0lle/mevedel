@@ -449,6 +449,43 @@
 ;;
 ;;; Working directory sessions
 
+(mevedel-deftest mevedel--display-chat-buffer
+  ()
+  ,test
+  (test)
+  :doc "keeps an existing session's selected preset"
+  (let ((buf (generate-new-buffer " *mevedel-existing-preset*"))
+        applied)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session
+                        (mevedel-session--create
+                         :name "test" :preset-name 'selected)))
+          (cl-letf (((symbol-function 'mevedel-preset-apply)
+                     (lambda (&rest _) (setq applied t)))
+                    ((symbol-function 'display-buffer) #'ignore))
+            (mevedel--display-chat-buffer buf))
+          (should-not applied))
+      (kill-buffer buf)))
+  :doc "applies the default to a fresh session"
+  (let ((buf (generate-new-buffer " *mevedel-fresh-preset*"))
+        applied)
+    (unwind-protect
+        (progn
+          (with-current-buffer buf
+            (setq-local mevedel--session
+                        (mevedel-session--create :name "test")))
+          (cl-letf (((symbol-function 'mevedel-preset-apply)
+                     (lambda (name &optional _)
+                       (setq applied name)))
+                    ((symbol-function 'display-buffer) #'ignore))
+            (mevedel--display-chat-buffer buf))
+          (should (eq applied
+                      (alist-get mevedel-default-chat-preset
+                                 mevedel-action-preset-alist))))
+      (kill-buffer buf))))
+
 (mevedel-deftest mevedel-session-working-directory
 		 (:before-each (mevedel-workspace-clear-registry)
 			       :vars* ((root-dir (file-name-as-directory

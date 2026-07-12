@@ -86,7 +86,6 @@
 (declare-function cl-remove-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 
 ;; `gptel'
-(declare-function gptel--apply-preset "ext:gptel" (preset setter))
 (defvar gptel-display-buffer-action)
 
 ;; `gptel-request'
@@ -123,6 +122,8 @@
 
 ;; `mevedel-presets'
 (declare-function mevedel--define-presets "mevedel-presets")
+(declare-function mevedel-preset-apply
+                  "mevedel-presets" (name &optional buffer))
 (defvar mevedel-action-preset-alist)
 
 ;; `mevedel-skills-core'
@@ -503,9 +504,7 @@ always prompt for the session name."
   (interactive)
   (let ((chat-buffer (mevedel--tutor-buffer t)))
     (with-current-buffer chat-buffer
-      (gptel--apply-preset
-       'mevedel-tutor
-       (lambda (sym val) (set (make-local-variable sym) val))))
+      (mevedel-preset-apply 'mevedel-tutor))
     ;; Display the view buffer, not the data buffer
     (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
                         chat-buffer)

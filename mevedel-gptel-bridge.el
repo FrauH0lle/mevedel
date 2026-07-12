@@ -13,6 +13,7 @@
 (declare-function gptel--edit-directive "ext:gptel-transient"
                   (&optional sym &rest args))
 (declare-function gptel-menu "ext:gptel-transient" ())
+(defvar gptel--set-buffer-locally)
 
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
@@ -211,6 +212,8 @@
                           (selected-window)))))
     (unless (and view-buffer data-buffer)
       (user-error "No mevedel session cockpit here"))
+    (with-current-buffer data-buffer
+      (setq-local gptel--set-buffer-locally t))
     (if view-origin-p
         (let ((setup-ok nil))
           (mevedel-gptel-bridge--schedule-return-to-view
