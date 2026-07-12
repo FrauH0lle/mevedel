@@ -247,7 +247,7 @@ workspace."
   ;; differ from permission outcomes and never coalesce.
   ;; Transient.
   plan-queue
-  ;; Plan artifact metadata.  Plan text lives in plans/current.md.
+  ;; Plan artifact metadata.  Goal plan paths are recorded here.
   plan-metadata
   ;; The session-owned current `mevedel-goal', or nil.
   goal)
@@ -265,7 +265,11 @@ workspace."
   approval-policy    ; supervised or automatic
   owner-session      ; owning session id/name
   current-plan       ; current accepted/presented artifact plist
-  review-summary)    ; latest review response text
+  review-summary     ; latest structured review result plist
+  cycle              ; current one-based cycle number
+  cycles             ; lightweight cycle index records
+  review-findings    ; findings carried into the next planning cycle
+  reason)            ; pause or blocked reason
 
 
 ;;

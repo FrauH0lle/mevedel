@@ -45,6 +45,10 @@ Layout:
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
+  goals/<goal-id>/                   ; one Goal's cycle artifacts and index
+    current-plan.md                  ; mutable proposal being approved
+    cycle-001-plan.md                ; immutable accepted cycle plan
+    cycles.el                        ; lightweight cycle metadata
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
@@ -62,6 +66,13 @@ to backup names), workspace identity, `:working-directory`, fork lineage
 buffer-local mevedel variables in `:preset-settings`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
 gptel's own buffer-local settings continue to use its Org persistence.
+
+The Goal cycle index stores artifact references, structured review verdicts,
+provider/effort selections, hashes, and timestamps, but not plan or review
+bodies. Accepted plans are copied to sequential cycle files without overwrite;
+the mutable current plan is reused only while preparing the next acceptance.
+The Goal itself remains in the session sidecar, including its current cycle,
+carried review findings, and pause or blocked reason.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree

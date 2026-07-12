@@ -29,8 +29,9 @@ flowchart TD
 
 ### Plan-file reference reminder
 
-Accepted plans are recorded in session `plan-metadata` and persisted
-as `plans/current.md` under the session directory. The one-shot
+Accepted plans are recorded in session `plan-metadata` and persisted as
+immutable `goals/<goal-id>/cycle-NNN-plan.md` artifacts under the session
+directory. The mutable proposal remains at `current-plan.md`. The one-shot
 `plan-reference` reminder surfaces bounded contents of the approved
 plan on later turns when it may still be relevant. The Goal controller owns
 planning and review prompts directly; their read-only restriction is enforced
