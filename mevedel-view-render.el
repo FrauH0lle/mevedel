@@ -3568,7 +3568,8 @@ are merged into a single summary."
                       'mevedel-view-type 'turn-header
                       'mevedel-view-turn-role 'assistant
                       'mevedel-view-collapsed nil))
-  (let (tool-group thinking-group request-summary-group)
+  (let ((view-buf (current-buffer))
+        tool-group thinking-group request-summary-group)
     (dolist (seg segments)
       (let ((type (car seg)))
         (pcase type
@@ -3586,8 +3587,7 @@ are merged into a single summary."
                (let ((text (string-trim
                              (buffer-substring-no-properties seg-start seg-end))))
                  (setq text (mevedel-view--visible-response-text text))
-                 (with-current-buffer (buffer-local-value
-                                       'mevedel--view-buffer data-buf)
+                 (with-current-buffer view-buf
                    (unless (string-empty-p text)
                      (mevedel-view--ensure-blank-line-before-response)
                      (let ((start (point)))

@@ -13,6 +13,9 @@
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
 
+;; `mevedel-agent-exec'
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime--agent-invocation-at "mevedel-agent-runtime" (fsm))
 (declare-function mevedel-agent-runtime--prune-stale-agents-fsm "mevedel-agent-runtime" ())
@@ -50,6 +53,8 @@
 
 ;; `mevedel-tool-ui'
 (declare-function mevedel-tool-ui--handle-badge "mevedel-tool-ui" (render-data))
+(declare-function mevedel-tool-ui--agent-blocked-reason
+                  "mevedel-tool-ui" (agent-id session))
 (declare-function mevedel-tool-ui--render-agent
                   "mevedel-tool-ui" (name args result render-data))
 
@@ -100,6 +105,15 @@
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--in-flight-turn-start-position
                   "mevedel-view-stream" ())
+(declare-function mevedel-view--set-in-flight-turn-start
+                  "mevedel-view-stream" (position))
+(declare-function mevedel-view-stream-post-tool
+                  "mevedel-view-stream" (args))
+(declare-function mevedel-view-stream-pre-tool
+                  "mevedel-view-stream" (args))
+(declare-function mevedel-view-stream-schedule "mevedel-view-stream" ())
+(declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
+(defvar mevedel-view--data-turn-start)
 (defvar mevedel-view--in-flight-turn-start)
 
 ;; `mevedel-view-zone'
@@ -226,7 +240,7 @@ running in the UI."
 
 (defun mevedel-view--agent-transcript-header-line ()
   "Return the header-line string for a transcript inspection view."
-  (let* ((info mevedel-view--agent-transcript-info)
+  (let* ((info (mevedel-view--agent-transcript-current-info))
          (agent-id (or mevedel-view--agent-id
                        (plist-get info :agent-id)))
          (display-label (mevedel-view--display-label-for-agent agent-id))
@@ -234,7 +248,9 @@ running in the UI."
                  (list :status (plist-get info :status)
                        :calls (plist-get info :calls)
                        :elapsed (plist-get info :elapsed)
-                       :reason (plist-get info :reason))))
+                       :reason (plist-get info :reason)
+                       :blocked-reason
+                       (plist-get info :blocked-reason))))
          (calls (plist-get info :calls))
          (elapsed (plist-get info :elapsed))
          (session-label
@@ -260,6 +276,34 @@ running in the UI."
                  (when (numberp elapsed) (format "%.1fs" elapsed))
                  (format "session %s" session-label)))
      "  ")))
+
+(defun mevedel-view--agent-transcript-current-info ()
+  "Return transcript metadata refreshed from the live invocation."
+  (let* ((info (copy-sequence mevedel-view--agent-transcript-info))
+         (data-buf mevedel--data-buffer)
+         (inv (and (buffer-live-p data-buf)
+                   (buffer-local-value 'mevedel--agent-invocation data-buf))))
+    (when (and (plist-get info :live-buffer)
+               (mevedel-agent-invocation-p inv))
+      (let* ((started (mevedel-agent-invocation-started-at inv))
+             (session (and (buffer-live-p data-buf)
+                           (buffer-local-value 'mevedel--session data-buf)))
+             (blocked-reason
+              (mevedel-tool-ui--agent-blocked-reason
+               (mevedel-agent-invocation-agent-id inv) session)))
+        (setq info
+              (append
+               (list :status
+                     (mevedel-agent-invocation-transcript-status inv)
+                     :calls (mevedel-agent-invocation-call-count inv)
+                     :reason (mevedel-agent-invocation-terminal-reason inv)
+                     :blocked-reason blocked-reason)
+               (when started
+                 (list :elapsed
+                       (float-time
+                        (time-subtract (current-time) started))))
+               info))))
+    info))
 
 (defun mevedel-view--clear-parent-transcript-window ()
   "Clear this transcript view from its parent view's singleton slot."
@@ -344,21 +388,71 @@ running in the UI."
         (when (buffer-live-p view)
           (kill-buffer view))))))
 
-(defun mevedel-view--agent-live-transcript-views (agent-buf &optional agent-id)
-  "Return live transcript views displaying AGENT-BUF.
-When AGENT-ID is non-nil, only return views for that agent id."
-  (let (views)
-    (dolist (buf (buffer-list) (nreverse views))
-      (when (and (buffer-live-p buf)
-                 (with-current-buffer buf
-                   (and (bound-and-true-p mevedel-view--agent-transcript-p)
-                        (eq mevedel--data-buffer agent-buf)
-                        (or (not agent-id)
-                            (equal mevedel-view--agent-id agent-id)
-                            (equal (mevedel-view--display-label-for-agent
-                                    mevedel-view--agent-id)
-                                   agent-id)))))
-        (push buf views)))))
+(defun mevedel-view--agent-live-transcript-dispatch (function &rest args)
+  "Call stream FUNCTION with ARGS for every view of the current agent buffer."
+  (let ((agent-buf (current-buffer)))
+    (dolist (view (mevedel-view--agent-transcript-views-for-data agent-buf))
+      (condition-case err
+          (with-current-buffer view
+            (atomic-change-group
+              (with-current-buffer agent-buf
+                (let ((mevedel--view-buffer view))
+                  (apply function args))))
+            (force-mode-line-update t))
+        (error
+         (display-warning
+          'mevedel
+          (format "Live agent transcript update failed: %s"
+                  (error-message-string err))
+          :warning)))))
+  nil)
+
+(defun mevedel-view-agent-live-transcript-stream ()
+  "Fan out a streamed agent chunk to open transcript inspection views."
+  (mevedel-view--agent-live-transcript-dispatch
+   #'mevedel-view-stream-schedule))
+
+(defun mevedel-view-agent-live-transcript-pre-tool (args)
+  "Fan out the agent pre-tool hook ARGS to open transcript views."
+  (mevedel-view--agent-live-transcript-dispatch
+   #'mevedel-view-stream-pre-tool args))
+
+(defun mevedel-view-agent-live-transcript-post-tool (args)
+  "Fan out the agent post-tool hook ARGS to open transcript views."
+  (mevedel-view--agent-live-transcript-dispatch
+   #'mevedel-view-stream-post-tool args))
+
+(defun mevedel-view--agent-transcript-start-streaming ()
+  "Anchor incremental rendering to the last rendered assistant turn."
+  (let ((pos (point-min))
+        last-assistant)
+    (while (< pos (point-max))
+      (when (eq (get-text-property pos 'mevedel-view-turn-role) 'assistant)
+        (setq last-assistant pos))
+      (setq pos (or (next-single-property-change
+                     pos 'mevedel-view-turn-role nil (point-max))
+                    (point-max))))
+    (when last-assistant
+      (let ((turn-id (get-text-property last-assistant
+                                        'mevedel-view-turn-id))
+            (source-pos last-assistant)
+            source)
+        (while (and (< source-pos (point-max))
+                    (eq (get-text-property source-pos
+                                           'mevedel-view-turn-id)
+                        turn-id)
+                    (not source))
+          (setq source (get-text-property source-pos 'mevedel-view-source))
+          (setq source-pos (1+ source-pos)))
+        (when (and (consp source) (integerp (car source)))
+          (mevedel-view--set-in-flight-turn-start last-assistant)
+          (setq mevedel-view--data-turn-start
+                (copy-marker (car source) nil)))))
+    (unless (mevedel-view--in-flight-turn-start-position)
+      (mevedel-view--set-in-flight-turn-start mevedel-view--input-marker)
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer mevedel--data-buffer
+              (copy-marker (point-max) nil))))))
 
 (defun mevedel-view-agent-live-transcript-finalize (invocation)
   "Refresh live transcript views for finalized INVOCATION.
@@ -369,9 +463,7 @@ buffer."
   (when-let* (((mevedel-agent-invocation-p invocation))
               (agent-buf (mevedel-agent-invocation-buffer invocation))
               ((buffer-live-p agent-buf)))
-    (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
-           (views (mevedel-view--agent-live-transcript-views
-                   agent-buf agent-id))
+    (let* ((views (mevedel-view--agent-transcript-views-for-data agent-buf))
            (status (mevedel-agent-invocation-transcript-status invocation))
            (started (mevedel-agent-invocation-started-at invocation))
            (elapsed (and started
@@ -381,27 +473,25 @@ buffer."
            (calls (mevedel-agent-invocation-call-count invocation)))
       (dolist (view views)
         (when (buffer-live-p view)
-          (with-current-buffer view
-            (setq mevedel-view--agent-transcript-info
-                  (plist-put (copy-sequence
-                              mevedel-view--agent-transcript-info)
-                             :live-buffer nil))
-            (setq mevedel-view--agent-transcript-info
-                  (plist-put mevedel-view--agent-transcript-info
-                             :status status))
-            (setq mevedel-view--agent-transcript-info
-                  (plist-put mevedel-view--agent-transcript-info
-                             :calls calls))
-            (when elapsed
-              (setq mevedel-view--agent-transcript-info
-                    (plist-put mevedel-view--agent-transcript-info
-                               :elapsed elapsed)))
-            (when reason
-              (setq mevedel-view--agent-transcript-info
-                    (plist-put mevedel-view--agent-transcript-info
-                               :reason reason)))
-            (when (buffer-live-p mevedel--data-buffer)
-              (mevedel-view--full-rerender)))))
+          (condition-case err
+              (with-current-buffer view
+                (mevedel-view-stream-stop)
+                (setq mevedel-view--agent-transcript-info
+                      (append (list :live-buffer nil
+                                    :status status
+                                    :calls calls
+                                    :elapsed elapsed
+                                    :reason reason)
+                              mevedel-view--agent-transcript-info))
+                (when (buffer-live-p mevedel--data-buffer)
+                  (atomic-change-group
+                    (mevedel-view--full-rerender))))
+            (error
+             (display-warning
+              'mevedel
+              (format "Final live agent transcript update failed: %s"
+                      (error-message-string err))
+              :warning)))))
       views)))
 
 (defun mevedel-view-close-agent-transcript ()
@@ -616,7 +706,10 @@ PARENT-VIEW is the session view that opened the transcript."
       (unless (or live-p buffer-read-only)
         (read-only-mode +1)))
     (with-current-buffer agent-view
-      (mevedel-view--full-rerender))
+      (mevedel-view--full-rerender)
+      (when live-p
+        (mevedel-view--agent-transcript-start-streaming))
+      (setq buffer-read-only t))
     agent-view))
 
 (defun mevedel-view-agent-handle-activate (&optional agent-id)

@@ -24,6 +24,8 @@
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
 (require 'mevedel-permission-prompt)
+(require 'mevedel-agents)
+(require 'gptel)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-view-zone)
 
@@ -92,6 +94,33 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-view--agent-transcript-current-info
+  (:doc "keeps finalized elapsed time fixed while retaining live data")
+  ,test
+  (test)
+  (let* ((data-buffer (generate-new-buffer " *test-agent-header-data*"))
+         (inv (mevedel-agent-invocation--create
+               :agent-id "explorer--header"
+               :buffer data-buffer
+               :started-at (seconds-to-time 10)
+               :transcript-status 'completed
+               :call-count 2)))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--data-buffer data-buffer)
+          (setq-local mevedel-view--agent-transcript-info
+                      '(:live-buffer nil :status completed :elapsed 3.0))
+          (with-current-buffer data-buffer
+            (setq-local mevedel--agent-invocation inv))
+          (cl-letf (((symbol-function 'current-time)
+                     (lambda () (seconds-to-time 100))))
+            (should (= 3.0
+                       (plist-get
+                        (mevedel-view--agent-transcript-current-info)
+                        :elapsed)))))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
 (mevedel-deftest mevedel-view-agent-handle-view-kill
   (:doc "handles transcript-only view cleanup")
   ,test
@@ -149,6 +178,33 @@
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (when (buffer-live-p parent) (kill-buffer parent)))))
+
+(mevedel-deftest mevedel-view--agent-live-transcript-dispatch
+  (:doc "rolls back synchronous observer updates that fail")
+  ,test
+  (test)
+  (let ((agent-data (generate-new-buffer " *test-agent-dispatch-data*"))
+        (agent-view (generate-new-buffer " *test-agent-dispatch-view*"))
+        warned)
+    (unwind-protect
+        (progn
+          (with-current-buffer agent-view
+            (insert "last good projection")
+            (setq-local mevedel-view--agent-transcript-p t)
+            (setq-local mevedel--data-buffer agent-data))
+          (with-current-buffer agent-data
+            (cl-letf (((symbol-function 'display-warning)
+                       (lambda (&rest _) (setq warned t))))
+              (mevedel-view--agent-live-transcript-dispatch
+               (lambda ()
+                 (with-current-buffer mevedel--view-buffer
+                   (delete-region (point-min) (point-max)))
+                 (error "Observer update failed")))))
+          (should warned)
+          (with-current-buffer agent-view
+            (should (equal "last good projection" (buffer-string)))))
+      (when (buffer-live-p agent-view) (kill-buffer agent-view))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data)))))
 
 (mevedel-deftest mevedel-view-open-agent-transcript-at-point
   (:doc "opens transcript at attribution targets")
@@ -804,6 +860,89 @@
 	      (when (buffer-live-p parent-view) (kill-buffer parent-view))
 	      (when (buffer-live-p parent-data) (kill-buffer parent-data))
 	      (when (file-directory-p root) (delete-directory root t))))
+
+  :doc "open running transcript follows streamed text without redirecting parent view"
+  (let* ((agent-id "explorer--live-stream")
+         (root (file-name-as-directory
+                (make-temp-file "mevedel-transcript-live-stream" t)))
+         (parent-data (generate-new-buffer " *test-parent-data-live-stream*"))
+         (parent-view (generate-new-buffer " *test-parent-view-live-stream*"))
+         (agent-data (generate-new-buffer " *test-agent-data-live-stream*"))
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :buffer agent-data
+               :transcript-status 'running
+               :call-count 0))
+         agent-view
+         parent-before)
+    (unwind-protect
+        (let* ((workspace (mevedel-workspace--create
+                           :type 'project :id "transcript-live-stream"
+                           :root root :name "transcript-live-stream"))
+               (session (mevedel-session-create "main" workspace)))
+          (with-current-buffer agent-data
+            (org-mode)
+            (setq-local mevedel--agent-invocation inv)
+            (setq-local mevedel--view-buffer parent-view)
+            (setq-local mevedel--session session)
+            (setq-local default-directory root)
+            (insert "Observe this agent.\n")
+            (insert "\n")
+            (add-hook 'gptel-post-stream-hook
+                      #'mevedel-view-agent-live-transcript-stream nil t))
+          (with-current-buffer parent-data
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local default-directory root))
+          (mevedel-view--setup parent-view parent-data)
+          (with-current-buffer parent-view
+            (setq parent-before (buffer-string))
+            (cl-letf (((symbol-function 'display-buffer)
+                       (lambda (buf _action)
+                         (set-window-buffer (selected-window) buf)
+                         (selected-window)))
+                      ((symbol-function 'mevedel-view--agent-invocation)
+                       (lambda (_id) inv)))
+              (mevedel-view-open-agent-transcript agent-id)))
+          (setq agent-view
+                (get-buffer "*mevedel-agent:explorer--live-str*"))
+          (should (buffer-live-p agent-view))
+          (with-current-buffer agent-view
+            (should (string-search "Observe this agent" (buffer-string)))
+            (should-not (string-search "Partial response" (buffer-string)))
+            (should buffer-read-only)
+            (goto-char (point-max))
+            (should-error (insert "not allowed"))
+            (should (markerp mevedel-view--in-flight-turn-start))
+            (should (markerp mevedel-view--data-turn-start)))
+          (with-current-buffer agent-data
+            (should (memq agent-view
+                          (mevedel-view--agent-transcript-views-for-data
+                           agent-data)))
+            (goto-char (point-max))
+            (let ((start (point)))
+              (insert "Partial response complete\n")
+              (add-text-properties
+               start (point) '(gptel response front-sticky (gptel))))
+            (let ((mevedel-view-stream-render-delay 0))
+              (cl-letf (((symbol-function 'run-at-time)
+                         (lambda (_delay repeat callback &rest args)
+                           (unless repeat
+                             (apply callback args))
+                           'scheduled)))
+                (run-hooks 'gptel-post-stream-hook))))
+          (with-current-buffer agent-view
+            (should (string-search "Partial response complete"
+                                   (buffer-string))))
+          (with-current-buffer parent-view
+            (should (equal parent-before (buffer-string))))
+          (with-current-buffer agent-data
+            (should (eq mevedel--view-buffer parent-view))))
+      (when (buffer-live-p agent-view) (kill-buffer agent-view))
+      (when (buffer-live-p agent-data) (kill-buffer agent-data))
+      (when (buffer-live-p parent-view) (kill-buffer parent-view))
+      (when (buffer-live-p parent-data) (kill-buffer parent-data))
+      (when (file-directory-p root) (delete-directory root t))))
 
   :doc "running transcript view skips bounds repair for incomplete live blocks"
   (let* ((agent-id "verifier--partial-live")

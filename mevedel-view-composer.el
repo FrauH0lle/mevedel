@@ -451,8 +451,10 @@ late callback accidentally inserts transcript content below the prompt."
     result))
 
 (defun mevedel-view--call-preserving-window-state (thunk)
-  "Call THUNK while preserving `window-point' and `window-start'.
+  "Call THUNK while preserving each displayed window's browsing state.
 Preserves those values for every window displaying the current buffer.
+Windows already following the bottom continue following new output;
+windows browsing older content retain their point and start.
 
 Used to wrap delete-and-re-render operations so the user's scroll
 position and caret do not jump back to the edit site on every
@@ -470,12 +472,17 @@ above the composer does not strand point in rendered transcript text."
           (mevedel-view--pww-saved
            (mapcar (lambda (w)
                      (with-current-buffer mevedel-view--pww-current-buffer
-                       (let ((wp (window-point w)))
+                       (let ((wp (window-point w))
+                             (ws (window-start w)))
                          (list w
                                wp
-                               (window-start w)
+                               ws
                                (and (mevedel-view--position-in-input-region-p wp)
-                                    (- wp (mevedel-view--input-start)))))))
+                                    (- wp (mevedel-view--input-start)))
+                               (or (= wp (point-max))
+                                   (and (> ws (point-min))
+                                        (>= (window-end w t)
+                                            (point-max))))))))
                    (get-buffer-window-list (current-buffer) nil t))))
      (prog1 (funcall thunk)
        (let ((restored-current-point
@@ -487,7 +494,7 @@ above the composer does not strand point in rendered transcript text."
                 mevedel-view--pww-current-point)))
          (goto-char (min (point-max) restored-current-point)))
        (dolist (entry mevedel-view--pww-saved)
-         (pcase-let ((`(,w ,wp ,ws ,input-offset) entry))
+         (pcase-let ((`(,w ,wp ,ws ,input-offset ,at-bottom) entry))
            (when (window-live-p w)
              (let ((restored-point
                     (if (and input-offset
@@ -501,7 +508,12 @@ above the composer does not strand point in rendered transcript text."
                (when (eq w mevedel-view--pww-selected-window)
                  (goto-char (window-point w))))
              (when (and ws (<= ws (point-max)))
-               (set-window-start w ws t))))))))
+               (set-window-start w ws t))
+             (when (and at-bottom (not input-offset))
+               (save-selected-window
+                 (select-window w)
+                 (goto-char (point-max))
+                 (recenter -1)))))))))
 
 (defmacro mevedel-view--preserving-window-state (&rest body)
   "Execute BODY while preserving point and window positions."

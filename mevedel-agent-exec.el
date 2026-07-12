@@ -213,6 +213,12 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-finalize
                   "mevedel-view-agent" (invocation))
+(declare-function mevedel-view-agent-live-transcript-post-tool
+                  "mevedel-view-agent" (args))
+(declare-function mevedel-view-agent-live-transcript-pre-tool
+                  "mevedel-view-agent" (args))
+(declare-function mevedel-view-agent-live-transcript-stream
+                  "mevedel-view-agent" ())
 (declare-function mevedel-view-refresh-agent-rendering
                   "mevedel-view-agent" (view-buffer agent-id))
 
@@ -378,6 +384,12 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
       (add-hook 'gptel-post-response-functions
                 #'mevedel-tool-repair-clear-ledger nil t)
       (add-hook 'kill-buffer-hook #'mevedel-tool-repair-clear-ledger nil t)
+      (add-hook 'gptel-post-stream-hook
+                #'mevedel-view-agent-live-transcript-stream nil t)
+      (add-hook 'gptel-pre-tool-call-functions
+                #'mevedel-view-agent-live-transcript-pre-tool nil t)
+      (add-hook 'gptel-post-tool-call-functions
+                #'mevedel-view-agent-live-transcript-post-tool nil t)
       ;; bump the invocation's call-count on each
       ;; tool dispatch so the parent's running-handle badge reads
       ;; [running * N calls] rather than the zero-suppressed

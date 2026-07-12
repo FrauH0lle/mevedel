@@ -20,8 +20,67 @@ transcript.
 - **View buffer**: `mevedel-view-mode`. Holds `mevedel--data-buffer`,
   compact Markdown-rendered turns, status and interaction zones, and the
   input zone.
-- **Agent transcript view**: rendered read-only projection of a saved
-  sub-agent transcript file. It is opened on demand for terminal agents.
+- **Agent transcript view**: rendered read-only projection of a sub-agent
+  transcript. Running agents use the live agent buffer; terminal agents use
+  the saved transcript file.
+
+An open running-agent transcript view follows the main view's update cadence:
+streamed text uses `mevedel-view-stream-render-delay`, tool boundaries use
+`mevedel-view-tool-boundary-render-delay`, and terminal settlement renders
+immediately. It shows the same transient pending-tool rows as the main view,
+but not the main foreground-request spinner; the transcript header already
+shows that the agent is running. Live updates keep the window at the bottom
+only when it was already there. If the reader has scrolled upward, rendering
+preserves point and window start until they return to the bottom.
+
+Agent transcript views reuse the main view's transcript renderer, incremental
+rendering, and stream scheduling. The agent-specific layer only fans live
+agent events out to open transcript views and applies their read-only chrome;
+it does not maintain a parallel rendering implementation. The live agent data
+buffer keeps its existing parent-view binding, so opening an inspection view
+does not redirect parent status and interaction UI.
+
+Agent transcript views are observation-only. Permission, Ask, RequestAccess,
+plan, and other actionable interactions remain exclusively in the parent
+view. A transcript header may report that an agent is blocked, but the
+transcript view never duplicates interaction controls or owns their callbacks.
+
+Each parent view owns at most one agent transcript side window. Opening a
+different agent transcript replaces the current inspection view; live refresh
+does not add multi-view window management.
+
+If the observed agent settles while its transcript view is open, the view
+renders the final content immediately and updates its header in place. It
+keeps the live data buffer until the user closes the view rather than swapping
+source buffers mid-display. Reopening after closure reads the saved transcript.
+
+The live transcript header updates on the same stream and tool events as the
+body. It reflects running or blocked state, tool-call count, and elapsed time.
+Elapsed time has no independent ticking timer; it advances when another live
+event refreshes the view. Terminal status updates immediately.
+
+Live transcript rendering is an observer side effect and cannot alter agent
+execution or the parent view. If a refresh fails, the last good projection
+remains visible, mevedel emits a warning, and a later event or terminal
+settlement may retry.
+
+Opening a transcript performs the existing full render. Subsequent live
+events use the main incremental renderer. Missing or stale source anchors fall
+back to the existing full-rerender correctness path rather than introducing a
+second recovery strategy.
+
+Opening a view while a tool is already in flight does not reconstruct a
+transient pending-tool row from activity history. The full render shows the
+authoritative live transcript as it stands; subsequent tool events populate
+pending rows normally, and terminal settlement renders the final state.
+
+Live updates preserve the main view's source-backed disclosure state. An
+incremental update or full-rerender fallback must not collapse response,
+reasoning, tool, or audit sections that the reader expanded.
+
+Agent transcript views open only through explicit user action on an agent
+handle or status surface. Agent start, progress, and blocked events never
+create or focus an inspection window automatically.
 
 The view is reconstructable from the data buffer. Avoid storing durable
 conversation state only in view overlays or text properties.
