@@ -740,26 +740,27 @@
                                        :args nil
                                        :result "visible"
                                        :default-directory default-directory))
-                        result)
-                   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                              (lambda (_event _payload callback &rest _)
-                                (funcall callback
-                                         '(:additional-context
-                                           ("hook note")
-                                           :system-message "because")))))
+                        result
+                        (mevedel-post-tool-use-functions
+                         (list (lambda (_event)
+                                 '(:additional-context ("hook note")
+                                   :system-message "because")))))
                      (mevedel-pipeline--step-post-tool-hooks
                       context
                       (lambda (ctx) (setq result (plist-get ctx :result)))
-                      #'ignore))
+                      #'ignore)
                    (should (string-match-p
                             "<hook-event name=\"PostToolUse\">"
                             result))
                    (let ((record (car (test-mevedel-pipeline--hook-audit-records
-                                       result))))
+                                       result)))
+                         handler)
                      (should (eq (plist-get record :type) 'tool-context))
                      (should (equal (plist-get record :event) "PostToolUse"))
-                     (should (equal (plist-get record :context) "hook note"))
-                     (should (equal (plist-get record :reason) "because"))))
+                     (setq handler (car (plist-get record :handlers)))
+                     (should (equal (plist-get handler :contexts)
+                                    '("hook note")))
+                     (should (equal (plist-get handler :reason) "because"))))
 			 :doc "updated hook result clears stale media before later attachment"
 		 (let* ((tool (mevedel-tool--create :name "Read"))
 			(media '((:path "/tmp/a.png"

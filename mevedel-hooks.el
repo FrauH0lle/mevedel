@@ -179,6 +179,10 @@ plist.")
 Each function receives one event plist and may return a hook decision
 plist.")
 
+(defvar mevedel-hooks--context-handler-table
+  (make-hash-table :test #'eq :weakness 'key)
+  "Internal handler attribution keyed by final hook decisions.")
+
 
 ;;
 ;;; Constants
@@ -1134,12 +1138,15 @@ EVENT labels each generated hook event block."
       (setf (mevedel-session-hook-log session) log))
     (mevedel-hooks--persist-log-entry session entry)))
 
-(defun mevedel-hooks--log-entry (event handler status &rest props)
-  "Build a hook log entry for EVENT, HANDLER, STATUS, and PROPS."
+(defun mevedel-hooks--log-entry (event event-plist handler status &rest props)
+  "Build a log entry for EVENT, EVENT-PLIST, HANDLER, STATUS, and PROPS."
   (append (list :event event
                 :handler handler
                 :status status
                 :time (format-time-string "%FT%T%z"))
+          (when (and (eq event 'SessionStart)
+                     (plist-get event-plist :source))
+            (list :event-source (plist-get event-plist :source)))
           props))
 
 (defun mevedel-hooks--surface (_session text &optional spinner-text)
@@ -1170,22 +1177,45 @@ EVENT labels each generated hook event block."
         (plist-get decision :permission-reason)
         (plist-get decision :system-message))))
 
+(defun mevedel-hooks--context-contribution (handler decision)
+  "Return HANDLER attribution for DECISION's added context."
+  (when-let* ((decision (mevedel-hooks--normalize-decision decision))
+              (contexts (plist-get decision :additional-context)))
+    (let ((contribution (list :contexts contexts)))
+      (dolist (key '(:source :plugin-name :description :function :command))
+        (when (plist-member handler key)
+          (setq contribution
+                (plist-put contribution key (plist-get handler key)))))
+      (when-let* ((reason (mevedel-hooks-decision-reason decision)))
+        (setq contribution (plist-put contribution :reason reason)))
+      contribution)))
+
 (defun mevedel-hooks-context-audit-records
     (decision event type &optional omit-context)
   "Return hook audit records for DECISION context at EVENT.
 TYPE is stored as the audit record type.  When OMIT-CONTEXT is non-nil,
 record only that context was added, without duplicating the body."
-  (let ((reason (mevedel-hooks-decision-reason decision)))
-    (mapcar
-     (lambda (entry)
-       (append
-        (list :type type
-              :event (plist-get entry :event))
-        (unless omit-context
-          (list :context (plist-get entry :body)))
-        (when reason
-          (list :reason reason))))
-     (mevedel-hooks-context-entries decision event))))
+  (when-let* ((handlers (gethash decision
+                                 mevedel-hooks--context-handler-table)))
+      (list
+       (list :type type
+             :event (mevedel-hooks--event-display-name event)
+             :handlers
+             (mapcar
+              (lambda (contribution)
+                (let (handler)
+                  (dolist (key '(:source :plugin-name :description :function
+                                :command :reason))
+                    (when (plist-member contribution key)
+                      (setq handler
+                            (plist-put handler key
+                                       (plist-get contribution key)))))
+                  (unless omit-context
+                    (setq handler
+                          (plist-put handler :contexts
+                                     (plist-get contribution :contexts))))
+                  handler))
+              handlers)))))
 
 (defun mevedel-hooks--surface-final-decision (event session decision)
   "Surface user-visible fields from hook DECISION for EVENT and SESSION."
@@ -1429,7 +1459,7 @@ record only that context was added, without duplicating the body."
                (mevedel-hooks--log
                 session
                 (mevedel-hooks--log-entry
-                 event handler log-status
+                 event event-plist handler log-status
                  :elapsed elapsed
                  :exit-status status
                  :stdout-preview (substring stdout 0 (min 1000 (length stdout)))
@@ -1513,49 +1543,63 @@ stable public event payload."
                     (mevedel-hooks--log
                      session
                      (mevedel-hooks--log-entry
-                      event handler 'error :error reason))
+                      event event-plist handler 'error :error reason))
                     (mevedel-hooks--failure-decision handler reason))
                 (mevedel-hooks--log
                  session
                  (mevedel-hooks--log-entry
-                  event handler 'ok :decision decision))
+                  event event-plist handler 'ok :decision decision))
                 decision))
           (let ((reason (format "Unknown hook function: %S" fn)))
             (mevedel-hooks--log
              session
              (mevedel-hooks--log-entry
-              event handler 'error :error reason))
+              event event-plist handler 'error :error reason))
             (mevedel-hooks--failure-decision handler reason)))
       (error
        (let ((reason (error-message-string err)))
          (mevedel-hooks--log
           session
-          (mevedel-hooks--log-entry event handler 'error :error reason))
+          (mevedel-hooks--log-entry
+           event event-plist handler 'error :error reason))
          (mevedel-hooks--failure-decision handler reason))))))
 
 (defun mevedel-hooks--run-handlers
-    (event handlers event-plist session decision callback &optional dispatch-buffer)
+    (event handlers event-plist session decision callback
+           &optional dispatch-buffer context-handlers)
   "Run HANDLERS for EVENT serially, then call CALLBACK."
   (if (and dispatch-buffer
            (buffer-live-p dispatch-buffer)
            (not (eq (current-buffer) dispatch-buffer)))
       (with-current-buffer dispatch-buffer
         (mevedel-hooks--run-handlers
-         event handlers event-plist session decision callback dispatch-buffer))
+         event handlers event-plist session decision callback dispatch-buffer
+         context-handlers))
     (if (or (null handlers)
             (mevedel-hooks-terminal-decision-p decision event))
-        (funcall callback decision)
+        (progn
+          (when (and decision context-handlers)
+            (puthash decision context-handlers
+                     mevedel-hooks--context-handler-table))
+          (funcall callback decision))
       (let ((handler (car handlers)))
         (cl-labels
             ((advance (handler-decision)
-               (let* ((next (mevedel-hooks-merge-decisions
+               (let* ((contribution
+                       (mevedel-hooks--context-contribution
+                        handler handler-decision))
+                      (next (mevedel-hooks-merge-decisions
                              decision handler-decision))
+                      (next-context-handlers
+                       (if contribution
+                           (append context-handlers (list contribution))
+                         context-handlers))
                       (next-plist
                        (mevedel-hooks--apply-decision-to-event-plist
                         event event-plist next)))
                  (mevedel-hooks--run-handlers
                   event (cdr handlers) next-plist session next callback
-                  dispatch-buffer))))
+                  dispatch-buffer next-context-handlers))))
           (pcase (plist-get handler :type)
             ('elisp
              (advance

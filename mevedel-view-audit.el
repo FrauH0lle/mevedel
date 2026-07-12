@@ -84,6 +84,51 @@ PRIMARY records usually have source metadata and are preferred."
           (print-circle t))
       (prin1-to-string value))))
 
+(defun mevedel-view--format-hook-context-audit (record expanded)
+  "Return grouped context audit RECORD text.
+When EXPANDED is non-nil, include ordered handler details."
+  (let ((handlers (plist-get record :handlers))
+        (index 0))
+    (concat
+     (format "  ◇ %s hook added context · %d handler%s\n"
+             (or (plist-get record :event) "Hook")
+             (length handlers)
+             (if (= 1 (length handlers)) "" "s"))
+     (when expanded
+       (mapconcat
+        (lambda (handler)
+          (setq index (1+ index))
+          (concat
+           (format
+            "    %d. %s\n" index
+            (pcase (plist-get handler :source)
+              ('plugin (if-let* ((name (plist-get handler :plugin-name)))
+                           (format "%s plugin" name)
+                         "plugin hook"))
+              ('project-file "project hook")
+              ('user-file "user hook")
+              ('native "native hook")
+              (_ "configured hook")))
+           "       Handler: "
+           (mevedel-view--hook-audit-value-text
+            (or (plist-get handler :description)
+                (plist-get handler :function)
+                (plist-get handler :command)
+                "unknown"))
+           "\n"
+           (when-let* ((reason (plist-get handler :reason)))
+             (concat "       Reason: " reason "\n"))
+           (when-let* ((contexts (plist-get handler :contexts)))
+             (concat
+              "       Context:\n"
+              (mapconcat
+               (lambda (context)
+                 (mapconcat (lambda (line) (concat "         " line))
+                            (split-string (format "%s" context) "\n") "\n"))
+               contexts "\n\n")
+              "\n"))))
+        handlers "\n")))))
+
 (defun mevedel-view--prompt-rewrite-audit-record
     (event original submitted decision)
   "Return a prompt rewrite audit record, or nil if nothing changed."
@@ -169,17 +214,7 @@ When EXPANDED is non-nil, include record details."
          (when-let* ((reason (plist-get record :reason)))
            (concat "    Reason: " reason "\n"))))))
     ('tool-context
-     (concat
-      "  \u25c7 hook added tool context\n"
-      (when expanded
-        (concat
-         "    Event: " (or (plist-get record :event) "PostToolUse") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))
-         "    Context:\n"
-         (mevedel-view--indent-hook-audit-text
-         (plist-get record :context))
-         "\n"))))
+     (mevedel-view--format-hook-context-audit record expanded))
     ('tool-input-rewrite
      (concat
       "  \u25c7 hook changed tool input\n"
@@ -199,25 +234,9 @@ When EXPANDED is non-nil, include record details."
            (plist-get record :updated-input)))
          "\n"))))
     ('subagent-context
-     (concat
-      "  \u25c7 hook added sub-agent context\n"
-      (when expanded
-        (concat
-         "    Event: " (or (plist-get record :event) "SubagentStart") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))))))
+     (mevedel-view--format-hook-context-audit record expanded))
     ('compact-context
-     (concat
-      "  \u25c7 hook added compaction context\n"
-      (when expanded
-        (concat
-         "    Event: " (or (plist-get record :event) "PreCompact") "\n"
-         (when-let* ((reason (plist-get record :reason)))
-           (concat "    Reason: " reason "\n"))
-         "    Context:\n"
-         (mevedel-view--indent-hook-audit-text
-          (plist-get record :context))
-         "\n"))))
+     (mevedel-view--format-hook-context-audit record expanded))
     ('tool-result-rewrite
      (concat
       "  \u25c7 hook changed tool result\n"
