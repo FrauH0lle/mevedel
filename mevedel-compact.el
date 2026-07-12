@@ -2,10 +2,9 @@
 
 ;;; Commentary:
 
-;; Summarizes older portions of a chat session to reduce token usage.  Persisted
-;; sessions rotate to a new on-disk segment whose first block is an anchored
-;; compaction summary followed by a preserved recent tail.  Non-persisted manual
-;; compaction uses an in-buffer ignored-summary block.
+;; Summarizes older portions of a chat session to reduce token usage.  Compaction
+;; rotates to a new on-disk segment whose first block is an anchored summary
+;; followed by a preserved recent tail.
 
 ;;; Code:
 
@@ -85,7 +84,6 @@
                   "mevedel-session-persistence" (session buffer summary
                                                          &rest keys))
 (defvar mevedel-session--read-only-mode)
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-structs'
 (declare-function mevedel-file-interaction-modified-turn
@@ -953,18 +951,13 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
             (mevedel-session-save-path mevedel--session)
             (mevedel-session-current-segment mevedel--session)))))))
 
-(defun mevedel--compact-can-rotate-p ()
-  "Return non-nil when compaction may rotate the persisted segment."
-  (and (bound-and-true-p mevedel-session-persistence)
-       (mevedel--compact-current-persisted-p)))
-
 (defun mevedel--compact-auto-eligible-p ()
   "Return non-nil when automatic compaction may run in this buffer."
   (and mevedel-compact-auto
        (not mevedel--compact-auto-disabled)
        (not mevedel--compaction-in-flight)
        (not (bound-and-true-p mevedel-session--read-only-mode))
-       (mevedel--compact-can-rotate-p)))
+       (mevedel--compact-current-persisted-p)))
 
 (defun mevedel--compact-auto-ineligible-reason ()
   "Return a short reason automatic compaction cannot run, or nil."
@@ -973,7 +966,6 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
    (mevedel--compact-auto-disabled "auto-compaction is disabled after repeated failures")
    (mevedel--compaction-in-flight "compaction is already in progress")
    ((bound-and-true-p mevedel-session--read-only-mode) "session is read-only")
-   ((not (bound-and-true-p mevedel-session-persistence)) "session persistence is disabled")
    ((not (and (boundp 'mevedel--session)
               mevedel--session
               (mevedel-session-save-path mevedel--session)))
@@ -1001,71 +993,19 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
      (t nil))))
 
 (defun mevedel--compact-apply
-    (boundary summary &optional tail-text pending-text hook-audits)
-  "Apply compaction to the current buffer.
-
-Implements **split-on-compact**: when the session is materialized
-on disk, we finalize the current segment file and start a new one
-whose content is SUMMARY followed by TAIL-TEXT and PENDING-TEXT.
-Uses the in-place approach when the session has no
-`save-path' (persistence disabled).
-
-BOUNDARY is unused in the segment-rotation path; it is preserved
-for in-place compaction.  HOOK-AUDITS are persisted as ignored
-side-channel records next to the summary."
+    (summary &optional tail-text pending-text hook-audits)
+  "Rotate the current segment with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
+HOOK-AUDITS are persisted as ignored side-channel records next to the
+summary."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
-    (cond
-     ;; Split-on-compact path: rotate to a new segment file.
-     ((and session
-           (mevedel--compact-can-rotate-p))
-      (remove-text-properties 0 (length summary)
-                              '(gptel nil face nil) summary)
-      (setq summary
-            (mevedel--compact-append-hook-audits summary hook-audits))
-      (mevedel-session-persistence-rotate-segment
-       session (current-buffer) summary
-       :tail-text tail-text
-       :pending-text pending-text))
-     ;; In-place path: ignore marking without on-disk persistence.
-     (t
-      (mevedel--compact-apply-in-place boundary summary hook-audits)))))
-
-(defun mevedel--compact-apply-in-place (boundary summary &optional hook-audits)
-  "Mark content before BOUNDARY as ignored for in-place compaction.
-
-Used when no on-disk session exists (`mevedel-session-persistence' is
-nil or the session has not yet been materialized).  Inserts SUMMARY at
-BOUNDARY wrapped in a folded summary block."
-  (let ((inhibit-read-only t))
-    (put-text-property (point-min) boundary 'gptel 'ignore)
-    (put-text-property (point-min) boundary 'face 'shadow)
-    (save-excursion
-      (goto-char boundary)
-      (let ((sep (format "\n\n--- Conversation compacted at %s ---\n\n"
-                         (format-time-string "%Y-%m-%d %H:%M"))))
-        (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
-        (setq summary
-              (mevedel--compact-append-hook-audits summary hook-audits))
-        (insert
-         (propertize sep 'gptel 'ignore)
-         (if (derived-mode-p 'org-mode)
-             (propertize "#+begin_summary\n" 'gptel 'ignore)
-           (propertize "``` summary\n" 'gptel 'ignore
-                       'keymap gptel--markdown-block-map))
-         summary
-         (if (derived-mode-p 'org-mode)
-             (concat "\n" (propertize "#+end_summary\n" 'gptel 'ignore))
-           (concat "\n" (propertize "```\n" 'gptel 'ignore
-                                    'keymap gptel--markdown-block-map))))
-        (ignore-errors
-          (if (derived-mode-p 'org-mode)
-              (save-excursion
-                (search-backward "#+begin_summary" boundary t)
-                (when (looking-at "^#+begin_summary")
-                  (org-cycle)))
-            (save-excursion
-              (when (re-search-backward "^```" boundary t)
-                (gptel-markdown-cycle-block)))))))))
+    (unless (and session (mevedel--compact-current-persisted-p))
+      (user-error "Session is not materialized on disk"))
+    (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
+    (setq summary (mevedel--compact-append-hook-audits summary hook-audits))
+    (mevedel-session-persistence-rotate-segment
+     session (current-buffer) summary
+     :tail-text tail-text
+     :pending-text pending-text)))
 
 (defun mevedel--compact-preserved-tail-turn-count (tail-start limit aggressive)
   "Return the number of complete user-authored requests in retained tail.
@@ -1165,6 +1105,8 @@ auto-compaction call."
       (when (and (not pending-start)
                  (mevedel--compact-buffer-active-p chat-buffer))
         (user-error "Cannot compact while a request is active"))
+      (unless (mevedel--compact-current-persisted-p)
+        (user-error "Current buffer is not the active persisted segment"))
       (let* ((limit (or pending-start (mevedel--compact-find-boundary))))
         (unless limit
           (if auto
@@ -1189,7 +1131,6 @@ auto-compaction call."
                (pending-text (when pending-start
                                (buffer-substring pending-start (point-max))))
                (previous-summary (mevedel--compact-previous-summary))
-               (boundary-marker (copy-marker compact-end))
                (system-prompt
                 (mevedel--compact-prompt previous-summary
                                          instructions
@@ -1242,8 +1183,7 @@ auto-compaction call."
                              (condition-case apply-err
                                  (progn
                                    (mevedel--compact-apply
-                                    boundary-marker summary
-                                    tail-text pending-text
+                                    summary tail-text pending-text
                                     pre-compact-hook-audits)
                                    (let ((reminder
                                           (mevedel--compact-file-reference-reminder-body
@@ -1255,7 +1195,6 @@ auto-compaction call."
                                       (reminder
                                        (mevedel-session-enqueue-pending-reminder
                                         session reminder))))
-                                   (set-marker boundary-marker nil)
                                    (setq mevedel--known-token-baseline nil)
                                    (setq mevedel--compact-failure-count 0)
                                    (when-let* ((vb mevedel--view-buffer)

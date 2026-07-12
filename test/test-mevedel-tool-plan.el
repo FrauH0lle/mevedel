@@ -23,7 +23,6 @@
                byte-compile-current-file))
           "helpers"))
 
-(defvar mevedel-plans-directory)
 
 (defun test-mevedel-tool-plan--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
@@ -204,11 +203,9 @@
             (mevedel-plan-mode--current-plan-body session))))
       (delete-directory save-dir t)))
 
-  :doc "uses workspace plans directory when session persistence is disabled"
+  :doc "materializes the session before writing its plan"
   (let ((root (make-temp-file "mevedel-plan-workspace-" t))
-        (rendered nil)
-        (mevedel-session-persistence nil)
-        (mevedel-plans-directory (file-name-concat ".mevedel" "plans")))
+        (rendered nil))
     (unwind-protect
         (let* ((workspace (mevedel-workspace--create
                            :type 'project
@@ -231,11 +228,12 @@
             (mevedel-plan-mode-present "# Workspace plan\n\nDo it."))
           (let* ((metadata (mevedel-session-plan-metadata session))
                  (path (plist-get metadata :absolute-path)))
-            (should (null (mevedel-session-save-path session)))
+            (should (mevedel-session-save-path session))
             (should (equal '("# Workspace plan\n\nDo it.") rendered))
             (should (file-exists-p path))
-            (should (string-prefix-p
-                     (file-name-concat root ".mevedel" "plans")
+            (should (equal
+                     (file-name-concat (mevedel-session-save-path session)
+                                       "plans" "current.md")
                      path))
             (should (equal "# Workspace plan\n\nDo it."
                            (mevedel-plan-mode--current-plan-body session)))

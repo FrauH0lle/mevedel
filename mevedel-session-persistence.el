@@ -183,17 +183,8 @@
   "Directory where session persistence files live.
 
 Relative paths resolve against the workspace root at save time;
-absolute paths are used as-is.  Mirrors `mevedel-plans-directory'."
+absolute paths are used as-is."
   :type 'directory
-  :group 'mevedel)
-
-(defcustom mevedel-session-persistence t
-  "Master switch for session auto-save and lazy materialization.
-
-When non-nil (default), sessions auto-save on every completed turn
-and lazily materialize on first content.  When nil, no on-disk
-artifacts appear; explicit `mevedel-save-session' still works."
-  :type 'boolean
   :group 'mevedel)
 
 (defcustom mevedel-file-history-max-snapshots 100
@@ -673,10 +664,8 @@ write the sidecar later, picking up any
 sub-agent transcript entries that accumulated in the in-memory
 slot.
 
-Returns SESSION's `save-path' on success, nil on failure or when
-persistence is disabled.  Idempotent."
-  (when mevedel-session-persistence
-    (or (mevedel-session-save-path session)
+Returns SESSION's `save-path' on success, or nil on failure.  Idempotent."
+  (or (mevedel-session-save-path session)
       (condition-case err
           (let* ((sessions-dir (mevedel-session-persistence--sessions-dir
                                 (mevedel-session-workspace session)))
@@ -708,7 +697,7 @@ persistence is disabled.  Idempotent."
             save-path)
         (error
          (message "mevedel: shallow session materialization failed: %S" err)
-         nil)))))
+         nil))))
 
 (defun mevedel-session-persistence--record-running-transcript
     (session entry)
@@ -1035,10 +1024,8 @@ in one place avoids double-writing the sidecar on first save.
 
 Idempotent -- if SESSION already has a `save-path', repairs BUFFER's
 variable `buffer-file-name' so it visits the current segment before any save.
-Returns SESSION's `save-path' (allocated or existing) on success, nil
-when persistence is disabled."
-  (when mevedel-session-persistence
-    (let* ((existing-save-path (mevedel-session-save-path session))
+Returns SESSION's `save-path' (allocated or existing)."
+  (let* ((existing-save-path (mevedel-session-save-path session))
            (save-path
             (or existing-save-path
                 (let* ((sessions-dir
@@ -1083,7 +1070,7 @@ when persistence is disabled."
         (unless (file-exists-p segment-path)
           (set-buffer-modified-p t)
           (save-buffer)))
-      save-path)))
+      save-path))
 
 
 ;;
@@ -1426,12 +1413,9 @@ restore `instructions/current.el'.  Missing snapshots are ignored."
 Materializes lazily on first call.  Subsequent calls update the
 `updated-at' timestamp, save the data buffer, snapshot any tool-modified
 files for this turn, evict old snapshots over the cap, and rewrite the
-sidecar.
-
-No-op when `mevedel-session-persistence' is nil."
-  (when-let ((buffer (and mevedel-session-persistence
-                         (mevedel-session-persistence--authoritative-buffer
-                          buffer))))
+sidecar."
+  (when-let ((buffer (mevedel-session-persistence--authoritative-buffer
+                      buffer)))
     (let ((had-save-path (mevedel-session-save-path session))
           (rerender-needed nil))
       (when (mevedel-session-persistence-ensure-files session buffer)
@@ -4083,16 +4067,14 @@ the throttle has already fired."
   "Save modified mevedel sessions and release their locks on Emacs exit.
 
 Runs unconditionally so that locks don't outlive the Emacs process
-that wrote them; session auto-save is gated on
-`mevedel-session-persistence'.  Best-effort: individual errors are
-swallowed so one bad buffer can't block exit."
+that wrote them.  Best-effort: individual errors are swallowed so one
+bad buffer can't block exit."
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf
         (when (and (boundp 'mevedel--session)
                    mevedel--session)
-          (when (and mevedel-session-persistence
-                     (buffer-modified-p))
+          (when (buffer-modified-p)
             (condition-case _
                 (mevedel-session-persistence-save mevedel--session buf)
               (error nil)))

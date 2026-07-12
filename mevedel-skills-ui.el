@@ -76,7 +76,6 @@
 (declare-function mevedel-session-persistence-start-fresh-segment
                   "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session--read-only-mode)
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--clear-pending-inline-attachments
@@ -275,8 +274,7 @@ Routes through the lifecycle-aware permission transition path."
     (cond
      ((bound-and-true-p mevedel-session--read-only-mode)
       (user-error "Session is read-only"))
-     ((and (bound-and-true-p mevedel-session-persistence)
-           (bound-and-true-p mevedel--session)
+     ((and (bound-and-true-p mevedel--session)
            (mevedel-session-save-path mevedel--session)
            buffer-file-name)
       (require 'mevedel-session-persistence)
@@ -641,7 +639,6 @@ the deleted command followed the prompt prefix."
 DELETE-START and REGION-END bound the command text.  AFTER-PREFIX means
 the deleted command followed the prompt prefix."
   (when (and buffer-file-name
-             (bound-and-true-p mevedel-session-persistence)
              (bound-and-true-p mevedel--session)
              (mevedel-session-save-path mevedel--session))
     (require 'mevedel-session-persistence)

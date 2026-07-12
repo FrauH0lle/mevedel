@@ -384,8 +384,8 @@ completion, prompt submission, and integration with that history ring:
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed
 sessions in the same project share prompt recall. Read-only or
-non-persistent sessions keep history in memory only. Rewind keeps the
-current buffer-local ring.
+rewound sessions keep history in memory only. Rewind keeps the current
+buffer-local ring.
 
 The input zone installs slash command completion, `$` skill completion,
 and display-only skill argument hints. Root slash completion offers local

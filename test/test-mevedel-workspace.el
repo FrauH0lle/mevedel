@@ -10,7 +10,6 @@
 
 ;; Defined in mevedel-chat.el; declared here so dynamic binding works
 ;; without pulling in the full chat module at test time.
-(defvar mevedel-plans-directory)
 
 (require 'helpers
          (file-name-concat
@@ -169,12 +168,11 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "includes default roots, memory dirs, and plans directory"
+  :doc "includes default roots and memory directories"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/rootsproj/" "/tmp/rootsproj/" "rootsproj"))
          (mevedel-workspace-additional-roots nil)
-         (mevedel-memory-dirs '(".mevedel/memory/" ".agents/memory/"))
-         (mevedel-plans-directory "/tmp/plans/"))
+         (mevedel-memory-dirs '(".mevedel/memory/" ".agents/memory/")))
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
       (let ((roots (mevedel--all-allowed-roots))
@@ -184,8 +182,6 @@
         (should (member (file-name-concat root ".agents/memory/") roots))
         (should (member (file-name-as-directory
                          (expand-file-name temporary-file-directory))
-                        roots))
-        (should (member (file-name-as-directory (expand-file-name "/tmp/plans/"))
                         roots)))))
 
   :doc "includes additional roots configured for workspace"
@@ -194,8 +190,7 @@
          (mevedel-workspace-additional-roots
           (list
            (cons (file-name-as-directory (expand-file-name "/tmp/rootsproj/"))
-                 (list "/tmp/extra-a/" "/tmp/extra-b/"))))
-         (mevedel-plans-directory "/tmp/plans/"))
+                 (list "/tmp/extra-a/" "/tmp/extra-b/")))))
     (with-temp-buffer
       (setq-local mevedel--workspace ws)
       (let ((roots (mevedel--all-allowed-roots)))
@@ -224,7 +219,6 @@
   (let* ((ws (mevedel-workspace-get-or-create
               'project root-dir root-dir "rootsproj"))
          (mevedel-workspace-additional-roots nil)
-         (mevedel-plans-directory "/tmp/plans/")
          (file (file-name-concat root-dir "inside.txt")))
     (write-region "" nil file)
     (with-temp-buffer
@@ -237,7 +231,6 @@
               'project root-dir root-dir "rootsproj"))
          (mevedel-workspace-additional-roots
           (list (cons root-dir (list extra-dir))))
-         (mevedel-plans-directory "/tmp/plans/")
          (file (file-name-concat extra-dir "extra.txt")))
     (write-region "" nil file)
     (with-temp-buffer
@@ -258,7 +251,6 @@
          (ws (mevedel-workspace-get-or-create
               'project root root "rootsproj"))
          (mevedel-workspace-additional-roots nil)
-         (mevedel-plans-directory "/var/tmp/mevedel-plans/")
          (temporary-file-directory (file-name-concat parent-dir "tmp/"))
          (file (file-name-concat outside "outside.txt")))
     (unwind-protect

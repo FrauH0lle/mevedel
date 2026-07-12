@@ -402,8 +402,7 @@
                               (1- (point))
                               'mevedel-view-zone-id)))))))
   :doc "rebuilds status and permission zones in order after full rerender"
-  (let ((mevedel-session-persistence nil))
-    (mevedel-view-test--with-buffers
+  (mevedel-view-test--with-buffers
       (let* ((ws (mevedel-workspace--create
                   :type 'project
                   :id "/tmp/view-zones/"
@@ -464,7 +463,7 @@
             (should (< agent-pos permission-pos))
             (should (= 1 (how-many "Permission Request"
                                    (point-min)
-                                   mevedel-view--input-marker))))))))
+                                   mevedel-view--input-marker)))))))
   :doc "does not restore task block after full rerender when all tasks are completed"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create

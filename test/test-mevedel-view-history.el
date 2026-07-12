@@ -54,8 +54,7 @@
   "Run BODY with a minimal data/view buffer pair.
 Binds `data-buf' and `view-buf'."
   (declare (indent 0) (debug t))
-  `(let ((mevedel-session-persistence nil)
-         (data-buf (generate-new-buffer " *test-data*"))
+  `(let ((data-buf (generate-new-buffer " *test-data*"))
          (view-buf (generate-new-buffer " *test-view*")))
      (unwind-protect
          (progn
@@ -238,8 +237,7 @@ Binds `data-buf' and `view-buf'."
       (let ((session (mevedel-view-history-test--session
                       workspace-dir session-dir))
             (path (mevedel-view-history-test--path workspace-dir))
-            (session-path (file-name-concat session-dir "input-history.el"))
-            (mevedel-session-persistence t))
+            (session-path (file-name-concat session-dir "input-history.el")))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-add "first")
@@ -293,7 +291,6 @@ Binds `data-buf' and `view-buf'."
                (two-entry (or (plist-get case :two)
                               "from session two"))
                (expected (plist-get case :expected))
-               (mevedel-session-persistence t)
                (mevedel-view-input-history-size 5)
                (buf-one (generate-new-buffer " *history-one*"))
                (buf-two (generate-new-buffer " *history-two*")))
@@ -330,8 +327,7 @@ Binds `data-buf' and `view-buf'."
   (:doc "renames corrupt workspace input-history.el to .bad and starts empty")
   (mevedel-view-history-test--with-temp-dir dir
     (let* ((path (mevedel-view-history-test--path dir))
-           (session (mevedel-view-history-test--session dir))
-           (mevedel-session-persistence t))
+           (session (mevedel-view-history-test--session dir)))
       (make-directory (file-name-directory path) t)
       (with-temp-file path
         (insert "not a plist"))
@@ -341,25 +337,12 @@ Binds `data-buf' and `view-buf'."
         (should (equal nil (mevedel-view-history--entries))))
       (should (file-exists-p (concat path ".bad"))))))
 
-(mevedel-deftest mevedel-view-history--persistence-disabled
-  (:doc "does not write input-history.el when persistence is disabled")
-  (mevedel-view-history-test--with-temp-dir dir
-    (let ((session (mevedel-view-history-test--session dir))
-          (mevedel-session-persistence nil))
-      (with-temp-buffer
-        (setq-local mevedel--session session)
-        (mevedel-view-history-add "first")
-        (mevedel-view-history-save (current-buffer)))
-      (should-not (file-exists-p
-                   (mevedel-view-history-test--path dir))))))
-
 (mevedel-deftest mevedel-view-history--no-workspace
   (:doc "keeps history in memory only when no workspace is available")
   (mevedel-view-history-test--with-temp-dir dir
     (let ((session (mevedel-session--create
                     :name "main"
-                    :save-path dir))
-          (mevedel-session-persistence t))
+                    :save-path dir)))
       (with-temp-buffer
         (setq-local mevedel--session session)
         (mevedel-view-history-add "first")
@@ -375,8 +358,7 @@ Binds `data-buf' and `view-buf'."
     (let ((session (mevedel-view-history-test--session dir))
           (data-buf (generate-new-buffer " *test-data*"))
           (view-buf (generate-new-buffer " *test-view*"))
-          (path (mevedel-view-history-test--path dir))
-          (mevedel-session-persistence t))
+          (path (mevedel-view-history-test--path dir)))
       (unwind-protect
           (progn
             (make-directory (file-name-directory path) t)
@@ -405,8 +387,7 @@ Binds `data-buf' and `view-buf'."
     (let ((session (mevedel-view-history-test--session dir))
           (data-buf (generate-new-buffer " *test-data*"))
           (view-buf (generate-new-buffer " *test-view*"))
-          (path (mevedel-view-history-test--path dir))
-          (mevedel-session-persistence t))
+          (path (mevedel-view-history-test--path dir)))
       (unwind-protect
           (progn
             (make-directory (file-name-directory path) t)

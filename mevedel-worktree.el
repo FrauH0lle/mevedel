@@ -68,7 +68,6 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-skills'
 (defvar mevedel-slash-commands)
@@ -900,16 +899,15 @@ new session."
 (defun mevedel-worktree--save-stub (chat-buffer)
   "Persist CHAT-BUFFER after a setup stub was inserted."
   (with-current-buffer chat-buffer
-    (when (bound-and-true-p mevedel-session-persistence)
-      (require 'mevedel-session-persistence)
-      (condition-case err
-          (mevedel-session-persistence-save mevedel--session chat-buffer)
-        (error
-         (display-warning
-          'mevedel
-          (format "Could not save worktree setup context: %s"
-                  (error-message-string err))
-          :warning))))))
+    (require 'mevedel-session-persistence)
+    (condition-case err
+        (mevedel-session-persistence-save mevedel--session chat-buffer)
+      (error
+       (display-warning
+        'mevedel
+        (format "Could not save worktree setup context: %s"
+                (error-message-string err))
+        :warning)))))
 
 (defun mevedel-worktree--cleanup-message
     (worktree-directory workspace-root)

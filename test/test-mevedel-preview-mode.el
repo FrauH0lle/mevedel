@@ -16,8 +16,6 @@
 
 ;; Stubs for globals defined in `mevedel-chat' that auto-apply's
 ;; dependencies reach for during a bare preview-mode test.
-(defvar mevedel-plans-directory
-  (file-name-concat ".mevedel" "plans"))
 
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
 (require 'helpers

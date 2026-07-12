@@ -23,7 +23,6 @@
 
 (defvar gptel-backend)
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
-(defvar mevedel-plans-directory)
 
 
 ;;
@@ -1368,7 +1367,6 @@
    :type 'error)
   :doc "approval is the filesystem mutation boundary"
   (let* ((mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
-         (mevedel-plans-directory (file-name-concat ".mevedel" "plans"))
          (root (make-temp-file "mevedel-test-" t))
          (workspace (mevedel-workspace--create
                      :type 'test :id root :root root :name "write-test"))

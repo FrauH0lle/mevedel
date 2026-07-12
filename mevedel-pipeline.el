@@ -146,8 +146,8 @@ the minimum of the tool value and this default.")
 When SESSION has no save path yet, use
 `mevedel-session-persistence--shallow-ensure-files' with BUFFER so
 oversized tool output produced during the first turn can still be
-owned by the session.  Returns nil when there is no session,
-persistence is disabled, or shallow materialization fails."
+owned by the session.  Returns nil when there is no session or shallow
+materialization fails."
   (when session
     (let ((save-path (or (mevedel-session-save-path session)
                          (when (and buffer (buffer-live-p buffer))

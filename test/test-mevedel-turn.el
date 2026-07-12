@@ -123,7 +123,7 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "saves enabled writable sessions and skips read-only sessions"
+  :doc "saves writable sessions and skips read-only sessions"
   (let* ((ws (mevedel-workspace-get-or-create
               'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
@@ -134,7 +134,6 @@
         (progn
           (with-current-buffer chat-buf
             (setq-local mevedel--session session)
-            (setq-local mevedel-session-persistence t)
             (setq-local mevedel-session--read-only-mode nil))
           (cl-letf (((symbol-function 'mevedel-session-persistence-save)
                      (lambda (saved-session saved-buffer)

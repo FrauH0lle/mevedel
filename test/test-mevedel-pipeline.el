@@ -2210,10 +2210,9 @@
 			persisted)
 		   (unwind-protect
 		       (with-temp-buffer
-			 (let ((mevedel-session-persistence t))
-			   (setq persisted
-				 (mevedel-pipeline--persist-result
-				  result tool session (current-buffer))))
+			 (setq persisted
+			       (mevedel-pipeline--persist-result
+				result tool session (current-buffer)))
 			 (should (string-prefix-p "<persisted-output>" persisted))
 			 (should (mevedel-session-save-path session))
 			 (should (directory-files

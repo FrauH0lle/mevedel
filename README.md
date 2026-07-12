@@ -262,7 +262,6 @@ writer's transcript.
 
 | Custom Variable                          | Variable Description                                  |
 |------------------------------------------|-------------------------------------------------------|
-| `mevedel-session-persistence`            | Whether sessions are persisted to disk (default `t`). |
 | `mevedel-sessions-directory`             | Directory for sessions (default `.mevedel/sessions/`). |
 | `mevedel-session-max-age-days`           | Auto-cleanup age, in days. `nil` disables.             |
 | `mevedel-file-history-max-snapshots`     | Per-session file backup retention.                     |
@@ -904,7 +903,6 @@ Useful commands:
 | `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
 | `mevedel-model-workload-tiers`             | Default tier per sub-agent and helper model workload.                    |
 | `mevedel-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
-| `mevedel-plans-directory`                  | Legacy workspace plans directory included in protected workspace roots.  |
 | `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
 | `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |
 | `mevedel-hooks-command-timeout`            | Default timeout for command hooks.                                       |
@@ -1059,8 +1057,7 @@ or external setup encrypts them.
 | `.mevedel/permissions.el` | Persistent permission decisions. |
 | `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
 | `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |
-| `<session>/plans/current.md` | Current Plan mode artifact when session persistence is active. |
-| `.mevedel/plans/plan-*.md` | Fallback plan artifacts for non-persistent sessions. |
+| `<session>/plans/current.md` | Current Plan mode artifact. |
 
 ## Documentation
 

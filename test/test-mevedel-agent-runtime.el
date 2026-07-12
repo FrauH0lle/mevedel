@@ -62,6 +62,12 @@
                      'project basename tempdir basename)))
     (cons workspace tempdir)))
 
+(defun mevedel-agent-runtime-test--make-persistent-session ()
+  "Return (SESSION . TEMPDIR) for a fresh persistent runtime session."
+  (cl-destructuring-bind (workspace . tempdir)
+      (mevedel-agent-runtime-test--make-workspace)
+    (cons (mevedel-session-create "main" workspace) tempdir)))
+
 (defun mevedel-agent-runtime-test--release-and-kill (buffer session)
   "Release SESSION's lock and kill BUFFER if it is live."
   (when (and session (mevedel-session-save-path session))
@@ -1657,8 +1663,9 @@
   (test)
 
   :doc "foreground callback defers main-cb while background agents are pending"
-  (let* ((mevedel-session-persistence nil)
-         (session (mevedel-agent-runtime-test--make-session))
+  (let* ((state (mevedel-agent-runtime-test--make-persistent-session))
+         (session (car state))
+         (tempdir (cdr state))
          (buf (generate-new-buffer " *mt-stash1*"))
          (coordinator-cb nil)
          (result nil)
@@ -1701,23 +1708,29 @@
             ;; Step 4: Child finishes, then coordinator fires final.
             (mevedel-agent-runtime--ctx-remove-background-agent inv "explorer--fake")
             (funcall coordinator-cb "Final summary with results.")
-            (should (stringp result))
-            (should (string-match-p "Final summary" result))
+            (should (equal "Final summary with results."
+                           (plist-get result :result)))
             (should (= 1 call-count))
             (should-not (assoc (mevedel-agent-invocation-agent-id inv)
                                mevedel-agent-runtime--fsms))
             ;; Step 5: A late duplicate 't' event must NOT double-fire.
             (funcall coordinator-cb "Redundant late response.")
             (should (= 1 call-count))
-            (should (string-match-p "Final summary" result))))
+            (should (string-match-p "Final summary"
+                                    (plist-get result :result)))))
       (when (and inv
                  (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (with-current-buffer (mevedel-agent-invocation-buffer inv)
+          (set-buffer-modified-p nil)
+          (setq kill-buffer-hook nil))
         (kill-buffer (mevedel-agent-invocation-buffer inv)))
-      (kill-buffer buf)))
+      (mevedel-agent-runtime-test--release-and-kill buf session)
+      (delete-directory tempdir t)))
 
   :doc "foreground callback defers main-cb while mailbox holds pending results (race)"
-  (let* ((mevedel-session-persistence nil)
-         (session (mevedel-agent-runtime-test--make-session))
+  (let* ((state (mevedel-agent-runtime-test--make-persistent-session))
+         (session (car state))
+         (tempdir (cdr state))
          (buf (generate-new-buffer " *mt-stash2*"))
          (coordinator-cb nil)
          (result nil)
@@ -1761,17 +1774,23 @@
             (setf (mevedel-agent-invocation-messages inv) nil)
             (funcall coordinator-cb "Final summary with results.")
             (should (= 1 call-count))
-            (should (string-match-p "Final summary" result))
+            (should (string-match-p "Final summary"
+                                    (plist-get result :result)))
             (should-not (assoc (mevedel-agent-invocation-agent-id inv)
                                mevedel-agent-runtime--fsms))))
       (when (and inv
                  (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (with-current-buffer (mevedel-agent-invocation-buffer inv)
+          (set-buffer-modified-p nil)
+          (setq kill-buffer-hook nil))
         (kill-buffer (mevedel-agent-invocation-buffer inv)))
-      (kill-buffer buf)))
+      (mevedel-agent-runtime-test--release-and-kill buf session)
+      (delete-directory tempdir t)))
 
   :doc "foreground callback removes parent registry from an agent buffer"
-  (let* ((mevedel-session-persistence nil)
-         (session (mevedel-agent-runtime-test--make-session))
+  (let* ((state (mevedel-agent-runtime-test--make-persistent-session))
+         (session (car state))
+         (tempdir (cdr state))
          (parent-buf (generate-new-buffer " *mt-stash-agent-parent*"))
          (callback-buf (generate-new-buffer " *mt-stash-agent-callback*"))
          (coordinator-cb nil)
@@ -1804,7 +1823,8 @@
           (with-current-buffer callback-buf
             (setq-local mevedel-agent-runtime--fsms nil)
             (funcall coordinator-cb "Final summary from agent buffer."))
-          (should (string-match-p "Final summary" result))
+          (should (string-match-p "Final summary"
+                                  (plist-get result :result)))
           (with-current-buffer parent-buf
             (should-not (assoc (mevedel-agent-invocation-agent-id inv)
                                mevedel-agent-runtime--fsms)))
@@ -1812,13 +1832,18 @@
             (should-not mevedel-agent-runtime--fsms)))
       (when (and inv
                  (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (with-current-buffer (mevedel-agent-invocation-buffer inv)
+          (set-buffer-modified-p nil)
+          (setq kill-buffer-hook nil))
         (kill-buffer (mevedel-agent-invocation-buffer inv)))
       (when (buffer-live-p callback-buf) (kill-buffer callback-buf))
-      (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
+      (mevedel-agent-runtime-test--release-and-kill parent-buf session)
+      (delete-directory tempdir t)))
 
   :doc "foreground callback bypasses gate on error/abort responses"
-  (let* ((mevedel-session-persistence nil)
-         (session (mevedel-agent-runtime-test--make-session))
+  (let* ((state (mevedel-agent-runtime-test--make-persistent-session))
+         (session (car state))
+         (tempdir (cdr state))
          (buf (generate-new-buffer " *mt-stash3*"))
          (coordinator-cb nil)
          (result nil)
@@ -1856,8 +1881,12 @@
                                mevedel-agent-runtime--fsms))))
       (when (and inv
                  (buffer-live-p (mevedel-agent-invocation-buffer inv)))
+        (with-current-buffer (mevedel-agent-invocation-buffer inv)
+          (set-buffer-modified-p nil)
+          (setq kill-buffer-hook nil))
         (kill-buffer (mevedel-agent-invocation-buffer inv)))
-      (kill-buffer buf))))
+      (mevedel-agent-runtime-test--release-and-kill buf session)
+      (delete-directory tempdir t))))
 
 (mevedel-deftest mevedel-agent-runtime--bwait-watchdog-expire/case-2
   (:before-each (progn (mevedel-tool-clear-registry)
