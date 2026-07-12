@@ -32,8 +32,9 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   the current session-owned Goal, and a transient bounded tool-input repair
   log.
 - **`mevedel-goal`**: stable identity and objective, lifecycle status,
-  current phase, approval policy, owning session, accepted plan artifact, and
-  latest review summary.
+  current phase and cycle, approval policy, owning session, accepted plan
+  artifact, lightweight cycle records, structured review result and carried
+  findings, and any pause or blocked reason.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
   rules, hook rules, model override, effort override.

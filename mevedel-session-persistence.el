@@ -53,6 +53,20 @@
                   "mevedel-transcript-restore" ())
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-owner-session "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
@@ -237,7 +251,8 @@ add more, and we don't want to act on actions we don't understand).")
     :permission-mode :permission-rules :preset-name :preset-settings
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
-    :prompt-index :file-snapshots :agent-transcripts :plan-metadata :messages)
+    :prompt-index :file-snapshots :agent-transcripts :plan-metadata :goal
+    :messages)
   "Keys required in every current-version session sidecar.")
 
 
@@ -328,6 +343,80 @@ containment semantics as session creation."
 
 
 ;;
+;;; Goal serialization
+
+(defun mevedel-session-persistence--goal-to-plist (goal)
+  "Serialize GOAL to a sidecar plist."
+  (list :id (mevedel-goal-id goal)
+        :objective (mevedel-goal-objective goal)
+        :status (mevedel-goal-status goal)
+        :phase (mevedel-goal-phase goal)
+        :approval-policy (mevedel-goal-approval-policy goal)
+        :owner-session (mevedel-goal-owner-session goal)
+        :current-plan (mevedel-goal-current-plan goal)
+        :review-summary (mevedel-goal-review-summary goal)
+        :cycle (mevedel-goal-cycle goal)
+        :cycles (mevedel-goal-cycles goal)
+        :review-findings (mevedel-goal-review-findings goal)
+        :reason (mevedel-goal-reason goal)))
+
+(defun mevedel-session-persistence--goal-from-plist (plist)
+  "Reconstruct a `mevedel-goal' from PLIST, or nil."
+  (when plist
+    (let ((id (plist-get plist :id))
+          (objective (plist-get plist :objective))
+          (status (plist-get plist :status))
+          (phase (plist-get plist :phase))
+          (policy (plist-get plist :approval-policy))
+          (cycle (plist-get plist :cycle))
+          (cycles (plist-get plist :cycles)))
+      (unless
+          (and (proper-list-p plist)
+               (stringp id)
+               (string-match-p "\\`[[:alnum:]_.-]+\\'" id)
+               (not (member id '("." "..")))
+               (stringp objective)
+               (not (string-blank-p objective))
+               (memq status '(active paused blocked complete))
+               (memq phase '(planning awaiting-approval
+                              implementing reviewing))
+               (memq policy '(supervised automatic))
+               (integerp cycle)
+               (> cycle 0)
+               (proper-list-p cycles)
+               (cl-every
+                (lambda (record)
+                  (and (proper-list-p record)
+                       (integerp (plist-get record :cycle))
+                       (> (plist-get record :cycle) 0)))
+                cycles)
+               (cl-find cycle cycles
+                        :key (lambda (record) (plist-get record :cycle)))
+               (or (null (plist-get plist :current-plan))
+                   (proper-list-p (plist-get plist :current-plan)))
+               (or (null (plist-get plist :review-summary))
+                   (proper-list-p (plist-get plist :review-summary)))
+               (or (null (plist-get plist :review-findings))
+                   (stringp (plist-get plist :review-findings)))
+               (or (null (plist-get plist :reason))
+                   (stringp (plist-get plist :reason))))
+        (error "Invalid Goal sidecar")))
+    (mevedel-goal--create
+     :id (plist-get plist :id)
+     :objective (plist-get plist :objective)
+     :status (plist-get plist :status)
+     :phase (plist-get plist :phase)
+     :approval-policy (plist-get plist :approval-policy)
+     :owner-session (plist-get plist :owner-session)
+     :current-plan (copy-tree (plist-get plist :current-plan))
+     :review-summary (copy-tree (plist-get plist :review-summary))
+     :cycle (plist-get plist :cycle)
+     :cycles (copy-tree (plist-get plist :cycles))
+     :review-findings (plist-get plist :review-findings)
+     :reason (plist-get plist :reason))))
+
+
+;;
 ;;; Task serialization
 
 (defun mevedel-session-persistence--task-owner-from-plist (plist)
@@ -413,6 +502,8 @@ The resulting plist is round-trippable via
    :file-snapshots         (mevedel-session-file-snapshots session)
    :agent-transcripts      (mevedel-session-agent-transcripts session)
    :plan-metadata          (mevedel-session-plan-metadata session)
+   :goal                   (when-let* ((goal (mevedel-session-goal session)))
+                             (mevedel-session-persistence--goal-to-plist goal))
    ;; Inbound mailbox.  Background sub-agents push agent-result
    ;; blocks here when they finalize; if Emacs restarts before the
    ;; parent's next WAIT drains them, the messages would otherwise
@@ -499,6 +590,9 @@ unknown actions are dropped via the hygiene filter."
                      :prompt-index     prompt-index
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :plan-metadata    (plist-get plist :plan-metadata)
+                     :goal
+                     (mevedel-session-persistence--goal-from-plist
+                      (plist-get plist :goal))
                      :agent-transcripts
                      (mevedel-session-persistence--sanitize-agent-transcripts
                       (plist-get plist :agent-transcripts))

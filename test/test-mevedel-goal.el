@@ -28,6 +28,107 @@
   (gptel-make-fsm
    :info (list :buffer buffer :mevedel-goal-phase phase)))
 
+(mevedel-deftest mevedel-goal--relative-dir ()
+  ,test
+  (test)
+  :doc "uses the stable Goal ID as the artifact directory"
+  (should (equal "goals/goal-42"
+                 (mevedel-goal--relative-dir
+                  (mevedel-goal--create :id "goal-42")))))
+
+(mevedel-deftest mevedel-goal--current-plan-relative-path ()
+  ,test
+  (test)
+  :doc "keeps one mutable current plan per Goal"
+  (should (equal "goals/goal-42/current-plan.md"
+                 (mevedel-goal--current-plan-relative-path
+                  (mevedel-goal--create :id "goal-42")))))
+
+(mevedel-deftest mevedel-goal--cycle-plan-relative-path ()
+  ,test
+  (test)
+  :doc "numbers immutable accepted plans by cycle"
+  (should (equal "goals/goal-42/cycle-007-plan.md"
+                 (mevedel-goal--cycle-plan-relative-path
+                  (mevedel-goal--create :id "goal-42" :cycle 7)))))
+
+(mevedel-deftest mevedel-goal--cycle-record ()
+  ,test
+  (test)
+  :doc "returns only the current cycle's lightweight record"
+  (let ((goal (mevedel-goal--create
+               :cycle 2 :cycles '((:cycle 1) (:cycle 2 :plan "p")))))
+    (should (equal '(:cycle 2 :plan "p")
+                   (mevedel-goal--cycle-record goal)))))
+
+(mevedel-deftest mevedel-goal--cycle-put ()
+  ,test
+  (test)
+  :doc "updates one cycle record while preserving sorted history"
+  (let ((goal (mevedel-goal--create
+               :cycle 2 :cycles '((:cycle 1 :plan "one")))))
+    (mevedel-goal--cycle-put goal :plan "two")
+    (let ((cycles (mevedel-goal-cycles goal)))
+      (should (= 2 (length cycles)))
+      (should (equal "one" (plist-get (nth 0 cycles) :plan)))
+      (should (equal "two" (plist-get (nth 1 cycles) :plan)))
+      (should (plist-get (nth 1 cycles) :started-at)))))
+
+(mevedel-deftest mevedel-goal--persist-cycle-index ()
+  ,test
+  (test)
+  :doc "writes a readable lightweight index without artifact bodies"
+  (let* ((root (make-temp-file "mevedel-cycle-index-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "goal-index" :cycle 1
+                :cycles '((:cycle 1 :plan "cycle-001-plan.md")))))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((path (mevedel-goal--persist-cycle-index
+                       goal session (current-buffer))))
+            (should (file-exists-p path))
+            (with-temp-buffer
+              (insert-file-contents path)
+              (should (equal (mevedel-goal-cycles goal)
+                             (read (current-buffer)))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal--parse-review ()
+  ,test
+  (test)
+  :doc "accepts exactly one complete, continue, or blocked review result"
+  (should (equal '(:verdict continue :summary "Fix the remaining test.")
+                 (mevedel-goal--parse-review
+                  "<goal_review>\nverdict: continue\nsummary: Fix the remaining test.\n</goal_review>")))
+  :doc "rejects malformed, duplicate, or unknown verdicts"
+  (dolist (text '("complete"
+                  "preface\n<goal_review>\nverdict: complete\nsummary: x\n</goal_review>"
+                  "<goal_review>\nverdict: done\nsummary: x\n</goal_review>"
+                  "<goal_review>\nverdict: complete\nverdict: continue\nsummary: x\n</goal_review>"))
+    (should-not (mevedel-goal--parse-review text))))
+
+(mevedel-deftest mevedel-goal--record-phase-policy ()
+  ,test
+  (test)
+  :doc "records provider and effort for the current phase without prose"
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-policy" :cycle 1 :status 'active
+                :cycles '((:cycle 1)))))
+    (setf (mevedel-session-goal session) goal)
+    (let ((mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-goal--persist-cycle-index)
+                 #'ignore))
+        (mevedel-goal--record-phase-policy
+         'planning '(:backend nil :model model :effort high))))
+    (let* ((providers (plist-get (car (mevedel-goal-cycles goal))
+                                 :providers))
+           (planning (alist-get 'planning providers)))
+      (should (equal "model" (plist-get planning :provider)))
+      (should (eq 'high (plist-get planning :effort))))))
+
 (mevedel-deftest mevedel-goal-start ()
   ,test
   (test)
@@ -192,11 +293,15 @@
         (with-temp-buffer
           (setq-local mevedel--session session)
           (setf (mevedel-session-goal session) goal)
-          (insert "Tests and diff satisfy the objective.")
+          (insert "<goal_review>\nverdict: complete\nsummary: Tests and diff satisfy the objective.\n</goal_review>")
           (mevedel-goal--post-response (point-min) (point-max))
           (should (eq 'active (mevedel-goal-status goal)))
+          (should (equal 'complete
+                         (plist-get (mevedel-goal-review-summary goal)
+                                    :verdict)))
           (should (equal "Tests and diff satisfy the objective."
-                         (mevedel-goal-review-summary goal))))
+                         (plist-get (mevedel-goal-review-summary goal)
+                                    :summary))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal--approval-callback ()
@@ -208,6 +313,7 @@
          (session (mevedel-session-create
                    "main" (test-mevedel-goal--workspace root)))
          (goal (mevedel-goal--create
+                :id "goal-1" :cycle 1 :cycles '((:cycle 1))
                 :status 'active :phase 'awaiting-approval :objective "x"))
          implementation)
     (unwind-protect
@@ -341,7 +447,9 @@
                    "main" (test-mevedel-goal--workspace root)))
          (goal (mevedel-goal--create
                 :status 'active :phase 'reviewing :objective "x"
-                :review-summary "All acceptance checks pass.")))
+                :id "goal-complete" :cycle 1 :cycles '((:cycle 1))
+                :review-summary
+                '(:verdict complete :summary "All acceptance checks pass."))))
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session)
@@ -360,6 +468,7 @@
          (session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :status 'active :phase 'reviewing :objective "Fix it"
+                :cycle 1
                 :current-plan '(:absolute-path "/tmp/plan.md")))
          dispatched)
     (unwind-protect
@@ -413,7 +522,7 @@
             (mevedel-goal-dispatch-after-turn
              (test-mevedel-goal--fsm buffer 'implementing))
             (erase-buffer)
-            (insert "Review confirms the objective and tests pass.")
+            (insert "<goal_review>\nverdict: complete\nsummary: Review confirms the objective and tests pass.\n</goal_review>")
             (mevedel-goal--post-response (point-min) (point-max))
             (mevedel-goal-settle-turn
              (test-mevedel-goal--fsm buffer 'reviewing))
@@ -424,6 +533,123 @@
                            (mapcar #'car dispatched)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal-multi-cycle ()
+  ,test
+  (test)
+  :doc "continues through a second immutable plan before review completes"
+  (let* ((root (make-temp-file "mevedel-goal-multi-" t))
+         (buffer (generate-new-buffer " *goal-multi*"))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         dispatched)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (let ((mevedel-goal-dispatch-function
+                 (lambda (phase prompt display)
+                   (push (list phase prompt display) dispatched))))
+            (mevedel-goal-start "Finish both slices")
+            (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
+                       #'ignore)
+                      ((symbol-function 'mevedel-goal--ensure-reference-reminder)
+                       #'ignore)
+                      ((symbol-function 'mevedel-goal--call-with-workload)
+                       (lambda (_workload fn) (funcall fn)))
+                      ((symbol-function 'mevedel--implement-plan)
+                       (lambda (_input) nil)))
+              (let ((goal (mevedel-session-goal session)))
+                (setf (mevedel-goal-phase goal) 'awaiting-approval)
+                (mevedel-goal--approval-callback
+                 "# Cycle one\n\nImplement slice one." buffer 'implement)
+                (mevedel-goal-settle-turn
+                 (test-mevedel-goal--fsm buffer 'implementing))
+                (erase-buffer)
+                (insert "<goal_review>\nverdict: continue\nsummary: Implement slice two.\n</goal_review>")
+                (mevedel-goal--post-response (point-min) (point-max))
+                (mevedel-goal-settle-turn
+                 (test-mevedel-goal--fsm buffer 'reviewing))
+                (mevedel-goal-dispatch-after-turn
+                 (test-mevedel-goal--fsm buffer 'reviewing))
+                (should (= 2 (mevedel-goal-cycle goal)))
+                (should (string-match-p "Implement slice two"
+                                        (cadr (car dispatched))))
+                (setf (mevedel-goal-phase goal) 'awaiting-approval)
+                (mevedel-goal--approval-callback
+                 "# Cycle two\n\nImplement slice two." buffer 'implement)
+                (mevedel-goal-settle-turn
+                 (test-mevedel-goal--fsm buffer 'implementing))
+                (erase-buffer)
+                (insert "<goal_review>\nverdict: complete\nsummary: Both slices and tests pass.\n</goal_review>")
+                (mevedel-goal--post-response (point-min) (point-max))
+                (mevedel-goal-settle-turn
+                 (test-mevedel-goal--fsm buffer 'reviewing))
+                (should (eq 'complete (mevedel-goal-status goal)))
+                (let* ((save-path (mevedel-session-save-path session))
+                       (goal-dir (file-name-concat save-path "goals"
+                                                   (mevedel-goal-id goal))))
+                  (should (file-exists-p
+                           (file-name-concat goal-dir
+                                             "cycle-001-plan.md")))
+                  (should (file-exists-p
+                           (file-name-concat goal-dir
+                                             "cycle-002-plan.md")))
+                  (with-temp-buffer
+                    (insert-file-contents
+                     (file-name-concat goal-dir "cycles.el"))
+                    (let ((index (read (current-buffer))))
+                      (should (= 2 (length index)))
+                      (should-not (string-match-p
+                                   "Implement slice"
+                                   (prin1-to-string index))))))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t)))
+  :doc "blocked review settles with its concrete reason and no continuation"
+  (let* ((root (make-temp-file "mevedel-goal-blocked-" t))
+         (buffer (generate-new-buffer " *goal-blocked*"))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "blocked" :objective "Ship" :status 'active
+                :phase 'reviewing :cycle 1 :cycles '((:cycle 1))
+                :review-summary
+                '(:verdict blocked :summary "Need an API credential."))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-goal-settle-turn
+           (test-mevedel-goal--fsm buffer 'reviewing))
+          (should (eq 'blocked (mevedel-goal-status goal)))
+          (should (equal "Need an API credential."
+                         (mevedel-goal-reason goal))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal-duplicate-plan ()
+  ,test
+  (test)
+  :doc "pauses instead of presenting the previous accepted plan again"
+  (let* ((plan "# Same\n\nRepeat.")
+         (session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "duplicate" :objective "Finish" :status 'active
+                :phase 'planning :cycle 2
+                :cycles
+                (list (list :cycle 1 :plan-hash (mevedel-plan-hash plan))
+                      '(:cycle 2))))
+         presented)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setf (mevedel-session-goal session) goal)
+      (insert "<proposed_plan>\n" plan "\n</proposed_plan>")
+      (cl-letf (((symbol-function 'mevedel-goal-present-plan)
+                 (lambda (&rest _) (setq presented t)))
+                ((symbol-function 'mevedel-goal--save-session-state)
+                 #'ignore))
+        (mevedel-goal--post-response (point-min) (point-max)))
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should-not presented))))
 
 (provide 'test-mevedel-goal)
 ;;; test-mevedel-goal.el ends here

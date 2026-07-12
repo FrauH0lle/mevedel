@@ -128,6 +128,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :file-snapshots nil
                :agent-transcripts nil
                :plan-metadata nil
+               :goal nil
                :messages nil)))
     (while plist
       (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
@@ -214,6 +215,57 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                  ("Bash" :pattern "echo" :action allow))))
     (should (= 2 (length
                   (mevedel-session-persistence--filter-permission-rules rules))))))
+
+
+;;
+;;; Goal round-trip
+
+(mevedel-deftest mevedel-session-persistence--goal-to-plist ()
+  ,test
+  (test)
+  :doc "captures lifecycle position, cycle metadata, and blocked reason"
+  (let* ((goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'blocked
+                :phase 'reviewing :approval-policy 'supervised
+                :owner-session "main" :cycle 2
+                :cycles '((:cycle 1) (:cycle 2))
+                :reason "Need an API credential."))
+         (plist (mevedel-session-persistence--goal-to-plist goal)))
+    (should (equal "g1" (plist-get plist :id)))
+    (should (eq 'blocked (plist-get plist :status)))
+    (should (= 2 (plist-get plist :cycle)))
+    (should (equal "Need an API credential." (plist-get plist :reason)))))
+
+(mevedel-deftest mevedel-session-persistence--goal-from-plist ()
+  ,test
+  (test)
+  :doc "rebuilds a Goal without sharing mutable cycle records"
+  (let* ((cycles '((:cycle 1 :plan "cycle-001-plan.md")))
+         (goal (mevedel-session-persistence--goal-from-plist
+                (list :id "g1" :objective "Ship" :status 'active
+                      :phase 'planning :approval-policy 'supervised
+                      :cycle 1 :cycles cycles))))
+    (should (mevedel-goal-p goal))
+    (should (equal "Ship" (mevedel-goal-objective goal)))
+    (should (equal cycles (mevedel-goal-cycles goal)))
+    (should-not (eq cycles (mevedel-goal-cycles goal))))
+  :doc "keeps sessions without a Goal empty"
+  (should-not (mevedel-session-persistence--goal-from-plist nil))
+  :doc "rejects unsafe IDs and malformed lifecycle state"
+  (let ((valid '(:id "g1" :objective "Ship" :status active
+                 :phase planning :approval-policy supervised
+                 :cycle 1 :cycles ((:cycle 1)))))
+    (dolist (change '((:id "../escape")
+                      (:status unknown)
+                      (:phase editing)
+                      (:cycle 0)
+                      (:cycles ((:cycle "one")))
+                      (:reason 42)))
+      (let ((plist (copy-tree valid)))
+        (setq plist (plist-put plist (car change) (cadr change)))
+        (should-error
+         (mevedel-session-persistence--goal-from-plist plist)
+         :type 'error)))))
 
 
 ;;
@@ -413,6 +465,31 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (should (equal "test-id" (mevedel-workspace-id workspace)))))
       (when (file-directory-p root)
         (delete-directory root t))))
+  :doc "persists and restores a blocked Goal reason through an on-disk sidecar"
+  (let ((root (make-temp-file "mevedel-goal-sidecar-" t))
+        (path (make-temp-file "mevedel-goal-sidecar-" nil ".el")))
+    (unwind-protect
+        (let* ((source (test-mevedel-session-persistence--make-session root))
+               (_ (setf (mevedel-session-goal source)
+                        (mevedel-goal--create
+                         :id "blocked-goal" :objective "Ship"
+                         :status 'blocked :phase 'reviewing
+                         :approval-policy 'supervised :cycle 1
+                         :cycles '((:cycle 1))
+                         :reason "Need an API credential.")))
+               (_ (mevedel-session-persistence-write
+                   path (mevedel-session-persistence-serialize source)))
+               (result
+                (mevedel-session-persistence-deserialize
+                 (mevedel-session-persistence-read path)))
+               (goal (mevedel-session-goal (plist-get result :session))))
+          (should (eq 'blocked (mevedel-goal-status goal)))
+          (should (equal "Need an API credential."
+                         (mevedel-goal-reason goal))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (when (file-exists-p path)
+        (delete-file path))))
   :doc "drops permission rules with unknown actions"
   (let* ((plist (list :version (mevedel-version)
                       :session-name "x"

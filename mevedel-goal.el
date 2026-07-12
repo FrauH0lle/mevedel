@@ -2,8 +2,8 @@
 
 ;;; Commentary:
 
-;; A session-owned Goal drives one supervised planning, approval,
-;; implementation, and review cycle.  Plans use the lifecycle-neutral
+;; A session-owned Goal drives supervised planning, approval, implementation,
+;; and evidence-review cycles.  Plans use the lifecycle-neutral
 ;; artifact operations in `mevedel-plan'.
 
 ;;; Code:
@@ -17,6 +17,8 @@
 (require 'mevedel-utilities)
 
 ;; `gptel'
+(declare-function gptel--model-name "ext:gptel" (model))
+(declare-function gptel-backend-name "ext:gptel" (backend))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-backend)
@@ -57,14 +59,20 @@
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-write
+                  "mevedel-session-persistence" (path plist))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest args))
 (declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -74,6 +82,7 @@
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-view'
@@ -103,6 +112,83 @@
 
 (defvar mevedel-goal-dispatch-function #'mevedel-goal--dispatch-gptel
   "Function called with PHASE, PROMPT, and DISPLAY-TEXT for a Goal request.")
+
+(defconst mevedel-goal--review-open-tag "<goal_review>"
+  "Opening tag for structured Goal review results.")
+
+(defconst mevedel-goal--review-close-tag "</goal_review>"
+  "Closing tag for structured Goal review results.")
+
+(defun mevedel-goal--relative-dir (goal)
+  "Return GOAL's artifact directory relative to its session."
+  (file-name-concat "goals" (mevedel-goal-id goal)))
+
+(defun mevedel-goal--current-plan-relative-path (goal)
+  "Return GOAL's mutable current-plan relative path."
+  (file-name-concat (mevedel-goal--relative-dir goal) "current-plan.md"))
+
+(defun mevedel-goal--cycle-plan-relative-path (goal)
+  "Return GOAL's current immutable cycle-plan relative path."
+  (file-name-concat
+   (mevedel-goal--relative-dir goal)
+   (format "cycle-%03d-plan.md" (mevedel-goal-cycle goal))))
+
+(defun mevedel-goal--cycle-record (goal)
+  "Return GOAL's current cycle record."
+  (cl-find (mevedel-goal-cycle goal) (mevedel-goal-cycles goal)
+           :key (lambda (record) (plist-get record :cycle))))
+
+(defun mevedel-goal--cycle-put (goal key value)
+  "Set KEY to VALUE in GOAL's current cycle record."
+  (let* ((number (mevedel-goal-cycle goal))
+         (records (copy-tree (or (mevedel-goal-cycles goal) nil)))
+         (record (or (cl-find number records
+                              :key (lambda (item) (plist-get item :cycle)))
+                     (list :cycle number
+                           :started-at (format-time-string "%FT%T%z")))))
+    (setq record (plist-put record key value))
+    (setq records
+          (cons record
+                (cl-remove number records
+                           :key (lambda (item) (plist-get item :cycle)))))
+    (setf (mevedel-goal-cycles goal)
+          (sort records (lambda (a b)
+                          (< (plist-get a :cycle) (plist-get b :cycle)))))
+    record))
+
+(defun mevedel-goal--persist-cycle-index (goal session buffer)
+  "Persist GOAL's lightweight cycle index for SESSION from BUFFER."
+  (require 'mevedel-session-persistence)
+  (let* ((save-path (or (mevedel-session-save-path session)
+                        (mevedel-session-persistence-ensure-files
+                         session buffer)))
+         (path (file-name-concat save-path
+                                 (mevedel-goal--relative-dir goal)
+                                 "cycles.el")))
+    (make-directory (file-name-directory path) t)
+    (mevedel-session-persistence-write path (mevedel-goal-cycles goal))
+    path))
+
+(defun mevedel-goal--record-phase-policy (workload policy)
+  "Record resolved POLICY for WORKLOAD in the active Goal cycle."
+  (when-let* ((session (and (bound-and-true-p mevedel--session)
+                            mevedel--session))
+              (goal (mevedel-session-goal session))
+              ((eq (mevedel-goal-status goal) 'active)))
+    (let* ((record (mevedel-goal--cycle-record goal))
+           (providers (copy-tree (plist-get record :providers)))
+           (backend (plist-get policy :backend))
+           (model (plist-get policy :model)))
+      (setf (alist-get workload providers)
+            (list :provider
+                  (if backend
+                      (format "%s:%s" (gptel-backend-name backend)
+                              (gptel--model-name model))
+                    (format "%s" model))
+                  :effort (plist-get policy :effort)
+                  :at (format-time-string "%FT%T%z")))
+      (mevedel-goal--cycle-put goal :providers providers)
+      (mevedel-goal--persist-cycle-index goal session (current-buffer)))))
 
 (defun mevedel-goal--plan-metadata-put (session key value)
   "Set plan artifact metadata KEY to VALUE in SESSION."
@@ -145,14 +231,19 @@
 (defun mevedel-goal--planning-prompt (goal)
   "Return the planning request for GOAL."
   (format
-   "Goal objective:\n%s\n\nInvestigate the current repository state and propose a decision-complete implementation plan. This phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
-   (mevedel-goal-objective goal)))
+   "Goal objective:\n%s\n\nCycle: %d\n%sInvestigate the current repository state and propose the next decision-complete implementation plan. This phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
+   (mevedel-goal-objective goal)
+   (mevedel-goal-cycle goal)
+   (if-let* ((findings (mevedel-goal-review-findings goal)))
+       (format "Prior review findings to resolve:\n%s\n\n" findings)
+     "")))
 
 (defun mevedel-goal--review-prompt (goal)
   "Return the one-cycle completion review request for GOAL."
   (format
-   "Goal objective:\n%s\n\nAccepted plan: %s\n\nReview the implementation against the whole objective and current repository evidence. This phase is read-only. Do not make changes. State whether the objective is fully complete and explain the evidence."
+   "Goal objective:\n%s\n\nCycle: %d\nAccepted plan: %s\n\nReview the implementation against the whole objective and current repository evidence. This phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole objective is proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
    (mevedel-goal-objective goal)
+   (mevedel-goal-cycle goal)
    (or (plist-get (mevedel-goal-current-plan goal) :absolute-path)
        "unavailable")))
 
@@ -186,6 +277,9 @@ DISPLAY-TEXT is the user-facing form of the planning turn."
           :status 'active
           :phase 'planning
           :approval-policy 'supervised
+          :cycle 1
+          :cycles (list (list :cycle 1
+                              :started-at (format-time-string "%FT%T%z")))
           :owner-session (or (mevedel-session-session-id mevedel--session)
                              (mevedel-session-name mevedel--session)))))
     (setf (mevedel-session-goal mevedel--session) goal
@@ -225,6 +319,7 @@ DISPLAY-TEXT is the user-facing form of the planning turn."
          (old-model gptel-model)
          (old-effort (and (boundp 'gptel-reasoning-effort)
                           gptel-reasoning-effort)))
+    (mevedel-goal--record-phase-policy workload policy)
     (unwind-protect
         (progn
           (setq-local gptel-backend (plist-get policy :backend)
@@ -533,13 +628,25 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
                          (eq (mevedel-goal-phase goal) 'awaiting-approval))
               (user-error "Goal is not awaiting plan approval"))
             (let* ((artifacts (mevedel-plan-accept
-                               plan-markdown mevedel--session chat-buffer))
-                   (current-artifact (plist-get artifacts :current))
+                               plan-markdown mevedel--session chat-buffer nil
+                               (mevedel-goal--current-plan-relative-path goal)
+                               (mevedel-goal--cycle-plan-relative-path goal)))
+                   (accepted-artifact (plist-get artifacts :accepted))
+                   (plan-hash (mevedel-plan-hash plan-markdown))
                    (implementation-mode
                     (mevedel-goal--approval-implementation-mode outcome)))
               (mevedel-goal--ensure-reference-reminder mevedel--session)
-              (setf (mevedel-goal-current-plan goal) current-artifact
+              (setq accepted-artifact
+                    (plist-put accepted-artifact :hash plan-hash))
+              (setf (mevedel-goal-current-plan goal) accepted-artifact
                     (mevedel-goal-phase goal) 'implementing)
+              (mevedel-goal--cycle-put goal :plan
+                                       (plist-get accepted-artifact :path))
+              (mevedel-goal--cycle-put goal :plan-hash plan-hash)
+              (mevedel-goal--cycle-put goal :accepted-at
+                                       (format-time-string "%FT%T%z"))
+              (mevedel-goal--persist-cycle-index
+               goal mevedel--session chat-buffer)
               (mevedel-goal--save-session-state mevedel--session chat-buffer)
               (let ((fsm
                      (mevedel-goal--call-with-workload
@@ -547,7 +654,7 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
                       (lambda ()
                         (mevedel--implement-plan
                          (mevedel-plan-implementation-input
-                          action current-artifact implementation-mode))))))
+                          action accepted-artifact implementation-mode))))))
                 (when fsm
                   (setf (gptel-fsm-info fsm)
                         (plist-put (gptel-fsm-info fsm)
@@ -607,7 +714,9 @@ artifact before the approval prompt is displayed."
         (plan-markdown (stringp . "string")))
       (unless (string-blank-p plan-markdown)
         (mevedel-plan-write-current
-         plan-markdown mevedel--session chat-buffer)
+         plan-markdown mevedel--session chat-buffer
+         (when-let* ((goal (mevedel-session-goal mevedel--session)))
+           (mevedel-goal--current-plan-relative-path goal)))
         (mevedel-plan-queue--enqueue
          (mevedel-goal--approval-entry
           plan-markdown chat-buffer mevedel--session))))))
@@ -638,6 +747,23 @@ artifact before the approval prompt is displayed."
   (mevedel--normalize-message-text
    (buffer-substring-no-properties start end)))
 
+(defun mevedel-goal--parse-review (text)
+  "Return validated structured Goal review from TEXT, or nil."
+  (let ((case-fold-search nil)
+        (text (string-trim text)))
+    (when (string-match
+           (concat "\\`" (regexp-quote mevedel-goal--review-open-tag)
+                   "[ \t]*\n"
+                   "verdict:[ \t]*\\(complete\\|continue\\|blocked\\)"
+                   "[ \t]*\n"
+                   "summary:[ \t]*\\(\\(?:.\\|\n\\)*?\\)[ \t\n]*"
+                   (regexp-quote mevedel-goal--review-close-tag) "\\'")
+           text)
+      (let ((summary (string-trim (match-string 2 text))))
+        (unless (string-blank-p summary)
+          (list :verdict (intern (match-string 1 text))
+                :summary summary))))))
+
 (defun mevedel-goal--post-response (start end)
   "Capture phase output between START and END without settling the turn."
   (require 'mevedel-plan)
@@ -649,10 +775,22 @@ artifact before the approval prompt is displayed."
       (pcase (mevedel-goal-phase goal)
         ('planning
          (when-let* ((plan (mevedel-plan-extract-proposed response)))
-           (mevedel-goal-present-plan plan (current-buffer))
-           (setf (mevedel-goal-phase goal) 'awaiting-approval)))
+           (let* ((hash (mevedel-plan-hash plan))
+                  (previous (car (last (butlast
+                                        (mevedel-goal-cycles goal))))))
+             (if (and previous
+                      (equal hash (plist-get previous :plan-hash)))
+                 (progn
+                   (setf (mevedel-goal-status goal) 'paused
+                         (mevedel-goal-reason goal)
+                         "Planner repeated the previous accepted plan")
+                   (mevedel-goal--save-session-state session (current-buffer))
+                   (message "mevedel: goal paused after duplicate plan"))
+               (mevedel-goal-present-plan plan (current-buffer))
+               (setf (mevedel-goal-phase goal) 'awaiting-approval)))))
         ('reviewing
-         (setf (mevedel-goal-review-summary goal) response))))))
+         (setf (mevedel-goal-review-summary goal)
+               (mevedel-goal--parse-review response)))))))
 
 (defun mevedel-goal-settle-turn (fsm)
   "Advance Goal state after FSM reaches a successful terminal boundary."
@@ -669,25 +807,61 @@ artifact before the approval prompt is displayed."
           ('implementing
            (setf (mevedel-goal-phase goal) 'reviewing))
           ('reviewing
-           (when (and (stringp (mevedel-goal-review-summary goal))
-                      (not (string-blank-p
-                            (mevedel-goal-review-summary goal))))
-             (setf (mevedel-goal-status goal) 'complete))))))))
+           (if-let* ((review (mevedel-goal-review-summary goal)))
+               (progn
+                 (mevedel-goal--cycle-put
+                  goal :review
+                  (list :verdict (plist-get review :verdict)
+                        :summary-hash
+                        (secure-hash 'sha256 (plist-get review :summary))
+                        :at (format-time-string "%FT%T%z")))
+                 (mevedel-goal--persist-cycle-index
+                  goal mevedel--session chat-buffer)
+                 (pcase (plist-get review :verdict)
+                   ('complete
+                    (setf (mevedel-goal-status goal) 'complete
+                          (mevedel-goal-reason goal) nil))
+                   ('continue
+                    (setf (mevedel-goal-cycle goal)
+                          (1+ (mevedel-goal-cycle goal))
+                          (mevedel-goal-phase goal) 'planning
+                          (mevedel-goal-current-plan goal) nil
+                          (mevedel-goal-review-findings goal)
+                          (plist-get review :summary)
+                          (mevedel-goal-review-summary goal) nil
+                          (mevedel-goal-reason goal) nil)
+                    (mevedel-goal--cycle-put goal :started-at
+                                             (format-time-string "%FT%T%z"))
+                    (mevedel-goal--persist-cycle-index
+                     goal mevedel--session chat-buffer))
+                   ('blocked
+                    (setf (mevedel-goal-status goal) 'blocked
+                          (mevedel-goal-reason goal)
+                          (plist-get review :summary)))))
+             (setf (mevedel-goal-status goal) 'paused
+                   (mevedel-goal-reason goal)
+                   "Goal review returned malformed structured output"))))))))
 
 (defun mevedel-goal-dispatch-after-turn (fsm)
-  "Dispatch Goal review after FSM's implementation turn has settled."
+  "Dispatch the next Goal phase after FSM has settled."
   (when-let* ((info (gptel-fsm-info fsm))
-              ((eq (plist-get info :mevedel-goal-phase) 'implementing))
+              (settled-phase (plist-get info :mevedel-goal-phase))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
                              (mevedel-session-goal mevedel--session)))
-                  ((eq (mevedel-goal-status goal) 'active))
-                  ((eq (mevedel-goal-phase goal) 'reviewing)))
-        (mevedel-goal--dispatch-phase
-         'reviewing (mevedel-goal--review-prompt goal)
-         "Review Goal implementation")))))
+                  ((eq (mevedel-goal-status goal) 'active)))
+        (pcase (cons settled-phase (mevedel-goal-phase goal))
+          (`(implementing . reviewing)
+           (mevedel-goal--dispatch-phase
+            'reviewing (mevedel-goal--review-prompt goal)
+            "Review Goal implementation"))
+          (`(reviewing . planning)
+           (mevedel-goal--dispatch-phase
+            'planning (mevedel-goal--planning-prompt goal)
+            (format "Continue Goal with cycle %d"
+                    (mevedel-goal-cycle goal)))))))))
 
 
 (provide 'mevedel-goal)

@@ -565,13 +565,16 @@ override policy for one invocation.
 
 ### Supervised Goals
 
-`/goal <objective>` starts a supervised Goal in the current session. The model
-first explores with read-only tools and emits a `<proposed_plan>` block.
-mevedel persists the proposal as `plans/current.md` and shows the existing plan
-approval prompt. Approval starts implementation with the selected session
-permission mode; after that request settles, mevedel starts a read-only review.
-A successful review completes the Goal. Goal status is one of `active`,
-`paused`, `blocked`, or `complete`.
+`/goal <objective>` starts a supervised Goal in the current session. Each cycle
+begins with read-only exploration and a `<proposed_plan>` block. mevedel keeps
+that proposal in the Goal's mutable `current-plan.md` and shows the plan
+approval prompt. Approval copies it to an immutable, sequential
+`cycle-NNN-plan.md`, then starts implementation with the selected session
+permission mode. A read-only review returns one structured verdict: `complete`
+finishes the whole Goal, `continue` carries its findings into a new planning
+cycle, and `blocked` stops with a concrete reason. Malformed reviews and a
+successive materially identical plan pause for intervention. Goal status is
+one of `active`, `paused`, `blocked`, or `complete`.
 
 ### Review and Verify Commands
 
@@ -1060,7 +1063,9 @@ or external setup encrypts them.
 | `.mevedel/permissions.el` | Persistent permission decisions. |
 | `<session>/tool-results/` | Oversized tool outputs saved outside the transcript. |
 | `.mevedel/hooks.el`, `.mevedel/hooks.json` | Project hook configuration. |
-| `<session>/plans/current.md` | Current Goal plan artifact. |
+| `<session>/goals/<goal-id>/current-plan.md` | Mutable proposal for the current Goal cycle. |
+| `<session>/goals/<goal-id>/cycle-NNN-plan.md` | Immutable accepted plan for one Goal cycle. |
+| `<session>/goals/<goal-id>/cycles.el` | Lightweight cycle artifact, review, provider/effort, and timestamp index. |
 
 ## Documentation
 
