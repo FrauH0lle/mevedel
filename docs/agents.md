@@ -222,8 +222,10 @@ does not keep the overlay visible.
 
 ## Model tiers
 
-`mevedel-models.el` maps small tier names (`fast`, `balanced`,
-`strong`) to concrete gptel backend/model providers. Agent-like workload
-defaults live in `mevedel-model-workload-tiers`; an Agent call or skill
-invocation can override the model for that invocation without changing
-the parent session default.
+`mevedel-models.el` resolves the current session's preset-local named tiers and
+workload map. A tier can select a concrete gptel provider and reasoning effort;
+a workload can select a tier or exact provider and override effort. Resolution
+starts from the session backend/model/effort, then applies tier and workload
+values, followed by explicit Agent or skill overrides. Agent buffers receive a
+deep-copied snapshot of the maps, so nested agents keep the policy in effect
+when they were launched.

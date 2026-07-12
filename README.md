@@ -547,10 +547,11 @@ agent's mailbox and the FSM parks until all live workers finish. If an agent is
 no longer relevant or appears stuck, the model can use `StopAgent`, and the user
 can run `mevedel-stop-agent`.
 
-Default model tiers for agent-like workloads are configured via
-`mevedel-model-workload-tiers` (`fast`/`balanced`/`strong`); the concrete
-provider for each tier is set via `mevedel-model-tiers`. An `Agent` call can
-override the tier for a single invocation.
+Named model tiers and workload assignments live in the current session preset.
+The global `mevedel-model-tiers` and `mevedel-model-workloads` values are the
+defaults for presets that omit them. A workload selects a tier or exact gptel
+provider and may override reasoning effort; an `Agent` call or skill can
+override policy for one invocation.
 
 | Custom Variable                         | Variable Description                                                |
 |-----------------------------------------|---------------------------------------------------------------------|
@@ -900,8 +901,8 @@ Useful commands:
 | `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |
 | `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |
 | `mevedel-eval-expression-display-limit`    | Lines of an `Eval` expression to show in the confirmation prompt.        |
-| `mevedel-model-tiers`                      | Map `fast` / `balanced` / `strong` tiers to concrete gptel providers.    |
-| `mevedel-model-workload-tiers`             | Default tier per sub-agent and helper model workload.                    |
+| `mevedel-model-tiers`                      | Default named provider/effort tier map inherited by session presets.     |
+| `mevedel-model-workloads`                  | Default tier/provider/effort policy per model workload.                  |
 | `mevedel-preset-extra-tool-specs`          | Add active or deferred tool specs to built-in presets.                   |
 | `mevedel-hook-rules`                       | Trusted user-level declarative hook rules.                               |
 | `mevedel-hooks-require-project-trust`      | Require explicit trust before project hook files run.                    |

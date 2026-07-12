@@ -55,6 +55,12 @@
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
 
+;; `mevedel-models'
+(declare-function mevedel-model-merge-tiers
+                  "mevedel-models" (additions current))
+(declare-function mevedel-model-merge-workloads
+                  "mevedel-models" (additions current))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--find-directive-by-uuid
                   "mevedel-overlays" (uuid))
@@ -151,7 +157,8 @@ Each value contains the raw parent, agent, tool, and variable settings.")
   "Non-nil while a preset is applied for one dynamic request only.")
 
 (defconst mevedel-preset--structural-keys
-  '(:description :parents :pre :post :backend :model :system :tools :agents)
+  '(:description :parents :pre :post :backend :model :system :tools :agents
+    :model-tiers :model-workloads)
   "Preset keys with dedicated mevedel or gptel behavior.")
 
 (defun mevedel-preset--variable-for-key (key)
@@ -250,6 +257,18 @@ Mevedel public and private variables take precedence over gptel variables."
             (value (pop keys)))
         (cond
          ((eq key :agents) nil)
+         ((memq key '(:model-tiers :model-workloads))
+          (require 'mevedel-models)
+          (push (cons (if (eq key :model-tiers)
+                          'mevedel-model-tiers
+                        'mevedel-model-workloads)
+                      (list :function
+                            (apply-partially
+                             (if (eq key :model-tiers)
+                                 #'mevedel-model-merge-tiers
+                               #'mevedel-model-merge-workloads)
+                             value)))
+                settings))
          ((eq key :tools)
           (setq gptel-keys
                 (append gptel-keys
@@ -324,6 +343,8 @@ KEYS is a plist with the following recognized keys:
                            (bare symbols, (:group X), (:tool X), (:deferred X))
   :agents       LIST    -- list of agent name symbols for request-time setup
   :system       VALUE   -- system prompt (string, function, or dynamic spec)
+  :model-tiers  ALIST   -- named provider/effort tier entries
+  :model-workloads ALIST -- workload tier/provider/effort entries
 
 PARENT composition and arbitrary ordinary keys follow gptel preset value
 semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
@@ -337,7 +358,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
         (setq forms
               (append forms
                       (list key
-                            (if (memq key '(:parents :tools :agents))
+                            (if (memq key '(:parents :tools :agents
+                                           :model-tiers :model-workloads))
                                 (if (eq (car-safe value) 'quote)
                                     value
                                   `',value)

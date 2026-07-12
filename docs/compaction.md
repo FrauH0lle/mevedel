@@ -146,9 +146,9 @@ remain ineligible.
 
 Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
 use a no-tools prompt preamble, respect the active `gptel-stream`
-setting, and use the `compaction` workload model tier from
-`mevedel-model-workload-tiers`. Failures retry up to three attempts with
-exponential backoff. After repeated failures,
+setting, and use the `compaction` workload policy from the current session's
+`mevedel-model-workloads`. Failures retry up to three attempts with exponential
+backoff. After repeated failures,
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 

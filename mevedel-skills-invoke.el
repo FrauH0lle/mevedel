@@ -26,6 +26,7 @@
 (declare-function gptel-make-fsm "ext:gptel-request" (&rest args))
 (defvar gptel-backend)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 (defvar gptel-post-response-functions)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
@@ -59,11 +60,12 @@
                   "mevedel-mentions" (start end placeholder))
 
 ;; `mevedel-models'
-(declare-function mevedel-model-apply-provider-to-info
-                  "mevedel-models" (info provider))
+(declare-function mevedel-model-apply-policy-to-info
+                  "mevedel-models" (info policy))
 (declare-function mevedel-model-parse-selector "mevedel-models" (value))
-(declare-function mevedel-model-resolve-selector
-                  "mevedel-models" (selector &optional noerror))
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
@@ -206,6 +208,13 @@ the request struct.  Used by the WAIT-state apply handler to swap
       (when-let* ((req (mevedel-skills--current-request)))
         (mevedel-request-skill-model-override req))))
 
+(defun mevedel-skills--current-effort-override ()
+  "Return the active skill effort override, or nil."
+  (or (when-let* ((inv (mevedel-skills--current-invocation)))
+        (mevedel-agent-invocation-skill-effort-override inv))
+      (when-let* ((req (mevedel-skills--current-request)))
+        (mevedel-request-skill-effort-override req))))
+
 (defun mevedel-skills--pre-realize-model-override ()
   "Return the model selector visible before gptel realizes request data.
 
@@ -213,6 +222,11 @@ Checks active invocation/request overrides first, then the pending
 slash/inline skill stash that has not yet been drained into a request."
   (or (mevedel-skills--current-model-override)
       (plist-get mevedel-skills--pending-request-context :model)))
+
+(defun mevedel-skills--pre-realize-effort-override ()
+  "Return the effort override visible before request realization."
+  (or (mevedel-skills--current-effort-override)
+      (plist-get mevedel-skills--pending-request-context :effort)))
 
 (defun mevedel-skills--model-selector (skill)
   "Return SKILL's parsed model selector, or nil."
@@ -261,11 +275,15 @@ Post-realize model-side overrides remain handled by
   (let* ((info (gptel-fsm-info fsm))
          (chat-buffer (plist-get info :buffer)))
     (when (and chat-buffer (buffer-live-p chat-buffer))
-      (when-let* ((override (with-current-buffer chat-buffer
-                              (mevedel-skills--pre-realize-model-override)))
-                  (provider (mevedel-model-resolve-selector override t)))
-        (setq-local gptel-backend (plist-get provider :backend))
-        (setq-local gptel-model (plist-get provider :model))))))
+      (let ((policy
+             (with-current-buffer chat-buffer
+               (mevedel-model-resolve-workload
+                nil
+                (mevedel-skills--pre-realize-model-override)
+                (mevedel-skills--pre-realize-effort-override)))))
+        (setq-local gptel-backend (plist-get policy :backend))
+        (setq-local gptel-model (plist-get policy :model))
+        (setq-local gptel-reasoning-effort (plist-get policy :effort))))))
 
 (defun mevedel-skills--apply-overrides-handler (fsm)
   "WAIT-state handler: apply post-realize skill model overrides to FSM info.
@@ -278,20 +296,24 @@ override is in effect.
 This is a post-realize safety rail for model-side skill invocations
 that arrive during an already-running tool loop.  Same-backend model
 swaps are allowed; cross-backend swaps are rejected by
-`mevedel-model-apply-provider-to-info' because `info' :data is already
-backend-specific.
-
-  Effort is parsed and stored on the same slot but not applied here
-  -- gptel does not yet expose an effort knob.  When it does, this
-  handler will mutate the corresponding info key the same way."
+`mevedel-model-apply-policy-to-info' because `info' :data is already
+backend-specific."
   (let* ((info (gptel-fsm-info fsm))
          (chat-buffer (plist-get info :buffer)))
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (with-current-buffer chat-buffer
-        (when-let* ((override (mevedel-skills--current-model-override))
-                    (provider (mevedel-model-resolve-selector override t)))
-          (setf (gptel-fsm-info fsm)
-                (mevedel-model-apply-provider-to-info info provider)))))))
+        (let ((effort (mevedel-skills--current-effort-override)))
+          (when effort
+            (user-error
+             "Skill effort overrides must be selected before request dispatch"))
+          (when (mevedel-skills--current-model-override)
+            (let ((policy
+                   (mevedel-model-resolve-workload
+                    nil
+                    (mevedel-skills--current-model-override)
+                    nil)))
+              (setf (gptel-fsm-info fsm)
+                    (mevedel-model-apply-policy-to-info info policy)))))))))
 
 
 ;;
@@ -543,7 +565,7 @@ shadow `$0'/`$1' shorthand."
          (skill-dir (or (and skill (mevedel-skill-source-dir skill)) ""))
          (effort (or (and skill
                           (mevedel-skill-effort skill)
-                          (symbol-name (mevedel-skill-effort skill)))
+                          (format "%s" (mevedel-skill-effort skill)))
                      ""))
          (argument-names (and skill (mevedel-skill-argument-names skill)))
          (raw-args arguments)
@@ -1217,8 +1239,8 @@ TRIGGER selects the install path:
   invocation (innermost) or request directly.
 
 PERMISSION-RULES is a list of parsed mevedel rules to append.
-MODEL is a selector plist or nil.  EFFORT is a symbol or nil (currently
-inert).  HOOK-RULES is a list of normalized hook rules.  INVOKED-SKILL
+MODEL is a selector plist or nil.  EFFORT is an opaque gptel value or nil.
+HOOK-RULES is a list of normalized hook rules.  INVOKED-SKILL
 is a `mevedel-skill-invocation-record' to record on the session for
 compaction/replay.
 
@@ -1226,8 +1248,7 @@ Emits one-time per-invocation `display-warning' notices when MODEL
 or EFFORT is set so skill authors know:
 - model: the override is being installed; verify the provider or tier is
   configured with gptel.
-- effort: stored but currently has no observable effect (gptel
-  does not yet expose an effort knob)."
+- effort: the override is installed and will be validated before dispatch."
   (when model
     (display-warning
      'mevedel
@@ -1237,7 +1258,7 @@ or EFFORT is set so skill authors know:
   (when effort
     (display-warning
      'mevedel
-     (format "Skill effort override %S stored but currently inert (gptel does not yet expose an effort knob)."
+     (format "Skill effort override %S installed; gptel will validate it before dispatch."
              effort)
      :debug))
   (cond

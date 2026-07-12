@@ -607,7 +607,7 @@ arguments: alpha beta 2 gamma
                            (mevedel-skill-argument-names str-skill)))))
       (delete-directory dir t)))
 
-  :doc "effort validates against allowed values"
+  :doc "effort remains opaque until gptel validates the selected model"
   (let* ((mevedel-skills-include-bundled nil)
          (dir (make-temp-file "mevedel-skills-test-" t)))
     (unwind-protect
@@ -620,7 +620,7 @@ effort: high
           (mevedel-skills-test--write-skill
            dir "bad-effort"
            "description: ok
-effort: ludicrous
+effort: -1
 " "Body")
           (let* ((skills (mevedel-skills-scan dir '(".")))
                  (good (cl-find "good-effort" skills
@@ -628,8 +628,7 @@ effort: ludicrous
                  (bad (cl-find "bad-effort" skills
                                :key #'mevedel-skill-name :test #'equal)))
             (should (eq 'high (mevedel-skill-effort good)))
-            ;; Invalid value is dropped, skill loads.
-            (should (null (mevedel-skill-effort bad)))))
+            (should (= -1 (mevedel-skill-effort bad)))))
       (delete-directory dir t)))
 
   :doc "shell defaults to bash, accepts powershell, warns on unknown"

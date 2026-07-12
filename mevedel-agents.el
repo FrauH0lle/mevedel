@@ -41,6 +41,7 @@
 
 ;; `mevedel-models'
 (declare-function mevedel-model-agent-tool-description "mevedel-models" ())
+(defvar mevedel-model-tiers)
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset--resolved-metadata
@@ -563,7 +564,9 @@ Agent tool's `:enum' slot.  Must be called in the chat buffer."
                                (equal (plist-get arg :name) "model"))
                              args)))
       (setf (plist-get model-arg :enum)
-            (vconcat '("fast" "balanced" "strong")))
+            (vconcat (mapcar (lambda (entry)
+                               (symbol-name (car entry)))
+                             mevedel-model-tiers)))
       (setf (plist-get model-arg :description)
             (mevedel-model-agent-tool-description))))
   nil)

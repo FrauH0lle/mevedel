@@ -629,6 +629,25 @@ fire-count and payload."
 			   (should (equal gptel-system-prompt "agent system"))))
 			     (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(mevedel-deftest mevedel-agent-exec--policy-for-invocation
+  ()
+  ,test
+  (test)
+  :doc "passes explicit Agent model and skill effort over workload policy"
+  (let* ((inv (mevedel-agent-invocation--create
+               :model-tier-override '(:tier strong)
+               :skill-model-override '(:tier fast)
+               :skill-effort-override 'high))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(:model chosen))))
+      (should (equal '(:model chosen)
+                     (mevedel-agent-exec--policy-for-invocation
+                      "reviewer" inv))))
+    (should (equal '("reviewer" (:tier strong) high) captured))))
+
 
 (mevedel-deftest mevedel-agent-exec--refresh-initial-transcript-state ()
   ,test
@@ -744,8 +763,12 @@ fire-count and payload."
 		       (agent-buf (generate-new-buffer " *mev-agent-child*"))
 		       (inv (mevedel-agent-invocation--create
 		             :agent (mevedel-agent--create :name "explorer")))
+		       (parent-tiers '((custom)))
+		       (parent-workloads '((explorer :tier custom)))
 		       captured-buffer
-		       captured-include-reasoning)
+		       captured-include-reasoning
+		       captured-tiers
+		       captured-workloads)
 		   (unwind-protect
 		       (progn
 			 (with-current-buffer parent-buf
@@ -756,6 +779,9 @@ fire-count and payload."
 				 (gptel-stream nil)
 				 (gptel-backend nil)
 				 (gptel-model 'test-model)
+				 (gptel-reasoning-effort nil)
+				 (mevedel-model-tiers parent-tiers)
+				 (mevedel-model-workloads parent-workloads)
 				 (gptel-system-prompt "parent system")
 				 (gptel-use-tools nil)
 				 (gptel-tools nil)
@@ -771,7 +797,10 @@ fire-count and payload."
 					(lambda (&optional _prompt &rest _args)
 					  (setq captured-buffer (current-buffer))
 					  (setq captured-include-reasoning
-						gptel-include-reasoning)))
+						gptel-include-reasoning)
+					  (setq captured-tiers mevedel-model-tiers
+						captured-workloads
+						mevedel-model-workloads)))
 				       ((symbol-function 'gptel--update-status)
 					#'ignore))
 			       (mevedel-agent-exec--run
@@ -779,6 +808,11 @@ fire-count and payload."
 				inv agent-buf))))
 			 (should (eq captured-buffer agent-buf))
 			 (should (eq captured-include-reasoning t))
+			 (should (equal '((custom)) captured-tiers))
+			 (should (equal '((explorer :tier custom))
+					captured-workloads))
+			 (should-not (eq parent-tiers captured-tiers))
+			 (should-not (eq parent-workloads captured-workloads))
 			 (with-current-buffer agent-buf
 			   (should (eq gptel-include-reasoning t))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))

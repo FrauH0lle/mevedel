@@ -227,15 +227,37 @@
     (should (equal (mevedel-model-tier-selector 'fast)
                    (mevedel-skills--pre-realize-model-override)))))
 
+(mevedel-deftest mevedel-skills--current-effort-override
+  ()
+  ,test
+  (test)
+  :doc "prefers the innermost agent skill effort"
+  (with-temp-buffer
+    (setq-local mevedel--current-request
+                (mevedel-request--create :skill-effort-override 'medium))
+    (setq-local mevedel--agent-invocation
+                (mevedel-agent-invocation--create
+                 :skill-effort-override 'high))
+    (should (eq 'high (mevedel-skills--current-effort-override)))))
+
+(mevedel-deftest mevedel-skills--pre-realize-effort-override
+  ()
+  ,test
+  (test)
+  :doc "uses pending skill effort before request creation"
+  (with-temp-buffer
+    (setq-local mevedel-skills--pending-request-context '(:effort high))
+    (should (eq 'high (mevedel-skills--pre-realize-effort-override)))))
+
 (mevedel-deftest mevedel-skills--transform-apply-model-override ()
   ,test
   (test)
   :doc "pending slash tier sets prompt-buffer backend and model locals"
   (mevedel-skills-test--with-model-backends
     (let ((mevedel-model-tiers
-           '((fast . "Fast:fast-model")
-             (balanced . "Balanced:balanced-model")
-             (strong . nil)))
+           '((fast :provider "Fast:fast-model")
+             (balanced :provider "Balanced:balanced-model")
+             (strong)))
           (chat (generate-new-buffer " *skill-model-chat*")))
       (unwind-protect
           (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
@@ -285,7 +307,44 @@
               (mevedel-skills--transform-apply-model-override fsm)
               (should (equal "Fast" (gptel-backend-name gptel-backend)))
               (should (eq 'fast-model gptel-model))))
+        (kill-buffer chat))))
+
+  :doc "pending effort uses gptel validation and reaches the prompt buffer"
+  (mevedel-skills-test--with-model-backends
+    (let ((chat (generate-new-buffer " *skill-effort-chat*"))
+          (old-custom (get 'gptel-reasoning-effort 'custom-type))
+          (old-effort (get 'fast-model :reasoning-effort)))
+      (unwind-protect
+          (progn
+            (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
+            (put 'fast-model :reasoning-effort '(member low high))
+            (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
+              (with-current-buffer chat
+                (setq-local mevedel-skills--pending-request-context
+                            (list :model
+                                  (mevedel-model-resolve-provider
+                                   "Fast:fast-model")
+                                  :effort 'high)))
+              (with-temp-buffer
+                (mevedel-skills--transform-apply-model-override fsm)
+                (should (eq 'fast-model gptel-model))
+                (should (eq 'high gptel-reasoning-effort)))))
+        (put 'gptel-reasoning-effort 'custom-type old-custom)
+        (put 'fast-model :reasoning-effort old-effort)
         (kill-buffer chat)))))
+
+(mevedel-deftest mevedel-skills--apply-overrides-handler ()
+  ,test
+  (test)
+  :doc "rejects a model-side effort override before the next dispatch"
+  (let ((chat (generate-new-buffer " *skill-post-effort-chat*")))
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm :info (list :buffer chat :data '(:messages [])))))
+          (cl-letf (((symbol-function 'mevedel-skills--current-effort-override)
+                     (lambda () 'high)))
+            (should-error (mevedel-skills--apply-overrides-handler fsm)
+                          :type 'user-error)))
+      (kill-buffer chat))))
 
 
 ;;

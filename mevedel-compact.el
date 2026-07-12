@@ -43,6 +43,7 @@
 (defvar gptel-backend)
 (defvar gptel-max-tokens)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 (defvar gptel-stream)
 (defvar gptel-tools)
 (defvar gptel-use-tools)
@@ -65,10 +66,9 @@
 (declare-function mevedel--transform-expand-mentions "mevedel-mentions" (fsm))
 
 ;; `mevedel-models'
-(declare-function mevedel-model-resolve-selector
-                  "mevedel-models" (selector &optional noerror))
-(declare-function mevedel-model-workload-default-selector
-                  "mevedel-models" (workload))
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--transform "mevedel-reminders" (fsm))
@@ -1236,13 +1236,11 @@ auto-compaction call."
                                (error
                                 (fail (format "%s" apply-err) nil))))))
                        (condition-case request-err
-                           (let ((provider
+                           (let ((policy
                                   (progn
                                     (require 'mevedel-models)
-                                    (mevedel-model-resolve-selector
-                                     (mevedel-model-workload-default-selector
-                                      'compaction)
-                                     t)))
+                                    (mevedel-model-resolve-workload
+                                     'compaction)))
                                  (gptel-use-tools nil)
                                  (gptel-tools nil))
                              (gptel-with-preset 'gptel-default
@@ -1276,12 +1274,12 @@ auto-compaction call."
                                                   (apply #'concat
                                                          (nreverse
                                                           summary-parts)))))))))))
-                                 (if provider
-                                     (let ((gptel-backend
-                                            (plist-get provider :backend))
-                                           (gptel-model
-                                            (plist-get provider :model)))
-                                       (funcall request-fn))
+                                 (let ((gptel-backend
+                                        (plist-get policy :backend))
+                                       (gptel-model
+                                        (plist-get policy :model))
+                                       (gptel-reasoning-effort
+                                        (plist-get policy :effort)))
                                    (funcall request-fn)))))
                          (error
                           (fail (format "%s" request-err) t)))))))

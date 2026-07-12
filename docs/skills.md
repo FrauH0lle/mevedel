@@ -404,11 +404,16 @@ follow-ups and other terminal cleanup run through that shared boundary.
 
 ## Model And Effort
 
-`model` can name a tier or concrete provider selector. It temporarily
-overrides subsequent gptel iterations in the active request/invocation.
+`model` can name a preset-local tier or concrete provider selector. It
+temporarily overrides the workload/session provider for the active
+request/invocation.
 
-`effort` is parsed and stored but currently inert until gptel exposes an
-effort/reasoning knob.
+`effort` remains opaque until dispatch. Mevedel validates it through gptel's
+public `gptel-reasoning-effort` and the selected model's `:reasoning-effort`
+type metadata. Unsupported explicit effort fails before the request instead of
+being dropped or downgraded. An effort-bearing skill must be selected before
+request realization; a model-side Skill call cannot retrofit effort into an
+already provider-specific payload and therefore fails visibly.
 
 ## Body Preparation
 
@@ -423,8 +428,7 @@ Claude-compatible literal substitutions are supported for imported skills:
 Mevedel-native aliases are also available and preferred for new
 mevedel-specific skills: `${MEVEDEL_SESSION_ID}`, `${MEVEDEL_SKILL_DIR}`,
 and `${MEVEDEL_EFFORT}`. Effort substitutions reflect the parsed skill
-`effort`; model-side reasoning effort remains inert until gptel exposes a
-reasoning knob. Literal `${...}` substitutions do not suppress the
+`effort`. Literal `${...}` substitutions do not suppress the
 automatic `ARGUMENTS: ...` fallback when invocation arguments are supplied
 but no argument placeholder is present.
 
