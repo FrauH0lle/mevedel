@@ -161,6 +161,26 @@
         (should (equal draft (mevedel-view--input-text)))
         (should (= (point) (+ (mevedel-view--input-start) 4)))))))
 
+(mevedel-deftest mevedel-view--render-stream-update
+  (:doc "rolls back failed agent observer renders")
+  ,test
+  (test)
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (setq-local mevedel-view--agent-transcript-p t)
+      (let ((before (buffer-string))
+            warned)
+        (cl-letf (((symbol-function 'mevedel-view--render-incremental)
+                   (lambda (&rest _)
+                     (let ((inhibit-read-only t))
+                       (delete-region (point-min) (point-max)))
+                     (error "Observer render failed")))
+                  ((symbol-function 'display-warning)
+                   (lambda (&rest _) (setq warned t))))
+          (mevedel-view--render-stream-update data-buf))
+        (should warned)
+        (should (equal before (buffer-string)))))))
+
 (mevedel-deftest mevedel-view-stream-install ()
   ,test
   (test)

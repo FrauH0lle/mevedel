@@ -3,7 +3,7 @@
 Issues and PRDs for this repo live as markdown files in `.scratch/`.
 That directory is intentionally gitignored local agent state. If a PRD
 contains durable product or architecture decisions, promote those parts
-to maintained docs such as `docs/adr/`, `docs/deferred-tracker.md`, or
+to maintained docs such as `docs/adr/`, `docs/backlog.md`, or
 the relevant area doc instead of committing `.scratch/`.
 
 ## Issue flow

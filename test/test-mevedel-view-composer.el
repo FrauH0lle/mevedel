@@ -321,6 +321,45 @@
              (insert "status row\n"))))
         (should (= 0 changes))))))
 
+(mevedel-deftest mevedel-view--call-preserving-window-state
+  (:doc "follows new output only from the bottom")
+  ,test
+  (test)
+
+  :doc "bottom-following windows stay at the bottom"
+  (save-window-excursion
+    (with-temp-buffer
+      (dotimes (index 400)
+        (insert (format "line %d\n" index)))
+      (switch-to-buffer (current-buffer))
+      (goto-char (point-max))
+      (recenter -1)
+      (redisplay t)
+      (mevedel-view--call-preserving-window-state
+       (lambda ()
+         (goto-char (point-max))
+         (insert "new output\n")))
+      (should (= (window-point) (point-max)))
+      (should (>= (window-end nil t) (point-max)))))
+
+  :doc "windows browsing older output keep their point and start"
+  (save-window-excursion
+    (with-temp-buffer
+      (dotimes (index 400)
+        (insert (format "line %d\n" index)))
+      (switch-to-buffer (current-buffer))
+      (goto-char (point-min))
+      (set-window-start nil (point-min))
+      (redisplay t)
+      (let ((point-before (point))
+            (start-before (window-start)))
+        (mevedel-view--call-preserving-window-state
+         (lambda ()
+           (goto-char (point-max))
+           (insert "new output\n")))
+        (should (= (point) point-before))
+        (should (= (window-start) start-before))))))
+
 (mevedel-deftest mevedel-view--input-text ()
   ,test
   (test)

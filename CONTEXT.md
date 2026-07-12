@@ -19,6 +19,10 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
+- **agent transcript view** — A read-only projection of a sub-agent transcript,
+  backed by the live agent while it is running and by its saved transcript after
+  it reaches a terminal state. It is an observation-only view-buffer variant,
+  not a separate transcript presentation or interaction surface.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **tool input repair** — A deterministic correction to a tool call that either responds to a specific contract violation or is explicitly requested by the tool. Ordinary default values are tool semantics, not repairs.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.

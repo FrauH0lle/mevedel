@@ -1089,9 +1089,8 @@ The maintained detail docs live in [`docs/`](docs/):
 - [`docs/tutor.md`](docs/tutor.md) — Socratic tutoring workflow and hint
   persistence.
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection.
-- [`docs/tech-debt-tracker.md`](docs/tech-debt-tracker.md) and
-  [`docs/deferred-tracker.md`](docs/deferred-tracker.md) — known shortcuts and
-  deferred follow-up work.
+- [`docs/backlog.md`](docs/backlog.md) — project notes,
+  todos, feature ideas, fixes, and deferred work.
 - [`docs/commits.md`](docs/commits.md) — commit message format and guidelines.
 
 ## Development

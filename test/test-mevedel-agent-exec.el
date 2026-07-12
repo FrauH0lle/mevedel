@@ -568,6 +568,15 @@ fire-count and payload."
                                         (memq #'mevedel-tool-repair-clear-ledger
                                               gptel-post-response-functions))
                                        (should
+                                        (memq #'mevedel-view-agent-live-transcript-stream
+                                              gptel-post-stream-hook))
+                                       (should
+                                        (memq #'mevedel-view-agent-live-transcript-pre-tool
+                                              gptel-pre-tool-call-functions))
+                                       (should
+                                        (memq #'mevedel-view-agent-live-transcript-post-tool
+                                              gptel-post-tool-call-functions))
+                                       (should
                                         (memq #'mevedel-tool-repair-clear-ledger
                                               kill-buffer-hook)))))
                                  (with-current-buffer (car buffers)

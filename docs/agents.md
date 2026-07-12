@@ -186,7 +186,11 @@ attribution; recent ephemeral
 activity is kept out of the default view to avoid churn. Terminal
 handles open a rendered read-only transcript view from the saved
 transcript file. Running handles open a rendered read-only view over
-the live agent buffer when that buffer is available.
+the live agent buffer when that buffer is available. Open live transcript
+views are observation-only projections that follow the main renderer's stream
+and tool cadence without redirecting parent interactions. See
+[`docs/view.md`](view.md#buffer-roles) for their update, scrolling, header,
+settlement, and failure-isolation contract.
 
 The agent view owner supplies aggregate running or blocked rows to the status
 zone so the user can locate active handles without scanning the whole

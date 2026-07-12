@@ -861,6 +861,20 @@ POSITION may be an integer or marker."
                                      mevedel-view--pending-tool-calls)))))
       (mevedel-view--insert-pending-tool-lines visible))))
 
+(defun mevedel-view--render-stream-update (data-buf)
+  "Incrementally render DATA-BUF, isolating observer-view failures."
+  (if (not mevedel-view--agent-transcript-p)
+      (mevedel-view--render-incremental data-buf)
+    (condition-case err
+        (atomic-change-group
+          (mevedel-view--render-incremental data-buf))
+      (error
+       (display-warning
+        'mevedel
+        (format "Live agent transcript render failed: %s"
+                (error-message-string err))
+        :warning)))))
+
 (defun mevedel-view--schedule-tool-boundary-render (data-buf)
   "Schedule a coalesced incremental render for DATA-BUF."
   (when (and (buffer-live-p data-buf)
@@ -878,8 +892,8 @@ POSITION may be an integer or marker."
                               (buffer-live-p data-buf))
                      (with-current-buffer view-buf
                        (setq mevedel-view--tool-boundary-render-timer nil)
-                       (mevedel-view--render-incremental data-buf)))))))
-      (mevedel-view--render-incremental data-buf))))
+                       (mevedel-view--render-stream-update data-buf)))))))
+      (mevedel-view--render-stream-update data-buf))))
 
 (defun mevedel-view-stream-schedule ()
   "Schedule a debounced incremental render driven by the stream hook.
@@ -913,7 +927,7 @@ rebuilds at most a few times per second rather than per token."
                          (mevedel-view--debug-log
                           'stream-render-fire
                           :state (mevedel-view--debug-state data-buf))
-                         (mevedel-view--render-incremental data-buf)))))))))))
+                         (mevedel-view--render-stream-update data-buf)))))))))))
   nil)
 
 (defun mevedel-view--pending-tool-key (info)
