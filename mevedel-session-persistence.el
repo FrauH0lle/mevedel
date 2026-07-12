@@ -71,6 +71,8 @@
 (declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-forked-from-turn "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
@@ -232,7 +234,8 @@ add more, and we don't want to act on actions we don't understand).")
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
-    :permission-mode :permission-rules :last-observed-date
+    :permission-mode :permission-rules :preset-name :preset-settings
+    :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
     :prompt-index :file-snapshots :agent-transcripts :plan-metadata :messages)
   "Keys required in every current-version session sidecar.")
@@ -398,6 +401,8 @@ The resulting plist is round-trippable via
    :forked-from-turn       (mevedel-session-forked-from-turn session)
    :permission-mode        (mevedel-session-permission-mode session)
    :permission-rules       (mevedel-session-permission-rules session)
+   :preset-name            (mevedel-session-preset-name session)
+   :preset-settings        (mevedel-session-preset-settings session)
    :last-observed-date     (mevedel-session-last-observed-date session)
    :agent-types-snapshot   (mevedel-session-agent-types-snapshot session)
    :skills-snapshot        (mevedel-session-skills-snapshot session)
@@ -472,6 +477,9 @@ unknown actions are dropped via the hygiene filter."
                      :tasks            tasks
                      :permission-rules rules
                      :permission-mode  (plist-get plist :permission-mode)
+                     :preset-name      (plist-get plist :preset-name)
+                     :preset-settings  (copy-tree
+                                        (plist-get plist :preset-settings))
                      :turn-count       (plist-get plist :total-turn-count)
                      :last-observed-date (plist-get plist :last-observed-date)
                      :agent-types-snapshot
@@ -3359,7 +3367,9 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     (session staging-path new-id parent-id picked-segment picked-cum-turn now)
   "Return a staged fork copy of SESSION reduced to the picked turn."
   (let ((child (copy-mevedel-session session)))
-    (setf (mevedel-session-prompt-index child)
+    (setf (mevedel-session-preset-settings child)
+          (copy-tree (mevedel-session-preset-settings session))
+          (mevedel-session-prompt-index child)
           (mevedel-session-persistence--reduce-prompt-index
            (mevedel-session-prompt-index session)
            picked-segment picked-cum-turn)

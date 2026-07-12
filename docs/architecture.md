@@ -28,7 +28,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   deferred tool state, mailbox messages, background agents, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
-  queue, plan queue, and a transient bounded tool-input repair log.
+  queue, plan queue, selected preset and resolved mevedel preset settings,
+  and a transient bounded tool-input repair log.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
   rules, hook rules, model override, effort override.
@@ -67,8 +68,13 @@ lives on the workspace file cache and session touched-files map.
 ## gptel integration
 
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in
-`gptel--known-tools`. Four presets: `mevedel-discuss` → `implement` →
-`revise`; `tutor` inherits from `discuss`. System prompt assembled
+`gptel--known-tools`. Presets use exact declared names and inherit in parent
+order (later parents win, then the child). Ordinary preset keys resolve to
+`mevedel-foo`/`mevedel--foo` before gptel variables and use gptel's value
+composition semantics. Persistent application is buffer- and session-local;
+request-only application is dynamically scoped. The built-ins are
+`mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, and
+`mevedel-tutor`. System prompt assembled
 dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md plus optional AGENTS.local.md), persistent memory,

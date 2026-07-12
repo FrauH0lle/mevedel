@@ -43,7 +43,8 @@
 (declare-function mevedel-model-agent-tool-description "mevedel-models" ())
 
 ;; `mevedel-presets'
-(defvar mevedel-preset--registry)
+(declare-function mevedel-preset--resolved-metadata
+                  "mevedel-presets" (name))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
@@ -539,7 +540,7 @@ all agents in `mevedel-agent--registry' are registered.
 Populates the buffer-local `mevedel-agent-exec--agents' and updates the
 Agent tool's `:enum' slot.  Must be called in the chat buffer."
   (let* ((meta (and preset-name
-                    (alist-get preset-name mevedel-preset--registry)))
+                    (mevedel-preset--resolved-metadata preset-name)))
          (allowed (plist-get meta :agents))
          (allowed-names (and allowed (mapcar #'symbol-name allowed)))
          (mevedel-specs

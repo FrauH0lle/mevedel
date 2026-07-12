@@ -26,6 +26,7 @@
 
 ;; `gptel'
 (defvar gptel-model)
+(defvar gptel--set-buffer-locally)
 (defvar gptel-system-prompt)
 (defvar gptel-tools)
 
@@ -117,6 +118,8 @@
       (should (eq called-window-buffer data-buf))
       (should (equal called-prompt "data prompt"))
       (with-current-buffer data-buf
+        (should gptel--set-buffer-locally)
+        (should (local-variable-p 'gptel--set-buffer-locally))
         (should (equal gptel-system-prompt "bridge prompt"))
         (should (eq gptel-model 'bridge-model))
         (should (equal gptel-tools '(bridge-tool))))

@@ -21,10 +21,18 @@
 (require 'mevedel-compact)
 (require 'mevedel-presets)
 
-(defvar gptel-request--transitions)
+;; `gptel'
 (defvar gptel--known-presets)
+(defvar gptel-request--transitions)
+(defvar gptel-test-gptel-setting nil)
+
+;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--apply-overrides-handler
                   "mevedel-skills-invoke" (fsm))
+
+;; Test variables
+(defvar mevedel--test-private-setting nil)
+(defvar mevedel-test-setting nil)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -171,14 +179,28 @@
 ;;
 ;;; mevedel-define-preset macro
 
+(mevedel-deftest mevedel-preset--variable-for-key
+  ()
+  ,test
+  (test)
+  :doc "prefers public then private mevedel variables before gptel"
+  (should (eq 'mevedel-test-setting
+              (mevedel-preset--variable-for-key :test-setting)))
+  (should (eq 'mevedel--test-private-setting
+              (mevedel-preset--variable-for-key :test-private-setting)))
+  :doc "returns nil when no matching variable exists"
+  (should-not
+   (mevedel-preset--variable-for-key :test-certainly-not-defined)))
+
 (mevedel-deftest mevedel-define-preset
   (:before-each (mevedel-tool-clear-registry)
    :after-each (progn
                  (mevedel-tool-clear-registry)
                  (setq mevedel-preset--registry nil)
-                 (setq gptel--known-presets
-                       (assq-delete-all 'mevedel-test-preset
-                                        gptel--known-presets))))
+                 (dolist (name '(test-preset test-parent-a test-parent-b
+                                 test-child test-session-a test-session-b))
+                   (setq gptel--known-presets
+                         (assq-delete-all name gptel--known-presets)))))
   ,test
   (test)
 
@@ -195,9 +217,9 @@
       :agents (explorer verifier)
       :system "Test system prompt")
     ;; Registered in gptel
-    (should (assq 'mevedel-test-preset gptel--known-presets))
+    (should (assq 'test-preset gptel--known-presets))
     ;; Registered in mevedel registry
-    (let ((meta (alist-get 'mevedel-test-preset mevedel-preset--registry)))
+    (let ((meta (alist-get 'test-preset mevedel-preset--registry)))
       (should meta)
       (should (equal '(explorer verifier) (plist-get meta :agents)))
       (should (equal '(testgrp) (plist-get meta :tool-specs)))))
@@ -217,7 +239,7 @@
     (mevedel-define-preset test-preset
       :description "Test"
       :tools (mygroup))
-    (let* ((gptel-spec (alist-get 'mevedel-test-preset gptel--known-presets))
+    (let* ((gptel-spec (alist-get 'test-preset gptel--known-presets))
            (tools (plist-get gptel-spec :tools)))
       ;; Should have 2 tools from the group
       (should (= 2 (length tools)))
@@ -234,8 +256,273 @@
     (mevedel-define-preset test-preset
       :description "No system"
       :tools (grp))
-    (let ((gptel-spec (alist-get 'mevedel-test-preset gptel--known-presets)))
-      (should-not (plist-member gptel-spec :system)))))
+    (let ((gptel-spec (alist-get 'test-preset gptel--known-presets)))
+      (should-not (plist-member gptel-spec :system))))
+
+  :doc "uses exact names and preserves explicitly quoted parents"
+  (progn
+    (mevedel-define-preset test-parent-a :description "Parent")
+    (mevedel-define-preset test-preset
+      :parents '(test-parent-a))
+    (should (equal '(test-parent-a)
+                   (plist-get (gptel-get-preset 'test-preset) :parents))))
+
+  :doc "routes ordinary keys to mevedel before gptel variables"
+  (let ((mevedel-test-setting 'global-mevedel)
+        (gptel-test-gptel-setting 'global-gptel))
+    (mevedel-define-preset test-preset
+      :test-setting 'session-mevedel
+      :test-gptel-setting 'session-gptel)
+    (let ((metadata (alist-get 'test-preset mevedel-preset--registry))
+          (gptel-spec (gptel-get-preset 'test-preset)))
+      (should (equal '((mevedel-test-setting . session-mevedel))
+                     (plist-get metadata :settings)))
+      (should (eq 'session-gptel
+                  (plist-get gptel-spec :test-gptel-setting)))))
+
+  :doc "inherits agents and tools from the later parent then the child"
+  (progn
+    (mevedel-define-tool
+      :name "ParentA"
+      :handler #'ignore
+      :description "Parent A"
+      :groups (parent-a))
+    (mevedel-define-tool
+      :name "ParentB"
+      :handler #'ignore
+      :description "Parent B"
+      :groups (parent-b))
+    (mevedel-define-preset test-parent-a
+      :tools (parent-a)
+      :agents (explorer))
+    (mevedel-define-preset test-parent-b
+      :tools (parent-b)
+      :agents (verifier))
+    (mevedel-define-preset test-child
+      :parents (test-parent-a test-parent-b))
+    (let ((metadata (mevedel-preset--resolved-metadata 'test-child)))
+      (should (equal '(parent-b) (plist-get metadata :tool-specs)))
+      (should (equal '(verifier) (plist-get metadata :agents))))))
+
+(mevedel-deftest mevedel-preset-resolve-settings
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (dolist (name '(test-parent-a test-parent-b test-parent-c test-child))
+       (setq gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
+  ,test
+  (test)
+  :doc "supports replacement, prepend, append, and function semantics"
+  (let ((mevedel-test-setting '(base)))
+    (mevedel-define-preset test-parent-a
+      :test-setting '(parent))
+    (mevedel-define-preset test-parent-b
+      :test-setting '(:prepend (before)))
+    (mevedel-define-preset test-parent-c
+      :test-setting '(:append (after)))
+    (mevedel-define-preset test-child
+      :parents (test-parent-a test-parent-b test-parent-c)
+      :test-setting '(:function (lambda (value) (append value '(function)))))
+    (should (equal '(before parent after function)
+                   (alist-get 'mevedel-test-setting
+                              (mevedel-preset-resolve-settings
+                               'test-child))))))
+
+(mevedel-deftest mevedel-preset--resolved-metadata
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (dolist (name '(test-parent-a test-parent-b test-child))
+       (setq gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
+  ,test
+  (test)
+  :doc "uses later parent metadata and then child metadata"
+  (progn
+    (mevedel-define-preset test-parent-a :agents (explorer))
+    (mevedel-define-preset test-parent-b :agents (verifier))
+    (mevedel-define-preset test-child
+      :parents (test-parent-a test-parent-b)
+      :agents (reviewer))
+    (should (equal '(reviewer)
+                   (plist-get
+                    (mevedel-preset--resolved-metadata 'test-child)
+                    :agents)))))
+
+(mevedel-deftest mevedel-preset--setting-specs
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (dolist (name '(test-parent-a test-parent-b test-child))
+       (setq gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
+  ,test
+  (test)
+  :doc "returns parent settings in declaration order before child settings"
+  (progn
+    (mevedel-define-preset test-parent-a :test-setting 'a)
+    (mevedel-define-preset test-parent-b :test-setting 'b)
+    (mevedel-define-preset test-child
+      :parents (test-parent-a test-parent-b)
+      :test-setting 'child)
+    (should (equal '((mevedel-test-setting . a)
+                     (mevedel-test-setting . b)
+                     (mevedel-test-setting . child))
+                   (mevedel-preset--setting-specs 'test-child)))))
+
+(mevedel-deftest mevedel-preset--apply-settings
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (setq gptel--known-presets
+           (assq-delete-all 'test-preset gptel--known-presets))))
+  ,test
+  (test)
+  :doc "stores persistent settings in the current buffer and session"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "test"))
+    (mevedel-define-preset test-preset :test-setting 'local)
+    (mevedel-preset--apply-settings 'test-preset)
+    (should (eq 'local mevedel-test-setting))
+    (should (local-variable-p 'mevedel-test-setting))
+    (should (eq 'test-preset
+                (mevedel-session-preset-name mevedel--session)))))
+
+(mevedel-deftest mevedel-preset--post
+  ()
+  ,test
+  (test)
+  :doc "composes the user post hook with required mevedel setup"
+  (let (calls)
+    (cl-letf (((symbol-function 'mevedel-preset--apply-settings)
+               (lambda (_) (push 'settings calls)))
+              ((symbol-function 'mevedel-agents--setup-for-request)
+               (lambda (_) (push 'agents calls)))
+              ((symbol-function 'mevedel-preset--setup-deferred)
+               (lambda (_) (push 'deferred calls)))
+              ((symbol-function 'mevedel-preset--setup-extras)
+               (lambda (_) (push 'extras calls))))
+      (mevedel-preset--post 'test-preset
+                            (lambda () (push 'user calls))))
+    (should (equal '(user settings agents deferred extras)
+                   (nreverse calls)))))
+
+(mevedel-deftest mevedel-preset--define
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (setq gptel--known-presets
+           (assq-delete-all 'test-preset gptel--known-presets))))
+  ,test
+  (test)
+  :doc "warns and ignores an ordinary key without a matching variable"
+  (let (warning)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (type message &rest _)
+                 (setq warning (cons type message)))))
+      (mevedel-preset--define
+       'test-preset '(:test-certainly-not-defined value)))
+    (should (equal '(mevedel presets) (car warning)))
+    (should (string-match-p "not found" (cdr warning)))))
+
+(mevedel-deftest mevedel-preset-apply
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (dolist (name '(test-parent-a test-session-a test-session-b test-child))
+       (setq gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
+  ,test
+  (test)
+  :doc "keeps selected preset settings isolated between sessions"
+  (let ((buffer-a (generate-new-buffer " *preset-a*"))
+        (buffer-b (generate-new-buffer " *preset-b*")))
+    (unwind-protect
+        (progn
+          (mevedel-define-preset test-session-a :test-setting 'a)
+          (mevedel-define-preset test-session-b :test-setting 'b)
+          (dolist (pair `((,buffer-a . test-session-a)
+                          (,buffer-b . test-session-b)))
+            (with-current-buffer (car pair)
+              (setq-local mevedel--session
+                          (mevedel-session--create :name "test"))
+              (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
+                         #'ignore)
+                        ((symbol-function 'mevedel-preset--setup-deferred)
+                         #'ignore)
+                        ((symbol-function 'mevedel-preset--setup-extras)
+                         #'ignore))
+                (mevedel-preset-apply (cdr pair)))))
+          (should (eq 'a (buffer-local-value 'mevedel-test-setting buffer-a)))
+          (should (eq 'b (buffer-local-value 'mevedel-test-setting buffer-b)))
+          (should (eq 'test-session-a
+                      (mevedel-session-preset-name
+                       (buffer-local-value 'mevedel--session buffer-a)))))
+      (kill-buffer buffer-a)
+      (kill-buffer buffer-b)))
+  :doc "composes inherited ordinary settings exactly once when applied"
+  (let ((mevedel-test-setting '(base)))
+    (mevedel-define-preset test-parent-a
+      :test-setting '(:append (parent)))
+    (mevedel-define-preset test-child
+      :parents (test-parent-a)
+      :test-setting '(:append (child)))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create :name "test"))
+      (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
+                 #'ignore)
+                ((symbol-function 'mevedel-preset--setup-deferred)
+                 #'ignore)
+                ((symbol-function 'mevedel-preset--setup-extras)
+                 #'ignore))
+        (mevedel-preset-apply 'test-child))
+      (should (equal '(base parent child) mevedel-test-setting))
+      (should (equal '((mevedel-test-setting base parent child))
+                     (mevedel-session-preset-settings mevedel--session))))))
+
+(mevedel-deftest mevedel-preset-restore-session
+  (:doc "restores saved settings buffer-locally")
+  ,test
+  (test)
+  (with-temp-buffer
+    (let ((session
+           (mevedel-session--create
+            :name "test"
+            :preset-name 'test-preset
+            :preset-settings '((mevedel-test-setting . restored)))))
+      (mevedel-preset-restore-session session)
+      (should (local-variable-p 'mevedel-test-setting))
+      (should (eq 'restored mevedel-test-setting)))))
+
+(mevedel-deftest mevedel-with-preset
+  (:after-each
+   (progn
+     (setq mevedel-preset--registry nil)
+     (setq gptel--known-presets
+           (assq-delete-all 'test-preset gptel--known-presets))))
+  ,test
+  (test)
+  :doc "applies settings for one request without changing session state"
+  (let ((mevedel-test-setting 'outside))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create :name "test"))
+      (mevedel-define-preset test-preset :test-setting 'inside)
+      (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
+                 #'ignore)
+                ((symbol-function 'mevedel-preset--setup-deferred)
+                 #'ignore)
+                ((symbol-function 'mevedel-preset--setup-extras)
+                 #'ignore))
+        (mevedel-with-preset 'test-preset
+          (should (eq 'inside mevedel-test-setting))))
+      (should (eq 'outside mevedel-test-setting))
+      (should-not (mevedel-session-preset-name mevedel--session))))
+  :doc "delegates raw gptel preset specs"
+  (let ((gptel-system-prompt "outside"))
+    (mevedel-with-preset '(:system "inside")
+      (should (equal "inside" gptel-system-prompt)))
+    (should (equal "outside" gptel-system-prompt))))
 
 
 ;;

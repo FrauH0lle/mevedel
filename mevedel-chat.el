@@ -17,7 +17,8 @@
 (eval-when-compile
   (require 'cl-lib)
   (require 'gptel)
-  (require 'gptel-request))
+  (require 'gptel-request)
+  (require 'mevedel-presets))
 
 (require 'mevedel-hooks)
 
@@ -34,7 +35,6 @@
 (declare-function cl-sort "cl-seq" (cl-seq cl-pred &rest cl-keys))
 
 ;; `gptel'
-(declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
 (declare-function gptel-markdown-cycle-block "ext:gptel" ())
 (declare-function gptel-mode "ext:gptel" (&optional arg))
 (declare-function gptel-send "ext:gptel" ())
@@ -99,6 +99,10 @@
 
 ;; `mevedel-presets'
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
+(declare-function mevedel-preset-apply
+                  "mevedel-presets" (name &optional buffer))
+(declare-function mevedel-preset-restore-session
+                  "mevedel-presets" (session &optional buffer))
 (defvar mevedel-action-preset-alist)
 (defvar mevedel-default-chat-preset)
 
@@ -388,6 +392,7 @@ session struct."
       (mevedel--chat-buffer-disable-org-element-cache))
     (setq-local gptel-org-convert-response nil)
     (setq-local gptel-org-branching-context nil)
+    (mevedel-preset-restore-session mevedel--session buf)
     (mevedel-reminders-install-defaults mevedel--session)
     (require 'mevedel-tool-plan)
     (mevedel-plan-mode-restore-reminders mevedel--session)
@@ -588,11 +593,11 @@ in SESSIONS creates a new session with that name."
     (completing-read "Session: " names nil nil nil nil default)))
 
 (defun mevedel--display-chat-buffer (chat-buffer)
-  "Apply the default preset and display CHAT-BUFFER's view."
+  "Ensure CHAT-BUFFER has a preset and display its view."
   (with-current-buffer chat-buffer
-    (gptel--apply-preset
-     (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
-     (lambda (sym val) (set (make-local-variable sym) val))))
+    (unless (mevedel-session-preset-name mevedel--session)
+      (mevedel-preset-apply
+       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))))
   (display-buffer (or (buffer-local-value 'mevedel--view-buffer chat-buffer)
                       chat-buffer)
                   gptel-display-buffer-action))
@@ -1093,9 +1098,8 @@ Updates directive status and overlay, handles success/failure states."
                       gptel-display-buffer-action))
 
     (with-current-buffer chat-buffer
-      (gptel--apply-preset
-       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist)
-       (lambda (sym val) (set (make-local-variable sym) val)))
+      (mevedel-preset-apply
+       (alist-get mevedel-default-chat-preset mevedel-action-preset-alist))
       (setq response-start
             (mevedel--insert-directive-turn
              directive-text prompt
@@ -1111,7 +1115,7 @@ Updates directive status and overlay, handles success/failure states."
            response-start
            'directive)))
 
-      (gptel-with-preset preset
+      (mevedel-with-preset preset
         ;; Agents and deferred tools are wired up by the preset's own
         ;; `:post' hook (see `mevedel-define-preset').  FSM handlers are
         ;; installed buffer-locally on `gptel-send--handlers' by
@@ -1468,7 +1472,7 @@ preset."
                (mevedel--send-plan-implementation-turn
                 prompt "Implement accepted plan with cleared context"
                 (lambda ()
-                  (gptel-with-preset 'mevedel-implement
+                  (mevedel-with-preset 'mevedel-implement
                     (gptel-request prompt
                       :buffer chat-buffer
                       :stream gptel-stream
@@ -1480,7 +1484,7 @@ preset."
                (mevedel--send-plan-implementation-turn
                 prompt "Implement accepted plan in worktree"
                 (lambda ()
-                  (gptel-with-preset 'mevedel-implement
+                  (mevedel-with-preset 'mevedel-implement
                     (gptel-send)))))
               (_
                (error "Unknown plan implementation action: %s"

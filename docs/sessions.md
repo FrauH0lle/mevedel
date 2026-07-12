@@ -58,7 +58,10 @@ permission rules, tasks, prompt-index (driving the rewind picker and
 latest resume preview), `:file-snapshots` (per-turn map of tracked files
 to backup names), workspace identity, `:working-directory`, fork lineage
 (`:forked-from-session-id` / `:forked-from-turn`), and
-`:agent-transcripts` metadata.
+`:agent-transcripts` metadata. It also records `:preset-name` and the resolved
+buffer-local mevedel variables in `:preset-settings`; resume restores those
+settings, and a normal fork deep-copies them so parent and child can diverge.
+gptel's own buffer-local settings continue to use its Org persistence.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree

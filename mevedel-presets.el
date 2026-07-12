@@ -25,6 +25,8 @@
   (require 'gptel-request nil t))
 
 ;; `gptel'
+(declare-function gptel--apply-preset "ext:gptel" (preset &optional setter))
+(declare-function gptel--modify-value "ext:gptel" (original new-spec))
 (declare-function gptel-make-preset "ext:gptel" (name &rest keys))
 
 ;; `gptel-request'
@@ -71,6 +73,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin
                   "mevedel-structs" (session &optional directive-uuid))
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -141,7 +145,174 @@ without redefining it."
 
 (defvar mevedel-preset--registry nil
   "Alist mapping preset names to mevedel-specific metadata.
-Each entry: (NAME . (:agents AGENT-LIST :tool-specs ORIGINAL-SPECS)).")
+Each value contains the raw parent, agent, tool, and variable settings.")
+
+(defvar mevedel-preset--temporary-p nil
+  "Non-nil while a preset is applied for one dynamic request only.")
+
+(defconst mevedel-preset--structural-keys
+  '(:description :parents :pre :post :backend :model :system :tools :agents)
+  "Preset keys with dedicated mevedel or gptel behavior.")
+
+(defun mevedel-preset--variable-for-key (key)
+  "Return the variable selected by ordinary preset KEY, or nil.
+Mevedel public and private variables take precedence over gptel variables."
+  (let ((name (substring (symbol-name key) 1)))
+    (cl-find-if
+     #'boundp
+     (delq nil
+           (mapcar #'intern-soft
+                   (list (concat "mevedel-" name)
+                         (concat "mevedel--" name)
+                         (concat "gptel-" name)
+                         (concat "gptel--" name)))))))
+
+(defun mevedel-preset--resolved-metadata (name)
+  "Return inherited mevedel metadata for preset NAME."
+  (let* ((metadata (or (alist-get name mevedel-preset--registry)
+                       (user-error "Unknown mevedel preset: %s" name)))
+         (resolved nil))
+    (dolist (parent (ensure-list (plist-get metadata :parents)))
+      (let ((parent-meta (mevedel-preset--resolved-metadata parent)))
+        (when (plist-member parent-meta :agents)
+          (setq resolved (plist-put resolved :agents
+                                    (plist-get parent-meta :agents))))
+        (when (plist-member parent-meta :tool-specs)
+          (setq resolved (plist-put resolved :tool-specs
+                                    (plist-get parent-meta :tool-specs))))))
+    (dolist (key '(:agents :tool-specs))
+      (when (plist-member metadata key)
+        (setq resolved (plist-put resolved key (plist-get metadata key)))))
+    resolved))
+
+(defun mevedel-preset--setting-specs (name)
+  "Return inherited ordinary mevedel setting specs for preset NAME."
+  (let* ((metadata (or (alist-get name mevedel-preset--registry)
+                       (user-error "Unknown mevedel preset: %s" name)))
+         specs)
+    (dolist (parent (ensure-list (plist-get metadata :parents)))
+      (setq specs (append specs (mevedel-preset--setting-specs parent))))
+    (append specs (plist-get metadata :settings))))
+
+(defun mevedel-preset-resolve-settings (name)
+  "Return preset NAME's resolved mevedel variable alist."
+  (let (resolved)
+    (dolist (setting (mevedel-preset--setting-specs name))
+      (let* ((symbol (car setting))
+             (current (if-let* ((entry (assq symbol resolved)))
+                          (cdr entry)
+                        (symbol-value symbol)))
+             (value (gptel--modify-value current (cdr setting))))
+        (setf (alist-get symbol resolved) value)))
+    resolved))
+
+(defun mevedel-preset--apply-settings (name)
+  "Apply preset NAME's mevedel settings to the current request or session."
+  (let ((settings
+         (plist-get (or (alist-get name mevedel-preset--registry)
+                        (user-error "Unknown mevedel preset: %s" name))
+                    :settings)))
+    (dolist (setting settings)
+      (let* ((symbol (car setting))
+             (value (gptel--modify-value
+                     (symbol-value symbol) (cdr setting))))
+        (if mevedel-preset--temporary-p
+            (set symbol value)
+          (set (make-local-variable symbol) value))))
+    (when (and (not mevedel-preset--temporary-p) mevedel--session)
+      (let ((resolved
+             (mapcar (lambda (symbol)
+                       (cons symbol (symbol-value symbol)))
+                     (delete-dups
+                      (mapcar #'car
+                              (mevedel-preset--setting-specs name))))))
+        (setf (mevedel-session-preset-name mevedel--session) name
+              (mevedel-session-preset-settings mevedel--session)
+              (copy-tree resolved))
+        resolved))))
+
+(defun mevedel-preset--post (name user-post)
+  "Run USER-POST and required mevedel setup for preset NAME."
+  (when user-post (funcall user-post))
+  (mevedel-preset--apply-settings name)
+  (mevedel-agents--setup-for-request name)
+  (mevedel-preset--setup-deferred name)
+  (mevedel-preset--setup-extras name))
+
+(defun mevedel-preset--define (name keys)
+  "Register exact preset NAME from evaluated KEYS."
+  (let ((raw-keys keys)
+        (gptel-keys nil)
+        (settings nil)
+        (user-post (plist-get keys :post)))
+    (while keys
+      (let ((key (pop keys))
+            (value (pop keys)))
+        (cond
+         ((eq key :agents) nil)
+         ((eq key :tools)
+          (setq gptel-keys
+                (append gptel-keys
+                        (list key
+                              (plist-get
+                               (mevedel-tool-resolve-gptel value)
+                               :active)))))
+         ((memq key mevedel-preset--structural-keys)
+          (unless (eq key :post)
+            (setq gptel-keys (append gptel-keys (list key value)))))
+         (t
+          (let ((symbol (mevedel-preset--variable-for-key key)))
+            (cond
+             ((and symbol
+                   (string-prefix-p "mevedel-" (symbol-name symbol)))
+              (push (cons symbol value) settings))
+             (symbol
+              (setq gptel-keys (append gptel-keys (list key value))))
+             (t
+              (display-warning
+               '(mevedel presets)
+               (format "mevedel preset %s: setting for %s not found, ignoring"
+                       name key)))))))))
+    (let ((metadata (list :parents (plist-get raw-keys :parents)
+                          :settings (nreverse settings))))
+      (when (plist-member raw-keys :agents)
+        (setq metadata
+              (plist-put metadata :agents (plist-get raw-keys :agents))))
+      (when (plist-member raw-keys :tools)
+        (setq metadata
+              (plist-put metadata :tool-specs (plist-get raw-keys :tools))))
+      (setf (alist-get name mevedel-preset--registry) metadata))
+    (apply #'gptel-make-preset name
+           (append gptel-keys
+                   (list :post (apply-partially
+                                #'mevedel-preset--post name user-post))))))
+
+(defun mevedel-preset-apply (name &optional buffer)
+  "Apply mevedel preset NAME buffer-locally to BUFFER and its session."
+  (with-current-buffer (or buffer (current-buffer))
+    (gptel--apply-preset
+     name (lambda (symbol value)
+            (set (make-local-variable symbol) value)))))
+
+(defun mevedel-preset-restore-session (session &optional buffer)
+  "Restore SESSION's saved mevedel preset settings in BUFFER."
+  (with-current-buffer (or buffer (current-buffer))
+    (dolist (setting (mevedel-session-preset-settings session))
+      (set (make-local-variable (car setting)) (cdr setting)))))
+
+(defmacro mevedel-with-preset (name &rest body)
+  "Run BODY with mevedel preset NAME applied for this request only."
+  (declare (indent 1) (debug t))
+  `(let ((preset ,name))
+     (if (and (symbolp preset)
+              (assq preset mevedel-preset--registry))
+         (let* ((symbols (mapcar #'car
+                                 (mevedel-preset-resolve-settings preset)))
+                (values (mapcar #'symbol-value symbols))
+                (mevedel-preset--temporary-p t))
+           (cl-progv symbols values
+             (gptel-with-preset preset ,@body)))
+       (gptel-with-preset preset ,@body))))
 
 (defmacro mevedel-define-preset (name &rest keys)
   "Define a mevedel preset NAME with declarative KEYS.
@@ -154,36 +325,24 @@ KEYS is a plist with the following recognized keys:
   :agents       LIST    -- list of agent name symbols for request-time setup
   :system       VALUE   -- system prompt (string, function, or dynamic spec)
 
-Unlike `gptel-make-preset', this macro:
-  - Has no :parents -- mevedel presets are flat by design; `:pre'/`:post'
-    hooks assume no inheritance chain
-  - Has no :send--handlers -- FSM handlers are injected at request time
-  - Resolves :tools via `mevedel-tool-resolve-gptel' at definition time
-  - Stores :agents in `mevedel-preset--registry' for request-time setup
-  - Injects a `:post' hook that runs `mevedel-agents--setup-for-request'
-    and `mevedel-preset--setup-deferred' so mevedel session wiring fires
-    transparently on every preset application path (directives,
-    `gptel-with-preset', @name expansion, transient menus)"
+PARENT composition and arbitrary ordinary keys follow gptel preset value
+semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
+`gptel-KEY' and `gptel--KEY'.  Required request setup composes with user
+`:pre' and `:post' hooks."
   (declare (indent 1))
-  (let ((preset-sym (intern (concat "mevedel-" (symbol-name name)))))
-    `(progn
-       ;; Store mevedel-specific metadata
-       (setf (alist-get ',preset-sym mevedel-preset--registry)
-             (list :agents ',(plist-get keys :agents)
-                   :tool-specs ',(plist-get keys :tools)))
-       ;; Register with gptel
-       (gptel-make-preset ',preset-sym
-         :description ,(plist-get keys :description)
-         :tools (let* ((resolved (mevedel-tool-resolve-gptel
-                                  ',(plist-get keys :tools)))
-                       (active (plist-get resolved :active)))
-                  active)
-         ,@(when (plist-get keys :system)
-             (list :system (plist-get keys :system)))
-         :post (lambda ()
-                 (mevedel-agents--setup-for-request ',preset-sym)
-                 (mevedel-preset--setup-deferred ',preset-sym)
-                 (mevedel-preset--setup-extras ',preset-sym))))))
+  (let (forms)
+    (while keys
+      (let ((key (pop keys))
+            (value (pop keys)))
+        (setq forms
+              (append forms
+                      (list key
+                            (if (memq key '(:parents :tools :agents))
+                                (if (eq (car-safe value) 'quote)
+                                    value
+                                  `',value)
+                              value))))))
+    `(mevedel-preset--define ',name (list ,@forms))))
 
 ;;;###autoload
 (defun mevedel--define-presets ()
@@ -192,7 +351,7 @@ Unlike `gptel-make-preset', this macro:
   (require 'mevedel-tool-registry)
 
   ;; Read-only preset for discussion/analysis
-  (mevedel-define-preset discuss
+  (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
     :tools (read util (:tool "Bash")
             (:deferred (:tool "Eval"))
@@ -206,8 +365,9 @@ Unlike `gptel-make-preset', this macro:
                mevedel--session (current-buffer))))
 
   ;; Full editing preset for implementation
-  (mevedel-define-preset implement
+  (mevedel-define-preset mevedel-implement
     :description "Full editing capabilities with patch review workflow"
+    :parents (mevedel-discuss)
     :tools (read util edit (:tool "Bash")
             (:deferred (:tool "Eval"))
             (:deferred code)
@@ -220,19 +380,15 @@ Unlike `gptel-make-preset', this macro:
                mevedel--session (current-buffer))))
 
   ;; Revision preset with previous patch context
-  (mevedel-define-preset revise
+  (mevedel-define-preset mevedel-revise
     :description "Revise previous implementation with full context"
-    :tools (read util edit (:tool "Bash")
-            (:deferred (:tool "Eval"))
-            (:deferred code)
-            (:deferred web)
-            (:deferred elisp))
-    :agents (explorer coordinator verifier)
+    :parents (mevedel-implement)
     :system "You are revising a previous implementation. The previous patch and its context are included in the conversation. Analyze what needs to be changed and create an improved implementation.")
 
   ;; Tutoring preset - guides through hints, never provides solutions
-  (mevedel-define-preset tutor
+  (mevedel-define-preset mevedel-tutor
     :description "Tutoring preset - guides through hints, never provides solutions"
+    :parents (mevedel-discuss)
     :tools (read util (:tool "Bash")
             (:tool "GetHints") (:tool "RecordHint")
             (:deferred (:tool "Eval"))
@@ -261,7 +417,7 @@ any prior deferred state so every request starts with a clean
 lifecycle.  Has no effect when the preset has no deferred specs or
 no active session is bound."
   (when-let* ((session mevedel--session)
-              (meta (alist-get preset-name mevedel-preset--registry))
+              (meta (mevedel-preset--resolved-metadata preset-name))
               (tool-specs (plist-get meta :tool-specs)))
     (let* ((resolved (mevedel-tool-resolve tool-specs))
            (deferred (plist-get resolved :deferred)))
