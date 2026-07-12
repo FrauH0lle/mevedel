@@ -123,6 +123,15 @@
   "Return additional context for terminal-behavior cases."
   '(:additional-context ("later")))
 
+(defun mevedel-hooks-test--first-context-fn (_event)
+  "Return the first attributed context contribution."
+  '(:system-message "first reason"
+    :additional-context ("first")))
+
+(defun mevedel-hooks-test--second-context-fn (_event)
+  "Return the second attributed context contribution."
+  '(:additional-context ("second-a" "second-b")))
+
 (defun mevedel-hooks-test--allow-fn (_event)
   "Return an allow decision for permission hook cases."
   '(:permission-decision allow))
@@ -716,6 +725,19 @@
 ;;
 ;;; Decisions
 
+(mevedel-deftest mevedel-hooks--context-contribution
+  (:doc "keeps one handler's identity, reason, and ordered contexts")
+  (should
+   (equal
+    '(:contexts ("a" "b")
+      :source plugin
+      :plugin-name "ponytail"
+      :function inject
+      :reason "active")
+    (mevedel-hooks--context-contribution
+     '(:source plugin :plugin-name "ponytail" :function inject)
+     '(:additional-context ("a" "b") :system-message "active")))))
+
 (mevedel-deftest mevedel-hooks-merge-decisions
 		 (:doc "merges contexts and keeps restrictive permission precedence")
 		 (let* ((first '(:permission-decision allow
@@ -831,6 +853,83 @@
 					'(:updated-input (:command "echo rewritten"))))
 			 (should (= (length (mevedel-session-hook-log session)) 1)))
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-context-audit-records
+  (:doc "attributes merged context to handlers in execution order")
+  (let* ((root (make-temp-file "mevedel-hooks-context-audit" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hook-rules
+          '((SubagentStart
+             ((:matcher "explorer"
+               :hooks ((:type elisp
+                        :function mevedel-hooks-test--first-context-fn
+                        :source plugin
+                        :plugin-name "ponytail")
+                       (:type elisp
+                        :function mevedel-hooks-test--second-context-fn
+                        :source project-file
+                        :description "Inject project conventions"))))))))
+    (unwind-protect
+        (let* ((decision
+                (mevedel-hooks-test--await
+                 (lambda (cb)
+                   (mevedel-hooks-run-event
+                    'SubagentStart '(:agent-type "explorer") cb session))))
+               (audits (mevedel-hooks-context-audit-records
+                        decision 'SubagentStart 'subagent-context t))
+               (handlers (plist-get (car audits) :handlers)))
+          (should (equal '("first" "second-a" "second-b")
+                         (plist-get decision :additional-context)))
+          (should-not (plist-member decision :hook-context-handlers))
+          (should (= 1 (length audits)))
+          (should (= 2 (length handlers)))
+          (should (equal "ponytail"
+                         (plist-get (car handlers) :plugin-name)))
+          (should (equal 'plugin
+                         (plist-get (car handlers) :source)))
+          (should (equal "first reason"
+                         (plist-get (car handlers) :reason)))
+          (should (equal "Inject project conventions"
+                         (plist-get (cadr handlers) :description)))
+          (should (equal 'project-file
+                         (plist-get (cadr handlers) :source)))
+          (should-not (plist-member (cadr handlers) :reason))
+          (should-not (plist-member (car audits) :context)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/session-start-log-source
+  (:doc "logs whether SessionStart initializes or resumes a session")
+  (let* ((root (make-temp-file "mevedel-hooks-session-source" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hook-rules
+          '((SessionStart
+             ((:matcher "*"
+               :hooks ((:type elisp
+                        :function mevedel-hooks-test--context-fn))))))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session)
+                (file-name-as-directory root))
+          (mevedel-hooks-test--await
+           (lambda (cb)
+             (mevedel-hooks-run-event
+              'SessionStart '(:source "resume") cb session)))
+          (mevedel-hooks-test--await
+           (lambda (cb)
+             (mevedel-hooks-run-event
+              'SessionStart '(:source "startup") cb session)))
+          (should
+           (equal '("resume" "startup")
+                  (mapcar (lambda (entry)
+                            (plist-get entry :event-source))
+                          (mevedel-session-hook-log session))))
+          (with-temp-buffer
+            (insert-file-contents (file-name-concat root "hook-log.el"))
+            (should (equal "resume" (plist-get (read (current-buffer))
+                                               :event-source)))
+            (should (equal "startup" (plist-get (read (current-buffer))
+                                                :event-source)))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/serial-mutation
 		 (:doc "passes updated input from one hook to later hooks")

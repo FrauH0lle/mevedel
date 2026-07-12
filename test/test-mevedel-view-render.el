@@ -10,6 +10,7 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 (require 'mevedel-view)
+(require 'mevedel-view-audit)
 (require 'mevedel-view-render)
 
 ;; Focused dependencies moved with the rendering tests.
@@ -2868,6 +2869,28 @@ state of its inner sections"
       (let ((before (buffer-string)))
         (should-error (mevedel-view-toggle-section))
         (should (equal before (buffer-string)))))))
+
+(mevedel-deftest mevedel-view--format-hook-context-audit ()
+  ,test
+  (test)
+  :doc "formats one event with ordered handler attribution"
+  (let* ((record '(:event "SubagentStart"
+                   :handlers
+                   ((:function ponytail-subagent
+                     :source plugin
+                     :plugin-name "ponytail"
+                     :reason "PONYTAIL:FULL")
+                    (:description "Inject project conventions"
+                     :source project-file))))
+         (collapsed (mevedel-view--format-hook-context-audit record nil))
+         (expanded (mevedel-view--format-hook-context-audit record t)))
+    (should (equal "  ◇ SubagentStart hook added context · 2 handlers\n"
+                   collapsed))
+    (should (< (string-match "1\\. ponytail plugin" expanded)
+               (string-match "2\\. project hook" expanded)))
+    (should (string-match-p "Handler: ponytail-subagent" expanded))
+    (should (string-match-p "Reason: PONYTAIL:FULL" expanded))
+    (should (string-match-p "Handler: Inject project conventions" expanded))))
 
 (mevedel-deftest mevedel-view--insert-rendered-tool/hook-audits ()
   ,test

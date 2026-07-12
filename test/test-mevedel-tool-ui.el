@@ -103,7 +103,7 @@
           (should (string-match-p "final response body" text))
           (should-not (string-match-p "Read" text)))))))
 
-  :doc "Agent rows render SubagentStart hook context as a compact audit note"
+  :doc "Agent rows group SubagentStart context handlers in execution order"
   (mevedel-view-test--with-buffers
     (let* ((args '(:subagent_type "explorer" :description "Task"))
            (rd '(:kind agent-transcript
@@ -111,7 +111,14 @@
                  :status running
                  :hook-audits
                  ((:type subagent-context
-                   :event "SubagentStart"))))
+                   :event "SubagentStart"
+                   :handlers
+                   ((:function ponytail-subagent
+                     :source plugin
+                     :plugin-name "ponytail"
+                     :reason "PONYTAIL:FULL")
+                    (:description "Inject project conventions"
+                     :source project-file))))))
            (rendering (mevedel-tool-ui--render-agent
                        "Agent" args "launch body" rd)))
       (with-current-buffer view-buf
@@ -123,7 +130,23 @@
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "hook added sub-agent context" text))
+          (should (string-match-p
+                   "SubagentStart hook added context · 2 handlers" text))
+          (should-not (string-match-p "ponytail plugin" text)))
+        (goto-char (point-min))
+        (search-forward "SubagentStart hook added context")
+        (mevedel-view-toggle-section)
+        (let* ((text (buffer-substring-no-properties
+                      (point-min) mevedel-view--input-marker))
+               (first (string-match "1\\. ponytail plugin" text))
+               (second (string-match "2\\. project hook" text)))
+          (should first)
+          (should second)
+          (should (< first second))
+          (should (string-match-p "Handler: ponytail-subagent" text))
+          (should (string-match-p "Reason: PONYTAIL:FULL" text))
+          (should (string-match-p
+                   "Handler: Inject project conventions" text))
           (should-not (string-match-p "extra start context" text))))))
 
   :doc "Agent handle transcript click target is the visible type label"

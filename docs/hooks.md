@@ -98,7 +98,7 @@ boundaries:
 
 | Event | Fires | Matcher | Control |
 | --- | --- | --- | --- |
-| `SessionStart` | chat session creation/resume | source (`startup`, `resume`) | add context only |
+| `SessionStart` | fresh or restored chat-buffer initialization | source (`startup`, `resume`) | add context only |
 | `UserPromptSubmit` | before a view-submitted user prompt is sent | none | block, add context |
 | `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
@@ -440,6 +440,14 @@ processing and plan execution, do not currently fire this event.
 request, not an immediate transcript event.  Its hook audit surface is
 attached to the first user turn that consumes it, so the visible record
 appears at the point where the context actually affects model input.
+Restoring a saved session fires `SessionStart` again with source `resume` so
+transient hook context is reacquired; restoring an already-live buffer does
+not reinitialize it.  This is distinct from the initial `startup` source.
+
+Context-changing audit surfaces represent an event once and list its
+contributing handlers in execution order.  Each handler retains its own
+source, identity, reason, and context bodies where that audit surface exposes
+them.  Parent sub-agent rows omit the injected bodies.
 
 `UserPromptExpansion` runs for user `$skill` expansion after the skill
 body has been prepared and before it is installed as the prompt sent to
@@ -554,7 +562,9 @@ as declarative `elisp` handlers.
 
 The hook runner keeps a per-session in-memory hook log with event,
 handler, status, elapsed time for command hooks, stdout/stderr previews,
-parsed decision, and failure details.
+parsed decision, and failure details.  `SessionStart` entries also record
+`:event-source` as `"startup"` or `"resume"`, separately from the handler's
+configuration source.
 
 Raw command-hook stdout/stderr never appears in the view by default.
 Only structured decision fields are eligible for user-facing hook audit
