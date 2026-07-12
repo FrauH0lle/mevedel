@@ -169,7 +169,7 @@ blocks that already carry a tool `gptel` property or overlapping non-empty
 
 The view input ring is persisted at
 `<workspace-root>/.mevedel/input-history.el` when the session is
-writable and persistence is enabled. Missing files are normal. Corrupt
+writable. Missing files are normal. Corrupt
 files are warned about once, renamed aside, and replaced with an empty
 in-memory ring.
 
@@ -204,7 +204,6 @@ workspace per Emacs invocation. `nil` disables.
 All in `mevedel-session-persistence.el`:
 
 - `mevedel-sessions-directory` (default `.mevedel/sessions/`)
-- `mevedel-session-persistence` (default `t`)
 - `mevedel-session-max-age-days` (default 30)
 - `mevedel-file-history-max-snapshots` (default 100)
 - `mevedel-file-history-max-snapshot-bytes` (default 1 MB)

@@ -31,7 +31,6 @@
                   "mevedel-chat"
                   (prompt &optional display-text kind hook-context no-spinner))
 (defvar mevedel--session)
-(defvar mevedel-plans-directory)
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle
@@ -190,21 +189,6 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
                                  :presented-plan-hashes)))
     (member (mevedel-plan-mode--plan-hash plan-markdown) hashes)))
 
-(defun mevedel-plan-mode--workspace-plan-path (session)
-  "Return a workspace-level plan artifact path for non-persistent SESSION."
-  (when-let* ((workspace (mevedel-session-workspace session))
-              (root (mevedel-workspace-root workspace)))
-    (let* ((plans-dir (if (and (boundp 'mevedel-plans-directory)
-                               mevedel-plans-directory)
-                          mevedel-plans-directory
-                        (file-name-concat ".mevedel" "plans")))
-           (dir (if (file-name-absolute-p plans-dir)
-                    plans-dir
-                  (expand-file-name plans-dir root)))
-           (filename (format "plan-%s.md"
-                             (format-time-string "%Y%m%d-%H%M%S"))))
-      (file-name-concat dir filename))))
-
 (defun mevedel-plan-mode-current-plan-path (&optional session buffer)
   "Return the session-local current plan path for SESSION.
 Materializes the session directory when needed.  BUFFER defaults to the
@@ -216,9 +200,9 @@ current data buffer."
                           (require 'mevedel-session-persistence)
                           (mevedel-session-persistence-ensure-files
                            session buffer)))))
-    (if save-path
-        (file-name-concat save-path mevedel-plan-mode--relative-plan-path)
-      (mevedel-plan-mode--workspace-plan-path session))))
+    (unless save-path
+      (error "Could not materialize session for plan"))
+    (file-name-concat save-path mevedel-plan-mode--relative-plan-path)))
 
 (defun mevedel-plan-mode--metadata-plan-path (session)
   "Return SESSION's recorded plan artifact path, when available."
@@ -699,7 +683,7 @@ When SKIP-VERIFICATION is non-nil, do not leave verification pending."
      session (mevedel-reminders-make-plan-reference))))
 
 (defun mevedel-plan-mode--save-session-state (session buffer)
-  "Persist SESSION state from BUFFER when session persistence is enabled."
+  "Persist SESSION state from BUFFER."
   (require 'mevedel-session-persistence)
   (condition-case err
       (mevedel-session-persistence-save session buffer)

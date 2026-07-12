@@ -27,9 +27,6 @@
 (defvar mevedel--session)
 (defvar mevedel--data-buffer)
 
-;; `mevedel-chat'
-(defvar mevedel-plans-directory)
-
 ;; `mevedel-system'
 (defvar mevedel-memory-dirs)
 
@@ -249,9 +246,7 @@ the system temporary directory, and any additional roots configured via
          (roots (append
                  (list workspace-root
                        (with-current-buffer (or buffer (current-buffer))
-                         temporary-file-directory)
-                       (and (boundp 'mevedel-plans-directory)
-                            mevedel-plans-directory))
+                         temporary-file-directory))
                  (mapcar
                   (lambda (dir)
                     (expand-file-name

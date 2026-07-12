@@ -36,7 +36,6 @@
                   "mevedel-session-persistence" (session buffer))
 (defvar mevedel-session--read-only-mode)
 (defvar mevedel-session--save-failed)
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-end "mevedel-structs" ())
@@ -116,13 +115,12 @@
         (cl-incf (mevedel-session-turn-count mevedel--session))))))
 
 (defun mevedel--turn-autosave (fsm)
-  "Persist the completed turn represented by FSM when enabled."
+  "Persist the completed turn represented by FSM."
   (when-let* ((info (gptel-fsm-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when (and mevedel--session
-                 (bound-and-true-p mevedel-session-persistence)
                  (not (bound-and-true-p mevedel-session--read-only-mode)))
         (condition-case err
             (progn

@@ -21,7 +21,6 @@
 (declare-function mevedel-session-persistence-write
                   "mevedel-session-persistence" (path plist))
 (defvar mevedel-session--read-only-mode)
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -258,8 +257,7 @@ files are renamed to `.bad', warned about once, and ignored."
         mevedel-view-history--index nil
         mevedel-view-history--stored-incomplete nil
         mevedel-view-history--loaded-entries nil)
-  (when-let* (((bound-and-true-p mevedel-session-persistence))
-              (path (mevedel-view-history--path session)))
+  (when-let* ((path (mevedel-view-history--path session)))
     (when (file-exists-p path)
       (condition-case err
           (mevedel-view-history--set-entries
@@ -275,12 +273,11 @@ files are renamed to `.bad', warned about once, and ignored."
          (mevedel-view-history--rename-bad-file path))))))
 
 (defun mevedel-view-history-save (&optional view-buffer)
-  "Persist VIEW-BUFFER input history when session persistence permits."
+  "Persist VIEW-BUFFER input history."
   (let ((buf (or view-buffer (current-buffer))))
     (when (buffer-live-p buf)
       (with-current-buffer buf
-        (when-let* (((bound-and-true-p mevedel-session-persistence))
-                    ((not (bound-and-true-p
+        (when-let* (((not (bound-and-true-p
                            mevedel-view--agent-transcript-p)))
                     ((not mevedel-view-history--save-failed))
                     ((not (mevedel-view-history--read-only-p)))

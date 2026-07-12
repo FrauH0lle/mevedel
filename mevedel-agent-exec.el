@@ -187,7 +187,6 @@
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
@@ -259,7 +258,7 @@ The list is populated by `mevedel-agents--setup-for-request' from
 ;;; Agent buffer
 ;;
 ;; Each sub-agent invocation runs in its own gptel buffer; that
-;; buffer is the on-disk transcript when persistence is enabled.
+;; buffer is the on-disk transcript.
 ;; The buffer carries parent-context bindings so tools dispatched
 ;; from inside the sub-agent see the parent session/workspace.
 

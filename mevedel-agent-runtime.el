@@ -128,7 +128,6 @@
 (declare-function mevedel-session-persistence--write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
 (defvar mevedel-session--read-only-mode)
-(defvar mevedel-session-persistence)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts
@@ -2214,14 +2213,12 @@ Performs allocation steps 6-11: shallow materialization of
 the parent session, transcript path computation with collision
 avoidance, `set-visited-file-name', and a session-slot `running'
 entry.  Any failure is logged and falls through to the
-no-persistence branch (the agent buffer remains usable;
+in-memory fallback (the agent buffer remains usable;
 variable `buffer-file-name' stays nil; no sidecar entry is created)."
   (let ((session (mevedel-agent-invocation-parent-session invocation))
         (parent-buf (mevedel-agent-invocation-parent-data-buffer invocation))
         (agent-id (mevedel-agent-invocation-agent-id invocation)))
-    (when (and (boundp 'mevedel-session-persistence)
-               mevedel-session-persistence
-               (mevedel-agent-invocation-p invocation)
+    (when (and (mevedel-agent-invocation-p invocation)
                session
                agent-buffer
                (buffer-live-p agent-buffer)

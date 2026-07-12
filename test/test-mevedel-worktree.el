@@ -1451,9 +1451,8 @@
                                (mevedel-worktree-test--git-result " M foo.el")
                              (mevedel-worktree-test--base-response
                               root args)))))
-                (let ((mevedel-session-persistence t))
-                  (mevedel-cmd--worktree
-                   "create worktree/foo --for \"fix the parser\""))
+                (mevedel-cmd--worktree
+                 "create worktree/foo --for \"fix the parser\"")
                 (with-current-buffer new-buffer
                   (let ((text (buffer-substring-no-properties
                                (point-min) (point-max))))
@@ -1506,9 +1505,8 @@
                         ((symbol-function 'mevedel-worktree--git-result)
                          (lambda (_dir &rest args)
                            (mevedel-worktree-test--base-response root args))))
-                (let ((mevedel-session-persistence t))
-                  (mevedel-cmd--worktree
-                   "create worktree/foo --for \"ignored\" --clean")))
+                (mevedel-cmd--worktree
+                 "create worktree/foo --for \"ignored\" --clean"))
               (with-current-buffer new-buffer
                 (should (string-empty-p
                          (buffer-substring-no-properties

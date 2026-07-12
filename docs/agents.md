@@ -172,9 +172,9 @@ handles, without exposing the hidden bookkeeping block to the model.
 
 ## Transcript persistence and views
 
-Each sub-agent invocation runs in its own gptel buffer. When session
-persistence is enabled, that buffer is the transcript file under the
-parent session's `agents/` directory. The parent session mirrors an
+Each sub-agent invocation runs in its own gptel buffer. That buffer is
+the transcript file under the parent session's `agents/` directory. The
+parent session mirrors an
 `agent-transcripts` alist into the sidecar with agent id, type,
 description, path, status, timestamps, parent turn, and call count.
 

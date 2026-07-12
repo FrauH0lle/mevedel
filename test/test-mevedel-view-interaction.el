@@ -423,8 +423,7 @@
                                   'mevedel-view-zone-id)))))))
 
   :doc "permission queue renders only the FIFO head while request progress is visible"
-  (let ((mevedel-view-spinner-animate nil)
-        (mevedel-session-persistence nil))
+  (let ((mevedel-view-spinner-animate nil))
     (mevedel-view-test--with-buffers
       (let ((session (mevedel-session--create
                       :name "test"
@@ -705,8 +704,7 @@
           (should-not (string-match-p "permission" text))))))
 
   :doc "rerender rebuilds from live queues without settling"
-  (let ((mevedel-session-persistence nil))
-    (mevedel-view-test--with-buffers
+  (mevedel-view-test--with-buffers
       (let* ((session (mevedel-session--create
                        :name "test"
                        :workspace nil
@@ -749,11 +747,10 @@
                (should (plist-get descriptor :activate)))
              mevedel-view--interaction-descriptors)
             (should (memq 'plan kinds))
-            (should (memq 'permission kinds))))))))
+            (should (memq 'permission kinds)))))))
 
   :doc "agent-owned permission prompt stays in parent view after parent request end"
-  (let ((mevedel-session-persistence nil))
-    (mevedel-view-test--with-buffers
+  (mevedel-view-test--with-buffers
       (let* ((session (mevedel-session--create
                        :name "test"
                        :workspace nil
@@ -836,11 +833,10 @@
                            (buffer-substring-no-properties
                             (point-min) (point-max)))))))
           (when (buffer-live-p agent-buf)
-            (kill-buffer agent-buf))))))
+            (kill-buffer agent-buf)))))
 
   :doc "interaction target ignores transcript inspection view"
-  (let ((mevedel-session-persistence nil))
-    (mevedel-view-test--with-buffers
+  (mevedel-view-test--with-buffers
       (let* ((session (mevedel-session--create :name "test"))
              (agent (mevedel-agent--create :name "verifier"))
              (inv (mevedel-agent-invocation-create agent))
@@ -877,7 +873,7 @@
                             (mevedel-view--interaction-target-buffer
                              agent-buf)))))
           (when (buffer-live-p agent-view) (kill-buffer agent-view))
-          (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
+          (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
 
   :doc "all interaction kinds keep priority, callbacks, and a leading-> draft across redraws"
   (mevedel-view-test--with-buffers

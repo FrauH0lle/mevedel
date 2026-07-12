@@ -100,7 +100,7 @@ Prompt offers 5 choices (allow/deny × once/session/always). Persisted
 rules live in `.mevedel/permissions.el`.
 
 Default allowed roots are the workspace root, the system temporary directory,
-configured memory roots, `mevedel-plans-directory`, and session-added roots
+configured memory roots, and session-added roots
 granted through `RequestAccess`. These roots bypass the workspace-boundary
 prompt but not explicit deny rules or protected-path prompts.
 

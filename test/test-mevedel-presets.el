@@ -23,7 +23,6 @@
 
 (defvar gptel-request--transitions)
 (defvar gptel--known-presets)
-(defvar mevedel-session-persistence)
 (declare-function mevedel-skills--apply-overrides-handler
                   "mevedel-skills-invoke" (fsm))
 (require 'helpers

@@ -907,23 +907,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
               (kill-buffer buf))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry)))
-  :doc "returns nil when persistence is disabled"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-session-persistence--make-tempdir-workspace)
-    (unwind-protect
-        (let ((mevedel-session-persistence nil)
-              (session (mevedel-session-create "main" workspace))
-              (buf     (generate-new-buffer "*test-data-buf*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (should (null
-                         (mevedel-session-persistence-ensure-files
-                          session buf)))
-                (should (null (mevedel-session-save-path session))))
-            (kill-buffer buf)))
-      (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
   :doc "repairs shallowly materialized sessions before saving data buffers"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)

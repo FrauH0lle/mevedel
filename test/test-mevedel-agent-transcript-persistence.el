@@ -352,23 +352,6 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                                 session buf))))
             (test-mevedel-spec21--release-and-kill buf session)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
-
-  :doc "returns nil when persistence is disabled"
-  (cl-destructuring-bind (workspace . tempdir)
-      (test-mevedel-spec21--make-workspace)
-    (unwind-protect
-        (let ((mevedel-session-persistence nil)
-              (session (mevedel-session-create "main" workspace))
-              (buf (generate-new-buffer "*spec21-shallow-disabled*")))
-          (unwind-protect
-              (with-current-buffer buf
-                (org-mode)
-                (should-not
-                 (mevedel-session-persistence--shallow-ensure-files
-                  session buf)))
-            (kill-buffer buf)))
-      (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
 

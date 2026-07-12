@@ -6,6 +6,7 @@
 
 (require 'cl-lib)
 (require 'gptel-request)
+(require 'mevedel)
 (require 'mevedel-compact)
 (require 'mevedel-models)
 (require 'mevedel-hooks)
@@ -42,24 +43,6 @@
             "#+end_summary\n")
     (should (equal "## Goal\n- Continue"
                    (mevedel--compact-previous-summary)))))
-
-(mevedel-deftest mevedel--compact-apply-in-place ()
-  ,test
-  (test)
-  :doc "keeps PreCompact audit blocks gptel-ignored after summary cleanup"
-  (with-temp-buffer
-    (org-mode)
-    (insert "old transcript\n")
-    (let ((summary (propertize "summary" 'gptel 'ignore))
-          (audit '(:type compact-context
-                   :event "PreCompact"
-                   :context "compact note")))
-      (mevedel--compact-apply-in-place (point-max) summary (list audit))
-      (goto-char (point-min))
-      (search-forward "<!-- mevedel-hook-audit -->")
-      (should (eq 'ignore
-                  (get-text-property (match-beginning 0) 'gptel)))
-      (should (string-match-p "summary" (buffer-string))))))
 
 (mevedel-deftest mevedel--file-local-variables-start ()
   ,test
@@ -753,6 +736,23 @@
 (mevedel-deftest mevedel--compact-run ()
   ,test
   (test)
+  :doc "rejects an unpersisted buffer before hooks or model requests"
+  (with-temp-buffer
+    (org-mode)
+    (insert "Prompt\n")
+    (let (hook-called request-called)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (&rest _)
+                   (setq hook-called t)))
+                ((symbol-function 'gptel-request)
+                 (lambda (&rest _)
+                   (setq request-called t))))
+        (should-error
+         (mevedel--compact-run :aggressive t :pending-start (point-max))
+         :type 'user-error))
+      (should-not hook-called)
+      (should-not request-called)))
+
   :doc "manual compaction failure stops the view spinner"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-chat*"))
         (view-buf (generate-new-buffer " *mevedel-compact-view*"))
@@ -770,7 +770,9 @@
           (setq-local gptel--request-alist nil)
           (setq-local gptel-use-tools nil)
           (setq-local gptel-tools nil)
-          (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (&rest _)
                        "system prompt"))
                     ((symbol-function 'mevedel-view--update-spinner)
@@ -817,7 +819,9 @@
           (setq-local gptel-use-tools nil)
           (setq-local gptel-tools nil)
           (setq-local gptel-stream t)
-          (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (&rest _)
                        "system prompt"))
                     ((symbol-function 'gptel-get-preset)
@@ -856,14 +860,16 @@
           (setq-local gptel-tools nil)
           (setq-local gptel-stream t)
           (let ((mevedel-compact-warn-on-completion nil))
-            (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+            (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
+                       (lambda () t))
+                      ((symbol-function 'mevedel-system-render-prompt-file)
                        (lambda (&rest _)
                          "system prompt"))
                       ((symbol-function 'gptel-get-preset)
                        (lambda (&rest _)
                          '(:description "test")))
                       ((symbol-function 'mevedel--compact-apply)
-                       (lambda (_boundary summary &optional _tail _pending hook-audits)
+                       (lambda (summary &optional _tail _pending hook-audits)
                          (setq applied-summary summary
                                applied-hook-audits hook-audits)))
                       ((symbol-function 'mevedel-hooks-run-event)
@@ -925,7 +931,9 @@
           (setq-local gptel--request-alist nil)
           (setq-local gptel-use-tools nil)
           (setq-local gptel-tools nil)
-          (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (&rest _)
                        "system prompt"))
                     ((symbol-function 'gptel-get-preset)
@@ -974,7 +982,9 @@
           (setq-local gptel--request-alist nil)
           (setq-local gptel-use-tools nil)
           (setq-local gptel-tools nil)
-          (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+          (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (&rest _)
                        "system prompt"))
                     ((symbol-function 'gptel-request)
@@ -1018,7 +1028,9 @@
           (setq-local gptel-use-tools nil)
           (setq-local gptel-tools nil)
           (let ((mevedel-compact-warn-on-completion nil))
-            (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+            (cl-letf (((symbol-function 'mevedel--compact-current-persisted-p)
+                       (lambda () t))
+                      ((symbol-function 'mevedel-system-render-prompt-file)
                        (lambda (&rest _)
                          "system prompt"))
                       ((symbol-function 'gptel-get-preset)
@@ -1096,6 +1108,52 @@
                   (mevedel-session-persistence--segment-path tempdir 1))
             (setq-local mevedel--session session)
             (should-not (mevedel--compact-current-persisted-p))))
+      (mevedel-workspace-clear-registry)
+      (delete-directory tempdir t))))
+
+(mevedel-deftest mevedel--compact-apply ()
+  ,test
+  (test)
+  :doc "rotates the persisted segment and includes hook audits"
+  (let* ((tempdir (make-temp-file "mevedel-compact-apply-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "compact-apply" tempdir "compact-apply"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *mevedel-compact-apply*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (org-mode)
+          (insert "Original transcript\n")
+          (setq-local mevedel--session session)
+          (mevedel-session-persistence-ensure-files session buffer)
+          (mevedel--compact-apply
+           "summary" "tail" "pending"
+           (list '(:type compact-context
+                   :event "PreCompact"
+                   :context "compact note")))
+          (should (= 2 (mevedel-session-current-segment session)))
+          (should (string-match-p "summary" (buffer-string)))
+          (should (string-match "<!-- mevedel-hook-audit -->"
+                                (buffer-string)))
+          (should (eq 'ignore
+                      (get-text-property (match-beginning 0)
+                                         'gptel (buffer-string))))
+          (should (string-match-p "tail\npending\n\\'" (buffer-string)))
+          (let ((segment-path
+                 (mevedel-session-persistence--segment-path
+                  (mevedel-session-save-path session) 2)))
+            (should (file-exists-p segment-path))
+            (with-temp-buffer
+              (insert-file-contents segment-path)
+              (should (string-match-p "summary" (buffer-string)))
+              (should (string-match-p "tail\n+\\'" (buffer-string)))
+              (should-not (string-match-p "pending" (buffer-string))))))
+      (mevedel-session-persistence-lock-release
+       (mevedel-session-save-path session))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
       (mevedel-workspace-clear-registry)
       (delete-directory tempdir t))))
 

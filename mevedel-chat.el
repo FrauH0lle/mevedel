@@ -245,15 +245,6 @@ If non-nil, the chat buffer will automatically be displayed."
   :type 'boolean
   :group 'mevedel)
 
-(defcustom mevedel-plans-directory (file-name-concat ".mevedel" "plans")
-  "Directory where implementation plans are stored.
-
-If this is a relative path, it is resolved relative to the workspace
-root at plan-save time.  If absolute, it is used as-is."
-  :type 'directory
-  :group 'mevedel)
-
-
 ;;
 ;;; Buffer management
 
