@@ -50,6 +50,7 @@
 (require 'mevedel-persistence)
 (require 'mevedel-file-state)
 (require 'mevedel-models)
+(require 'mevedel-plan)
 (require 'mevedel-tools)
 (require 'mevedel-tools-list)
 (require 'mevedel-system)

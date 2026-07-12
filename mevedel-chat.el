@@ -1435,7 +1435,7 @@ with NO-SPINNER forwarded when non-nil."
 ACTION-PLIST is a plist with keys:
   :action        - `implement', `implement-clear', or `implement-worktree'
   :plan-file     - Path to the saved plan file
-  :plan-markdown - The plan text as markdown
+  :permission-mode - Permission mode for implementation
 
 For `implement', the plan is inserted into the chat buffer as a user
 message and sent via `gptel-send', including full conversation context.

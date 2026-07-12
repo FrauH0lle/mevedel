@@ -62,14 +62,14 @@
                        (lambda (&rest _)
                          (cl-incf create-count)
                          worktree))
-                      ((symbol-function 'mevedel-plan-mode--write-current-plan)
+                      ((symbol-function 'mevedel-plan-write-current)
                        (lambda (&rest _)
                          (if fail-write
                              (error "Write failed")
-                           "/tmp/plan.md")))
-                      ((symbol-function 'mevedel-plan-mode--archive-accepted-plan)
+                           '(:absolute-path "/tmp/plan.md"))))
+                      ((symbol-function 'mevedel-plan-archive-accepted)
                        (lambda (&rest _) '(:absolute-path "/tmp/accepted.md")))
-                      ((symbol-function 'mevedel-plan-mode--mark-approved)
+                      ((symbol-function 'mevedel-plan-mark-approved)
                        #'ignore)
                       ((symbol-function 'mevedel-plan-mode--save-session-state)
                        #'ignore))
@@ -84,42 +84,6 @@
                 (should (eq worktree (plist-get prepared :worktree))))))
         (when (buffer-live-p target-buffer)
           (kill-buffer target-buffer))))))
-
-
-;;
-;;; Proposed-plan blocks
-
-(mevedel-deftest mevedel-plan-mode-extract-proposed-plan
-  (:doc "extracts the body of a line-oriented proposed-plan block")
-  ,test
-  (test)
-  (should (equal "# Plan\nDo it."
-                 (mevedel-plan-mode-extract-proposed-plan
-                  "Intro\n<proposed_plan>\n# Plan\nDo it.\n</proposed_plan>\nTail")))
-
-  :doc "returns the last proposed-plan block when multiple are present"
-  (should (equal "second"
-                 (mevedel-plan-mode-extract-proposed-plan
-                  "<proposed_plan>\nfirst\n</proposed_plan>\n<proposed_plan>\nsecond\n</proposed_plan>")))
-
-  :doc "ignores inline tag-looking text"
-  (should-not
-   (mevedel-plan-mode-extract-proposed-plan
-    "text <proposed_plan>\nnot a plan\n</proposed_plan>")))
-
-(mevedel-deftest mevedel-plan-mode-strip-proposed-plans
-  (:doc "removes proposed-plan blocks from visible assistant text")
-  ,test
-  (test)
-  (should (equal "Intro\nTail"
-                 (mevedel-plan-mode-strip-proposed-plans
-                  "Intro\n<proposed_plan>\n# Plan\n</proposed_plan>\nTail")))
-
-  :doc "removes an incomplete streaming proposed-plan block"
-  (should (equal "Intro"
-                 (mevedel-plan-mode-strip-proposed-plans
-                  "Intro\n<proposed_plan>\n# Streaming plan\n"))))
-
 
 ;;
 ;;; Plan-mode presentation
@@ -167,7 +131,7 @@
                                  :verification-pending))
           (should-not (plist-get (mevedel-session-plan-metadata session)
                                  :approved-turn))
-          (should (mevedel-plan-mode-known-proposed-plan-p
+          (should (mevedel-plan-known-p
                    "# Plan\n\nDo it." session)))
       (delete-directory save-dir t)))
 
@@ -200,7 +164,7 @@
           (should (equal '("# Plan\n\nQuote: “x”") rendered))
           (should-not
            (test-mevedel-tool-plan--raw-byte-string-p
-            (mevedel-plan-mode--current-plan-body session))))
+            (mevedel-plan-current-body session))))
       (delete-directory save-dir t)))
 
   :doc "materializes the session before writing its plan"
@@ -236,8 +200,8 @@
                                        "plans" "current.md")
                      path))
             (should (equal "# Workspace plan\n\nDo it."
-                           (mevedel-plan-mode--current-plan-body session)))
-            (should (mevedel-plan-mode--current-plan-exists-p session))))
+                           (mevedel-plan-current-body session)))
+            (should (mevedel-plan-current-exists-p session))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-plan-mode--post-response
@@ -579,15 +543,17 @@
                           '((org-mode . "* User\n")))
               (setq-local mevedel--session (cdr pair))))
           (with-current-buffer target-buffer
-            (let* ((target-path
-                    (mevedel-plan-mode--write-current-plan
+            (let* ((target-artifact
+                    (mevedel-plan-write-current
                      "# Plan\n\nDo it." target-session target-buffer))
                    (target-accepted-plan
-                    (mevedel-plan-mode--archive-accepted-plan
-                     target-path target-session)))
-              (mevedel-plan-mode--mark-approved
-               target-session target-path target-accepted-plan)
-              (setq worktree (plist-put worktree :plan-file target-path))
+                    (mevedel-plan-archive-accepted
+                     target-artifact target-session)))
+              (mevedel-plan-mark-approved
+               target-session target-artifact target-accepted-plan)
+              (setq worktree
+                    (plist-put worktree :plan-file
+                               (plist-get target-artifact :absolute-path)))
               (setq outcome (plist-put outcome :worktree worktree))))
           (cl-letf (((symbol-function 'mevedel-session-persistence-save)
                      (lambda (session _buffer)
@@ -605,6 +571,11 @@
                  (mevedel-session-plan-metadata target-session)))
             (should (eq 'approved (plist-get source-metadata :status)))
             (should-not (plist-get source-metadata :verification-pending))
+            (let ((handoff (plist-get source-metadata :execution-handoff)))
+              (should (equal ".worktrees:main"
+                             (plist-get handoff :session)))
+              (should (equal (plist-get worktree :plan-file)
+                             (plist-get handoff :plan-file))))
             (should (eq 'approved (plist-get target-metadata :status)))
             (should (plist-get target-metadata :verification-pending))
             (should (file-exists-p
@@ -672,13 +643,14 @@
                           '((org-mode . "* User\n")))
               (setq-local mevedel--session (cdr pair))))
           (with-current-buffer target-buffer
-            (setq target-path
-                  (mevedel-plan-mode--write-current-plan
-                   "# Plan\n\nDo it." target-session target-buffer))
-            (mevedel-plan-mode--mark-approved
-             target-session target-path
-             (mevedel-plan-mode--archive-accepted-plan
-              target-path target-session)))
+            (let ((target-artifact
+                   (mevedel-plan-write-current
+                    "# Plan\n\nDo it." target-session target-buffer)))
+              (setq target-path (plist-get target-artifact :absolute-path))
+              (mevedel-plan-mark-approved
+               target-session target-artifact
+               (mevedel-plan-archive-accepted
+                target-artifact target-session))))
           (setq worktree (plist-put worktree :plan-file target-path))
           (cl-letf (((symbol-function 'mevedel-session-persistence-save)
                      (lambda (session _buffer)
@@ -709,7 +681,6 @@
           (should (equal
                    (list :action 'implement-worktree
                          :plan-file target-path
-                         :plan-markdown "# Plan\n\nDo it."
                          :permission-mode 'default)
                    (plist-get (mevedel-session-plan-metadata target-session)
                               :implementation-retry))))
@@ -770,7 +741,6 @@
     (unwind-protect
         (let* ((retry (list :action 'implement-worktree
                             :plan-file "/tmp/accepted-plan.md"
-                            :plan-markdown "# Plan\n\nDo it."
                             :permission-mode 'trust-all))
                (session
                 (mevedel-session--create

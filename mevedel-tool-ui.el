@@ -44,9 +44,9 @@
 ;; `mevedel-tool-ask'
 (declare-function mevedel-tool-ask-register "mevedel-tool-ask" ())
 
-;; `mevedel-tool-plan'
-(declare-function mevedel-plan-mode-clear-verification-pending
-                  "mevedel-tool-plan" (&optional session))
+;; `mevedel-plan'
+(declare-function mevedel-plan-clear-verification-pending
+                  "mevedel-plan" (&optional session))
 
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-truthy-p
@@ -184,7 +184,8 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     (when agent-type
       (require 'mevedel-agent-runtime)
       (when (equal agent-type "verifier")
-        (mevedel-plan-mode-clear-verification-pending))
+        (require 'mevedel-plan)
+        (mevedel-plan-clear-verification-pending))
       (if-let* ((agent (mevedel-agent-get agent-type)))
           (mevedel-agent-runtime-dispatch
            (apply-partially #'mevedel-tool-ui--deliver-result callback)
