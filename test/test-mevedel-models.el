@@ -58,48 +58,144 @@
   :doc "resolves configured tiers to provider plists"
   (mevedel-models-test--with-backends
     (let ((mevedel-model-tiers
-           '((fast . "Fast:fast-model")
-             (balanced . "Balanced:balanced-model")
-             (strong . nil))))
+           '((fast :provider "Fast:fast-model" :effort nil)
+             (balanced :provider "Balanced:balanced-model")
+             (strong))))
       (let ((provider (mevedel-model-resolve-tier 'fast)))
         (should (equal "Fast" (gptel-backend-name
                                (plist-get provider :backend))))
         (should (eq 'fast-model (plist-get provider :model))))))
 
-  :doc "unconfigured fast and strong fall back to balanced"
+  :doc "unconfigured named tiers inherit current session policy"
   (mevedel-models-test--with-backends
-    (let ((mevedel-model-tiers
-           '((fast . nil)
-             (balanced . "Balanced:balanced-model")
-             (strong . nil))))
-      (dolist (tier '(fast strong))
-        (let ((provider (mevedel-model-resolve-tier tier)))
-          (should (equal "Balanced"
-                         (gptel-backend-name (plist-get provider :backend))))
-          (should (eq 'balanced-model (plist-get provider :model)))))))
+    (let ((mevedel-model-tiers '((custom)))
+          (gptel-backend (gptel-get-backend "Balanced"))
+          (gptel-model 'balanced-model))
+      (let ((policy (mevedel-model-resolve-tier 'custom)))
+        (should (eq gptel-backend (plist-get policy :backend)))
+        (should (eq gptel-model (plist-get policy :model)))))))
 
-  :doc "unconfigured balanced inherits"
-  (let ((mevedel-model-tiers
-         '((fast . nil) (balanced . nil) (strong . nil))))
-    (should (null (mevedel-model-resolve-tier 'balanced)))))
-
-(mevedel-deftest mevedel-model-workload-default-selector ()
+(mevedel-deftest mevedel-model--merge-map
+  ()
   ,test
   (test)
+  :doc "replaces entries by name without mutating the base map"
+  (let* ((base '((fast :provider "A:a") (strong :effort high)))
+         (result (mevedel-model--merge-map
+                  '((fast :provider "B:b") (custom :effort low)) base)))
+    (should (equal '(:provider "B:b") (alist-get 'fast result)))
+    (should (equal '(:effort low) (alist-get 'custom result)))
+    (should (equal '(:provider "A:a") (alist-get 'fast base)))))
 
-  :doc "returns configured workload tier selectors"
-  (let ((mevedel-model-workload-tiers
-         '((explorer . fast)
-           (guardian . fast)
-           (compaction . balanced))))
-    (should (equal '(:tier fast)
-                   (mevedel-model-workload-default-selector 'guardian)))
-    (should (equal '(:tier balanced)
-                   (mevedel-model-workload-default-selector "compaction"))))
+(mevedel-deftest mevedel-model-merge-tiers
+  ()
+  ,test
+  (test)
+  :doc "accepts provider and effort tier fields"
+  (should (equal '((fast :provider "Fast:fast-model" :effort low))
+                 (mevedel-model-merge-tiers
+                  '((fast :provider "Fast:fast-model" :effort low)) nil)))
+  :doc "rejects unknown tier fields"
+  (should-error (mevedel-model-merge-tiers '((fast :tier other)) nil)
+                :type 'user-error))
 
-  :doc "returns nil for unknown workloads"
-  (let ((mevedel-model-workload-tiers '((explorer . fast))))
-    (should-not (mevedel-model-workload-default-selector 'guardian))))
+(mevedel-deftest mevedel-model-merge-workloads
+  ()
+  ,test
+  (test)
+  :doc "merges workload entries by workload name"
+  (should (equal '(:provider "Fast:fast-model" :effort high)
+                 (alist-get
+                  'planning
+                  (mevedel-model-merge-workloads
+                   '((planning :provider "Fast:fast-model" :effort high))
+                   '((planning :tier balanced) (review :tier strong))))))
+  :doc "rejects simultaneous tier and provider selectors"
+  (should-error
+   (mevedel-model-merge-workloads
+    '((planning :tier balanced :provider "Fast:fast-model")) nil)
+   :type 'user-error))
+
+(mevedel-deftest mevedel-model-validate-effort
+  ()
+  ,test
+  (test)
+  :doc "delegates effort validation to gptel model metadata"
+  (let ((old-custom (get 'gptel-reasoning-effort 'custom-type))
+        (old-effort (get 'fast-model :reasoning-effort)))
+    (unwind-protect
+        (progn
+          (put 'gptel-reasoning-effort 'custom-type nil)
+          (should-error
+           (mevedel-model-validate-effort 'fast-model 'high)
+           :type 'user-error)
+          (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
+          (put 'fast-model :reasoning-effort '(member low medium high))
+          (should (eq 'high
+                      (mevedel-model-validate-effort 'fast-model 'high)))
+          (should-error
+           (mevedel-model-validate-effort 'fast-model 'max)
+           :type 'user-error))
+      (put 'gptel-reasoning-effort 'custom-type old-custom)
+      (put 'fast-model :reasoning-effort old-effort))))
+
+(mevedel-deftest mevedel-model-resolve-workload
+  ()
+  ,test
+  (test)
+  :doc "applies session, tier, workload, and explicit override precedence"
+  (mevedel-models-test--with-backends
+    (let ((old-custom (get 'gptel-reasoning-effort 'custom-type))
+          (old-fast (get 'fast-model :reasoning-effort))
+          (old-llama (get 'llama3.1:8b :reasoning-effort)))
+      (unwind-protect
+          (let ((gptel-backend (gptel-get-backend "Balanced"))
+                (gptel-model 'balanced-model)
+                (gptel-reasoning-effort 'low)
+                (mevedel-model-tiers
+                 '((strong :provider "Fast:fast-model" :effort medium)))
+                (mevedel-model-workloads
+                 '((planning :tier strong :effort high))))
+            (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
+            (put 'fast-model :reasoning-effort '(member low medium high))
+            (put 'llama3.1:8b :reasoning-effort '(member low medium high max))
+            (let ((policy
+                   (mevedel-model-resolve-workload
+                    'planning
+                    (mevedel-model-resolve-provider "Ollama:llama3.1:8b")
+                    'max)))
+              (should (equal "Ollama"
+                             (gptel-backend-name
+                              (plist-get policy :backend))))
+              (should (eq 'llama3.1:8b (plist-get policy :model)))
+              (should (eq 'max (plist-get policy :effort)))))
+        (put 'gptel-reasoning-effort 'custom-type old-custom)
+        (put 'fast-model :reasoning-effort old-fast)
+        (put 'llama3.1:8b :reasoning-effort old-llama))))
+  :doc "missing workloads inherit the session provider and effort"
+  (mevedel-models-test--with-backends
+    (let ((gptel-backend (gptel-get-backend "Balanced"))
+          (gptel-model 'balanced-model)
+          (gptel-reasoning-effort nil)
+          (mevedel-model-workloads nil))
+      (let ((policy (mevedel-model-resolve-workload 'missing)))
+        (should (eq gptel-backend (plist-get policy :backend)))
+        (should (eq gptel-model (plist-get policy :model)))
+        (should-not (plist-get policy :effort)))))
+  :doc "settled policy is fixed while a later dispatch sees session changes"
+  (mevedel-models-test--with-backends
+    (let ((gptel-backend (gptel-get-backend "Balanced"))
+          (gptel-model 'balanced-model)
+          (gptel-reasoning-effort nil)
+          (mevedel-model-tiers
+           '((first :provider "Fast:fast-model")
+             (second :provider "Ollama:llama3.1:8b")))
+          (mevedel-model-workloads '((planning :tier first))))
+      (let ((in-flight (mevedel-model-resolve-workload 'planning)))
+        (setq mevedel-model-workloads '((planning :tier second)))
+        (let ((next-phase (mevedel-model-resolve-workload 'planning)))
+          (should (eq 'fast-model (plist-get in-flight :model)))
+          (should (eq 'llama3.1:8b (plist-get next-phase :model))))))))
 
 (mevedel-deftest mevedel-model-current-label ()
   ,test
@@ -151,6 +247,19 @@
                              (plist-get selector :backend))))
       (should (eq 'fast-model (plist-get selector :model))))))
 
+(mevedel-deftest mevedel-model-resolve-selector
+  ()
+  ,test
+  (test)
+  :doc "resolves configured tier selectors"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-tiers
+           '((custom :provider "Fast:fast-model"))))
+      (should (eq 'fast-model
+                  (plist-get
+                   (mevedel-model-resolve-selector '(:tier custom))
+                   :model))))))
+
 (mevedel-deftest mevedel-model-apply-provider-to-info ()
   ,test
   (test)
@@ -175,8 +284,23 @@
        (mevedel-model-apply-provider-to-info
         (list :backend (gptel-get-backend "Fast")
               :data '(:model "old" :messages []))
-        provider)
+       provider)
        :type 'user-error))))
+
+(mevedel-deftest mevedel-model-apply-policy-to-info
+  ()
+  ,test
+  (test)
+  :doc "records effort while applying the provider"
+  (mevedel-models-test--with-backends
+    (let* ((backend (gptel-get-backend "Fast"))
+           (policy (append
+                    (mevedel-model-resolve-provider "Fast:fast-model")
+                    '(:effort high)))
+           (info (mevedel-model-apply-policy-to-info
+                  (list :backend backend) policy)))
+      (should (eq 'fast-model (plist-get info :model)))
+      (should (eq 'high (plist-get info :reasoning-effort))))))
 
 (provide 'test-mevedel-models)
 ;;; test-mevedel-models.el ends here

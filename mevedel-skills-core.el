@@ -249,9 +249,6 @@ yaml.el false sentinel :false.  Anything else is treated as t."
     (`(,single) (mevedel-skills--coerce-context single))
     (_ 'inline)))
 
-(defconst mevedel-skills--valid-efforts '(low medium high xhigh max)
-  "Effort values accepted on the `effort' frontmatter field.")
-
 (defconst mevedel-skills--name-regexp "\\`[a-z0-9-]+\\'"
   "Regexp matching valid skill invocation identifiers.")
 
@@ -280,24 +277,6 @@ entries are filtered out so they cannot shadow `$0'/`$1'/etc."
                     (or (string-empty-p n)
                         (string-match-p "\\`[0-9]+\\'" n)))
                   names)))
-
-(defun mevedel-skills--validate-effort (val source-file)
-  "Validate effort VAL.  Return symbol or nil.
-Emits a warning and returns nil for unrecognized values.
-SOURCE-FILE identifies the offending skill in the warning."
-  (when val
-    (let ((sym (cond ((symbolp val) val)
-                     ((stringp val) (intern val))
-                     (t nil))))
-      (cond
-       ((memq sym mevedel-skills--valid-efforts) sym)
-       (t
-        (display-warning
-         'mevedel
-         (format "Skill at %s declares unknown effort %S; ignoring"
-                 source-file val)
-         :warning)
-        nil)))))
 
 (defun mevedel-skills--validate-shell (val source-file)
   "Validate shell VAL.  Return `bash', `powershell', or `bash' on error.
@@ -452,7 +431,7 @@ the fallback."
      (mevedel-skills--parse-allowed-tool-rules
       (mevedel-skills--coerce-list allowed-tools) source-file)
      :model (and (stringp model) model)
-     :effort (mevedel-skills--validate-effort effort source-file)
+     :effort (if (stringp effort) (intern effort) effort)
      :argument-hint (and (stringp argument-hint) argument-hint)
      :argument-names (mevedel-skills--parse-argument-names arguments)
      :path-patterns (mevedel-skills--coerce-list paths)

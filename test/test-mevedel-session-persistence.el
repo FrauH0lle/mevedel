@@ -277,7 +277,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (let* ((session (test-mevedel-session-persistence--make-session root))
                (_ (setf (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-preset-settings session)
-                        '((mevedel-test-setting . session))))
+                        '((mevedel-model-tiers
+                           (strong :provider "Test:test-model" :effort high))
+                          (mevedel-model-workloads
+                           (planning :tier strong)))))
                (plist (mevedel-session-persistence-serialize
                        session
                        :first-user-message "Refactor X"
@@ -292,7 +295,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                          (plist-get plist :working-directory)))
           (should (equal 'default (plist-get plist :permission-mode)))
           (should (eq 'test-preset (plist-get plist :preset-name)))
-          (should (equal '((mevedel-test-setting . session))
+          (should (equal '((mevedel-model-tiers
+                            (strong :provider "Test:test-model" :effort high))
+                           (mevedel-model-workloads
+                            (planning :tier strong)))
                          (plist-get plist :preset-settings)))
           (should (= 2 (plist-get plist :current-segment)))
           (should (= 5 (plist-get plist :total-turn-count)))
@@ -356,7 +362,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (let* ((source (test-mevedel-session-persistence--make-session root))
                (_ (setf (mevedel-session-preset-name source) 'test-preset
                         (mevedel-session-preset-settings source)
-                        '((mevedel-test-setting . restored))))
+                        '((mevedel-model-tiers
+                           (strong :provider "Test:test-model" :effort high))
+                          (mevedel-model-workloads
+                           (review :tier strong)))))
                (plist (mevedel-session-persistence-serialize
                        source
                        :first-user-message "Hi"
@@ -372,7 +381,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                          (mevedel-session-session-id session)))
           (should (eq 'default (mevedel-session-permission-mode session)))
           (should (eq 'test-preset (mevedel-session-preset-name session)))
-          (should (equal '((mevedel-test-setting . restored))
+          (should (equal '((mevedel-model-tiers
+                            (strong :provider "Test:test-model" :effort high))
+                           (mevedel-model-workloads
+                            (review :tier strong)))
                          (mevedel-session-preset-settings session)))
           (should (= 5 (mevedel-session-turn-count session)))
           (should (= 4 (mevedel-session-last-task-write-turn session)))

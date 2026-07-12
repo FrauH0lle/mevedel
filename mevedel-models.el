@@ -2,10 +2,9 @@
 
 ;;; Commentary:
 
-;; User-facing model selection helpers.  mevedel exposes a small tier
-;; vocabulary (`fast', `balanced', `strong') while gptel dispatch needs
-;; an exact backend/model pair.  This module parses provider specs,
-;; resolves tiers, and applies resolved providers to gptel FSM info.
+;; Session-local model-team policy.  Named tiers and workload assignments
+;; resolve to exact backend/model/effort tuples at dispatch time.  Provider
+;; and reasoning-effort details remain delegated to gptel.
 
 ;;; Code:
 
@@ -21,67 +20,83 @@
 (declare-function gptel--model-name "ext:gptel" (model))
 (defvar gptel-backend)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 
 
 ;;
 ;;; Customization
 
-(defconst mevedel-model-tier-symbols '(fast balanced strong)
-  "Valid mevedel model tier symbols.")
-
 (defcustom mevedel-model-tiers
-  '((fast . nil)
-    (balanced . nil)
-    (strong . nil))
-  "Alist mapping model tiers to concrete gptel providers.
+  '((fast)
+    (balanced)
+    (strong))
+  "Alist mapping named tiers to provider and effort policy.
 
-Keys are `fast', `balanced', and `strong'.  Values are one of:
-
-- nil: inherit the current backend/model, subject to tier fallback.
-- \"BACKEND:MODEL\": the same concrete provider notation shown by
-  gptel's transient model selector.
-- (BACKEND-NAME . MODEL): structured form where BACKEND-NAME is a
-  string or symbol and MODEL is a string or symbol.
-
-Bare model symbols are intentionally not accepted because gptel
-models are scoped to backends."
+Each entry is (NAME :provider PROVIDER :effort EFFORT).  PROVIDER is nil,
+\"BACKEND:MODEL\", or (BACKEND-NAME . MODEL).  Nil fields inherit the
+session backend, model, and reasoning effort."
   :group 'mevedel
-  :type '(alist :key-type (choice (const fast)
-                                  (const balanced)
-                                  (const strong))
-                :value-type (choice (const :tag "Inherit" nil)
-                                    string
-                                    (cons (choice string symbol)
-                                          (choice string symbol)))))
+  :type '(repeat sexp))
 
-(defcustom mevedel-model-workload-tiers
-  '((explorer . fast)
-    (coordinator . strong)
-    (verifier . balanced)
-    (reviewer . strong)
-    (guardian . fast)
-    (compaction . balanced))
-  "Alist mapping model workloads to their default tier.
+(defcustom mevedel-model-workloads
+  '((planning :tier balanced)
+    (goal-guardian :tier strong)
+    (implementation :tier fast)
+    (review :tier strong)
+    (explorer :tier fast)
+    (coordinator :tier strong)
+    (verifier :tier balanced)
+    (reviewer :tier strong)
+    (guardian :tier fast)
+    (compaction :tier balanced))
+  "Alist mapping workloads to tier or exact-provider policy.
 
-Keys are workload symbols.  Built-in workloads include sub-agent names
-such as `explorer' and `verifier', plus helper requests such as
-`guardian' and `compaction'.  Values are `fast', `balanced', or
-`strong'.  An Agent tool call with an explicit model tier overrides the
-sub-agent default for that invocation."
+Each entry is (WORKLOAD :tier TIER :provider PROVIDER :effort EFFORT).
+`:tier' and `:provider' are mutually exclusive.  Missing entries and fields
+inherit the current session values."
   :group 'mevedel
-  :type '(alist :key-type symbol
-                :value-type (choice (const fast)
-                                    (const balanced)
-                                    (const strong))))
+  :type '(repeat sexp))
 
 
 ;;
 ;;; Provider parsing
 
 (defun mevedel-model-normalize-tier (value)
-  "Return VALUE as a tier symbol, or nil when VALUE is not a tier."
+  "Return VALUE as a configured tier symbol, or nil."
   (let ((sym (if (stringp value) (intern-soft value) value)))
-    (and (memq sym mevedel-model-tier-symbols) sym)))
+    (and (symbolp sym) (assq sym mevedel-model-tiers) sym)))
+
+(defun mevedel-model--merge-map (additions current)
+  "Merge keyed ADDITIONS over CURRENT and return a fresh alist."
+  (let ((result (copy-tree current)))
+    (dolist (entry additions)
+      (unless (and (consp entry) (symbolp (car entry)))
+        (user-error "Invalid model policy entry %S" entry))
+      (setf (alist-get (car entry) result) (copy-tree (cdr entry))))
+    result))
+
+(defun mevedel-model-merge-tiers (additions current)
+  "Merge tier ADDITIONS over CURRENT for preset composition."
+  (dolist (entry additions)
+    (let ((keys (cdr entry)))
+      (unless (and (cl-evenp (length keys))
+                   (cl-loop for (key _) on keys by #'cddr
+                            always (memq key '(:provider :effort))))
+        (user-error "Invalid model tier entry %S" entry))))
+  (mevedel-model--merge-map additions current))
+
+(defun mevedel-model-merge-workloads (additions current)
+  "Merge workload ADDITIONS over CURRENT for preset composition."
+  (dolist (entry additions)
+    (let ((keys (cdr entry)))
+      (unless (and (cl-evenp (length keys))
+                   (cl-loop for (key _) on keys by #'cddr
+                            always (memq key '(:tier :provider :effort))))
+        (user-error "Invalid model workload entry %S" entry))
+      (when (and (plist-member keys :tier) (plist-member keys :provider))
+        (user-error "Workload %s cannot select both tier and provider"
+                    (car entry)))))
+  (mevedel-model--merge-map additions current))
 
 (defun mevedel-model-provider-p (value)
   "Return non-nil when VALUE is a resolved provider plist."
@@ -150,35 +165,30 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
     (list :tier sym)))
 
 (defun mevedel-model-resolve-tier (tier &optional noerror)
-  "Resolve TIER through `mevedel-model-tiers'.
-
-Unconfigured `fast' and `strong' fall back to configured `balanced'.
-Unconfigured `balanced' inherits the current backend/model and returns
-nil.  When NOERROR is non-nil, invalid config returns nil and emits a
-warning instead of signaling."
+  "Resolve TIER through `mevedel-model-tiers' over session defaults.
+When NOERROR is non-nil, invalid configuration returns nil."
   (let* ((sym (mevedel-model-normalize-tier tier))
-         (configured (and sym (alist-get sym mevedel-model-tiers)))
-         (fallback (and (not (eq sym 'balanced))
-                        (alist-get 'balanced mevedel-model-tiers)))
-         (spec (or configured fallback)))
+         (configured (and sym (alist-get sym mevedel-model-tiers))))
     (cond
      ((not sym)
       (if noerror
           nil
         (user-error "Unknown model tier %S" tier)))
-     ((null spec) nil)
      (t
       (condition-case err
-          (mevedel-model-resolve-provider spec noerror)
+          (let* ((provider-spec (plist-get configured :provider))
+                 (provider (and provider-spec
+                                (mevedel-model-resolve-provider
+                                 provider-spec noerror))))
+            (list :backend (or (plist-get provider :backend) gptel-backend)
+                  :model (or (plist-get provider :model) gptel-model)
+                  :effort (if (plist-member configured :effort)
+                              (plist-get configured :effort)
+                            (and (boundp 'gptel-reasoning-effort)
+                                 gptel-reasoning-effort))))
         (error
          (if noerror
-             (progn
-               (display-warning
-                'mevedel
-                (format "Invalid model tier config for %S: %s"
-                        sym (error-message-string err))
-                :warning)
-               nil)
+             nil
            (signal (car err) (cdr err)))))))))
 
 (defun mevedel-model-parse-selector (value)
@@ -195,7 +205,7 @@ string.  Returns either (:tier TIER) or (:backend BACKEND :model MODEL)."
     (mevedel-model-resolve-provider value))
    (t
     (user-error
-     "Model must be a tier (fast, balanced, strong) or BACKEND:MODEL: %S"
+     "Model must be a configured tier or BACKEND:MODEL: %S"
      value))))
 
 (defun mevedel-model-resolve-selector (selector &optional noerror)
@@ -211,13 +221,59 @@ non-nil, return nil instead of signaling for invalid selectors."
    (noerror nil)
    (t (user-error "Invalid model selector %S" selector))))
 
-(defun mevedel-model-workload-default-selector (workload)
-  "Return WORKLOAD's configured default tier selector, or nil."
-  (when-let* ((tier (alist-get (if (symbolp workload)
-                                   workload
-                                 (intern workload))
-                               mevedel-model-workload-tiers)))
-    (mevedel-model-tier-selector tier)))
+(defun mevedel-model-validate-effort (model effort)
+  "Return EFFORT when gptel says MODEL supports it, or signal an error."
+  (when effort
+    (unless (get 'gptel-reasoning-effort 'custom-type)
+      (user-error "Installed gptel does not support reasoning effort"))
+    (let ((type (and (symbolp model) (get model :reasoning-effort))))
+      (unless type
+        (user-error "Model %s does not support reasoning effort"
+                    (gptel--model-name model)))
+      (unless (cl-typep effort type)
+        (user-error "Reasoning effort %S is unsupported by model %s"
+                    effort (gptel--model-name model)))))
+  effort)
+
+(defun mevedel-model-resolve-workload
+    (workload &optional explicit-selector explicit-effort)
+  "Resolve WORKLOAD with optional explicit model and effort overrides.
+
+Resolution starts from the current session backend/model/effort, then applies
+the workload's tier, exact provider and effort, followed by explicit overrides."
+  (let* ((name (and workload
+                    (if (symbolp workload) workload (intern workload))))
+         (spec (and name (alist-get name mevedel-model-workloads)))
+         (tier (plist-get spec :tier))
+         (provider-spec (plist-get spec :provider)))
+    (when (and tier provider-spec)
+      (user-error "Workload %s cannot select both tier and provider" name))
+    (let* ((policy (if tier
+                       (mevedel-model-resolve-tier tier)
+                     (list :backend gptel-backend
+                           :model gptel-model
+                           :effort (and (boundp 'gptel-reasoning-effort)
+                                        gptel-reasoning-effort))))
+           (provider (and provider-spec
+                          (mevedel-model-resolve-provider provider-spec)))
+           (explicit (and explicit-selector
+                          (mevedel-model-resolve-selector explicit-selector))))
+      (when provider
+        (setq policy (plist-put policy :backend (plist-get provider :backend))
+              policy (plist-put policy :model (plist-get provider :model))))
+      (when (plist-member spec :effort)
+        (setq policy (plist-put policy :effort (plist-get spec :effort))))
+      (when explicit
+        (setq policy (plist-put policy :backend (plist-get explicit :backend))
+              policy (plist-put policy :model (plist-get explicit :model)))
+        (when (plist-member explicit :effort)
+          (setq policy (plist-put policy :effort
+                                  (plist-get explicit :effort)))))
+      (when explicit-effort
+        (setq policy (plist-put policy :effort explicit-effort)))
+      (mevedel-model-validate-effort
+       (plist-get policy :model) (plist-get policy :effort))
+      policy)))
 
 (defun mevedel-model-current-label (&optional buffer)
   "Return BUFFER's current model label, or \"none\"."
@@ -247,23 +303,11 @@ non-nil, return nil instead of signaling for invalid selectors."
 (defun mevedel-model-agent-tool-description ()
   "Return the Agent tool model-argument description."
   (concat
-   "Optional model tier for this agent invocation. Allowed values: "
-   "fast, balanced, strong. Prefer balanced by default. Only pick fast "
-   "when the task is clearly mechanical; only pick strong when the task "
-   "clearly needs deep reasoning. Picking strong for trivial work is "
-   "wasteful; picking fast for hard work is unsafe.\n\n"
-   "fast: quick, low-cost work. Good for well-defined lookups, simple "
-   "edits, summarizing tool output, format/lint fixes, single-step "
-   "transformations where the right answer is obvious. Avoid for "
-   "multi-file reasoning, debugging, or design decisions.\n\n"
-   "balanced: the default. Good for typical implementation work: "
-   "writing or modifying functions, reviewing code with context, "
-   "exploring an unfamiliar codebase, most refactors. Pick this when "
-   "the task is clearly real work but not unusually subtle.\n\n"
-   "strong: heaviest, slowest tier. Good for hard reasoning: "
-   "architecture decisions, ambiguous specifications, debugging subtle "
-   "invariants (concurrency, type systems, ordering bugs), long-horizon "
-   "planning. Avoid for well-scoped tasks where balanced would suffice."))
+   "Optional model tier for this agent invocation. Available tiers: "
+   (mapconcat (lambda (entry) (symbol-name (car entry)))
+              mevedel-model-tiers ", ")
+   ". Omit this argument to use the agent workload declared by the current "
+   "session preset."))
 
 (defun mevedel-model-apply-provider-to-info (info provider)
   "Return INFO with PROVIDER applied to backend/model slots.
@@ -289,6 +333,11 @@ cross-backend switches must happen before gptel builds `info' :data."
       (when (listp data)
         (plist-put data :model (gptel--model-name model)))
       info)))
+
+(defun mevedel-model-apply-policy-to-info (info policy)
+  "Return INFO with resolved model POLICY recorded and applied."
+  (setq info (mevedel-model-apply-provider-to-info info policy))
+  (plist-put info :reasoning-effort (plist-get policy :effort)))
 
 (provide 'mevedel-models)
 ;;; mevedel-models.el ends here

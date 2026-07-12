@@ -74,7 +74,9 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped. The built-ins are
 `mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, and
-`mevedel-tutor`. System prompt assembled
+`mevedel-tutor`. Presets can also merge named model tiers and workload maps;
+dispatch resolves session values, tier values, workload values, then explicit
+Agent or skill overrides. System prompt assembled
 dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md plus optional AGENTS.local.md), persistent memory,

@@ -88,6 +88,7 @@
 (defvar gptel-max-tokens)
 (defvar gptel-model)
 (defvar gptel-org-convert-response)
+(defvar gptel-reasoning-effort)
 (defvar gptel-stream)
 (defvar gptel-temperature)
 (defvar gptel-tools)
@@ -167,10 +168,11 @@
 (defvar mevedel-hooks-command-timeout-max)
 
 ;; `mevedel-models'
-(declare-function mevedel-model-workload-default-selector
-                  "mevedel-models" (workload))
-(declare-function mevedel-model-resolve-selector
-                  "mevedel-models" (selector &optional noerror))
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
+(defvar mevedel-model-tiers)
+(defvar mevedel-model-workloads)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-extract-render-data
@@ -1211,19 +1213,20 @@ before dispatch."
           (set-buffer-modified-p t))
         (mevedel-agent-exec--flush-transcript-save invocation)))))
 
-(defun mevedel-agent-exec--provider-for-invocation (agent-type invocation)
-  "Return the resolved provider for AGENT-TYPE and INVOCATION, or nil.
+(defun mevedel-agent-exec--policy-for-invocation (agent-type invocation)
+  "Return resolved model policy for AGENT-TYPE and INVOCATION.
 
-Precedence is explicit Agent-tool tier, skill selector, agent default
-tier, then inherit."
-  (let* ((selector
-          (cond
-           ((and invocation
-                 (mevedel-agent-invocation-model-tier-override invocation)))
-           ((and invocation
-                 (mevedel-agent-invocation-skill-model-override invocation)))
-           (t (mevedel-model-workload-default-selector agent-type)))))
-    (mevedel-model-resolve-selector selector)))
+An explicit Agent-tool tier wins over a skill selector.  Skill effort remains
+the final effort override."
+  (let ((selector
+         (or (and invocation
+                  (mevedel-agent-invocation-model-tier-override invocation))
+             (and invocation
+                  (mevedel-agent-invocation-skill-model-override invocation))))
+        (effort (and invocation
+                     (mevedel-agent-invocation-skill-effort-override
+                      invocation))))
+    (mevedel-model-resolve-workload agent-type selector effort)))
 
 
 ;;
@@ -1387,10 +1390,11 @@ Returns the spawned FSM."
                              gptel-agent-preset)))))
             agent-spec
             (list :include-reasoning parent-include-reasoning))
-     (let* ((provider (mevedel-agent-exec--provider-for-invocation
-                       agent-type invocation))
-            (effective-backend (or (plist-get provider :backend) gptel-backend))
-            (effective-model (or (plist-get provider :model) gptel-model))
+     (let* ((policy (mevedel-agent-exec--policy-for-invocation
+                     agent-type invocation))
+            (effective-backend (plist-get policy :backend))
+            (effective-model (plist-get policy :model))
+            (effective-effort (plist-get policy :effort))
             (info (and (boundp 'gptel--fsm-last)
                        gptel--fsm-last
                        (gptel-fsm-info gptel--fsm-last)))
@@ -1412,6 +1416,7 @@ Returns the spawned FSM."
             (request-locals
              `((gptel-backend . ,effective-backend)
                (gptel-model . ,effective-model)
+               (gptel-reasoning-effort . ,effective-effort)
                (gptel-system-prompt . ,gptel-system-prompt)
                (gptel-use-tools . ,gptel-use-tools)
                (gptel-tools . ,gptel-tools)
@@ -1423,7 +1428,10 @@ Returns the spawned FSM."
                (gptel-temperature . ,gptel-temperature)
                (gptel-max-tokens . ,gptel-max-tokens)
                (gptel-cache . ,gptel-cache)
-               (gptel--request-params . ,gptel--request-params))))
+               (gptel--request-params . ,gptel--request-params)
+               (mevedel-model-tiers . ,(copy-tree mevedel-model-tiers))
+               (mevedel-model-workloads .
+                                        ,(copy-tree mevedel-model-workloads)))))
        (when configure-fsm
          (funcall configure-fsm fsm invocation))
        (setf (gptel-fsm-info fsm)

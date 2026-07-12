@@ -24,6 +24,7 @@
 (declare-function gptel-request "ext:gptel-request" (&optional prompt &rest args))
 (defvar gptel-backend)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
@@ -38,10 +39,9 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-models'
-(declare-function mevedel-model-resolve-selector
-                  "mevedel-models" (selector &optional noerror))
-(declare-function mevedel-model-workload-default-selector
-                  "mevedel-models" (workload))
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-permission-prompt'
 (declare-function mevedel-permission--build-attribution-line
@@ -1106,13 +1106,11 @@ guidance or nil."
                mevedel-permission-guardian-timeout nil
                (lambda ()
                  (finish nil))))
-        (condition-case nil
-            (let* ((provider
+        (condition-case err
+            (let* ((policy
                     (progn
                       (require 'mevedel-models)
-                      (mevedel-model-resolve-selector
-                       (mevedel-model-workload-default-selector 'guardian)
-                       t)))
+                      (mevedel-model-resolve-workload 'guardian)))
                    (gptel-use-tools nil)
                    (gptel-tools nil)
                    (gptel-use-context nil)
@@ -1139,11 +1137,15 @@ guidance or nil."
                              (mevedel-tool-exec--bash-guardian-parse response)))
                            ((or (null response) (eq response 'abort))
                             (finish nil))))))))
-              (if provider
-                  (let ((gptel-backend (plist-get provider :backend))
-                        (gptel-model (plist-get provider :model)))
-                    (funcall request-fn))
+              (let ((gptel-backend (plist-get policy :backend))
+                    (gptel-model (plist-get policy :model))
+                    (gptel-reasoning-effort (plist-get policy :effort)))
                 (funcall request-fn)))
+          (user-error
+           (setq done t)
+           (when timer
+             (cancel-timer timer))
+           (signal (car err) (cdr err)))
           (error
            (finish nil)))))))
 

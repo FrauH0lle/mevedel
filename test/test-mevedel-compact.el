@@ -913,10 +913,9 @@
   :doc "uses compaction workload tier for the gptel request"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-workload*"))
         (captured-workload nil)
-        (captured-selector nil)
-        (captured-noerror nil)
         (captured-backend nil)
-        (captured-model nil))
+        (captured-model nil)
+        (captured-effort nil))
     (unwind-protect
         (with-current-buffer chat-buf
           (org-mode)
@@ -938,15 +937,11 @@
                     ((symbol-function 'gptel-get-preset)
                      (lambda (&rest _)
                        '(:description "test")))
-                    ((symbol-function 'mevedel-model-workload-default-selector)
-                     (lambda (workload)
+                    ((symbol-function 'mevedel-model-resolve-workload)
+                     (lambda (workload &rest _)
                        (setq captured-workload workload)
-                       '(:tier balanced)))
-                    ((symbol-function 'mevedel-model-resolve-selector)
-                     (lambda (selector &optional noerror)
-                       (setq captured-selector selector
-                             captured-noerror noerror)
-                       '(:backend workload-backend :model workload-model)))
+                       '(:backend workload-backend :model workload-model
+                         :effort high)))
                     ((symbol-function 'message)
                      #'ignore)
                     ((symbol-function 'display-warning)
@@ -954,14 +949,14 @@
                     ((symbol-function 'gptel-request)
                      (lambda (_prompt &rest args)
                        (setq captured-backend gptel-backend
-                             captured-model gptel-model)
+                             captured-model gptel-model
+                             captured-effort gptel-reasoning-effort)
                        (funcall (plist-get args :callback) 'abort nil))))
             (mevedel--compact-run :aggressive t :pending-start (point-max)))
           (should (eq captured-workload 'compaction))
-          (should (equal captured-selector '(:tier balanced)))
-          (should captured-noerror)
           (should (eq captured-backend 'workload-backend))
           (should (eq captured-model 'workload-model))
+          (should (eq captured-effort 'high))
           (should-not mevedel--compaction-in-flight))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf))))

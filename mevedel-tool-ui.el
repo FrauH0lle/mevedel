@@ -28,6 +28,7 @@
 
 ;; `mevedel-models'
 (declare-function mevedel-model-normalize-tier "mevedel-models" (value))
+(defvar mevedel-model-tiers)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts
@@ -178,8 +179,10 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     (when (and model (not (mevedel-model-normalize-tier model)))
       (mevedel-tool-ui--deliver-result
        callback
-       (format "Error: Unknown model tier: %s. Available: fast, balanced, strong"
-               model))
+       (format "Error: Unknown model tier: %s. Available: %s"
+               model
+               (mapconcat (lambda (entry) (symbol-name (car entry)))
+                          mevedel-model-tiers ", ")))
       (setq agent-type nil))
     (when agent-type
       (require 'mevedel-agent-runtime)

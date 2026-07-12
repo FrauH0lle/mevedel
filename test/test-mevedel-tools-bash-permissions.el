@@ -860,27 +860,23 @@
 
   :doc "uses guardian workload tier for the gptel request"
   (let ((captured-workload nil)
-        (captured-selector nil)
-        (captured-noerror nil)
         (captured-backend nil)
         (captured-model nil)
+        (captured-effort nil)
         (mevedel-permission-guardian-timeout 60)
         (gptel-backend 'current-backend)
         (gptel-model 'current-model))
     (require 'gptel nil t)
-    (cl-letf (((symbol-function 'mevedel-model-workload-default-selector)
-               (lambda (workload)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (workload &rest _)
                  (setq captured-workload workload)
-                 '(:tier fast)))
-              ((symbol-function 'mevedel-model-resolve-selector)
-               (lambda (selector &optional noerror)
-                 (setq captured-selector selector
-                       captured-noerror noerror)
-                 '(:backend workload-backend :model workload-model)))
+                 '(:backend workload-backend :model workload-model
+                   :effort high)))
               ((symbol-function 'gptel-request)
                (lambda (_prompt &rest args)
                  (setq captured-backend gptel-backend
-                       captured-model gptel-model)
+                       captured-model gptel-model
+                       captured-effort gptel-reasoning-effort)
                  (funcall (plist-get args :callback)
                           "{\"risk\":\"low\",\"recommendation\":\"ask\",\"reason\":\"Needs review.\"}"
                           nil))))
@@ -889,10 +885,25 @@
        '(:dangerous nil :unparseable nil)
        #'ignore))
     (should (eq captured-workload 'guardian))
-    (should (equal captured-selector '(:tier fast)))
-    (should captured-noerror)
     (should (eq captured-backend 'workload-backend))
-    (should (eq captured-model 'workload-model))))
+    (should (eq captured-model 'workload-model))
+    (should (eq captured-effort 'high)))
+
+  :doc "surfaces unsupported guardian effort before dispatch"
+  (let ((requested nil)
+        (mevedel-permission-guardian-timeout 60))
+    (require 'gptel nil t)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _)
+                 (user-error "Reasoning effort max is unsupported")))
+              ((symbol-function 'gptel-request)
+               (lambda (&rest _)
+                 (setq requested t))))
+      (should-error
+       (mevedel-tool-exec--bash-guardian-model-async
+        "pwd" '(:dangerous nil :unparseable nil) #'ignore)
+       :type 'user-error))
+    (should-not requested)))
 
 
 ;;

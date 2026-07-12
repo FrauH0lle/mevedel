@@ -327,7 +327,30 @@
     (should (equal '(before parent after function)
                    (alist-get 'mevedel-test-setting
                               (mevedel-preset-resolve-settings
-                               'test-child))))))
+                               'test-child)))))
+  :doc "merges preset-local tier and workload maps by entry"
+  (let ((mevedel-model-tiers '((balanced)))
+        (mevedel-model-workloads '((planning :tier balanced))))
+    (mevedel-define-preset test-parent-a
+      :model-tiers ((fast :provider "Fast:fast-model"))
+      :model-workloads ((implementation :tier fast)))
+    (mevedel-define-preset test-parent-b
+      :model-tiers ((strong :provider "Strong:strong-model"))
+      :model-workloads ((review :tier strong)))
+    (mevedel-define-preset test-child
+      :parents (test-parent-a test-parent-b)
+      :model-workloads ((planning :tier strong)))
+    (let ((settings (mevedel-preset-resolve-settings 'test-child)))
+      (should (equal '(:provider "Fast:fast-model")
+                     (alist-get 'fast
+                                (alist-get 'mevedel-model-tiers settings))))
+      (should (equal '(:provider "Strong:strong-model")
+                     (alist-get 'strong
+                                (alist-get 'mevedel-model-tiers settings))))
+      (should (equal '(:tier strong)
+                     (alist-get 'planning
+                                (alist-get 'mevedel-model-workloads
+                                           settings)))))))
 
 (mevedel-deftest mevedel-preset--resolved-metadata
   (:after-each
@@ -479,7 +502,28 @@
         (mevedel-preset-apply 'test-child))
       (should (equal '(base parent child) mevedel-test-setting))
       (should (equal '((mevedel-test-setting base parent child))
-                     (mevedel-session-preset-settings mevedel--session))))))
+                     (mevedel-session-preset-settings mevedel--session)))))
+  :doc "stores resolved preset-local model policy on the session"
+  (let ((mevedel-model-tiers '((balanced)))
+        (mevedel-model-workloads nil))
+    (mevedel-define-preset test-child
+      :model-tiers ((strong :provider "Strong:strong-model" :effort high))
+      :model-workloads ((review :tier strong)))
+    (with-temp-buffer
+      (setq-local mevedel--session (mevedel-session--create :name "test"))
+      (cl-letf (((symbol-function 'mevedel-agents--setup-for-request)
+                 #'ignore)
+                ((symbol-function 'mevedel-preset--setup-deferred)
+                 #'ignore)
+                ((symbol-function 'mevedel-preset--setup-extras)
+                 #'ignore))
+        (mevedel-preset-apply 'test-child))
+      (should (equal '(:provider "Strong:strong-model" :effort high)
+                     (alist-get 'strong mevedel-model-tiers)))
+      (should (equal '(:tier strong)
+                     (alist-get 'review mevedel-model-workloads)))
+      (should (assq 'mevedel-model-tiers
+                    (mevedel-session-preset-settings mevedel--session))))))
 
 (mevedel-deftest mevedel-preset-restore-session
   (:doc "restores saved settings buffer-locally")
