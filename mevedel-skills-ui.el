@@ -64,6 +64,10 @@
                   "mevedel-goal"
                   (objective &optional display-text approval-policy))
 
+;; `mevedel-mentions'
+(declare-function mevedel-mentions-set-binding
+                  "mevedel-mentions" (start end binding &optional object))
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
@@ -87,6 +91,10 @@
                   "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session--read-only-mode)
 
+;; `mevedel-skill-bindings'
+(declare-function mevedel-skill-bindings-token-start-p
+                  "mevedel-skill-bindings" (text start))
+
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--clear-pending-inline-attachments
                   "mevedel-skills-invoke" ())
@@ -98,8 +106,6 @@
                   "mevedel-skills-invoke" (&optional continue-fn))
 (declare-function mevedel-skills--ensure-fresh-line
                   "mevedel-skills-invoke" ())
-(declare-function mevedel-skills--inline-skill-boundary-p
-                  "mevedel-skills-invoke" (text pos))
 (declare-function mevedel-skills--parse-prefixed-line
                   "mevedel-skills-invoke" (text prefix))
 (declare-function mevedel-skills--scan-skill-tokens
@@ -1046,6 +1052,30 @@ buffer still contains `$skill'."
                  (not (memq (char-after) '(?\s ?\t ?\n)))))
     (insert " ")))
 
+(defun mevedel-skills--skill-completion-exit-function
+    (buffer session candidate status)
+  "Bind completed skill CANDIDATE, then finish root completion.
+BUFFER and SESSION identify the discovery context.  STATUS is the
+completion exit status."
+  (when (memq status '(finished exact sole))
+    (when-let* ((skill
+                 (and (buffer-live-p buffer)
+                      (with-current-buffer buffer
+                        (mevedel-session-get-skill session candidate))))
+                (source-file (mevedel-skill-source-file skill))
+                (end (point))
+                (start (- end (length candidate) 1))
+                ((>= start (point-min)))
+                ((equal (buffer-substring-no-properties start end)
+                        (concat "$" candidate))))
+      (require 'mevedel-mentions)
+      (mevedel-mentions-set-binding
+       start end
+       (list :kind 'skill
+             :name candidate
+             :source-file source-file))))
+  (mevedel-skills--slash-root-exit-function candidate status))
+
 (defun mevedel-skills--slash-command-start (&optional input-start)
   "Return slash command start position on this line, or nil.
 
@@ -1161,7 +1191,8 @@ return value is a plist with :kind `root', :start, :end, and
             (let* ((line-text (buffer-substring-no-properties
                                line-start line-end))
                    (relative-dollar (- dollar-pos line-start)))
-              (when (and (mevedel-skills--inline-skill-boundary-p
+              (require 'mevedel-skill-bindings)
+              (when (and (mevedel-skill-bindings-token-start-p
                           line-text relative-dollar)
                          (not (mevedel-skills--escaped-position-p
                                line-text relative-dollar)))
@@ -1229,7 +1260,9 @@ line when called from the view buffer."
                       (mevedel-skills--skill-annotation
                        name buffer session inline-only))
                     :exit-function
-                    #'mevedel-skills--slash-root-exit-function)))))))))
+                    (lambda (candidate status)
+                      (mevedel-skills--skill-completion-exit-function
+                       buffer session candidate status)))))))))))
 
 (defun mevedel-slash-capf ()
   "Completion-at-point for slash commands, `$' skills, and options.
@@ -1258,7 +1291,8 @@ is active for slash commands that declare finite argument choices."
              (lambda (candidate) (>= (plist-get candidate :start) scan))
              (mevedel-skills--scan-skill-tokens
               text
-              (lambda (name) (mevedel-session-get-skill session name))
+              (lambda (name _start _end)
+                (mevedel-session-get-skill session name))
               t))))
       (when token
         (let ((start (+ origin (plist-get token :start)))

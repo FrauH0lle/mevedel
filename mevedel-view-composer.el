@@ -58,9 +58,15 @@
 (declare-function mevedel-hooks-take-session-context "mevedel-hooks" (session))
 
 ;; `mevedel-mentions'
+(declare-function mevedel-mentions-binding-ranges
+                  "mevedel-mentions" (text))
+(declare-function mevedel-mentions-copy-bound-text
+                  "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
+(declare-function mevedel-mentions-set-binding
+                  "mevedel-mentions" (start end binding &optional object))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -87,6 +93,12 @@
 (defvar mevedel-session--fork-pending)
 (defvar mevedel-session--read-only-mode)
 
+;; `mevedel-skill-bindings'
+(declare-function mevedel-skill-bindings-invalidate-edit
+                  "mevedel-skill-bindings" (start end minimum maximum))
+(declare-function mevedel-skill-bindings-resolve
+                  "mevedel-skill-bindings" (text session start end name))
+
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill
                   "mevedel-skills-core" (session name))
@@ -112,6 +124,10 @@
 (declare-function mevedel-skills-inline-display-text
                   "mevedel-skills-invoke" (name arguments))
 (declare-function mevedel-skills-invoke "mevedel-skills-invoke" t t)
+(declare-function mevedel-skills-prepare-user-input
+                  "mevedel-skills-invoke" (text session))
+(declare-function mevedel-skills-refresh-bound-input
+                  "mevedel-skills-invoke" (text session))
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--parse-slash-line "mevedel-skills-ui" (text))
@@ -438,8 +454,11 @@ late callback accidentally inserts transcript content below the prompt."
                (markerp mevedel-view--input-marker)
                (marker-buffer mevedel-view--input-marker)))
          (text (and preserve-p
-                    (buffer-substring-no-properties
-                     (mevedel-view--input-start) (point-max))))
+                    (progn
+                      (require 'mevedel-mentions)
+                      (mevedel-mentions-copy-bound-text
+                       (buffer-substring
+                        (mevedel-view--input-start) (point-max))))))
          result)
     (let ((inhibit-modification-hooks t))
       (setq result (funcall thunk)))
@@ -447,8 +466,9 @@ late callback accidentally inserts transcript content below the prompt."
                (markerp mevedel-view--input-marker)
                (marker-buffer mevedel-view--input-marker))
       (let* ((start (mevedel-view--input-start))
-             (current (buffer-substring-no-properties start (point-max))))
-        (unless (equal current text)
+             (current (mevedel-mentions-copy-bound-text
+                       (buffer-substring start (point-max)))))
+        (unless (equal-including-properties current text)
           (let ((inhibit-read-only t)
                 (inhibit-modification-hooks t))
             (delete-region start (point-max))
@@ -939,9 +959,34 @@ follows `mevedel-view--input-marker'."
 
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."
-  (let ((text (buffer-substring-no-properties
-               (mevedel-view--input-start) (point-max))))
+  (require 'mevedel-mentions)
+  (let ((text (mevedel-mentions-copy-bound-text
+               (buffer-substring
+                (mevedel-view--input-start) (point-max)))))
     (string-trim text)))
+
+(defun mevedel-view--bind-input-skill-mentions (session)
+  "Bind skill mentions in the live composer for SESSION and return input.
+The visible text is unchanged.  Binding before asynchronous preparation
+means a failed attempt leaves the exact source attached for a retry."
+  (require 'mevedel-mentions)
+  (let* ((input-start (mevedel-view--input-start))
+         (raw-input
+          (mevedel-mentions-copy-bound-text
+           (buffer-substring input-start (point-max))))
+         (bound-input
+          (with-current-buffer mevedel--data-buffer
+            (mevedel-skills-prepare-user-input raw-input session))))
+    (with-silent-modifications
+      (remove-text-properties
+       input-start (point-max)
+       '(mevedel-mention-binding nil rear-nonsticky nil))
+      (dolist (range (mevedel-mentions-binding-ranges bound-input))
+        (mevedel-mentions-set-binding
+         (+ input-start (plist-get range :start))
+         (+ input-start (plist-get range :end))
+         (plist-get range :binding))))
+    (string-trim bound-input)))
 
 (defun mevedel-view--clear-input ()
   "Clear the user's composer text, leaving the prompt in place."
@@ -1174,7 +1219,8 @@ text to render in the view."
                     (list entry))
             live-session)
            (mevedel-view-history-add input)
-           (when (string= (mevedel-view--input-text) input)
+           (when (equal-including-properties
+                  (mevedel-view--input-text) input)
              (mevedel-view--clear-input))
            (mevedel-view--interaction-rebuild)
            (message "mevedel: queued message for the next turn")
@@ -1271,8 +1317,14 @@ text to render in the view."
           (mevedel-view--delete-skill-argument-hint)))))))
 
 (defun mevedel-view--refresh-skill-argument-hint-after-change
-    (&rest _ignore)
-  "Refresh the skill argument hint after composer edits."
+    (start end _old-length)
+  "Invalidate edited bindings and refresh the composer skill hint."
+  (when (and (markerp mevedel-view--input-marker)
+             (marker-buffer mevedel-view--input-marker)
+             (>= start (mevedel-view--input-start)))
+    (require 'mevedel-skill-bindings)
+    (mevedel-skill-bindings-invalidate-edit
+     start end (mevedel-view--input-start) (point-max)))
   (mevedel-view--refresh-skill-argument-hint))
 
 (defun mevedel-view-slash-capf ()
@@ -1497,16 +1549,23 @@ fork."
   (when (buffer-local-value 'mevedel-session--read-only-mode
                             mevedel--data-buffer)
     (user-error "Session is open read-only (another host holds the lock)"))
-  (let ((input (mevedel-view--input-text)))
+  (let* ((session (buffer-local-value 'mevedel--session
+                                      mevedel--data-buffer))
+         (input (if session
+                    (mevedel-view--bind-input-skill-mentions session)
+                  (mevedel-view--input-text))))
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (let* ((slash-parsed (mevedel-skills--parse-slash-line input))
            (skill-parsed (mevedel-skills--parse-skill-line input))
-           (skill (and skill-parsed
+           (skill (and skill-parsed session
                        (with-current-buffer mevedel--data-buffer
-                         (and (bound-and-true-p mevedel--session)
-                              (mevedel-session-get-skill
-                               mevedel--session (nth 0 skill-parsed)))))))
+                         (mevedel-skill-bindings-resolve
+                          input session
+                          (nth 2 skill-parsed)
+                          (+ (nth 2 skill-parsed) 1
+                             (length (nth 0 skill-parsed)))
+                          (nth 0 skill-parsed))))))
       (if (or (buffer-local-value 'mevedel--current-request
                                   mevedel--data-buffer)
               (with-current-buffer mevedel--data-buffer
@@ -1897,8 +1956,11 @@ HTTP request, then commits the batch by clearing the editable queue."
                            session))
                      (string-empty-p (mevedel-view--input-text)))
             (when-let* ((queue (mevedel-view--queued-user-messages session)))
-              (let ((block (mevedel-view--queued-user-message-batch-block
-                            queue))
+              (let ((block (with-current-buffer data-buffer
+                             (mevedel-skills-refresh-bound-input
+                              (mevedel-view--queued-user-message-batch-block
+                               queue)
+                              session)))
                     (dropped-file-grants
                      (mevedel-view--queued-user-message-dropped-file-grants
                       queue)))

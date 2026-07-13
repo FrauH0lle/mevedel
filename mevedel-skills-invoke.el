@@ -58,6 +58,8 @@
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-replace-with-placeholder
                   "mevedel-mentions" (start end placeholder))
+(declare-function mevedel-mentions-set-binding
+                  "mevedel-mentions" (start end binding &optional object))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-apply-policy-to-info
@@ -72,6 +74,18 @@
                   "mevedel-pipeline" (render-data))
 (declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
                   (tool callback args))
+
+;; `mevedel-skill-bindings'
+(declare-function mevedel-skill-bindings-at
+                  "mevedel-skill-bindings" (text start end name))
+(declare-function mevedel-skill-bindings-resolve
+                  "mevedel-skill-bindings" (text session start end name))
+(declare-function mevedel-skill-bindings-sanitize
+                  "mevedel-skill-bindings" (text))
+(declare-function mevedel-skill-bindings-starting-at
+                  "mevedel-skill-bindings" (text start))
+(declare-function mevedel-skill-bindings-token-occurrences
+                  "mevedel-skill-bindings" (text))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -1183,7 +1197,9 @@ Return attachments that were actually referenced, preserving first use."
       (puthash (plist-get attachment :name) attachment by-name))
     (dolist (token
              (mevedel-skills--scan-skill-tokens
-              text (lambda (candidate) (gethash candidate by-name))))
+              text
+              (lambda (candidate _start _end)
+                (gethash candidate by-name))))
       (let ((name (plist-get token :name))
             (attachment (plist-get token :value)))
         (push (list (+ start (plist-get token :start))
@@ -1969,13 +1985,6 @@ bodies are naturally multi-line."
       (cl-decf i))
     (cl-oddp count)))
 
-(defun mevedel-skills--inline-skill-boundary-p (text pos)
-  "Return non-nil when a `$skill' mention may start at POS in TEXT."
-  (or (= pos 0)
-      (not (string-match-p
-            "[[:alnum:]_]"
-            (char-to-string (aref text (1- pos)))))))
-
 (defun mevedel-skills--quote-delimiter-p (text pos)
   "Return non-nil when POS is a quote delimiter in TEXT."
   (and (not (mevedel-skills--escaped-position-p text pos))
@@ -2021,45 +2030,29 @@ bodies are naturally multi-line."
   "Return non-nil when TEXT START..END is a live `$skill' token.
 When ALLOW-ROOT is nil, exclude the leading root skill invocation."
   (and (or allow-root (not (= start first-nonspace)))
-       (mevedel-skills--inline-skill-boundary-p text start)
        (not (mevedel-skills--escaped-position-p text start))
        (not (mevedel-skills--quoted-inline-skill-p text start end))
        (not (mevedel-skills--ranges-overlap-p
              code-ranges start end))))
 
-(defun mevedel-skills--resolve-inline-skill-name (raw-name lookup)
-  "Resolve RAW-NAME with LOOKUP, trimming trailing punctuation if needed.
-Return (NAME . VALUE), preferring an exact match.  Only punctuation
-that is also allowed in skill names is trimmed, so `$foobar' does not
-fall back to `$foo'."
-  (let ((name raw-name)
-        found)
-    (while (and (not found) (> (length name) 0))
-      (when-let* ((value (funcall lookup name)))
-        (setq found (cons name value)))
-      (unless found
-        (let ((last (aref name (1- (length name)))))
-          (if (memq last '(?. ?: ?-))
-              (setq name (substring name 0 -1))
-            (setq name "")))))
-    found))
-
-(defun mevedel-skills--scan-skill-tokens (text lookup &optional allow-root)
-  "Return live `$skill' tokens in TEXT resolved through LOOKUP.
+(defun mevedel-skills--scan-skill-tokens (text resolver &optional allow-root)
+  "Return live `$skill' tokens in TEXT resolved through RESOLVER.
 Each token has `:start', `:end', `:name', and `:value'.  When
 ALLOW-ROOT is non-nil, include the leading root invocation."
-  (let ((pos 0)
-        (first-nonspace (or (string-match-p "\\S-" text) -1))
+  (let ((first-nonspace (or (string-match-p "\\S-" text) -1))
         (code-ranges (mevedel-skills--markdown-code-ranges text))
         tokens)
-    (while (string-match "\\$\\([A-Za-z0-9_.:-]+\\)" text pos)
-      (let* ((start (match-beginning 0))
+    (dolist (occurrence
+             (mevedel-skill-bindings-token-occurrences text))
+      (let* ((start (plist-get occurrence :start))
              (resolved
-              (mevedel-skills--resolve-inline-skill-name
-               (match-string 1 text) lookup))
+              (cl-loop
+               for candidate in (plist-get occurrence :candidates)
+               for end = (+ start 1 (length candidate))
+               for value = (funcall resolver candidate start end)
+               when value return (cons candidate value)))
              (name (car-safe resolved))
              (end (and name (+ start 1 (length name)))))
-        (setq pos (match-end 0))
         (when (and resolved
                    (mevedel-skills--skill-token-live-p
                     text start end first-nonspace code-ranges allow-root))
@@ -2068,17 +2061,67 @@ ALLOW-ROOT is non-nil, include the leading root invocation."
                 tokens))))
     (nreverse tokens)))
 
+(defun mevedel-skills-refresh-bound-input (text session)
+  "Refresh SESSION discovery when TEXT carries atomic skill bindings.
+Return TEXT unchanged.  Call this at a submission boundary so an exact
+source resolves against its latest on-disk contents even when automatic
+modification checking is disabled."
+  (when (text-property-not-all
+         0 (length text) 'mevedel-mention-binding nil text)
+    (mevedel-skills-install session (current-buffer)))
+  text)
+
+(defun mevedel-skills-prepare-user-input (text session)
+  "Prepare user TEXT with valid skill tokens bound in SESSION.
+Existing valid bindings remain authoritative.  Manually typed known
+tokens receive a binding when their skill has a stable source file.
+Existing bindings trigger one explicit discovery refresh so exact
+sources are checked before the submission leaves the composer."
+  (require 'mevedel-mentions)
+  (require 'mevedel-skill-bindings)
+  (let ((result (mevedel-skill-bindings-sanitize text)))
+    (mevedel-skills-refresh-bound-input result session)
+    (dolist (token
+             (mevedel-skills--scan-skill-tokens
+              result
+              (lambda (candidate start end)
+                (let ((binding (mevedel-skill-bindings-starting-at
+                                result start)))
+                  (if binding
+                      (mevedel-skill-bindings-at
+                       result start end candidate)
+                    (mevedel-session-get-skill session candidate))))
+              t))
+      (let ((start (plist-get token :start))
+            (end (plist-get token :end))
+            (skill (plist-get token :value)))
+        (unless (get-text-property start 'mevedel-mention-binding result)
+          (when-let* (((mevedel-skill-p skill))
+                      (source-file (mevedel-skill-source-file skill)))
+            (mevedel-mentions-set-binding
+             start end
+             (list :kind 'skill
+                   :name (plist-get token :name)
+                   :source-file source-file)
+             result)))))
+    result))
+
 (defun mevedel-skills--inline-skill-mentions (text session)
   "Return live inline `$skill' mentions in TEXT for SESSION.
 
 Unknown `$foo' text is ignored.  Known but unavailable skills return
 a single plist with :error and :message so callers can block the send."
-  (let ((tokens
-         (and session
-              (mevedel-skills--scan-skill-tokens
-               text
-               (lambda (candidate)
-                 (mevedel-session-get-skill session candidate)))))
+  (let* ((tokens
+          (and session
+               (mevedel-skills--scan-skill-tokens
+                text
+                (lambda (candidate start end)
+                  (condition-case err
+                      (mevedel-skill-bindings-resolve
+                       text session start end candidate)
+                    (user-error
+                     (list :error 'bound-source
+                           :message (error-message-string err))))))))
         (seen (make-hash-table :test #'equal))
         mentions
         problem)
@@ -2089,6 +2132,8 @@ a single plist with :error and :message so callers can block the send."
              (name (plist-get token :name))
              (skill (plist-get token :value)))
         (cond
+           ((and (listp skill) (plist-get skill :error))
+            (setq problem skill))
            ((not (mevedel-skills--skill-enabled-p skill))
             (setq problem
                   (list :error 'disabled
@@ -2107,9 +2152,13 @@ a single plist with :error and :message so callers can block the send."
                         :message
                         (format "Fork skill $%s must be invoked at the start of the prompt. Use $%s ..., or escape, quote, or code-span it to send literal text."
                                 name name))))
-           ((not (gethash (mevedel-skill-name skill) seen))
-            (puthash (mevedel-skill-name skill) t seen)
-            (push (list :name (mevedel-skill-name skill)
+           ((not (gethash (or (mevedel-skill-source-file skill)
+                              (mevedel-skill-name skill))
+                          seen))
+            (puthash (or (mevedel-skill-source-file skill)
+                         (mevedel-skill-name skill))
+                     t seen)
+            (push (list :name name
                         :start start
                         :end end
                         :skill skill)
@@ -2257,13 +2306,16 @@ Returns:
             should abort the send.
 - nil       no known `$skill' present; caller should proceed as usual."
   (when-let* ((region (mevedel-skills--current-prompt-region))
-              (text (buffer-substring-no-properties (car region) (cdr region)))
+              (text (buffer-substring (car region) (cdr region)))
               (parsed (mevedel-skills--parse-skill-line text)))
     (let* ((name (nth 0 parsed))
            (args (nth 1 parsed))
            (skill-pos (+ (car region) (nth 2 parsed)))
-           (skill (and mevedel--session
-                       (mevedel-session-get-skill mevedel--session name))))
+           (skill (mevedel-skill-bindings-resolve
+                   text mevedel--session
+                   (nth 2 parsed)
+                   (+ (nth 2 parsed) 1 (length name))
+                   name)))
       (when skill
         (let* ((delete-context
                 (mevedel-skills--command-delete-context skill-pos))
@@ -2354,7 +2406,7 @@ attachments exist."
                             mevedel--session))
               ((not (bound-and-true-p
                      mevedel-skills--pending-inline-attachments)))
-              (text (buffer-substring-no-properties (car region) (cdr region))))
+              (text (buffer-substring (car region) (cdr region))))
     (let ((buffer (current-buffer)))
       (mevedel-skills--prepare-inline-attachments-for-text
        text session

@@ -1097,6 +1097,22 @@ description: Review changed code
 ;;
 ;;; Persisted enablement
 
+(mevedel-deftest mevedel-skills--source-key ()
+  ,test
+  (test)
+  :doc "canonicalizes alternate paths to the same source identity"
+  (let* ((root (make-temp-file "mevedel-skills-source-key-" t))
+         (source (file-name-concat root "SKILL.md"))
+         (alias (file-name-concat root "alias.md")))
+    (unwind-protect
+        (progn
+          (with-temp-file source)
+          (make-symbolic-link source alias)
+          (should (equal (mevedel-skills--source-key source)
+                         (mevedel-skills--source-key alias)))
+          (should-not (mevedel-skills--source-key nil)))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-skills--set-enabled
   (:vars* ((user-dir (make-temp-file "mevedel-skills-state-" t))
            (mevedel-user-dir (file-name-as-directory user-dir)))

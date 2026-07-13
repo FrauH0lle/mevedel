@@ -15,12 +15,20 @@
 (require 'subr-x)
 (require 'mevedel-utilities)
 
+;; `mevedel-mentions'
+(declare-function mevedel-mentions-copy-bound-text
+                  "mevedel-mentions" (text))
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-read
                   "mevedel-session-persistence" (path))
 (declare-function mevedel-session-persistence-write
                   "mevedel-session-persistence" (path plist))
 (defvar mevedel-session--read-only-mode)
+
+;; `mevedel-skill-bindings'
+(declare-function mevedel-skill-bindings-valid-p
+                  "mevedel-skill-bindings" (text))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -103,7 +111,9 @@
 
 (defun mevedel-view-history--input-text ()
   "Return current view input text, untrimmed."
-  (buffer-substring-no-properties (mevedel-view--input-start) (point-max)))
+  (require 'mevedel-mentions)
+  (mevedel-mentions-copy-bound-text
+   (buffer-substring (mevedel-view--input-start) (point-max))))
 
 (defun mevedel-view-history--replace-input (text)
   "Replace the current view input with TEXT."
@@ -117,14 +127,17 @@
   "Add INPUT to the current view buffer's input history.
 INPUT is trimmed before insertion.  Empty entries and consecutive
 duplicates are skipped.  History navigation state is reset."
-  (let ((entry (string-trim (mevedel--normalize-message-text
-                             (or input ""))))
+  (require 'mevedel-mentions)
+  (let ((entry (string-trim
+                (mevedel-mentions-copy-bound-text
+                 (mevedel--normalize-message-text (or input "")))))
         (ring (mevedel-view-history--ensure-ring)))
     (setq mevedel-view-history--index nil
           mevedel-view-history--stored-incomplete nil)
-    (unless (or (string-empty-p entry)
-                (and (> (ring-length ring) 0)
-                     (string= entry (ring-ref ring 0))))
+    (unless (string-empty-p entry)
+      (when (and (> (ring-length ring) 0)
+                 (string= entry (ring-ref ring 0)))
+        (ring-remove ring 0))
       (ring-insert ring entry))))
 
 
@@ -183,11 +196,20 @@ Signal an error when PATH exists but does not contain the expected
 input-history plist."
   (let* ((plist (mevedel-session-persistence-read path))
          (entries (plist-get plist :entries)))
-    (unless (and (equal 1 (plist-get plist :version))
+    (require 'mevedel-mentions)
+    (require 'mevedel-skill-bindings)
+    (unless (and (equal 2 (plist-get plist :version))
                  (listp entries)
-                 (cl-every #'stringp entries))
+                 (cl-every
+                  (lambda (entry)
+                    (and (stringp entry)
+                         (mevedel-skill-bindings-valid-p entry)))
+                  entries))
       (error "Malformed input history"))
-    (mapcar #'mevedel--normalize-message-text entries)))
+    (mapcar (lambda (entry)
+              (mevedel-mentions-copy-bound-text
+               (mevedel--normalize-message-text entry)))
+            entries)))
 
 (defun mevedel-view-history--prefix (entries count)
   "Return the first COUNT entries from ENTRIES."
@@ -206,9 +228,10 @@ prefix of LOADED."
                 (<= count (length current)))
       (let ((tail (nthcdr count current)))
         (when (and (<= (length tail) (length loaded))
-                   (equal tail
-                          (mevedel-view-history--prefix
-                           loaded (length tail))))
+                   (equal-including-properties
+                    tail
+                    (mevedel-view-history--prefix
+                     loaded (length tail))))
           (setq found t)))
       (unless found
         (setq count (1+ count))))
@@ -298,7 +321,7 @@ files are renamed to `.bad', warned about once, and ignored."
                                 mevedel-view-history--loaded-entries)))
                   (mevedel-session-persistence-write
                    path
-                   (list :version 1 :entries merged))
+                   (list :version 2 :entries merged))
                   (mevedel-view-history--set-entries merged)))
             (error
              (setq mevedel-view-history--save-failed t)
@@ -460,9 +483,10 @@ request."
   (let ((entries (mevedel-view-history--entries)))
     (when (null entries)
       (user-error "No input history"))
-    (let ((choice (completing-read "Input history: " entries nil t)))
+    (let* ((choice (completing-read "Input history: " entries nil t))
+           (entry (cl-find choice entries :test #'string=)))
       (goto-char (mevedel-view--input-start))
-      (mevedel-view-history--replace-input choice))))
+      (mevedel-view-history--replace-input (or entry choice)))))
 
 (defun mevedel-view-history-clear-input ()
   "Clear current input when point is in the composer."
