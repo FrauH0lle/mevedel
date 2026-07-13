@@ -784,7 +784,13 @@
                                               :root "/tmp/mevedel-chat-abort-save/"
                                               :name "abort-save"))
                                   (session (mevedel-session-create "main" workspace))
+                                  (goal (mevedel-goal--create
+                                         :id "g1" :objective "Ship"
+                                         :status 'active :phase 'implementing
+                                         :approval-policy 'supervised
+                                         :cycle 1 :cycles '((:cycle 1))))
                                   saved)
+                             (setf (mevedel-session-goal session) goal)
                              (setq-local mevedel--session session)
                              (mevedel-request-begin session)
                              (cl-letf (((symbol-function
@@ -796,7 +802,31 @@
                                (mevedel-abort (current-buffer)))
                              (should (equal (list session (current-buffer) nil)
                                             saved))
-                             (should (null mevedel--current-request))))
+                             (should (null mevedel--current-request))
+                             (should (eq 'paused (mevedel-goal-status goal)))
+                             (should (equal "Active request aborted by user"
+                                            (mevedel-goal-reason goal)))))
+
+			 :doc "does not rewrite a Goal already paused for another reason"
+			 (with-temp-buffer
+			   (let* ((workspace (mevedel-workspace--create
+			                      :type 'project :id "/tmp/abort-paused/"
+			                      :root "/tmp/abort-paused/" :name "paused"))
+			          (goal (mevedel-goal--create
+			                 :id "g1" :objective "Ship" :status 'paused
+			                 :phase 'planning :approval-policy 'supervised
+			                 :cycle 1 :cycles '((:cycle 1))
+			                 :reason "Waiting for review"))
+			          (session (mevedel-session-create "main" workspace)))
+			     (setf (mevedel-session-goal session) goal)
+			     (setq-local mevedel--session session)
+			     (mevedel-request-begin session)
+			     (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+			                #'ignore))
+			       (mevedel-abort (current-buffer)))
+			     (should (eq 'paused (mevedel-goal-status goal)))
+			     (should (equal "Waiting for review"
+			                    (mevedel-goal-reason goal)))))
 
 				 :doc "stops registered agents with no live request process"
 			 (with-temp-buffer

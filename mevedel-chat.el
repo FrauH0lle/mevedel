@@ -116,6 +116,9 @@
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
 (declare-function mevedel-request-end "mevedel-structs" ())
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
@@ -1267,6 +1270,12 @@ BUF defaults to the current buffer if not specified."
         ;; but entries can linger if a callback errored.
         (when (bound-and-true-p mevedel-agent-runtime--fsms)
           (setq mevedel-agent-runtime--fsms nil))
+        (when-let* ((goal (and (bound-and-true-p mevedel--session)
+                               (mevedel-session-goal mevedel--session)))
+                    ((eq (mevedel-goal-status goal) 'active)))
+          (setf (mevedel-goal-status goal) 'paused
+                (mevedel-goal-pause-requested goal) nil
+                (mevedel-goal-reason goal) "Active request aborted by user"))
         (when (bound-and-true-p mevedel--current-request)
           (mevedel-request-end))
         (when (and (bound-and-true-p mevedel--session)

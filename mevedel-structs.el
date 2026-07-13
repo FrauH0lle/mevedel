@@ -269,7 +269,8 @@ workspace."
   cycle              ; current one-based cycle number
   cycles             ; lightweight cycle index records
   review-findings    ; findings carried into the next planning cycle
-  reason)            ; pause or blocked reason
+  reason             ; pause or blocked reason
+  pause-requested)   ; pause continuation after the active request settles
 
 
 ;;

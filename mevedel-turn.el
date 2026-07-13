@@ -24,6 +24,7 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
+(declare-function mevedel-goal-settle-failure "mevedel-goal" (fsm))
 (declare-function mevedel-goal-settle-turn "mevedel-goal" (fsm))
 
 ;; `mevedel-hooks'
@@ -184,6 +185,7 @@
    (list #'mevedel--turn-clear-access-state
          #'mevedel--turn-increment
          #'mevedel--compact-record-token-baseline
+         #'mevedel-goal-settle-failure
          (lambda (machine)
            (mevedel--run-turn-terminal-hook
             machine 'StopFailure status))

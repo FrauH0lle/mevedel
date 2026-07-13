@@ -1503,9 +1503,21 @@ fork."
                               (mevedel-session-get-skill
                                mevedel--session (nth 0 skill-parsed)))))))
       (if (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
-          (if (or slash-parsed skill)
-              (user-error "A request is already active -- wait or abort first")
-            (mevedel-view--queue-user-message input))
+          (if (and slash-parsed
+                   (string= (nth 0 slash-parsed) "goal")
+                   (member (car (split-string (or (nth 1 slash-parsed) "")
+                                              "[ \t\n]+" t))
+                           '("pause" "edit")))
+              (let ((result (with-current-buffer mevedel--data-buffer
+                              (funcall (cdr (assoc "goal"
+                                                  mevedel-slash-commands))
+                                       (nth 1 slash-parsed)))))
+                (when (stringp result) (message "%s" result))
+                (mevedel-view-history-add input)
+                (mevedel-view--clear-input))
+            (if (or slash-parsed skill)
+                (user-error "A request is already active -- wait or abort first")
+              (mevedel-view--queue-user-message input)))
         (cond
          (slash-parsed
           (let* ((name (nth 0 slash-parsed))
@@ -1515,7 +1527,10 @@ fork."
              ((and local
                    (string= name "goal")
                    args
-                   (not (string-blank-p args)))
+                   (not (string-blank-p args))
+                   (not (member
+                         (car (split-string args "[ \t\n]+" t))
+                         '("edit" "pause" "resume" "clear"))))
               (mevedel-view--send-local-goal input args))
              (local
               (let ((result (with-current-buffer mevedel--data-buffer

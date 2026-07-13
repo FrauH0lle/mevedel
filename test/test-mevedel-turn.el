@@ -256,6 +256,8 @@
                (lambda (_fsm) (push 'turn events)))
               ((symbol-function 'mevedel--compact-record-token-baseline)
                (lambda (_fsm) (push 'baseline events)))
+              ((symbol-function 'mevedel-goal-settle-failure)
+               (lambda (_fsm) (push 'goal-failure events)))
               ((symbol-function 'mevedel--turn-autosave)
                (lambda (_fsm) (setq saved t)))
               ((symbol-function 'mevedel--run-turn-terminal-hook)
@@ -274,7 +276,7 @@
         (setq events nil)
         (mevedel--fail-turn 'fsm (car case))
         (should (equal (nreverse events)
-                       `(access turn baseline
+                       `(access turn baseline goal-failure
                                 (StopFailure ,(car case))
                                 restore request-end mailbox)))))
     (should-not saved)

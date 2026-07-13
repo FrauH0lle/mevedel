@@ -55,6 +55,11 @@
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
 
 ;; `mevedel-goal'
+(declare-function mevedel-goal-clear "mevedel-goal" ())
+(declare-function mevedel-goal-description "mevedel-goal" (&optional goal))
+(declare-function mevedel-goal-edit "mevedel-goal" (objective))
+(declare-function mevedel-goal-pause "mevedel-goal" ())
+(declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-start
                   "mevedel-goal" (objective &optional display-text))
 
@@ -160,11 +165,18 @@
     ("disable" . " disable a skill"))
   "Completion candidates and annotations for `/skills'.")
 
+(defconst mevedel-skills--goal-command-candidates
+  '(("edit" . " edit the objective and pause")
+    ("pause" . " pause after the active request")
+    ("resume" . " resume from the saved phase")
+    ("clear" . " clear lifecycle state only"))
+  "Completion candidates and annotations for `/goal'.")
+
 (defconst mevedel-skills--slash-command-annotations
   '(("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
-    ("goal" . " [command] objective; bare command shows current Goal")
+    ("goal" . " [command] objective | edit | pause | resume | clear")
     ("mode" . " [command] default | accept-edits | trust-all")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
@@ -245,19 +257,32 @@ Routes through the lifecycle-aware permission transition path."
      'mode "Current permission mode: %s" mevedel-permission-mode)))
 
 (defun mevedel-cmd--goal (args)
-  "Show the current Goal, or start one from ARGS."
-  (if (and args (not (string-blank-p args)))
-      (progn
-        (require 'mevedel-goal)
-        (mevedel-goal-start args args)
-        'mevedel-view-sent)
-    (if-let* ((goal (and (bound-and-true-p mevedel--session)
-                         (mevedel-session-goal mevedel--session))))
-        (message "Goal [%s/%s]: %s"
-                 (mevedel-goal-status goal)
-                 (mevedel-goal-phase goal)
-                 (mevedel-goal-objective goal))
-      (message "No current Goal; use /goal <objective>"))))
+  "Run the `/goal' lifecycle command described by ARGS."
+  (require 'mevedel-goal)
+  (let* ((args (string-trim (or args "")))
+         (parts (split-string args "[ \t\n]+" t))
+         (action (car parts))
+         (rest (string-join (cdr parts) " "))
+         (goal (and (bound-and-true-p mevedel--session)
+                    (mevedel-session-goal mevedel--session))))
+    (pcase action
+      ((or 'nil "")
+       (if goal
+           (message "%s" (mevedel-goal-description goal))
+         (let ((objective (read-string "Goal objective: ")))
+           (mevedel-goal-start objective objective))))
+      ("edit"
+       (unless goal (user-error "No current Goal"))
+       (mevedel-goal-edit
+        (if (string-blank-p rest)
+            (read-string "Goal objective: " (mevedel-goal-objective goal))
+          rest)))
+      ("pause" (mevedel-goal-pause))
+      ("resume" (mevedel-goal-resume rest))
+      ("clear" (mevedel-goal-clear))
+      (_
+       (mevedel-goal-start args args)
+       'mevedel-view-sent))))
 
 (defun mevedel-cmd--auto (_args)
   "Toggle trust-all auto mode for the current session."
@@ -918,6 +943,8 @@ ARGS is the list of completed command arguments, and ARG-INDEX is the zero-based
 index of the argument being completed."
   (let ((arg-index (or arg-index 0)))
     (pcase name
+      ("goal" (and (zerop arg-index)
+                   (mapcar #'car mevedel-skills--goal-command-candidates)))
       ("mode" (and (zerop arg-index)
                    (mapcar #'car mevedel-skills--mode-command-candidates)))
       ("skills" (and (zerop arg-index)
@@ -962,6 +989,9 @@ ARGS is the list of completed command arguments, and ARG-INDEX is the zero-based
 index of the argument being completed."
   (let ((arg-index (or arg-index 0)))
     (pcase name
+      ("goal" (and (zerop arg-index)
+                   (cdr (assoc candidate
+                               mevedel-skills--goal-command-candidates))))
       ("mode" (and (zerop arg-index)
                    (cdr (assoc candidate
                                mevedel-skills--mode-command-candidates))))
