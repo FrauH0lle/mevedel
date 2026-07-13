@@ -95,6 +95,8 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-enqueue-pending-reminder
+                  "mevedel-structs" (session body))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal-handoff "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -330,15 +332,85 @@ CALLBACK receives a normalized guardian decision plist.")
       (error "Goal execution home is %s, not %s" expected actual))
     expected))
 
-(defun mevedel-goal--focused-context (goal)
-  "Return deterministic minimal implementation context for GOAL."
-  (let ((home (mevedel-goal-execution-home goal)))
+(defun mevedel-goal-context-fragment (goal &optional session snapshot)
+  "Return authoritative model context generated from persisted GOAL state.
+SESSION supplies the cycle-index path when it is materialized.  When SNAPSHOT
+is non-nil, label the fragment as a compaction-time snapshot instead."
+  (let* ((home (mevedel-goal-execution-home goal))
+         (cycles (mevedel-goal-cycles goal))
+         (plan-cycle
+          (cl-find-if (lambda (record) (plist-get record :plan))
+                      cycles :from-end t))
+         (review-cycle
+          (cl-find-if (lambda (record) (plist-get record :review))
+                      cycles :from-end t))
+         (plan (or (mevedel-goal-current-plan goal)
+                   (and plan-cycle
+                        (list :path (plist-get plan-cycle :plan)))))
+         (review (mevedel-goal-review-summary goal))
+         (review-text
+          (cond
+           (review
+            (format "%s - %s"
+                    (or (plist-get review :verdict) "unknown")
+                    (or (plist-get review :summary) "no summary")))
+           ((mevedel-goal-review-findings goal)
+            (format "continue - %s" (mevedel-goal-review-findings goal)))
+           ((plist-get review-cycle :review)
+            (format "%s - summary hash %s"
+                    (or (plist-get (plist-get review-cycle :review) :verdict)
+                        "unknown")
+                    (or (plist-get (plist-get review-cycle :review)
+                                   :summary-hash)
+                        "unavailable")))
+           (t "none")))
+         (budget (mevedel-goal-token-budget goal))
+         (save-path (and session (mevedel-session-save-path session)))
+         (cycle-index
+          (if save-path
+              (file-name-concat save-path (mevedel-goal--relative-dir goal)
+                                "cycles.el")
+            (file-name-concat (mevedel-goal--relative-dir goal) "cycles.el"))))
     (format
-     "Goal ID: %s\nPhase: %s\nCycle: %d\nExecution home: %s"
+     (concat
+      "<goal-context authority=\"%s\">\n"
+      "Goal ID: %s\nObjective: %s\nStatus: %s\nPhase: %s\nCycle: %d\n"
+      "Approval policy: %s\nAccepted plan: %s\nCycle index: %s\n"
+      "Latest review: %s\nBudget: %s\nExecution home: %s\n"
+      "</goal-context>")
+     (if snapshot "compaction-snapshot" "session-sidecar")
      (mevedel-goal-id goal)
+     (mevedel-goal-objective goal)
+     (mevedel-goal-status goal)
      (mevedel-goal-phase goal)
      (mevedel-goal-cycle goal)
-     (plist-get home :directory))))
+     (mevedel-goal-approval-policy goal)
+     (or (plist-get plan :absolute-path) (plist-get plan :path) "none")
+     cycle-index
+     review-text
+     (if budget
+         (format "%d/%d tokens"
+                 (or (mevedel-goal-token-usage goal) 0) budget)
+       (format "%d tokens used; unlimited"
+               (or (mevedel-goal-token-usage goal) 0)))
+     (or (plist-get home :directory) "unavailable"))))
+
+(defun mevedel-goal--refresh-request-context (goal input)
+  "Return checkpoint INPUT with current persisted context for GOAL."
+  (let ((context (mevedel-goal-context-fragment goal mevedel--session)))
+    (if (stringp input)
+        (let* ((start (string-match "<goal-context[ >]" input))
+               (close (and start (string-match "</goal-context>" input start)))
+               (end (and close (+ close (length "</goal-context>")))))
+          (if end
+              (concat (substring input 0 start) context (substring input end))
+            (concat context "\n\n" input)))
+      (plist-put (copy-tree input) :goal-context context))))
+
+(defun mevedel-goal--enqueue-event-reminder (session event)
+  "Queue sparse lifecycle EVENT for SESSION without changing Goal state."
+  (mevedel-session-enqueue-pending-reminder
+   session (format "Goal lifecycle event: %s" event)))
 
 (defun mevedel-goal--policy-label (policy)
   "Return a stable provider/model label for resolved POLICY."
@@ -542,9 +614,8 @@ CALLBACK receives a normalized guardian decision plist.")
 (defun mevedel-goal--planning-prompt (goal)
   "Return the planning request for GOAL."
   (format
-   "Goal objective:\n%s\n\nCycle: %d\n%sInvestigate the current repository state and propose the next decision-complete implementation plan. This phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
-   (mevedel-goal-objective goal)
-   (mevedel-goal-cycle goal)
+   "%s\n\nPlanning instructions:\n%sInvestigate the current repository state and propose the next decision-complete implementation plan. This phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
+   (mevedel-goal-context-fragment goal mevedel--session)
    (if-let* ((findings (mevedel-goal-review-findings goal)))
        (format "Prior review findings to resolve:\n%s\n\n" findings)
      "")))
@@ -552,34 +623,22 @@ CALLBACK receives a normalized guardian decision plist.")
 (defun mevedel-goal--review-prompt (goal)
   "Return the one-cycle completion review request for GOAL."
   (format
-   "Goal objective:\n%s\n\nCycle: %d\nAccepted plan: %s\n\nReview the implementation against the whole objective and current repository evidence. This phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole objective is proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
-   (mevedel-goal-objective goal)
-   (mevedel-goal-cycle goal)
-   (or (plist-get (mevedel-goal-current-plan goal) :absolute-path)
-       "unavailable")))
+   "%s\n\nReview instructions:\nReview the implementation against the whole objective and current repository evidence. This phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole objective is proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
+   (mevedel-goal-context-fragment goal mevedel--session)))
 
 (defun mevedel-goal--recovery-prompt (goal checkpoint)
   "Return a read-only recovery audit request for GOAL and CHECKPOINT."
   (format
-   "Goal objective:\n%s\n\nCycle: %d\nAccepted plan: %s\nInterrupted implementation attempt: %s\nDispatch state: %s\n\nThe implementation request may already have changed files. Do not replay it and do not make changes. Inspect the actual repository, diff, tests, and artifacts against the objective and accepted plan. Choose the next safe lifecycle boundary. Return exactly one structured result:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence and the safe next step\n</goal_review>\nUse complete only when repository evidence proves the whole objective; continue when a new plan should address remaining work; blocked when external input is required."
-   (mevedel-goal-objective goal)
-   (mevedel-goal-cycle goal)
-   (or (plist-get (mevedel-goal-current-plan goal) :absolute-path)
-       (plist-get checkpoint :plan-reference)
-       "unavailable")
+   "%s\n\nRecovery instructions:\nInterrupted implementation attempt: %s\nDispatch state: %s\n\nThe implementation request may already have changed files. Do not replay it and do not make changes. Inspect the actual repository, diff, tests, and artifacts against the objective and accepted plan. Choose the next safe lifecycle boundary. Return exactly one structured result:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence and the safe next step\n</goal_review>\nUse complete only when repository evidence proves the whole objective; continue when a new plan should address remaining work; blocked when external input is required."
+   (mevedel-goal-context-fragment goal mevedel--session)
    (or (plist-get checkpoint :attempt-id) "unknown")
    (or (plist-get checkpoint :dispatch-state) 'unknown)))
 
 (defun mevedel-goal--guardian-prompt (goal plan)
   "Return the tool-free automatic approval request for GOAL and PLAN."
   (format
-   "Goal objective:\n%s\n\nGoal state: status=%s phase=%s cycle=%d approval-policy=%s\nExecution home: %s\n\nProposed plan:\n%s\n\nJudge only whether this plan is safe and credible to implement automatically. Check objective alignment, scope boundaries, dangerous or irreversible effects, ambiguity, and verification quality. Do not rewrite the plan. Return exactly:\n<goal_guardian>\nverdict: approve|ask\nreason: concise reason\n</goal_guardian>\nUse ask whenever user judgment, missing constraints, or clarification is required."
-   (mevedel-goal-objective goal)
-   (mevedel-goal-status goal)
-   (mevedel-goal-phase goal)
-   (mevedel-goal-cycle goal)
-   (mevedel-goal-approval-policy goal)
-   default-directory
+   "%s\n\nGuardian instructions:\nProposed plan:\n%s\n\nJudge only whether this plan is safe and credible to implement automatically. Check objective alignment, scope boundaries, dangerous or irreversible effects, ambiguity, and verification quality. Do not rewrite the plan. Return exactly:\n<goal_guardian>\nverdict: approve|ask\nreason: concise reason\n</goal_guardian>\nUse ask whenever user judgment, missing constraints, or clarification is required."
+   (mevedel-goal-context-fragment goal mevedel--session)
    plan))
 
 (defun mevedel-goal--parse-guardian (text)
@@ -737,10 +796,15 @@ The request has no tools or conversational transcript insertion."
     (when (eq (mevedel-goal-status goal) 'complete)
       (user-error "Completed Goal cannot be paused"))
     (if (bound-and-true-p mevedel--current-request)
-        (setf (mevedel-goal-pause-requested goal) t)
+        (progn
+          (setf (mevedel-goal-pause-requested goal) t)
+          (mevedel-goal--enqueue-event-reminder
+           mevedel--session "pause requested; stop after the active request"))
       (setf (mevedel-goal-status goal) 'paused
             (mevedel-goal-pause-requested goal) nil
             (mevedel-goal-reason goal) "Paused by user")
+      (mevedel-goal--enqueue-event-reminder
+       mevedel--session "paused by the user")
       (mevedel-goal--save-session-state mevedel--session (current-buffer)))
     goal))
 
@@ -756,6 +820,8 @@ The request has no tools or conversational transcript insertion."
           (mevedel-goal-reason goal)
           "Goal objective edited; use /goal resume to replan")
     (mevedel-plan-queue-abort-all mevedel--session)
+    (mevedel-goal--enqueue-event-reminder
+     mevedel--session "objective edited; replan before implementation")
     (mevedel-goal--save-session-state mevedel--session (current-buffer))
     goal))
 
@@ -779,6 +845,8 @@ The request has no tools or conversational transcript insertion."
   (when (bound-and-true-p mevedel--current-request)
     (user-error "Wait for or abort the active request before clearing Goal"))
   (mevedel-plan-queue-abort-all mevedel--session)
+  (mevedel-goal--enqueue-event-reminder
+   mevedel--session "cleared; transcript and artifacts were preserved")
   (setf (mevedel-session-goal mevedel--session) nil
         (mevedel-session-plan-metadata mevedel--session) nil)
   (mevedel-goal--save-session-state mevedel--session (current-buffer))
@@ -811,6 +879,8 @@ The request has no tools or conversational transcript insertion."
     (setf (mevedel-goal-status goal) 'active
           (mevedel-goal-pause-requested goal) nil
           (mevedel-goal-reason goal) nil)
+    (mevedel-goal--enqueue-event-reminder
+     mevedel--session "resumed from persisted phase and checkpoint")
     (condition-case err
         (let ((checkpoint (mevedel-goal-checkpoint goal)))
           (pcase (mevedel-goal-phase goal)
@@ -858,9 +928,11 @@ The request has no tools or conversational transcript insertion."
                        'implementation
                        (lambda ()
                          (mevedel--implement-plan
-                          (copy-tree (plist-get checkpoint :input))))
+                          (mevedel-goal--refresh-request-context
+                           goal (plist-get checkpoint :input))))
                        'implementing
-                       (copy-tree (plist-get checkpoint :input)))))
+                       (mevedel-goal--refresh-request-context
+                        goal (plist-get checkpoint :input)))))
                  (when fsm
                    (setf (gptel-fsm-info fsm)
                          (plist-put (gptel-fsm-info fsm)
@@ -933,6 +1005,8 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
                               :started-at (format-time-string "%FT%T%z"))))))
     (setf (mevedel-session-goal mevedel--session) goal
           (mevedel-session-plan-metadata mevedel--session) nil)
+    (mevedel-goal--enqueue-event-reminder
+     mevedel--session "started; authoritative Goal context is attached")
     (condition-case err
         (mevedel-goal--dispatch-phase
          'planning (mevedel-goal--planning-prompt goal)
@@ -1043,11 +1117,13 @@ dispatch and attach the attempt identity to the returned FSM."
   "Dispatch Goal PHASE with PROMPT and DISPLAY-TEXT."
   (unless (memq phase '(planning reviewing))
     (error "Goal phase cannot dispatch: %s" phase))
-  (mevedel-goal--call-with-workload
-   (if (eq phase 'planning) 'planning 'review)
-   (lambda ()
-     (funcall mevedel-goal-dispatch-function phase prompt display-text))
-   phase prompt))
+  (let* ((goal (mevedel-session-goal mevedel--session))
+         (prompt (mevedel-goal--refresh-request-context goal prompt)))
+    (mevedel-goal--call-with-workload
+     (if (eq phase 'planning) 'planning 'review)
+     (lambda ()
+       (funcall mevedel-goal-dispatch-function phase prompt display-text))
+     phase prompt)))
 
 (defun mevedel-goal--insert-and-send (prompt &optional display-text hook-context)
   "Insert PROMPT as a user turn in the current data buffer and send it.
@@ -1403,6 +1479,8 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
     (setq accepted (plist-put accepted :hash plan-hash))
     (setf (mevedel-goal-current-plan goal) accepted
           (mevedel-goal-phase goal) 'implementing)
+    (mevedel-goal--enqueue-event-reminder
+     session "accepted plan; implementation started")
     (mevedel-goal--cycle-put goal :plan (plist-get accepted :path))
     (mevedel-goal--cycle-put goal :plan-hash plan-hash)
     (mevedel-goal--cycle-put
@@ -1469,6 +1547,8 @@ Return `(:buffer BUFFER :accepted ARTIFACT)' for the sole target owner."
             (setf (mevedel-session-goal source-session) nil
                   (plist-get handoff :state) 'complete
                   (mevedel-session-plan-metadata source-session) nil)
+            (mevedel-goal--enqueue-event-reminder
+             target-session "ownership transferred to this Goal worktree")
             (mevedel-goal--persist-checkpoint source-session source-buffer)
             (list :buffer target-buffer :accepted accepted))
         (error
@@ -1589,8 +1669,8 @@ Return `(:buffer BUFFER :accepted ARTIFACT)' for the sole target owner."
                   (let* ((implementation-input
                           (mevedel-plan-implementation-input
                            context accepted-artifact implementation-mode
-                           (mevedel-goal-objective goal)
-                           (mevedel-goal--focused-context goal)))
+                           (mevedel-goal-context-fragment
+                            goal mevedel--session)))
                          (fsm
                           (mevedel-goal--call-with-workload
                            'implementation
@@ -1721,6 +1801,8 @@ When exhausted, pause durably with progress and blocker context after SOURCE."
                "Goal token budget exhausted (%d/%d)%s. Progress: %d completed review cycle%s; latest evidence: %s. Blocker: raise or remove the budget, then resume"
                usage budget (if source (format " after %s" source) "")
                finished (if (= finished 1) "" "s") latest))
+        (mevedel-goal--enqueue-event-reminder
+         session "token budget exhausted; raise or remove it before resume")
         (mevedel-goal--persist-checkpoint session (current-buffer))
         nil))))
 
@@ -1842,6 +1924,8 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                        (mevedel-goal-present-plan
                         plan chat-buffer
                         "Automatic approval deferred because user input or an interaction is pending.")))))))
+          (mevedel-goal--enqueue-event-reminder
+           session "guardian escalated plan approval to the user")
           (mevedel-goal-present-plan
            plan chat-buffer (plist-get decision :reason)))))))
 
@@ -1912,6 +1996,8 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                      (mevedel-goal--save-session-state session (current-buffer))
                      (message "mevedel: goal paused after duplicate plan"))
                  (setf (mevedel-goal-phase goal) 'awaiting-approval)
+                 (mevedel-goal--enqueue-event-reminder
+                  session "planning finished; plan awaits approval")
                  (if (eq (mevedel-goal-approval-policy goal) 'automatic)
                      (progn
                        (mevedel-plan-write-current
@@ -1944,7 +2030,9 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
           (when (eq phase (mevedel-goal-phase goal))
             (pcase phase
               ('implementing
-               (setf (mevedel-goal-phase goal) 'reviewing))
+               (setf (mevedel-goal-phase goal) 'reviewing)
+               (mevedel-goal--enqueue-event-reminder
+                mevedel--session "implementation settled; review started"))
               ('reviewing
                (if-let* ((review (mevedel-goal-review-summary goal)))
                    (progn
@@ -1959,7 +2047,9 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                      (pcase (plist-get review :verdict)
                        ('complete
                         (setf (mevedel-goal-status goal) 'complete
-                              (mevedel-goal-reason goal) nil))
+                              (mevedel-goal-reason goal) nil)
+                        (mevedel-goal--enqueue-event-reminder
+                         mevedel--session "review proved the Goal complete"))
                        ('continue
                         (setf (mevedel-goal-cycle goal)
                               (1+ (mevedel-goal-cycle goal))
@@ -1972,11 +2062,17 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                         (mevedel-goal--cycle-put
                          goal :started-at (format-time-string "%FT%T%z"))
                         (mevedel-goal--persist-cycle-index
-                         goal mevedel--session chat-buffer))
+                         goal mevedel--session chat-buffer)
+                        (mevedel-goal--enqueue-event-reminder
+                         mevedel--session
+                         "review found remaining work; next planning cycle started"))
                        ('blocked
                         (setf (mevedel-goal-status goal) 'blocked
                               (mevedel-goal-reason goal)
-                              (plist-get review :summary)))))
+                              (plist-get review :summary))
+                        (mevedel-goal--enqueue-event-reminder
+                         mevedel--session
+                         "review found a blocker; user input is required"))))
                    (setf (mevedel-goal-status goal) 'paused
                        (mevedel-goal-reason goal)
                        "Goal review returned malformed structured output")))))
@@ -2034,6 +2130,12 @@ The post-teardown failure transaction persists this state."
                             (if (mevedel-goal--terminal-provider-failure-p reason)
                                 "Provider" "Request")
                             reason)))))
+          (when (eq (mevedel-goal-status goal) 'paused)
+            (mevedel-goal--enqueue-event-reminder
+             mevedel--session
+             (if (eq status 'aborted)
+                 "request was forcefully stopped; resume remains available"
+               "request failed; Goal paused with a recoverable checkpoint")))
           (setf (mevedel-goal-pause-requested goal) nil))))))
 
 (defun mevedel-goal-persist-failure (fsm)

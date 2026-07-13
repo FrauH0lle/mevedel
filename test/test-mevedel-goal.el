@@ -124,18 +124,94 @@
           (should-error (mevedel-goal--assert-execution-home goal session)))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-goal--focused-context ()
+(mevedel-deftest mevedel-goal-context-fragment ()
   ,test
   (test)
   :doc "renders stable Goal identity, progress, and execution-home context"
-  (let* ((goal (mevedel-goal--create
-                :id "g1" :phase 'implementing :cycle 3
+  (let* ((session (mevedel-session--create
+                   :save-path "/tmp/session/"))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship safely" :status 'active
+                :phase 'implementing :cycle 3 :approval-policy 'automatic
+                :current-plan '(:path "goals/g1/cycle-003-plan.md")
+                :review-findings "Fix the remaining race"
+                :token-budget 1000 :token-usage 400
                 :execution-home
                 '(:kind worktree :directory "/tmp/goal/" :session-id "s1")))
-         (context (mevedel-goal--focused-context goal)))
-    (dolist (needle '("Goal ID: g1" "Phase: implementing" "Cycle: 3"
+         (context (mevedel-goal-context-fragment goal session)))
+    (dolist (needle '("authority=\"session-sidecar\"" "Goal ID: g1"
+                      "Objective: Ship safely" "Status: active"
+                      "Phase: implementing" "Cycle: 3"
+                      "Approval policy: automatic"
+                      "Accepted plan: goals/g1/cycle-003-plan.md"
+                      "Cycle index: /tmp/session/goals/g1/cycles.el"
+                      "Latest review: continue - Fix the remaining race"
+                      "Budget: 400/1000 tokens"
                       "Execution home: /tmp/goal/"))
-      (should (string-match-p (regexp-quote needle) context)))))
+      (should (string-match-p (regexp-quote needle) context))))
+  :doc "is the identical prefix beneath every phase-specific request"
+  (let* ((session (mevedel-session--create :save-path "/tmp/session/"))
+         (mevedel--session session)
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'planning :cycle 1 :approval-policy 'automatic
+                :current-plan '(:absolute-path "/tmp/plan.md")
+                :execution-home '(:directory "/tmp/project/")))
+         (context (mevedel-goal-context-fragment goal session))
+         (prompts
+          (list (cons "Planning instructions:"
+                      (mevedel-goal--planning-prompt goal))
+                (cons "Guardian instructions:"
+                      (mevedel-goal--guardian-prompt goal "# Plan"))
+                (cons "Review instructions:"
+                      (mevedel-goal--review-prompt goal))
+                (cons "Recovery instructions:"
+                      (mevedel-goal--recovery-prompt
+                       goal '(:attempt-id "a1" :dispatch-state unknown))))))
+    (dolist (entry prompts)
+      (should (string-prefix-p context (cdr entry)))
+      (should (string-match-p (regexp-quote (car entry)) (cdr entry))))))
+
+(mevedel-deftest mevedel-goal--refresh-request-context ()
+  ,test
+  (test)
+  :doc "replaces stale checkpoint context while preserving phase input"
+  (let* ((session (mevedel-session--create :save-path "/tmp/session/"))
+         (mevedel--session session)
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'paused
+                :phase 'planning :cycle 1 :token-budget 100
+                :token-usage 10))
+         (old (mevedel-goal-context-fragment goal session)))
+    (setf (mevedel-goal-status goal) 'active
+          (mevedel-goal-phase goal) 'reviewing
+          (mevedel-goal-cycle goal) 2
+          (mevedel-goal-token-usage goal) 40)
+    (let ((refreshed
+           (mevedel-goal--refresh-request-context
+            goal (concat old "\n\nReview instructions:\nKeep this exact input"))))
+      (dolist (needle '("Status: active" "Phase: reviewing" "Cycle: 2"
+                        "Budget: 40/100 tokens" "Keep this exact input"))
+        (should (string-match-p (regexp-quote needle) refreshed)))
+      (should-not (string-match-p "Status: paused" refreshed))
+      (should (= 1 (let ((start 0) (count 0))
+                     (while (string-match "<goal-context" refreshed start)
+                       (setq count (1+ count)
+                             start (match-end 0)))
+                     count))))))
+
+(mevedel-deftest mevedel-goal--enqueue-event-reminder ()
+  ,test
+  (test)
+  :doc "queues an event without mutating Goal lifecycle state"
+  (let* ((goal (mevedel-goal--create
+                :id "g1" :status 'active :phase 'planning :cycle 1))
+         (session (mevedel-session--create :goal goal))
+         (before (copy-mevedel-goal goal)))
+    (mevedel-goal--enqueue-event-reminder session "planning started")
+    (should (equal before goal))
+    (should (equal '("Goal lifecycle event: planning started")
+                   (mevedel-session-pending-reminders session)))))
 
 (mevedel-deftest mevedel-goal--relative-dir ()
   ,test
@@ -485,6 +561,9 @@
                      #'ignore))
             (mevedel-goal-clear))
           (should-not (mevedel-session-goal session))
+          (should (member
+                   "Goal lifecycle event: cleared; transcript and artifacts were preserved"
+                   (mevedel-session-pending-reminders session)))
           (should (equal "transcript" (buffer-string)))
           (should (file-exists-p artifact))
           (should (file-exists-p work)))
@@ -586,7 +665,9 @@
                            (list prompt gptel-model
                                  gptel-reasoning-effort)))))
               (mevedel-goal-resume)))
-          (should (equal observed '("Exact prior request" new-model high)))
+          (should (string-match-p "Exact prior request" (car observed)))
+          (should (string-match-p "Status: active" (car observed)))
+          (should (equal (cdr observed) '(new-model high)))
           (should (equal "new-model"
                          (plist-get (mevedel-goal-checkpoint goal)
                                     :provider))))
@@ -619,7 +700,9 @@
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (value) (setq received value) nil)))
             (mevedel-goal-resume))
-          (should (equal input received))
+          (should (equal "plan.md" (plist-get received :plan-file)))
+          (should (string-match-p
+                   "Status: active" (plist-get received :goal-context)))
           (should (eq 'implementing (mevedel-goal-phase goal))))
       (delete-directory root t)))
   :doc "continues the automatic cascade after the user raises its budget"
@@ -666,7 +749,8 @@
          (test-mevedel-goal--fsm (current-buffer) 'planning)))
       (should-not saved)
       (should (eq 'paused (mevedel-goal-status goal)))
-      (should-not (mevedel-goal-pause-requested goal)))))
+      (should-not (mevedel-goal-pause-requested goal))
+      (should (mevedel-session-pending-reminders session)))))
 
 (mevedel-deftest mevedel-goal-persist-failure ()
   ,test
@@ -729,7 +813,9 @@
                                  gptel-reasoning-effort)))))
               (mevedel-goal-dispatch-after-failure
                (test-mevedel-goal--fsm (current-buffer) 'planning))))
-          (should (equal observed '("Exact retry" retry-model high))))
+          (should (string-match-p "Exact retry" (car observed)))
+          (should (string-match-p "Status: active" (car observed)))
+          (should (equal (cdr observed) '(retry-model high))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal--call-with-workload ()
@@ -1110,11 +1196,21 @@
   ,test
   (test)
   :doc "dispatches only request-bearing Goal phases"
-  (let (received)
+  (let* ((goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'planning :cycle 1))
+         (mevedel--session (mevedel-session--create :goal goal))
+         received)
     (let ((mevedel-goal-dispatch-function
            (lambda (&rest args) (setq received args))))
-      (mevedel-goal--dispatch-phase 'planning "Prompt" "Display")
-      (should (equal received '(planning "Prompt" "Display")))
+      (cl-letf (((symbol-function 'mevedel-goal--call-with-workload)
+                 (lambda (_workload function &rest _) (funcall function))))
+        (mevedel-goal--dispatch-phase 'planning "Prompt" "Display"))
+      (should (eq 'planning (car received)))
+      (should (string-match-p "authority=\"session-sidecar\""
+                              (cadr received)))
+      (should (string-match-p "Prompt" (cadr received)))
+      (should (equal "Display" (caddr received)))
       (should-error
        (mevedel-goal--dispatch-phase 'awaiting-approval "x" "x")))))
 
@@ -2246,7 +2342,7 @@
                 :phase 'awaiting-approval :cycle 2
                 :approval-policy 'automatic)
                "# Plan\nRun tests.")))
-    (dolist (needle '("Ship safely" "cycle=2" "# Plan"
+    (dolist (needle '("Ship safely" "Cycle: 2" "# Plan"
                       "dangerous or irreversible" "verdict: approve|ask"))
       (should (string-match-p (regexp-quote needle) text)))))
 
@@ -2658,6 +2754,9 @@
             (mevedel-goal--guardian-finished
              "g1" "# Plan" (mevedel-plan-hash "# Plan")
              (current-buffer) '(:verdict ask :reason "Need scope"))
+            (should (member
+                     "Goal lifecycle event: guardian escalated plan approval to the user"
+                     (mevedel-session-pending-reminders session)))
             (setf (mevedel-session-queued-user-messages session) '("wait"))
             (mevedel-goal--guardian-finished
              "g1" "# Plan" (mevedel-plan-hash "# Plan")

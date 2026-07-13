@@ -20,6 +20,9 @@ accepted plan through implementation and review in its recorded execution-home
 session. Current-checkout Goals remain in place. Worktree Goals transfer once
 to a `goal/<goal-id>` linked-worktree session; the source keeps only a handoff
 pointer and cannot continue the Goal.
+Every Goal phase request begins with the same deterministic context fragment
+generated from persisted session state. Planning, guardian, implementation,
+review, and recovery then add only their phase-specific instructions.
 For `/goal auto <objective>`, each proposal first goes through an internal
 `goal-guardian` workload request. That request has no tools and is not inserted
 as a conversational turn. Its approve-or-ask decision is persisted and shown

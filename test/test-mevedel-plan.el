@@ -235,20 +235,20 @@
         (let ((input
                (mevedel-plan-implementation-input
                 'focused (list :absolute-path path)
-                'accept-edits "Ship" "Goal ID: g1")))
+                'accept-edits "Goal ID: g1")))
           (should (equal 'focused (plist-get input :context)))
           (should (equal path (plist-get input :plan-file)))
           (should (equal 'accept-edits
                          (plist-get input :permission-mode)))
           (should-error
            (mevedel-plan-implementation-input
-            'unknown (list :absolute-path path) 'default)))
+            'unknown (list :absolute-path path) 'default "Goal ID: g1"))
           (should-error
            (mevedel-plan-implementation-input
             'focused (list :absolute-path path) 'default nil))
           (should-error
            (mevedel-plan-implementation-input
-            'focused (list :absolute-path path) 'default "Ship" nil))
+            'full (list :absolute-path path) 'default nil)))
       (delete-file path))))
 
 (mevedel-deftest mevedel-plan-clear-verification-pending

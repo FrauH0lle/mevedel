@@ -1445,29 +1445,25 @@ ACTION-PLIST is a plist with keys:
   :context       - `full' or `focused'
   :plan-file     - Path to the saved plan file
   :permission-mode - Permission mode for implementation
-  :goal-objective - Authoritative objective for focused context
-  :goal-context   - Deterministic lifecycle context for focused execution
+  :goal-context   - Authoritative persisted lifecycle context
 
 For `full', the plan is inserted into the chat buffer as a user message and
 sent via `gptel-send', including full conversation context.
 
-For `focused', a fresh `gptel-request' is fired with the objective and plan as
-the authoritative prompt, without prior conversation context."
+For `focused', a fresh `gptel-request' is fired with Goal context and the plan,
+without prior conversation context."
   (require 'mevedel-utilities)
   (let* ((plan-file (plist-get action-plist :plan-file))
          (permission-mode (plist-get action-plist :permission-mode))
          (context (plist-get action-plist :context))
-         (objective (plist-get action-plist :goal-objective))
          (goal-context (plist-get action-plist :goal-context))
          (chat-buffer (current-buffer))
          (plan-content (with-temp-buffer
                          (insert-file-contents plan-file)
                          (buffer-string)))
          (prompt
-          (if (eq context 'focused)
-              (format "Goal context:\n%s\n\nGoal objective:\n%s\n\nImplement the accepted plan:\n\n%s"
-                      goal-context objective plan-content)
-            (format "Implement the following plan:\n\n%s" plan-content))))
+          (format "%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state:\n\n%s"
+                  goal-context plan-content)))
     (with-current-buffer chat-buffer
       (condition-case err
           (progn
