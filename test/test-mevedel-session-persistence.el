@@ -229,6 +229,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 :phase 'reviewing :approval-policy 'supervised
                 :owner-session "main" :cycle 2
                 :cycles '((:cycle 1) (:cycle 2))
+                :token-budget 1000 :token-usage 345
+                :continuation-key "key"
                 :checkpoint
                 '(:phase reviewing :cycle 2 :input "Exact review"
                   :workload review :provider "openai:model" :effort high
@@ -241,6 +243,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should (equal "g1" (plist-get plist :id)))
     (should (eq 'blocked (plist-get plist :status)))
     (should (= 2 (plist-get plist :cycle)))
+    (should (= 1000 (plist-get plist :token-budget)))
+    (should (= 345 (plist-get plist :token-usage)))
     (should (equal "Exact review"
                    (plist-get (plist-get plist :checkpoint) :input)))
     (should (equal "Need an API credential." (plist-get plist :reason)))))
@@ -260,19 +264,26 @@ ROOT is a temporary directory owned and cleaned up by the caller."
          (goal (mevedel-session-persistence--goal-from-plist
                 (list :id "g1" :objective "Ship" :status 'active
                       :phase 'planning :approval-policy 'supervised
-                      :cycle 1 :cycles cycles :checkpoint checkpoint))))
+                      :cycle 1 :cycles cycles :checkpoint checkpoint
+                      :token-budget 1000 :token-usage 25
+                      :continuation-key "key"))))
     (should (mevedel-goal-p goal))
     (should (equal "Ship" (mevedel-goal-objective goal)))
     (should (equal cycles (mevedel-goal-cycles goal)))
     (should-not (eq cycles (mevedel-goal-cycles goal)))
     (should (equal checkpoint (mevedel-goal-checkpoint goal)))
-    (should-not (eq checkpoint (mevedel-goal-checkpoint goal))))
+    (should-not (eq checkpoint (mevedel-goal-checkpoint goal)))
+    (should (= 1000 (mevedel-goal-token-budget goal)))
+    (should (= 25 (mevedel-goal-token-usage goal)))
+    (should (equal "key" (mevedel-goal-continuation-key goal))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-persistence--goal-from-plist nil))
   :doc "rejects unsafe IDs and malformed lifecycle state"
   (let ((valid '(:id "g1" :objective "Ship" :status active
                  :phase planning :approval-policy supervised
-                 :cycle 1 :cycles ((:cycle 1)))))
+                 :cycle 1 :cycles ((:cycle 1))
+                 :token-budget nil :token-usage 0
+                 :continuation-key nil)))
     (dolist (change '((:id "../escape")
                       (:status unknown)
                       (:phase editing)
@@ -516,7 +527,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   :doc "restoration reason remains stable across repeated reopen cycles"
   (let* ((goal '(:id "g1" :objective "Ship" :status active
                  :phase planning :approval-policy supervised
-                 :cycle 1 :cycles ((:cycle 1))))
+                 :cycle 1 :cycles ((:cycle 1))
+                 :token-budget nil :token-usage 0
+                 :continuation-key nil))
          (first (mevedel-session-persistence-deserialize
                  (test-mevedel-session-persistence--complete-sidecar
                   (list :goal goal))))
@@ -537,7 +550,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                   (blocked . paused) (complete . complete)))
     (let* ((goal (list :id "g1" :objective "Ship" :status (car case)
                        :phase 'planning :approval-policy 'supervised
-                       :cycle 1 :cycles '((:cycle 1))))
+                       :cycle 1 :cycles '((:cycle 1))
+                       :token-budget nil :token-usage 0
+                       :continuation-key nil))
            (result
             (mevedel-session-persistence-deserialize
              (test-mevedel-session-persistence--complete-sidecar

@@ -62,6 +62,26 @@
     (should (= 0 (hash-table-count mevedel-view--interaction-descriptors)))
     (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))))
 
+(mevedel-deftest mevedel-view-interaction-pending-p
+  (:doc "reports pending view-owned user interactions")
+  ,test
+  (test)
+
+  :doc "detects prompt-hook and registered descriptor state"
+  (with-temp-buffer
+    (mevedel-view-interaction-initialize)
+    (should-not (mevedel-view-interaction-pending-p))
+    (setq-local mevedel-view--prompt-hook-pending t)
+    (should (mevedel-view-interaction-pending-p))
+    (setq-local mevedel-view--prompt-hook-pending nil)
+    (puthash 'ask '(:kind ask) mevedel-view--interaction-descriptors)
+    (should (mevedel-view-interaction-pending-p (current-buffer))))
+
+  :doc "rejects a dead view buffer"
+  (let ((view (generate-new-buffer " *dead-interaction-view*")))
+    (kill-buffer view)
+    (should-not (mevedel-view-interaction-pending-p view))))
+
 (mevedel-deftest mevedel-view--interaction-target-buffer
   (:doc "resolves the live parent view for queued interactions")
   ,test

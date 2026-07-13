@@ -29,6 +29,12 @@ Implementation is deliberately asymmetric: if its outcome is not known, resume
 audits the current repository against the accepted plan and never resends the
 mutation request.
 
+All automatic phase handoffs share one continuation gate. It requires a
+settled checkpoint, an idle request and interaction surface, no queued user
+intervention, any required guardian approval, and remaining Goal token budget.
+The admitted durable state is recorded before dispatch so duplicate callbacks
+cannot start the same phase twice.
+
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per
 request (no caching). Each invocation gets a cloned reminder list with
