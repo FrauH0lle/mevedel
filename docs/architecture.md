@@ -37,7 +37,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   findings, and any pause or blocked reason.
 - **`mevedel-request`**: per-turn state: session, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission
-  rules, hook rules, model override, effort override.
+  rules, and hook rules. Skill model and effort policy is consumed before
+  gptel realizes an owning request rather than stored for late mutation.
 - **`mevedel-tool`**: name, handler, description, summary, prompt,
   args, optional semantic `repair-input` callback, category,
   read-only/destructive/async flags, sync/async
@@ -79,9 +80,11 @@ order (later parents win, then the child). Ordinary preset keys resolve to
 composition semantics. Persistent application is buffer- and session-local;
 request-only application is dynamically scoped. The built-ins are
 `mevedel-discuss`, `mevedel-implement`, `mevedel-revise`, and
-`mevedel-tutor`. Presets can also merge named model tiers and workload maps;
-dispatch resolves session values, tier values, workload values, then explicit
-Agent or skill overrides. System prompt assembled
+`mevedel-tutor`. Presets can also merge named model tiers and workload maps.
+Dispatch resolves session values, tier values, workload values, then explicit
+Agent policy or request-owning skill policy. Skill preset entries use
+`$skill-name` workload symbols and are consumed before request realization.
+System prompt assembled
 dynamically from Markdown-backed parts. Static content is emitted first
 for provider prefix-cache reuse: base prompt, workspace config
 (AGENTS.md plus optional AGENTS.local.md), persistent memory,

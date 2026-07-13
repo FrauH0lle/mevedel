@@ -102,6 +102,43 @@ argument-hint: \"[path]\"
             (should-not (mevedel-skill-body skill))))
       (delete-directory dir t)))
 
+  :doc "preserves model and effort metadata normalized by gptel-agent"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-policy-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "policy"
+           "description: Policy\nmodel: \"OpenAI:gpt-5-mini\"\neffort: high\n"
+           "Body")
+          (let ((skill (car (mevedel-skills-scan dir '(".")))))
+            (should (equal "OpenAI:gpt-5-mini"
+                           (mevedel-skill-model skill)))
+            (should (eq 'high (mevedel-skill-effort skill)))))
+      (delete-directory dir t)))
+
+  :doc "records inline-agent diagnostics during discovery"
+  (let* ((mevedel-skills-include-bundled nil)
+         (dir (make-temp-file "mevedel-skills-warning-" t)))
+    (unwind-protect
+        (progn
+          (mevedel-skills-test--write-skill
+           dir "inline-agent"
+           "description: Inline\ncontext: inline\nagent: explorer\n" "Body")
+          (mevedel-skills-test--write-skill
+           dir "fork-agent"
+           "description: Fork\ncontext: fork\nagent: explorer\n" "Body")
+          (let ((skills (mevedel-skills-scan dir '("."))))
+            (should (= 1 (length
+                          (mevedel-skill-warnings
+                           (cl-find "inline-agent" skills
+                                    :key #'mevedel-skill-name :test #'equal)))))
+            (should-not
+             (mevedel-skill-warnings
+              (cl-find "fork-agent" skills
+                       :key #'mevedel-skill-name :test #'equal)))))
+      (delete-directory dir t)))
+
   :doc "project/user name conflicts are source-qualified"
   (let* ((mevedel-skills-include-bundled nil)
          (root (make-temp-file "mevedel-skills-project-" t))

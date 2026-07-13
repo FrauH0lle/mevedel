@@ -133,24 +133,22 @@ are injected once, preserving first occurrence order. Unknown `$foo` text is
 sent as a normal prompt rather than rejected, so shell/environment prose such
 as `$PATH` remains safe. A `$foo` mention that names a known but disabled
 skill blocks the send with guidance to enable it via `/skills enable foo` or
-escape it as literal text. Leading and inline explicit user skill invocations
-install the same skill-scoped permission rules, hooks, model override, and
-parsed effort state; only prompt body handling differs.
+escape it as literal text. A leading command contributes command-scoped
+permissions and hooks. Exactly one leading command may also own the next
+request's model and effort; a command stack retains session policy. Embedded
+instruction mentions attach prepared skill context but do not activate command
+permissions, hooks, agents, model, or effort.
 Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, and `$foo` inside Markdown inline
 code spans or fenced code blocks stay literal text for inline detection.
-Inline attachment-style `$skill` is resolved by mevedel itself into additive
-hidden skill context before the model request, using the same
-`<system-reminder>` prompt-transform path as `@file` and `@ref` mentions. The
-scanner is colocated with the mention transform but uses a separate `$skill`
-parser. It does not ask the model to call `Skill(name=...)`. The transcript
-keeps the user's original prompt text, while the model-visible prompt replaces
-recognized inline mentions with compact placeholders such as
+Inline attachment-style `$skill` is resolved by mevedel itself from atomic
+source bindings into additive hidden skill context before the model request.
+It does not ask the model to call `Skill(name=...)`. The transcript keeps the
+user's original prompt text, while the model-visible prompt replaces recognized
+inline mentions with compact placeholders such as
 `[skill:to-prd -- attached]`. Inline attachment-style invocations persist the
 original user text plus render metadata naming the attached skills; transformed
 placeholders and hidden reminder bodies are request-time only. Inline
-attachment-style invocation only accepts `context: inline` skills. If a known
-user-invocable `context: fork` skill appears inline, mevedel blocks the send
-with guidance to invoke it as leading `$skill ...` or escape, quote, or
-code-span it for literal text. Leading command-style `$skill` can still
-dispatch fork skills. Unknown `/foo` remains a strict unknown-command error
+attachment-style invocation treats even a `context: fork` skill as a non-forking
+instruction. Only a leading fork command dispatches a child. Unknown `/foo`
+remains a strict unknown-command error
 because slash is reserved for local commands.

@@ -445,7 +445,12 @@
                      (let* ((name (mevedel-skill-name skill))
                             (role (plist-get keys :role))
                             (record (list name role)))
-                       (setq calls (append calls (list (list name arguments))))
+                       (setq calls
+                             (append
+                              calls
+                              (list (list name arguments role
+                                          (plist-get keys
+                                                     :policy-owner-p)))))
                        (funcall
                         callback
                         (list :status 'ok
@@ -465,6 +470,7 @@
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
     (should (equal '("alpha" "beta" "delta") (mapcar #'car calls)))
+    (should (equal '(nil nil nil) (mapcar #'cadddr calls)))
     (should (equal
              "inspect [skill:delta -- attached] and [skill:alpha -- attached]"
              (cadar calls)))
@@ -500,11 +506,13 @@
                  "$alpha use $alias" session)
                 :plan))
          calls
+         owner
          result)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (skill arguments callback &rest _)
+                   (lambda (skill arguments callback &rest keys)
                      (push (mevedel-skill-name skill) calls)
+                     (setq owner (plist-get keys :policy-owner-p))
                      (funcall callback
                               (list :status 'ok :body arguments
                                     :request-context
@@ -513,6 +521,7 @@
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
     (should (equal '("alpha") calls))
+    (should owner)
     (should (eq 'selected
                 (plist-get (plist-get result :request-context) :model)))
     (should (eq 'high
@@ -529,17 +538,20 @@
                 (mevedel-skills-plan-user-input
                  "Use $alpha and $alpha; keep $body-literal" session)
                 :plan))
+         owner
          result)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel-skills-prepare)
-                   (lambda (_skill arguments callback &rest _)
+                   (lambda (_skill arguments callback &rest keys)
                      (should (equal "" arguments))
+                     (setq owner (plist-get keys :policy-owner-p))
                      (funcall callback
                               '(:status ok :body "Body says $nested"
                                 :request-context
                                 (:invoked-skills (record)))))))
           (mevedel-skills-plan-prepare plan (lambda (value) (setq result value))))
       (delete-directory root t))
+    (should-not owner)
     (should (= 1 (length (plist-get result :prepared-entries))))
     (should
      (string-match-p
@@ -550,6 +562,79 @@
                             (plist-get result :model-input)))
     (should (string-match-p (regexp-quote "$body-literal")
                             (plist-get result :model-input))))
+
+  :doc "invalid skill and preset policy is ignored by stacks and instructions"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-plan-" t))
+         (alpha (mevedel-skills-plan-test--skill root "alpha"))
+         (beta (mevedel-skills-plan-test--skill root "beta"))
+         (delta (mevedel-skills-plan-test--skill root "delta"))
+         (session (mevedel-skills-plan-test--session alpha beta delta))
+         (mevedel-model-workloads
+          '(($alpha :provider "Missing:alpha" :effort impossible)
+            ($beta :provider "Missing:beta" :effort impossible)
+            ($delta :provider "Missing:delta" :effort impossible)))
+         stacked-result
+         instruction-result)
+    (setf (mevedel-skill-model alpha) "invalid alpha"
+          (mevedel-skill-effort alpha) 'impossible
+          (mevedel-skill-model beta) "invalid beta"
+          (mevedel-skill-effort beta) 'impossible
+          (mevedel-skill-model delta) "invalid delta"
+          (mevedel-skill-effort delta) 'impossible)
+    (unwind-protect
+        (progn
+          (mevedel-skills-plan-prepare
+           (plist-get
+            (mevedel-skills-plan-user-input
+             "$alpha $beta inspect" session)
+            :plan)
+           (lambda (value) (setq stacked-result value)))
+          (mevedel-skills-plan-prepare
+           (plist-get
+            (mevedel-skills-plan-user-input
+             "Use $delta to inspect" session)
+            :plan)
+           (lambda (value) (setq instruction-result value))))
+      (delete-directory root t))
+    (should (eq 'ok (plist-get stacked-result :status)))
+    (should (eq 'ok (plist-get instruction-result :status)))
+    (should-not (plist-member (plist-get stacked-result :request-context)
+                              :model))
+    (should-not (plist-member (plist-get stacked-result :request-context)
+                              :effort))
+    (should-not (plist-member (plist-get instruction-result :request-context)
+                              :model))
+    (should-not (plist-member (plist-get instruction-result :request-context)
+                              :effort)))
+
+  :doc "one owner retains preset-over-frontmatter policy in aggregate context"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-skill-plan-" t))
+         (alpha (mevedel-skills-plan-test--skill root "alpha"))
+         (session (mevedel-skills-plan-test--session alpha))
+         (mevedel-model-tiers '((strong)))
+         (mevedel-model-workloads '(($alpha :tier strong :effort high)))
+         (gptel-backend 'session-backend)
+         (gptel-model 'session-model)
+         (gptel-reasoning-effort 'medium)
+         result)
+    (setf (mevedel-skill-model alpha) "invalid superseded selector"
+          (mevedel-skill-effort alpha) 'low)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-model-validate-effort)
+                   (lambda (_model effort) effort)))
+          (mevedel-skills-plan-prepare
+           (plist-get
+            (mevedel-skills-plan-user-input "$alpha inspect" session)
+            :plan)
+           (lambda (value) (setq result value))))
+      (delete-directory root t))
+    (should (eq 'ok (plist-get result :status)))
+    (should (equal '(:tier strong)
+                   (plist-get (plist-get result :request-context) :model)))
+    (should (eq 'high
+                (plist-get (plist-get result :request-context) :effort))))
 
   :doc "the first failure short-circuits remaining entries"
   (let* ((mevedel-skills-check-for-modifications nil)

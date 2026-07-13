@@ -432,12 +432,8 @@ Created at request start, cleared in the termination handler."
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
   origin            ; "main" or canonical agent-id that owns this request
-  ;; Rules accumulate across nested skills (additive); model
-  ;; selector/effort are last-writer-wins.  All three die with the
-  ;; request struct.
+  ;; Rules accumulated by an owning skill die with the request struct.
   skill-permission-rules
-  skill-model-override
-  skill-effort-override
   hook-rules)
 
 

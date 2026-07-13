@@ -435,15 +435,18 @@ Routes through the lifecycle-aware permission transition path."
 
 (defun mevedel-skills--skill-detail-text (skill &optional _context)
   "Return detail text for SKILL."
-  (format
-   "Skill %s [%s]\nSource: %s\nDescription: %s%s"
-   (mevedel-skill-name skill)
-   (mevedel-skills--skill-status-label skill)
-   (mevedel-skills--skill-source-label skill)
-   (or (mevedel-skill-description skill) "")
+  (concat
+   (format
+    "Skill %s [%s]\nSource: %s\nDescription: %s"
+    (mevedel-skill-name skill)
+    (mevedel-skills--skill-status-label skill)
+    (mevedel-skills--skill-source-label skill)
+    (or (mevedel-skill-description skill) ""))
    (if-let* ((file (mevedel-skill-source-file skill)))
        (format "\nFile: %s" file)
-     "")))
+     "")
+   (when-let* ((warnings (mevedel-skill-warnings skill)))
+     (concat "\nWarnings:\n- " (string-join warnings "\n- ")))))
 
 (defun mevedel-skills-list--session-label (&optional context)
   "Return CONTEXT's skills cockpit session label."

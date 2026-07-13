@@ -550,8 +550,9 @@ can run `mevedel-stop-agent`.
 Named model tiers and workload assignments live in the current session preset.
 The global `mevedel-model-tiers` and `mevedel-model-workloads` values are the
 defaults for presets that omit them. A workload selects a tier or exact gptel
-provider and may override reasoning effort; an `Agent` call or skill can
-override policy for one invocation.
+provider and may override reasoning effort; an `Agent` call or a skill that
+owns a future request can override policy for that invocation. Skill workload
+keys are `$skill-name` symbols.
 
 | Custom Variable                         | Variable Description                                                |
 |-----------------------------------------|---------------------------------------------------------------------|
@@ -941,9 +942,10 @@ A skill can:
 - Inline its body into the current request, or fork into a sub-agent (with
   `context: fork` and an optional `agent: <name>`).
 - Augment permissions for the duration of the invocation via `allowed-tools`.
-- Override the model for that invocation. Skills can also declare effort
-  metadata; it is parsed and stored, but currently inert until gptel exposes a
-  reasoning-effort control.
+- Select model and reasoning effort when a single leading inline command owns
+  the next request, or when a fork command owns its child request. Inline
+  command stacks, instruction mentions, and model-side inline calls retain the
+  active request policy.
 
 User skill invocations may block chat input while async preparation or a foreground
 fork completes.
@@ -952,9 +954,11 @@ Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
 `/compact`, `/mode`, `/auto`, `/goal`, `/init`, `/review`, and `/verify`.
 Project and user skills add `$<skill-name>` invocations by name.
 
-Skill frontmatter can also declare file `paths`, shell commands, hooks, model and
-effort metadata, and whether a skill runs inline or in a forked agent. Skill
-bodies support argument placeholders and shell/Elisp insertions; see
+Skill frontmatter can also declare file `paths`, shell commands, hooks, model
+and effort policy, and whether a skill runs inline or in a forked agent.
+Presets can override external skill policy through `$skill-name` entries in
+`mevedel-model-workloads`. Skill bodies support argument placeholders and
+shell/Elisp insertions; see
 [`docs/skills.md`](docs/skills.md) for the full format.
 
 | Custom Variable                   | Variable Description                                            |
@@ -962,7 +966,6 @@ bodies support argument placeholders and shell/Elisp insertions; see
 | `mevedel-skill-dirs`              | Directories scanned for `SKILL.md` files.                       |
 | `mevedel-skills-include-bundled`  | Whether to scan mevedel's bundled `skills/` directory.          |
 | `mevedel-skills-check-for-modifications` | When non-nil, hot-reload skills on file changes.         |
-| `mevedel-skills-max-recursion-depth` | Maximum depth for nested skill invocations.                  |
 | `mevedel-skills-listing-budget` | Context fraction reserved for the model-visible skill list.       |
 | `mevedel-skills-listing-max-entry-chars` | Maximum characters per skill entry in that listing.      |
 

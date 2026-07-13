@@ -221,6 +221,55 @@ non-nil, return nil instead of signaling for invalid selectors."
    (noerror nil)
    (t (user-error "Invalid model selector %S" selector))))
 
+
+;;
+;;; Skill workload policy
+
+(defun mevedel-model-skill-policy-fields (skill-name model effort)
+  "Return policy fields declared for SKILL-NAME without validating them.
+
+MODEL and EFFORT are the skill frontmatter values.  Preset-side fields come
+from SKILL-NAME's `$skill-name' workload.  The result contains `model' and/or
+`effort' in that order when either source declares the corresponding field.
+This function deliberately does not parse model selectors or validate effort."
+  (let ((spec (alist-get (intern (concat "$" skill-name))
+                         mevedel-model-workloads)))
+    (delq nil
+          (list (and (or model
+                         (plist-member spec :tier)
+                         (plist-member spec :provider))
+                     'model)
+                (and (or effort (plist-member spec :effort)) 'effort)))))
+
+(defun mevedel-model-merge-skill-policy (skill-name model effort)
+  "Merge SKILL-NAME's preset workload over frontmatter MODEL and EFFORT.
+
+The return value is `(:model SELECTOR :effort EFFORT)'.  A preset `:tier' or
+`:provider' field replaces MODEL; a preset `:effort' field replaces EFFORT.
+Missing preset fields retain their frontmatter value.  MODEL is parsed only
+when no preset model selector replaces it, so superseded third-party metadata
+cannot make an owning request fail.  Provider-dependent validation still
+happens here only when the caller has established request ownership."
+  (let* ((workload (intern (concat "$" skill-name)))
+         (spec (alist-get workload mevedel-model-workloads))
+         (tier-p (plist-member spec :tier))
+         (provider-p (plist-member spec :provider)))
+    (when (and tier-p provider-p)
+      (user-error "Workload %s cannot select both tier and provider" workload))
+    (list :model
+          (cond
+           (tier-p
+            (when-let* ((tier (plist-get spec :tier)))
+              (mevedel-model-tier-selector tier)))
+           (provider-p
+            (when-let* ((provider (plist-get spec :provider)))
+              (mevedel-model-resolve-provider provider)))
+           (model (mevedel-model-parse-selector model)))
+          :effort
+          (if (plist-member spec :effort)
+              (plist-get spec :effort)
+            effort))))
+
 (defun mevedel-model-validate-effort (model effort)
   "Return EFFORT when gptel says MODEL supports it, or signal an error."
   (when effort

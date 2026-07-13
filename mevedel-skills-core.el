@@ -105,14 +105,14 @@ execution; if omitted, the fork inherits from the immediate parent
 invocation.  ALLOWED-TOOLS holds the raw
   frontmatter strings; ALLOWED-TOOL-RULES holds the parsed mevedel
   permission rules.  MODEL names a tier or BACKEND:MODEL provider for
-  the request scope.  EFFORT overrides reasoning effort
-\\=(parsed and stored; currently inert pending gptel support).
+  a request-owning invocation.  EFFORT selects its reasoning effort.
 ARGUMENT-HINT annotates completion UI.  ARGUMENT-NAMES holds the
 parsed `arguments' frontmatter as a list of names with numeric-only
 entries filtered out.  PATH-PATTERNS contains globs that trigger
 conditional activation.  SHELL is the shell symbol for body shell
 expansion (`bash' default, `powershell' parsed but unsupported).
 HOOKS is the normalized frontmatter `hooks' value.
+WARNINGS holds configuration diagnostics exposed by skill inspection.
 ACTIVE-P records the current activation state for path-scoped
 skills."
   name
@@ -136,6 +136,7 @@ skills."
   path-patterns
   shell
   hooks
+  warnings
   active-p)
 
 
@@ -417,7 +418,14 @@ the fallback."
          (arguments (plist-get plist :arguments))
          (paths (plist-get plist :paths))
          (shell (plist-get plist :shell))
-         (hooks (plist-get plist :hooks)))
+         (hooks (plist-get plist :hooks))
+         (warnings
+          (when (and (eq context 'inline)
+                     (stringp agent)
+                     (not (string-blank-p agent)))
+            (list
+             (format "Agent %s is ignored for inline skills; use context: fork to select an agent"
+                     agent)))))
     (mevedel-skill--create
      :name name
      :display-name (or (and (stringp display-name) display-name) name)
@@ -434,7 +442,11 @@ the fallback."
      :allowed-tool-rules
      (mevedel-skills--parse-allowed-tool-rules
       (mevedel-skills--coerce-list allowed-tools) source-file)
-     :model (and (stringp model) model)
+     ;; gptel-agent normalizes Markdown `model' values to symbols.
+     :model (and model
+                 (cond
+                  ((stringp model) model)
+                  ((symbolp model) (symbol-name model))))
      :effort (if (stringp effort) (intern effort) effort)
      :argument-hint (and (stringp argument-hint) argument-hint)
      :argument-names (mevedel-skills--parse-argument-names arguments)
@@ -442,6 +454,7 @@ the fallback."
      :shell (mevedel-skills--validate-shell shell source-file)
      :hooks (mevedel-skills--normalize-hooks
              hooks (and (eq context 'fork) 'skill-fork))
+     :warnings warnings
      :active-p (null paths))))
 
 

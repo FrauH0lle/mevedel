@@ -114,7 +114,90 @@
   (should-error
    (mevedel-model-merge-workloads
     '((planning :tier balanced :provider "Fast:fast-model")) nil)
+   :type 'user-error)
+  :doc "accepts prefixed and qualified skill workload symbols"
+  (let ((merged
+         (mevedel-model-merge-workloads
+          '(($grill-with-docs :tier strong)
+            ($plugin:code-review :provider "Fast:fast-model" :effort high))
+          nil)))
+    (should (equal '(:tier strong)
+                   (alist-get '$grill-with-docs merged)))
+    (should (equal '(:provider "Fast:fast-model" :effort high)
+                   (alist-get '$plugin:code-review merged))))
+  :doc "rejects string skill workload keys"
+  (should-error
+   (mevedel-model-merge-workloads
+    '(("$grill-with-docs" :tier strong)) nil)
    :type 'user-error))
+
+(mevedel-deftest mevedel-model-skill-policy-fields
+  ()
+  ,test
+  (test)
+  :doc "combines frontmatter and preset field presence in stable order"
+  (let ((mevedel-model-workloads
+         '(($alpha :effort nil)
+           ($plugin:beta :tier missing))))
+    (should (equal '(model effort)
+                   (mevedel-model-skill-policy-fields
+                    "alpha" "front-tier" nil)))
+    (should (equal '(model)
+                   (mevedel-model-skill-policy-fields
+                    "plugin:beta" nil nil)))
+    (should (equal '(effort)
+                   (mevedel-model-skill-policy-fields
+                    "plain" nil 'high))))
+  :doc "does not validate ignored preset values"
+  (let ((mevedel-model-workloads
+         '(($alpha :tier missing :provider "Missing:model" :effort impossible))))
+    (should (equal '(model effort)
+                   (mevedel-model-skill-policy-fields
+                    "alpha" nil nil)))))
+
+(mevedel-deftest mevedel-model-merge-skill-policy
+  ()
+  ,test
+  (test)
+  :doc "preset tier replaces model while frontmatter effort remains"
+  (let ((mevedel-model-tiers '((fast) (strong)))
+        (mevedel-model-workloads '(($alpha :tier strong))))
+    (should (equal '(:model (:tier strong) :effort low)
+                   (mevedel-model-merge-skill-policy
+                    "alpha" "fast" 'low))))
+  :doc "preset effort replaces effort while frontmatter model remains"
+  (let ((mevedel-model-tiers '((fast)))
+        (mevedel-model-workloads '(($alpha :effort high))))
+    (should (equal '(:model (:tier fast) :effort high)
+                   (mevedel-model-merge-skill-policy
+                    "alpha" "fast" 'low))))
+  :doc "qualified preset provider replaces invalid frontmatter model"
+  (mevedel-models-test--with-backends
+    (let ((mevedel-model-workloads
+           '(($plugin:alpha :provider "Fast:fast-model"))))
+      (let ((policy (mevedel-model-merge-skill-policy
+                     "plugin:alpha" "not-a-selector" 'medium)))
+        (should (eq 'fast-model
+                    (plist-get (plist-get policy :model) :model)))
+        (should (eq 'medium (plist-get policy :effort))))))
+  :doc "explicit nil preset fields replace frontmatter with inheritance"
+  (let ((mevedel-model-tiers '((fast)))
+        (mevedel-model-workloads '(($alpha :tier nil :effort nil))))
+    (should (equal '(:model nil :effort nil)
+                   (mevedel-model-merge-skill-policy
+                    "alpha" "fast" 'high))))
+  :doc "missing preset fields retain frontmatter"
+  (let ((mevedel-model-tiers '((fast)))
+        (mevedel-model-workloads nil))
+    (should (equal '(:model (:tier fast) :effort medium)
+                   (mevedel-model-merge-skill-policy
+                    "alpha" "fast" 'medium))))
+  :doc "conflicting preset selectors fail only during owning policy merge"
+  (let ((mevedel-model-workloads
+         '(($alpha :tier strong :provider "Fast:fast-model"))))
+    (should-error
+     (mevedel-model-merge-skill-policy "alpha" nil nil)
+     :type 'user-error)))
 
 (mevedel-deftest mevedel-model-validate-effort
   ()

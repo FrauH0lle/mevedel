@@ -102,9 +102,10 @@
   "Return current gptel request data after normal prompt transforms."
   (let ((fsm
          (gptel-request
-             nil
+           nil
            :buffer (current-buffer)
-           :dry-run t)))
+           :dry-run t
+           :transforms gptel-prompt-transform-functions)))
     (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
 (defun mevedel-view-test--complete-skill (candidate)
@@ -878,7 +879,7 @@ Binds `data-buf', `view-buf', `session', and `skill' in scope."
 
 (defmacro mevedel-view-test--with-source-skills (specs &rest body)
   "Install source-backed SPECS and run BODY in paired session buffers.
-Each spec is (NAME CONTEXT BODY)."
+Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (declare (indent 1) (debug t))
   `(let* ((mevedel-skills-include-bundled nil)
           (root (make-temp-file "mevedel-view-planned-skills-" t))
@@ -894,8 +895,9 @@ Each spec is (NAME CONTEXT BODY)."
            (dolist (spec ,specs)
              (mevedel-view-test--write-skill
               root (nth 0 spec)
-              (format "name: %s\ndescription: Test %s\ncontext: %s\n"
-                      (nth 0 spec) (nth 0 spec) (nth 1 spec))
+              (format "name: %s\ndescription: Test %s\ncontext: %s\n%s"
+                      (nth 0 spec) (nth 0 spec) (nth 1 spec)
+                      (or (nth 3 spec) ""))
               (nth 2 spec)))
            (mevedel-view-test--with-buffers
              (with-current-buffer data-buf
@@ -1538,6 +1540,131 @@ Each spec is (NAME CONTEXT BODY)."
             (should-not (string-match-p "skill:alpha -- attached" sent))
           (should (string-match-p
                    (regexp-quote "[skill:alpha -- attached]") sent))))))
+
+  :doc "one leading command owns the pending request model policy"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA" "model: \"fast\"\n"))
+    (let (context)
+      (should (equal "fast"
+                     (mevedel-skill-model
+                      (mevedel-session-get-skill session "alpha"))))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq context
+                         (copy-tree mevedel-skills--pending-request-context)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$alpha inspect")
+          (mevedel-view-send)))
+      (should (equal '(:tier fast) (plist-get context :model)))
+      (should (plist-member context :effort))
+      (should-not (plist-get context :effort))))
+
+  :doc "qualified preset policy reaches the realized prompt request"
+  (mevedel-skills-test--with-model-backends
+    (let* ((mevedel-skills-include-bundled nil)
+           (mevedel-skills-check-for-modifications nil)
+           (root (make-temp-file "mevedel-view-skill-policy-" t))
+           (project-skills (file-name-concat root ".mevedel/skills"))
+           (user-skills (make-temp-file "mevedel-view-skill-policy-user-" t))
+           (mevedel-skill-dirs (list ".mevedel/skills" user-skills))
+           (mevedel-model-workloads
+            '(($local:alpha :provider "Fast:fast-model" :effort high)))
+           (ws (mevedel-workspace--create
+                :type 'test :id root :root root :name "skill-policy"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           (old-custom (get 'gptel-reasoning-effort 'custom-type))
+           (old-effort (get 'fast-model :reasoning-effort))
+           effective)
+      (unwind-protect
+          (progn
+            (put 'gptel-reasoning-effort 'custom-type '(choice symbol))
+            (put 'fast-model :reasoning-effort '(member low high))
+            (mevedel-view-test--write-skill
+             project-skills "alpha"
+             "name: alpha\ndescription: Local alpha\ncontext: inline\nmodel: \"superseded\"\n"
+             "LOCAL ALPHA")
+            (mevedel-view-test--write-skill
+             user-skills "alpha"
+             "name: alpha\ndescription: Global alpha\ncontext: inline\n"
+             "GLOBAL ALPHA")
+            (mevedel-view-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session
+                            mevedel--workspace ws
+                            gptel-backend (gptel-get-backend "Balanced")
+                            gptel-model 'balanced-model
+                            gptel-reasoning-effort 'low
+                            gptel-prompt-transform-functions
+                            (cons
+                             #'mevedel-skills--transform-apply-model-override
+                             gptel-prompt-transform-functions))
+                (mevedel-skills-install session data-buf))
+              (let ((transform
+                     (symbol-function
+                      'mevedel-skills--transform-apply-model-override)))
+                (cl-letf
+                    (((symbol-function
+                       'mevedel-skills--transform-apply-model-override)
+                      (lambda (fsm)
+                        (funcall transform fsm)
+                        (setq effective
+                              (list (gptel-backend-name gptel-backend)
+                                    gptel-model
+                                    gptel-reasoning-effort))))
+                     ((symbol-function 'gptel-send)
+                      (lambda (&rest _)
+                        (mevedel-view-test--dry-run-request-data))))
+                  (with-current-buffer view-buf
+                    (goto-char (mevedel-view--input-start))
+                    (insert "$local:alpha inspect")
+                    (mevedel-view-send))))
+              (should (equal '("Fast" fast-model high) effective))))
+        (put 'gptel-reasoning-effort 'custom-type old-custom)
+        (put 'fast-model :reasoning-effort old-effort)
+        (delete-directory root t)
+        (delete-directory user-skills t))))
+
+  :doc "command stacks ignore malformed policy and retain the session policy"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA"
+         "model: \"invalid-alpha\"\neffort: impossible\n")
+        ("beta" "inline" "BETA"
+         "model: \"invalid-beta\"\neffort: impossible\n"))
+    (let (context sent)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq context
+                         (copy-tree mevedel-skills--pending-request-context)
+                         sent t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$alpha $beta inspect")
+          (mevedel-view-send)))
+      (should sent)
+      (should-not (plist-member context :model))
+      (should-not (plist-member context :effort))))
+
+  :doc "embedded instructions ignore malformed policy and retain session policy"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA"
+         "model: \"invalid-alpha\"\neffort: impossible\n"))
+    (let (context sent)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (setq context
+                         (copy-tree mevedel-skills--pending-request-context)
+                         sent t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha to inspect")
+          (mevedel-view-send)))
+      (should sent)
+      (should-not (plist-member context :model))
+      (should-not (plist-member context :effort))))
 
   :doc "repeated instruction mentions render twice but prepare once"
   (mevedel-view-test--with-source-skills

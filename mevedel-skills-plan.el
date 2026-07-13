@@ -430,7 +430,12 @@ occurrences have become inert placeholders.  Instruction preparation always
 receives empty arguments.  CANCELLED-P, when non-nil, is a zero-argument
 predicate checked before and after every asynchronous preparation.  Once the
 transaction fails or is cancelled, later callbacks have no effect."
-  (let ((entries (mevedel-skill-invocation-plan-entries plan))
+  (let* ((entries (mevedel-skill-invocation-plan-entries plan))
+         (command-count
+          (cl-count-if
+           (lambda (entry)
+             (eq (mevedel-skill-plan-entry-role entry) 'command))
+           entries))
         (command-arguments
          (if-let* ((arguments
                     (mevedel-skill-invocation-plan-arguments plan)))
@@ -480,7 +485,10 @@ transaction fails or is cancelled, later callbacks have no effect."
                      (t
                       (push (list :entry entry :outcome outcome) prepared)
                       (prepare-next)))))
-                :role role :origin 'user))))))
+                :role role
+                :origin 'user
+                :policy-owner-p (and (eq role 'command)
+                                     (= command-count 1))))))))
       (prepare-next))))
 
 (defun mevedel-skills-plan-render-data (plan)

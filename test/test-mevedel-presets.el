@@ -26,10 +26,6 @@
 (defvar gptel-request--transitions)
 (defvar gptel-test-gptel-setting nil)
 
-;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--apply-overrides-handler
-                  "mevedel-skills-invoke" (fsm))
-
 ;; Test variables
 (defvar mevedel--test-private-setting nil)
 (defvar mevedel-test-setting nil)
@@ -103,8 +99,6 @@
                        (and (functionp handler)
                             (not (symbolp handler))))
                      wait-handlers))
-         (skill-pos (cl-position #'mevedel-skills--apply-overrides-handler
-                                 wait-handlers))
          (message-pos (cl-position #'mevedel-tools--handle-message-inject
                                    wait-handlers))
          (deferred-pos (cl-position #'mevedel-tools--handle-deferred-inject
@@ -112,7 +106,7 @@
     (should-not (memq #'gptel--handle-wait wait-handlers))
     (should gate-pos)
     (should (equal (nth (1+ gate-pos) wait-handlers) 'after-wait))
-    (dolist (pos (list begin-pos skill-pos message-pos deferred-pos))
+    (dolist (pos (list begin-pos message-pos deferred-pos))
       (should pos)
       (should (< pos gate-pos)))))
 
@@ -327,7 +321,8 @@
         (mevedel-model-workloads '((planning :tier balanced))))
     (mevedel-define-preset test-parent-a
       :model-tiers ((fast :provider "Fast:fast-model"))
-      :model-workloads ((implementation :tier fast)))
+      :model-workloads ((implementation :tier fast)
+                        ($plugin:code-review :tier fast)))
     (mevedel-define-preset test-parent-b
       :model-tiers ((strong :provider "Strong:strong-model"))
       :model-workloads ((review :tier strong)))
@@ -343,6 +338,10 @@
                                 (alist-get 'mevedel-model-tiers settings))))
       (should (equal '(:tier strong)
                      (alist-get 'planning
+                                (alist-get 'mevedel-model-workloads
+                                           settings))))
+      (should (equal '(:tier fast)
+                     (alist-get '$plugin:code-review
                                 (alist-get 'mevedel-model-workloads
                                            settings)))))))
 
