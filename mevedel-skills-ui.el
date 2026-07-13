@@ -61,7 +61,8 @@
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-start
-                  "mevedel-goal" (objective &optional display-text))
+                  "mevedel-goal"
+                  (objective &optional display-text approval-policy))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -166,7 +167,8 @@
   "Completion candidates and annotations for `/skills'.")
 
 (defconst mevedel-skills--goal-command-candidates
-  '(("edit" . " edit the objective and pause")
+  '(("auto" . " start with guarded automatic approval")
+    ("edit" . " edit the objective and pause")
     ("pause" . " pause after the active request")
     ("resume" . " resume from the saved phase")
     ("clear" . " clear lifecycle state only"))
@@ -176,7 +178,7 @@
   '(("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
-    ("goal" . " [command] objective | edit | pause | resume | clear")
+    ("goal" . " [command] objective | auto OBJECTIVE | edit | pause | resume | clear")
     ("mode" . " [command] default | accept-edits | trust-all")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
@@ -280,6 +282,11 @@ Routes through the lifecycle-aware permission transition path."
       ("pause" (mevedel-goal-pause))
       ("resume" (mevedel-goal-resume rest))
       ("clear" (mevedel-goal-clear))
+      ("auto"
+       (when (string-blank-p rest)
+         (user-error "Automatic Goal objective must not be blank"))
+       (mevedel-goal-start rest rest 'automatic)
+       'mevedel-view-sent)
       (_
        (mevedel-goal-start args args)
        'mevedel-view-sent))))

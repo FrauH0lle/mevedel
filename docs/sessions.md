@@ -130,6 +130,8 @@ only after that explicit action. A saved `implementing` phase is treated as
 potentially partial: resume advances to read-only review of repository evidence
 instead of blindly replaying mutations. Normal rewind forks copy session preset
 settings but clear Goal ownership, leaving the parent as the sole owner.
+An interrupted automatic guardian is not replayed on restore; resume exposes
+the persisted plan through explicit user approval.
 
 ### Rewind
 

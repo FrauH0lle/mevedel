@@ -40,8 +40,11 @@
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-goal'
+(declare-function mevedel-goal-guardian-pending-p
+                  "mevedel-goal" (&optional session))
 (declare-function mevedel-goal-start
-                  "mevedel-goal" (objective &optional display-text))
+                  "mevedel-goal"
+                  (objective &optional display-text approval-policy))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
@@ -1055,7 +1058,9 @@ text to render in the view."
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (mevedel-session-plan-queue sess)))
+    (or (mevedel-session-plan-queue sess)
+        (and (fboundp 'mevedel-goal-guardian-pending-p)
+             (mevedel-goal-guardian-pending-p sess)))))
 
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
@@ -1502,7 +1507,13 @@ fork."
                          (and (bound-and-true-p mevedel--session)
                               (mevedel-session-get-skill
                                mevedel--session (nth 0 skill-parsed)))))))
-      (if (buffer-local-value 'mevedel--current-request mevedel--data-buffer)
+      (if (or (buffer-local-value 'mevedel--current-request
+                                  mevedel--data-buffer)
+              (with-current-buffer mevedel--data-buffer
+                (and (fboundp 'mevedel-goal-guardian-pending-p)
+                     (mevedel-goal-guardian-pending-p
+                      (and (bound-and-true-p mevedel--session)
+                           mevedel--session)))))
           (if (and slash-parsed
                    (string= (nth 0 slash-parsed) "goal")
                    (member (car (split-string (or (nth 1 slash-parsed) "")
@@ -1559,10 +1570,17 @@ fork."
 (defun mevedel-view--send-local-goal (input args)
   "Run pre-send check and start local `/goal' with ARGS.
 INPUT is the original composer text, including the slash command."
-  (let ((view-buffer (current-buffer))
-        (data-buffer mevedel--data-buffer))
+  (let* ((view-buffer (current-buffer))
+         (data-buffer mevedel--data-buffer)
+         (parts (split-string args "[ \t\n]+" t))
+         (automatic (equal (car parts) "auto"))
+         (objective (if automatic
+                        (string-join (cdr parts) " ")
+                      args)))
+    (when (string-blank-p objective)
+      (user-error "Goal objective must not be blank"))
     (mevedel-view--run-prompt-submit-hook
-     args input
+     objective input
      (lambda (hook-input context _audits)
        (when (and (buffer-live-p view-buffer)
                   (buffer-live-p data-buffer))
@@ -1576,7 +1594,8 @@ INPUT is the original composer text, including the slash command."
             (if context
                 (concat hook-input "\n\n" context)
               hook-input)
-            hook-input)))))))
+            hook-input
+            (if automatic 'automatic 'supervised))))))))
 
 (defun mevedel-view--fork-if-pending ()
   "Materialize the fork if the data buffer is in rewind preview state.

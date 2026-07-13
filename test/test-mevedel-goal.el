@@ -164,6 +164,16 @@
               (should (string-match-p "<proposed_plan>"
                                       (cadr dispatched))))))
       (delete-directory root t)))
+  :doc "creates an automatic Goal only when explicitly requested"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create
+                     :name "main" :permission-mode 'accept-edits))
+           (mevedel--session session)
+           (mevedel-goal-dispatch-function #'ignore)
+           (goal (mevedel-goal-start "Ship" nil 'automatic)))
+      (should (eq 'automatic (mevedel-goal-approval-policy goal)))
+      (should (eq 'accept-edits
+                  (mevedel-session-permission-mode session)))))
   :doc "rejects a blank objective and declined unfinished replacement"
   (let* ((root (make-temp-file "mevedel-goal-replace-" t))
          (session (mevedel-session-create
@@ -495,6 +505,28 @@
           (should (eq 'awaiting-approval (mevedel-goal-phase goal)))
           (should (equal "# Fix\n\nDo it." presented)))
       (delete-directory root t)))
+  :doc "automatic planning persists the plan without opening user approval first"
+  (let* ((root (make-temp-file "mevedel-goal-auto-plan-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :status 'active :phase 'planning :objective "x"
+                :approval-policy 'automatic :cycle 1 :cycles '((:cycle 1))))
+         presented)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (insert "<proposed_plan>\n# Guard me\n</proposed_plan>")
+          (cl-letf (((symbol-function 'mevedel-goal-present-plan)
+                     (lambda (&rest _) (setq presented t)))
+                    ((symbol-function 'mevedel-goal--save-session-state)
+                     #'ignore))
+            (mevedel-goal--post-response (point-min) (point-max)))
+          (should (eq 'awaiting-approval (mevedel-goal-phase goal)))
+          (should-not presented)
+          (should (equal "# Guard me" (mevedel-plan-current-body session))))
+      (delete-directory root t)))
   :doc "reviewing captures evidence but cannot complete before settlement"
   (let* ((root (make-temp-file "mevedel-goal-review-" t))
          (session (mevedel-session-create
@@ -606,10 +638,12 @@
           (setq-local mevedel--session session)
           (cl-letf (((symbol-function 'mevedel-plan-queue--enqueue)
                      (lambda (entry) (setq queued entry))))
-            (mevedel-goal-present-plan "# Plan\n\nDo it." (current-buffer)))
+            (mevedel-goal-present-plan
+             "# Plan\n\nDo it." (current-buffer) "Need scope"))
           (should (file-exists-p
                    (mevedel-plan-current-path session (current-buffer))))
-          (should (equal "# Plan\n\nDo it." (plist-get queued :body))))
+          (should (equal "# Plan\n\nDo it." (plist-get queued :body)))
+          (should (equal "Need scope" (plist-get queued :guardian-reason))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal-restore-pending-approval ()
@@ -620,7 +654,7 @@
                    :name "main"
                    :goal (mevedel-goal--create
                           :status 'active :phase 'awaiting-approval)
-                   :plan-metadata '(:status presented)))
+                   :plan-metadata '(:status presented :guardian-pending t)))
          queued)
     (with-temp-buffer
       (setq-local mevedel--session session)
@@ -630,6 +664,8 @@
                  (lambda (entry) (setq queued entry))))
         (mevedel-goal-restore-pending-approval session (current-buffer)))
       (should (equal "# Pending" (plist-get queued :body)))
+      (should (string-match-p "interrupted"
+                              (plist-get queued :guardian-reason)))
       (should (eq session (plist-get queued :session))))))
 
 (mevedel-deftest mevedel-goal-settle-turn ()
@@ -694,6 +730,20 @@
           (should (eq 'reviewing (car dispatched)))
           (should (string-match-p "Fix it" (cadr dispatched))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
+  :doc "runs the mandatory guardian after automatic planning settles"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :status 'active :phase 'awaiting-approval
+                  :approval-policy 'automatic :cycle 1))
+           (session (mevedel-session--create :name "main" :goal goal))
+           guarded)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-goal--guard-current-plan)
+                 (lambda (selected buffer)
+                   (setq guarded (list selected buffer)))))
+        (mevedel-goal-dispatch-after-turn
+         (test-mevedel-goal--fsm (current-buffer) 'planning)))
+      (should (equal (list goal (current-buffer)) guarded))))
 
 (mevedel-deftest mevedel-goal-supervised-cycle ()
   ,test
@@ -862,6 +912,418 @@
         (mevedel-goal--post-response (point-min) (point-max)))
       (should (eq 'paused (mevedel-goal-status goal)))
       (should-not presented))))
+
+(mevedel-deftest mevedel-goal--guardian-prompt ()
+  ,test
+  (test)
+  :doc "supplies the objective, state, plan, safety criteria, and strict contract"
+  (let ((text (mevedel-goal--guardian-prompt
+               (mevedel-goal--create
+                :objective "Ship safely" :status 'active
+                :phase 'awaiting-approval :cycle 2
+                :approval-policy 'automatic)
+               "# Plan\nRun tests.")))
+    (dolist (needle '("Ship safely" "cycle=2" "# Plan"
+                      "dangerous or irreversible" "verdict: approve|ask"))
+      (should (string-match-p (regexp-quote needle) text)))))
+
+(mevedel-deftest mevedel-goal--parse-guardian ()
+  ,test
+  (test)
+  :doc "accepts the exact approve-or-ask contract"
+  (should (equal '(:verdict approve :reason "Scoped and verified.")
+                 (mevedel-goal--parse-guardian
+                  "<goal_guardian>\nverdict: approve\nreason: Scoped and verified.\n</goal_guardian>")))
+  :doc "rejects malformed, empty-reason, and extra-prose output"
+  (dolist (text '("approve"
+                  "<goal_guardian>\nverdict: approve\nreason: \n</goal_guardian>"
+                  "Maybe\n<goal_guardian>\nverdict: ask\nreason: unclear\n</goal_guardian>"))
+    (should-not (mevedel-goal--parse-guardian text))))
+
+(mevedel-deftest mevedel-goal--normalize-guardian-decision ()
+  ,test
+  (test)
+  :doc "preserves valid decisions and converts every malformed value to ask"
+  (let ((valid '(:verdict approve :reason "Safe" :provider "P:M")))
+    (should (eq valid (mevedel-goal--normalize-guardian-decision valid))))
+  (dolist (value '(nil (:verdict approve) (:verdict maybe :reason "x")
+                       (:verdict ask :reason "")))
+    (let ((decision (mevedel-goal--normalize-guardian-decision value)))
+      (should (eq 'ask (plist-get decision :verdict)))
+      (should (string-match-p "malformed" (plist-get decision :reason))))))
+
+(mevedel-deftest mevedel-goal--guardian-provider-label ()
+  ,test
+  (test)
+  :doc "formats model-only policies without inventing a backend"
+  (should (equal "guardian-model"
+                 (mevedel-goal--guardian-provider-label
+                  '(:backend nil :model guardian-model)))))
+
+(mevedel-deftest mevedel-goal--guardian-request ()
+  ,test
+  (test)
+  :doc "uses the goal-guardian workload with no tools or conversational transforms"
+  (with-temp-buffer
+    (let ((goal (mevedel-goal--create
+                 :objective "Ship" :status 'active :phase 'awaiting-approval
+                 :approval-policy 'automatic :cycle 1))
+          decision resolved recorded)
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (workload &rest _)
+                   (setq resolved workload)
+                   '(:backend nil :model guardian-model :effort high)))
+                ((symbol-function 'mevedel-goal--record-phase-policy)
+                 (lambda (workload _policy) (setq recorded workload)))
+                ((symbol-function 'gptel-request)
+                 (lambda (_prompt &rest args)
+                   (should-not gptel-use-tools)
+                   (should-not gptel-tools)
+                   (should-not gptel-use-context)
+                   (should-not (plist-get args :transforms))
+                   (funcall (plist-get args :callback)
+                            '(reasoning . "Safety analysis") nil)
+                   (should-not decision)
+                   (funcall
+                    (plist-get args :callback)
+                    "<goal_guardian>\nverdict: approve\nreason: Safe.\n</goal_guardian>"
+                    nil))))
+        (mevedel-goal--guardian-request
+         goal "# Plan" (current-buffer)
+         (lambda (value) (setq decision value))))
+      (should (eq 'goal-guardian resolved))
+      (should (eq 'goal-guardian recorded))
+      (should (eq 'approve (plist-get decision :verdict)))
+      (should (equal "guardian-model" (plist-get decision :provider)))
+      (should (eq 'high (plist-get decision :effort)))))
+  :doc "fails closed when request startup errors"
+  (with-temp-buffer
+    (let ((goal (mevedel-goal--create
+                 :objective "Ship" :status 'active :phase 'awaiting-approval
+                 :approval-policy 'automatic :cycle 1))
+          decision)
+      (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) (error "No credits"))))
+        (mevedel-goal--guardian-request
+         goal "# Plan" (current-buffer)
+         (lambda (value) (setq decision value))))
+      (should (eq 'ask (plist-get decision :verdict)))
+      (should (string-match-p "No credits" (plist-get decision :reason)))))
+  :doc "times out to ask when the transport never settles"
+  (with-temp-buffer
+    (let ((goal (mevedel-goal--create
+                 :objective "Ship" :status 'active :phase 'awaiting-approval
+                 :approval-policy 'automatic :cycle 1))
+          timer-callback decision)
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_seconds _repeat callback)
+                   (setq timer-callback callback)
+                   'timer))
+                ((symbol-function 'cancel-timer) #'ignore)
+                ((symbol-function 'timerp) (lambda (_) t))
+                ((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _)
+                   '(:backend nil :model guardian-model :effort nil)))
+                ((symbol-function 'mevedel-goal--record-phase-policy) #'ignore)
+                ((symbol-function 'gptel-request) #'ignore))
+        (mevedel-goal--guardian-request
+         goal "# Plan" (current-buffer)
+         (lambda (value) (setq decision value)))
+        (should-not decision)
+        (funcall timer-callback))
+      (should (eq 'ask (plist-get decision :verdict)))
+      (should (string-match-p "timed out" (plist-get decision :reason))))))
+
+(mevedel-deftest mevedel-goal--append-guardian-audit ()
+  ,test
+  (test)
+  :doc "writes a hidden model-ignored audit and requests a visible rerender"
+  (let ((chat (generate-new-buffer " *goal-guardian-audit*"))
+        (view (generate-new-buffer " *goal-guardian-view*"))
+        rerendered)
+    (unwind-protect
+        (with-current-buffer chat
+          (setq-local mevedel--view-buffer view)
+          (cl-letf (((symbol-function 'mevedel-view-rerender)
+                     (lambda (buffer) (setq rerendered buffer))))
+            (mevedel-goal--append-guardian-audit
+             '(:type goal-guardian :verdict approve :reason "Safe") chat))
+          (should (eq view rerendered))
+          (should (equal 'approve
+                         (plist-get
+                          (car (mevedel-transcript-audit-records
+                                (buffer-string) 'goal-guardian))
+                          :verdict)))
+          (should (eq 'ignore (get-text-property (1- (point-max)) 'gptel))))
+      (kill-buffer chat)
+      (kill-buffer view))))
+
+(mevedel-deftest mevedel-goal--record-guardian-decision ()
+  ,test
+  (test)
+  :doc "persists auditable verdict, reason, policy, timestamp, and plan hash"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :cycle 1 :cycles '((:cycle 1))))
+           (session (mevedel-session--create :name "main" :goal goal))
+           appended)
+      (cl-letf (((symbol-function 'mevedel-goal--persist-cycle-index) #'ignore)
+                ((symbol-function 'mevedel-goal--save-session-state) #'ignore)
+                ((symbol-function 'mevedel-goal--append-guardian-audit)
+                 (lambda (record _buffer) (setq appended record))))
+        (mevedel-goal--record-guardian-decision
+         goal '(:verdict ask :reason "Clarify scope"
+                 :provider "P:M" :effort high)
+         "hash" session (current-buffer)))
+      (let ((record (car (plist-get (mevedel-goal--cycle-record goal)
+                                    :guardian-audits))))
+        (should (equal record appended))
+        (should (eq 'goal-guardian (plist-get record :type)))
+        (should (equal "hash" (plist-get record :plan-hash)))
+        (should (equal "P:M" (plist-get record :provider)))
+        (should (plist-get record :at)))))
+  :doc "writes the hidden audit before the ask path session save"
+  (let* ((root (make-temp-file "goal-guardian-persist-" t))
+         (workspace (test-mevedel-goal--workspace root))
+         (session (mevedel-session-create "main" workspace))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1)))))
+    (unwind-protect
+        (with-temp-buffer
+          (require 'mevedel)
+          (org-mode)
+          (setq-local mevedel--session session
+                      mevedel--workspace workspace)
+          (setf (mevedel-session-goal session) goal)
+          (insert "Planning complete.\n")
+          (mevedel-goal--record-guardian-decision
+           goal '(:verdict ask :reason "Need scope"
+                   :provider "P:M" :effort high)
+           "hash" session (current-buffer))
+          (let ((segment
+                 (mevedel-session-persistence--segment-path
+                  (mevedel-session-save-path session) 1)))
+            (should (file-exists-p segment))
+            (with-temp-buffer
+              (insert-file-contents segment)
+              (let ((record
+                     (car (mevedel-transcript-audit-records
+                           (buffer-string) 'goal-guardian))))
+                (should (eq 'ask (plist-get record :verdict)))
+                (should (equal "Need scope" (plist-get record :reason)))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal-guardian-pending-p ()
+  ,test
+  (test)
+  :doc "reflects only the session's in-flight guardian metadata"
+  (let ((session (mevedel-session--create
+                  :name "main" :plan-metadata '(:guardian-pending t))))
+    (should (mevedel-goal-guardian-pending-p session))
+    (setf (mevedel-session-plan-metadata session) '(:guardian-pending nil))
+    (should-not (mevedel-goal-guardian-pending-p session))))
+
+(mevedel-deftest mevedel-goal--automatic-continuation-ready-p ()
+  ,test
+  (test)
+  :doc "requires an idle session without queued input or interactions"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "main")))
+      (should (mevedel-goal--automatic-continuation-ready-p session))
+      (setf (mevedel-session-queued-user-messages session) '("wait"))
+      (should-not (mevedel-goal--automatic-continuation-ready-p session))
+      (setf (mevedel-session-queued-user-messages session) nil
+            (mevedel-session-permission-queue session) '(permission))
+      (should-not (mevedel-goal--automatic-continuation-ready-p session))
+      (setf (mevedel-session-permission-queue session) nil
+            (mevedel-session-plan-queue session) '(plan))
+      (should-not (mevedel-goal--automatic-continuation-ready-p session))))
+  :doc "blocks while the paired view is processing a submitted intervention"
+  (let ((view (generate-new-buffer " *guardian-prompt-hook*")))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((session (mevedel-session--create :name "main")))
+            (setq-local mevedel--view-buffer view)
+            (with-current-buffer view
+              (setq-local mevedel-view--prompt-hook-pending t))
+            (should-not
+             (mevedel-goal--automatic-continuation-ready-p session))
+            (with-current-buffer view
+              (setq-local mevedel-view--prompt-hook-pending nil))
+            (should (mevedel-goal--automatic-continuation-ready-p session))))
+      (kill-buffer view))))
+
+(mevedel-deftest mevedel-goal--guardian-finished ()
+  ,test
+  (test)
+  :doc "approved plans implement only when every continuation gate is clear"
+  (let* ((root (make-temp-file "goal-guardian-finish-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1))))
+         approved presented scheduled)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-plan-write-current
+           "# Plan" session (current-buffer)
+           (mevedel-goal--current-plan-relative-path goal))
+          (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
+                     #'ignore)
+                    ((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat function &rest args)
+                       (setq scheduled (cons function args))))
+                    ((symbol-function 'mevedel-goal--approval-callback)
+                     (lambda (&rest _) (setq approved t)))
+                    ((symbol-function 'mevedel-goal-present-plan)
+                     (lambda (&rest _) (setq presented t))))
+            (mevedel-goal--guardian-finished
+             "g1" "# Plan" (mevedel-plan-hash "# Plan")
+             (current-buffer) '(:verdict approve :reason "Safe"))
+            (should-not presented)
+            (apply (car scheduled) (cdr scheduled))
+            (should approved)
+            (should-not presented)))
+      (delete-directory root t)))
+  :doc "ask and pending user input escalate through ordinary plan approval"
+  (let* ((root (make-temp-file "goal-guardian-ask-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1))))
+         reasons scheduled)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-plan-write-current
+           "# Plan" session (current-buffer)
+           (mevedel-goal--current-plan-relative-path goal))
+          (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
+                     #'ignore)
+                    ((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat function &rest args)
+                       (setq scheduled (cons function args))))
+                    ((symbol-function 'mevedel-goal--approval-callback)
+                     (lambda (&rest _) (error "Must not implement")))
+                    ((symbol-function 'mevedel-goal-present-plan)
+                     (lambda (_plan _buffer reason) (push reason reasons))))
+            (mevedel-goal--guardian-finished
+             "g1" "# Plan" (mevedel-plan-hash "# Plan")
+             (current-buffer) '(:verdict ask :reason "Need scope"))
+            (setf (mevedel-session-queued-user-messages session) '("wait"))
+            (mevedel-goal--guardian-finished
+             "g1" "# Plan" (mevedel-plan-hash "# Plan")
+             (current-buffer) '(:verdict approve :reason "Safe"))
+            (should (equal '("Need scope") reasons))
+            (apply (car scheduled) (cdr scheduled))
+            (should (equal '("Automatic approval deferred because user input or an interaction is pending."
+                             "Need scope")
+                           reasons))))
+      (delete-directory root t)))
+  :doc "approval cannot overtake an asynchronous prompt hook intervention"
+  (let* ((root (make-temp-file "goal-guardian-hook-race-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1))))
+         (view (generate-new-buffer " *guardian-hook-race*"))
+         scheduled reason)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session
+                      mevedel--view-buffer view)
+          (with-current-buffer view
+            (setq-local mevedel-view--prompt-hook-pending t))
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-plan-write-current
+           "# Plan" session (current-buffer)
+           (mevedel-goal--current-plan-relative-path goal))
+          (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
+                     #'ignore)
+                    ((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat function &rest args)
+                       (setq scheduled (cons function args))))
+                    ((symbol-function 'mevedel-goal--approval-callback)
+                     (lambda (&rest _) (error "Must not implement")))
+                    ((symbol-function 'mevedel-goal-present-plan)
+                     (lambda (_plan _buffer why) (setq reason why))))
+            (mevedel-goal--guardian-finished
+             "g1" "# Plan" (mevedel-plan-hash "# Plan")
+             (current-buffer) '(:verdict approve :reason "Safe"))
+            (should-not reason)
+            (apply (car scheduled) (cdr scheduled))
+            (should (string-match-p "interaction is pending" reason))))
+      (kill-buffer view)
+      (delete-directory root t)))
+  :doc "audit persistence failure prevents automatic implementation"
+  (let* ((root (make-temp-file "goal-guardian-audit-fail-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1))))
+         reason)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-plan-write-current
+           "# Plan" session (current-buffer)
+           (mevedel-goal--current-plan-relative-path goal))
+          (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
+                     (lambda (&rest _) (error "Disk full")))
+                    ((symbol-function 'mevedel-goal--approval-callback)
+                     (lambda (&rest _) (error "Must not implement")))
+                    ((symbol-function 'mevedel-goal-present-plan)
+                     (lambda (_plan _buffer why) (setq reason why))))
+            (mevedel-goal--guardian-finished
+             "g1" "# Plan" (mevedel-plan-hash "# Plan")
+             (current-buffer) '(:verdict approve :reason "Safe")))
+          (should (string-match-p "Disk full" reason)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal--guard-current-plan ()
+  ,test
+  (test)
+  :doc "runs the configured guardian over the persisted current plan"
+  (let* ((root (make-temp-file "goal-guard-current-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1))))
+         finished)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-plan-write-current
+           "# Plan" session (current-buffer)
+           (mevedel-goal--current-plan-relative-path goal))
+          (let ((mevedel-goal-guardian-function
+                 (lambda (_goal plan _buffer callback)
+                   (should (equal "# Plan" plan))
+                   (funcall callback '(:verdict approve :reason "Safe")))))
+            (cl-letf (((symbol-function 'mevedel-goal--guardian-finished)
+                       (lambda (&rest args) (setq finished args))))
+              (mevedel-goal--guard-current-plan goal (current-buffer))))
+          (should (eq 'approve (plist-get (car (last finished)) :verdict)))
+          (should (plist-get (mevedel-session-plan-metadata session)
+                             :guardian-pending)))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-goal)
 ;;; test-mevedel-goal.el ends here

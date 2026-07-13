@@ -1822,6 +1822,20 @@ spanning lines")))
                    (setq started (list objective display)))))
         (should (eq 'mevedel-view-sent (mevedel-cmd--goal "Fix it"))))
       (should (equal '("Fix it" "Fix it") started))))
+  :doc "starts automatic Goals explicitly without changing permission mode"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create
+                    :name "main" :permission-mode 'accept-edits))
+          started)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-goal-start)
+                 (lambda (objective display policy)
+                   (setq started (list objective display policy)))))
+        (should (eq 'mevedel-view-sent
+                    (mevedel-cmd--goal "auto Ship safely"))))
+      (should (equal '("Ship safely" "Ship safely" automatic) started))
+      (should (eq 'accept-edits
+                  (mevedel-session-permission-mode session)))))
   :doc "bare command reports the current Goal"
   (with-temp-buffer
     (let* ((goal (mevedel-goal--create
