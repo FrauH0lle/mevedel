@@ -3116,7 +3116,32 @@ Each binding is (NAME KEYS)."
             'settled
             (mevedel-session-queued-user-messages session) '("stop"))
       (should-not (mevedel-goal-continuation-ready-p
-                   session 'planning 'guardian)))))
+                   session 'planning 'guardian))))
+  :doc "checks the explicit session instead of the current buffer's session"
+  (with-temp-buffer
+    (let* ((plan "# Target plan")
+           (hash (mevedel-plan-hash plan))
+           (goal (mevedel-goal--create
+                  :id "g1" :status 'active :phase 'awaiting-approval
+                  :approval-policy 'automatic :cycle 1
+                  :owner-session "target"
+                  :execution-home '(:session-id "target")
+                  :cycles `((:cycle 1 :guardian-audits
+                                     ((:verdict approve
+                                                :plan-hash ,hash))))
+                  :checkpoint '(:phase guardian :attempt-id "guardian-1"
+                                :dispatch-state settled)))
+           (target (mevedel-session--create
+                    :name "target" :session-id "target" :goal goal))
+           (foreign (mevedel-session--create
+                     :name "foreign" :session-id "foreign")))
+      (setq-local mevedel--session foreign)
+      (cl-letf (((symbol-function 'mevedel-plan-current-body)
+                 (lambda (session)
+                   (if (eq session target) plan "# Foreign plan")))
+                ((symbol-function 'mevedel-goal--persist-checkpoint) #'ignore))
+        (should (mevedel-goal-continuation-ready-p
+                 target 'guardian 'implementing))))))
 
 (mevedel-deftest mevedel-goal--guardian-finished ()
   ,test

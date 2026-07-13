@@ -854,7 +854,7 @@ The request has no tools or conversational transcript insertion."
     goal))
 
 (defun mevedel-goal--apply-automatic-approval-policy (goal chat-buffer)
-  "Apply GOAL's automatic policy at its pending approval boundary."
+  "Apply GOAL's automatic policy at its pending boundary in CHAT-BUFFER."
   (when-let* ((plan (mevedel-plan-current-body mevedel--session)))
     (let ((audit (mevedel-goal--guardian-decision-for-plan goal plan)))
       (pcase (plist-get audit :verdict)
@@ -1886,7 +1886,7 @@ When exhausted, pause durably with progress and blocker context after SOURCE."
        :from-end t))))
 
 (defun mevedel-goal--guardian-approved-p (goal &optional session)
-  "Return non-nil when GOAL's current plan has a matching guardian approval."
+  "Return non-nil when GOAL's current plan in SESSION has guardian approval."
   (when-let* ((session (or session
                            (and (bound-and-true-p mevedel--session)
                                 mevedel--session)))
@@ -1923,7 +1923,7 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                    (plist-get checkpoint :dispatch-state)))
           (and (eq target 'implementing)
                (eq (mevedel-goal-approval-policy goal) 'automatic)
-               (not (mevedel-goal--guardian-approved-p goal))))
+               (not (mevedel-goal--guardian-approved-p goal session))))
       nil)
      ((not (mevedel-goal--budget-available-p goal session source))
       nil)

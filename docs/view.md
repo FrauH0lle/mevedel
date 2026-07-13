@@ -608,10 +608,11 @@ it shows original and updated model-visible result text.
 ## Goal and Preset Cockpits
 
 The session cockpit exposes two session-owned workflow surfaces. The Goal
-surface shows the objective, status and phase, cycle, approval policy, budget,
-execution home and context, current plan, latest review, guardian audit, and
-recovery checkpoint. Its start, pause, resume, edit, budget, and clear actions
-are enabled only at compatible lifecycle states.
+surface shows the objective, status and phase, cycle, approval policy alongside
+the independent tool permission mode, budget, execution home and context,
+current plan, latest review, guardian audit, and recovery checkpoint. Its
+start, pause, resume, edit, budget, approval-toggle, and clear actions are
+enabled only at compatible lifecycle states.
 
 The Preset surface selects a preset buffer-locally in the owning data buffer
 and displays its effective tier map, resolved provider and effort for each
