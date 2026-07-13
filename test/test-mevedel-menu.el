@@ -251,7 +251,8 @@
       (with-current-buffer view-buf
         (let ((text (mevedel-menu--goal-description)))
           (dolist (needle '("Ship the feature" "paused / implementing"
-                            "Approval: automatic" "400/1000"
+                            "Approval: automatic · Tool permissions: default"
+                            "400/1000"
                             "worktree" "focused" "cycle-002-plan.md"
                             "One test remains" "Needs confirmation"
                             "failed — Provider credits exhausted"))
@@ -446,6 +447,51 @@
                (lambda (&rest args) (setq call args))))
       (mevedel-menu--goal-set-budget))
     (should (equal (cdr call) '(500)))))
+
+(mevedel-deftest mevedel-menu--goal-approval-toggle-description ()
+  ,test (test)
+  :doc "shows the current and next approval policies"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create
+           :status 'active :approval-policy 'supervised
+           :owner-session (mevedel-session-session-id session)
+           :execution-home
+           (list :session-id (mevedel-session-session-id session))))
+    (with-current-buffer view-buf
+      (should (equal "Approval: supervised → automatic"
+                     (mevedel-menu--goal-approval-toggle-description))))
+    (setf (mevedel-goal-approval-policy (mevedel-session-goal session))
+          'automatic)
+    (with-current-buffer view-buf
+      (should (equal "Approval: automatic → supervised"
+                     (mevedel-menu--goal-approval-toggle-description))))))
+
+(mevedel-deftest mevedel-menu--goal-toggle-approval-policy ()
+  ,test (test)
+  :doc "routes the inverse policy in data and preserves a multiline draft"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create
+           :status 'active :approval-policy 'supervised
+           :owner-session (mevedel-session-session-id session)
+           :execution-home
+           (list :session-id (mevedel-session-session-id session))))
+    (with-current-buffer view-buf
+      (goto-char (point-max))
+      (insert "> draft\nsecond line"))
+    (let (called-buffer policy)
+      (cl-letf (((symbol-function 'mevedel-goal-set-approval-policy)
+                 (lambda (value)
+                   (setq called-buffer (current-buffer)
+                         policy value))))
+        (with-current-buffer view-buf
+          (mevedel-menu--goal-toggle-approval-policy)))
+      (should (eq data-buf called-buffer))
+      (should (eq 'automatic policy))
+      (with-current-buffer view-buf
+        (should (string-suffix-p "> draft\nsecond line"
+                                 (buffer-string)))))))
 
 (mevedel-deftest mevedel-menu--select-preset ()
   ,test

@@ -576,8 +576,10 @@ permissions; fully unattended mutation still requires selecting `trust-all`.
 
 Bare `/goal` opens the Goal cockpit for status and lifecycle actions, including
 starting a Goal when none exists. Use `/goal pause`, `/goal resume [context]`,
-`/goal edit <objective>`, and `/goal clear` to manage it. Clear preserves the
-transcript, plan artifacts, worktrees, and filesystem changes.
+`/goal approval [supervised|automatic]`, `/goal edit <objective>`, and
+`/goal clear` to manage it. The Goal cockpit's `o` key toggles approval policy.
+Clear preserves the transcript, plan artifacts, worktrees, and filesystem
+changes.
 
 ### Review and Verify Commands
 
