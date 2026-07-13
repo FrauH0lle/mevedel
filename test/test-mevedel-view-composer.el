@@ -25,6 +25,7 @@
 (require 'mevedel-tool-media)
 (require 'mevedel-tool-registry)
 (require 'mevedel-mentions)
+(require 'mevedel-skills-plan)
 (require 'mevedel-skills-ui)
 (require 'mevedel-workspace)
 (require 'mevedel-file-state)
@@ -103,8 +104,6 @@
          (gptel-request
              nil
            :buffer (current-buffer)
-           :transforms
-           '(mevedel-skills--transform-expand-inline-attachments)
            :dry-run t)))
     (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
@@ -844,220 +843,246 @@
       (delete-directory root t))))
 
 (defmacro mevedel-view-test--with-fork-skill (skill-form &rest body)
-  "Wire data-buf with a session containing SKILL-FORM, then run BODY.
-Binds `data-buf', `view-buf', and `session' in scope.  The skill is
-attached via `mevedel-session-skills' so `mevedel-session-get-skill'
-finds it during `$' skill dispatch."
+  "Install a source-backed SKILL-FORM, then run BODY in paired buffers.
+Binds `data-buf', `view-buf', `session', and `skill' in scope."
   (declare (indent 1) (debug t))
-  `(mevedel-view-test--with-buffers
-     (let* ((ws (mevedel-workspace--create
-                 :type 'test :id "vf" :root "/tmp/vf" :name "vf"
-                 :file-cache (mevedel-file-cache--create
-                              :table (make-hash-table :test #'equal)
-                              :order nil :total-bytes 0)))
-            (session (mevedel-session-create "main" ws))
-            (skill ,skill-form))
-       (setf (mevedel-session-skills session) (list skill))
-       (with-current-buffer data-buf
-         (setq-local mevedel--session session))
-       ,@body)))
+  `(let* ((mevedel-skills-include-bundled nil)
+          (root (make-temp-file "mevedel-view-skill-send-" t))
+          (mevedel-skill-dirs (list root))
+          (template ,skill-form)
+          (source
+           (mevedel-view-test--write-skill
+            root
+            (mevedel-skill-name template)
+            (format "name: %s\ndescription: Test skill\ncontext: %s\n"
+                    (mevedel-skill-name template)
+                    (or (mevedel-skill-context template) 'inline))
+            (mevedel-skill-body template)))
+          (ws (mevedel-workspace--create
+               :type 'test :id root :root root :name "view-skill-send"
+               :file-cache (mevedel-file-cache--create
+                            :table (make-hash-table :test #'equal)
+                            :order nil :total-bytes 0)))
+          (session (mevedel-session-create "main" ws)))
+     (unwind-protect
+         (mevedel-view-test--with-buffers
+           (with-current-buffer data-buf
+             (setq-local mevedel--session session
+                         mevedel--workspace ws)
+             (mevedel-skills-install session data-buf))
+           (let ((skill (mevedel-session-get-skill
+                         session (mevedel-skill-name template))))
+             (should (equal source (mevedel-skill-source-file skill)))
+             ,@body))
+       (delete-directory root t))))
 
-(mevedel-deftest mevedel-view-send/skill-fork ()
+(defmacro mevedel-view-test--with-source-skills (specs &rest body)
+  "Install source-backed SPECS and run BODY in paired session buffers.
+Each spec is (NAME CONTEXT BODY)."
+  (declare (indent 1) (debug t))
+  `(let* ((mevedel-skills-include-bundled nil)
+          (root (make-temp-file "mevedel-view-planned-skills-" t))
+          (mevedel-skill-dirs (list root))
+          (ws (mevedel-workspace--create
+               :type 'test :id root :root root :name "planned-skills"
+               :file-cache (mevedel-file-cache--create
+                            :table (make-hash-table :test #'equal)
+                            :order nil :total-bytes 0)))
+          (session (mevedel-session-create "main" ws)))
+     (unwind-protect
+         (progn
+           (dolist (spec ,specs)
+             (mevedel-view-test--write-skill
+              root (nth 0 spec)
+              (format "name: %s\ndescription: Test %s\ncontext: %s\n"
+                      (nth 0 spec) (nth 0 spec) (nth 1 spec))
+              (nth 2 spec)))
+           (mevedel-view-test--with-buffers
+             (with-current-buffer data-buf
+               (setq-local mevedel--session session
+                           mevedel--workspace ws)
+               (mevedel-skills-install session data-buf))
+             ,@body))
+       (delete-directory root t))))
+
+(defun mevedel-view-test--count-matches (regexp text)
+  "Return the number of non-overlapping REGEXP matches in TEXT."
+  (let ((start 0)
+        (count 0))
+    (while (string-match regexp text start)
+      (setq count (1+ count)
+            start (match-end 0)))
+    count))
+
+
+;;
+;;; Planned submission helpers
+
+(mevedel-deftest mevedel-view--queued-user-message-input ()
   ,test
   (test)
-  :doc "fork skill blocks input, captures the callback, and inserts the result"
-  ;; Drive `mevedel-view-send' for a $myfork dispatch with a fork
-  ;; skill installed on the session.  We mock `mevedel-skills-invoke'
-  ;; to capture the callback so we can verify (a) the view-side spinner
-  ;; and turn marker get armed before invocation returns, (b) the input
-  ;; is cleared, (c) the eventual fork result is rendered into the data
-  ;; buffer with `gptel response' text properties (the contract that
-  ;; `--insert-fork-result' relies on for downstream rendering).
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "myfork"
-       :body "ignored"
-       :context 'fork
-       :agent "general-purpose"
-       :user-invocable-p t)
-    (let (captured-args save-called status-called)
-      (cl-letf (((symbol-function 'mevedel-skills-invoke)
-                 (lambda (skill args callback &rest kwargs)
-                   (setq captured-args
-                         (list :skill skill :args args
-                               :callback callback :kwargs kwargs))))
-                ((symbol-function 'mevedel-session-persistence-save)
-                 (lambda (s b)
-                   (setq save-called (list s b))
-                   "saved"))
-                ((symbol-function 'gptel--update-status)
-                 (lambda (&rest args) (setq status-called args))))
+  :doc "returns queued input and defaults a missing value to empty text"
+  (should (equal "queued" (mevedel-view--queued-user-message-input
+                            '(:input "queued"))))
+  (should (equal "" (mevedel-view--queued-user-message-input nil))))
+
+(mevedel-deftest mevedel-view--cancel-pending-skill-submission ()
+  ,test
+  (test)
+  :doc "marks the active preparation token cancelled and clears ownership"
+  (with-temp-buffer
+    (let ((token (list :cancelled nil)))
+      (setq-local mevedel-view--pending-skill-submission token)
+      (mevedel-view--cancel-pending-skill-submission)
+      (should (plist-get token :cancelled))
+      (should-not mevedel-view--pending-skill-submission))))
+
+(mevedel-deftest mevedel-view--skill-submission-active-p ()
+  ,test
+  (test)
+  :doc "requires live buffers, current ownership, and a non-cancelled token"
+  (mevedel-view-test--with-buffers
+    (let ((token (list :cancelled nil)))
+      (with-current-buffer view-buf
+        (setq-local mevedel-view--pending-skill-submission token))
+      (should (mevedel-view--skill-submission-active-p
+               token view-buf data-buf))
+      (setf (plist-get token :cancelled) t)
+      (should-not (mevedel-view--skill-submission-active-p
+                   token view-buf data-buf))
+      (setf (plist-get token :cancelled) nil)
+      (with-current-buffer view-buf
+        (setq mevedel-view--pending-skill-submission (list :cancelled nil)))
+      (should-not (mevedel-view--skill-submission-active-p
+                   token view-buf data-buf)))))
+
+(mevedel-deftest mevedel-view--finish-skill-submission ()
+  ,test
+  (test)
+  :doc "clears only the token that owns the pending submission"
+  (with-temp-buffer
+    (let ((token (list :cancelled nil))
+          (other (list :cancelled nil)))
+      (setq-local mevedel-view--pending-skill-submission token)
+      (mevedel-view--finish-skill-submission other)
+      (should (eq token mevedel-view--pending-skill-submission))
+      (mevedel-view--finish-skill-submission token)
+      (should-not mevedel-view--pending-skill-submission))))
+
+(mevedel-deftest mevedel-view--prepared-fork-outcome ()
+  ,test
+  (test)
+  :doc "returns the first prepared fork outcome and nil when none exists"
+  (let ((fork '(:status ok :kind fork :body "fork")))
+    (should
+     (eq fork
+         (mevedel-view--prepared-fork-outcome
+          (list :prepared-entries
+                (list '(:outcome (:status ok :kind inline))
+                      (list :outcome fork))))))
+    (should-not
+     (mevedel-view--prepared-fork-outcome
+      '(:prepared-entries ((:outcome (:status ok :kind instruction))))))))
+
+(mevedel-deftest mevedel-view--block-planned-submission ()
+  ,test
+  (test)
+  :doc "clears ownership, reports preparation failure, and invokes on-block"
+  (with-temp-buffer
+    (let ((token (list :cancelled nil))
+          blocked
+          notice)
+      (setq-local mevedel-view--pending-skill-submission token)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq notice (apply #'format format-string args)))))
+        (mevedel-view--block-planned-submission
+         (list :token token :on-block (lambda () (setq blocked t)))
+         '(:status error :name "alpha" :message "failed")))
+      (should blocked)
+      (should-not mevedel-view--pending-skill-submission)
+      (should (equal "mevedel: skill $alpha failed: failed" notice)))))
+
+(mevedel-deftest mevedel-view--dispatch-prepared-plan ()
+  ,test
+  (test)
+  :doc "dispatches a source-backed prepared plan while preserving additions"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY"))
+    (let* ((input "Use $alpha")
+           (plan (plist-get
+                  (mevedel-skills-plan-user-input input session) :plan))
+           prepared
+           forwarded
+           before)
+      (with-current-buffer data-buf
+        (mevedel-skills-plan-prepare plan (lambda (value) (setq prepared value))))
+      (let* ((token (list :cancelled nil))
+             (submission
+              (list :token token :input input :plan plan
+                    :view-buffer view-buf :data-buffer data-buf
+                    :before-send (lambda () (setq before t)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myfork run a thing")
-          (mevedel-view-send)
-
-          ;; The view armed the in-flight turn marker and spinner.
-          (should (markerp mevedel-view--in-flight-turn-start))
-          (should (marker-position mevedel-view--in-flight-turn-start))
-          (should (mevedel-view--request-progress-visible-p))
-
-          ;; The user-message display text appeared in the view above
-          ;; the input region.
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "\\$myfork run a thing" text))))
+          (setq-local mevedel-view--pending-skill-submission token)
+          (cl-letf (((symbol-function 'mevedel-view--forward-input)
+                     (lambda (&rest args) (setq forwarded args))))
+            (mevedel-view--dispatch-prepared-plan
+             submission prepared
+             (concat (plist-get prepared :model-input) " $literal")
+             nil nil))
+          (should-not mevedel-view--pending-skill-submission))
+        (should before)
+        (should (string-match-p "ALPHA BODY" (car forwarded)))
+        (should (string-match-p (regexp-quote "$literal")
+                                (car forwarded)))
         (with-current-buffer data-buf
-          (should mevedel--current-request))
+          (should (equal (plist-get prepared :request-context)
+                         mevedel-skills--pending-request-context)))))))
 
-        ;; mevedel-skills-invoke was called with the right shape.
-        (should captured-args)
-        (should (equal "myfork"
-                       (mevedel-skill-name (plist-get captured-args :skill))))
-        (should (equal "run a thing" (plist-get captured-args :args)))
-        (should (eq 'user-skill
-                    (plist-get (plist-get captured-args :kwargs) :trigger)))
-
-        ;; Fire the callback with a fork outcome; expect the data buffer
-        ;; to grow an assistant response carrying `gptel response'.
-        (with-current-buffer data-buf
-          (let ((before (buffer-size)))
-            (funcall (plist-get captured-args :callback)
-                     '(:status ok :kind fork
-                               :result "FORK-RESULT-BODY"
-                               :agent-id "myfork--1"))
-            (should (> (buffer-size) before))
-            (let ((text (buffer-string)))
-              (should (string-match-p "FORK-RESULT-BODY" text)))
-            ;; The inserted region carries `gptel response' so the view
-            ;; renderer treats it as an assistant turn.
-            (goto-char (point-max))
-            (let ((response-pos
-                   (text-property-any (point-min) (point-max)
-                                      'gptel 'response)))
-              (should response-pos)
-              (should (string-match-p
-                       "FORK-RESULT-BODY"
-                       (buffer-substring-no-properties
-                        response-pos (point-max)))))))
-        (with-current-buffer data-buf
-          (should-not mevedel--current-request)
-          (should (= 1 (mevedel-session-turn-count session)))
-          (should (equal (list session data-buf) save-called))
-          (should (equal '(" Ready" success) status-called)))))
-
-  :doc "fork result prompt rewrite audit rerenders on the submitted user turn"
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "myfork"
-       :body "ignored"
-       :context 'fork
-       :agent "general-purpose"
-       :user-invocable-p t)
-    (let (captured-args)
-      (cl-letf (((symbol-function 'mevedel-skills-invoke)
-                 (lambda (_skill _args callback &rest _)
-                   (setq captured-args (list :callback callback))))
-                ((symbol-function 'mevedel-session-persistence-save)
-                 (lambda (&rest _) "saved"))
-                ((symbol-function 'gptel--update-status)
-                 (lambda (&rest _))))
+(mevedel-deftest mevedel-view--handle-prepared-plan ()
+  ,test
+  (test)
+  :doc "runs the prompt gate and dispatches a successful prepared plan"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY"))
+    (let* ((input "Use $alpha")
+           (plan (plist-get
+                  (mevedel-skills-plan-user-input input session) :plan))
+           prepared
+           forwarded)
+      (with-current-buffer data-buf
+        (mevedel-skills-plan-prepare plan (lambda (value) (setq prepared value))))
+      (let* ((token (list :cancelled nil))
+             (submission
+              (list :token token :input input :plan plan
+                    :view-buffer view-buf :data-buffer data-buf)))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myfork run")
-          (mevedel-view-send))
-        (with-current-buffer data-buf
-          (funcall (plist-get captured-args :callback)
-                   '(:status ok :kind fork
-                             :result "agent body"
-                             :agent-id "myfork--audit"
-                             :hook-audits
-                             ((:type prompt-rewrite
-                                     :event "UserPromptExpansion"
-                                     :original "Original body"
-                                     :submitted "Expanded body"
-                                     :reason "expanded"))
-                             :render-data
-                             (:kind agent-transcript
-                                    :agent-id "myfork--audit"
-                                    :agent-type "general-purpose"
-                                    :description "run"
-                                    :status completed
-                                    :body "agent body"))))
-        (with-current-buffer data-buf
-          (let* ((text (buffer-string))
-                 (audit-pos (string-search
-                             "<!-- mevedel-hook-audit -->" text))
-                 (response-pos (and audit-pos
-                                    (string-search gptel-response-separator
-                                                   text (1+ audit-pos))))
-                 (render-data (cdr (mevedel-pipeline-extract-render-data
-                                    text))))
-            (should (string-search "<!-- mevedel-render-data -->" text))
-            (should audit-pos)
-            (should response-pos)
-            (should (< audit-pos response-pos))
-            (goto-char (point-min))
-            (search-forward "<!-- mevedel-hook-audit -->")
-            (should (eq (get-text-property (match-beginning 0) 'gptel)
-                        'ignore))
-            (goto-char (point-min))
-            (search-forward "<!-- mevedel-render-data -->")
-            (should (eq (get-text-property (match-beginning 0) 'gptel)
-                        'ignore))
-            (should-not (plist-get render-data :hook-audits))))
-        (with-current-buffer view-buf
-          (mevedel-view--full-rerender)
-          (let* ((text (buffer-substring-no-properties
-                        (point-min) mevedel-view--input-marker))
-                 (hook-pos (string-search "hook changed prompt" text))
-                 (agent-pos (string-search
-                             "Agent: general-purpose -- run" text)))
-            (should (string-match-p "Agent: general-purpose -- run" text))
-            (should (string-match-p "hook changed prompt" text))
-            (should (< hook-pos agent-pos))
-            (should-not (string-match-p "Original body" text)))
-          (goto-char (point-min))
-          (search-forward "hook changed prompt")
-          (mevedel-view-toggle-section)
-          (let ((text (buffer-substring-no-properties
-                       (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "UserPromptExpansion" text))
-            (should (string-match-p "Original body" text))
-            (should (string-match-p "Expanded body" text)))))))
+          (setq-local mevedel-view--pending-skill-submission token)
+          (cl-letf (((symbol-function 'mevedel-view--forward-input)
+                     (lambda (&rest args) (setq forwarded args))))
+            (mevedel-view--handle-prepared-plan submission prepared)))
+        (should (string-match-p "ALPHA BODY" (car forwarded)))))))
 
-  :doc "fork error stops the spinner and does not insert a response"
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "myfork"
-       :body "ignored"
-       :context 'fork
-       :agent "general-purpose"
-       :user-invocable-p t)
-    (let (captured-args)
-      (cl-letf (((symbol-function 'mevedel-skills-invoke)
-                 (lambda (_skill _args callback &rest _)
-                   (setq captured-args (list :callback callback))))
-                ((symbol-function 'message)
-                 (lambda (&rest _))))
+(mevedel-deftest mevedel-view--submit-planned-input ()
+  ,test
+  (test)
+  :doc "plans and submits source-backed instructions through the view seam"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY"))
+    (let (sent before blocked)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
         (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myfork run")
-          (mevedel-view-send))
-        (with-current-buffer data-buf
-          (should mevedel--current-request))
-        ;; Drive the error branch.
-        (with-current-buffer data-buf
-          (let ((before (buffer-string)))
-            (funcall (plist-get captured-args :callback)
-                     '(:status error :reason boom :message "boom"))
-            ;; No response inserted.
-            (should (equal before (buffer-string)))
-            (should-not mevedel--current-request)))
-        ;; Request progress was removed by `--stop-spinner'.
-        (with-current-buffer view-buf
-          (should-not (mevedel-view--request-progress-visible-p)))))))
-)
+          (mevedel-view--submit-planned-input
+           "Use $alpha"
+           (lambda () (setq before t))
+           (lambda () (setq blocked t)))))
+      (setq sent (mevedel-pipeline--strip-render-data-blocks sent))
+      (should before)
+      (should-not blocked)
+      (should (string-match-p "ALPHA BODY" sent))
+      (should (string-match-p
+               (regexp-quote "[skill:alpha -- attached]") sent)))))
 
 (mevedel-deftest mevedel-view-send/skill-inline ()
   ,test
@@ -1073,17 +1098,8 @@ finds it during `$' skill dispatch."
     (let (request-data)
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _)
-                   (let ((fsm
-                          (gptel-request
-                              nil
-                            :buffer (current-buffer)
-                            :transforms
-                            '(mevedel-skills--transform-expand-inline-attachments)
-                            :dry-run t)))
-                     (setq request-data
-                           (format "%S"
-                                   (plist-get (gptel-fsm-info fsm)
-                                              :data)))))))
+                   (setq request-data
+                         (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "Run $thermo-review on the repository")
@@ -1130,9 +1146,9 @@ finds it during `$' skill dispatch."
             (should (eq 'ignore
                         (get-text-property (match-beginning 0)
                                            'gptel)))
-            (should (equal
-                     (mevedel-pipeline--strip-render-data-blocks text)
-                     "\n\n*** Expanded hello\n"))))
+            (should (string-match-p
+                     "Expanded hello"
+                     (mevedel-pipeline--strip-render-data-blocks text)))))
 	        (with-current-buffer view-buf
 	          (mevedel-view--full-rerender)
 	          (let ((text (buffer-substring-no-properties
@@ -1266,7 +1282,7 @@ finds it during `$' skill dispatch."
               (delete-file source-file)
               (with-current-buffer data-buf
                 (setq-local mevedel--current-request nil))
-              (mevedel-view--drain-queued-user-message-batch data-buf)
+              (mevedel-view--drain-queued-user-message data-buf)
               (should-not request-data)
               (let* ((queue (mevedel-session-queued-user-messages session))
                      (input (plist-get (car queue) :input))
@@ -1281,7 +1297,7 @@ finds it during `$' skill dispatch."
                project-skills "alpha"
                "name: alpha\ndescription: Project alpha\ncontext: inline\n"
                "ORIGINAL ALPHA V2")
-              (mevedel-view--drain-queued-user-message-batch data-buf))
+              (mevedel-view--drain-queued-user-message data-buf))
             (should (string-search "ORIGINAL ALPHA V2" request-data))
             (should-not (string-search "ORIGINAL ALPHA V1" request-data))
             (should-not (string-search "COMPETING ALPHA" request-data))
@@ -1382,72 +1398,6 @@ finds it during `$' skill dispatch."
             (should (string-search "BETA BODY" request-data))
             (should-not (string-search "ALPHA BODY" request-data))))
       (delete-directory root t)))
-
-  :doc "manual punctuation binding survives failed preparation and retry collision"
-  (let* ((mevedel-skills-include-bundled nil)
-         (mevedel-skills-check-for-modifications nil)
-         (root (make-temp-file "mevedel-inline-bound-retry-" t))
-         (project-skills (file-name-concat root ".mevedel/skills"))
-         (user-skills (make-temp-file "mevedel-inline-bound-retry-user-" t))
-         (mevedel-skill-dirs '(".mevedel/skills"))
-         (ws (mevedel-workspace--create
-              :type 'test :id root :root root :name "inline-bound-retry"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         source-file
-         request-data)
-    (unwind-protect
-        (progn
-          (setq source-file
-                (mevedel-view-test--write-skill
-                 project-skills "alpha"
-                 "name: alpha\ndescription: Project alpha\ncontext: inline\n"
-                 "PROJECT ALPHA BODY"))
-          (mevedel-view-test--with-buffers
-            (with-current-buffer data-buf
-              (setq-local mevedel--session session
-                          mevedel--workspace ws)
-              (mevedel-skills-install session data-buf))
-            (cl-letf (((symbol-function 'mevedel-skills-invoke)
-                       (lambda (_skill _args callback &rest _)
-                         (funcall callback
-                                  '(:status error
-                                    :reason blocked
-                                    :message "blocked")))))
-              (with-current-buffer view-buf
-                (goto-char (mevedel-view--input-start))
-                (insert "Please use $alpha.")
-                (mevedel-view-send)
-                (let* ((input (mevedel-view--input-text))
-                       (start (string-match "\\$alpha" input))
-                       (binding (get-text-property
-                                 start 'mevedel-mention-binding input)))
-                  (should (equal "Please use $alpha." input))
-                  (should (equal source-file
-                                 (plist-get binding :source-file)))
-                  (should-not (get-text-property
-                               (+ start 6) 'mevedel-mention-binding input)))))
-            (mevedel-view-test--write-skill
-             user-skills "alpha"
-             "name: alpha\ndescription: User alpha\ncontext: inline\n"
-             "COMPETING ALPHA BODY")
-            (setq mevedel-skill-dirs
-                  (list ".mevedel/skills" user-skills))
-            (with-current-buffer data-buf
-              (mevedel-skills-install session data-buf))
-            (cl-letf (((symbol-function 'gptel-send)
-                       (lambda (&rest _)
-                         (setq request-data
-                               (mevedel-view-test--dry-run-request-data)))))
-              (with-current-buffer view-buf
-                (mevedel-view-send)))
-            (should (string-search "PROJECT ALPHA BODY" request-data))
-            (should-not (string-search "COMPETING ALPHA BODY"
-                                       request-data))))
-      (delete-directory root t)
-      (delete-directory user-skills t)))
 
   :doc "persisted history recall submits the latest exact source after a collision"
   (let* ((mevedel-skills-include-bundled nil)
@@ -1564,57 +1514,266 @@ finds it during `$' skill dispatch."
   (mevedel-view-test--bound-source-failure-case 'malformed)
 
   :doc "non-invocable exact source keeps the multiline draft and sends nothing"
-  (mevedel-view-test--bound-source-failure-case 'not-user-invocable)
+  (mevedel-view-test--bound-source-failure-case 'not-user-invocable))
 
-  :doc "inline attachment failure rolls back echoed prompt"
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "myskill"
-       :body "Expanded"
-       :context 'inline
-       :user-invocable-p t)
-    (let ((path (make-temp-file "mevedel-inline-rollback-"))
-          send-called
-          message-text)
-      (unwind-protect
-          (cl-letf (((symbol-function 'gptel-send)
-                     (lambda (&rest args)
-                       (apply #'mevedel-skills--gptel-send-advice
-                              (lambda (&rest _)
-                                (setq send-called t))
-                              args)))
-                    ((symbol-function 'mevedel-skills-invoke)
-                     (lambda (_skill _args callback &rest _)
-                       (funcall callback
-                                '(:status error
-                                  :reason blocked
-                                  :message "blocked"))))
-                    ((symbol-function 'message)
-                     (lambda (fmt &rest args)
-                       (setq message-text (apply #'format fmt args)))))
-            (mevedel-session-add-dropped-file-grant session path)
-            (with-current-buffer view-buf
-              (goto-char (mevedel-view--input-start))
-              (insert (format "Please use $myskill @file:%s" path))
-              (mevedel-view-send)
-              (should-not send-called)
-              (should (equal (format "Please use $myskill @file:%s" path)
-                             (mevedel-view--input-text)))
-              (should-not (mevedel-view-history--entries))
-              (should-not (mevedel-view--request-progress-visible-p))
-              (let ((history (buffer-substring-no-properties
-                              (point-min) mevedel-view--input-marker)))
-                (should-not (string-match-p "Please use \\$myskill"
-                                            history))))
-            (with-current-buffer data-buf
-              (should-not (string-match-p "Please use \\$myskill"
-                                          (buffer-string))))
-            (should (equal (list (expand-file-name path))
-                           (mevedel-session-dropped-file-grants session)))
-            (should-not (mevedel-session-active-dropped-file-grants session))
-            (should (string-match-p "Inline skill failed: blocked"
-                                    message-text)))
-        (delete-file path)))))
+(mevedel-deftest mevedel-view-send/planned-skills ()
+  ,test
+  (test)
+
+  :doc "embedded mentions are instructions while a leading mention is a command"
+  (dolist (case '(("Analyze with $alpha" . "ALPHA ARGS=<>")
+                  ("$alpha analyze now" . "ALPHA ARGS=<analyze now>")))
+    (mevedel-view-test--with-source-skills
+        '(("alpha" "inline" "ALPHA ARGS=<$ARGUMENTS>"))
+      (let (sent)
+        (cl-letf (((symbol-function 'gptel-send)
+                   (lambda (&rest _) (setq sent (buffer-string)))))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert (car case))
+            (mevedel-view-send)))
+        (setq sent (mevedel-pipeline--strip-render-data-blocks sent))
+        (should (string-match-p (regexp-quote (cdr case)) sent))
+        (if (string-prefix-p "$" (car case))
+            (should-not (string-match-p "skill:alpha -- attached" sent))
+          (should (string-match-p
+                   (regexp-quote "[skill:alpha -- attached]") sent))))))
+
+  :doc "repeated instruction mentions render twice but prepare once"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "UNIQUE ALPHA BODY"))
+    (let (sent)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha, then $alpha again")
+          (mevedel-view-send)))
+      (setq sent (mevedel-pipeline--strip-render-data-blocks sent))
+      (should (= 1 (mevedel-view-test--count-matches
+                    "UNIQUE ALPHA BODY" sent)))
+      (should (= 2 (mevedel-view-test--count-matches
+                    (regexp-quote "[skill:alpha -- attached]") sent)))))
+
+  :doc "command stacks share arguments and -- starts instruction parsing"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA<$ARGUMENTS>")
+        ("beta" "inline" "BETA<$ARGUMENTS>")
+        ("delta" "inline" "DELTA<$ARGUMENTS>"))
+    (let (sent)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$alpha $alpha $beta -- $delta details")
+          (mevedel-view-send)))
+      (setq sent (mevedel-pipeline--strip-render-data-blocks sent))
+      (should (= 1 (mevedel-view-test--count-matches "ALPHA<" sent)))
+      (should (= 1 (mevedel-view-test--count-matches "BETA<" sent)))
+      (should (= 1 (mevedel-view-test--count-matches "DELTA<>" sent)))
+      (should (= 2 (mevedel-view-test--count-matches
+                    (regexp-quote
+                     "<[skill:delta -- attached] details>") sent)))))
+
+  :doc "only six distinct leading skills become commands"
+  (mevedel-view-test--with-source-skills
+      '(("a" "inline" "A<$ARGUMENTS>")
+        ("b" "inline" "B<$ARGUMENTS>")
+        ("c" "inline" "C<$ARGUMENTS>")
+        ("d" "inline" "D<$ARGUMENTS>")
+        ("e" "inline" "E<$ARGUMENTS>")
+        ("f" "inline" "F<$ARGUMENTS>")
+        ("g" "inline" "G<$ARGUMENTS>"))
+    (let (sent)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$a $b $c $d $e $f $g rest")
+          (mevedel-view-send)))
+      (setq sent (mevedel-pipeline--strip-render-data-blocks sent))
+      (dolist (body '("A<" "B<" "C<" "D<" "E<" "F<"))
+        (should (string-match-p body sent)))
+      (should (string-match-p "G<>" sent))
+      (should (= 6 (mevedel-view-test--count-matches
+                    (regexp-quote "<[skill:g -- attached] rest>") sent)))))
+
+  :doc "leading forks dispatch once while later forks remain instructions"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA<$ARGUMENTS>")
+        ("forker" "fork" "FORK<$ARGUMENTS>"))
+    (let (fork-prompt sent)
+      (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
+                 (lambda (_prepared _callback &rest keys)
+                   (setq fork-prompt (plist-get keys :prompt))))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "$forker inspect with $alpha")
+          (mevedel-view-send))
+        (should (string-match-p "FORK<inspect with" fork-prompt))
+        (should (string-match-p
+                 (regexp-quote "[skill:alpha -- attached]") fork-prompt))
+        (should-not sent)))
+    (with-current-buffer data-buf
+      (setq-local mevedel--current-request nil))
+    (with-current-buffer view-buf
+      (mevedel-view--stop-request-progress)
+      (mevedel-view--clear-input))
+    (let (fork-called sent)
+      (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
+                 (lambda (&rest _) (setq fork-called t)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (mevedel-view--clear-input)
+          (goto-char (mevedel-view--input-start))
+          (insert "$alpha $forker inspect")
+          (mevedel-view-send))
+        (should-not fork-called)
+        (should (string-match-p "FORK<>" sent)))))
+
+  :doc "preparation failure prevents every dispatch and preserves the draft"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA")
+        ("beta" "inline" "BETA"))
+    (let (calls sent)
+      (cl-letf (((symbol-function 'mevedel-skills-prepare)
+                 (lambda (skill _arguments callback &rest _)
+                   (push (mevedel-skill-name skill) calls)
+                   (funcall callback
+                            (if (equal "beta" (mevedel-skill-name skill))
+                                '(:status error :reason blocked
+                                  :message "blocked")
+                              '(:status ok :kind instruction :body "ALPHA"
+                                :request-context (:invoked-skills nil))))))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha and $beta")
+          (mevedel-view-send)
+          (should (equal "Use $alpha and $beta"
+                         (mevedel-view--input-text)))
+          (should-not (mevedel-view-history--entries))))
+      (should (equal '("beta" "alpha") calls))
+      (should-not sent)))
+
+  :doc "submit hooks see the complete inert prompt and added skill text stays literal"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY")
+        ("beta" "inline" "BETA BODY"))
+    (let (seen sent)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (event event-plist callback &rest _)
+                   (if (eq event 'UserPromptSubmit)
+                       (progn
+                         (setq seen (plist-get event-plist :prompt))
+                         (funcall callback
+                                  (list :updated-input
+                                        (concat seen " $beta"))))
+                     (funcall callback nil))))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (_event _session _workspace &rest extra) extra))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha")
+          (mevedel-view-send)))
+      (should (string-match-p "ALPHA BODY" seen))
+      (should (string-match-p
+               (regexp-quote "[skill:alpha -- attached]") seen))
+      (should (string-match-p (regexp-quote "$beta") sent))
+      (should-not (string-match-p "BETA BODY" sent))))
+
+  :doc "submit hook rewrites cannot remove prepared instructions or placeholders"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY"))
+    (let (sent)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (event _event-plist callback &rest _)
+                   (funcall callback
+                            (and (eq event 'UserPromptSubmit)
+                                 '(:updated-input "rewritten prompt")))))
+                ((symbol-function 'mevedel-hooks-event-plist)
+                 (lambda (_event _session _workspace &rest extra) extra))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent (buffer-string)))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha")
+          (mevedel-view-send)))
+      (setq sent (mevedel-pipeline--strip-render-data-blocks sent))
+      (should (string-match-p "ALPHA BODY" sent))
+      (should (string-match-p
+               (regexp-quote "[skill:alpha -- attached]") sent))
+      (should-not (string-match-p "rewritten prompt" sent))))
+
+  :doc "aborting asynchronous preparation makes its late callback inert"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA"))
+    (let (late-callback sent)
+      (cl-letf (((symbol-function 'mevedel-skills-plan-prepare)
+                 (lambda (_plan callback &optional _cancelled-p)
+                   (setq late-callback callback)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha")
+          (mevedel-view-send)
+          (should mevedel-view--pending-skill-submission)
+          (mevedel-view-abort)
+          (funcall late-callback
+                   '(:status ok :model-input "late"
+                     :request-context nil :prepared-entries nil))
+          (should-not mevedel-view--pending-skill-submission)
+          (should (equal "Use $alpha" (mevedel-view--input-text)))))
+      (should-not sent)))
+
+  :doc "buffer death settles asynchronous preparation once without dispatch"
+  (dolist (killed-buffer '(view data))
+    (mevedel-view-test--with-source-skills
+        '(("alpha" "inline" "ALPHA"))
+      (let ((handle-prepared
+             (symbol-function 'mevedel-view--handle-prepared-plan))
+            late-callback
+            token
+            (settlements 0)
+            (hooks 0)
+            (dispatches 0))
+        (cl-letf (((symbol-function 'mevedel-skills-prepare)
+                   (lambda (_skill _arguments callback &rest _)
+                     (setq late-callback callback)))
+                  ((symbol-function 'mevedel-view--handle-prepared-plan)
+                   (lambda (submission prepared)
+                     (cl-incf settlements)
+                     (funcall handle-prepared submission prepared)))
+                  ((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (&rest _) (cl-incf hooks)))
+                  ((symbol-function 'mevedel-skills-dispatch-prepared-fork)
+                   (lambda (&rest _) (cl-incf dispatches)))
+                  ((symbol-function 'gptel-send)
+                   (lambda (&rest _) (cl-incf dispatches))))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "Use $alpha")
+            (mevedel-view-send)
+            (setq token mevedel-view--pending-skill-submission))
+          (should token)
+          (kill-buffer (if (eq killed-buffer 'view) view-buf data-buf))
+          (should (plist-get token :cancelled))
+          (funcall late-callback
+                   '(:status ok :body "late"
+                     :request-context (:invoked-skills nil)))
+          (funcall late-callback
+                   '(:status ok :body "later"
+                     :request-context (:invoked-skills nil)))
+          (should (= 1 settlements))
+          (should (= 0 hooks))
+          (should (= 0 dispatches)))))))
 
 (mevedel-deftest mevedel-view--forward-input-now ()
   ,test
@@ -1767,48 +1926,6 @@ finds it during `$' skill dispatch."
                       (car (mevedel-session-queued-user-messages session))
                       :input)))))
 
-  :doc "queued inline skill waits for request-time transforms"
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "alpha"
-       :body "Alpha body"
-       :context 'inline
-       :user-invocable-p t)
-    (let* ((data (list :messages
-                       (vector (list :role "user"
-                                     :content "active turn"))))
-           position
-           fsm)
-      (with-current-buffer data-buf
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :session session))
-        (setq position (copy-marker (point-max) nil)))
-      (cl-letf (((symbol-function
-                  'mevedel-view--schedule-late-queued-user-message-drain)
-                 (lambda () nil)))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "please use $alpha")
-          (mevedel-view-send)))
-      (let ((entry (car (mevedel-session-queued-user-messages session))))
-        (should entry)
-        (should-not (plist-get entry :requires-request-transform))
-        (should (mevedel-view--queued-user-message-requires-transform-p
-                 entry session)))
-      (setq fsm
-            (gptel-make-fsm
-             :info (list :buffer data-buf
-                         :backend nil
-                         :data data
-                         :position position)))
-      (mevedel-view--handle-queued-user-message-inject fsm)
-      (should (= 1 (length (mevedel-session-queued-user-messages session))))
-      (should (= 1 (length (plist-get data :messages))))
-      (with-current-buffer data-buf
-        (should-not (string-match-p "queued-user-message"
-                                    (buffer-string))))))
-
   :doc "queued message stays visible across incremental in-flight rendering"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -1912,274 +2029,73 @@ finds it during `$' skill dispatch."
         (should (string-match-p "C-c C-e edit batch; C-c C-q clear"
                                 (buffer-string))))))
 
-  :doc "queue-time UserPromptSubmit stores prepared model input"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hook" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           seen-prompt)
+  :doc "queued skill hooks run once at dispatch and not while queueing"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA"))
+    (let ((hooks 0)
+          (sends 0))
       (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
         (setq-local mevedel--current-request
                     (mevedel-request--create :session session)))
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event event-plist callback &rest _)
-                   (setq seen-prompt (plist-get event-plist :prompt))
-                   (funcall callback '(:updated-input "rewritten"))))
-                ((symbol-function 'mevedel-hooks-event-plist)
-                 (lambda (_event _session _workspace &rest extra) extra))
-                ((symbol-function 'mevedel-hooks-additional-context-string)
-                 (lambda (&rest _)
-                   "<hook-context>\n<hook-event name=\"UserPromptSubmit\">\nctx\n</hook-event>\n</hook-context>")))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "draft")
-          (mevedel-view-send)
-          (should (string-empty-p (mevedel-view--input-text)))))
-      (should (equal "draft" seen-prompt))
-      (let ((entry (car (mevedel-session-queued-user-messages session))))
-        (should (equal "draft" (plist-get entry :input)))
-        (should (equal "draft" (plist-get entry :history-input)))
-        (should (equal "rewritten" (plist-get entry :display-text)))
-        (should (equal "rewritten\n\n<hook-context>\n<hook-event name=\"UserPromptSubmit\">\nctx\n</hook-event>\n</hook-context>"
-                       (plist-get entry :model-input))))))
-
-  :doc "queue-time UserPromptSubmit rewrite audit survives drain and rerender"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hook-audit" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           sent)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _event-plist callback &rest _)
-                   (funcall callback '(:updated-input "rewritten"
-                                       :system-message "queued rewrite"))))
-                ((symbol-function 'mevedel-hooks-event-plist)
-                 (lambda (_event _session _workspace &rest extra) extra))
-                ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent t))))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "draft")
-          (mevedel-view-send))
-        (should (= 1 (length (mevedel-session-queued-user-messages session))))
-        (should (plist-get (car (mevedel-session-queued-user-messages session))
-                           :hook-audits))
-        (with-current-buffer data-buf
-          (setq-local mevedel--current-request nil))
-        (mevedel-view--drain-queued-user-message-batch data-buf)
-        (should sent))
-      (with-current-buffer data-buf
-        (let ((text (buffer-string)))
-          (should (string-match-p "<!-- mevedel-hook-audit -->" text))
-          (goto-char (point-min))
-          (search-forward "<!-- mevedel-hook-audit -->")
-          (should (eq 'ignore
-                      (get-text-property (match-beginning 0)
-                                         'gptel)))))
-      (with-current-buffer view-buf
-        (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "Queued message" text))
-          (should (string-match-p "hook changed prompt" text))
-          (should-not (string-match-p "queued rewrite" text)))
-        (goto-char (point-min))
-        (search-forward "hook changed prompt")
-        (mevedel-view-toggle-section)
-        (let ((expanded (buffer-substring-no-properties
-                         (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "queued rewrite" expanded))
-          (should (string-match-p "draft" expanded))
-          (should (string-match-p "rewritten" expanded))))))
-
-  :doc "queue-time UserPromptSubmit block leaves composer and queue untouched"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hook-block" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _event-plist callback &rest _)
-                   (funcall callback '(:continue nil
-                                       :stop-reason "blocked"))))
-                ((symbol-function 'mevedel-hooks-event-plist)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'mevedel-hooks-additional-context-string)
-                 (lambda (&rest _) nil)))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "draft")
-          (mevedel-view-send)
-          (should (string= "draft" (mevedel-view--input-text)))))
-      (should-not (mevedel-session-queued-user-messages session))
-      (should-not (mevedel-view-history--entries))))
-
-  :doc "queue-time async hook does not clear a changed composer"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hook-async" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           hook-callback)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _event-plist callback &rest _)
-                   (setq hook-callback callback)))
-                ((symbol-function 'mevedel-hooks-event-plist)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'mevedel-hooks-additional-context-string)
-                 (lambda (&rest _) nil)))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "draft")
-          (mevedel-view-send)
-          (should mevedel-view--prompt-hook-pending)
-          (goto-char (point-max))
-          (insert " changed")
-          (funcall hook-callback nil)
-          (should-not mevedel-view--prompt-hook-pending)
-          (should (string= "draft changed"
-                           (mevedel-view--input-text)))))
-      (should (= 1 (length (mevedel-session-queued-user-messages
-                            session))))))
-
-  :doc "queue-time async hook preserves same text rebound to another source"
-  (let ((first-source (make-temp-file "mevedel-bound-first-"))
-        (second-source (make-temp-file "mevedel-bound-second-")))
-    (unwind-protect
-        (mevedel-view-test--with-buffers
-          (let* ((ws (mevedel-workspace--create
-                      :type 'test :id "vq-hook-binding"
-                      :root "/tmp/vq" :name "vq"
-                      :file-cache (mevedel-file-cache--create
-                                   :table (make-hash-table :test #'equal)
-                                   :order nil :total-bytes 0)))
-                 (session (mevedel-session-create "main" ws))
-                 (input (copy-sequence "draft $alpha"))
-                 (token-offset (string-match "\\$alpha" input))
-                 hook-callback)
-            (mevedel-mentions-set-binding
-             token-offset (+ token-offset 6)
-             (list :kind 'skill :name "alpha" :source-file first-source)
-             input)
-            (with-current-buffer data-buf
-              (setq-local mevedel--session session
-                          mevedel--workspace ws
-                          mevedel--current-request
-                          (mevedel-request--create :session session)))
-            (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                       (lambda (_event _event-plist callback &rest _)
-                         (setq hook-callback callback)))
-                      ((symbol-function 'mevedel-hooks-event-plist)
-                       (lambda (&rest _) nil))
-                      ((symbol-function
-                        'mevedel-hooks-additional-context-string)
-                       (lambda (&rest _) nil)))
-              (with-current-buffer view-buf
-                (goto-char (mevedel-view--input-start))
-                (insert input)
-                (mevedel-view--queue-user-message input)
-                (let ((start (+ (mevedel-view--input-start) token-offset)))
-                  (with-silent-modifications
-                    (remove-text-properties
-                     start (+ start 6)
-                     '(mevedel-mention-binding nil rear-nonsticky nil))
-                    (mevedel-mentions-set-binding
-                     start (+ start 6)
-                     (list :kind 'skill :name "alpha"
-                           :source-file second-source))))
-                (funcall hook-callback nil)
-                (let* ((draft (mevedel-view--input-text))
-                       (start (string-match "\\$alpha" draft)))
-                  (should (equal second-source
-                                 (plist-get
-                                  (get-text-property
-                                   start 'mevedel-mention-binding draft)
-                                  :source-file)))))
-              (let* ((entry (car (mevedel-session-queued-user-messages
-                                  session)))
-                     (queued (plist-get entry :input))
-                     (start (string-match "\\$alpha" queued)))
-                (should (equal first-source
-                               (plist-get
-                                (get-text-property
-                                 start 'mevedel-mention-binding queued)
-                                :source-file)))))))
-      (delete-file first-source)
-      (delete-file second-source)))
-
-  :doc "queue-time async hook schedules fallback if request already ended"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-hook-late" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           hook-callback
-           drain-buffer
-           send-called)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request
-                    (mevedel-request--create :session session)))
-      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-                 (lambda (_event _event-plist callback &rest _)
-                   (setq hook-callback callback)))
-                ((symbol-function 'mevedel-hooks-event-plist)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'mevedel-hooks-additional-context-string)
-                 (lambda (&rest _) nil))
+                 (lambda (event _event-plist callback &rest _)
+                   (when (eq event 'UserPromptSubmit)
+                     (cl-incf hooks))
+                   (funcall callback nil)))
                 ((symbol-function
                   'mevedel-view--schedule-late-queued-user-message-drain)
-                 (lambda ()
-                   (setq drain-buffer mevedel--data-buffer)
-                   (mevedel-view--run-queued-user-message-drain
-                    drain-buffer)))
+                 #'ignore)
                 ((symbol-function 'gptel-send)
-                 (lambda (&rest _)
-                   (setq send-called t))))
+                 (lambda (&rest _) (cl-incf sends))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (insert "draft")
+          (insert "Queue $alpha exactly")
           (mevedel-view-send))
+        (should (= 0 hooks))
+        (should (= 0 sends))
+        (let* ((input (plist-get
+                       (car (mevedel-session-queued-user-messages session))
+                       :input))
+               (start (string-match "\\$alpha" input)))
+          (should (plist-get
+                   (get-text-property start 'mevedel-mention-binding input)
+                   :source-file)))
         (with-current-buffer data-buf
           (setq-local mevedel--current-request nil))
-        (with-current-buffer view-buf
-          (funcall hook-callback nil)))
-      (should (eq drain-buffer data-buf))
-      (should send-called)
-      (should-not (mevedel-session-queued-user-messages session))
+        (mevedel-view--drain-queued-user-message data-buf)
+        (should (= 1 hooks))
+        (should (= 1 sends))
+        (should-not (mevedel-session-queued-user-messages session)))))
+
+  :doc "failed queued preparation retains the exact FIFO entry"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA"))
+    (let (sent original)
       (with-current-buffer data-buf
-        (should (string-match-p "<queued-user-message-batch count=\"1\">"
-                                (buffer-string))))))
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function
+                  'mevedel-view--schedule-late-queued-user-message-drain)
+                 #'ignore))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Queue $alpha exactly")
+          (mevedel-view-send)))
+      (setq original (car (mevedel-session-queued-user-messages session)))
+      (delete-file
+       (plist-get
+        (get-text-property
+         (string-match "\\$alpha" (plist-get original :input))
+         'mevedel-mention-binding (plist-get original :input))
+        :source-file))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request nil))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t))))
+        (mevedel-view--drain-queued-user-message data-buf))
+      (should-not sent)
+      (should (eq original
+                  (car (mevedel-session-queued-user-messages session))))))
 
   :doc "fallback drain preserves queued entries while plan approval is pending"
   (mevedel-view-test--with-buffers
@@ -2204,40 +2120,9 @@ finds it during `$' skill dispatch."
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _)
                    (setq sent t))))
-        (mevedel-view--drain-queued-user-message-batch data-buf))
+        (mevedel-view--drain-queued-user-message data-buf))
       (should-not sent)
-      (should (= 1 (length (mevedel-session-queued-user-messages session))))
-      (with-current-buffer data-buf
-        (should-not (string-match-p "queued-user-message-batch"
-                                    (buffer-string))))))
-
-  :doc "fallback drain keeps queued entry when inline fork skill blocks"
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "forker"
-       :body "ignored"
-       :context 'fork
-       :agent "general-purpose"
-       :user-invocable-p t)
-    (let (sent)
-      (with-current-buffer data-buf
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--current-request nil))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "please use $forker"
-                        :display-text "please use $forker"
-                        :model-input "please use $forker")))
-      (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _)
-                   (setq sent t))))
-        (mevedel-view--drain-queued-user-message-batch data-buf))
-      (should-not sent)
-      (should (= 1 (length (mevedel-session-queued-user-messages session))))
-      (with-current-buffer view-buf
-        (should (string-empty-p (mevedel-view--input-text))))
-      (with-current-buffer data-buf
-        (should-not (string-match-p "queued-user-message-batch"
-                                    (buffer-string))))))
+      (should (= 1 (length (mevedel-session-queued-user-messages session))))))
 
   :doc "late drain scheduler uses data buffer after request cleanup"
   (mevedel-view-test--with-buffers
@@ -2334,7 +2219,7 @@ finds it during `$' skill dispatch."
         (should-not (mevedel-session-queued-user-messages session))
         (should (string= "/review" (mevedel-view--input-text))))))
 
-  :doc "fallback drain submits queued messages as one FIFO batch"
+  :doc "fallback drain submits one exact FIFO entry per turn"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq-fifo" :root "/tmp/vq" :name "vq"
@@ -2357,15 +2242,16 @@ finds it during `$' skill dispatch."
                  (lambda (&rest _) nil))
                 ((symbol-function 'gptel-send)
                  (lambda (&rest _) (cl-incf sent))))
-        (mevedel-view--drain-queued-user-message-batch data-buf)
+        (mevedel-view--drain-queued-user-message data-buf)
         (should (= 1 sent))
-        (should-not (mevedel-session-queued-user-messages session))
+        (should (equal "second"
+                       (plist-get
+                        (car (mevedel-session-queued-user-messages session))
+                        :input)))
         (with-current-buffer data-buf
           (let ((text (buffer-string)))
-            (should (string-match-p
-                     "<queued-user-message-batch count=\"2\">" text))
-            (should (< (string-match-p "first" text)
-                       (string-match-p "second" text))))))))
+            (should (string-match-p "first" text))
+            (should-not (string-match-p "second" text)))))))
 
   :doc "queued messages do not drain while the request is still active"
   (mevedel-view-test--with-buffers
@@ -2384,7 +2270,7 @@ finds it during `$' skill dispatch."
             (list (list :input "pending" :display-text "pending")))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-queued-user-message-batch data-buf)
+        (mevedel-view--drain-queued-user-message data-buf)
         (should-not sent)
         (should (mevedel-session-queued-user-messages session)))))
 
@@ -2409,7 +2295,7 @@ finds it during `$' skill dispatch."
         (should-not (mevedel-session-queued-user-messages session)))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
-        (mevedel-view--drain-queued-user-message-batch data-buf)
+        (mevedel-view--drain-queued-user-message data-buf)
         (should-not sent))))
 
   :doc "resubmitting an edited queued batch creates one queued entry"
@@ -2445,231 +2331,7 @@ finds it during `$' skill dispatch."
         (should (= 1 (length queue)))
         (should (equal "first\n\nsecond"
                        (plist-get (car queue) :input)))
-        (should (equal "first\n\nsecond"
-                       (plist-get (car queue) :model-input))))))
-
-  :doc "WAIT drain injects all prepared queued entries without gptel-send"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-wait-drain" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (data (list :messages
-                       (vector (list :role "user"
-                                     :content "active turn"))))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer data-buf
-                             :backend nil
-                             :data data)))
-           sent)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "first" :model-input "first prepared")
-                  (list :input "audited"
-                        :model-input "audited prepared"
-                        :hook-audits
-                        '((:type prompt-rewrite
-                                  :event "UserPromptSubmit"
-                                  :original "secret draft"
-                                  :submitted "audited prepared"
-                                  :reason "queued rewrite")))
-                  (list :input "second" :model-input "second prepared")))
-      (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent t))))
-        (mevedel-view--handle-queued-user-message-inject fsm)
-        (should-not sent)
-        (should-not (mevedel-session-queued-user-messages session))
-        (let ((msgs (plist-get data :messages)))
-          (should (= 2 (length msgs)))
-          (let ((content (plist-get (aref msgs 1) :content)))
-            (should (string-match-p "first prepared" content))
-            (should (string-match-p "second prepared" content))
-            (should (string-match-p "audited prepared" content))
-            (should-not (string-match-p "<!-- mevedel-hook-audit -->"
-                                        content))
-            (should-not (string-match-p "secret draft" content))
-            (should-not (string-match-p "queued rewrite" content))
-            (should (< (string-match-p "first prepared" content)
-                       (string-match-p "second prepared" content)))))
-        (with-current-buffer data-buf
-          (let ((text (buffer-string)))
-            (should (string-match-p "first prepared" text))
-            (should (string-match-p "<!-- mevedel-hook-audit -->" text))
-            (should-not (string-match-p "secret draft" text))
-            (let ((audit (car (mevedel-view--hook-audit-records-from-text
-                               text))))
-              (should (equal "secret draft"
-                             (plist-get audit :original))))))
-        (with-current-buffer view-buf
-          (mevedel-view--full-rerender)
-          (should (string-match-p "second prepared"
-                                  (buffer-string))))))))
-
-  :doc "WAIT drain preserves queued entries during plan approval"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-wait-plan" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (data (list :messages
-                       (vector (list :role "user"
-                                     :content "active plan turn"))))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer data-buf
-                             :backend nil
-                             :data data))))
-      (setf (mevedel-session-plan-queue session) (list 'approval))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "new feedback"
-                        :model-input "new feedback prepared")))
-      (mevedel-view--handle-queued-user-message-inject fsm)
-      (should (= 1 (length (plist-get data :messages))))
-      (should (= 1 (length (mevedel-session-queued-user-messages session))))
-      (with-current-buffer data-buf
-        (should-not (string-match-p "new feedback prepared"
-                                    (buffer-string))))))
-
-  :doc "WAIT drain advances response marker after queued batch insertion"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-wait-marker" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (data (list :messages
-                       (vector (list :role "user"
-                                     :content "active turn"))))
-           (position nil)
-           (data-turn-start nil)
-           (fsm nil))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (insert "*** active turn\n")
-        (setq data-turn-start (copy-marker (point) nil))
-        (let ((start (point)))
-          (insert "assistant partial\n")
-          (put-text-property start (point) 'gptel 'response))
-        (setq position (copy-marker (point) nil)))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (setq mevedel-view--data-turn-start data-turn-start)
-        (setq mevedel-view--in-flight-turn-start
-              (mevedel-view--insert-user-message "active turn"))
-        (mevedel-view--render-incremental data-buf))
-      (setq fsm
-            (gptel-make-fsm
-             :info (list :buffer data-buf
-                         :backend nil
-                         :data data
-                         :position position)))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "queued"
-                        :model-input "queued prepared")))
-      (mevedel-view--handle-queued-user-message-inject fsm)
-      (with-current-buffer view-buf
-        (should (string-match-p "queued prepared"
-                                (buffer-substring-no-properties
-                                 (point-min) (point-max)))))
-      (with-current-buffer data-buf
-        (goto-char position)
-        (insert (propertize "assistant response\n" 'gptel 'response))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) (point-max))))
-          (should (< (string-match-p "<queued-user-message-batch" text)
-                     (string-match-p "assistant response" text)))
-          (should (string-match-p "queued prepared" text))))))
-
-  :doc "WAIT drain renders queued batch before first assistant text"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-wait-first" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (data (list :messages
-                       (vector (list :role "user"
-                                     :content "active turn"))))
-           position
-           data-turn-start
-           fsm)
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (insert "*** active turn\n")
-        (setq data-turn-start (copy-marker (point) nil))
-        (setq position (copy-marker (point) nil)))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (setq mevedel-view--data-turn-start data-turn-start)
-        (setq mevedel-view--in-flight-turn-start
-              (mevedel-view--insert-user-message "active turn"))
-        (mevedel-view--start-spinner "Working..."))
-      (setq fsm
-            (gptel-make-fsm
-             :info (list :buffer data-buf
-                         :backend nil
-                         :data data
-                         :position position)))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "queued"
-                        :model-input "queued prepared")))
-      (mevedel-view--handle-queued-user-message-inject fsm)
-      (with-current-buffer view-buf
-        (let* ((text (buffer-substring-no-properties
-                      (point-min) (point-max)))
-               (label (string-match-p "Queued message" text))
-               (queued (string-match-p "queued prepared" text))
-               (prompt (string-match-p "\n> " text)))
-          (should label)
-          (should queued)
-          (should prompt)
-          (should (< label queued))
-          (should (< queued prompt))
-          (should-not (string-match-p "<system-reminder>" text))
-          (should-not (string-match-p "queued-user-message" text))))))
-
-  :doc "WAIT drain ignores agent FSMs that share the parent session"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-agent-wait" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           (inv (mevedel-agent-invocation--create :background-p t))
-           (data (list :messages
-                       (vector (list :role "user"
-                                     :content "agent turn"))))
-           (fsm (gptel-make-fsm
-                 :info (list :buffer data-buf
-                             :backend nil
-                             :data data
-                             :mevedel-agent-invocation inv))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session)
-        (setq-local mevedel--workspace ws)
-        (setq-local mevedel--agent-invocation inv))
-      (setf (mevedel-session-queued-user-messages session)
-            (list (list :input "main follow-up"
-                        :model-input "main follow-up prepared")))
-      (mevedel-view--handle-queued-user-message-inject fsm)
-      (should (mevedel-session-queued-user-messages session))
-      (should (= 1 (length (plist-get data :messages))))
-      (with-current-buffer data-buf
-        (should-not (string-match-p "main follow-up prepared"
-                                    (buffer-string))))))
+        (should-not (plist-member (car queue) :model-input))))))
 
 (mevedel-deftest mevedel-view--send-local-goal ()
   ,test
@@ -2831,7 +2493,7 @@ finds it during `$' skill dispatch."
 	          (should-not (bound-and-true-p
 	                       mevedel-skills--pending-request-context))))))
 
-  :doc "inline skill hooks see expanded body and can rewrite it"
+  :doc "inline skill hooks see expanded body but cannot replace it"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "myskill"
@@ -2861,8 +2523,8 @@ finds it during `$' skill dispatch."
 	        (with-current-buffer data-buf
 	          (let ((text (mevedel--strip-hook-audit-blocks
                          (buffer-string))))
-	            (should (string-match-p "rewritten prompt" text))
-            (should-not (string-match-p "Expanded hello" text)))))))
+	            (should-not (string-match-p "rewritten prompt" text))
+            (should (string-match-p "Expanded hello" text)))))))
 
   :doc "prompt rewrites render an expandable hook audit disclosure"
   (let* ((root (make-temp-file "mevedel-view-hooks-audit" t))
@@ -2957,46 +2619,13 @@ finds it during `$' skill dispatch."
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "rewritten prompt" expanded))
+            (should-not (string-match-p "rewritten prompt" expanded))
             (should-not (string-match-p "model-only context" expanded)))))
       (with-current-buffer data-buf
         (let ((text (buffer-string)))
-          (should (string-match-p "rewritten prompt" text))
+          (should-not (string-match-p "rewritten prompt" text))
+          (should (string-match-p "Expanded hello" text))
           (should (string-match-p "model-only context" text))))))
-
-  :doc "rewritten fork skill prompt sends as normal prompt without invoking skill"
-  (mevedel-view-test--with-fork-skill
-      (mevedel-skill--create
-       :name "myfork"
-       :body "ignored"
-       :context 'fork
-       :agent "general-purpose"
-       :user-invocable-p t)
-    (let ((mevedel-hook-rules
-           '((UserPromptSubmit
-              ((:matcher "*"
-                         :hooks ((:type elisp
-                                        :function
-                                        mevedel-view-test--rewrite-prompt-hook)))))))
-          invoke-called
-          send-called)
-      (cl-letf (((symbol-function 'mevedel-skills-invoke)
-                 (lambda (&rest _)
-                   (setq invoke-called t)))
-                ((symbol-function 'gptel-send)
-                 (lambda (&rest _)
-                   (setq send-called t))))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "$myfork original")
-          (mevedel-view-send))
-        (should send-called)
-        (should-not invoke-called)
-        (with-current-buffer data-buf
-          (let ((text (mevedel--strip-hook-audit-blocks
-                       (buffer-string))))
-            (should (string-match-p "rewritten prompt" text))
-            (should-not (string-match-p "\\$myfork original" text)))))))
 
   :doc "malformed UserPromptSubmit decisions are ignored"
   (let* ((root (make-temp-file "mevedel-view-hooks-malformed" t))

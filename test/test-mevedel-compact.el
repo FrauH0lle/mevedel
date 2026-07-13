@@ -1651,7 +1651,7 @@
          (session (mevedel-session-create "main" ws)))
     (should (equal (mevedel--compact-skills-section session) "- (none)")))
 
-  :doc "lists invoked skills with name, args, trigger, turn"
+  :doc "lists invoked skills with name, args, role, origin, and turn"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "c2" :root "/tmp/c2" :name "c2"
               :file-cache (mevedel-file-cache--create
@@ -1660,21 +1660,21 @@
          (session (mevedel-session-create "main" ws))
          (rec1 (mevedel-skill-invocation-record--create
                 :name "grill-me" :args "spec 22"
-                :trigger 'user-skill :turn 3
+                :role 'command :origin 'user :turn 3
                 :source-path "/skills/grill-me/SKILL.md"
                 :prepared-body "Body 1"))
          (rec2 (mevedel-skill-invocation-record--create
                 :name "review-spec" :args nil
-                :trigger 'model-skill :turn 7
+                :role 'command :origin 'model :turn 7
                 :source-path "/skills/review-spec/SKILL.md"
                 :prepared-body "Body 2")))
     (setf (mevedel-session-invoked-skills session) (list rec1 rec2))
     (let ((section (mevedel--compact-skills-section session)))
       (should (string-match-p "\\$grill-me spec 22" section))
-      (should (string-match-p "user-skill" section))
+      (should (string-match-p "role: command, origin: user" section))
       (should (string-match-p "turn: 3" section))
       (should (string-match-p "\\$review-spec" section))
-      (should (string-match-p "model-skill" section)))))
+      (should (string-match-p "role: command, origin: model" section)))))
 
 (provide 'test-mevedel-compact)
 ;;; test-mevedel-compact.el ends here

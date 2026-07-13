@@ -186,86 +186,8 @@ first non-empty line outside gptel-owned org blocks."
             nil))))))
 
 
-(defun mevedel-transcript--queued-user-message-batch-control-text (text)
-  "Return TEXT trimmed of leading org tool-close glue.
-Generated queued batches can be inserted immediately after a tool block,
-leaving unpropertized `#+end_tool' marker text in the same nil-`gptel'
-segment.  Strip only that trailing-tool structural glue so ordinary prose
-containing queued-message XML is still rendered literally."
-  (when (stringp text)
-    (with-temp-buffer
-      (insert (string-trim text))
-      (goto-char (point-min))
-      (while (looking-at "#\\+end_tool\\b[^\n]*\n?")
-        (delete-region (match-beginning 0) (match-end 0))
-        (skip-chars-forward " \t\r\n"))
-      (string-trim (buffer-string)))))
-
-(defun mevedel-transcript--queued-user-message-batch-items-from-text (text)
-  "Return generated queued user-message items parsed from TEXT, or nil.
-TEXT must consist only of leading org tool-close glue, the generated
-optional system reminder, and one complete queued-message batch.  Literal
-examples embedded in user text are not treated as control markup."
-  (when (stringp text)
-    (with-temp-buffer
-      (insert (mevedel-transcript--queued-user-message-batch-control-text text))
-      (goto-char (point-min))
-      (when (looking-at "<system-reminder>")
-        (goto-char (match-end 0))
-        (if (search-forward "</system-reminder>" nil t)
-            (skip-chars-forward " \t\r\n")
-          (goto-char (point-max))))
-      (when (looking-at
-             "<queued-user-message-batch[[:space:]][^>]*count=\"\\([0-9]+\\)\"[^>]*>")
-        (let ((count (string-to-number (match-string 1)))
-              (body-start (match-end 0)))
-          (goto-char body-start)
-          (when (search-forward "</queued-user-message-batch>" nil t)
-            (let ((body-end (match-beginning 0)))
-              (skip-chars-forward " \t\r\n")
-              (when (= (point) (point-max))
-                (mevedel-transcript--queued-user-message-items-from-body
-                 (buffer-substring-no-properties body-start body-end)
-                 count)))))))))
-
-(defun mevedel-transcript--queued-user-message-items-from-body (body count)
-  "Return queued user-message items parsed from BODY matching COUNT."
-  (with-temp-buffer
-    (insert body)
-    (goto-char (point-min))
-    (let (items ok)
-      (setq ok t)
-      (while ok
-        (skip-chars-forward " \t\r\n")
-        (cond
-         ((eobp)
-          (setq ok nil))
-         ((looking-at
-           "<queued-user-message[[:space:]][^>]*index=\"\\([0-9]+\\)\"[^>]*>")
-          (let ((index (string-to-number (match-string 1)))
-                (body-start (match-end 0)))
-            (goto-char body-start)
-            (if (search-forward "</queued-user-message>" nil t)
-                (push (cons index
-                            (string-trim
-                             (buffer-substring-no-properties
-                              body-start (match-beginning 0))))
-                      items)
-              (setq ok :invalid))))
-         (t
-          (setq ok :invalid))))
-      (when (and (not (eq ok :invalid))
-                 (= count (length items))
-                 (> count 0))
-        (mapcar #'cdr (sort items (lambda (a b) (< (car a) (car b)))))))))
-
-
 ;;
 ;;; Canonical structure
-
-(defconst mevedel-transcript-queued-message-reminder
-  "The following user message batch arrived while your previous request was already active. Account for it while continuing the current work; do not discard in-progress context just because this arrived mid-turn."
-  "Generated reminder that introduces a queued user-message batch.")
 
 (defun mevedel-transcript--tool-id-in-range (start end)
   "Return the first gptel tool id in START..END, or nil."
@@ -361,7 +283,7 @@ examples embedded in user text are not treated as control markup."
   "Return overlay priority for structural RANGE."
   (pcase (car range)
     ('tool 40)
-    ((or 'mailbox 'reminder 'queued-message 'hook-context 'prompt) 30)
+    ((or 'mailbox 'reminder 'hook-context 'prompt) 30)
     ('reasoning 20)
     ((or 'render-data 'ignored) 10)
     (_ 0)))
@@ -392,26 +314,17 @@ BASE-SEGMENTS delimit the containing raw property run."
       (when (and ok
                  (< (cadr prior) start)
                  (> (caddr prior) cursor))
-        (unless (and (eq (car range) 'queued-message)
-                     (mevedel-transcript--generated-queued-reminder-p prior))
-          (when (and (> (cadr prior) cursor)
-                     (string-match-p
-                      "[^ \t\r\n]"
-                      (buffer-substring-no-properties
-                       cursor (min start (cadr prior)))))
-            (setq ok nil)))
+        (when (and (> (cadr prior) cursor)
+                   (string-match-p
+                    "[^ \t\r\n]"
+                    (buffer-substring-no-properties
+                     cursor (min start (cadr prior)))))
+          (setq ok nil))
         (setq cursor (max cursor (min start (caddr prior))))))
     (and ok
          (not (string-match-p
                "[^ \t\r\n]"
                (buffer-substring-no-properties cursor start))))))
-
-(defun mevedel-transcript--generated-queued-reminder-p (range)
-  "Return non-nil when reminder RANGE is the queued-message control text."
-  (and (eq (car range) 'reminder)
-       (string-search
-        mevedel-transcript-queued-message-reminder
-        (buffer-substring-no-properties (cadr range) (caddr range)))))
 
 (defun mevedel-transcript--mailbox-control-context-p (range base-segments)
   "Return non-nil when mailbox RANGE is outside an Org user heading.
@@ -477,9 +390,6 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
            'reminder "^\\(?:\\*+ \\)?<system-reminder>[ \t]*$"
            "^</system-reminder>[ \t]*\n?" start end)
           (mevedel-transcript--delimited-ranges
-           'queued-message "^<queued-user-message-batch\\_>"
-           "^</queued-user-message-batch>[ \t]*\n?" start end)
-          (mevedel-transcript--delimited-ranges
            'hook-context "^<hook-context>[ \t]*$"
            "^</hook-context>[ \t]*\n?" start end)
           (mevedel-transcript--delimited-ranges
@@ -508,8 +418,7 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
                      start end base-segments tool-ranges))))
     (let (accepted)
       (dolist (range (sort ranges (lambda (a b) (< (cadr a) (cadr b)))))
-        (when (or (not (memq (car range) '(mailbox reminder queued-message)))
-                  (mevedel-transcript--generated-queued-reminder-p range)
+        (when (or (not (memq (car range) '(mailbox reminder)))
                   (and (eq (car range) 'mailbox)
                        (mevedel-transcript--mailbox-control-context-p
                         range base-segments))
@@ -592,7 +501,7 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
   "Return canonical transcript segments between START and END.
 Each segment is `(TYPE START END)'.  TYPE is `user',
 `response', `tool', `reasoning', `mailbox', `reminder',
-`queued-message', `hook-context', `render-data', `prompt', or
+`hook-context', `render-data', `prompt', or
 `ignored'.  Structural control ranges override stale `gptel' property
 runs and incomplete control text remains ordinary transcript text."
   (let* ((segments (mevedel-transcript--property-segments start end))
@@ -627,8 +536,8 @@ runs and incomplete control text remains ordinary transcript text."
                  (memq (car seg) '(user ignored))
                  (mevedel-transcript--whitespace-segment-p seg)
                  (memq (car next)
-                       '(tool reasoning mailbox reminder queued-message
-                         hook-context render-data prompt ignored)))
+                       '(tool reasoning mailbox reminder hook-context
+                         render-data prompt ignored)))
             (progn
               (setcar (cdr rest)
                       (list (car next) (cadr seg) (caddr next)))
@@ -1148,7 +1057,7 @@ The returned plist includes open metadata plus `:body-start',
            (save-excursion
              (goto-char start)
              (re-search-forward
-              "^\\(?:<system-reminder>\\|<queued-user-message-batch\\_>\\|<hook-context>\\)"
+              "^\\(?:<system-reminder>\\|<hook-context>\\)"
               end t)))))
 
 (defun mevedel-transcript--tool-block-truncated-before-p (start end)
@@ -1283,7 +1192,7 @@ fake thinking block or user turn."
              (convert-p
               (and (eq type 'user)
                    (or (and (memq prev-type
-                                  '(tool reasoning mailbox reminder queued-message
+                                  '(tool reasoning mailbox reminder
                                     render-data ignored))
                             (eq next-type 'response)
                             (mevedel-transcript--response-fragment-segment-p

@@ -22,6 +22,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skill-bindings)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-structs)
@@ -132,7 +133,8 @@
          (request (mevedel-request--create :session session))
          (rules '(("Bash" :pattern "echo *" :action allow)))
          (records (list (mevedel-skill-invocation-record--create
-                         :name "demo" :args "x" :trigger 'user-skill
+                         :name "demo" :args "x"
+                         :role 'command :origin 'user
                          :turn 1 :source-path "/tmp/demo/SKILL.md"
                          :prepared-body "Hello"))))
     (with-temp-buffer
@@ -605,7 +607,8 @@ configuration."
 
 (defmacro mevedel-skills-test--with-eval-allowed (&rest body)
   "Run BODY with a deterministic trusted Eval allow rule."
-  `(let ((mevedel-permission-rules '(("Eval" :action allow))))
+  `(let ((mevedel-permission-mode 'trust-all)
+         (mevedel-permission-rules '(("Eval" :action allow))))
      ,@body))
 
 (defun mevedel-skills-test--shell-injections-sync (text)
@@ -919,7 +922,39 @@ Return the outcome plist produced by the async helper."
            (outcome (mevedel-skills-test--shell-injections-sync body)))
       (should (eq 'ok (plist-get outcome :status)))
       (should (equal "value\n\"xy\""
-                     (plist-get outcome :body))))))
+                     (plist-get outcome :body)))))
+
+  :doc "parameterized shell injection checks the fully expanded operation"
+  (let* ((skill (mevedel-skill--create :name "x"))
+         (body (mevedel-skills--substitute-vars
+                "!`echo safe $ARGUMENTS`"
+                "&& denied-command" nil skill))
+         seen
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+               (lambda (_tool callback args)
+                 (setq seen args)
+                 (funcall callback "ok"))))
+      (setq outcome (mevedel-skills-test--shell-injections-sync body)))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "echo safe && denied-command"
+                   (plist-get seen :command)))
+    (should-not (plist-get seen :trust-literal-p)))
+
+  :doc "parameterized Elisp injection checks the fully expanded expression"
+  (let* ((skill (mevedel-skill--create :name "x"))
+         (body (mevedel-skills--substitute-vars
+                "!el`(list $ARGUMENTS)`" "danger" nil skill))
+         seen
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-pipeline-run-tool)
+               (lambda (_tool callback args)
+                 (setq seen args)
+                 (funcall callback "ok"))))
+      (setq outcome (mevedel-skills-test--shell-injections-sync body)))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "(list danger)" (plist-get seen :expression)))
+    (should-not (plist-get seen :trust-literal-p))))
 
 (mevedel-deftest mevedel-skills--run-body-injections-async/interpolated-delimiters ()
   ,test
@@ -1038,7 +1073,7 @@ allowed-tools:
               (setq-local mevedel--session session)
               (mevedel-skills-invoke
                skill nil (lambda (o) (setq outcome o))
-               :trigger 'user-skill)
+               :origin 'user)
               (while (null outcome)
                 (accept-process-output nil 0.01)))
             (should (eq 'ok (plist-get outcome :status)))
@@ -1129,6 +1164,200 @@ allowed-tools:
 ;;
 ;;; mevedel-skills-invoke (unified invocation API)
 
+(mevedel-deftest mevedel-skills--preparation-rejection ()
+  ,test
+  (test)
+  :doc "rejects invalid skill, role, origin, and named fork agent"
+  (should (eq 'unknown-skill
+              (plist-get (mevedel-skills--preparation-rejection
+                          nil 'command 'user)
+                         :reason)))
+  (let ((skill (mevedel-skill--create :name "alpha" :body "Body")))
+    (should (eq 'invalid-role
+                (plist-get (mevedel-skills--preparation-rejection
+                            skill 'other 'user)
+                           :reason)))
+    (should (eq 'invalid-origin
+                (plist-get (mevedel-skills--preparation-rejection
+                            skill 'command 'other)
+                           :reason))))
+  (let ((skill (mevedel-skill--create
+                :name "alpha" :body "Body" :context 'fork :agent "missing")))
+    (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) nil)))
+      (should (eq 'unknown-agent
+                  (plist-get (mevedel-skills--preparation-rejection
+                              skill 'command 'user)
+                             :reason)))))
+
+  :doc "accepts a valid preparation request"
+  (let ((skill (mevedel-skill--create :name "alpha" :body "Body")))
+    (should-not
+     (mevedel-skills--preparation-rejection skill 'command 'model))))
+
+(mevedel-deftest mevedel-skills--preparation-settler ()
+  ,test
+  (test)
+  :doc "installs temporary request, restores prior request, and settles once"
+  (let* ((session (mevedel-skills-test--make-session))
+         (previous (mevedel-request--create :session session))
+         (rules '(("Read" :action allow)))
+         (hooks '((PreToolUse nil)))
+         outcomes)
+    (with-temp-buffer
+      (setq-local mevedel--current-request previous)
+      (let ((settle (mevedel-skills--preparation-settler
+                     session rules hooks
+                     (lambda (outcome) (push outcome outcomes)))))
+        (should-not (eq previous mevedel--current-request))
+        (should (eq session
+                    (mevedel-request-session mevedel--current-request)))
+        (should (equal rules
+                       (mevedel-request-skill-permission-rules
+                        mevedel--current-request)))
+        (should (equal hooks
+                       (mevedel-request-hook-rules mevedel--current-request)))
+        (funcall settle 'first)
+        (should (eq previous mevedel--current-request))
+        (funcall settle 'second)
+        (should (equal '(first) outcomes))))))
+
+(mevedel-deftest mevedel-skills--preparation-success-outcome ()
+  ,test
+  (test)
+  :doc "builds command body, policy context, and invocation record"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "alpha" :body "Body" :source-file "/tmp/alpha/SKILL.md"))
+         (rules '(("Read" :action allow)))
+         (hooks '((PreToolUse nil)))
+         (metadata
+          (list :skill skill :arguments "task" :role 'command
+                :origin 'user :session session :rules rules :hooks hooks
+                :model '(:tier fast) :effort 'high))
+         (outcome (mevedel-skills--preparation-success-outcome
+                   metadata "original" "expanded" nil))
+         (context (plist-get outcome :request-context))
+         (record (car (plist-get context :invoked-skills))))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (eq 'inline (plist-get outcome :kind)))
+    (should (equal "expanded" (plist-get outcome :body)))
+    (should (equal rules (plist-get context :permission-rules)))
+    (should (equal hooks (plist-get context :hook-rules)))
+    (should (equal '(:tier fast) (plist-get context :model)))
+    (should (eq 'high (plist-get context :effort)))
+    (should (equal "alpha" (mevedel-skill-invocation-record-name record)))
+    (should (equal "task" (mevedel-skill-invocation-record-args record)))
+    (should (eq 'command (mevedel-skill-invocation-record-role record)))
+    (should (eq 'user (mevedel-skill-invocation-record-origin record)))
+    (should (equal "expanded"
+                   (mevedel-skill-invocation-record-prepared-body record))))
+
+  :doc "instruction outcome omits command policy"
+  (let* ((skill (mevedel-skill--create
+                 :name "alpha" :body "Body" :context 'fork))
+         (metadata (list :skill skill :arguments "" :role 'instruction
+                         :origin 'user :rules '(ignored)
+                         :model 'ignored :effort 'ignored :hooks '(ignored)))
+         (outcome (mevedel-skills--preparation-success-outcome
+                   metadata "original" "expanded" nil))
+         (context (plist-get outcome :request-context)))
+    (should (eq 'instruction (plist-get outcome :kind)))
+    (should-not (plist-get context :permission-rules))
+    (should-not (plist-get context :model))
+    (should-not (plist-get context :effort))
+    (should-not (plist-get context :hook-rules))))
+
+(mevedel-deftest mevedel-skills-prepare ()
+  ,test
+  (test)
+  :doc "instruction preparation isolates command metadata and forces empty args"
+  (let* ((session (mevedel-skills-test--make-session))
+         (rules '(("Bash" :pattern "echo *" :action allow)))
+         (hooks '((PreToolUse ((:hooks nil)))))
+         (skill (mevedel-skill--create
+                 :name "alpha"
+                 :body "$ARGUMENTS|$0"
+                 :context 'fork
+                 :model "fast"
+                 :effort 'high
+                 :agent "reviewer"
+                 :allowed-tool-rules rules
+                 :hooks hooks))
+         outcome
+         injection-rules
+         expansion-hooks
+         dispatched)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-skills--run-body-injections-async)
+                 (lambda (body callback)
+                   (setq injection-rules
+                         (mevedel-request-skill-permission-rules
+                          mevedel--current-request))
+                   (funcall callback (list :status 'ok :body body))))
+                ((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (setq expansion-hooks
+                         (mevedel-request-hook-rules
+                          mevedel--current-request))
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel-agent-runtime-dispatch)
+                 (lambda (&rest _args) (setq dispatched t))))
+        (mevedel-skills-prepare
+         skill "ignored"
+         (lambda (value) (setq outcome value))
+         :role 'instruction :origin 'user)))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (eq 'instruction (plist-get outcome :kind)))
+    (should (equal "|" (plist-get outcome :body)))
+    (should (equal rules injection-rules))
+    (should-not expansion-hooks)
+    (should-not dispatched)
+    (let* ((context (plist-get outcome :request-context))
+           (record (car (plist-get context :invoked-skills))))
+      (should-not (plist-get context :permission-rules))
+      (should-not (plist-get context :model))
+      (should-not (plist-get context :effort))
+      (should-not (plist-get context :hook-rules))
+      (should (eq 'instruction
+                  (mevedel-skill-invocation-record-role record)))
+      (should (eq 'user
+                  (mevedel-skill-invocation-record-origin record)))))
+
+  :doc "command preparation returns policy context without committing it"
+  (let* ((session (mevedel-skills-test--make-session))
+         (rules '(("Read" :action allow)))
+         (hooks '((PreToolUse ((:hooks nil)))))
+         (skill (mevedel-skill--create
+                 :name "alpha" :body "Do $ARGUMENTS"
+                 :model "fast" :effort 'high
+                 :allowed-tool-rules rules :hooks hooks))
+         outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel-skills--pending-request-context nil)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _event-plist callback &rest _)
+                   (funcall callback nil))))
+        (mevedel-skills-prepare
+         skill "work"
+         (lambda (value) (setq outcome value))
+         :role 'command :origin 'user)
+        (should-not mevedel-skills--pending-request-context)))
+    (should (eq 'inline (plist-get outcome :kind)))
+    (should (equal "Do work" (plist-get outcome :body)))
+    (let* ((context (plist-get outcome :request-context))
+           (record (car (plist-get context :invoked-skills))))
+      (should (equal rules (plist-get context :permission-rules)))
+      (should (equal hooks (plist-get context :hook-rules)))
+      (should (equal (mevedel-model-tier-selector 'fast)
+                     (plist-get context :model)))
+      (should (eq 'high (plist-get context :effort)))
+      (should (eq 'command
+                  (mevedel-skill-invocation-record-role record)))
+      (should (eq 'user
+                  (mevedel-skill-invocation-record-origin record))))))
+
 (mevedel-deftest mevedel-skills-invoke ()
   ,test
   (test)
@@ -1148,12 +1377,12 @@ allowed-tools:
       (mevedel-skills-invoke
        skill "loudly"
        (lambda (o) (setq outcome o))
-       :trigger 'model-skill))
+       :origin 'model))
     (should (eq 'ok (plist-get outcome :status)))
     (should (eq 'inline (plist-get outcome :kind)))
     (should (equal "YELL loudly" (plist-get outcome :body))))
 
-  :doc "user-skill trigger installs the pending stash"
+  :doc "user origin installs the pending stash"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "s" :root "/tmp/s" :name "s"
               :file-cache (mevedel-file-cache--create
@@ -1173,7 +1402,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-skill)
+       :origin 'user)
       (let ((stash mevedel-skills--pending-request-context))
         (should (equal (mevedel-model-tier-selector 'fast)
                        (plist-get stash :model)))
@@ -1182,7 +1411,7 @@ allowed-tools:
         (should (= 1 (length (plist-get stash :invoked-skills))))))
 	    (should (eq 'ok (plist-get outcome :status))))
 
-  :doc "UserPromptExpansion can rewrite user-skill inline skill output"
+  :doc "UserPromptExpansion can rewrite user-origin inline skill output"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-expansion" :root "/tmp/slash-expansion"
               :name "slash-expansion"
@@ -1205,7 +1434,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-skill))
+       :origin 'user))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal
              "Expanded by hook\n\n<hook-context>\n<hook-event name=\"UserPromptExpansion\">\nexpansion context\n</hook-event>\n</hook-context>"
@@ -1240,12 +1469,12 @@ allowed-tools:
         (mevedel-skills-invoke
          skill nil
          (lambda (o) (setq outcome o))
-         :trigger 'user-skill)
+         :origin 'user)
         (should mevedel-skills--pending-request-context)))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal "Original body" (plist-get outcome :body))))
 
-  :doc "UserPromptExpansion can block user-skill inline skill output"
+  :doc "UserPromptExpansion can block user-origin inline skill output"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-expansion-block"
               :root "/tmp/slash-expansion-block"
@@ -1269,13 +1498,13 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-skill)
+       :origin 'user)
       (should-not mevedel-skills--pending-request-context))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'hook-blocked (plist-get outcome :reason)))
     (should (equal "blocked expansion" (plist-get outcome :message))))
 
-  :doc "user-skill preparation failure clears the pending stash"
+  :doc "user-origin preparation failure leaves the pending stash empty"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "slash-fail" :root "/tmp/slash-fail"
               :name "slash-fail"
@@ -1300,13 +1529,13 @@ allowed-tools:
         (mevedel-skills-invoke
          skill nil
          (lambda (o) (setq outcome o))
-         :trigger 'user-skill)
+         :origin 'user)
         (should (null mevedel-skills--pending-request-context))
         (should-not (bound-and-true-p mevedel--current-request))))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'injection-failed (plist-get outcome :reason))))
 
-  :doc "model-skill trigger writes directly to the active request"
+  :doc "model origin writes directly to the active request"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "t" :root "/tmp/t" :name "t"
               :file-cache (mevedel-file-cache--create
@@ -1326,7 +1555,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (_) nil)
-       :trigger 'model-skill))
+       :origin 'model))
     (should (equal (mevedel-model-tier-selector 'fast)
                    (mevedel-request-skill-model-override request)))
     (should (equal '(("Bash" :pattern "ls" :action allow))
@@ -1342,14 +1571,14 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-skill))
+       :origin 'user))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'disabled (plist-get outcome :reason)))
     (should (string-match-p "/skills enable hidden"
                             (plist-get outcome :message)))
     (should (string-search "\\$hidden" (plist-get outcome :message))))
 
-  :doc "user-invocable: false rejects user-skill trigger"
+  :doc "user-invocable: false rejects user origin"
   (let ((skill (mevedel-skill--create
                 :name "internal-only"
                 :body "X"
@@ -1358,11 +1587,11 @@ allowed-tools:
     (mevedel-skills-invoke
      skill nil
      (lambda (o) (setq outcome o))
-     :trigger 'user-skill)
+     :origin 'user)
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'disabled (plist-get outcome :reason))))
 
-  :doc "disable-model-invocation rejects model-skill trigger"
+  :doc "disable-model-invocation rejects model origin"
   (let ((skill (mevedel-skill--create
                 :name "human-only"
                 :body "X"
@@ -1371,7 +1600,7 @@ allowed-tools:
     (mevedel-skills-invoke
      skill nil
      (lambda (o) (setq outcome o))
-     :trigger 'model-skill)
+     :origin 'model)
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'disabled (plist-get outcome :reason))))
 
@@ -1386,7 +1615,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'model-skill
+       :origin 'model
        :skip-gates t))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal "X" (plist-get outcome :body))))
@@ -1397,22 +1626,9 @@ allowed-tools:
     (mevedel-skills-invoke
      skill nil
      (lambda (o) (setq outcome o))
-     :trigger 'model-skill)
+     :origin 'model)
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'load-failure (plist-get outcome :reason))))
-
-  :doc "recursion-depth limit yields recursion-limit-exceeded"
-  ;; Dynamic let-bound counter; 0 max means even the first invocation
-  ;; exceeds.
-  (let ((skill (mevedel-skill--create :name "x" :body "X"))
-        (mevedel-skills-max-recursion-depth 0)
-        outcome)
-    (mevedel-skills-invoke
-     skill nil
-     (lambda (o) (setq outcome o))
-     :trigger 'internal)
-    (should (eq 'error (plist-get outcome :status)))
-    (should (eq 'recursion-limit-exceeded (plist-get outcome :reason))))
 
   :doc "display-callback receives done event on success"
   (let ((skill (mevedel-skill--create :name "ok" :body "Hi"))
@@ -1420,7 +1636,7 @@ allowed-tools:
     (mevedel-skills-invoke
      skill nil
      (lambda (_) nil)
-     :trigger 'internal
+     :origin 'internal
      :display-callback (lambda (e) (push e events)))
     (should (cl-some (lambda (e) (eq (plist-get e :event) 'done))
                      events)))
@@ -1431,7 +1647,7 @@ allowed-tools:
     (mevedel-skills-invoke
      skill nil
      (lambda (_) nil)
-     :trigger 'internal
+     :origin 'internal
      :display-callback (lambda (e) (push e events)))
     (should (cl-some (lambda (e) (eq (plist-get e :event) 'error))
                      events))))
@@ -1477,10 +1693,75 @@ allowed-tools:
         ;; `mevedel-agent-exec--agents' so spawn can resolve it.
         (should (assoc-string "skill:demo" mevedel-agent-exec--agents))))))
 
+(mevedel-deftest mevedel-skills-dispatch-prepared-fork ()
+  ,test
+  (test)
+  :doc "dispatches prepared fork context and records the invocation"
+  (let* ((session (mevedel-skills-test--make-session))
+         (agent (mevedel-agent--create :name "explorer"))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explorer"
+                 :body "unused"))
+         (record (mevedel-skill-invocation-record--create
+                  :name "demo" :args "task" :role 'command :origin 'user))
+         (context (list :permission-rules '(("Read" :action allow))
+                        :model '(:tier fast)
+                        :effort 'high
+                        :hook-rules '((PreToolUse nil))
+                        :invoked-skills (list record)))
+         (prepared (list :status 'ok :kind 'fork :skill skill
+                         :body "prepared body"
+                         :hook-audits '((:event "expansion"))
+                         :request-context context))
+         dispatched
+         outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-agent-get)
+                 (lambda (_) agent))
+                ((symbol-function 'mevedel-agent-runtime-dispatch)
+                 (lambda (callback actual-agent description prompt &rest keys)
+                   (setq dispatched
+                         (list :agent actual-agent :description description
+                               :prompt prompt :keys keys))
+                   (funcall callback
+                            '(:result "done"
+                              :render-data (:agent-id "explorer--1"))))))
+        (mevedel-skills-dispatch-prepared-fork
+         prepared (lambda (value) (setq outcome value)))))
+    (should (eq agent (plist-get dispatched :agent)))
+    (should (equal "prepared body" (plist-get dispatched :prompt)))
+    (let ((keys (plist-get dispatched :keys)))
+      (should (equal '(("Read" :action allow))
+                     (plist-get keys :skill-permission-rules)))
+      (should (equal '(:tier fast)
+                     (plist-get keys :skill-model-override)))
+      (should (eq 'high (plist-get keys :skill-effort-override)))
+      (should (equal '((PreToolUse nil))
+                     (plist-get keys :skill-hook-rules))))
+    (should (equal (list record)
+                   (mevedel-session-invoked-skills session)))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal "done" (plist-get outcome :result)))
+    (should (equal "explorer--1" (plist-get outcome :agent-id)))
+    (should (equal '((:event "expansion"))
+                   (plist-get outcome :hook-audits))))
+
+  :doc "rejects an invalid prepared outcome without dispatching"
+  (let (outcome dispatched)
+    (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+               (lambda (&rest _) (setq dispatched t))))
+      (mevedel-skills-dispatch-prepared-fork
+       '(:status error :reason failed)
+       (lambda (value) (setq outcome value))))
+    (should-not dispatched)
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'invalid-prepared-fork (plist-get outcome :reason)))))
+
 (mevedel-deftest mevedel-skills-invoke-fork ()
   ,test
   (test)
-  :doc "model-skill trigger routes to direct dispatch via mevedel-agent-runtime-dispatch"
+  :doc "model origin routes to direct dispatch via mevedel-agent-runtime-dispatch"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (dispatched nil)
          (skill (mevedel-skill--create
@@ -1502,7 +1783,7 @@ allowed-tools:
         (mevedel-skills-invoke
          skill "the task"
          (lambda (o) (setq outcome o))
-         :trigger 'model-skill)
+         :origin 'model)
         (should dispatched)
         (should (eq agent (plist-get dispatched :agent)))
         (should (string-match-p "the task" (plist-get dispatched :prompt)))
@@ -1543,14 +1824,14 @@ allowed-tools:
         (mevedel-skills-invoke
          skill nil
          (lambda (o) (setq outcome o))
-         :trigger 'model-skill)
+         :origin 'model)
         (should (equal "wrapped" (plist-get outcome :result)))
         (should (equal "explorer--abc123"
                        (plist-get outcome :agent-id)))
         (should (eq 'agent-transcript
                     (plist-get (plist-get outcome :render-data) :kind))))))
 
-  :doc "user-skill trigger direct-dispatches and returns fork outcome"
+  :doc "user origin direct-dispatches and returns fork outcome"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
                  :name "demo" :context 'fork :agent "explorer"
@@ -1564,7 +1845,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill "the task"
        (lambda (o) (setq outcome o))
-       :trigger 'user-skill))
+       :origin 'user))
     (should (eq 'ok (plist-get outcome :status)))
     (should (eq 'fork (plist-get outcome :kind)))
     (should (equal "agent finished" (plist-get outcome :result))))
@@ -1583,7 +1864,7 @@ allowed-tools:
                  (funcall cb "agent finished"))))
       (mevedel-skills-invoke
        skill nil #'ignore
-       :trigger 'user-skill
+       :origin 'user
        :additional-context "<hook-context>ctx</hook-context>"))
   (should (string-match-p "Task body" captured-prompt))
   (should (string-match-p "<hook-context>ctx</hook-context>"
@@ -1607,7 +1888,7 @@ allowed-tools:
                  (funcall cb "agent finished"))))
       (mevedel-skills-invoke
        skill nil #'ignore
-       :trigger 'user-skill
+       :origin 'user
        :description "target hint"
        :on-invocation progress-callback))
     (should (equal "target hint" captured-description))
@@ -1627,13 +1908,13 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'user-skill))
+       :origin 'user))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'agent-dispatch-failed (plist-get outcome :reason)))
     (should (string-match-p "SubagentStart hook stopped sub-agent"
                             (plist-get outcome :message))))
 
-  :doc "user-skill fork hooks are active during body injection"
+  :doc "user-origin fork hooks are active during body injection"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (hooks '((PreToolUse
                    (:matcher "Bash"
@@ -1651,7 +1932,9 @@ allowed-tools:
                  (lambda (n) (and (equal n "explorer") agent)))
                 ((symbol-function 'mevedel-skills--run-body-injections-async)
                  (lambda (_text callback)
-                   (setq saw-hooks (mevedel-request-hook-rules request))
+                   (setq saw-hooks
+                         (mevedel-request-hook-rules
+                          mevedel--current-request))
                    (funcall callback '(:status error
                                        :reason stop
                                        :message "stop"))))
@@ -1660,7 +1943,7 @@ allowed-tools:
 	                   (error "Should not dispatch"))))
         (mevedel-skills-invoke
          skill nil #'ignore
-         :trigger 'user-skill)))
+         :origin 'user)))
     (should (equal hooks saw-hooks)))
 
   :doc "unknown agent yields :reason unknown-agent"
@@ -1671,7 +1954,7 @@ allowed-tools:
       (mevedel-skills-invoke
        skill nil
        (lambda (o) (setq outcome o))
-       :trigger 'model-skill))
+       :origin 'model))
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'unknown-agent (plist-get outcome :reason))))
 
@@ -1693,7 +1976,7 @@ allowed-tools:
           (mevedel-skills-invoke
            skill nil
            (lambda (o) (setq outcome o))
-           :trigger 'model-skill)
+           :origin 'model)
           (should (eq 'ok (plist-get outcome :status)))
           (should (mevedel-agent-p dispatched-agent))
           (should (equal "skill:demo"

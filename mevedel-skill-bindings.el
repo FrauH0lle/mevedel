@@ -165,10 +165,12 @@ only trim trailing punctuation that is ambiguous with prose."
          (equal name (plist-get binding :name))
          binding)))
 
-(defun mevedel-skill-bindings-resolve (text session start end name)
-  "Resolve the skill token NAME at START..END in TEXT for SESSION.
-An atomic binding resolves only through its exact source and signals a
-`user-error' when that source is unavailable or no longer invocable."
+(defun mevedel-skill-bindings-resolve-outcome
+    (text session start end name)
+  "Return a structured resolution outcome for NAME at START..END in TEXT.
+Success is `(:status ok :skill SKILL)'.  An unavailable, disabled, or no
+longer invocable atomic binding returns `(:status error :reason REASON
+:message MESSAGE)'.  Unbound unknown names are successful with a nil skill."
   (let* ((bound (mevedel-skill-bindings-starting-at text start))
          (binding (and bound
                        (mevedel-skill-bindings-at text start end name)))
@@ -179,17 +181,32 @@ An atomic binding resolves only through its exact source and signals a
             (mevedel-session-get-skill-by-source session source-file))
            (bound nil)
            (t (mevedel-session-get-skill session name)))))
-    (when (and binding (null skill))
-      (user-error "Bound skill $%s is unavailable at %s" name source-file))
-    (when (and binding skill (not (mevedel-skills--skill-enabled-p skill)))
-      (user-error
-       "Skill $%s is disabled; enable it or escape it as \\$%s"
-       name name))
-    (when (and binding skill (not (mevedel-skill-user-invocable-p skill)))
-      (user-error
-       "Skill $%s is no longer user-invocable; escape it as \\$%s"
-       name name))
-    skill))
+    (cond
+     ((and binding (null skill))
+      (list :status 'error :reason 'bound-source
+            :message
+            (format "Bound skill $%s is unavailable at %s" name source-file)))
+     ((and binding skill (not (mevedel-skills--skill-enabled-p skill)))
+      (list :status 'error :reason 'disabled
+            :message
+            (format "Skill $%s is disabled; enable it or escape it as \\$%s"
+                    name name)))
+     ((and binding skill (not (mevedel-skill-user-invocable-p skill)))
+      (list :status 'error :reason 'not-user-invocable
+            :message
+            (format "Skill $%s is no longer user-invocable; escape it as \\$%s"
+                    name name)))
+     (t (list :status 'ok :skill skill)))))
+
+(defun mevedel-skill-bindings-resolve (text session start end name)
+  "Resolve the skill token NAME at START..END in TEXT for SESSION.
+An atomic binding resolves only through its exact source and signals a
+`user-error' when that source is unavailable or no longer invocable."
+  (let ((outcome (mevedel-skill-bindings-resolve-outcome
+                  text session start end name)))
+    (if (eq (plist-get outcome :status) 'ok)
+        (plist-get outcome :skill)
+      (user-error "%s" (plist-get outcome :message)))))
 
 
 ;;

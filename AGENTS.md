@@ -106,6 +106,7 @@ Data model
   mevedel-skills-core.el      skill model, discovery, state, reload
   mevedel-skill-bindings.el   atomic skill mention validation and resolution
   mevedel-skills-invoke.el    skill preparation, invocation, model tools
+  mevedel-skills-plan.el      deterministic user invocation planning and preparation
   mevedel-skills-prompt.el    model-visible roster, reminders, activation
   mevedel-skills-ui.el        slash commands, cockpit, completion, font-lock
 

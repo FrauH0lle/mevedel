@@ -199,7 +199,7 @@ workspace."
   deferred-used     ; list of tool-name strings used during current turn
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
-  queued-user-messages ; transient FIFO of prepared prompts queued during an active request
+  queued-user-messages ; transient FIFO of bound original prompts awaiting preparation
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   background-agents ; list of agent-id strings for running background children
@@ -450,16 +450,17 @@ Created at request start, cleared in the termination handler."
 compaction/replay.
 
 NAME is the skill identifier.  ARGS is the raw argument string
-passed to the skill.  TRIGGER is `user-skill', `model-skill', or
-`internal'.  TURN is the session turn-count when the skill was
-invoked.  SOURCE-PATH is the absolute path of the SKILL.md that was
+passed to the skill.  ROLE is `command' or `instruction'.  ORIGIN is
+`user', `model', or `internal'.  TURN is the session turn-count when
+the skill was invoked.  SOURCE-PATH is the absolute path of the SKILL.md that was
 loaded.  PREPARED-BODY is the post-substitution, post-shell-expansion
 body string -- stored verbatim so compaction can summarize the
 skill's actual contribution to the conversation without re-reading
 SKILL.md (which may have changed)."
   name
   args
-  trigger
+  role
+  origin
   turn
   source-path
   prepared-body)

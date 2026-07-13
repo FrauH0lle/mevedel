@@ -183,33 +183,6 @@
                    "Green loop completed"
                    (buffer-substring-no-properties
                     (cadr (cadr segs)) (caddr (cadr segs)))))))))
-  :doc "keeps queued user batches in user segments when splitting prefixes"
-  (mevedel-transcript-test--with-buffer
-    (with-current-buffer data-buf
-      (let (block-start prefix-start response-start)
-        (setq block-start (point))
-        (insert "<system-reminder>\n"
-                "Queued messages arrived.\n"
-                "</system-reminder>\n\n"
-                "<queued-user-message-batch count=\"1\">\n"
-                "<queued-user-message index=\"1\">\n"
-                "Please keep going.\n"
-                "</queued-user-message>\n"
-                "</queued-user-message-batch>\n")
-        (setq prefix-start (point))
-        (insert "Conti")
-        (setq response-start (point))
-        (insert "nuing the answer.\n")
-        (put-text-property response-start (point) 'gptel 'response)
-        (let ((segs (mevedel-transcript-segments (point-min) (point-max))))
-          (should (equal '(reminder queued-message response)
-                         (mapcar #'car segs)))
-          (should (= (cadr (car segs)) block-start))
-          (should (= (caddr (cadr segs)) prefix-start))
-          (should (string-prefix-p
-                   "Continuing the answer"
-                   (buffer-substring-no-properties
-                    (cadr (caddr segs)) (caddr (caddr segs)))))))))
   :doc "does not treat literal tool markers as tool blocks without a tool run"
   (mevedel-transcript-test--with-buffer
     (mevedel-transcript-test--insert
@@ -684,9 +657,6 @@
     (insert "#+begin_reasoning\nthinking\n#+end_reasoning\n"
             "<agent-result agent-id=\"agent-1\">\ndone\n</agent-result>\n"
             "<system-reminder>\nremember\n</system-reminder>\n"
-            "<queued-user-message-batch count=\"1\">\n"
-            "<queued-user-message index=\"1\">later</queued-user-message>\n"
-            "</queued-user-message-batch>\n"
             "<hook-context>\n<hook-event name=\"UserPromptSubmit\">ctx</hook-event>\n"
             "</hook-context>\n"
             "<!-- mevedel-render-data -->\n(:kind diff)\n"
@@ -697,24 +667,9 @@
     (let ((types (mapcar #'car
                          (mevedel-transcript-segments
                           (point-min) (point-max)))))
-      (dolist (type '(tool reasoning mailbox reminder queued-message
-                           hook-context render-data prompt ignored))
+      (dolist (type '(tool reasoning mailbox reminder hook-context
+                           render-data prompt ignored))
         (should (memq type types)))))
-
-  :doc "classifies a generated queued batch after an active prompt"
-  (with-temp-buffer
-    (org-mode)
-    (insert "*** active prompt\n\n"
-            "<system-reminder>\n"
-            mevedel-transcript-queued-message-reminder
-            "\n</system-reminder>\n\n"
-            "<queued-user-message-batch count=\"1\">\n"
-            "<queued-user-message index=\"1\">\nfollow up\n"
-            "</queued-user-message>\n"
-            "</queued-user-message-batch>\n")
-    (let ((segments (mevedel-transcript-segments 20 (point-max))))
-      (should (equal '(user reminder queued-message)
-                     (mapcar #'car segments)))))
 
   :doc "leaves incomplete live control text as ordinary transcript text"
   (with-temp-buffer
@@ -1119,31 +1074,6 @@ TOOL-PROP."
       (should-not (get-text-property second-prompt-start 'gptel))
       (should-not (get-text-property response-prefix-start 'gptel))
       (should (eq (get-text-property response-start 'gptel) 'response))))
-  :doc "keeps queued user batches out of repaired assistant prefixes"
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n:END:\n")
-    (let (user-start user-end prefix-start response-start response-end)
-      (setq user-start (point))
-      (insert "<system-reminder>\n"
-              "Queued messages arrived.\n"
-              "</system-reminder>\n\n"
-              "<queued-user-message-batch count=\"1\">\n"
-              "<queued-user-message index=\"1\">\n"
-              "Please keep going.\n"
-              "</queued-user-message>\n"
-              "</queued-user-message-batch>\n")
-      (setq user-end (point))
-      (setq prefix-start (point))
-      (insert "Conti")
-      (setq response-start (point))
-      (insert "nuing the answer.\n")
-      (setq response-end (point))
-      (put-text-property response-start response-end
-                         'gptel 'response)
-      (mevedel-transcript-normalize-properties)
-      (should (mevedel-transcript-test--all-gptel-prop-p user-start user-end nil))
-      (should (mevedel-transcript-test--all-gptel-prop-p prefix-start response-end 'response))))
   :doc "repairs multi-run response prefixes after reasoning blocks"
   (with-temp-buffer
     (org-mode)
@@ -1224,7 +1154,6 @@ TOOL-PROP."
                               "(:name \"Bash\" :args (:command \"date\"))\n\n"
                               "partial output")
                      "<system-reminder>\npartial reminder"
-                     "<queued-user-message-batch count=\"1\">\npartial queue"
                      "<hook-context>\npartial hook"
                      "<!-- mevedel-render-data -->\n(:kind agent-transcript)"
                      ":PROMPT:\npartial prompt"))

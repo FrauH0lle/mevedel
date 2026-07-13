@@ -744,7 +744,7 @@ Returns:
         'unknown)))))
 
 (defun mevedel-skills--gptel-send-advice (orig-fn &rest args)
-  "`:around' advice on `gptel-send' for command dispatch.
+  "`:around' advice on raw `gptel-send' buffers for command dispatch.
 
 ORIG-FN and ARGS are the original `gptel-send' function and arguments.
 
@@ -757,10 +757,14 @@ Dispatches the leading `/command' or `$skill' on the prompt region first.
   the `$skill' command.
 - No command present -> proceed unchanged.
 
-Pending-stash cleanup is tied to the continuation that actually resumes
-ORIG-FN so async shell preparation does not clear the stash before the
-request begin handler can drain it."
-  (if (not (bound-and-true-p mevedel--session))
+Paired mevedel view/data buffers already own a deterministic submission plan;
+the advice must not rescan their derived prompt text.  Pending-stash cleanup
+is tied to the continuation that actually resumes ORIG-FN so async shell
+preparation does not clear the stash before the request begin handler can
+drain it."
+  (if (or (not (bound-and-true-p mevedel--session))
+          (and (boundp 'mevedel--view-buffer)
+               (buffer-live-p mevedel--view-buffer)))
       (apply orig-fn args)
     (cl-labels
         ((continue ()

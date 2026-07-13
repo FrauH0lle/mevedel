@@ -293,7 +293,7 @@ the next send.
 | `mevedel-view-abort`                 | Abort the active request from the view buffer.           |
 | `mevedel-view-toggle-section`        | Expand or collapse the section or turn at point.         |
 | `mevedel-view-cycle-permission-mode` | Cycle the current session's permission mode.             |
-| `mevedel-view-edit-last-queued-message` | Move the queued follow-up batch back into the composer. |
+| `mevedel-view-edit-last-queued-message` | Move queued follow-ups back into the composer.          |
 | `mevedel-view-clear-queued-messages` | Clear queued follow-up prompts for the current session.  |
 | `mevedel-view-toggle-transcript`     | Switch from the view to the raw data buffer.             |
 | `mevedel-view-rerender`              | Debounced full refresh of the rendered view.             |

@@ -105,9 +105,8 @@ Full rerenders parse the data buffer through
 `mevedel-transcript-segments`, after skipping gptel-org leading
 metadata and any leading compaction summary. `mevedel-view.el` owns the
 surrounding view coordination, while `mevedel-view-render.el` owns turn
-grouping and rendering. Transcript span classification, tool block
-recovery, generated queued-message parsing, and mailbox, reminder,
-hook-context, render-data, prompt, and ignored-range recognition live in
+grouping and rendering. Transcript span classification, tool block recovery,
+and mailbox, reminder, hook-context, render-data, prompt, and ignored-range recognition live in
 `mevedel-transcript.el` so persistence and compaction use the same structural
 view of the buffer. Hidden audit record grammar and
 attachment spans live in `mevedel-transcript-audit.el`; the view consumes
@@ -236,7 +235,7 @@ Current fragment namespaces:
 - `status`: `tasks` and `agents` status-zone blocks. Task and aggregate-agent
   disclosure state is backed by fragment collapse state.
 - `interaction`: queued user controls plus a non-navigatable `:separator`
-  fragment. Ask, permission, plan, RequestAccess, preview, and queued-message
+  fragment. Ask, permission, plan, RequestAccess, preview, and queued-user-message
   callers continue to use the descriptor registry.
 - `progress`: the foreground `request` progress row between the interaction
   zone and input prompt.
@@ -456,8 +455,8 @@ as a zero-width overlay near point from `argument-hint` or remaining
 `arguments` names. They are not buffer text and are never sent to the
 model.
 
-Text inserted as a user turn must be plain transcript text. User send,
-queued-drain, and synthetic user-role insertion paths strip copied view,
+Text inserted as a user turn must be plain transcript text. User send and
+queued-drain paths strip copied view,
 tool, read-only, and `gptel` text properties, then restore only internal
 render-data blocks as `'gptel 'ignore`; UI properties copied from the view
 must not become model-visible transcript state.
@@ -486,29 +485,23 @@ uses the same pending-grant path.
 ## Queued Follow-Ups
 
 Plain user input submitted while a request is active is queued on the
-session as a transient FIFO and shown in the interaction zone.
-`UserPromptSubmit` runs when the prompt is queued; accepted entries store
-their prepared model input, display text, hook context, and history
-input. Slash commands are not queued; they continue to be rejected until
-the active request finishes.
+session as a transient FIFO and shown in the interaction zone. The entry keeps
+the original atomically bound text and any dropped-file grants; queueing does
+not prepare skills or run prompt hooks. Slash commands are not queued and
+remain rejected until the active request finishes.
 
-At the next `WAIT` boundary before an HTTP request is sent, all prepared
-queued prompts drain as one explicit user-role batch block in FIFO order.
-The same batch block is written to the data buffer transcript so the
-view/audit log matches the request payload. Direct `WAIT` injection is
-rendered live as generated user messages; the system-reminder and
-queued-message XML wrappers are display/control wrappers, not prose the
-user typed. If no `WAIT` boundary occurs before the active turn reaches
-successful `DONE`, the zero-delay post-`DONE` drain sends the queued batch
-as the next normal user turn. Aborted and errored turns leave queued prompts
-pending for review.
+After a successful turn, the next entry drains as its own normal user turn. It
+is planned and prepared at that point, then passes through `UserPromptSubmit`
+once before request or fork dispatch. The entry leaves the FIFO only at that
+dispatch boundary, so planning, preparation, and hook failures keep it
+editable. Each successful queued turn schedules the next entry; aborted and
+errored turns leave the remaining FIFO pending for review. There is no `WAIT`
+injection or synthetic queued-message transcript format.
 
-Queued entries that contain `@` mentions, including dropped-file grants,
-skip the direct `WAIT` injection path. They drain after the active turn as
-a normal send so gptel prompt transforms can expand mentions and attach
-media consistently.
+`@` mentions and dropped-file grants therefore follow the same ordinary send
+path as direct composer input and are expanded or activated for their own turn.
 
-Editing queued prompts removes the whole uncommitted batch from the FIFO
+Editing queued prompts removes the whole uncommitted FIFO
 and restores a combined draft to the composer, so it cannot be
 auto-submitted while being edited.
 

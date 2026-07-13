@@ -148,14 +148,14 @@ artifacts where appropriate.
 `mevedel-transcript.el` owns the canonical transcript grammar. Its primary
 entry point, `mevedel-transcript-segments`, classifies data-buffer spans as
 `(TYPE START END)` where type is `user`, `response`, `tool`, `reasoning`,
-`mailbox`, `reminder`, `queued-message`, `hook-context`, `render-data`,
-`prompt`, or `ignored`. It combines gptel text-property runs with generated
+`mailbox`, `reminder`, `hook-context`, `render-data`, `prompt`, or `ignored`.
+It combines gptel text-property runs with generated
 control ranges, protects literal user examples from structural recognition,
 and repairs known org/gptel boundary damage.
 
 The module also owns the small structural helpers needed to skip leading
 property drawers and compaction summaries, recover whole org tool
-blocks, split generated queued-user batches, parse agent mailbox blocks,
+blocks, parse agent mailbox blocks,
 and find the first real user prompt line outside tool/reasoning/summary
 scaffolding.
 

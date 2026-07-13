@@ -70,6 +70,7 @@
 (require 'mevedel-skills-core)
 (require 'mevedel-skill-bindings)
 (require 'mevedel-skills-invoke)
+(require 'mevedel-skills-plan)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-skills-ui)
 (require 'mevedel-cockpit)
@@ -535,7 +536,9 @@ always prompt for the session name."
   ;; Expand @ref/@file mentions early in the gptel transform chain
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions -90)
 
-  ;; Add prepared inline `$skill' attachments through the same hidden context path
+  ;; Bare gptel buffers use their inline-attachment path.  Paired
+  ;; mevedel views prepare complete plans before `gptel-send', so their stash
+  ;; is empty and this transform is a no-op.
   (add-hook 'gptel-prompt-transform-functions
             #'mevedel-skills--transform-expand-inline-attachments -89)
 

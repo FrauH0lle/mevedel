@@ -72,8 +72,6 @@
     ;; WAIT entry should have deferred inject handler prepended
     (should (memq #'mevedel-tools--handle-deferred-inject
                   (cdr (assq 'WAIT result))))
-    (should (memq #'mevedel-view--handle-queued-user-message-inject
-                  (cdr (assq 'WAIT result))))
     (should (memq #'mevedel--compact-record-token-baseline
                   (cdr (assq 'TPRE result))))
     ;; DONE exposes one canonical named transaction; failure cleanup stays
@@ -88,7 +86,7 @@
       (should-not (memq #'mevedel--complete-turn errs-handlers))
       (should-not (memq #'mevedel--complete-turn abrt-handlers))))
 
-  :doc "wraps gptel wait after existing WAIT injectors"
+  :doc "wraps gptel wait after request-scoped WAIT handlers"
   (let* ((gptel-request--transitions
           '((INIT . ((t . WAIT)))
             (WAIT . ((t . TYPE)))
@@ -107,9 +105,6 @@
                      wait-handlers))
          (skill-pos (cl-position #'mevedel-skills--apply-overrides-handler
                                  wait-handlers))
-         (queued-pos
-          (cl-position #'mevedel-view--handle-queued-user-message-inject
-                       wait-handlers))
          (message-pos (cl-position #'mevedel-tools--handle-message-inject
                                    wait-handlers))
          (deferred-pos (cl-position #'mevedel-tools--handle-deferred-inject
@@ -117,8 +112,7 @@
     (should-not (memq #'gptel--handle-wait wait-handlers))
     (should gate-pos)
     (should (equal (nth (1+ gate-pos) wait-handlers) 'after-wait))
-    (dolist (pos (list begin-pos skill-pos queued-pos
-                       message-pos deferred-pos))
+    (dolist (pos (list begin-pos skill-pos message-pos deferred-pos))
       (should pos)
       (should (< pos gate-pos)))))
 

@@ -82,8 +82,6 @@
                   "mevedel-transcript" (limit))
 (declare-function mevedel-transcript--mailbox-find-close
                   "mevedel-transcript" (open-regexp close-tag limit))
-(declare-function mevedel-transcript--queued-user-message-batch-items-from-text
-                  "mevedel-transcript" (text))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
                   "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
@@ -833,19 +831,6 @@ real user message."
                    data-buf
                    (mevedel-view--review-action-segment-p
                     data-buf seg-start (caddr seg))))
-             (queued-batch-p (eq type 'queued-message))
-             (queued-batch-continuation-p
-              (and (eq type 'user)
-                   data-buf
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)
-                   (mevedel-view--queued-user-message-batch-items-from-text
-                    (mevedel-view--queued-user-message-batch-normalized-text
-                     (mevedel-view--segments-raw-text
-                      (append (plist-get (car turns) :segments)
-                              (list seg))
-                      data-buf)))))
              (system-reminder-p (eq type 'reminder))
              (inline-skill-render-p
               (and data-buf
@@ -878,25 +863,11 @@ real user message."
             (setq current-role 'assistant
                   turn-start seg-start))
           (push (list 'request-summary seg-start (caddr seg)) current-segs))
-         (queued-batch-p
-          (when current-segs
-            (push (list :role current-role
-                        :segments (nreverse current-segs)
-                        :start turn-start
-                        :end (caddr (car current-segs)))
-                  turns))
-          (push (list :role 'user
-                      :segments (list seg)
-                      :start seg-start
-                      :end (caddr seg))
-                turns)
-          (setq current-segs nil current-role nil turn-start nil))
          (scaffolding-before-hook-audit-p
           nil)
          ((or prompt-drawer-after-user-p
               hook-audit-after-user-p
               hook-context-after-user-p
-              queued-batch-continuation-p
               (and inline-skill-render-p
                    (null current-role)
                    turns
@@ -2492,8 +2463,6 @@ the render so user toggles survive streaming ticks."
     ;; content that arrived later in the turn.
     (while (and turns
                 (eq (plist-get (car turns) :role) 'user)
-                (not (mevedel-view--queued-user-message-batch-turn-p
-                      (car turns) data-buf))
                 (or mevedel-view--user-pre-rendered
                     pre-rendered-user-visible-p
                     (and data-from
@@ -2713,20 +2682,11 @@ TURN is a plist with :role, :segments, :start, :end."
 Returns the concatenated, trimmed text with org scaffolding removed.
 Empty string when the turn contains only whitespace or markers."
   (with-current-buffer data-buf
-    (let* ((batch-text (mevedel-view--queued-user-message-batch-normalized-text
-                        (mevedel-view--segments-raw-text segments data-buf)))
-           (batch-display
-            (and (mevedel-view--queued-user-message-batch-items-from-text
-                  batch-text)
-                 (mevedel-view--queued-user-message-batch-display-text
-                  batch-text))))
-      (if batch-display
-          (string-trim (mevedel-view--strip-hook-context-blocks batch-display))
-        (let ((parts nil))
-          (dolist (seg segments)
-            (let* ((seg-start (cadr seg))
-                   (seg-end (caddr seg))
-                   (text (buffer-substring-no-properties seg-start seg-end)))
+    (let (parts)
+      (dolist (seg segments)
+        (let* ((seg-start (cadr seg))
+               (seg-end (caddr seg))
+               (text (buffer-substring-no-properties seg-start seg-end)))
               ;; Strip org heading prefix (e.g., "*** ")
               (when (string-match "\\`\\*+ " text)
                 (setq text (substring text (match-end 0))))
@@ -2739,9 +2699,6 @@ Empty string when the turn contains only whitespace or markers."
               ;; buffer so the model can resolve follow-ups like "fix finding 2",
               ;; but the normal view should show only the user's visible prompt.
               (setq text (mevedel-view--strip-review-action-blocks text))
-              ;; Queued batches are model-visible control wrappers around real
-              ;; follow-up messages.  Render only the follow-up bodies.
-              (setq text (mevedel-view--queued-user-message-batch-display-text text))
               ;; Strip model-only prompt context added by UserPromptSubmit hooks.
               (setq text (mevedel-view--strip-hook-context-blocks text))
               ;; Strip prompt drawer content
@@ -2766,10 +2723,10 @@ Empty string when the turn contains only whitespace or markers."
                           "#\\+begin_tool[^\n]*\n?" "" text))
               (setq text (replace-regexp-in-string
                           "#\\+end_tool[^\n]*\n?" "" text))
-              (let ((trimmed (string-trim text)))
-                (unless (string-empty-p trimmed)
-                  (push trimmed parts)))))
-          (string-join (nreverse parts) "\n"))))))
+          (let ((trimmed (string-trim text)))
+            (unless (string-empty-p trimmed)
+              (push trimmed parts)))))
+      (string-join (nreverse parts) "\n"))))
 
 (defun mevedel-view--strip-hook-context-blocks (text)
   "Return TEXT without generated `<hook-context>' blocks."
@@ -2885,19 +2842,6 @@ Empty string when the turn contains only whitespace or markers."
                        body-start (match-beginning 0)))))))))
       events)))
 
-(defun mevedel-view--queued-user-message-batch-items-from-text (text)
-  "Return generated queued user-message items parsed from TEXT, or nil."
-  (require 'mevedel-transcript)
-  (mevedel-transcript--queued-user-message-batch-items-from-text text))
-
-(defun mevedel-view--queued-user-message-batch-normalized-text (text)
-  "Return TEXT normalized for generated queued-message batch parsing."
-  (let ((text (string-trim-left
-               (mevedel--strip-hook-audit-blocks text))))
-    (when (string-match "\\`\\*+ " text)
-      (setq text (substring text (match-end 0))))
-    text))
-
 (defun mevedel-view--segments-raw-text (segments data-buf)
   "Return raw DATA-BUF text covered by SEGMENTS."
   (with-current-buffer data-buf
@@ -2906,26 +2850,6 @@ Empty string when the turn contains only whitespace or markers."
        (buffer-substring-no-properties (cadr seg) (caddr seg)))
      segments
      "")))
-
-(defun mevedel-view--queued-user-message-batch-turn-p (turn data-buf)
-  "Return non-nil when TURN in DATA-BUF has a generated message batch."
-  (and (eq (plist-get turn :role) 'user)
-       (mevedel-view--queued-user-message-batch-items-from-text
-        (mevedel-view--queued-user-message-batch-normalized-text
-         (mevedel-view--segments-raw-text
-          (plist-get turn :segments)
-          data-buf)))))
-
-(defun mevedel-view--queued-user-message-batch-display-text (text)
-  "Return view display text for queued-message batch TEXT."
-  (if-let* ((items (mevedel-view--queued-user-message-batch-items-from-text
-                    text)))
-      (let* ((items (mapcar #'mevedel--strip-hook-audit-blocks items))
-             (label (if (= (length items) 1)
-                       "Queued message"
-                     (format "Queued messages (%d)" (length items)))))
-        (string-join (cons label items) "\n\n"))
-    text))
 
 (defun mevedel-view--user-turn-hook-contexts (segments data-buf)
   "Return hook context blocks found in user SEGMENTS from DATA-BUF."
@@ -3083,8 +3007,7 @@ EXPANDED means insert the disclosure body expanded."
     (let (info hook-audits)
       (dolist (seg segments)
         (when (memq (car seg)
-                    '(user queued-message hook-context prompt
-                      render-data ignored))
+                    '(user hook-context prompt render-data ignored))
           (let ((text (buffer-substring-no-properties
                        (cadr seg) (caddr seg))))
             (unless info

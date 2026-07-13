@@ -23,6 +23,7 @@
 (require 'mevedel-plugins)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skill-bindings)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
@@ -1060,6 +1061,23 @@ spanning lines")))
       (mevedel-skills--gptel-send-advice
        (lambda (&rest _) (setq orig-called t)))
       (should orig-called)))
+
+  :doc "paired view buffers bypass dollar rescanning of planned prompts"
+  (let ((session (mevedel-skills-test--make-session))
+        (view-buffer (generate-new-buffer " *mevedel-planned-view*"))
+        orig-called
+        dispatched)
+    (unwind-protect
+        (mevedel-skills-test--with-chat-buffer session
+          (setq-local mevedel--view-buffer view-buffer)
+          (insert "### prepared body says $nested")
+          (cl-letf (((symbol-function 'mevedel-skills--dispatch-skill-command)
+                     (lambda (&optional _) (setq dispatched t))))
+            (mevedel-skills--gptel-send-advice
+             (lambda (&rest _) (setq orig-called t))))
+          (should orig-called)
+          (should-not dispatched))
+      (kill-buffer view-buffer)))
 
   :doc "stash leaks are cleared after advice returns"
   ;; `unwind-protect' clears the pending stash if the begin handler did

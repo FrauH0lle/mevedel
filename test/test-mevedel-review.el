@@ -420,8 +420,8 @@
                progress-callback)
               (should (equal "review" (mevedel-skill-name captured-skill)))
               (should (equal "prompt" captured-arguments))
-              (should (eq 'user-skill
-                          (plist-get captured-options :trigger)))
+              (should (eq 'user
+                          (plist-get captured-options :origin)))
               (should (plist-get captured-options :skip-gates))
               (should (equal "target"
                              (plist-get captured-options :description)))
