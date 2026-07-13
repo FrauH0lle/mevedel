@@ -1095,12 +1095,15 @@ spanning lines")))
 (mevedel-deftest mevedel-slash-capf ()
   ,test
   (test)
-  :doc "global local commands include plugin and skills"
+  :doc "global commands expose Goal and omit the superseded Plan entry point"
   (let ((session (mevedel-skills-test--make-session)))
     (should (eq 'mevedel-plugins-slash-command
                 (cdr (assoc "plugin" mevedel-slash-commands))))
     (should (eq 'mevedel-cmd--skills
                 (cdr (assoc "skills" mevedel-slash-commands))))
+    (should (eq 'mevedel-cmd--goal
+                (cdr (assoc "goal" mevedel-slash-commands))))
+    (should-not (assoc "plan" mevedel-slash-commands))
     (mevedel-skills-test--with-chat-buffer session
       (insert "### /pl")
       (goto-char (point-max))

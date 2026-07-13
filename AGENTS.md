@@ -63,6 +63,8 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection,
   implemented reminder surface, and candidate reminder backlog grouped
   by implementation readiness
+- [`docs/goals.md`](docs/goals.md) — Goal lifecycle, approval policy,
+  continuation, recovery, model routing, execution home, and context
 - [`docs/sessions.md`](docs/sessions.md) — on-disk layout, segment
   persistence contract, resume/rewind/fork, locking, auto-cleanup,
   defcustoms
