@@ -60,7 +60,9 @@
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-execution-home "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-implementation-context "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-owner-session "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
@@ -72,6 +74,7 @@
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal-handoff "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
@@ -257,7 +260,7 @@ add more, and we don't want to act on actions we don't understand).")
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
     :prompt-index :file-snapshots :agent-transcripts :plan-metadata :goal
-    :messages)
+    :goal-handoff :messages)
   "Keys required in every current-version session sidecar.")
 
 
@@ -358,6 +361,8 @@ containment semantics as session creation."
         :phase (mevedel-goal-phase goal)
         :approval-policy (mevedel-goal-approval-policy goal)
         :owner-session (mevedel-goal-owner-session goal)
+        :execution-home (mevedel-goal-execution-home goal)
+        :implementation-context (mevedel-goal-implementation-context goal)
         :pause-requested (mevedel-goal-pause-requested goal)
         :current-plan (mevedel-goal-current-plan goal)
         :review-summary (mevedel-goal-review-summary goal)
@@ -378,14 +383,16 @@ containment semantics as session creation."
           (status (plist-get plist :status))
           (phase (plist-get plist :phase))
           (policy (plist-get plist :approval-policy))
+          (owner (plist-get plist :owner-session))
           (cycle (plist-get plist :cycle))
           (cycles (plist-get plist :cycles)))
       (unless
           (and (proper-list-p plist)
                (cl-every
                 (lambda (key) (plist-member plist key))
-                '(:id :objective :status :phase :approval-policy :cycle
-                  :cycles :token-budget :token-usage :continuation-key))
+                '(:id :objective :status :phase :approval-policy :owner-session
+                  :execution-home :implementation-context :cycle :cycles
+                  :token-budget :token-usage :continuation-key))
                (stringp id)
                (string-match-p "\\`[[:alnum:]_.-]+\\'" id)
                (not (member id '("." "..")))
@@ -395,6 +402,22 @@ containment semantics as session creation."
                (memq phase '(planning awaiting-approval
                               implementing reviewing))
                (memq policy '(supervised automatic))
+               (stringp owner)
+               (let ((home (plist-get plist :execution-home)))
+                 (and (proper-list-p home)
+                      (plist-member home :locked)
+                      (memq (plist-get home :locked) '(nil t))
+                      (memq (plist-get home :kind) '(current worktree))
+                      (stringp (plist-get home :directory))
+                      (file-name-absolute-p
+                       (plist-get home :directory))
+                      (stringp (plist-get home :session-id))
+                      (equal owner (plist-get home :session-id))
+                      (or (eq (plist-get home :kind) 'current)
+                          (null (plist-get home :branch))
+                          (stringp (plist-get home :branch)))))
+               (memq (plist-get plist :implementation-context)
+                     '(full focused))
                (integerp cycle)
                (> cycle 0)
                (proper-list-p cycles)
@@ -467,6 +490,8 @@ containment semantics as session creation."
      :phase (plist-get plist :phase)
      :approval-policy (plist-get plist :approval-policy)
      :owner-session (plist-get plist :owner-session)
+     :execution-home (copy-tree (plist-get plist :execution-home))
+     :implementation-context (plist-get plist :implementation-context)
      :pause-requested (plist-get plist :pause-requested)
      :current-plan (copy-tree (plist-get plist :current-plan))
      :review-summary (copy-tree (plist-get plist :review-summary))
@@ -568,6 +593,7 @@ The resulting plist is round-trippable via
    :plan-metadata          (mevedel-session-plan-metadata session)
    :goal                   (when-let* ((goal (mevedel-session-goal session)))
                              (mevedel-session-persistence--goal-to-plist goal))
+   :goal-handoff           (mevedel-session-goal-handoff session)
    ;; Inbound mailbox.  Background sub-agents push agent-result
    ;; blocks here when they finalize; if Emacs restarts before the
    ;; parent's next WAIT drains them, the messages would otherwise
@@ -590,6 +616,15 @@ The resulting plist is round-trippable via
                    (cl-every (lambda (key) (plist-member prompt key))
                              '(:turn :file-turn :cum-turn)))
         (error "Invalid session prompt entry: %S" prompt))))
+  (when-let* ((handoff (plist-get plist :goal-handoff)))
+    (unless (and (proper-list-p handoff)
+                 (stringp (plist-get handoff :goal-id))
+                 (stringp (plist-get handoff :target-session-id))
+                 (stringp (plist-get handoff :target-directory))
+                 (memq (plist-get handoff :state) '(prepared complete))
+                 (file-name-absolute-p
+                  (plist-get handoff :target-directory)))
+      (error "Invalid Goal handoff")))
   plist)
 
 (defun mevedel-session-persistence-deserialize (plist)
@@ -657,12 +692,18 @@ unknown actions are dropped via the hygiene filter."
                      :goal
                      (mevedel-session-persistence--goal-from-plist
                       (plist-get plist :goal))
+                     :goal-handoff (copy-tree
+                                    (plist-get plist :goal-handoff))
                      :agent-transcripts
                      (mevedel-session-persistence--sanitize-agent-transcripts
                       (plist-get plist :agent-transcripts))
                      :messages
                      (mevedel-session-persistence--sanitize-messages
                       (plist-get plist :messages)))))
+    (when-let* ((goal (mevedel-session-goal session)))
+      (unless (equal (mevedel-session-session-id session)
+                     (mevedel-goal-owner-session goal))
+        (error "Goal owner does not match session")))
     (when-let* ((goal (mevedel-session-goal session))
                 ((not (eq (mevedel-goal-status goal) 'complete))))
       (let ((prior-status (mevedel-goal-status goal))
@@ -3550,6 +3591,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     (setf (mevedel-session-preset-settings child)
           (copy-tree (mevedel-session-preset-settings session))
           (mevedel-session-goal child) nil
+          (mevedel-session-goal-handoff child) nil
           (mevedel-session-prompt-index child)
           (mevedel-session-persistence--reduce-prompt-index
            (mevedel-session-prompt-index session)

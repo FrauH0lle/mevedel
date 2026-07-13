@@ -16,7 +16,10 @@ Agents declared with `mevedel-define-agent`:
 Interactive implementation planning is the first phase of `/goal <objective>`,
 not a planner sub-agent. The Goal controller keeps planning and review
 read-only, extracts `<proposed_plan>` blocks, asks for approval, and routes an
-accepted plan through implementation and review in the same session.
+accepted plan through implementation and review in its recorded execution-home
+session. Current-checkout Goals remain in place. Worktree Goals transfer once
+to a `goal/<goal-id>` linked-worktree session; the source keeps only a handoff
+pointer and cannot continue the Goal.
 For `/goal auto <objective>`, each proposal first goes through an internal
 `goal-guardian` workload request. That request has no tools and is not inserted
 as a conversational turn. Its approve-or-ask decision is persisted and shown

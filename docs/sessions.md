@@ -79,10 +79,11 @@ count, whether request startup began, and prior settled boundary before
 transport starts.
 
 Goal sidecars also hold the optional aggregate token budget, charged usage,
-and the last admitted continuation key. Provider usage is authoritative when
-available; otherwise the existing chat estimator accounts for request growth.
-Budget exhaustion and duplicate continuation state both persist a paused Goal,
-never a completion verdict.
+the last admitted continuation key, one execution-home record, and the selected
+`full` or `focused` implementation context. Provider usage is authoritative
+when available; otherwise the existing chat estimator accounts for request
+growth. Budget exhaustion and duplicate continuation state both persist a
+paused Goal, never a completion verdict.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree
@@ -92,6 +93,28 @@ history. Unless `--clean` is used, the new data buffer starts with a
 visible setup-context user turn explaining the source session, source
 directory, worktree directory, branch, purpose, and warnings. That turn is
 not sent automatically.
+
+A Goal chooses one execution home. The default is its current session checkout.
+A supervised approval can instead select `worktree`; an automatic Goal captures
+that choice when it starts. mevedel then creates one `goal/<goal-id>` worktree.
+A durable lock bit is set on first approval, so later cycles cannot change the
+execution home even after their prior plan reference is retired.
+A persisted `prepared` handoff gates source continuation while the target Goal
+and accepted plan are saved; the handoff becomes `complete` when source
+ownership is released. Only the target session can continue, and its
+owner/session/directory tuple gates every implementation, review, recovery, and
+automatic transition. Normal rewind forks clear both Goal ownership and handoff
+pointers. `/goal clear` removes lifecycle state without deleting the worktree.
+An ordinary transfer error restores and persists source ownership, removes the
+unused target worktree and branch, and leaves the same Goal eligible to retry.
+If restored source ownership cannot be persisted, the prepared source gate and
+target worktree are retained instead; mevedel reports the dual-state recovery
+location rather than deleting the only durable target.
+
+Full implementation preserves the existing transcript. Focused implementation
+starts a fresh request with the current system prompt, authoritative Goal
+objective, and accepted plan. Worktree Goals begin focused; supervised approval
+may explicitly select full context.
 
 When a saved session's working directory no longer exists, resume prompts
 for an existing replacement inside the workspace and persists that directory

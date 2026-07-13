@@ -620,6 +620,16 @@ Use `M-x mevedel-goal-set-token-budget` to raise, remove, or add the limit,
 then `/goal resume`. Re-admitting identical durable state pauses the Goal to
 prevent request loops.
 
+Each Goal records one execution home. The default is the current session and
+full conversation context. At supervised plan approval, `w` toggles between
+the current checkout and one Goal-owned worktree; `RET` implements with full
+context and `I` uses focused context. Worktree selection transfers the complete
+Goal to the new worktree session, leaving only a durable handoff pointer in the
+source. Worktree Goals begin focused, but supervised approval may explicitly
+select full context. Automatic Goals read
+`mevedel-goal-execution-home` and `mevedel-goal-implementation-context` when
+they start. Clearing a Goal never removes its worktree.
+
 ### Review and Verify Commands
 
 `M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run
