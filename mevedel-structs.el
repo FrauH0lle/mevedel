@@ -243,14 +243,16 @@ workspace."
   permission-queue
   ;; Plan approval FIFO queue.  Same FIFO machinery as
   ;; permission-queue but a separate slot since approval outcomes
-  ;; (`implement' / `implement-clear' / `feedback' / `aborted')
+  ;; (`implement' / `feedback' / `aborted')
   ;; differ from permission outcomes and never coalesce.
   ;; Transient.
   plan-queue
   ;; Plan artifact metadata.  Goal plan paths are recorded here.
   plan-metadata
   ;; The session-owned current `mevedel-goal', or nil.
-  goal)
+  goal
+  ;; Durable pointer left by a Goal transferred to another session.
+  goal-handoff)
 
 
 ;;
@@ -264,6 +266,8 @@ workspace."
   phase              ; planning, awaiting-approval, implementing, or reviewing
   approval-policy    ; supervised or automatic
   owner-session      ; owning session id/name
+  execution-home     ; plist naming current checkout or owned worktree
+  implementation-context ; full or focused
   current-plan       ; current accepted/presented artifact plist
   review-summary     ; latest structured review result plist
   cycle              ; current one-based cycle number

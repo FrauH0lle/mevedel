@@ -1442,34 +1442,43 @@ with NO-SPINNER forwarded when non-nil."
   "Implement the plan described by ACTION-PLIST.
 
 ACTION-PLIST is a plist with keys:
-  :action        - `implement' or `implement-clear'
+  :context       - `full' or `focused'
   :plan-file     - Path to the saved plan file
   :permission-mode - Permission mode for implementation
+  :goal-objective - Authoritative objective for focused context
+  :goal-context   - Deterministic lifecycle context for focused execution
 
-For `implement', the plan is inserted into the chat buffer as a user
-message and sent via `gptel-send', including full conversation context.
+For `full', the plan is inserted into the chat buffer as a user message and
+sent via `gptel-send', including full conversation context.
 
-For `implement-clear', a fresh `gptel-request' is fired with the plan
-as a string prompt, without prior conversation context."
+For `focused', a fresh `gptel-request' is fired with the objective and plan as
+the authoritative prompt, without prior conversation context."
   (require 'mevedel-utilities)
   (let* ((plan-file (plist-get action-plist :plan-file))
          (permission-mode (plist-get action-plist :permission-mode))
+         (context (plist-get action-plist :context))
+         (objective (plist-get action-plist :goal-objective))
+         (goal-context (plist-get action-plist :goal-context))
          (chat-buffer (current-buffer))
          (plan-content (with-temp-buffer
                          (insert-file-contents plan-file)
                          (buffer-string)))
-         (prompt (format "Implement the following plan:\n\n%s" plan-content)))
+         (prompt
+          (if (eq context 'focused)
+              (format "Goal context:\n%s\n\nGoal objective:\n%s\n\nImplement the accepted plan:\n\n%s"
+                      goal-context objective plan-content)
+            (format "Implement the following plan:\n\n%s" plan-content))))
     (with-current-buffer chat-buffer
       (condition-case err
           (progn
             (mevedel--implementation-permission-mode-apply permission-mode)
             ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
             (mevedel--close-unclosed-blocks)
-            (pcase (plist-get action-plist :action)
-              ('implement
+            (pcase context
+              ('full
                (mevedel--send-plan-implementation-turn
                 prompt "Implement accepted plan" #'gptel-send))
-              ('implement-clear
+              ('focused
                (mevedel--send-plan-implementation-turn
                 prompt "Implement accepted plan with cleared context"
                 (lambda ()
@@ -1482,8 +1491,7 @@ as a string prompt, without prior conversation context."
                       :fsm (gptel-make-fsm
                             :handlers gptel-send--handlers))))))
               (_
-               (error "Unknown plan implementation action: %s"
-                      (plist-get action-plist :action)))))
+               (error "Unknown implementation context: %s" context))))
         (error
          (mevedel--implementation-permission-mode-restore)
          (signal (car err) (cdr err)))))))

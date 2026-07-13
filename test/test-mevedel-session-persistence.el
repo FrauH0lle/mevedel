@@ -129,6 +129,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :agent-transcripts nil
                :plan-metadata nil
                :goal nil
+               :goal-handoff nil
                :messages nil)))
     (while plist
       (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
@@ -228,6 +229,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 :id "g1" :objective "Ship" :status 'blocked
                 :phase 'reviewing :approval-policy 'supervised
                 :owner-session "main" :cycle 2
+                :execution-home '(:kind current :directory "/tmp/"
+                                  :session-id "main" :locked t)
+                :implementation-context 'full
                 :cycles '((:cycle 1) (:cycle 2))
                 :token-budget 1000 :token-usage 345
                 :continuation-key "key"
@@ -245,6 +249,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should (= 2 (plist-get plist :cycle)))
     (should (= 1000 (plist-get plist :token-budget)))
     (should (= 345 (plist-get plist :token-usage)))
+    (should (eq 'current
+                (plist-get (plist-get plist :execution-home) :kind)))
+    (should (eq t (plist-get (plist-get plist :execution-home) :locked)))
+    (should (eq 'full (plist-get plist :implementation-context)))
     (should (equal "Exact review"
                    (plist-get (plist-get plist :checkpoint) :input)))
     (should (equal "Need an API credential." (plist-get plist :reason)))))
@@ -264,6 +272,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
          (goal (mevedel-session-persistence--goal-from-plist
                 (list :id "g1" :objective "Ship" :status 'active
                       :phase 'planning :approval-policy 'supervised
+                      :owner-session "main"
+                      :execution-home '(:kind current :directory "/tmp/"
+                                        :session-id "main" :locked t)
+                      :implementation-context 'full
                       :cycle 1 :cycles cycles :checkpoint checkpoint
                       :token-budget 1000 :token-usage 25
                       :continuation-key "key"))))
@@ -275,12 +287,21 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should-not (eq checkpoint (mevedel-goal-checkpoint goal)))
     (should (= 1000 (mevedel-goal-token-budget goal)))
     (should (= 25 (mevedel-goal-token-usage goal)))
+    (should (eq 'current
+                (plist-get (mevedel-goal-execution-home goal) :kind)))
+    (should (eq t
+                (plist-get (mevedel-goal-execution-home goal) :locked)))
+    (should (eq 'full (mevedel-goal-implementation-context goal)))
     (should (equal "key" (mevedel-goal-continuation-key goal))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-persistence--goal-from-plist nil))
   :doc "rejects unsafe IDs and malformed lifecycle state"
   (let ((valid '(:id "g1" :objective "Ship" :status active
                  :phase planning :approval-policy supervised
+                 :owner-session "main"
+                 :execution-home (:kind current :directory "/tmp/"
+                                  :session-id "main" :locked t)
+                 :implementation-context full
                  :cycle 1 :cycles ((:cycle 1))
                  :token-budget nil :token-usage 0
                  :continuation-key nil)))
@@ -289,6 +310,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                       (:phase editing)
                       (:cycle 0)
                       (:cycles ((:cycle "one")))
+                      (:execution-home
+                       (:kind current :directory "/tmp/" :session-id "main"))
+                      (:execution-home
+                       (:kind current :directory "/tmp/" :session-id "main"
+                        :locked yes))
                       (:checkpoint (:phase planning))
                       (:reason 42)))
       (let ((plist (copy-tree valid)))
@@ -362,7 +388,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
                           (mevedel-model-workloads
-                           (planning :tier strong)))))
+                           (planning :tier strong)))
+                        (mevedel-session-goal-handoff session)
+                        '(:goal-id "g1" :target-session-id "target"
+                          :target-directory "/tmp/target/" :state complete)))
                (plist (mevedel-session-persistence-serialize
                        session
                        :first-user-message "Refactor X"
@@ -400,7 +429,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (= 2 (length (plist-get plist :tasks))))
           (should (plist-get plist :workspace))
           (should (plist-get plist :prompt-index))
-          (should (plist-get plist :file-snapshots)))
+          (should (plist-get plist :file-snapshots))
+          (should (equal "target"
+                         (plist-get (plist-get plist :goal-handoff)
+                                    :target-session-id))))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "fork fields default nil for a non-fork session"
@@ -504,7 +536,12 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                         (mevedel-goal--create
                          :id "blocked-goal" :objective "Ship"
                          :status 'blocked :phase 'reviewing
-                         :approval-policy 'supervised :cycle 1
+                         :approval-policy 'supervised
+                         :owner-session "main-2026-04-23T14-30-a9f2" :cycle 1
+                         :execution-home
+                         '(:kind current :directory "/tmp/"
+                           :session-id "main-2026-04-23T14-30-a9f2" :locked t)
+                         :implementation-context 'full
                          :cycles '((:cycle 1))
                          :reason "Need an API credential.")))
                (_ (mevedel-session-persistence-write
@@ -527,6 +564,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   :doc "restoration reason remains stable across repeated reopen cycles"
   (let* ((goal '(:id "g1" :objective "Ship" :status active
                  :phase planning :approval-policy supervised
+                 :owner-session "test-session"
+                 :execution-home (:kind current :directory "/tmp/"
+                                  :session-id "test-session" :locked t)
+                 :implementation-context full
                  :cycle 1 :cycles ((:cycle 1))
                  :token-budget nil :token-usage 0
                  :continuation-key nil))
@@ -550,6 +591,11 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                   (blocked . paused) (complete . complete)))
     (let* ((goal (list :id "g1" :objective "Ship" :status (car case)
                        :phase 'planning :approval-policy 'supervised
+                       :owner-session "test-session"
+                       :execution-home
+                       '(:kind current :directory "/tmp/"
+                         :session-id "test-session" :locked t)
+                       :implementation-context 'full
                        :cycle 1 :cycles '((:cycle 1))
                        :token-budget nil :token-usage 0
                        :continuation-key nil))
@@ -4298,6 +4344,10 @@ The result is a plist whose :tempdir owns every created file."
                          :id "parent-goal" :objective "Ship"
                          :status 'active :phase 'planning
                          :approval-policy 'supervised :cycle 1
+                         :execution-home
+                         '(:kind current :directory "/tmp/"
+                           :session-id "parent" :locked t)
+                         :implementation-context 'full
                          :cycles '((:cycle 1)))))
                (before (mevedel-session-persistence-serialize session))
                (child

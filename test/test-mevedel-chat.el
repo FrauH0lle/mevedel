@@ -367,12 +367,40 @@
                         'mevedel--implementation-permission-mode-apply)
                        #'ignore))
               (mevedel--implement-plan
-               (list :action 'implement
+               (list :context 'full
                      :plan-file plan-file
                      :permission-mode 'default))))
           (should (string-match-p "Planning context" sent))
           (should (string-match-p "Implement the following plan" sent))
           (should (string-match-p "# Plan" sent)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-exists-p plan-file) (delete-file plan-file))))
+  :doc "sends only the objective and plan in focused context"
+  (let ((plan-file (make-temp-file "mevedel-plan-focused-"))
+        (buffer (generate-new-buffer " *mevedel-plan-focused*"))
+        prompt)
+    (unwind-protect
+        (progn
+          (write-region "# Focused plan" nil plan-file nil 'silent)
+          (with-current-buffer buffer
+            (org-mode)
+            (insert "Unrelated prior transcript")
+            (cl-letf (((symbol-function
+                        'mevedel--send-plan-implementation-turn)
+                       (lambda (request _display _send)
+                         (setq prompt request)))
+                      ((symbol-function
+                        'mevedel--implementation-permission-mode-apply)
+                       #'ignore))
+              (mevedel--implement-plan
+               (list :context 'focused :plan-file plan-file
+                     :permission-mode 'default
+                     :goal-objective "Ship safely"
+                     :goal-context "Goal ID: g1\nCycle: 1"))))
+          (should (string-match-p "Ship safely" prompt))
+          (should (string-match-p "Goal ID: g1" prompt))
+          (should (string-match-p "# Focused plan" prompt))
+          (should-not (string-match-p "Unrelated prior transcript" prompt)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (when (file-exists-p plan-file) (delete-file plan-file)))))
 

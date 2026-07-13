@@ -24,6 +24,21 @@
                 :table (make-hash-table :test #'equal)
                 :order nil :total-bytes 0)))
 
+(defun test-mevedel-goal--own (goal session root)
+  "Make GOAL a valid current-checkout Goal owned by SESSION at ROOT."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-ensure-files session (current-buffer))
+  (let ((id (mevedel-session-session-id session)))
+    (setf (mevedel-session-session-id session) id
+          (mevedel-session-working-directory session)
+          (file-name-as-directory root)
+          (mevedel-goal-owner-session goal) id
+          (mevedel-goal-execution-home goal)
+          (list :kind 'current :directory (file-name-as-directory root)
+                :session-id id :locked nil)
+          (mevedel-goal-implementation-context goal) 'full)
+    goal))
+
 (defun test-mevedel-goal--fsm (buffer phase)
   "Return a minimal FSM for BUFFER and Goal PHASE."
   (let ((attempt-id
@@ -45,6 +60,26 @@
    goal :guardian-audits
    (list (append decision (list :plan-hash plan-hash)))))
 
+(defun test-mevedel-goal--git (root &rest args)
+  "Run Git ARGS at ROOT or signal with its output."
+  (with-temp-buffer
+    (let* ((default-directory root)
+           (exit (apply #'process-file "git" nil t nil args)))
+      (unless (zerop exit)
+        (error "Git failed: %s" (buffer-string)))
+      (buffer-string))))
+
+(defun test-mevedel-goal--init-git (root)
+  "Create a real one-commit Git repository at ROOT."
+  (test-mevedel-goal--git root "init")
+  (test-mevedel-goal--git root "config" "user.email"
+                          "mevedel@example.invalid")
+  (test-mevedel-goal--git root "config" "user.name" "Mevedel Test")
+  (with-temp-file (file-name-concat root "file.txt")
+    (insert "base\n"))
+  (test-mevedel-goal--git root "add" "file.txt")
+  (test-mevedel-goal--git root "commit" "-m" "init"))
+
 (mevedel-deftest mevedel-goal--current ()
   ,test
   (test)
@@ -55,6 +90,52 @@
            (mevedel--session (mevedel-session--create
                               :name "main" :goal goal)))
       (should (eq goal (mevedel-goal--current))))))
+
+(mevedel-deftest mevedel-goal--owned-by-session-p ()
+  ,test
+  (test)
+  :doc "requires both lifecycle and execution-home ownership"
+  (let* ((session (mevedel-session--create :name "main" :session-id "s1"))
+         (goal (mevedel-goal--create
+                :owner-session "s1"
+                :execution-home
+                '(:kind current :directory "/tmp/" :session-id "s1"))))
+    (should (mevedel-goal--owned-by-session-p goal session))
+    (setf (plist-get (mevedel-goal-execution-home goal) :session-id) "s2")
+    (should-not (mevedel-goal--owned-by-session-p goal session))))
+
+(mevedel-deftest mevedel-goal--assert-execution-home ()
+  ,test
+  (test)
+  :doc "accepts only the owning session at its recorded directory"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-goal-home-" t)))
+         (session (mevedel-session--create
+                   :name "main" :session-id "s1" :working-directory root))
+         (goal (mevedel-goal--create
+                :owner-session "s1"
+                :execution-home
+                (list :kind 'current :directory root :session-id "s1"))))
+    (unwind-protect
+        (progn
+          (should (equal root
+                         (mevedel-goal--assert-execution-home goal session)))
+          (setf (mevedel-session-working-directory session) "/tmp/")
+          (should-error (mevedel-goal--assert-execution-home goal session)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal--focused-context ()
+  ,test
+  (test)
+  :doc "renders stable Goal identity, progress, and execution-home context"
+  (let* ((goal (mevedel-goal--create
+                :id "g1" :phase 'implementing :cycle 3
+                :execution-home
+                '(:kind worktree :directory "/tmp/goal/" :session-id "s1")))
+         (context (mevedel-goal--focused-context goal)))
+    (dolist (needle '("Goal ID: g1" "Phase: implementing" "Cycle: 3"
+                      "Execution home: /tmp/goal/"))
+      (should (string-match-p (regexp-quote needle) context)))))
 
 (mevedel-deftest mevedel-goal--relative-dir ()
   ,test
@@ -177,20 +258,37 @@
               (should (eq 'planning (mevedel-goal-phase goal)))
               (should (eq 'supervised (mevedel-goal-approval-policy goal)))
               (should (equal "Fix the race" (mevedel-goal-objective goal)))
+              (should (eq 'current
+                          (plist-get (mevedel-goal-execution-home goal)
+                                     :kind)))
+              (should (eq 'full
+                          (mevedel-goal-implementation-context goal)))
+              (should (equal (mevedel-session-session-id session)
+                             (mevedel-goal-owner-session goal)))
               (should (eq 'planning (car dispatched)))
               (should (string-match-p "<proposed_plan>"
                                       (cadr dispatched))))))
       (delete-directory root t)))
   :doc "creates an automatic Goal only when explicitly requested"
-  (with-temp-buffer
-    (let* ((session (mevedel-session--create
-                     :name "main" :permission-mode 'accept-edits))
-           (mevedel--session session)
-           (mevedel-goal-dispatch-function #'ignore)
-           (goal (mevedel-goal-start "Ship" nil 'automatic)))
-      (should (eq 'automatic (mevedel-goal-approval-policy goal)))
-      (should (eq 'accept-edits
-                  (mevedel-session-permission-mode session)))))
+  (let* ((root (make-temp-file "mevedel-goal-auto-start-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-permission-mode session) 'accept-edits)
+          (let* ((mevedel-goal-execution-home 'worktree)
+                 (mevedel-goal-implementation-context 'full)
+                 (mevedel-goal-dispatch-function #'ignore)
+                 (goal (mevedel-goal-start "Ship" nil 'automatic)))
+            (should (eq 'automatic (mevedel-goal-approval-policy goal)))
+            (should (eq 'worktree
+                        (plist-get (mevedel-goal-execution-home goal) :kind)))
+            (should (eq 'focused
+                        (mevedel-goal-implementation-context goal)))
+            (should (eq 'accept-edits
+                        (mevedel-session-permission-mode session)))))
+      (delete-directory root t)))
   :doc "rejects a blank objective and declined unfinished replacement"
   (let* ((root (make-temp-file "mevedel-goal-replace-" t))
          (session (mevedel-session-create
@@ -348,6 +446,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (mevedel-goal-set-token-budget 100)
           (should (= 100 (mevedel-goal-token-budget goal)))
@@ -409,6 +508,7 @@
       (unwind-protect
           (with-temp-buffer
             (setq-local mevedel--session session)
+            (test-mevedel-goal--own goal session root)
             (setf (mevedel-session-goal session) goal)
             (let ((mevedel-goal-dispatch-function
                    (lambda (phase &rest _) (setq dispatched phase))))
@@ -424,9 +524,11 @@
                         :id "g1" :objective "Ship" :status 'paused
                         :phase 'awaiting-approval :cycle 1
                         :cycles '((:cycle 1))))
-                 (session (mevedel-session--create
-                           :name "main" :goal goal :save-path root)))
+                 (session (mevedel-session-create
+                           "main" (test-mevedel-goal--workspace root) root)))
             (setq-local mevedel--session session)
+            (test-mevedel-goal--own goal session root)
+            (setf (mevedel-session-goal session) goal)
             (mevedel-plan-write-current "# Plan" session (current-buffer))
             (cl-letf (((symbol-function 'mevedel-queue--render-head)
                        #'ignore))
@@ -445,6 +547,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (let ((mevedel-goal-dispatch-function #'ignore))
             (mevedel-goal-resume "Credentials installed"))
@@ -472,6 +575,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (&rest _)
@@ -507,6 +611,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (&rest _)
@@ -533,6 +638,7 @@
         (with-temp-buffer
           (setq-local mevedel--session session
                       mevedel-goal-token-budget 20)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-goal--guard-current-plan)
                      (lambda (&rest _) (setq guarded t))))
@@ -611,6 +717,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (&rest _)
@@ -683,6 +790,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (&rest _)
@@ -729,6 +837,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (let ((checkpoint
                  (mevedel-goal--checkpoint-prepare
@@ -761,6 +870,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (mevedel-goal--checkpoint-prepare
            'planning "Exact" 'planning
@@ -922,6 +1032,7 @@
           (write-region "partial mutation" nil work nil 'silent)
           (setq-local mevedel--session session
                       default-directory (file-name-as-directory root))
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel--implement-plan)
                      (lambda (&rest _) (setq replayed t))))
@@ -1132,6 +1243,7 @@
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal
                 (mevedel-session-permission-mode session) 'accept-edits)
           (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
@@ -1147,7 +1259,7 @@
                        (setq implementation input)
                        nil)))
             (mevedel-goal--approval-callback
-             "# Plan\n\nImplement it." buffer 'implement))
+             "# Plan\n\nImplement it." buffer '(:context full)))
           (should (eq 'implementing (mevedel-goal-phase goal)))
           (should (eq 'accept-edits
                       (plist-get implementation :permission-mode)))
@@ -1164,6 +1276,7 @@
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
                      #'ignore))
@@ -1182,13 +1295,14 @@
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (cl-letf (((symbol-function 'mevedel-plan-accept)
                      (lambda (&rest _)
                        (setq wrote t))))
             (should-error
              (mevedel-goal--approval-callback
-              "# Plan" buffer 'implement)
+              "# Plan" buffer '(:context full))
              :type 'user-error))
           (should-not wrote))
       (when (buffer-live-p buffer) (kill-buffer buffer))
@@ -1295,6 +1409,7 @@
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (let ((mevedel-goal-dispatch-function
                  (lambda (&rest args) (setq dispatched args))))
@@ -1318,6 +1433,7 @@
       (unwind-protect
           (progn
             (setq-local mevedel--session session)
+            (test-mevedel-goal--own goal session root)
             (setf (mevedel-session-goal session) goal)
             (cl-letf (((symbol-function 'mevedel-goal--guard-current-plan)
                        (lambda (selected buffer)
@@ -1360,7 +1476,7 @@
                          (setq implementation input)
                          nil)))
               (mevedel-goal--approval-callback
-               "# Plan\n\nFix and test." buffer 'implement))
+               "# Plan\n\nFix and test." buffer '(:context full)))
             (should implementation)
             (mevedel-goal-settle-turn
              (test-mevedel-goal--fsm buffer 'implementing))
@@ -1377,6 +1493,549 @@
             (should (equal '(reviewing planning)
                            (mapcar #'car dispatched)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal--approval-execution-home ()
+  ,test
+  (test)
+  :doc "uses an explicit supervised choice or the captured Goal home"
+  (let ((goal (mevedel-goal--create
+               :execution-home '(:kind current :directory "/tmp/"
+                                 :session-id "s1"))))
+    (should (eq 'current
+                (mevedel-goal--approval-execution-home
+                 goal '(:context full))))
+    (should (eq 'worktree
+                (mevedel-goal--approval-execution-home
+                 goal '(:context full :execution-home worktree))))
+    (setf (plist-get (mevedel-goal-execution-home goal) :locked) t)
+    (should-error
+     (mevedel-goal--approval-execution-home
+      goal '(:context full :execution-home worktree))
+     :type 'user-error)))
+
+(mevedel-deftest mevedel-goal--approval-context ()
+  ,test
+  (test)
+  :doc "uses the Goal default and honors explicit approval selection"
+  (let ((goal (mevedel-goal--create :implementation-context 'focused)))
+    (should (eq 'focused
+                (mevedel-goal--approval-context goal nil)))
+    (should (eq 'focused
+                (mevedel-goal--approval-context
+                 goal '(:context focused))))
+    (should (eq 'full
+                (mevedel-goal--approval-context
+                 goal '(:context full))))))
+
+(mevedel-deftest mevedel-goal--approval-outcome-p ()
+  ,test
+  (test)
+  :doc "recognizes only explicit full or focused implementation outcomes"
+  (should (mevedel-goal--approval-outcome-p '(:context full)))
+  (should (mevedel-goal--approval-outcome-p '(:context focused)))
+  (should-not (mevedel-goal--approval-outcome-p 'implement))
+  (should-not (mevedel-goal--approval-outcome-p 'aborted)))
+
+(mevedel-deftest mevedel-goal--accept-plan ()
+  ,test
+  (test)
+  :doc "persists the accepted artifact and Goal cycle references together"
+  (let* ((root (make-temp-file "mevedel-goal-accept-plan-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root) root))
+         (goal (mevedel-goal--create
+                :id "g1" :status 'active :phase 'awaiting-approval
+                :cycle 1 :cycles '((:cycle 1))))
+         accepted)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
+          (setf (mevedel-session-goal session) goal)
+          (setq accepted
+                (mevedel-goal--accept-plan "# Plan\n\nDo it." session
+                                           (current-buffer)))
+          (should (eq 'implementing (mevedel-goal-phase goal)))
+          (should (equal accepted (mevedel-goal-current-plan goal)))
+          (should (file-exists-p (plist-get accepted :absolute-path)))
+          (should (equal (plist-get accepted :path)
+                         (plist-get (mevedel-goal--cycle-record goal) :plan))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-plan-queue--entry-execution-home ()
+  ,test
+  (test)
+  :doc "reads the Goal default until the approval entry overrides it"
+  (let* ((goal (mevedel-goal--create
+                :execution-home '(:kind current :directory "/tmp/"
+                                  :session-id "s1")))
+         (session (mevedel-session--create :name "main" :goal goal))
+         (entry (list :session session)))
+    (should (eq 'current
+                (mevedel-plan-queue--entry-execution-home entry)))
+    (mevedel-queue--entry-metadata-put entry :execution-home 'worktree)
+    (should (eq 'worktree
+                (mevedel-plan-queue--entry-execution-home entry)))))
+
+(mevedel-deftest mevedel-plan-queue--entry-execution-home-mutable-p ()
+  ,test
+  (test)
+  :doc "allows home selection only before the first accepted plan"
+  (let* ((goal (mevedel-goal--create))
+         (session (mevedel-session--create :name "main" :goal goal))
+         (entry (list :session session)))
+    (should (mevedel-plan-queue--entry-execution-home-mutable-p entry))
+    (setf (plist-get (mevedel-goal-execution-home goal) :locked) t)
+    (should-not (mevedel-plan-queue--entry-execution-home-mutable-p entry))))
+
+(mevedel-deftest mevedel-plan-queue--cycle-entry-execution-home ()
+  ,test
+  (test)
+  :doc "toggles current and worktree while rerendering the same entry"
+  (let* ((goal (mevedel-goal--create))
+         (session (mevedel-session--create :name "main" :goal goal))
+         (entry (list :session session))
+         rendered)
+    (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+               (lambda (candidate) (setq rendered candidate))))
+      (mevedel-plan-queue--cycle-entry-execution-home entry)
+      (should (eq 'worktree
+                  (mevedel-plan-queue--entry-execution-home entry)))
+      (should (eq entry rendered))
+      (mevedel-plan-queue--cycle-entry-execution-home entry)
+      (should (eq 'current
+                  (mevedel-plan-queue--entry-execution-home entry)))
+      (setf (plist-get (mevedel-goal-execution-home goal) :locked) t)
+      (should-error
+       (mevedel-plan-queue--cycle-entry-execution-home entry)
+       :type 'user-error))))
+
+(mevedel-deftest mevedel-plan-queue--keys-line ()
+  ,test
+  (test)
+  :doc "shows full/focused context, permission mode, and execution home"
+  (let ((text (substring-no-properties
+               (mevedel-plan-queue--keys-line
+                'accept-edits 'worktree t))))
+    (dolist (needle '("implement (full)" "implement (focused)"
+                      "mode: edit" "home: worktree"))
+      (should (string-match-p (regexp-quote needle) text)))
+    (let ((locked (substring-no-properties
+                   (mevedel-plan-queue--keys-line
+                    'default 'worktree nil))))
+      (should (string-match-p "home: worktree (locked)" locked))
+      (should-not (string-match-p "w home" locked)))))
+
+(mevedel-deftest mevedel-goal--transfer-to-worktree ()
+  ,test
+  (test)
+  :doc "transfers one durable owner into a real worktree and clear keeps it"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-goal-worktree-" t)))
+         (source-buffer (generate-new-buffer " *goal-worktree-source*"))
+         (target-buffer (generate-new-buffer " *goal-worktree-target*"))
+         (workspace (test-mevedel-goal--workspace root))
+         (source-session (mevedel-session-create "main" workspace root))
+         target-session target-goal target-directory dispatched)
+    (unwind-protect
+        (progn
+          (test-mevedel-goal--init-git root)
+          (with-current-buffer source-buffer
+            (setq-local mevedel--session source-session
+                        default-directory root)
+            (let ((goal (mevedel-goal--create
+                         :id "g1" :objective "Ship" :status 'active
+                         :phase 'awaiting-approval
+                         :approval-policy 'supervised
+                         :cycle 2 :cycles '((:cycle 1) (:cycle 2))
+                         :token-budget 1000 :token-usage 125
+                         :checkpoint '(:phase planning
+                                       :dispatch-state settled))))
+              (test-mevedel-goal--own goal source-session root)
+              (setf (plist-get (mevedel-goal-execution-home goal) :kind)
+                    'worktree
+                    (mevedel-goal-implementation-context goal) 'full
+                    (mevedel-session-goal source-session) goal)
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (target-workspace directory)
+                           (setq target-directory directory
+                                 target-session
+                                 (mevedel-session-create
+                                  "goal-g1" target-workspace directory))
+                           (with-current-buffer target-buffer
+                             (setq-local mevedel--session target-session
+                                         default-directory directory))
+                           target-buffer)))
+                (should
+                 (eq target-buffer
+                     (plist-get
+                      (mevedel-goal--transfer-to-worktree
+                       goal source-buffer
+                       "# Plan\n\nImplement both slices.")
+                      :buffer))))))
+          (setq target-goal (mevedel-session-goal target-session))
+          (should (file-directory-p target-directory))
+          (should (file-exists-p
+                   (file-name-concat target-directory ".git")))
+          (should-not (mevedel-session-goal source-session))
+          (should (equal "g1" (plist-get
+                                (mevedel-session-goal-handoff source-session)
+                                :goal-id)))
+          (should (equal (mevedel-session-session-id target-session)
+                         (mevedel-goal-owner-session target-goal)))
+          (should (eq 'full
+                      (mevedel-goal-implementation-context target-goal)))
+          (should (file-exists-p
+                   (plist-get (mevedel-goal-current-plan target-goal)
+                              :absolute-path)))
+          (should (= 125 (mevedel-goal-token-usage target-goal)))
+          (should (= 2 (length (mevedel-goal-cycles target-goal))))
+          (with-current-buffer target-buffer
+            (setf (mevedel-goal-status target-goal) 'paused
+                  (mevedel-goal-phase target-goal) 'planning
+                  (mevedel-goal-checkpoint target-goal) nil)
+            (let ((mevedel-goal-dispatch-function
+                   (lambda (phase &rest _) (setq dispatched phase))))
+              (mevedel-goal-resume))
+            (should (eq 'planning dispatched))
+            (setf (mevedel-goal-status target-goal) 'paused)
+            (mevedel-goal-clear))
+          (should (file-directory-p target-directory))
+          (should-not (mevedel-session-goal target-session))
+          (let ((source-sidecar
+                 (mevedel-session-persistence-load-sidecar
+                  (mevedel-session-persistence--sidecar-path
+                   (mevedel-session-save-path source-session))))
+                (target-sidecar
+                 (mevedel-session-persistence-load-sidecar
+                  (mevedel-session-persistence--sidecar-path
+                   (mevedel-session-save-path target-session)))))
+            (should-not (plist-get source-sidecar :goal))
+            (should (plist-get source-sidecar :goal-handoff))
+            (should-not (plist-get target-sidecar :goal))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
+      (delete-directory root t)))
+  :doc "a forceful stop after target persistence leaves one resumable owner"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-goal-transfer-crash-" t)))
+         (source-buffer (generate-new-buffer " *goal-transfer-crash-source*"))
+         (target-buffer (generate-new-buffer " *goal-transfer-crash-target*"))
+         (workspace (test-mevedel-goal--workspace root))
+         (source-session (mevedel-session-create "main" workspace root))
+         target-session target-directory)
+    (unwind-protect
+        (progn
+          (test-mevedel-goal--init-git root)
+          (with-current-buffer source-buffer
+            (setq-local mevedel--session source-session
+                        default-directory root)
+            (let* ((goal (mevedel-goal--create
+                          :id "g-crash" :objective "Ship" :status 'active
+                          :phase 'awaiting-approval
+                          :approval-policy 'supervised :cycle 1
+                          :cycles '((:cycle 1))
+                          :implementation-context 'full))
+                   (original-persist
+                    (symbol-function 'mevedel-goal--persist-checkpoint))
+                   (source-writes 0))
+              (test-mevedel-goal--own goal source-session root)
+              (setf (plist-get (mevedel-goal-execution-home goal) :kind)
+                    'worktree
+                    (mevedel-goal-implementation-context goal) 'full
+                    (mevedel-session-goal source-session) goal)
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (target-workspace directory)
+                           (setq target-directory directory
+                                 target-session
+                                 (mevedel-session-create
+                                  "goal-g-crash" target-workspace directory))
+                           (with-current-buffer target-buffer
+                             (setq-local mevedel--session target-session
+                                         default-directory directory))
+                           target-buffer))
+                        ((symbol-function 'mevedel-goal--persist-checkpoint)
+                         (lambda (session buffer)
+                           (when (eq session source-session)
+                             (cl-incf source-writes)
+                             (when (= source-writes 2)
+                               (throw 'force-stop :stopped)))
+                           (funcall original-persist session buffer))))
+                (should
+                 (eq :stopped
+                     (catch 'force-stop
+                       (mevedel-goal--transfer-to-worktree
+                        goal source-buffer "# Plan\n\nShip safely.")
+                       nil))))))
+          (mevedel-workspace-clear-registry)
+          (let* ((source-sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path source-session))))
+                 (target-sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path target-session))))
+                 (restored-target
+                  (plist-get
+                   (mevedel-session-persistence-deserialize target-sidecar)
+                   :session))
+                 (restored-source
+                  (plist-get
+                   (mevedel-session-persistence-deserialize source-sidecar)
+                   :session))
+                 (restored-goal (mevedel-session-goal restored-target))
+                 dispatched)
+            (should (eq 'prepared
+                        (plist-get (plist-get source-sidecar :goal-handoff)
+                                   :state)))
+            (should-not
+             (mevedel-goal--owned-by-session-p
+              (mevedel-session-goal restored-source) restored-source))
+            (setf (mevedel-goal-status (mevedel-session-goal restored-source))
+                  'paused)
+            (with-temp-buffer
+              (setq-local mevedel--session restored-source
+                          default-directory root)
+              (let ((mevedel-goal-dispatch-function
+                     (lambda (&rest _) (setq dispatched t))))
+                (should-error (mevedel-goal-resume) :type 'user-error)))
+            (should-not dispatched)
+            (should (eq 'implementing (mevedel-goal-phase restored-goal)))
+            (should (file-exists-p
+                     (plist-get (mevedel-goal-current-plan restored-goal)
+                                :absolute-path)))
+            (should (mevedel-goal--owned-by-session-p
+                     restored-goal restored-target))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
+      (delete-directory root t)))
+  :doc "a target persistence failure rolls back cleanly and permits retry"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-goal-transfer-retry-" t)))
+         (source-buffer (generate-new-buffer " *goal-transfer-retry-source*"))
+         (workspace (test-mevedel-goal--workspace root))
+         (source-session (mevedel-session-create "main" workspace root))
+         (original-persist
+          (symbol-function 'mevedel-goal--persist-checkpoint))
+         (fail-target-save t)
+         target-buffers target-directory)
+    (unwind-protect
+        (progn
+          (test-mevedel-goal--init-git root)
+          (with-current-buffer source-buffer
+            (setq-local mevedel--session source-session
+                        default-directory root)
+            (let ((goal (mevedel-goal--create
+                         :id "g-retry" :objective "Ship" :status 'active
+                         :phase 'awaiting-approval
+                         :approval-policy 'supervised :cycle 1
+                         :cycles '((:cycle 1))
+                         :implementation-context 'full)))
+              (test-mevedel-goal--own goal source-session root)
+              (setf (plist-get (mevedel-goal-execution-home goal) :kind)
+                    'worktree
+                    (plist-get (mevedel-goal-execution-home goal) :locked) t
+                    (mevedel-session-goal source-session) goal)
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (target-workspace directory)
+                           (let* ((buffer (generate-new-buffer
+                                           " *goal-transfer-retry-target*"))
+                                  (session (mevedel-session-create
+                                            "goal-g-retry"
+                                            target-workspace directory)))
+                             (setq target-directory directory)
+                             (push buffer target-buffers)
+                             (with-current-buffer buffer
+                               (setq-local mevedel--session session
+                                           default-directory directory))
+                             buffer)))
+                        ((symbol-function 'mevedel-goal--persist-checkpoint)
+                         (lambda (session buffer)
+                           (if (and fail-target-save
+                                    (not (eq session source-session)))
+                               (progn
+                                 (setq fail-target-save nil)
+                                 (error "Injected target save failure"))
+                             (funcall original-persist session buffer)))))
+                (should-error
+                 (mevedel-goal--transfer-to-worktree
+                  goal source-buffer "# Plan\n\nShip safely."))
+                (should-not (file-exists-p target-directory))
+                (should-not (mevedel-session-goal-handoff source-session))
+                (should (mevedel-goal--owned-by-session-p
+                         goal source-session))
+                (let* ((result
+                        (mevedel-goal--transfer-to-worktree
+                         goal source-buffer "# Plan\n\nShip safely."))
+                       (target-session
+                        (buffer-local-value
+                         'mevedel--session (plist-get result :buffer))))
+                  (should (file-directory-p target-directory))
+                  (should (mevedel-goal-current-plan
+                           (mevedel-session-goal target-session))))))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (dolist (buffer target-buffers)
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory root t)))
+  :doc "rollback-save failure preserves the durable target and source gate"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-goal-transfer-dual-" t)))
+         (source-buffer (generate-new-buffer " *goal-transfer-dual-source*"))
+         (target-buffer (generate-new-buffer " *goal-transfer-dual-target*"))
+         (workspace (test-mevedel-goal--workspace root))
+         (source-session (mevedel-session-create "main" workspace root))
+         (original-persist
+          (symbol-function 'mevedel-goal--persist-checkpoint))
+         (source-writes 0)
+         target-session target-directory)
+    (unwind-protect
+        (progn
+          (test-mevedel-goal--init-git root)
+          (with-current-buffer source-buffer
+            (setq-local mevedel--session source-session
+                        default-directory root)
+            (let ((goal (mevedel-goal--create
+                         :id "g-dual" :objective "Ship" :status 'active
+                         :phase 'awaiting-approval
+                         :approval-policy 'supervised :cycle 1
+                         :cycles '((:cycle 1))
+                         :implementation-context 'full)))
+              (test-mevedel-goal--own goal source-session root)
+              (setf (plist-get (mevedel-goal-execution-home goal) :kind)
+                    'worktree
+                    (plist-get (mevedel-goal-execution-home goal) :locked) t
+                    (mevedel-session-goal source-session) goal)
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (target-workspace directory)
+                           (setq target-directory directory
+                                 target-session
+                                 (mevedel-session-create
+                                  "goal-g-dual" target-workspace directory))
+                           (with-current-buffer target-buffer
+                             (setq-local mevedel--session target-session
+                                         default-directory directory))
+                           target-buffer))
+                        ((symbol-function 'mevedel-goal--persist-checkpoint)
+                         (lambda (session buffer)
+                           (when (eq session source-session)
+                             (cl-incf source-writes)
+                             (when (memq source-writes '(2 3))
+                               (error "Injected source save failure")))
+                           (funcall original-persist session buffer))))
+                (should-error
+                 (mevedel-goal--transfer-to-worktree
+                  goal source-buffer "# Plan\n\nShip safely.")))))
+          (let ((source-sidecar
+                 (mevedel-session-persistence-load-sidecar
+                  (mevedel-session-persistence--sidecar-path
+                   (mevedel-session-save-path source-session))))
+                (target-sidecar
+                 (mevedel-session-persistence-load-sidecar
+                  (mevedel-session-persistence--sidecar-path
+                   (mevedel-session-save-path target-session)))))
+            (should (file-directory-p target-directory))
+            (should (eq 'prepared
+                        (plist-get (plist-get source-sidecar :goal-handoff)
+                                   :state)))
+            (should (plist-get target-sidecar :goal))
+            (should (mevedel-session-goal target-session))
+            (should-not (mevedel-goal--owned-by-session-p
+                         (mevedel-session-goal source-session)
+                         source-session))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
+      (delete-directory root t)))
+  :doc "target-clear failure re-gates source before restoring target ownership"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-goal-transfer-regate-" t)))
+         (source-buffer (generate-new-buffer " *goal-transfer-regate-source*"))
+         (target-buffer (generate-new-buffer " *goal-transfer-regate-target*"))
+         (workspace (test-mevedel-goal--workspace root))
+         (source-session (mevedel-session-create "main" workspace root))
+         (original-persist
+          (symbol-function 'mevedel-goal--persist-checkpoint))
+         (source-writes 0)
+         (target-writes 0)
+         target-session target-directory)
+    (unwind-protect
+        (progn
+          (test-mevedel-goal--init-git root)
+          (with-current-buffer source-buffer
+            (setq-local mevedel--session source-session
+                        default-directory root)
+            (let ((goal (mevedel-goal--create
+                         :id "g-regate" :objective "Ship" :status 'active
+                         :phase 'awaiting-approval
+                         :approval-policy 'supervised :cycle 1
+                         :cycles '((:cycle 1))
+                         :implementation-context 'full)))
+              (test-mevedel-goal--own goal source-session root)
+              (setf (plist-get (mevedel-goal-execution-home goal) :kind)
+                    'worktree
+                    (plist-get (mevedel-goal-execution-home goal) :locked) t
+                    (mevedel-session-goal source-session) goal)
+              (cl-letf (((symbol-function 'mevedel-worktree--open-session)
+                         (lambda (target-workspace directory)
+                           (setq target-directory directory
+                                 target-session
+                                 (mevedel-session-create
+                                  "goal-g-regate" target-workspace directory))
+                           (with-current-buffer target-buffer
+                             (setq-local mevedel--session target-session
+                                         default-directory directory))
+                           target-buffer))
+                        ((symbol-function 'mevedel-goal--persist-checkpoint)
+                         (lambda (session buffer)
+                           (if (eq session source-session)
+                               (progn
+                                 (cl-incf source-writes)
+                                 (when (= source-writes 2)
+                                   (error "Injected final source save failure")))
+                             (cl-incf target-writes)
+                             (when (= target-writes 2)
+                               (error "Injected target clear failure")))
+                           (funcall original-persist session buffer))))
+                (should-error
+                 (mevedel-goal--transfer-to-worktree
+                  goal source-buffer "# Plan\n\nShip safely."))))))
+          (mevedel-workspace-clear-registry)
+          (let* ((source-sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path source-session))))
+                 (target-sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path target-session))))
+                 (restored-source
+                  (plist-get
+                   (mevedel-session-persistence-deserialize source-sidecar)
+                   :session))
+                 (restored-target
+                  (plist-get
+                   (mevedel-session-persistence-deserialize target-sidecar)
+                   :session))
+                 (source-goal (mevedel-session-goal restored-source))
+                 (target-goal (mevedel-session-goal restored-target)))
+            (should (eq 'prepared
+                        (plist-get (mevedel-session-goal-handoff
+                                    restored-source)
+                                   :state)))
+            (should-not (mevedel-goal--owned-by-session-p
+                         source-goal restored-source))
+            (should (mevedel-goal--owned-by-session-p
+                     target-goal restored-target))
+            (should (= 1 (length
+                          (delq nil
+                                (list
+                                 (mevedel-goal--owned-by-session-p
+                                  source-goal restored-source)
+                                 (mevedel-goal--owned-by-session-p
+                                  target-goal restored-target)))))))
+      (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
+      (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal-multi-cycle ()
@@ -1407,7 +2066,8 @@
               (let ((goal (mevedel-session-goal session)))
                 (setf (mevedel-goal-phase goal) 'awaiting-approval)
                 (mevedel-goal--approval-callback
-                 "# Cycle one\n\nImplement slice one." buffer 'implement)
+                 "# Cycle one\n\nImplement slice one."
+                 buffer '(:context full))
                 (mevedel-goal-settle-turn
                  (test-mevedel-goal--fsm buffer 'implementing))
                 (mevedel-goal-dispatch-after-turn
@@ -1422,9 +2082,14 @@
                 (should (= 2 (mevedel-goal-cycle goal)))
                 (should (string-match-p "Implement slice two"
                                         (cadr (car dispatched))))
+                (should-error
+                 (mevedel-goal--approval-execution-home
+                  goal '(:context full :execution-home worktree))
+                 :type 'user-error)
                 (setf (mevedel-goal-phase goal) 'awaiting-approval)
                 (mevedel-goal--approval-callback
-                 "# Cycle two\n\nImplement slice two." buffer 'implement)
+                 "# Cycle two\n\nImplement slice two."
+                 buffer '(:context full))
                 (mevedel-goal-settle-turn
                  (test-mevedel-goal--fsm buffer 'implementing))
                 (mevedel-goal-dispatch-after-turn
@@ -1889,6 +2554,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (should-not (mevedel-goal-continuation-ready-p
                        session 'guardian 'implementing))
@@ -1940,6 +2606,7 @@
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
+          (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal)
           (mevedel-plan-write-current
            "# Plan" session (current-buffer)

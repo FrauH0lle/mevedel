@@ -49,6 +49,10 @@
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
+;; `mevedel-presets'
+(declare-function mevedel-preset-restore-session
+                  "mevedel-presets" (session &optional buffer))
+
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
                   (entry key))
@@ -79,7 +83,9 @@
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-execution-home "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-implementation-context "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
@@ -90,15 +96,20 @@
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal-handoff "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -120,14 +131,20 @@
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-anchor
                   "mevedel-view-interaction" ())
-(declare-function mevedel-view-interaction-pending-p
-                  "mevedel-view-interaction" (&optional view-buffer))
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction"
                   (descriptor))
 (declare-function mevedel-view--interaction-target-buffer
                   "mevedel-view-interaction"
                   (&optional data-buffer))
+(declare-function mevedel-view-interaction-pending-p
+                  "mevedel-view-interaction" (&optional view-buffer))
+
+;; `mevedel-worktree'
+(declare-function mevedel-worktree-create-session
+                  "mevedel-worktree" (&optional branch purpose clean))
+(declare-function mevedel-worktree--git-result
+                  "mevedel-worktree" (directory &rest args))
 
 ;;
 ;;; Lifecycle
@@ -152,6 +169,25 @@ Nil means no budget.  Presets may set this buffer-locally."
   :group 'mevedel)
 
 (make-variable-buffer-local 'mevedel-goal-token-budget)
+
+(defcustom mevedel-goal-execution-home 'current
+  "Execution home selected for a newly started Goal.
+`current' uses the current session checkout.  `worktree' creates one Goal-owned
+worktree before implementation."
+  :type '(choice (const current) (const worktree))
+  :group 'mevedel)
+
+(make-variable-buffer-local 'mevedel-goal-execution-home)
+
+(defcustom mevedel-goal-implementation-context 'full
+  "Implementation context selected for a newly started Goal.
+`full' preserves the conversation.  `focused' sends only authoritative Goal
+and plan context.  Worktree Goals begin focused; supervised approval may
+explicitly select full context."
+  :type '(choice (const full) (const focused))
+  :group 'mevedel)
+
+(make-variable-buffer-local 'mevedel-goal-implementation-context)
 
 (defvar mevedel-goal-guardian-function #'mevedel-goal--guardian-request
   "Function called with GOAL, PLAN, CHAT-BUFFER, and CALLBACK.
@@ -268,6 +304,41 @@ CALLBACK receives a normalized guardian decision plist.")
   "Persist SESSION's Goal checkpoint from BUFFER or signal an error."
   (require 'mevedel-session-persistence)
   (mevedel-session-persistence-save session buffer))
+
+(defun mevedel-goal--owned-by-session-p (goal session)
+  "Return non-nil when GOAL is exclusively owned by SESSION."
+  (let ((session-id (mevedel-session-session-id session))
+        (home (mevedel-goal-execution-home goal)))
+    (and (stringp session-id)
+         (null (mevedel-session-goal-handoff session))
+         (equal session-id (mevedel-goal-owner-session goal))
+         (equal session-id (plist-get home :session-id)))))
+
+(defun mevedel-goal--assert-execution-home (goal session)
+  "Signal unless GOAL may execute from SESSION's recorded home."
+  (unless (mevedel-goal--owned-by-session-p goal session)
+    (error "Goal is owned by another session"))
+  (let ((expected (file-name-as-directory
+                   (expand-file-name
+                    (plist-get (mevedel-goal-execution-home goal)
+                               :directory))))
+        (actual (file-name-as-directory
+                 (expand-file-name
+                  (or (mevedel-session-working-directory session)
+                      default-directory)))))
+    (unless (equal expected actual)
+      (error "Goal execution home is %s, not %s" expected actual))
+    expected))
+
+(defun mevedel-goal--focused-context (goal)
+  "Return deterministic minimal implementation context for GOAL."
+  (let ((home (mevedel-goal-execution-home goal)))
+    (format
+     "Goal ID: %s\nPhase: %s\nCycle: %d\nExecution home: %s"
+     (mevedel-goal-id goal)
+     (mevedel-goal-phase goal)
+     (mevedel-goal-cycle goal)
+     (plist-get home :directory))))
 
 (defun mevedel-goal--policy-label (policy)
   "Return a stable provider/model label for resolved POLICY."
@@ -718,6 +789,8 @@ The request has no tools or conversational transcript insertion."
   (let ((goal (mevedel-goal--current)))
     (when (bound-and-true-p mevedel--current-request)
       (user-error "A request is already active"))
+    (unless (mevedel-goal--owned-by-session-p goal mevedel--session)
+      (user-error "Goal continuation belongs to its handoff target"))
     (unless (memq (mevedel-goal-status goal) '(paused blocked))
       (user-error "Goal is not paused or blocked"))
     (when (local-variable-p 'mevedel-goal-token-budget)
@@ -771,7 +844,8 @@ The request has no tools or conversational transcript insertion."
                    mevedel--session 'guardian 'implementing))
              (when-let* ((plan (mevedel-plan-current-body mevedel--session)))
                (mevedel-goal--approval-callback
-                plan (current-buffer) 'implement)))
+                plan (current-buffer)
+                (list :context (mevedel-goal-implementation-context goal)))))
             (t
              (mevedel-goal-restore-pending-approval
               mevedel--session (current-buffer)))))
@@ -826,6 +900,8 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
   (setq approval-policy (or approval-policy 'supervised))
   (unless (memq approval-policy '(supervised automatic))
     (error "Unknown Goal approval policy: %s" approval-policy))
+  (mevedel-session-persistence-ensure-files
+   mevedel--session (current-buffer))
   (let ((previous-goal (mevedel-session-goal mevedel--session))
         (previous-plan-metadata
          (mevedel-session-plan-metadata mevedel--session))
@@ -836,13 +912,25 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
           :status 'active
           :phase 'planning
           :approval-policy approval-policy
+          :owner-session (mevedel-session-session-id mevedel--session)
+          :execution-home
+          (list :kind mevedel-goal-execution-home
+                :directory
+                (file-name-as-directory
+                 (expand-file-name
+                  (or (mevedel-session-working-directory mevedel--session)
+                      default-directory)))
+                :session-id (mevedel-session-session-id mevedel--session)
+                :locked nil)
+          :implementation-context
+          (if (eq mevedel-goal-execution-home 'worktree)
+              'focused
+            mevedel-goal-implementation-context)
           :token-budget mevedel-goal-token-budget
           :token-usage 0
           :cycle 1
           :cycles (list (list :cycle 1
-                              :started-at (format-time-string "%FT%T%z")))
-          :owner-session (or (mevedel-session-session-id mevedel--session)
-                             (mevedel-session-name mevedel--session)))))
+                              :started-at (format-time-string "%FT%T%z"))))))
     (setf (mevedel-session-goal mevedel--session) goal
           (mevedel-session-plan-metadata mevedel--session) nil)
     (condition-case err
@@ -894,6 +982,11 @@ dispatch and attach the attempt identity to the returned FSM."
     (unwind-protect
         (condition-case err
             (progn
+              (when (and checkpoint-enabled
+                         (memq checkpoint-phase '(implementing reviewing)))
+                (mevedel-goal--assert-execution-home
+                 (mevedel-session-goal mevedel--session)
+                 mevedel--session))
               (setq policy (mevedel-model-resolve-workload workload))
               (mevedel-goal--record-phase-policy workload policy)
               (when checkpoint-enabled
@@ -1017,7 +1110,7 @@ shown as a collapsed hook-context disclosure."
 
 (defun mevedel-goal--ensure-implementation-allowed (entry outcome)
   "Signal when ENTRY may not be implemented with OUTCOME yet."
-  (when (and (mevedel-goal--approval-action outcome)
+  (when (and (mevedel-goal--approval-outcome-p outcome)
              (mevedel-session-queued-user-messages
               (plist-get entry :session)))
     (user-error
@@ -1069,20 +1162,51 @@ shown as a collapsed hook-context disclosure."
     (mevedel-plan-queue--entry-implementation-mode entry)))
   (mevedel-plan-queue--render-entry entry))
 
-(defun mevedel-plan-queue--keys-line (implementation-mode)
-  "Return the plan approval key help line for IMPLEMENTATION-MODE."
+(defun mevedel-plan-queue--entry-execution-home (entry)
+  "Return ENTRY's selected Goal execution-home kind."
+  (or (mevedel-queue--entry-metadata-get entry :execution-home)
+      (when-let* ((session (plist-get entry :session))
+                  (goal (mevedel-session-goal session)))
+        (plist-get (mevedel-goal-execution-home goal) :kind))
+      'current))
+
+(defun mevedel-plan-queue--cycle-entry-execution-home (entry)
+  "Toggle ENTRY's implementation home and rerender the plan prompt."
+  (unless (mevedel-plan-queue--entry-execution-home-mutable-p entry)
+    (user-error "Goal execution home is locked after first approval"))
+  (mevedel-queue--entry-metadata-put
+   entry :execution-home
+   (if (eq (mevedel-plan-queue--entry-execution-home entry) 'current)
+       'worktree
+     'current))
+  (mevedel-plan-queue--render-entry entry))
+
+(defun mevedel-plan-queue--entry-execution-home-mutable-p (entry)
+  "Return non-nil when ENTRY may select the Goal execution home."
+  (when-let* ((session (plist-get entry :session))
+              (goal (mevedel-session-goal session)))
+    (not (plist-get (mevedel-goal-execution-home goal) :locked))))
+
+(defun mevedel-plan-queue--keys-line
+    (implementation-mode execution-home home-mutable-p)
+  "Return plan key help for IMPLEMENTATION-MODE and EXECUTION-HOME.
+HOME-MUTABLE-P means the first approval may still select another home."
   (concat
    (propertize "Keys: " 'font-lock-face 'help-key-binding)
    (propertize "RET" 'font-lock-face 'help-key-binding)
-   " implement  "
+   " implement (full)  "
    (propertize "I" 'font-lock-face 'help-key-binding)
-   " implement (clear context)  "
+   " implement (focused)  "
    (propertize "TAB" 'font-lock-face 'help-key-binding)
    "/"
    (propertize "m" 'font-lock-face 'help-key-binding)
    (format " mode: %s  "
            (mevedel-goal--implementation-mode-label
             implementation-mode))
+   (if home-mutable-p
+       (concat (propertize "w" 'font-lock-face 'help-key-binding)
+               (format " home: %s  " execution-home))
+     (format "home: %s (locked)  " execution-home))
    (propertize "f" 'font-lock-face 'help-key-binding)
    " feedback draft  "
    (propertize "q" 'font-lock-face 'help-key-binding)
@@ -1104,23 +1228,28 @@ shown as a collapsed hook-context disclosure."
         ((settle (sym)
            (when overlay
              (mevedel--prompt--settle overlay sym)))
-         (implementation-outcome (action)
-           (list :action action
+         (implementation-outcome (context)
+           (list :context context
+                 :execution-home
+                 (mevedel-plan-queue--entry-execution-home entry)
                  :mode (mevedel-plan-queue--entry-implementation-mode
                         entry)))
          (implement-plan ()
            (interactive)
-           (let ((outcome (implementation-outcome 'implement)))
+           (let ((outcome (implementation-outcome 'full)))
              (mevedel-goal--ensure-implementation-allowed entry outcome)
              (settle outcome)))
          (implement-plan-clear ()
            (interactive)
-           (let ((outcome (implementation-outcome 'implement-clear)))
+           (let ((outcome (implementation-outcome 'focused)))
              (mevedel-goal--ensure-implementation-allowed entry outcome)
              (settle outcome)))
          (cycle-implementation-mode ()
            (interactive)
            (mevedel-plan-queue--cycle-entry-implementation-mode entry))
+         (cycle-execution-home ()
+           (interactive)
+           (mevedel-plan-queue--cycle-entry-execution-home entry))
          (reject-plan-feedback ()
            (interactive)
            (settle 'feedback-draft))
@@ -1150,7 +1279,10 @@ shown as a collapsed hook-context disclosure."
                    (mevedel-plan-queue--display-body plan-markdown)
                    "\n\n"
                    (mevedel-plan-queue--keys-line
-                    (mevedel-plan-queue--entry-implementation-mode entry))
+                    (mevedel-plan-queue--entry-implementation-mode entry)
+                    (mevedel-plan-queue--entry-execution-home entry)
+                    (mevedel-plan-queue--entry-execution-home-mutable-p
+                     entry))
                    (propertize
                     "\n" 'font-lock-face
                     '(:inherit font-lock-string-face :underline t :extend t)))))
@@ -1162,6 +1294,7 @@ shown as a collapsed hook-context disclosure."
             (define-key keymap (kbd "TAB") #'cycle-implementation-mode)
             (define-key keymap (kbd "<tab>") #'cycle-implementation-mode)
             (define-key keymap (kbd "m") #'cycle-implementation-mode)
+            (define-key keymap (kbd "w") #'cycle-execution-home)
             (define-key keymap (kbd "f") #'reject-plan-feedback)
             (define-key keymap (kbd "q") #'abort-plan)
             (define-key keymap (kbd "C-c C-k") #'abort-plan)
@@ -1223,14 +1356,10 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
       (when-let* ((window (get-buffer-window target-buffer)))
         (select-window window)))))
 
-(defun mevedel-goal--approval-action (outcome)
-  "Return implementation action represented by OUTCOME, or nil."
-  (cond
-   ((memq outcome '(implement implement-clear)) outcome)
-   ((and (consp outcome)
-         (memq (plist-get outcome :action)
-               '(implement implement-clear)))
-    (plist-get outcome :action))))
+(defun mevedel-goal--approval-outcome-p (outcome)
+  "Return non-nil when OUTCOME requests implementation."
+  (and (proper-list-p outcome)
+       (memq (plist-get outcome :context) '(full focused))))
 
 (defun mevedel-goal--approval-implementation-mode (outcome)
   "Return implementation permission mode represented by OUTCOME."
@@ -1239,6 +1368,186 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
         mode
       (or (mevedel-session-permission-mode mevedel--session) 'default))))
 
+(defun mevedel-goal--approval-execution-home (goal outcome)
+  "Return execution-home kind selected for GOAL by OUTCOME."
+  (let* ((recorded (plist-get (mevedel-goal-execution-home goal) :kind))
+         (requested (and (consp outcome)
+                         (plist-get outcome :execution-home)))
+         (kind (if (memq requested '(current worktree))
+                   requested
+                 recorded)))
+    (when (and (plist-get (mevedel-goal-execution-home goal) :locked)
+               (not (eq kind recorded)))
+      (user-error "Goal execution home is locked after first approval"))
+    kind))
+
+(defun mevedel-goal--approval-context (goal outcome)
+  "Return implementation context selected for GOAL by OUTCOME."
+  (let ((context (and (consp outcome) (plist-get outcome :context))))
+    (if (memq context '(full focused))
+        context
+      (mevedel-goal-implementation-context goal))))
+
+(defun mevedel-goal--accept-plan (plan-markdown session buffer)
+  "Accept PLAN-MARKDOWN for SESSION in BUFFER and persist Goal references."
+  (require 'mevedel-plan)
+  (let* ((goal (mevedel-session-goal session))
+         (artifacts
+          (mevedel-plan-accept
+           plan-markdown session buffer nil
+           (mevedel-goal--current-plan-relative-path goal)
+           (mevedel-goal--cycle-plan-relative-path goal)))
+         (accepted (plist-get artifacts :accepted))
+         (plan-hash (mevedel-plan-hash plan-markdown)))
+    (mevedel-goal--ensure-reference-reminder session)
+    (setq accepted (plist-put accepted :hash plan-hash))
+    (setf (mevedel-goal-current-plan goal) accepted
+          (mevedel-goal-phase goal) 'implementing)
+    (mevedel-goal--cycle-put goal :plan (plist-get accepted :path))
+    (mevedel-goal--cycle-put goal :plan-hash plan-hash)
+    (mevedel-goal--cycle-put
+     goal :accepted-at (format-time-string "%FT%T%z"))
+    (mevedel-goal--persist-cycle-index goal session buffer)
+    (mevedel-goal--persist-checkpoint session buffer)
+    accepted))
+
+(defun mevedel-goal--transfer-to-worktree (goal source-buffer plan-markdown)
+  "Transfer GOAL and accepted PLAN-MARKDOWN from SOURCE-BUFFER.
+Return `(:buffer BUFFER :accepted ARTIFACT)' for the sole target owner."
+  (require 'mevedel-worktree)
+  (with-current-buffer source-buffer
+    (let* ((source-session mevedel--session)
+           (source-plan-metadata
+            (copy-tree (mevedel-session-plan-metadata source-session)))
+           (branch (format "goal/%s" (mevedel-goal-id goal)))
+           (result (mevedel-worktree-create-session
+                    branch (mevedel-goal-objective goal) t))
+           (target-buffer (plist-get result :buffer))
+           (target-directory (plist-get result :directory))
+           (target-session
+            (buffer-local-value 'mevedel--session target-buffer))
+           (_target-files
+            (with-current-buffer target-buffer
+              (mevedel-session-persistence-ensure-files
+               target-session target-buffer)))
+           (target-goal (copy-mevedel-goal goal))
+           (target-id (mevedel-session-session-id target-session))
+           (handoff (list :goal-id (mevedel-goal-id goal)
+                          :target-session-id target-id
+                          :target-directory target-directory
+                          :state 'prepared))
+           accepted)
+      (setf (mevedel-session-preset-name target-session)
+            (mevedel-session-preset-name source-session)
+            (mevedel-session-preset-settings target-session)
+            (copy-tree (mevedel-session-preset-settings source-session))
+            (mevedel-session-permission-mode target-session)
+            (mevedel-session-permission-mode source-session)
+            (mevedel-session-permission-rules target-session)
+            (copy-tree (mevedel-session-permission-rules source-session))
+            (mevedel-goal-owner-session target-goal) target-id
+            (mevedel-goal-execution-home target-goal)
+            (list :kind 'worktree
+                  :directory target-directory
+                  :session-id target-id
+                  :branch (plist-get result :branch)
+                  :locked t)
+            (mevedel-session-goal target-session) target-goal
+            (mevedel-session-plan-metadata target-session) nil)
+      (condition-case err
+          (progn
+            ;; Persist the handoff intent first.  A forceful stop can then
+            ;; never leave the source capable of continuing independently.
+            (setf (mevedel-session-goal-handoff source-session) handoff)
+            (mevedel-goal--persist-checkpoint source-session source-buffer)
+            (with-current-buffer target-buffer
+              (require 'mevedel-presets)
+              (mevedel-preset-restore-session target-session target-buffer)
+              (setq accepted
+                    (mevedel-goal--accept-plan
+                     plan-markdown target-session target-buffer)))
+            (setf (mevedel-session-goal source-session) nil
+                  (plist-get handoff :state) 'complete
+                  (mevedel-session-plan-metadata source-session) nil)
+            (mevedel-goal--persist-checkpoint source-session source-buffer)
+            (list :buffer target-buffer :accepted accepted))
+        (error
+         (setf (mevedel-session-goal source-session) goal
+               (mevedel-session-goal-handoff source-session) nil
+               (mevedel-session-plan-metadata source-session)
+               source-plan-metadata)
+         (let ((source-restored-p nil))
+           (condition-case rollback-err
+               (progn
+               ;; Do not destroy the target until restored source ownership is
+               ;; durable.  If this write fails, the prepared handoff remains
+               ;; the source-side gate and the target is preserved for recovery.
+                 (mevedel-goal--persist-checkpoint
+                  source-session source-buffer)
+                 (setq source-restored-p t)
+                 (setf (mevedel-session-goal target-session) nil)
+                 (with-current-buffer target-buffer
+                   (mevedel-goal--persist-checkpoint
+                    target-session target-buffer))
+                 (when (buffer-live-p target-buffer)
+                   (with-current-buffer target-buffer
+                     (set-buffer-modified-p nil))
+                   (kill-buffer target-buffer))
+                 (let ((removed
+                        (mevedel-worktree--git-result
+                         (mevedel-session-working-directory source-session)
+                         "worktree" "remove" "--force" target-directory)))
+                   (if (eq 0 (plist-get removed :exit))
+                       (let ((deleted
+                              (mevedel-worktree--git-result
+                               (mevedel-session-working-directory source-session)
+                               "branch" "-D" branch)))
+                         (unless (eq 0 (plist-get deleted :exit))
+                           (display-warning
+                            'mevedel
+                            (format "Could not remove failed Goal branch %s: %s"
+                                    branch (plist-get deleted :output))
+                            :warning)))
+                     (display-warning
+                      'mevedel
+                      (format "Could not remove failed Goal worktree %s: %s"
+                              target-directory (plist-get removed :output))
+                      :warning)))
+                 nil)
+             (error
+              (setf (mevedel-session-goal-handoff source-session) handoff
+                    (plist-get handoff :state) 'prepared)
+              (if source-restored-p
+                  (condition-case regate-err
+                      (progn
+                        (mevedel-goal--persist-checkpoint
+                         source-session source-buffer)
+                        (setf (mevedel-session-goal target-session) target-goal)
+                        (with-current-buffer target-buffer
+                          (mevedel-goal--persist-checkpoint
+                           target-session target-buffer)))
+                    (error
+                     ;; The target remains non-runnable in memory.  Do not
+                     ;; write a second owner when the source cannot be gated.
+                     (error
+                      "Goal transfer failed (%s); target cleanup failed (%s); source re-gating failed (%s)"
+                      (error-message-string err)
+                      (error-message-string rollback-err)
+                      (error-message-string regate-err))))
+                ;; Source restoration never reached disk, so its original
+                ;; prepared handoff remains the durable gate.
+                (setf (mevedel-session-goal target-session) target-goal)
+                (ignore-errors
+                  (with-current-buffer target-buffer
+                    (mevedel-goal--persist-checkpoint
+                     target-session target-buffer))))
+              (error
+               "Goal transfer failed (%s); rollback failed (%s); target preserved at %s"
+               (error-message-string err)
+               (error-message-string rollback-err)
+               target-directory))))
+         (signal (car err) (cdr err)))))))
+
 (defun mevedel-goal--approval-callback
     (plan-markdown chat-buffer outcome)
   "Handle OUTCOME for a proposed PLAN-MARKDOWN in CHAT-BUFFER."
@@ -1246,46 +1555,53 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
   (setq plan-markdown (mevedel--normalize-message-text plan-markdown))
   (when (buffer-live-p chat-buffer)
     (with-current-buffer chat-buffer
-      (if-let* ((action (mevedel-goal--approval-action outcome)))
+      (if (mevedel-goal--approval-outcome-p outcome)
           (let* ((goal (mevedel-session-goal mevedel--session)))
             (unless (and goal
                          (eq (mevedel-goal-status goal) 'active)
                          (eq (mevedel-goal-phase goal) 'awaiting-approval))
               (user-error "Goal is not awaiting plan approval"))
-            (let* ((artifacts (mevedel-plan-accept
-                               plan-markdown mevedel--session chat-buffer nil
-                               (mevedel-goal--current-plan-relative-path goal)
-                               (mevedel-goal--cycle-plan-relative-path goal)))
-                   (accepted-artifact (plist-get artifacts :accepted))
-                   (plan-hash (mevedel-plan-hash plan-markdown))
-                   (implementation-mode
-                    (mevedel-goal--approval-implementation-mode outcome)))
-              (mevedel-goal--ensure-reference-reminder mevedel--session)
-              (setq accepted-artifact
-                    (plist-put accepted-artifact :hash plan-hash))
-              (setf (mevedel-goal-current-plan goal) accepted-artifact
-                    (mevedel-goal-phase goal) 'implementing)
-              (mevedel-goal--cycle-put goal :plan
-                                       (plist-get accepted-artifact :path))
-              (mevedel-goal--cycle-put goal :plan-hash plan-hash)
-              (mevedel-goal--cycle-put goal :accepted-at
-                                       (format-time-string "%FT%T%z"))
-              (mevedel-goal--persist-cycle-index
-               goal mevedel--session chat-buffer)
-              (mevedel-goal--save-session-state mevedel--session chat-buffer)
-              (let* ((implementation-input
-                      (mevedel-plan-implementation-input
-                       action accepted-artifact implementation-mode))
-                     (fsm
-                      (mevedel-goal--call-with-workload
-                       'implementation
-                       (lambda ()
-                         (mevedel--implement-plan implementation-input))
-                       'implementing implementation-input)))
-                (when fsm
-                  (setf (gptel-fsm-info fsm)
-                        (plist-put (gptel-fsm-info fsm)
-                                   :mevedel-goal-phase 'implementing))))))
+            (let* ((home-kind
+                    (mevedel-goal--approval-execution-home goal outcome))
+                   (context (mevedel-goal--approval-context goal outcome))
+                   (home (copy-tree (mevedel-goal-execution-home goal)))
+                   result)
+              (setf (plist-get home :kind) home-kind
+                    (plist-get home :locked) t
+                    (mevedel-goal-execution-home goal) home
+                    (mevedel-goal-implementation-context goal) context)
+              (setq result
+                    (if (and (eq home-kind 'worktree)
+                             (null (plist-get home :branch)))
+                        (mevedel-goal--transfer-to-worktree
+                         goal chat-buffer plan-markdown)
+                      (list :buffer chat-buffer
+                            :accepted
+                            (mevedel-goal--accept-plan
+                             plan-markdown mevedel--session chat-buffer))))
+              (let ((implementation-buffer (plist-get result :buffer))
+                    (accepted-artifact (plist-get result :accepted)))
+              (with-current-buffer implementation-buffer
+                (let* ((goal (mevedel-session-goal mevedel--session))
+                       (context (mevedel-goal-implementation-context goal))
+                       (implementation-mode
+                        (mevedel-goal--approval-implementation-mode outcome)))
+                  (let* ((implementation-input
+                          (mevedel-plan-implementation-input
+                           context accepted-artifact implementation-mode
+                           (mevedel-goal-objective goal)
+                           (mevedel-goal--focused-context goal)))
+                         (fsm
+                          (mevedel-goal--call-with-workload
+                           'implementation
+                           (lambda ()
+                             (mevedel--implement-plan implementation-input))
+                           'implementing implementation-input)))
+                    (when fsm
+                      (setf (gptel-fsm-info fsm)
+                            (plist-put (gptel-fsm-info fsm)
+                                       :mevedel-goal-phase
+                                       'implementing)))))))))
         (pcase outcome
           (`(feedback . ,text)
            (let ((path (mevedel-plan-current-path
@@ -1435,6 +1751,7 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
          (checkpoint (and goal (mevedel-goal-checkpoint goal))))
     (cond
      ((or (null goal)
+          (not (mevedel-goal--owned-by-session-p goal session))
           (not (eq (mevedel-goal-status goal) 'active))
           (bound-and-true-p mevedel--current-request)
           (mevedel-goal--pending-interaction-p session)
@@ -1518,7 +1835,10 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                      (if (mevedel-goal-continuation-ready-p
                           current-session 'guardian 'implementing)
                          (mevedel-goal--approval-callback
-                          plan chat-buffer 'implement)
+                          plan chat-buffer
+                          (list :context
+                                (mevedel-goal-implementation-context
+                                 current-goal)))
                        (mevedel-goal-present-plan
                         plan chat-buffer
                         "Automatic approval deferred because user input or an interaction is pending.")))))))
