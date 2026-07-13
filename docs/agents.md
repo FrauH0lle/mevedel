@@ -249,6 +249,8 @@ does not keep the overlay visible.
 workload map. A tier can select a concrete gptel provider and reasoning effort;
 a workload can select a tier or exact provider and override effort. Resolution
 starts from the session backend/model/effort, then applies tier and workload
-values, followed by explicit Agent or skill overrides. Agent buffers receive a
-deep-copied snapshot of the maps, so nested agents keep the policy in effect
-when they were launched.
+values, followed by explicit Agent policy or the policy of a skill that owns
+the child request. Skill-specific preset entries use `$skill-name` symbols in
+the same workload map; they do not add an Agent-tool effort argument. Agent
+buffers receive a deep-copied snapshot of the maps, so nested agents keep the
+policy in effect when they were launched.

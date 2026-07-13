@@ -46,10 +46,6 @@
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 (declare-function mevedel-agent-invocation-hook-rules
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-skill-effort-override
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-skill-model-override
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
@@ -62,12 +58,13 @@
                   "mevedel-mentions" (start end binding &optional object))
 
 ;; `mevedel-models'
-(declare-function mevedel-model-apply-policy-to-info
-                  "mevedel-models" (info policy))
-(declare-function mevedel-model-parse-selector "mevedel-models" (value))
+(declare-function mevedel-model-merge-skill-policy
+                  "mevedel-models" (skill-name model effort))
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
+(declare-function mevedel-model-skill-policy-fields
+                  "mevedel-models" (skill-name model effort))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
@@ -91,10 +88,6 @@
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
 (declare-function mevedel-request-hook-rules
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-skill-effort-override
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-skill-model-override
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
@@ -166,9 +159,10 @@ A plist of the form
    :hook-rules HOOKS :invoked-skills SKILLS)
 
 populated by user-dispatched skill invocation before `gptel-send'
-fires.  Drained into the new `mevedel-request' slots by the
-WAIT-state begin handler in `mevedel-presets.el' (see also
-`mevedel-skills--drain-pending-context').
+fires.  The prompt transform consumes MODEL and EFFORT before request
+realization.  The WAIT-state begin handler in `mevedel-presets.el' drains
+permission and hook rules into the new request and records invoked skills on
+the session (see `mevedel-skills--drain-pending-context').
 
 Cleared on drain.  Cleared by an `unwind-protect' in the slash
 or skill dispatch path if `gptel-send' aborts before request creation.")
@@ -199,62 +193,22 @@ returns nil when called outside any sub-agent."
   (and (boundp 'mevedel--current-request)
        mevedel--current-request))
 
-(defun mevedel-skills--current-model-override ()
-  "Return the active skill model override, or nil.
-Checks the active sub-agent invocation first (innermost wins), then
-the request struct.  Used by the WAIT-state apply handler to swap
-`info :backend' and `info :model' on the next gptel iteration."
-  (or (when-let* ((inv (mevedel-skills--current-invocation)))
-        (mevedel-agent-invocation-skill-model-override inv))
-      (when-let* ((req (mevedel-skills--current-request)))
-        (mevedel-request-skill-model-override req))))
-
-(defun mevedel-skills--current-effort-override ()
-  "Return the active skill effort override, or nil."
-  (or (when-let* ((inv (mevedel-skills--current-invocation)))
-        (mevedel-agent-invocation-skill-effort-override inv))
-      (when-let* ((req (mevedel-skills--current-request)))
-        (mevedel-request-skill-effort-override req))))
-
-(defun mevedel-skills--pre-realize-model-override ()
-  "Return the model selector visible before gptel realizes request data.
-
-Checks active invocation/request overrides first, then the pending
-slash/inline skill stash that has not yet been drained into a request."
-  (or (mevedel-skills--current-model-override)
-      (plist-get mevedel-skills--pending-request-context :model)))
-
-(defun mevedel-skills--pre-realize-effort-override ()
-  "Return the effort override visible before request realization."
-  (or (mevedel-skills--current-effort-override)
-      (plist-get mevedel-skills--pending-request-context :effort)))
-
-(defun mevedel-skills--model-selector (skill)
-  "Return SKILL's parsed model selector, or nil."
-  (when-let* ((model (mevedel-skill-model skill)))
-    (mevedel-model-parse-selector model)))
-
 (defun mevedel-skills--drain-pending-context (request)
   "Drain `mevedel-skills--pending-request-context' (buffer-local) into REQUEST.
 
 After this call the buffer-local stash is nil.  No-op when no stash
 is present.
 
-The stash plist keys map onto the request slots:
+The stash plist keys map onto request/session state:
 
 - :permission-rules -> `mevedel-request-skill-permission-rules'
-- :model            -> `mevedel-request-skill-model-override'
-- :effort           -> `mevedel-request-skill-effort-override'
+- :model/:effort    -> consumed by the pre-realization prompt transform
 - :hook-rules       -> `mevedel-request-hook-rules'
 - :invoked-skills   -> appended to `mevedel-session-invoked-skills'
                        on the request's session"
   (when-let* ((ctx mevedel-skills--pending-request-context))
     (when-let* ((rules (plist-get ctx :permission-rules)))
       (setf (mevedel-request-skill-permission-rules request) rules))
-    (when-let* ((model (plist-get ctx :model)))
-      (setf (mevedel-request-skill-model-override request) model))
-    (when-let* ((effort (plist-get ctx :effort)))
-      (setf (mevedel-request-skill-effort-override request) effort))
     (when-let* ((hooks (plist-get ctx :hook-rules)))
       (setf (mevedel-request-hook-rules request) hooks))
     (when-let* ((skills (plist-get ctx :invoked-skills))
@@ -271,51 +225,19 @@ FSM is the active gptel request state machine.
 gptel realizes request payloads from the temp prompt buffer's
 buffer-local `gptel-backend' and `gptel-model'.  Applying the override
 here lets cross-backend skill pins build backend-correct request data.
-Post-realize model-side overrides remain handled by
-`mevedel-skills--apply-overrides-handler'."
+Model and effort policy never changes after this realization boundary."
   (let* ((info (gptel-fsm-info fsm))
          (chat-buffer (plist-get info :buffer)))
     (when (and chat-buffer (buffer-live-p chat-buffer))
       (let ((policy
              (with-current-buffer chat-buffer
                (mevedel-model-resolve-workload
-                nil
-                (mevedel-skills--pre-realize-model-override)
-                (mevedel-skills--pre-realize-effort-override)))))
+               nil
+                (plist-get mevedel-skills--pending-request-context :model)
+                (plist-get mevedel-skills--pending-request-context :effort)))))
         (setq-local gptel-backend (plist-get policy :backend))
         (setq-local gptel-model (plist-get policy :model))
         (setq-local gptel-reasoning-effort (plist-get policy :effort))))))
-
-(defun mevedel-skills--apply-overrides-handler (fsm)
-  "WAIT-state handler: apply post-realize skill model overrides to FSM info.
-
-Reads the active model override (from sub-agent invocation or
-request) and mutates `info :backend' and `info :model' so the
-upcoming gptel-request fires with the override.  No-op when no
-override is in effect.
-
-This is a post-realize safety rail for model-side skill invocations
-that arrive during an already-running tool loop.  Same-backend model
-swaps are allowed; cross-backend swaps are rejected by
-`mevedel-model-apply-policy-to-info' because `info' :data is already
-backend-specific."
-  (let* ((info (gptel-fsm-info fsm))
-         (chat-buffer (plist-get info :buffer)))
-    (when (and chat-buffer (buffer-live-p chat-buffer))
-      (with-current-buffer chat-buffer
-        (let ((effort (mevedel-skills--current-effort-override)))
-          (when effort
-            (user-error
-             "Skill effort overrides must be selected before request dispatch"))
-          (when (mevedel-skills--current-model-override)
-            (let ((policy
-                   (mevedel-model-resolve-workload
-                    nil
-                    (mevedel-skills--current-model-override)
-                    nil)))
-              (setf (gptel-fsm-info fsm)
-                    (mevedel-model-apply-policy-to-info info policy)))))))))
-
 
 ;;
 ;;; Argument tokenization
@@ -1244,31 +1166,14 @@ ORIGIN selects the install path:
   Used because user skill dispatch fires before the `mevedel-request'
   has been created.
 - `model' / `internal': mutate the active sub-agent
-  invocation (innermost) or request directly.
+  invocation (innermost) or request directly.  Model and effort are never
+  installed on an already-realized request.
 
 PERMISSION-RULES is a list of parsed mevedel rules to append.
 MODEL is a selector plist or nil.  EFFORT is an opaque gptel value or nil.
 HOOK-RULES is a list of normalized hook rules.  INVOKED-SKILL
 is a `mevedel-skill-invocation-record' to record on the session for
-compaction/replay.
-
-Emits one-time per-invocation `display-warning' notices when MODEL
-or EFFORT is set so skill authors know:
-- model: the override is being installed; verify the provider or tier is
-  configured with gptel.
-- effort: the override is installed and will be validated before dispatch."
-  (when model
-    (display-warning
-     'mevedel
-     (format "Skill model override %S installed; verify the provider or tier is configured with gptel."
-             model)
-     :debug))
-  (when effort
-    (display-warning
-     'mevedel
-     (format "Skill effort override %S installed; gptel will validate it before dispatch."
-             effort)
-     :debug))
+compaction/replay."
   (cond
    ((eq origin 'user)
     (let ((existing mevedel-skills--pending-request-context))
@@ -1305,15 +1210,6 @@ or EFFORT is set so skill authors know:
          (req
           (mevedel-skills--activate-request-context
            req permission-rules nil))))
-      ;; Model and effort overwrite (last-writer-wins).
-      (when model
-        (cond
-         (inv (setf (mevedel-agent-invocation-skill-model-override inv) model))
-         (req (setf (mevedel-request-skill-model-override req) model))))
-      (when effort
-        (cond
-         (inv (setf (mevedel-agent-invocation-skill-effort-override inv) effort))
-         (req (setf (mevedel-request-skill-effort-override req) effort))))
       (when hook-rules
         (cond
          (inv
@@ -1348,7 +1244,10 @@ lifecycle events from the canonical preparation pipeline."
           :hook-rules (plist-get context :hook-rules)
           :invoked-skill (car (plist-get context :invoked-skills)))))
      (funcall callback outcome))
-   :role 'command :origin origin :display-callback display-callback))
+   :role 'command
+   :origin origin
+   :policy-owner-p (not (eq origin 'model))
+   :display-callback display-callback))
 
 (defun mevedel-skills--preparation-rejection (skill role origin)
   "Return a structured preflight rejection for SKILL, ROLE, and ORIGIN."
@@ -1370,6 +1269,41 @@ lifecycle events from the canonical preparation pipeline."
           :message
           (format "Skill '%s' references unknown agent '%s'"
                   (mevedel-skill-name skill) (mevedel-skill-agent skill))))))
+
+(defun mevedel-skills--preparation-policy
+    (skill origin policy-owner-p)
+  "Return structured request policy metadata for SKILL.
+ORIGIN identifies the caller.  POLICY-OWNER-P means the command owns a future
+request and may resolve and validate model/effort policy.  A model-origin
+inline command that does not own policy records only the ignored field names."
+  (if policy-owner-p
+      (condition-case err
+          (let* ((merged
+                  (mevedel-model-merge-skill-policy
+                   (mevedel-skill-name skill)
+                   (mevedel-skill-model skill)
+                   (mevedel-skill-effort skill)))
+                 (selector (plist-get merged :model))
+                 (effort (plist-get merged :effort))
+                 (workload
+                  (and (eq (mevedel-skill-context skill) 'fork)
+                       (mevedel-skill-agent skill))))
+            ;; Validate against the request owner's workload now, but retain the
+            ;; selector/effort pair so the actual request boundary remains the
+            ;; common resolver's source of truth.
+            (mevedel-model-resolve-workload workload selector effort)
+            (list :status 'ok :model selector :effort effort))
+        (error
+         (list :status 'error :reason 'invalid-policy
+               :message (error-message-string err))))
+    (list :status 'ok
+          :ignored-fields
+          (and (eq origin 'model)
+               (eq (mevedel-skill-context skill) 'inline)
+               (mevedel-model-skill-policy-fields
+                (mevedel-skill-name skill)
+                (mevedel-skill-model skill)
+                (mevedel-skill-effort skill))))))
 
 (defun mevedel-skills--preparation-settler
     (session rules hooks callback)
@@ -1430,10 +1364,12 @@ sanitized `UserPromptExpansion' hook decision."
     (list :status 'ok :kind kind :skill skill
           :body expanded :arguments arguments
           :hook-audits (and audit (list audit))
+          :ignored-policy-fields (plist-get metadata :ignored-policy-fields)
           :request-context context)))
 
 (cl-defun mevedel-skills-prepare
-    (skill arguments callback &key role origin display-callback)
+    (skill arguments callback
+           &key role origin policy-owner-p display-callback)
   "Prepare SKILL for ROLE and ORIGIN without dispatching or committing policy.
 ROLE is `command' or `instruction'.  ORIGIN is `user', `model', or
 `internal'.  CALLBACK receives the normal outcome plist.  Instruction
@@ -1447,14 +1383,23 @@ Allowed-tool rules apply only to the temporary preparation request."
     (let* ((skill-name (mevedel-skill-name skill))
            (arguments (if (eq role 'instruction) "" (or arguments "")))
            (session (and (boundp 'mevedel--session) mevedel--session))
-           (body (mevedel-skill-load-body skill)))
-      (if (null body)
-          (mevedel-skills--invoke-error
-           skill 'load-failure
-           (format "Skill %s could not be loaded: %s"
-                   skill-name
-                   (or (mevedel-skill-source-file skill) "unknown source"))
-           callback display-callback)
+           (policy (mevedel-skills--preparation-policy
+                    skill origin (and (eq role 'command) policy-owner-p)))
+           (body (and (eq (plist-get policy :status) 'ok)
+                      (mevedel-skill-load-body skill))))
+      (cond
+       ((not (eq (plist-get policy :status) 'ok))
+        (mevedel-skills--invoke-error
+         skill (plist-get policy :reason) (plist-get policy :message)
+         callback display-callback))
+       ((null body)
+        (mevedel-skills--invoke-error
+         skill 'load-failure
+         (format "Skill %s could not be loaded: %s"
+                 skill-name
+                 (or (mevedel-skill-source-file skill) "unknown source"))
+         callback display-callback))
+       (t
         (let* ((command-p (eq role 'command))
                (rules (mevedel-skill-allowed-tool-rules skill))
                (hooks (and command-p (mevedel-skill-hooks skill)))
@@ -1462,9 +1407,10 @@ Allowed-tool rules apply only to the temporary preparation request."
                 (list :skill skill :arguments arguments :role role
                       :origin origin :session session :rules rules
                       :hooks hooks
-                      :model (and command-p
-                                  (mevedel-skills--model-selector skill))
-                      :effort (and command-p (mevedel-skill-effort skill))))
+                      :model (plist-get policy :model)
+                      :effort (plist-get policy :effort)
+                      :ignored-policy-fields
+                      (plist-get policy :ignored-fields)))
                (substituted
                 (mevedel-skills--substitute-vars body arguments session skill))
                (finish (mevedel-skills--preparation-settler
@@ -1504,7 +1450,7 @@ Allowed-tool rules apply only to the temporary preparation request."
                       (complete (plist-get injection-outcome :body)
                                 expanded decision)))
                  (fail (plist-get injection-outcome :reason)
-                       (plist-get injection-outcome :message)))))))))))
+                       (plist-get injection-outcome :message))))))))))))
 
 (defun mevedel-skills--build-parent-inherited-agent (skill)
   "Build a synthetic `mevedel-agent' for SKILL with no `agent' field.
@@ -1670,6 +1616,7 @@ CALLBACK retain the public invocation lifecycle semantics."
           :display-callback display-callback))))
    :role 'command
    :origin origin
+   :policy-owner-p t
    :display-callback display-callback))
 
 (cl-defun mevedel-skills-invoke
@@ -1760,19 +1707,41 @@ foreground agent and calls CALLBACK when that agent returns."
 ;;
 ;;; Skill tool handler
 
-(defun mevedel-skills--render-skill-tool (name args result _render-data)
+(defun mevedel-skills--render-skill-tool (name args result render-data)
   "Return rendering plist for NAME, ARGS, and RESULT from the Skill tool."
   (when (stringp result)
     (let* ((skill-name (or (plist-get args :name) "?"))
-           (lines (length (split-string result "\n" t))))
-      (list :header (format "%s: %s (%d %s)"
+           (lines (length (split-string result "\n" t)))
+           (fields (plist-get render-data :ignored-policy-fields))
+           (ignored-fields
+            (and (eq (plist-get render-data :kind) 'skill-policy-warning)
+                 (member fields '((model) (effort) (model effort)))
+                 fields))
+           (ignored-names (mapconcat #'symbol-name ignored-fields ", "))
+           (ignored-description (mapconcat #'symbol-name ignored-fields " and ")))
+      (list :header (format "%s: %s (%d %s%s)"
                             (or name "Skill")
                             skill-name
                             lines
-                            (if (= lines 1) "line" "lines"))
-            :body result
+                            (if (= lines 1) "line" "lines")
+                            (if ignored-fields
+                                (format "; ignored %s" ignored-names)
+                              ""))
+            :body (if ignored-fields
+                      (format
+                       (concat
+                        "Warning: The skill's %s %s ignored because a "
+                        "model-side inline invocation cannot change its "
+                        "already-realized parent request. Use `context: fork` "
+                        "to give the skill its own request.\n\n%s")
+                       ignored-description
+                       (if (cdr ignored-fields) "overrides were" "override was")
+                       result)
+                    result)
             :body-mode 'markdown-mode
-            :status (and (string-prefix-p "Error:" result) 'error)
+            :status (cond
+                     ((string-prefix-p "Error:" result) 'error)
+                     (ignored-fields 'warning))
             :initially-collapsed-p t))))
 
 (defun mevedel-skills--invoke-handler (callback args)
@@ -1788,8 +1757,15 @@ returns the body; error returns a `Error: ' prefixed message."
          (arguments (plist-get args :arguments))
          (session (and (boundp 'mevedel--session) mevedel--session))
          (skill (and session (mevedel-session-get-skill session name)))
-         (return (lambda (result)
-                   (funcall callback (list :result result)))))
+         (return (lambda (result &optional ignored-fields)
+                   (funcall callback
+                            (if ignored-fields
+                                (list :result result
+                                      :render-data
+                                      (list :kind 'skill-policy-warning
+                                            :ignored-policy-fields
+                                            ignored-fields))
+                              (list :result result))))))
     (cond
      ((not (stringp name))
       (funcall return "Error: Skill name is required."))
@@ -1806,7 +1782,8 @@ returns the body; error returns a `Error: ' prefixed message."
             (funcall return
                      (or (plist-get outcome :body)
                          (plist-get outcome :result)
-                         (format "Skill '%s' produced no body." name))))
+                         (format "Skill '%s' produced no body." name))
+                     (plist-get outcome :ignored-policy-fields)))
            ('error
             (funcall return
                      (format "Error: %s"
@@ -2129,12 +2106,6 @@ a single plist with :error and :message so callers can block the send."
                         :message
                         (format "Skill $%s is not user-invocable. Escape it as \\$%s to send it literally."
                                 name name))))
-           ((eq (mevedel-skill-context skill) 'fork)
-            (setq problem
-                  (list :error 'fork-inline
-                        :message
-                        (format "Fork skill $%s must be invoked at the start of the prompt. Use $%s ..., or escape, quote, or code-span it to send literal text."
-                                name name))))
            ((not (gethash (or (mevedel-skill-source-file skill)
                               (mevedel-skill-name skill))
                           seen))
@@ -2330,18 +2301,22 @@ PREPARED is the accumulator used for sequential async preparation."
     (let* ((mention (car mentions))
            (skill (plist-get mention :skill))
            (name (plist-get mention :name)))
-      (mevedel-skills-invoke
+      (mevedel-skills-prepare
        skill ""
        (lambda (outcome)
          (pcase (plist-get outcome :status)
            ('ok
-            (if (eq (plist-get outcome :kind) 'inline)
+            (if (eq (plist-get outcome :kind) 'instruction)
                 (mevedel-skills--prepare-inline-attachments
                  (cdr mentions) callback
                  (cons (list :name name
                              :skill skill
                              :arguments ""
-                             :body (plist-get outcome :body))
+                             :body (plist-get outcome :body)
+                             :invoked-skills
+                             (plist-get
+                              (plist-get outcome :request-context)
+                              :invoked-skills))
                        prepared))
               (funcall callback
                        (list :status 'error
@@ -2351,7 +2326,7 @@ PREPARED is the accumulator used for sequential async preparation."
                                      name)))))
            (_
             (funcall callback outcome))))
-       :origin 'user))))
+       :role 'instruction :origin 'user :policy-owner-p nil))))
 
 (defun mevedel-skills--prepare-inline-attachments-for-text
     (text session callback)
@@ -2372,6 +2347,19 @@ send, or nil when TEXT has no inline attachments."
 (defun mevedel-skills--stage-inline-attachments (attachments)
   "Store prepared inline ATTACHMENTS and return their render-data block."
   (setq-local mevedel-skills--pending-inline-attachments attachments)
+  (let ((records
+         (mapcan (lambda (attachment)
+                   (copy-sequence (plist-get attachment :invoked-skills)))
+                 attachments)))
+    (when records
+      (setq-local
+       mevedel-skills--pending-request-context
+       (plist-put mevedel-skills--pending-request-context
+                  :invoked-skills
+                  (append
+                   (plist-get mevedel-skills--pending-request-context
+                              :invoked-skills)
+                   records)))))
   (mevedel-skills-format-inline-attachment-render-data attachments))
 
 (defun mevedel-skills--clear-pending-inline-attachments ()

@@ -71,8 +71,6 @@
 (defvar mevedel-session--fork-pending)
 
 ;; `mevedel-skills-invoke'
-(declare-function mevedel-skills--apply-overrides-handler
-                  "mevedel-skills-invoke" (fsm))
 (declare-function mevedel-skills--drain-pending-context
                   "mevedel-skills-invoke" (request))
 
@@ -535,27 +533,16 @@ alist with mevedel-specific handlers added:
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-message-inject
                     (cdr wait-entry)))))
-  ;; 1b. Apply skill request-scoped overrides BEFORE gptel--handle-wait
-  ;; fires.  This handler runs every WAIT entry (not just the first),
-  ;; so iteration 2+ pick up overrides installed mid-turn by model-side
-  ;; Skill calls.  Prepended BEFORE the begin handler so begin lands at
-  ;; the front of the chain (creating the request and draining the
-  ;; stash); the apply-overrides handler runs immediately after,
-  ;; reading the freshly-drained slot.
-  (let ((wait-entry (assq 'WAIT handlers)))
-    (when wait-entry
-      (setcdr wait-entry
-              (cons #'mevedel-skills--apply-overrides-handler
-                    (cdr wait-entry)))))
-  ;; 1c. Begin the mevedel-request on the first WAIT entry.  WAIT is
+  ;; 1b. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; Materialize a fork-pending rewind preview before `request-begin'
   ;; runs -- this catches direct data-buffer send paths (gptel-send,
   ;; agent invocations) that bypass `mevedel-view-send'.  After
   ;; `mevedel-request-begin' creates the request, drain any buffer-local
-  ;; `mevedel-skills--pending-request-context' stash into the new
-  ;; request's slots.
+  ;; `mevedel-skills--pending-request-context' permission/hooks into the new
+  ;; request and invocation records into the session.  Model/effort was already
+  ;; consumed by the pre-realization prompt transform.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
@@ -589,7 +576,7 @@ alist with mevedel-specific handlers added:
                           (setf (gptel-fsm-info fsm)
                                 (plist-put info :mevedel-request-begun t)))))
                     (cdr wait-entry)))))
-  ;; 1d. Continuation auto-compaction: keep all WAIT injectors ahead
+  ;; 1c. Continuation auto-compaction: keep all WAIT injectors ahead
   ;; of the network send, then gate the realized request immediately
   ;; before gptel fires it.
   (let ((wait-entry (assq 'WAIT handlers)))

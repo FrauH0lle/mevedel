@@ -305,6 +305,13 @@ submission. Skill bodies,
 prepared output, model output, child prompts and results, and model-supplied
 arguments are likewise never interpreted as new user `$skill` mentions.
 
+A plan with exactly one leading inline command lets that command select the
+model and effort of the request that the composer has not yet realized. A
+stack of two or more distinct inline commands retains the session model and
+effort; every stacked command's frontmatter and preset-side skill policy is
+ignored without choosing a winner. Instruction mentions also retain session
+policy, including when the mentioned skill normally has `context: fork`.
+
 Queued prompts retain their original bound text. Queueing performs no body
 preparation and runs no prompt hook. When an entry becomes the next turn, it is
 planned, prepared, and submitted independently; the entry leaves the queue
@@ -395,16 +402,57 @@ follow-ups and other terminal cleanup run through that shared boundary.
 
 ## Model And Effort
 
-`model` can name a preset-local tier or concrete provider selector. It
-temporarily overrides the workload/session provider for the active
-request/invocation.
+`model` can name a preset-local tier or concrete provider selector. `effort`
+uses gptel's public `gptel-reasoning-effort` values. Both fields are policy of
+the request that a skill owns, not ambient changes to the session.
 
-`effort` remains opaque until dispatch. Mevedel validates it through gptel's
-public `gptel-reasoning-effort` and the selected model's `:reasoning-effort`
-type metadata. Unsupported explicit effort fails before the request instead of
-being dropped or downgraded. An effort-bearing skill must be selected before
-request realization; a model-side Skill call cannot retrofit effort into an
-already provider-specific payload and therefore fails visibly.
+The existing `mevedel-model-workloads` map can tune an external skill without
+editing its `SKILL.md`. The key must be an Emacs symbol consisting of `$`
+followed by the skill's final visible name; string keys and unprefixed symbols
+do not address skills. Qualified names keep their qualification:
+
+```elisp
+(:model-workloads
+ (($grill-with-docs :tier strong)
+  ($code-review :provider "OpenAI:gpt-5.6-sol" :effort high)
+  ($plugin:review :effort low)))
+```
+
+The values use the workload map's existing `:tier`, `:provider`, and `:effort`
+fields. A preset `:tier` or `:provider` replaces the skill's frontmatter
+`model`; a preset `:effort` replaces frontmatter `effort`. An omitted field
+retains frontmatter, and an omitted frontmatter field inherits the normal
+session or child workload policy. This is field-by-field replacement, so a
+preset may replace effort while retaining the skill's model, or vice versa.
+
+Policy is applied only at a request-owner boundary:
+
+| Invocation | Model and effort policy |
+| --- | --- |
+| One leading user inline command | Applied before the parent request is realized |
+| User- or model-origin fork command | Applied to the dedicated child request |
+| Two or more leading inline commands | Ignored; the request retains session policy |
+| Instruction mention in user prose | Ignored; the request retains session policy |
+| Model-side inline `Skill` call | Ignored; the parent request is already realized |
+
+Mevedel resolves and validates provider-dependent policy only for the first two
+owner cases. Effort is checked against the selected model's
+`:reasoning-effort` metadata before dispatch; unsupported explicit effort
+fails the owning command instead of being dropped or downgraded. Ignored
+provider-dependent metadata is not resolved or validated, so invalid model or
+effort values cannot make an instruction, command stack, or model-side inline
+call fail.
+
+A model-side inline call still returns the prepared skill body unchanged to
+the model. When frontmatter or the `$skill-name` workload declared a model
+and/or effort field, the Skill tool row in the view receives warning status and
+names only the ignored fields; its expanded detail recommends `context: fork`.
+That warning is render data and is never prepended to the tool result. No
+warning is shown when neither field exists.
+
+An `agent` field selects the child type only for `context: fork`. Combining
+`agent` with `context: inline` records one configuration warning shown by skill
+inspection; invocation does not repeat it.
 
 ## Body Preparation
 

@@ -123,7 +123,7 @@
 (mevedel-deftest mevedel-skills--drain-pending-context ()
   ,test
   (test)
-  :doc "drain populates request slots from buffer-local stash"
+  :doc "drain commits non-policy context and clears the buffer-local stash"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "d" :root "/tmp/d" :name "d"
               :file-cache (mevedel-file-cache--create
@@ -147,9 +147,6 @@
       (mevedel-skills--drain-pending-context request)
       (should (equal rules
                      (mevedel-request-skill-permission-rules request)))
-      (should (equal (mevedel-model-tier-selector 'fast)
-                     (mevedel-request-skill-model-override request)))
-      (should (eq 'high  (mevedel-request-skill-effort-override request)))
       (should (equal records (mevedel-session-invoked-skills session)))
       ;; Stash is cleared after drain.
       (should (null mevedel-skills--pending-request-context))))
@@ -166,90 +163,7 @@
       (setq-local mevedel--session session)
       ;; No stash.
       (mevedel-skills--drain-pending-context request)
-      (should (null (mevedel-request-skill-permission-rules request)))
-      (should (null (mevedel-request-skill-model-override request))))))
-
-(mevedel-deftest mevedel-skills--current-model-override ()
-  ,test
-  (test)
-  :doc "returns request override when invocation has none"
-  (let* ((ws (mevedel-workspace--create
-              :type 'test :id "m" :root "/tmp/m" :name "m"
-              :file-cache (mevedel-file-cache--create
-                           :table (make-hash-table :test #'equal)
-                           :order nil :total-bytes 0)))
-         (session (mevedel-session-create "main" ws))
-         (request (mevedel-request--create
-                   :session session
-                   :skill-model-override
-                   (mevedel-model-tier-selector 'fast))))
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (setq-local mevedel--current-request request)
-      (should (equal (mevedel-model-tier-selector 'fast)
-                     (mevedel-skills--current-model-override)))))
-
-  :doc "invocation override wins over request override (innermost)"
-  (let* ((agent (mevedel-agent--create :name "tester"))
-         (invocation
-          (mevedel-agent-invocation--create
-           :agent agent
-           :skill-model-override (mevedel-model-tier-selector 'strong)))
-         (request (mevedel-request--create
-                   :skill-model-override
-                   (mevedel-model-tier-selector 'fast))))
-    (with-temp-buffer
-      (setq-local mevedel--current-request request)
-      (setq-local mevedel--agent-invocation invocation)
-      (should (equal (mevedel-model-tier-selector 'strong)
-                     (mevedel-skills--current-model-override)))))
-
-  :doc "no override anywhere returns nil"
-  (with-temp-buffer
-    (should (null (mevedel-skills--current-model-override)))))
-
-(mevedel-deftest mevedel-skills--pre-realize-model-override ()
-  ,test
-  (test)
-  :doc "returns current request override before pending slash stash"
-  (let ((request (mevedel-request--create
-                  :skill-model-override
-                  (mevedel-model-tier-selector 'strong))))
-    (with-temp-buffer
-      (setq-local mevedel--current-request request)
-      (setq-local mevedel-skills--pending-request-context
-                  (list :model (mevedel-model-tier-selector 'fast)))
-      (should (equal (mevedel-model-tier-selector 'strong)
-                     (mevedel-skills--pre-realize-model-override)))))
-
-  :doc "returns pending slash stash when no current override exists"
-  (with-temp-buffer
-    (setq-local mevedel-skills--pending-request-context
-                (list :model (mevedel-model-tier-selector 'fast)))
-    (should (equal (mevedel-model-tier-selector 'fast)
-                   (mevedel-skills--pre-realize-model-override)))))
-
-(mevedel-deftest mevedel-skills--current-effort-override
-  ()
-  ,test
-  (test)
-  :doc "prefers the innermost agent skill effort"
-  (with-temp-buffer
-    (setq-local mevedel--current-request
-                (mevedel-request--create :skill-effort-override 'medium))
-    (setq-local mevedel--agent-invocation
-                (mevedel-agent-invocation--create
-                 :skill-effort-override 'high))
-    (should (eq 'high (mevedel-skills--current-effort-override)))))
-
-(mevedel-deftest mevedel-skills--pre-realize-effort-override
-  ()
-  ,test
-  (test)
-  :doc "uses pending skill effort before request creation"
-  (with-temp-buffer
-    (setq-local mevedel-skills--pending-request-context '(:effort high))
-    (should (eq 'high (mevedel-skills--pre-realize-effort-override)))))
+      (should (null (mevedel-request-skill-permission-rules request))))))
 
 (mevedel-deftest mevedel-skills--transform-apply-model-override ()
   ,test
@@ -292,25 +206,6 @@
               (should (eq 'balanced-model gptel-model))))
         (kill-buffer chat))))
 
-  :doc "active request override sets prompt-buffer backend and model locals"
-  (mevedel-skills-test--with-model-backends
-    (let ((chat (generate-new-buffer " *skill-model-chat*")))
-      (unwind-protect
-          (let ((fsm (gptel-make-fsm :info (list :buffer chat))))
-            (with-current-buffer chat
-              (setq-local mevedel--current-request
-                          (mevedel-request--create
-                           :skill-model-override
-                           (mevedel-model-resolve-provider
-                            "Fast:fast-model"))))
-            (with-temp-buffer
-              (setq-local gptel-backend (gptel-get-backend "Balanced"))
-              (setq-local gptel-model 'balanced-model)
-              (mevedel-skills--transform-apply-model-override fsm)
-              (should (equal "Fast" (gptel-backend-name gptel-backend)))
-              (should (eq 'fast-model gptel-model))))
-        (kill-buffer chat))))
-
   :doc "pending effort uses gptel validation and reaches the prompt buffer"
   (mevedel-skills-test--with-model-backends
     (let ((chat (generate-new-buffer " *skill-effort-chat*"))
@@ -334,19 +229,6 @@
         (put 'gptel-reasoning-effort 'custom-type old-custom)
         (put 'fast-model :reasoning-effort old-effort)
         (kill-buffer chat)))))
-
-(mevedel-deftest mevedel-skills--apply-overrides-handler ()
-  ,test
-  (test)
-  :doc "rejects a model-side effort override before the next dispatch"
-  (let ((chat (generate-new-buffer " *skill-post-effort-chat*")))
-    (unwind-protect
-        (let ((fsm (gptel-make-fsm :info (list :buffer chat :data '(:messages [])))))
-          (cl-letf (((symbol-function 'mevedel-skills--current-effort-override)
-                     (lambda () 'high)))
-            (should-error (mevedel-skills--apply-overrides-handler fsm)
-                          :type 'user-error)))
-      (kill-buffer chat))))
 
 
 ;;
@@ -1194,6 +1076,59 @@ allowed-tools:
     (should-not
      (mevedel-skills--preparation-rejection skill 'command 'model))))
 
+(mevedel-deftest mevedel-skills--preparation-policy ()
+  ,test
+  (test)
+  :doc "an owner merges preset policy and validates its request workload"
+  (let* ((skill (mevedel-skill--create
+                 :name "alpha" :context 'fork :agent "reviewer"
+                 :model "fast" :effort 'low))
+         (mevedel-model-tiers '((fast) (strong)))
+         (mevedel-model-workloads '(($alpha :tier strong :effort high)))
+         call
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (workload selector effort)
+                 (setq call (list workload selector effort))
+                 '(:backend inherited :model inherited :effort high))))
+      (setq outcome (mevedel-skills--preparation-policy skill 'user t)))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should (equal '(:tier strong) (plist-get outcome :model)))
+    (should (eq 'high (plist-get outcome :effort)))
+    (should (equal '("reviewer" (:tier strong) high) call)))
+
+  :doc "a model-side inline non-owner reports fields without parsing them"
+  (let* ((skill (mevedel-skill--create
+                 :name "alpha" :context 'inline
+                 :model "invalid selector" :effort 'impossible))
+         (mevedel-model-workloads
+          '(($alpha :tier missing :provider "Missing:model"))))
+    (cl-letf (((symbol-function 'mevedel-model-merge-skill-policy)
+               (lambda (&rest _) (ert-fail "non-owner merged policy")))
+              ((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _) (ert-fail "non-owner resolved policy"))))
+      (let ((outcome
+             (mevedel-skills--preparation-policy skill 'model nil)))
+        (should (eq 'ok (plist-get outcome :status)))
+        (should (equal '(model effort)
+                       (plist-get outcome :ignored-fields))))))
+
+  :doc "a non-model non-owner silently retains session policy"
+  (let ((skill (mevedel-skill--create
+                :name "alpha" :model "invalid" :effort 'impossible)))
+    (should (equal '(:status ok :ignored-fields nil)
+                   (mevedel-skills--preparation-policy skill 'user nil))))
+
+  :doc "owner validation failures become structured invocation failures"
+  (let ((skill (mevedel-skill--create :name "alpha" :model "fast"))
+        outcome)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _) (user-error "Unsupported effort"))))
+      (setq outcome (mevedel-skills--preparation-policy skill 'user t)))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'invalid-policy (plist-get outcome :reason)))
+    (should (equal "Unsupported effort" (plist-get outcome :message)))))
+
 (mevedel-deftest mevedel-skills--preparation-settler ()
   ,test
   (test)
@@ -1338,11 +1273,13 @@ allowed-tools:
       (setq-local mevedel-skills--pending-request-context nil)
       (cl-letf (((symbol-function 'mevedel-hooks-run-event)
                  (lambda (_event _event-plist callback &rest _)
-                   (funcall callback nil))))
+                   (funcall callback nil)))
+                ((symbol-function 'mevedel-model-resolve-workload)
+                 (lambda (&rest _) '(:model inherited :effort high))))
         (mevedel-skills-prepare
          skill "work"
          (lambda (value) (setq outcome value))
-         :role 'command :origin 'user)
+         :role 'command :origin 'user :policy-owner-p t)
         (should-not mevedel-skills--pending-request-context)))
     (should (eq 'inline (plist-get outcome :kind)))
     (should (equal "Do work" (plist-get outcome :body)))
@@ -1535,7 +1472,7 @@ allowed-tools:
     (should (eq 'error (plist-get outcome :status)))
     (should (eq 'injection-failed (plist-get outcome :reason))))
 
-  :doc "model origin writes directly to the active request"
+  :doc "model inline origin installs additive context but ignores policy"
   (let* ((ws (mevedel-workspace--create
               :type 'test :id "t" :root "/tmp/t" :name "t"
               :file-cache (mevedel-file-cache--create
@@ -1548,16 +1485,17 @@ allowed-tools:
                  :body "Hi"
                  :model "fast"
                  :allowed-tool-rules
-                 '(("Bash" :pattern "ls" :action allow)))))
+                 '(("Bash" :pattern "ls" :action allow))))
+         outcome)
     (with-temp-buffer
       (setq mevedel--session session)
       (setq-local mevedel--current-request request)
       (mevedel-skills-invoke
        skill nil
-       (lambda (_) nil)
+       (lambda (value) (setq outcome value))
        :origin 'model))
-    (should (equal (mevedel-model-tier-selector 'fast)
-                   (mevedel-request-skill-model-override request)))
+    (should (equal '(model)
+                   (plist-get outcome :ignored-policy-fields)))
     (should (equal '(("Bash" :pattern "ls" :action allow))
                    (mevedel-request-skill-permission-rules request))))
 
@@ -1987,6 +1925,38 @@ allowed-tools:
   (should (plist-member envelope :result))
   (plist-get envelope :result))
 
+(mevedel-deftest mevedel-skills--render-skill-tool ()
+  ,test
+  (test)
+  :doc "ignored model-side inline policy renders a warning without changing result"
+  (let ((rendering
+         (mevedel-skills--render-skill-tool
+          "Skill" '(:name "review") "Prepared body"
+          '(:kind skill-policy-warning
+            :ignored-policy-fields (model effort)))))
+    (should (eq 'warning (plist-get rendering :status)))
+    (should (string-match-p "ignored model, effort"
+                            (plist-get rendering :header)))
+    (should (string-match-p "context: fork" (plist-get rendering :body)))
+    (should (string-match-p "Prepared body" (plist-get rendering :body))))
+
+  :doc "warning names only the policy field actually ignored"
+  (let ((rendering
+         (mevedel-skills--render-skill-tool
+          "Skill" '(:name "review") "Prepared body"
+          '(:kind skill-policy-warning
+            :ignored-policy-fields (effort)))))
+    (should (string-match-p "ignored effort" (plist-get rendering :header)))
+    (should-not (string-match-p "ignored model" (plist-get rendering :header))))
+
+  :doc "ordinary skill rendering remains successful and unchanged"
+  (let ((rendering
+         (mevedel-skills--render-skill-tool
+          "Skill" '(:name "review") "Prepared body" nil)))
+    (should-not (plist-get rendering :status))
+    (should (equal "Prepared body" (plist-get rendering :body)))
+    (should-not (string-match-p "ignored" (plist-get rendering :header)))))
+
 (mevedel-deftest mevedel-skills--invoke-handler ()
   ,test
   (test)
@@ -2033,6 +2003,87 @@ description: Yell
              (list :name "shout" :arguments "loudly")))
           (should (equal "YELL loudly" received)))
       (delete-directory dir t)))
+
+  :doc "model-side inline policy is view-only render-data"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "costly" :body "Prepared body"
+                 :context 'inline :model "OpenAI:gpt-5-mini" :effort 'low))
+         envelope)
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (mevedel-skills--invoke-handler
+       (lambda (value) (setq envelope value))
+       '(:name "costly")))
+    (should (equal "Prepared body" (plist-get envelope :result)))
+    (should (equal '(:kind skill-policy-warning
+                     :ignored-policy-fields (model effort))
+                   (plist-get envelope :render-data))))
+
+  :doc "registered Skill pipeline separates model result from warning view"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "costly" :body "Prepared body"
+                 :context 'inline :model "invalid" :effort 'low))
+         (tool (mevedel-tool-ensure "Skill"))
+         pipeline-result)
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq-local mevedel--session session
+                  mevedel--current-request
+                  (mevedel-request--create
+                   :session session
+                   :file-snapshots (make-hash-table :test #'equal)))
+      (mevedel-pipeline-run-tool
+       tool (lambda (value) (setq pipeline-result value))
+       '(:name "costly")))
+    (let* ((parts (mevedel-pipeline-extract-render-data
+                   pipeline-result session))
+           (visible (car parts))
+           (render-data (cdr parts))
+           (rendering
+            (funcall (mevedel-tool-renderer tool)
+                     "Skill" '(:name "costly") visible render-data)))
+      (should (equal "Prepared body" visible))
+      (should (equal '(:kind skill-policy-warning
+                       :ignored-policy-fields (model effort))
+                     render-data))
+      (should (eq 'warning (plist-get rendering :status)))
+      (should (string-match-p "context: fork"
+                              (plist-get rendering :body)))))
+
+  :doc "model-side inline skill without policy has no render-data"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "plain" :body "Prepared body" :context 'inline))
+         envelope)
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (mevedel-skills--invoke-handler
+       (lambda (value) (setq envelope value))
+       '(:name "plain")))
+    (should (equal "Prepared body" (plist-get envelope :result)))
+    (should-not (plist-member envelope :render-data)))
+
+  :doc "model-side fork policy owns its child and produces no warning"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "isolated" :body "Prepared body"
+                 :context 'fork :model "fast"))
+         envelope)
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+                 (lambda (callback _agent _description _prompt &rest _args)
+                   (funcall callback "Child result"))))
+        (mevedel-skills--invoke-handler
+         (lambda (value) (setq envelope value))
+         '(:name "isolated"))))
+    (should (equal "Child result" (plist-get envelope :result)))
+    (should-not (plist-member envelope :render-data)))
 
   :doc "model-side invocation uses visible prefixed names after conflicts"
   (let* ((user-dir (make-temp-file "mevedel-skills-state-" t))
@@ -2308,7 +2359,7 @@ spanning lines")))
        (mevedel-skills--inline-skill-mentions
         "Use $alpha here" session))))
 
-  :doc "known fork skill blocks inline attachment"
+  :doc "known fork skill becomes a non-forking instruction mention"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "review" :body "R" :context 'fork)))
@@ -2317,7 +2368,9 @@ spanning lines")))
                (lambda (&rest _) nil)))
       (let ((result (mevedel-skills--inline-skill-mentions
                      "Please use $review here" session)))
-        (should (eq 'fork-inline (plist-get result :error))))))
+        (should (equal '("review")
+                       (mapcar (lambda (item) (plist-get item :name))
+                               result))))))
 
   :doc "known disabled skill blocks inline attachment"
   (let* ((session (mevedel-skills-test--make-session))
@@ -2443,6 +2496,36 @@ spanning lines")))
                         :body)))
         (should (string-search "inline-skill-attachments"
                                (buffer-string)))
+        (should (= 1 (length (plist-get
+                              mevedel-skills--pending-request-context
+                              :invoked-skills)))))))
+
+  :doc "raw fork-context attachment is an instruction and ignores policy"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "review" :body "Review body" :context 'fork
+                 :model "invalid-selector" :effort 'impossible
+                 :hooks '((PreToolUse nil)))))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (setq-local mevedel-skills--pending-request-context nil)
+      (insert "Please use $review here")
+      (let (continued)
+        (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'mevedel-agent-runtime-dispatch)
+                   (lambda (&rest _) (ert-fail "instruction forked"))))
+          (should (eq 'skill
+                      (mevedel-skills--dispatch-inline-attachments
+                       (lambda () (setq continued t)))))
+          (should continued))
+        (should (= 1 (length mevedel-skills--pending-inline-attachments)))
+        (should-not (plist-member mevedel-skills--pending-request-context
+                                  :model))
+        (should-not (plist-member mevedel-skills--pending-request-context
+                                  :effort))
+        (should-not (plist-member mevedel-skills--pending-request-context
+                                  :hook-rules))
         (should (= 1 (length (plist-get
                               mevedel-skills--pending-request-context
                               :invoked-skills))))))))

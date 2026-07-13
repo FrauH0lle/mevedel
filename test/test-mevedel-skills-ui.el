@@ -806,6 +806,26 @@ spanning lines")))
                    '("disabled" "visible" "plugin"
                      "Visible description")))))
 
+(mevedel-deftest mevedel-skills--skill-detail-text ()
+  ,test
+  (test)
+  :doc "shows stored skill warnings in inspection details"
+  (let* ((warning
+          "Agent explorer is ignored for inline skills; use context: fork to select an agent")
+         (skill (mevedel-skill--create
+                 :name "inspect" :description "Inspectable"
+                 :source 'project :warnings (list warning)))
+         (details (mevedel-skills--skill-detail-text skill)))
+    (should (string-match-p "Warnings:" details))
+    (should (string-match-p (regexp-quote (concat "- " warning)) details)))
+
+  :doc "omits the warnings section when discovery found none"
+  (let* ((skill (mevedel-skill--create
+                 :name "clean" :description "Clean"
+                 :source 'project))
+         (details (mevedel-skills--skill-detail-text skill)))
+    (should-not (string-match-p "Warnings:" details))))
+
 (mevedel-deftest mevedel-skills-list--session-label ()
   ,test
   (test)

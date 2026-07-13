@@ -1934,8 +1934,8 @@ Dispatch order:
 
 spec keyword args (SKILL-PERMISSION-RULES /
 MODEL-TIER / SKILL-MODEL-OVERRIDE / SKILL-EFFORT-OVERRIDE) seed the spawned
-invocation's matching slots so the WAIT-state apply handler and
-permission resolver pick them up."
+invocation's matching slots so the child request's pre-realization model
+resolver and permission resolver pick them up."
   (require 'mevedel-agent-exec)
   (require 'mevedel-models)
   (let* ((agent-type (mevedel-agent-name agent))
@@ -1967,9 +1967,9 @@ permission resolver pick them up."
     (when model-tier
       (setf (mevedel-agent-invocation-model-tier-override invocation)
             (mevedel-model-tier-selector model-tier)))
-    ;; Seed the invocation's skill-* slots from the keyword args so
-    ;; the WAIT-state apply handler and the bucket-aware permission
-    ;; resolver see the caller's skill scope inside the fork.
+    ;; Seed the invocation's skill-* slots before child request realization so
+    ;; model policy and the bucket-aware permission resolver see the caller's
+    ;; skill scope inside the fork.
     (when skill-permission-rules
       (setf (mevedel-agent-invocation-skill-permission-rules invocation)
             skill-permission-rules))
