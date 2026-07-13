@@ -49,6 +49,9 @@
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
+;; `mevedel-plan'
+(defvar mevedel-plan-queue--spec)
+
 ;; `mevedel-presets'
 (declare-function mevedel-preset-restore-session
                   "mevedel-presets" (session &optional buffer))
@@ -103,6 +106,8 @@
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-reminders
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
@@ -846,6 +851,60 @@ The request has no tools or conversational transcript insertion."
     (setf (mevedel-goal-token-budget goal) budget)
     (setq-local mevedel-goal-token-budget budget)
     (mevedel-goal--save-session-state mevedel--session (current-buffer))
+    goal))
+
+(defun mevedel-goal--apply-automatic-approval-policy (goal chat-buffer)
+  "Apply GOAL's automatic policy at its pending approval boundary."
+  (when-let* ((plan (mevedel-plan-current-body mevedel--session)))
+    (let ((audit (mevedel-goal--guardian-decision-for-plan goal plan)))
+      (pcase (plist-get audit :verdict)
+        ('approve
+         (if (mevedel-goal-continuation-ready-p
+              mevedel--session 'guardian 'implementing)
+             (mevedel-goal--approval-callback
+              plan chat-buffer
+              (list :context (mevedel-goal-implementation-context goal)))
+           (mevedel-goal-present-plan
+            plan chat-buffer
+            "Automatic approval deferred because user input or an interaction is pending.")))
+        ('ask
+         (mevedel-goal-present-plan
+          plan chat-buffer (plist-get audit :reason)))
+        (_
+         (mevedel-goal--guard-current-plan goal chat-buffer))))))
+
+(defun mevedel-goal-set-approval-policy (policy)
+  "Set the current Goal approval POLICY to `supervised' or `automatic'."
+  (interactive
+   (list (intern (completing-read "Goal approval policy: "
+                                  '("supervised" "automatic") nil t))))
+  (unless (memq policy '(supervised automatic))
+    (user-error "Unknown Goal approval policy: %S" policy))
+  (let ((goal (mevedel-goal--current)))
+    (unless (mevedel-goal-owned-by-session-p goal mevedel--session)
+      (user-error "Goal continuation belongs to its handoff target"))
+    (when (eq (mevedel-goal-status goal) 'complete)
+      (user-error "Completed Goal has no approval policy to change"))
+    (unless (eq policy (mevedel-goal-approval-policy goal))
+      (let ((prefix "Goal lifecycle event: approval policy changed to "))
+        (setf (mevedel-goal-approval-policy goal) policy
+              (mevedel-session-pending-reminders mevedel--session)
+              (append
+               (cl-remove-if
+                (lambda (body) (string-prefix-p prefix body))
+                (mevedel-session-pending-reminders mevedel--session))
+               (list (concat prefix (symbol-name policy))))))
+      (mevedel-goal--save-session-state mevedel--session (current-buffer))
+      (when (and (eq policy 'automatic)
+                 (eq (mevedel-goal-status goal) 'active)
+                 (eq (mevedel-goal-phase goal) 'awaiting-approval))
+        (when (mevedel-session-plan-queue mevedel--session)
+          (mevedel-queue--abort-all
+           mevedel-plan-queue--spec 'policy-changed mevedel--session))
+        (unless (mevedel-goal-guardian-pending-p mevedel--session)
+          (mevedel-goal--apply-automatic-approval-policy
+           goal (current-buffer)))))
+    (message "mevedel: Goal approval policy is %s" policy)
     goal))
 
 (defun mevedel-goal-clear ()
@@ -1718,6 +1777,7 @@ Return `(:buffer BUFFER :accepted ARTIFACT)' for the sole target owner."
            (mevedel-goal--save-session-state
             mevedel--session chat-buffer)
            (message "mevedel: goal paused at plan approval"))
+          ('policy-changed nil)
           (_
            (message "mevedel: unknown plan outcome %S" outcome)))))))
 
@@ -1815,12 +1875,24 @@ When exhausted, pause durably with progress and blocker context after SOURCE."
         (mevedel-goal--persist-checkpoint session (current-buffer))
         nil))))
 
-(defun mevedel-goal--guardian-approved-p (goal)
+(defun mevedel-goal--guardian-decision-for-plan (goal plan)
+  "Return GOAL's latest guardian decision matching PLAN."
+  (when (and (stringp plan) (not (string-blank-p plan)))
+    (let ((plan-hash (mevedel-plan-hash plan)))
+      (cl-find-if
+       (lambda (audit)
+         (equal plan-hash (plist-get audit :plan-hash)))
+       (plist-get (mevedel-goal-cycle-record goal) :guardian-audits)
+       :from-end t))))
+
+(defun mevedel-goal--guardian-approved-p (goal &optional session)
   "Return non-nil when GOAL's current plan has a matching guardian approval."
-  (let* ((cycle (mevedel-goal-cycle-record goal))
-         (audit (car (last (plist-get cycle :guardian-audits)))))
-    (and audit
-         (eq (plist-get audit :verdict) 'approve))))
+  (when-let* ((session (or session
+                           (and (bound-and-true-p mevedel--session)
+                                mevedel--session)))
+              (plan (mevedel-plan-current-body session))
+              (audit (mevedel-goal--guardian-decision-for-plan goal plan)))
+    (eq (plist-get audit :verdict) 'approve)))
 
 (defun mevedel-goal--continuation-key (goal source target)
   "Return stable key for GOAL continuation from SOURCE to TARGET."
@@ -1923,8 +1995,11 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                                ((eq (mevedel-goal-status current-goal) 'active))
                                ((eq (mevedel-goal-phase current-goal)
                                     'awaiting-approval)))
-                     (if (mevedel-goal-continuation-ready-p
-                          current-session 'guardian 'implementing)
+                     (if (and
+                          (eq (mevedel-goal-approval-policy current-goal)
+                              'automatic)
+                          (mevedel-goal-continuation-ready-p
+                           current-session 'guardian 'implementing))
                          (mevedel-goal--approval-callback
                           plan chat-buffer
                           (list :context
@@ -1932,7 +2007,9 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                                  current-goal)))
                        (mevedel-goal-present-plan
                         plan chat-buffer
-                        "Automatic approval deferred because user input or an interaction is pending.")))))))
+                        (when (eq (mevedel-goal-approval-policy current-goal)
+                                  'automatic)
+                          "Automatic approval deferred because user input or an interaction is pending."))))))))
           (mevedel-goal--enqueue-event-reminder
            session "guardian escalated plan approval to the user")
           (mevedel-goal-present-plan

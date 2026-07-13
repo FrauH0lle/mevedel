@@ -1267,6 +1267,23 @@ spanning lines")))
           (should (string-match-p "auto-allow"
                                   (funcall annot "trust-all")))))))
 
+  :doc "Goal approval completes only the two canonical policies"
+  (let ((session (mevedel-skills-test--make-session)))
+    (mevedel-skills-test--with-chat-buffer session
+      (let ((mevedel-slash-commands '(("goal" . ignore))))
+        (insert "### /goal approval a")
+        (goto-char (point-max))
+        (let* ((capf (mevedel-slash-capf))
+               (annot (and capf (plist-get (nthcdr 3 capf)
+                                           :annotation-function))))
+          (should capf)
+          (should (equal '("automatic")
+                         (mevedel-skills-test--capf-candidates capf "a")))
+          (should (member "supervised"
+                          (mevedel-skills-test--capf-candidates capf)))
+          (should (equal " approval policy"
+                         (funcall annot "automatic")))))))
+
   :doc "plugin command completes first argument options"
   (let ((session (mevedel-skills-test--make-session)))
     (mevedel-skills-test--with-chat-buffer session
@@ -1841,6 +1858,7 @@ spanning lines")))
                   (mevedel-session-permission-mode session)))))
   :doc "bare command opens the Goal cockpit with a current Goal"
   (with-temp-buffer
+    (require 'mevedel-menu)
     (let* ((goal (mevedel-goal--create
                   :objective "Fix it" :status 'active :phase 'planning))
            (session (mevedel-session--create :name "main" :goal goal))
@@ -1880,7 +1898,36 @@ spanning lines")))
         (mevedel-cmd--goal "clear"))
       (should (equal '((clear) (resume "new evidence") (pause)
                        (edit "New objective"))
-                     calls)))))
+                     calls))))
+  :doc "reports and changes the current Goal approval policy"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :objective "Old" :status 'active
+                  :phase 'planning :approval-policy 'supervised :cycle 1))
+           (session (mevedel-session--create :name "main" :goal goal))
+           calls messages)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-goal-set-approval-policy)
+                 (lambda (policy) (push policy calls)))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (push (apply #'format format-string args) messages))))
+        (mevedel-cmd--goal "approval")
+        (mevedel-cmd--goal "approval automatic")
+        (mevedel-cmd--goal "approval supervised"))
+      (should (equal '(supervised automatic) calls))
+      (should (equal '("mevedel: Goal approval policy is supervised")
+                     messages))))
+  :doc "rejects unknown Goal approval policy spellings"
+  (with-temp-buffer
+    (setq-local mevedel--session
+                (mevedel-session--create
+                 :name "main"
+                 :goal (mevedel-goal--create
+                        :id "g1" :status 'active :phase 'planning
+                        :approval-policy 'supervised)))
+    (should-error (mevedel-cmd--goal "approval auto")
+                  :type 'user-error)))
 
 (mevedel-deftest mevedel-cmd--auto ()
   ,test

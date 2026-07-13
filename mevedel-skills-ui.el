@@ -168,6 +168,7 @@
 
 (defconst mevedel-skills--goal-command-candidates
   '(("auto" . " start with guarded automatic approval")
+    ("approval" . " show or set supervised/automatic approval")
     ("edit" . " edit the objective and pause")
     ("pause" . " pause after the active request")
     ("resume" . " resume from the saved phase")
@@ -178,7 +179,7 @@
   '(("tokens" . " [command] no args; estimate tokens")
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
-    ("goal" . " [command] objective | auto OBJECTIVE | edit | pause | resume | clear")
+    ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
     ("mode" . " [command] default | accept-edits | trust-all")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
@@ -280,6 +281,14 @@ Routes through the lifecycle-aware permission transition path."
       ("pause" (mevedel-goal-pause))
       ("resume" (mevedel-goal-resume rest))
       ("clear" (mevedel-goal-clear))
+      ("approval"
+       (unless goal (user-error "No current Goal"))
+       (if (string-blank-p rest)
+           (message "mevedel: Goal approval policy is %s"
+                    (mevedel-goal-approval-policy goal))
+         (unless (member rest '("supervised" "automatic"))
+           (user-error "Unknown Goal approval policy: %s" rest))
+         (mevedel-goal-set-approval-policy (intern rest))))
       ("auto"
        (when (string-blank-p rest)
          (user-error "Automatic Goal objective must not be blank"))
@@ -948,8 +957,11 @@ ARGS is the list of completed command arguments, and ARG-INDEX is the zero-based
 index of the argument being completed."
   (let ((arg-index (or arg-index 0)))
     (pcase name
-      ("goal" (and (zerop arg-index)
-                   (mapcar #'car mevedel-skills--goal-command-candidates)))
+      ("goal"
+       (pcase arg-index
+         (0 (mapcar #'car mevedel-skills--goal-command-candidates))
+         (1 (and (equal args '("approval"))
+                 '("supervised" "automatic")))))
       ("mode" (and (zerop arg-index)
                    (mapcar #'car mevedel-skills--mode-command-candidates)))
       ("skills" (and (zerop arg-index)
@@ -994,9 +1006,10 @@ ARGS is the list of completed command arguments, and ARG-INDEX is the zero-based
 index of the argument being completed."
   (let ((arg-index (or arg-index 0)))
     (pcase name
-      ("goal" (and (zerop arg-index)
-                   (cdr (assoc candidate
-                               mevedel-skills--goal-command-candidates))))
+      ("goal"
+       (pcase arg-index
+         (0 (cdr (assoc candidate mevedel-skills--goal-command-candidates)))
+         (1 (and (equal args '("approval")) " approval policy"))))
       ("mode" (and (zerop arg-index)
                    (cdr (assoc candidate
                                mevedel-skills--mode-command-candidates))))

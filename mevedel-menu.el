@@ -358,7 +358,8 @@
 (defun mevedel-menu--goal-description ()
   "Return the complete Goal cockpit description."
   (if-let* ((goal (mevedel-menu--current-goal)))
-      (let* ((home (mevedel-goal-execution-home goal))
+      (let* ((context (mevedel-menu--context))
+             (home (mevedel-goal-execution-home goal))
              (plan (mevedel-goal-current-plan goal))
              (review (or (mevedel-goal-review-summary goal)
                          (mevedel-goal-review-findings goal)))
@@ -372,7 +373,12 @@
           (format "Status / phase: %s / %s (cycle %d)"
                   (mevedel-goal-status goal) (mevedel-goal-phase goal)
                   (mevedel-goal-cycle goal))
-          (format "Approval: %s" (mevedel-goal-approval-policy goal))
+          (format "Approval: %s · Tool permissions: %s"
+                  (mevedel-goal-approval-policy goal)
+                  (mevedel-menu--mode-symbol
+                   (mevedel-cockpit-context-session context)
+                   (mevedel-cockpit-context-data-buffer context)
+                   (mevedel-cockpit-context-view-buffer context)))
           (format "Budget: %d%s" (or (mevedel-goal-token-usage goal) 0)
                   (if budget (format "/%d tokens" budget)
                     " tokens / unlimited"))
@@ -677,6 +683,24 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      #'mevedel-goal-set-token-budget
      (unless (string-blank-p value) (string-to-number value)))))
 
+(defun mevedel-menu--goal-approval-toggle-description ()
+  "Return the Goal approval toggle description."
+  (if-let* ((goal (mevedel-menu--current-goal))
+            (policy (mevedel-goal-approval-policy goal)))
+      (format "Approval: %s → %s" policy
+              (if (eq policy 'automatic) 'supervised 'automatic))
+    "Approval policy"))
+
+(defun mevedel-menu--goal-toggle-approval-policy ()
+  "Toggle the current Goal's approval policy."
+  (interactive)
+  (let ((policy (mevedel-goal-approval-policy
+                 (or (mevedel-menu--current-goal)
+                     (user-error "No current Goal")))))
+    (mevedel-menu--goal-call
+     #'mevedel-goal-set-approval-policy
+     (if (eq policy 'automatic) 'supervised 'automatic))))
+
 (defun mevedel-menu--select-preset ()
   "Select and apply a preset to the current session only."
   (interactive)
@@ -737,7 +761,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/skills enable NAME, disable NAME, help NAME"
      "/mode MODE, /model MODEL"
      "/worktree create [NAME] [--for \"purpose\"] [--clean]"
-     "/goal OBJECTIVE, /compact, /review, /verify, /auto, /clear, /init ..., /tokens"
+     "/goal OBJECTIVE, /goal approval [supervised|automatic]"
+     "/compact, /review, /verify, /auto, /clear, /init ..., /tokens"
      ""
      "Modes"
      "default / ask       Ask before write tools."
@@ -895,6 +920,9 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("e" "Edit objective" mevedel-menu--goal-edit
      :inapt-if-not mevedel-menu--goal-editable-p)
     ("b" "Set budget" mevedel-menu--goal-set-budget
+     :inapt-if-not mevedel-menu--goal-editable-p)
+    ("o" mevedel-menu--goal-toggle-approval-policy
+     :description mevedel-menu--goal-approval-toggle-description
      :inapt-if-not mevedel-menu--goal-editable-p)
     ("c" "Clear" (lambda () (interactive)
                      (mevedel-menu--goal-call #'mevedel-goal-clear))

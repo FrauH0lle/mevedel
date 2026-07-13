@@ -34,6 +34,10 @@ review findings into a new planning cycle. Every accepted plan is copied from
 - `/goal auto <objective>` starts an automatic Goal. Each plan first goes to a
   tool-free Goal guardian; anything other than a valid approval escalates to
   the ordinary user approval prompt.
+- `/goal approval` reports the active Goal's approval policy.
+- `/goal approval automatic` and `/goal approval supervised` change that
+  policy without restarting the Goal. The Goal cockpit provides the same
+  operation as the `o` toggle.
 - Bare `/goal` opens the Goal cockpit for inspection and lifecycle actions.
 - `/goal pause` stops continuation after the current request settles.
 - `/goal resume [context]` continues from the persisted safe boundary.
@@ -45,6 +49,16 @@ review findings into a new planning cycle. Every accepted plan is copied from
 Automatic approval does not grant tool permission. Fully unattended mutation
 also requires the user to select `trust-all`; explicit denies, protected paths,
 and the permission guardian remain authoritative.
+
+A policy change never cancels an in-flight request. It applies at the next
+unresolved plan-approval boundary. Switching to automatic dismisses an open
+ordinary approval prompt and consults the Goal guardian; a recorded verdict is
+reused only when its plan hash matches the persisted proposal. An `ask` verdict
+still requires the user, while a matching `approve` verdict may continue.
+Switching to supervised while the guardian is running lets that read-only
+request settle, records its audit, and presents the plan to the user. Paused or
+blocked Goals remember the new policy without resuming; complete Goals reject
+the change.
 
 ## Dispatch and model policy
 
