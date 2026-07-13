@@ -29,6 +29,7 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-interaction-prompt'
@@ -70,6 +71,7 @@
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
@@ -259,14 +261,122 @@
     (user-error "Goal objective must not be blank"))
   (string-trim objective))
 
+(defun mevedel-goal--current ()
+  "Return the current session Goal or signal `user-error'."
+  (unless (bound-and-true-p mevedel--session)
+    (user-error "No mevedel session in this buffer"))
+  (or (mevedel-session-goal mevedel--session)
+      (user-error "No current Goal")))
+
+(defun mevedel-goal-description (&optional goal)
+  "Return a compact user-facing description of GOAL."
+  (let ((goal (or goal (mevedel-goal--current))))
+    (format "Goal %s [%s/%s, cycle %s]: %s%s"
+            (mevedel-goal-id goal)
+            (mevedel-goal-status goal)
+            (mevedel-goal-phase goal)
+            (mevedel-goal-cycle goal)
+            (mevedel-goal-objective goal)
+            (if-let* ((reason (mevedel-goal-reason goal)))
+                (format " (%s)" reason)
+              ""))))
+
+(defun mevedel-goal-pause ()
+  "Pause the current Goal after any active request settles."
+  (let ((goal (mevedel-goal--current)))
+    (when (eq (mevedel-goal-status goal) 'complete)
+      (user-error "Completed Goal cannot be paused"))
+    (if (bound-and-true-p mevedel--current-request)
+        (setf (mevedel-goal-pause-requested goal) t)
+      (setf (mevedel-goal-status goal) 'paused
+            (mevedel-goal-pause-requested goal) nil
+            (mevedel-goal-reason goal) "Paused by user")
+      (mevedel-goal--save-session-state mevedel--session (current-buffer)))
+    goal))
+
+(defun mevedel-goal-edit (objective)
+  "Replace the current Goal OBJECTIVE while preserving its identity and cycles."
+  (let ((goal (mevedel-goal--current)))
+    (setf (mevedel-goal-objective goal)
+          (mevedel-goal--validate-objective objective)
+          (mevedel-goal-status goal) 'paused
+          (mevedel-goal-phase goal) 'planning
+          (mevedel-goal-current-plan goal) nil
+          (mevedel-goal-pause-requested goal) nil
+          (mevedel-goal-reason goal)
+          "Goal objective edited; use /goal resume to replan")
+    (mevedel-plan-queue-abort-all mevedel--session)
+    (mevedel-goal--save-session-state mevedel--session (current-buffer))
+    goal))
+
+(defun mevedel-goal-clear ()
+  "Remove current Goal state while preserving transcript, artifacts, and work."
+  (mevedel-goal--current)
+  (when (bound-and-true-p mevedel--current-request)
+    (user-error "Wait for or abort the active request before clearing Goal"))
+  (mevedel-plan-queue-abort-all mevedel--session)
+  (setf (mevedel-session-goal mevedel--session) nil
+        (mevedel-session-plan-metadata mevedel--session) nil)
+  (mevedel-goal--save-session-state mevedel--session (current-buffer))
+  nil)
+
+(defun mevedel-goal-resume (&optional input)
+  "Resume the current paused or blocked Goal, incorporating optional INPUT."
+  (let ((goal (mevedel-goal--current)))
+    (when (bound-and-true-p mevedel--current-request)
+      (user-error "A request is already active"))
+    (unless (memq (mevedel-goal-status goal) '(paused blocked))
+      (user-error "Goal is not paused or blocked"))
+    (when-let* ((reason (mevedel-goal-reason goal)))
+      (setf (mevedel-goal-review-findings goal)
+            (string-join
+             (delq nil
+                   (list (mevedel-goal-review-findings goal)
+                         (format "Prior stop reason: %s" reason)
+                         (and input (not (string-blank-p input))
+                              (format "Resume input: %s" input))))
+             "\n")))
+    (when (eq (mevedel-goal-status goal) 'blocked)
+      (setf (mevedel-goal-phase goal) 'planning))
+    (setf (mevedel-goal-status goal) 'active
+          (mevedel-goal-pause-requested goal) nil
+          (mevedel-goal-reason goal) nil)
+    (condition-case err
+        (pcase (mevedel-goal-phase goal)
+          ('planning
+           (mevedel-goal--dispatch-phase
+            'planning (mevedel-goal--planning-prompt goal)
+            (format "Resume Goal %s" (mevedel-goal-id goal))))
+          ('awaiting-approval
+           (mevedel-goal-restore-pending-approval
+            mevedel--session (current-buffer)))
+          ('implementing
+           (setf (mevedel-goal-phase goal) 'reviewing)
+           (mevedel-goal--dispatch-phase
+            'reviewing (mevedel-goal--review-prompt goal)
+            "Review interrupted Goal implementation"))
+          ('reviewing
+           (mevedel-goal--dispatch-phase
+            'reviewing (mevedel-goal--review-prompt goal)
+            "Resume Goal review")))
+      (error
+       (setf (mevedel-goal-status goal) 'paused
+             (mevedel-goal-reason goal) (error-message-string err))
+       (mevedel-goal--save-session-state mevedel--session (current-buffer))
+       (signal (car err) (cdr err))))
+    goal))
+
 (defun mevedel-goal-start (objective &optional display-text)
   "Start a supervised Goal for OBJECTIVE in the current session.
 DISPLAY-TEXT is the user-facing form of the planning turn."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (when-let* ((existing (mevedel-session-goal mevedel--session)))
-    (unless (eq (mevedel-goal-status existing) 'complete)
-      (user-error "A non-complete Goal already owns this session")))
+    (when (bound-and-true-p mevedel--current-request)
+      (user-error "A request is already active"))
+    (when (and (not (eq (mevedel-goal-status existing) 'complete))
+               (not (yes-or-no-p "Replace the unfinished Goal? ")))
+      (user-error "Goal replacement aborted")))
   (let ((previous-goal (mevedel-session-goal mevedel--session))
         (previous-plan-metadata
          (mevedel-session-plan-metadata mevedel--session))
@@ -293,6 +403,13 @@ DISPLAY-TEXT is the user-facing form of the planning turn."
              (mevedel-session-plan-metadata mevedel--session)
              previous-plan-metadata)
        (signal (car err) (cdr err))))
+    (when previous-goal
+      (setf (mevedel-session-goal mevedel--session) previous-goal
+            (mevedel-session-plan-metadata mevedel--session)
+            previous-plan-metadata)
+      (mevedel-plan-queue-abort-all mevedel--session)
+      (setf (mevedel-session-goal mevedel--session) goal
+            (mevedel-session-plan-metadata mevedel--session) nil))
     goal))
 
 (defun mevedel-goal--dispatch-gptel (phase prompt display-text)
@@ -801,14 +918,14 @@ artifact before the approval prompt is displayed."
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
                              (mevedel-session-goal mevedel--session)))
-                  ((eq (mevedel-goal-status goal) 'active))
-                  ((eq phase (mevedel-goal-phase goal))))
-        (pcase phase
-          ('implementing
-           (setf (mevedel-goal-phase goal) 'reviewing))
-          ('reviewing
-           (if-let* ((review (mevedel-goal-review-summary goal)))
-               (progn
+                  ((eq (mevedel-goal-status goal) 'active)))
+        (when (eq phase (mevedel-goal-phase goal))
+          (pcase phase
+            ('implementing
+             (setf (mevedel-goal-phase goal) 'reviewing))
+            ('reviewing
+             (if-let* ((review (mevedel-goal-review-summary goal)))
+                 (progn
                  (mevedel-goal--cycle-put
                   goal :review
                   (list :verdict (plist-get review :verdict)
@@ -838,9 +955,28 @@ artifact before the approval prompt is displayed."
                     (setf (mevedel-goal-status goal) 'blocked
                           (mevedel-goal-reason goal)
                           (plist-get review :summary)))))
-             (setf (mevedel-goal-status goal) 'paused
-                   (mevedel-goal-reason goal)
-                   "Goal review returned malformed structured output"))))))))
+               (setf (mevedel-goal-status goal) 'paused
+                     (mevedel-goal-reason goal)
+                     "Goal review returned malformed structured output")))))
+        (when (and (mevedel-goal-pause-requested goal)
+                   (eq (mevedel-goal-status goal) 'active))
+          (setf (mevedel-goal-status goal) 'paused
+                (mevedel-goal-pause-requested goal) nil
+                (mevedel-goal-reason goal) "Paused by user"))))))
+
+(defun mevedel-goal-settle-failure (fsm)
+  "Apply deferred Goal pause at FSM's failed terminal boundary.
+Persistence belongs to the caller's post-teardown abort or error path."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when-let* ((goal (and (bound-and-true-p mevedel--session)
+                             (mevedel-session-goal mevedel--session)))
+                  ((mevedel-goal-pause-requested goal)))
+        (setf (mevedel-goal-status goal) 'paused
+              (mevedel-goal-pause-requested goal) nil
+              (mevedel-goal-reason goal) "Paused by user")))))
 
 (defun mevedel-goal-dispatch-after-turn (fsm)
   "Dispatch the next Goal phase after FSM has settled."

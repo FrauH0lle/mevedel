@@ -1833,7 +1833,40 @@ spanning lines")))
                  (lambda (format-string &rest args)
                    (setq shown (apply #'format format-string args)))))
         (mevedel-cmd--goal nil))
-      (should (equal "Goal [active/planning]: Fix it" shown)))))
+      (should (equal "Goal nil [active/planning, cycle nil]: Fix it" shown))))
+  :doc "bare command offers creation when no Goal exists"
+  (with-temp-buffer
+    (setq-local mevedel--session (mevedel-session--create :name "main"))
+    (let (started)
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Ship it"))
+                ((symbol-function 'mevedel-goal-start)
+                 (lambda (objective display)
+                   (setq started (list objective display)))))
+        (mevedel-cmd--goal nil))
+      (should (equal '("Ship it" "Ship it") started))))
+  :doc "dispatches edit, pause, resume, and clear as lifecycle actions"
+  (with-temp-buffer
+    (let ((goal (mevedel-goal--create
+                 :id "g1" :objective "Old" :status 'paused
+                 :phase 'planning :cycle 1))
+          calls)
+      (setq-local mevedel--session
+                  (mevedel-session--create :name "main" :goal goal))
+      (cl-letf (((symbol-function 'mevedel-goal-edit)
+                 (lambda (value) (push (list 'edit value) calls)))
+                ((symbol-function 'mevedel-goal-pause)
+                 (lambda () (push '(pause) calls)))
+                ((symbol-function 'mevedel-goal-resume)
+                 (lambda (value) (push (list 'resume value) calls)))
+                ((symbol-function 'mevedel-goal-clear)
+                 (lambda () (push '(clear) calls))))
+        (mevedel-cmd--goal "edit New objective")
+        (mevedel-cmd--goal "pause")
+        (mevedel-cmd--goal "resume new evidence")
+        (mevedel-cmd--goal "clear"))
+      (should (equal '((clear) (resume "new evidence") (pause)
+                       (edit "New objective"))
+                     calls)))))
 
 (mevedel-deftest mevedel-cmd--auto ()
   ,test

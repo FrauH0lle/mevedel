@@ -483,13 +483,48 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 (mevedel-session-persistence-deserialize
                  (mevedel-session-persistence-read path)))
                (goal (mevedel-session-goal (plist-get result :session))))
-          (should (eq 'blocked (mevedel-goal-status goal)))
+          (should (eq 'paused (mevedel-goal-status goal)))
+          (should (eq 'planning (mevedel-goal-phase goal)))
           (should (equal "Need an API credential."
-                         (mevedel-goal-reason goal))))
+                         (mevedel-goal-review-findings goal)))
+          (should (equal
+                   "Session restored paused: Need an API credential."
+                   (mevedel-goal-reason goal))))
       (when (file-directory-p root)
         (delete-directory root t))
       (when (file-exists-p path)
         (delete-file path))))
+  :doc "restoration reason remains stable across repeated reopen cycles"
+  (let* ((goal '(:id "g1" :objective "Ship" :status active
+                 :phase planning :approval-policy supervised
+                 :cycle 1 :cycles ((:cycle 1))))
+         (first (mevedel-session-persistence-deserialize
+                 (test-mevedel-session-persistence--complete-sidecar
+                  (list :goal goal))))
+         (first-session (plist-get first :session))
+         (reason (mevedel-goal-reason
+                  (mevedel-session-goal first-session)))
+         (second
+          (mevedel-session-persistence-deserialize
+           (test-mevedel-session-persistence--complete-sidecar
+            (list :goal
+                  (mevedel-session-persistence--goal-to-plist
+                   (mevedel-session-goal first-session)))))))
+    (should (equal reason
+                   (mevedel-goal-reason
+                    (mevedel-session-goal (plist-get second :session))))))
+  :doc "restores every unfinished status paused while leaving complete terminal"
+  (dolist (case '((active . paused) (paused . paused)
+                  (blocked . paused) (complete . complete)))
+    (let* ((goal (list :id "g1" :objective "Ship" :status (car case)
+                       :phase 'planning :approval-policy 'supervised
+                       :cycle 1 :cycles '((:cycle 1))))
+           (result
+            (mevedel-session-persistence-deserialize
+             (test-mevedel-session-persistence--complete-sidecar
+              (list :goal goal))))
+           (restored (mevedel-session-goal (plist-get result :session))))
+      (should (eq (cdr case) (mevedel-goal-status restored)))))
   :doc "drops permission rules with unknown actions"
   (let* ((plist (list :version (mevedel-version)
                       :session-name "x"
@@ -4223,7 +4258,13 @@ The result is a plist whose :tempdir owns every created file."
         (let* ((session (plist-get fixture :session))
                (_ (setf (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-preset-settings session)
-                        '((mevedel-test-setting base))))
+                        '((mevedel-test-setting base))
+                        (mevedel-session-goal session)
+                        (mevedel-goal--create
+                         :id "parent-goal" :objective "Ship"
+                         :status 'active :phase 'planning
+                         :approval-policy 'supervised :cycle 1
+                         :cycles '((:cycle 1)))))
                (before (mevedel-session-persistence-serialize session))
                (child
                 (mevedel-session-persistence--fork-candidate
@@ -4239,6 +4280,8 @@ The result is a plist whose :tempdir owns every created file."
           (should-not (assoc 3 (mevedel-session-file-snapshots child)))
           (should-not (assoc "future--2"
                              (mevedel-session-agent-transcripts child)))
+          (should-not (mevedel-session-goal child))
+          (should (mevedel-session-goal session))
           (setcar (cdr (assq 'mevedel-test-setting
                              (mevedel-session-preset-settings child)))
                   'child)

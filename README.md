@@ -576,6 +576,16 @@ cycle, and `blocked` stops with a concrete reason. Malformed reviews and a
 successive materially identical plan pause for intervention. Goal status is
 one of `active`, `paused`, `blocked`, or `complete`.
 
+Bare `/goal` shows the current lifecycle position, or prompts for an objective
+when no Goal exists. `/goal edit <objective>` preserves identity and cycle
+history but pauses for explicit review; `/goal pause` waits for the active
+request to settle before stopping continuation; `/goal resume [context]`
+continues from the saved safe phase; and `/goal clear` removes only current
+lifecycle state. Clear and replacement never delete transcript, plan artifacts,
+or filesystem work. Starting over an unfinished Goal requires confirmation,
+while a complete Goal is replaced directly. Aborting an active request pauses
+its Goal.
+
 ### Review and Verify Commands
 
 `M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run

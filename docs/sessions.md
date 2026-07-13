@@ -123,6 +123,14 @@ virtue of never having been auto-saved. Abort/error teardown is an explicit
 save boundary after prompts, agents, and the current request have been
 cleared, so resumed sessions do not resurrect aborted runtime state.
 
+An unfinished persisted Goal is always restored `paused`, with an explicit
+restoration reason; opening a session never dispatches a Goal phase. `/goal
+resume` is required to continue. Planning and review can be requested again
+only after that explicit action. A saved `implementing` phase is treated as
+potentially partial: resume advances to read-only review of repository evidence
+instead of blindly replaying mutations. Normal rewind forks copy session preset
+settings but clear Goal ownership, leaving the parent as the sole owner.
+
 ### Rewind
 
 `mevedel-rewind` picks any prior user prompt across all segments via

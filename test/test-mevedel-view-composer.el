@@ -625,7 +625,21 @@
           (insert "/fake")
           (mevedel-view-send)
           (should (equal "fake result" seen))
-          (should (string-empty-p (mevedel-view--input-text))))))))
+          (should (string-empty-p (mevedel-view--input-text)))))))
+  :doc "/goal pause reaches the lifecycle handler during an active request"
+  (mevedel-view-test--with-buffers
+    (let* (seen
+           (commands
+            (list (cons "goal" (lambda (args) (setq seen args))))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request t
+                    mevedel-slash-commands commands))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "/goal pause")
+        (mevedel-view-send)
+        (should (equal "pause" seen))
+        (should (string-empty-p (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view-send/dollar-text ()
   ,test

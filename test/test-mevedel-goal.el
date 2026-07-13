@@ -28,6 +28,17 @@
   (gptel-make-fsm
    :info (list :buffer buffer :mevedel-goal-phase phase)))
 
+(mevedel-deftest mevedel-goal--current ()
+  ,test
+  (test)
+  :doc "returns the session Goal and rejects missing session state"
+  (with-temp-buffer
+    (should-error (mevedel-goal--current) :type 'user-error)
+    (let* ((goal (mevedel-goal--create :id "g1"))
+           (mevedel--session (mevedel-session--create
+                              :name "main" :goal goal)))
+      (should (eq goal (mevedel-goal--current))))))
+
 (mevedel-deftest mevedel-goal--relative-dir ()
   ,test
   (test)
@@ -153,7 +164,7 @@
               (should (string-match-p "<proposed_plan>"
                                       (cadr dispatched))))))
       (delete-directory root t)))
-  :doc "rejects a blank objective and a second non-complete Goal"
+  :doc "rejects a blank objective and declined unfinished replacement"
   (let* ((root (make-temp-file "mevedel-goal-replace-" t))
          (session (mevedel-session-create
                    "main" (test-mevedel-goal--workspace root))))
@@ -163,8 +174,30 @@
           (let ((mevedel-goal-dispatch-function #'ignore))
             (should-error (mevedel-goal-start "  ") :type 'user-error)
             (mevedel-goal-start "First")
-            (should-error (mevedel-goal-start "Second") :type 'user-error)))
+            (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+              (should-error (mevedel-goal-start "Second")
+                            :type 'user-error))))
       (delete-directory root t)))
+  :doc "confirmed unfinished and unconfirmed complete Goals are replaceable"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "main"))
+           (mevedel--session session)
+           (mevedel-goal-dispatch-function #'ignore))
+      (setf (mevedel-session-goal session)
+            (mevedel-goal--create :id "old" :objective "Old"
+                                  :status 'paused :phase 'planning))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+        (mevedel-goal-start "Replacement"))
+      (should (equal "Replacement"
+                     (mevedel-goal-objective
+                      (mevedel-session-goal session))))
+      (setf (mevedel-goal-status (mevedel-session-goal session)) 'complete)
+      (cl-letf (((symbol-function 'yes-or-no-p)
+                 (lambda (&rest _) (error "Unexpected confirmation"))))
+        (mevedel-goal-start "Next"))
+      (should (equal "Next"
+                     (mevedel-goal-objective
+                      (mevedel-session-goal session))))))
   :doc "restores prior Goal and plan metadata when planning cannot start"
   (let* ((root (make-temp-file "mevedel-goal-rollback-" t))
          (session (mevedel-session-create
@@ -184,6 +217,185 @@
           (should (eq previous (mevedel-session-goal session)))
           (should (eq metadata (mevedel-session-plan-metadata session))))
       (delete-directory root t))))
+  :doc "failed replacement preserves an awaiting approval interaction"
+  (with-temp-buffer
+    (let* ((previous (mevedel-goal--create
+                      :id "old" :objective "Old" :status 'active
+                      :phase 'awaiting-approval :cycle 1
+                      :cycles '((:cycle 1))))
+           (entry (list :body "# Plan" :callback #'ignore))
+           (metadata '(:status presented))
+           (session (mevedel-session--create
+                     :name "main" :goal previous :plan-queue (list entry)
+                     :plan-metadata metadata))
+           (mevedel--session session))
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                ((symbol-function 'mevedel-goal--dispatch-phase)
+                 (lambda (&rest _) (error "Startup failed"))))
+        (should-error (mevedel-goal-start "New")))
+      (should (eq previous (mevedel-session-goal session)))
+      (should (eq 'awaiting-approval (mevedel-goal-phase previous)))
+      (should (equal (list entry) (mevedel-session-plan-queue session)))
+      (should (eq metadata (mevedel-session-plan-metadata session)))))
+
+(mevedel-deftest mevedel-goal-description ()
+  ,test
+  (test)
+  :doc "shows stable identity, lifecycle position, objective, and reason"
+  (should
+   (equal "Goal g1 [paused/planning, cycle 2]: Ship (Waiting)"
+          (mevedel-goal-description
+           (mevedel-goal--create
+            :id "g1" :objective "Ship" :status 'paused
+            :phase 'planning :cycle 2 :reason "Waiting")))))
+
+(mevedel-deftest mevedel-goal-pause ()
+  ,test
+  (test)
+  :doc "pauses an idle Goal immediately"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :objective "Ship" :status 'active
+                  :phase 'planning :cycle 1 :cycles '((:cycle 1))))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-goal--save-session-state) #'ignore))
+        (mevedel-goal-pause))
+      (should (eq 'paused (mevedel-goal-status goal)))))
+  :doc "waits for an active request boundary before pausing continuation"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :objective "Ship" :status 'active
+                  :phase 'awaiting-approval :cycle 1 :cycles '((:cycle 1))))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (setq-local mevedel--session session
+                  mevedel--current-request t)
+      (mevedel-goal-pause)
+      (should (eq 'active (mevedel-goal-status goal)))
+      (should (mevedel-goal-pause-requested goal))
+      (mevedel-goal-settle-turn
+       (test-mevedel-goal--fsm (current-buffer) 'planning))
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should-not (mevedel-goal-pause-requested goal)))))
+
+(mevedel-deftest mevedel-goal-edit ()
+  ,test
+  (test)
+  :doc "changes the contract without replacing identity or cycle history"
+  (with-temp-buffer
+    (let* ((cycles '((:cycle 1 :plan "p")))
+           (goal (mevedel-goal--create
+                  :id "stable" :objective "Old" :status 'active
+                  :phase 'reviewing :cycle 1 :cycles cycles))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-goal--save-session-state) #'ignore))
+        (mevedel-goal-edit "New contract"))
+      (should (equal "stable" (mevedel-goal-id goal)))
+      (should (eq cycles (mevedel-goal-cycles goal)))
+      (should (equal "New contract" (mevedel-goal-objective goal)))
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should (eq 'planning (mevedel-goal-phase goal))))))
+
+(mevedel-deftest mevedel-goal-clear ()
+  ,test
+  (test)
+  :doc "removes control state without deleting transcript, artifacts, or work"
+  (let* ((root (make-temp-file "mevedel-goal-clear-" t))
+         (artifact (file-name-concat root "cycle-001-plan.md"))
+         (work (file-name-concat root "work.el"))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'paused
+                :phase 'planning :cycle 1 :cycles '((:cycle 1))))
+         (session (mevedel-session--create :name "main" :goal goal)))
+    (unwind-protect
+        (with-temp-buffer
+          (write-region "plan" nil artifact nil 'silent)
+          (write-region "work" nil work nil 'silent)
+          (insert "transcript")
+          (setq-local mevedel--session session)
+          (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
+                     #'ignore))
+            (mevedel-goal-clear))
+          (should-not (mevedel-session-goal session))
+          (should (equal "transcript" (buffer-string)))
+          (should (file-exists-p artifact))
+          (should (file-exists-p work)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal-resume ()
+  ,test
+  (test)
+  :doc "dispatches the saved safe phase and reviews interrupted implementation"
+  (dolist (case '((planning . planning)
+                  (reviewing . reviewing)
+                  (implementing . reviewing)))
+    (with-temp-buffer
+      (let* ((goal (mevedel-goal--create
+                    :id "g1" :objective "Ship" :status 'paused
+                    :phase (car case) :cycle 1 :cycles '((:cycle 1))
+                    :current-plan '(:absolute-path "/tmp/plan")))
+             (session (mevedel-session--create :name "main" :goal goal))
+             dispatched)
+        (setq-local mevedel--session session)
+        (let ((mevedel-goal-dispatch-function
+               (lambda (phase &rest _) (setq dispatched phase))))
+          (mevedel-goal-resume))
+        (should (eq (cdr case) dispatched))
+        (should (eq 'active (mevedel-goal-status goal))))))
+  :doc "reconstructs approval instead of dispatching a model request"
+  (let ((root (make-temp-file "mevedel-goal-resume-approval-" t)))
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((goal (mevedel-goal--create
+                        :id "g1" :objective "Ship" :status 'paused
+                        :phase 'awaiting-approval :cycle 1
+                        :cycles '((:cycle 1))))
+                 (session (mevedel-session--create
+                           :name "main" :goal goal :save-path root)))
+            (setq-local mevedel--session session)
+            (mevedel-plan-write-current "# Plan" session (current-buffer))
+            (cl-letf (((symbol-function 'mevedel-queue--render-head)
+                       #'ignore))
+              (mevedel-goal-resume))
+            (should (= 1 (length (mevedel-session-plan-queue session))))
+            (should (eq 'active (mevedel-goal-status goal)))))
+      (delete-directory root t)))
+  :doc "blocked resume replans with the blocker and new input"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :objective "Ship" :status 'blocked
+                  :phase 'reviewing :cycle 1 :cycles '((:cycle 1))
+                  :reason "Need credentials"))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (setq-local mevedel--session session)
+      (let ((mevedel-goal-dispatch-function #'ignore))
+        (mevedel-goal-resume "Credentials installed"))
+      (should (eq 'planning (mevedel-goal-phase goal)))
+      (should (string-match-p "Need credentials"
+                              (mevedel-goal-review-findings goal)))
+      (should (string-match-p "Credentials installed"
+                              (mevedel-goal-review-findings goal))))))
+
+(mevedel-deftest mevedel-goal-settle-failure ()
+  ,test
+  (test)
+  :doc "consumes a deferred pause without persisting before request teardown"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :objective "Ship" :status 'active
+                  :phase 'planning :cycle 1 :cycles '((:cycle 1))
+                  :pause-requested t))
+           (session (mevedel-session--create :name "main" :goal goal))
+           saved)
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
+                 (lambda (&rest _) (setq saved t))))
+        (mevedel-goal-settle-failure
+         (test-mevedel-goal--fsm (current-buffer) 'planning)))
+      (should-not saved)
+      (should (eq 'paused (mevedel-goal-status goal)))
+      (should-not (mevedel-goal-pause-requested goal)))))
 
 (mevedel-deftest mevedel-goal--call-with-workload ()
   ,test

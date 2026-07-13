@@ -61,6 +61,7 @@
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-owner-session "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
@@ -353,6 +354,7 @@ containment semantics as session creation."
         :phase (mevedel-goal-phase goal)
         :approval-policy (mevedel-goal-approval-policy goal)
         :owner-session (mevedel-goal-owner-session goal)
+        :pause-requested (mevedel-goal-pause-requested goal)
         :current-plan (mevedel-goal-current-plan goal)
         :review-summary (mevedel-goal-review-summary goal)
         :cycle (mevedel-goal-cycle goal)
@@ -399,7 +401,8 @@ containment semantics as session creation."
                (or (null (plist-get plist :review-findings))
                    (stringp (plist-get plist :review-findings)))
                (or (null (plist-get plist :reason))
-                   (stringp (plist-get plist :reason))))
+                   (stringp (plist-get plist :reason)))
+               (memq (plist-get plist :pause-requested) '(nil t)))
         (error "Invalid Goal sidecar")))
     (mevedel-goal--create
      :id (plist-get plist :id)
@@ -408,6 +411,7 @@ containment semantics as session creation."
      :phase (plist-get plist :phase)
      :approval-policy (plist-get plist :approval-policy)
      :owner-session (plist-get plist :owner-session)
+     :pause-requested (plist-get plist :pause-requested)
      :current-plan (copy-tree (plist-get plist :current-plan))
      :review-summary (copy-tree (plist-get plist :review-summary))
      :cycle (plist-get plist :cycle)
@@ -599,6 +603,28 @@ unknown actions are dropped via the hygiene filter."
                      :messages
                      (mevedel-session-persistence--sanitize-messages
                       (plist-get plist :messages)))))
+    (when-let* ((goal (mevedel-session-goal session))
+                ((not (eq (mevedel-goal-status goal) 'complete))))
+      (let ((prior-status (mevedel-goal-status goal))
+            (prior-reason (mevedel-goal-reason goal)))
+        (when (eq prior-status 'blocked)
+          (setf (mevedel-goal-phase goal) 'planning
+                (mevedel-goal-review-findings goal)
+                (string-join
+                 (delq nil (list (mevedel-goal-review-findings goal)
+                                  prior-reason))
+                 "\n")))
+        (setf (mevedel-goal-status goal) 'paused
+              (mevedel-goal-pause-requested goal) nil
+              (mevedel-goal-reason goal)
+              (cond
+               ((and (stringp prior-reason)
+                     (string-prefix-p "Session restored paused" prior-reason))
+                prior-reason)
+               ((and (stringp prior-reason)
+                     (not (string-blank-p prior-reason)))
+                (format "Session restored paused: %s" prior-reason))
+               (t "Session restored paused; use /goal resume to continue")))))
     (list :session             session
           :first-user-message  (plist-get plist :first-user-message)
           :latest-user-message latest-user-message
@@ -3463,6 +3489,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
   (let ((child (copy-mevedel-session session)))
     (setf (mevedel-session-preset-settings child)
           (copy-tree (mevedel-session-preset-settings session))
+          (mevedel-session-goal child) nil
           (mevedel-session-prompt-index child)
           (mevedel-session-persistence--reduce-prompt-index
            (mevedel-session-prompt-index session)
