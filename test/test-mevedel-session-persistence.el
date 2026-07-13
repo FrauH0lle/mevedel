@@ -229,26 +229,44 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                 :phase 'reviewing :approval-policy 'supervised
                 :owner-session "main" :cycle 2
                 :cycles '((:cycle 1) (:cycle 2))
+                :checkpoint
+                '(:phase reviewing :cycle 2 :input "Exact review"
+                  :workload review :provider "openai:model" :effort high
+                  :plan-reference nil
+                  :attempt 1 :attempt-id "g1/2/reviewing/1"
+                  :retry-count 0 :dispatch-state started :request-started t
+                  :last-settled-boundary nil :prepared-at "2026-01-01T00:00:00Z")
                 :reason "Need an API credential."))
          (plist (mevedel-session-persistence--goal-to-plist goal)))
     (should (equal "g1" (plist-get plist :id)))
     (should (eq 'blocked (plist-get plist :status)))
     (should (= 2 (plist-get plist :cycle)))
+    (should (equal "Exact review"
+                   (plist-get (plist-get plist :checkpoint) :input)))
     (should (equal "Need an API credential." (plist-get plist :reason)))))
 
 (mevedel-deftest mevedel-session-persistence--goal-from-plist ()
   ,test
   (test)
-  :doc "rebuilds a Goal without sharing mutable cycle records"
+  :doc "rebuilds a Goal without sharing mutable recovery records"
   (let* ((cycles '((:cycle 1 :plan "cycle-001-plan.md")))
+         (checkpoint
+          '(:phase planning :cycle 1 :input "Exact planning"
+            :workload planning :provider "p:m" :effort nil
+            :plan-reference nil
+            :attempt 1 :attempt-id "g1/1/planning/1"
+            :retry-count 0 :dispatch-state settled :request-started t
+            :last-settled-boundary nil :prepared-at "2026-01-01T00:00:00Z"))
          (goal (mevedel-session-persistence--goal-from-plist
                 (list :id "g1" :objective "Ship" :status 'active
                       :phase 'planning :approval-policy 'supervised
-                      :cycle 1 :cycles cycles))))
+                      :cycle 1 :cycles cycles :checkpoint checkpoint))))
     (should (mevedel-goal-p goal))
     (should (equal "Ship" (mevedel-goal-objective goal)))
     (should (equal cycles (mevedel-goal-cycles goal)))
-    (should-not (eq cycles (mevedel-goal-cycles goal))))
+    (should-not (eq cycles (mevedel-goal-cycles goal)))
+    (should (equal checkpoint (mevedel-goal-checkpoint goal)))
+    (should-not (eq checkpoint (mevedel-goal-checkpoint goal))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-persistence--goal-from-plist nil))
   :doc "rejects unsafe IDs and malformed lifecycle state"
@@ -260,6 +278,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                       (:phase editing)
                       (:cycle 0)
                       (:cycles ((:cycle "one")))
+                      (:checkpoint (:phase planning))
                       (:reason 42)))
       (let ((plist (copy-tree valid)))
         (setq plist (plist-put plist (car change) (cadr change)))

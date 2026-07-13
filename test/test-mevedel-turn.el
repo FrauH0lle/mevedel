@@ -257,7 +257,12 @@
               ((symbol-function 'mevedel--compact-record-token-baseline)
                (lambda (_fsm) (push 'baseline events)))
               ((symbol-function 'mevedel-goal-settle-failure)
-               (lambda (_fsm) (push 'goal-failure events)))
+               (lambda (_fsm &optional _status)
+                 (push 'goal-failure events)))
+              ((symbol-function 'mevedel-goal-persist-failure)
+               (lambda (_fsm) (push 'goal-save events)))
+              ((symbol-function 'mevedel-goal-dispatch-after-failure)
+               (lambda (_fsm) (push 'goal-retry events)))
               ((symbol-function 'mevedel--turn-autosave)
                (lambda (_fsm) (setq saved t)))
               ((symbol-function 'mevedel--run-turn-terminal-hook)
@@ -278,7 +283,8 @@
         (should (equal (nreverse events)
                        `(access turn baseline goal-failure
                                 (StopFailure ,(car case))
-                                restore request-end mailbox)))))
+                                restore request-end goal-save goal-retry
+                                mailbox)))))
     (should-not saved)
     (should-not drained)))
 

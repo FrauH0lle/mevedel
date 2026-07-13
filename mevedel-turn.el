@@ -23,8 +23,11 @@
                   "mevedel-compact" (fsm))
 
 ;; `mevedel-goal'
+(declare-function mevedel-goal-dispatch-after-failure "mevedel-goal" (fsm))
 (declare-function mevedel-goal-dispatch-after-turn "mevedel-goal" (fsm))
-(declare-function mevedel-goal-settle-failure "mevedel-goal" (fsm))
+(declare-function mevedel-goal-persist-failure "mevedel-goal" (fsm))
+(declare-function mevedel-goal-settle-failure
+                  "mevedel-goal" (fsm &optional status))
 (declare-function mevedel-goal-settle-turn "mevedel-goal" (fsm))
 
 ;; `mevedel-hooks'
@@ -185,12 +188,15 @@
    (list #'mevedel--turn-clear-access-state
          #'mevedel--turn-increment
          #'mevedel--compact-record-token-baseline
-         #'mevedel-goal-settle-failure
+         (lambda (machine)
+           (mevedel-goal-settle-failure machine status))
          (lambda (machine)
            (mevedel--run-turn-terminal-hook
             machine 'StopFailure status))
          #'mevedel--turn-restore-permission-mode
          #'mevedel--turn-end-request
+         #'mevedel-goal-persist-failure
+         #'mevedel-goal-dispatch-after-failure
          #'mevedel-tools--handle-terminal-mailbox)))
 
 

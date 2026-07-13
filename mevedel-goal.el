@@ -70,6 +70,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest args))
 (declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
@@ -129,6 +130,11 @@
 (defcustom mevedel-goal-guardian-timeout 60
   "Seconds before an automatic Goal guardian request escalates to the user."
   :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-goal-max-transient-retries 1
+  "Maximum automatic retries for a failed read-only Goal request."
+  :type 'natnum
   :group 'mevedel)
 
 (defvar mevedel-goal-guardian-function #'mevedel-goal--guardian-request
@@ -242,6 +248,127 @@ CALLBACK receives a normalized guardian decision plist.")
       (format "Could not persist plan state: %S" err)
       :warning))))
 
+(defun mevedel-goal--persist-checkpoint (session buffer)
+  "Persist SESSION's Goal checkpoint from BUFFER or signal an error."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-save session buffer))
+
+(defun mevedel-goal--policy-label (policy)
+  "Return a stable provider/model label for resolved POLICY."
+  (let ((backend (plist-get policy :backend))
+        (model (plist-get policy :model)))
+    (if backend
+        (condition-case nil
+            (format "%s:%s" (gptel-backend-name backend)
+                    (gptel--model-name model))
+          (error (format "%s:%s" backend model)))
+      (format "%s" model))))
+
+(defun mevedel-goal--checkpoint-prepare (phase input workload policy)
+  "Durably prepare PHASE checkpoint for INPUT, WORKLOAD, and POLICY."
+  (let* ((session mevedel--session)
+         (goal (mevedel-session-goal session))
+         (prior (mevedel-goal-checkpoint goal))
+         (same-boundary
+          (and (eq phase (plist-get prior :phase))
+               (= (mevedel-goal-cycle goal)
+                  (or (plist-get prior :cycle) -1))))
+         (attempt (if same-boundary
+                      (1+ (plist-get prior :attempt))
+                    1))
+         (attempt-id (format "%s/%d/%s/%d"
+                             (mevedel-goal-id goal)
+                             (mevedel-goal-cycle goal) phase attempt))
+         (last-settled
+          (if (eq (plist-get prior :dispatch-state) 'settled)
+              (list :phase (plist-get prior :phase)
+                    :cycle (plist-get prior :cycle)
+                    :attempt-id (plist-get prior :attempt-id)
+                    :settled-at (plist-get prior :settled-at))
+            (plist-get prior :last-settled-boundary)))
+         (checkpoint
+          (list :phase phase
+                :cycle (mevedel-goal-cycle goal)
+                :input (copy-tree input)
+                :workload workload
+                :provider (mevedel-goal--policy-label policy)
+                :effort (plist-get policy :effort)
+                :plan-reference
+                (plist-get (mevedel-goal-current-plan goal) :path)
+                :attempt attempt
+                :attempt-id attempt-id
+                :retry-count (if same-boundary
+                                 (or (plist-get prior :retry-count) 0)
+                               0)
+                :dispatch-state 'prepared
+                :request-started nil
+                :last-settled-boundary last-settled
+                :prepared-at (format-time-string "%FT%T%z"))))
+    (setf (mevedel-goal-checkpoint goal) checkpoint)
+    (mevedel-goal--persist-checkpoint session (current-buffer))
+    checkpoint))
+
+(defun mevedel-goal--checkpoint-state (state &rest properties)
+  "Set current Goal checkpoint STATE and append PROPERTIES durably."
+  (let* ((session mevedel--session)
+         (goal (mevedel-session-goal session))
+         (checkpoint (copy-tree (mevedel-goal-checkpoint goal))))
+    (setq checkpoint (plist-put checkpoint :dispatch-state state))
+    (while properties
+      (setq checkpoint (plist-put checkpoint (pop properties)
+                                  (pop properties))))
+    (setf (mevedel-goal-checkpoint goal) checkpoint)
+    (mevedel-goal--persist-checkpoint session (current-buffer))
+    checkpoint))
+
+(defun mevedel-goal--checkpoint-settle (fsm state &optional reason)
+  "Set FSM's matching checkpoint to STATE, optionally recording REASON."
+  (when-let* ((goal (and (bound-and-true-p mevedel--session)
+                         (mevedel-session-goal mevedel--session)))
+              (checkpoint (mevedel-goal-checkpoint goal))
+              (info (gptel-fsm-info fsm))
+              (attempt-id (plist-get info :mevedel-goal-attempt-id))
+              ((equal attempt-id (plist-get checkpoint :attempt-id))))
+    (setq checkpoint (copy-tree checkpoint))
+    (setq checkpoint (plist-put checkpoint :dispatch-state state))
+    (setq checkpoint (plist-put checkpoint
+                                (if (eq state 'settled)
+                                    :settled-at :failed-at)
+                                (format-time-string "%FT%T%z")))
+    (when reason
+      (setq checkpoint (plist-put checkpoint :error reason)))
+    (setf (mevedel-goal-checkpoint goal) checkpoint)
+    checkpoint))
+
+(defun mevedel-goal--fsm-failure-reason (fsm status)
+  "Return an actionable failure reason from FSM and terminal STATUS."
+  (let* ((info (gptel-fsm-info fsm))
+         (error-value (plist-get info :error))
+         (detail (cond
+                  ((stringp error-value) error-value)
+                  ((listp error-value)
+                   (or (plist-get error-value :message)
+                       (plist-get error-value :type)))
+                  (error-value (format "%s" error-value))
+                  ((plist-get info :status)
+                   (format "%s" (plist-get info :status)))
+                  (t (symbol-name status)))))
+    (string-trim (format "%s" detail))))
+
+(defun mevedel-goal--transient-failure-p (reason)
+  "Return non-nil when REASON describes a retryable transport failure."
+  (string-match-p
+   (rx (or "timeout" "timed out" "temporar" "connection"
+           "network" "unavailable" "502" "503" "504"))
+   (downcase reason)))
+
+(defun mevedel-goal--terminal-provider-failure-p (reason)
+  "Return non-nil when REASON requires user or provider intervention."
+  (string-match-p
+   (rx (or "quota" "credit" "billing" "authentication" "unauthorized"
+           "forbidden" "api key" "unsupported" "rate limit" "429"))
+   (downcase reason)))
+
 (defun mevedel-goal--append-guardian-audit (record chat-buffer)
   "Persist RECORD as a hidden, model-ignored disclosure in CHAT-BUFFER."
   (when (buffer-live-p chat-buffer)
@@ -306,6 +433,18 @@ CALLBACK receives a normalized guardian decision plist.")
    (or (plist-get (mevedel-goal-current-plan goal) :absolute-path)
        "unavailable")))
 
+(defun mevedel-goal--recovery-prompt (goal checkpoint)
+  "Return a read-only recovery audit request for GOAL and CHECKPOINT."
+  (format
+   "Goal objective:\n%s\n\nCycle: %d\nAccepted plan: %s\nInterrupted implementation attempt: %s\nDispatch state: %s\n\nThe implementation request may already have changed files. Do not replay it and do not make changes. Inspect the actual repository, diff, tests, and artifacts against the objective and accepted plan. Choose the next safe lifecycle boundary. Return exactly one structured result:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence and the safe next step\n</goal_review>\nUse complete only when repository evidence proves the whole objective; continue when a new plan should address remaining work; blocked when external input is required."
+   (mevedel-goal-objective goal)
+   (mevedel-goal-cycle goal)
+   (or (plist-get (mevedel-goal-current-plan goal) :absolute-path)
+       (plist-get checkpoint :plan-reference)
+       "unavailable")
+   (or (plist-get checkpoint :attempt-id) "unknown")
+   (or (plist-get checkpoint :dispatch-state) 'unknown)))
+
 (defun mevedel-goal--guardian-prompt (goal plan)
   "Return the tool-free automatic approval request for GOAL and PLAN."
   (format
@@ -349,12 +488,7 @@ CALLBACK receives a normalized guardian decision plist.")
 
 (defun mevedel-goal--guardian-provider-label (policy)
   "Return a stable provider/model label for resolved guardian POLICY."
-  (let ((backend (plist-get policy :backend))
-        (model (plist-get policy :model)))
-    (if backend
-        (format "%s:%s" (gptel-backend-name backend)
-                (gptel--model-name model))
-      (format "%s" model))))
+  (mevedel-goal--policy-label policy))
 
 (defun mevedel-goal--guardian-request (goal plan chat-buffer callback)
   "Review PLAN for GOAL internally, then call CALLBACK in CHAT-BUFFER.
@@ -380,48 +514,55 @@ The request has no tools or conversational transcript insertion."
                  (finish
                   (append
                    (list :verdict 'ask
-                         :reason "Goal guardian timed out")
+                         :reason "Goal guardian timed out"
+                         :checkpoint-state 'failed)
                    (when policy
                      (list :provider
                            (mevedel-goal--guardian-provider-label policy)
                            :effort (plist-get policy :effort))))))))
         (condition-case err
             (progn
-              (require 'mevedel-models)
-              (setq policy
-                    (mevedel-model-resolve-workload 'goal-guardian))
-              (let ((gptel-backend (plist-get policy :backend))
-                    (gptel-model (plist-get policy :model))
-                    (gptel-reasoning-effort (plist-get policy :effort))
-                    (gptel-use-tools nil)
-                    (gptel-tools nil)
-                    (gptel-use-context nil)
-                    (prompt (mevedel-goal--guardian-prompt goal plan)))
-                (mevedel-goal--record-phase-policy 'goal-guardian policy)
-                (gptel-request
-                  prompt
-                  :buffer chat-buffer
-                  :stream nil
-                  :transforms nil
-                  :callback
-                  (lambda (response _info)
-                    (unless (and (consp response)
-                                 (eq (car response) 'reasoning))
-                      (let ((decision (mevedel-goal--parse-guardian response)))
-                        (finish
-                         (append
-                          (or decision
-                              (list :verdict 'ask
-                                    :reason "Goal guardian returned malformed output"))
-                          (list :provider
-                                (mevedel-goal--guardian-provider-label policy)
-                                :effort (plist-get policy :effort))))))))))
+              (let ((prompt (mevedel-goal--guardian-prompt goal plan)))
+                (mevedel-goal--call-with-workload
+                 'goal-guardian
+                 (lambda ()
+                   (setq policy
+                         (list :backend gptel-backend
+                               :model gptel-model
+                               :effort gptel-reasoning-effort))
+                   (let ((gptel-use-tools nil)
+                         (gptel-tools nil)
+                         (gptel-use-context nil))
+                     (gptel-request
+                      prompt
+                      :buffer chat-buffer
+                      :stream nil
+                      :transforms nil
+                      :callback
+                      (lambda (response _info)
+                        (unless (and (consp response)
+                                     (eq (car response) 'reasoning))
+                          (let ((decision
+                                 (mevedel-goal--parse-guardian response)))
+                            (finish
+                             (append
+                              (or decision
+                                  (list
+                                   :verdict 'ask
+                                   :reason
+                                   "Goal guardian returned malformed output"))
+                              (list
+                               :provider
+                               (mevedel-goal--guardian-provider-label policy)
+                               :effort (plist-get policy :effort)))))))))))
+                 'guardian prompt))
           (error
            (finish
             (append
              (list :verdict 'ask
                    :reason (format "Goal guardian failed: %s"
-                                   (error-message-string err)))
+                                   (error-message-string err))
+                   :checkpoint-state 'failed)
              (when policy
                (list :provider (mevedel-goal--guardian-provider-label policy)
                      :effort (plist-get policy :effort)))))))))))
@@ -519,23 +660,54 @@ The request has no tools or conversational transcript insertion."
           (mevedel-goal-pause-requested goal) nil
           (mevedel-goal-reason goal) nil)
     (condition-case err
-        (pcase (mevedel-goal-phase goal)
-          ('planning
-           (mevedel-goal--dispatch-phase
-            'planning (mevedel-goal--planning-prompt goal)
-            (format "Resume Goal %s" (mevedel-goal-id goal))))
-          ('awaiting-approval
-           (mevedel-goal-restore-pending-approval
-            mevedel--session (current-buffer)))
+        (let ((checkpoint (mevedel-goal-checkpoint goal)))
+          (pcase (mevedel-goal-phase goal)
+            ('planning
+             (mevedel-goal--dispatch-phase
+              'planning
+              (if (and (eq (plist-get checkpoint :phase) 'planning)
+                       (memq (plist-get checkpoint :dispatch-state)
+                             '(started unknown failed)))
+                  (plist-get checkpoint :input)
+                (mevedel-goal--planning-prompt goal))
+              (format "Resume Goal %s" (mevedel-goal-id goal))))
+            ('awaiting-approval
+             (if (and (eq (mevedel-goal-approval-policy goal) 'automatic)
+                      (eq (plist-get checkpoint :phase) 'guardian)
+                      (memq (plist-get checkpoint :dispatch-state)
+                            '(started unknown failed)))
+               (mevedel-goal--guard-current-plan goal (current-buffer))
+               (mevedel-goal-restore-pending-approval
+                mevedel--session (current-buffer))))
           ('implementing
-           (setf (mevedel-goal-phase goal) 'reviewing)
-           (mevedel-goal--dispatch-phase
-            'reviewing (mevedel-goal--review-prompt goal)
-            "Review interrupted Goal implementation"))
-          ('reviewing
-           (mevedel-goal--dispatch-phase
-            'reviewing (mevedel-goal--review-prompt goal)
-            "Resume Goal review")))
+           (if (and (memq (plist-get checkpoint :dispatch-state)
+                          '(prepared failed))
+                    (not (plist-get checkpoint :request-started)))
+               (let ((fsm
+                      (mevedel-goal--call-with-workload
+                       'implementation
+                       (lambda ()
+                         (mevedel--implement-plan
+                          (copy-tree (plist-get checkpoint :input))))
+                       'implementing
+                       (copy-tree (plist-get checkpoint :input)))))
+                 (when fsm
+                   (setf (gptel-fsm-info fsm)
+                         (plist-put (gptel-fsm-info fsm)
+                                    :mevedel-goal-phase 'implementing))))
+             (setf (mevedel-goal-phase goal) 'reviewing)
+             (mevedel-goal--dispatch-phase
+              'reviewing (mevedel-goal--recovery-prompt goal checkpoint)
+              "Audit interrupted Goal implementation")))
+            ('reviewing
+             (mevedel-goal--dispatch-phase
+              'reviewing
+              (if (and (eq (plist-get checkpoint :phase) 'reviewing)
+                       (memq (plist-get checkpoint :dispatch-state)
+                             '(started unknown failed)))
+                  (plist-get checkpoint :input)
+                (mevedel-goal--review-prompt goal))
+              "Resume Goal review"))))
       (error
        (setf (mevedel-goal-status goal) 'paused
              (mevedel-goal-reason goal) (error-message-string err))
@@ -580,10 +752,13 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
          'planning (mevedel-goal--planning-prompt goal)
          (or display-text (mevedel-goal-objective goal)))
       (error
-       (setf (mevedel-session-goal mevedel--session) previous-goal
-             (mevedel-session-plan-metadata mevedel--session)
-             previous-plan-metadata)
-       (signal (car err) (cdr err))))
+       (if (mevedel-goal-checkpoint goal)
+           (message "mevedel: goal paused before planning dispatch: %s"
+                    (error-message-string err))
+         (setf (mevedel-session-goal mevedel--session) previous-goal
+               (mevedel-session-plan-metadata mevedel--session)
+               previous-plan-metadata)
+         (signal (car err) (cdr err)))))
     (when previous-goal
       (setf (mevedel-session-goal mevedel--session) previous-goal
             (mevedel-session-plan-metadata mevedel--session)
@@ -595,35 +770,80 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
 
 (defun mevedel-goal--dispatch-gptel (phase prompt display-text)
   "Dispatch PHASE with PROMPT, showing DISPLAY-TEXT in the transcript."
-  (let ((workload (pcase phase
-                    ('planning 'planning)
-                    ('reviewing 'review)
-                    (_ (error "Goal phase cannot dispatch: %s" phase)))))
-    (mevedel-goal--call-with-workload
-     workload
-     (lambda ()
-       (let ((fsm (mevedel-goal--insert-and-send prompt display-text)))
-         (when fsm
-           (setf (gptel-fsm-info fsm)
-                 (plist-put (gptel-fsm-info fsm)
-                            :mevedel-goal-phase phase)))
-         fsm)))))
+  (let ((fsm (mevedel-goal--insert-and-send prompt display-text)))
+    (when fsm
+      (setf (gptel-fsm-info fsm)
+            (plist-put (gptel-fsm-info fsm)
+                       :mevedel-goal-phase phase)))
+    fsm))
 
-(defun mevedel-goal--call-with-workload (workload function)
-  "Call FUNCTION with WORKLOAD's resolved request policy."
+(defun mevedel-goal--call-with-workload
+    (workload function &optional checkpoint-phase checkpoint-input)
+  "Call FUNCTION with WORKLOAD's resolved request policy.
+When CHECKPOINT-PHASE is non-nil, durably record CHECKPOINT-INPUT before
+dispatch and attach the attempt identity to the returned FSM."
   (require 'mevedel-models)
-  (let* ((policy (mevedel-model-resolve-workload workload))
+  (let* ((checkpoint-enabled
+          (and checkpoint-phase
+               (bound-and-true-p mevedel--session)
+               (mevedel-session-goal mevedel--session)))
          (old-backend gptel-backend)
          (old-model gptel-model)
          (old-effort (and (boundp 'gptel-reasoning-effort)
-                          gptel-reasoning-effort)))
-    (mevedel-goal--record-phase-policy workload policy)
+                          gptel-reasoning-effort))
+         policy
+         dispatch-started)
     (unwind-protect
-        (progn
-          (setq-local gptel-backend (plist-get policy :backend)
-                      gptel-model (plist-get policy :model)
-                      gptel-reasoning-effort (plist-get policy :effort))
-          (funcall function))
+        (condition-case err
+            (progn
+              (setq policy (mevedel-model-resolve-workload workload))
+              (mevedel-goal--record-phase-policy workload policy)
+              (when checkpoint-enabled
+                (mevedel-goal--checkpoint-prepare
+                 checkpoint-phase checkpoint-input workload policy))
+              (setq-local gptel-backend (plist-get policy :backend)
+                          gptel-model (plist-get policy :model)
+                          gptel-reasoning-effort (plist-get policy :effort))
+              (when checkpoint-enabled
+                (setq dispatch-started t)
+                (mevedel-goal--checkpoint-state
+                 'started :request-started t
+                 :started-at (format-time-string "%FT%T%z")))
+              (let ((fsm (funcall function)))
+                (when (and checkpoint-enabled fsm)
+                  (condition-case nil
+                      (setf (gptel-fsm-info fsm)
+                            (plist-put
+                             (gptel-fsm-info fsm)
+                             :mevedel-goal-attempt-id
+                             (plist-get
+                              (mevedel-goal-checkpoint
+                               (mevedel-session-goal mevedel--session))
+                              :attempt-id)))
+                    (wrong-type-argument nil)))
+                fsm))
+          (error
+           (when checkpoint-enabled
+             (let* ((goal (mevedel-session-goal mevedel--session))
+                    (checkpoint (mevedel-goal-checkpoint goal))
+                    (reason
+                     (format "Request startup failed; switch provider or preset, then resume: %s"
+                             (error-message-string err))))
+               (setf (mevedel-goal-status goal) 'paused
+                     (mevedel-goal-reason goal) reason)
+               (unless (and checkpoint
+                            (eq checkpoint-phase
+                                (plist-get checkpoint :phase)))
+                 (mevedel-goal--checkpoint-prepare
+                  checkpoint-phase checkpoint-input workload
+                  (list :backend old-backend :model old-model
+                        :effort old-effort)))
+               (mevedel-goal--checkpoint-state
+                (if dispatch-started 'unknown 'failed)
+                :request-started dispatch-started
+                :error (error-message-string err)
+                :failed-at (format-time-string "%FT%T%z"))))
+           (signal (car err) (cdr err))))
       (setq-local gptel-backend old-backend
                   gptel-model old-model
                   gptel-reasoning-effort old-effort))))
@@ -632,7 +852,11 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
   "Dispatch Goal PHASE with PROMPT and DISPLAY-TEXT."
   (unless (memq phase '(planning reviewing))
     (error "Goal phase cannot dispatch: %s" phase))
-  (funcall mevedel-goal-dispatch-function phase prompt display-text))
+  (mevedel-goal--call-with-workload
+   (if (eq phase 'planning) 'planning 'review)
+   (lambda ()
+     (funcall mevedel-goal-dispatch-function phase prompt display-text))
+   phase prompt))
 
 (defun mevedel-goal--insert-and-send (prompt &optional display-text hook-context)
   "Insert PROMPT as a user turn in the current data buffer and send it.
@@ -951,46 +1175,48 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
               (mevedel-goal--persist-cycle-index
                goal mevedel--session chat-buffer)
               (mevedel-goal--save-session-state mevedel--session chat-buffer)
-              (let ((fsm
-                     (mevedel-goal--call-with-workload
-                      'implementation
-                      (lambda ()
-                        (mevedel--implement-plan
-                         (mevedel-plan-implementation-input
-                          action accepted-artifact implementation-mode))))))
+              (let* ((implementation-input
+                      (mevedel-plan-implementation-input
+                       action accepted-artifact implementation-mode))
+                     (fsm
+                      (mevedel-goal--call-with-workload
+                       'implementation
+                       (lambda ()
+                         (mevedel--implement-plan implementation-input))
+                       'implementing implementation-input)))
                 (when fsm
                   (setf (gptel-fsm-info fsm)
                         (plist-put (gptel-fsm-info fsm)
                                    :mevedel-goal-phase 'implementing))))))
         (pcase outcome
-        (`(feedback . ,text)
-         (let ((path (mevedel-plan-current-path
-                      mevedel--session chat-buffer)))
-           (mevedel-goal--mark-rejected mevedel--session)
-           (setf (mevedel-goal-phase
-                  (mevedel-session-goal mevedel--session)) 'planning)
+          (`(feedback . ,text)
+           (let ((path (mevedel-plan-current-path
+                        mevedel--session chat-buffer)))
+             (mevedel-goal--mark-rejected mevedel--session)
+             (setf (mevedel-goal-phase
+                    (mevedel-session-goal mevedel--session)) 'planning)
+             (mevedel-goal--save-session-state
+              mevedel--session chat-buffer)
+             (mevedel-goal--insert-feedback-draft chat-buffer path text)))
+          ('feedback-draft
+           (let ((path (mevedel-plan-current-path
+                        mevedel--session chat-buffer)))
+             (mevedel-goal--mark-rejected mevedel--session)
+             (setf (mevedel-goal-phase
+                    (mevedel-session-goal mevedel--session)) 'planning)
+             (mevedel-goal--save-session-state
+              mevedel--session chat-buffer)
+             (mevedel-goal--insert-feedback-draft chat-buffer path)))
+          ('aborted
+           (setf (mevedel-goal-status
+                  (mevedel-session-goal mevedel--session)) 'paused)
+           (mevedel-goal--plan-metadata-put
+            mevedel--session :verification-pending nil)
            (mevedel-goal--save-session-state
             mevedel--session chat-buffer)
-           (mevedel-goal--insert-feedback-draft chat-buffer path text)))
-        ('feedback-draft
-         (let ((path (mevedel-plan-current-path
-                      mevedel--session chat-buffer)))
-           (mevedel-goal--mark-rejected mevedel--session)
-           (setf (mevedel-goal-phase
-                  (mevedel-session-goal mevedel--session)) 'planning)
-           (mevedel-goal--save-session-state
-            mevedel--session chat-buffer)
-           (mevedel-goal--insert-feedback-draft chat-buffer path)))
-        ('aborted
-         (setf (mevedel-goal-status
-                (mevedel-session-goal mevedel--session)) 'paused)
-         (mevedel-goal--plan-metadata-put
-          mevedel--session :verification-pending nil)
-         (mevedel-goal--save-session-state
-          mevedel--session chat-buffer)
-         (message "mevedel: goal paused at plan approval"))
-        (_
-         (message "mevedel: unknown plan outcome %S" outcome)))))))
+           (message "mevedel: goal paused at plan approval"))
+          (_
+           (message "mevedel: unknown plan outcome %S" outcome)))))))
 
 (defun mevedel-goal--approval-entry
     (plan-markdown chat-buffer session &optional guardian-reason)
@@ -1082,6 +1308,13 @@ when non-nil, explains why automatic approval escalated."
                   (current-plan (mevedel-plan-current-body session))
                   ((equal plan-hash (mevedel-plan-hash current-plan))))
         (mevedel-goal--plan-metadata-put session :guardian-pending nil)
+        (when (eq (plist-get (mevedel-goal-checkpoint goal) :phase)
+                  'guardian)
+          (mevedel-goal--checkpoint-state
+           (or (plist-get decision :checkpoint-state) 'settled)
+           (if (eq (plist-get decision :checkpoint-state) 'failed)
+               :failed-at :settled-at)
+           (format-time-string "%FT%T%z")))
         (condition-case err
             (mevedel-goal--record-guardian-decision
              goal decision plan-hash session chat-buffer)
@@ -1206,66 +1439,139 @@ when non-nil, explains why automatic approval escalated."
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
-                             (mevedel-session-goal mevedel--session)))
-                  ((eq (mevedel-goal-status goal) 'active)))
-        (when (eq phase (mevedel-goal-phase goal))
-          (pcase phase
-            ('implementing
-             (setf (mevedel-goal-phase goal) 'reviewing))
-            ('reviewing
-             (if-let* ((review (mevedel-goal-review-summary goal)))
-                 (progn
-                 (mevedel-goal--cycle-put
-                  goal :review
-                  (list :verdict (plist-get review :verdict)
-                        :summary-hash
-                        (secure-hash 'sha256 (plist-get review :summary))
-                        :at (format-time-string "%FT%T%z")))
-                 (mevedel-goal--persist-cycle-index
-                  goal mevedel--session chat-buffer)
-                 (pcase (plist-get review :verdict)
-                   ('complete
-                    (setf (mevedel-goal-status goal) 'complete
-                          (mevedel-goal-reason goal) nil))
-                   ('continue
-                    (setf (mevedel-goal-cycle goal)
-                          (1+ (mevedel-goal-cycle goal))
-                          (mevedel-goal-phase goal) 'planning
-                          (mevedel-goal-current-plan goal) nil
-                          (mevedel-goal-review-findings goal)
-                          (plist-get review :summary)
-                          (mevedel-goal-review-summary goal) nil
-                          (mevedel-goal-reason goal) nil)
-                    (mevedel-goal--cycle-put goal :started-at
-                                             (format-time-string "%FT%T%z"))
-                    (mevedel-goal--persist-cycle-index
-                     goal mevedel--session chat-buffer))
-                   ('blocked
-                    (setf (mevedel-goal-status goal) 'blocked
-                          (mevedel-goal-reason goal)
-                          (plist-get review :summary)))))
-               (setf (mevedel-goal-status goal) 'paused
-                     (mevedel-goal-reason goal)
-                     "Goal review returned malformed structured output")))))
-        (when (and (mevedel-goal-pause-requested goal)
-                   (eq (mevedel-goal-status goal) 'active))
-          (setf (mevedel-goal-status goal) 'paused
-                (mevedel-goal-pause-requested goal) nil
-                (mevedel-goal-reason goal) "Paused by user"))))))
+                             (mevedel-session-goal mevedel--session))))
+        (mevedel-goal--checkpoint-settle fsm 'settled)
+        (when (eq (mevedel-goal-status goal) 'active)
+          (when (eq phase (mevedel-goal-phase goal))
+            (pcase phase
+              ('implementing
+               (setf (mevedel-goal-phase goal) 'reviewing))
+              ('reviewing
+               (if-let* ((review (mevedel-goal-review-summary goal)))
+                   (progn
+                     (mevedel-goal--cycle-put
+                      goal :review
+                      (list :verdict (plist-get review :verdict)
+                            :summary-hash
+                            (secure-hash 'sha256 (plist-get review :summary))
+                            :at (format-time-string "%FT%T%z")))
+                     (mevedel-goal--persist-cycle-index
+                      goal mevedel--session chat-buffer)
+                     (pcase (plist-get review :verdict)
+                       ('complete
+                        (setf (mevedel-goal-status goal) 'complete
+                              (mevedel-goal-reason goal) nil))
+                       ('continue
+                        (setf (mevedel-goal-cycle goal)
+                              (1+ (mevedel-goal-cycle goal))
+                              (mevedel-goal-phase goal) 'planning
+                              (mevedel-goal-current-plan goal) nil
+                              (mevedel-goal-review-findings goal)
+                              (plist-get review :summary)
+                              (mevedel-goal-review-summary goal) nil
+                              (mevedel-goal-reason goal) nil)
+                        (mevedel-goal--cycle-put
+                         goal :started-at (format-time-string "%FT%T%z"))
+                        (mevedel-goal--persist-cycle-index
+                         goal mevedel--session chat-buffer))
+                       ('blocked
+                        (setf (mevedel-goal-status goal) 'blocked
+                              (mevedel-goal-reason goal)
+                              (plist-get review :summary)))))
+                   (setf (mevedel-goal-status goal) 'paused
+                       (mevedel-goal-reason goal)
+                       "Goal review returned malformed structured output")))))
+          (when (and (mevedel-goal-pause-requested goal)
+                     (eq (mevedel-goal-status goal) 'active))
+            (setf (mevedel-goal-status goal) 'paused
+                  (mevedel-goal-pause-requested goal) nil
+                  (mevedel-goal-reason goal) "Paused by user")))))))
 
-(defun mevedel-goal-settle-failure (fsm)
-  "Apply deferred Goal pause at FSM's failed terminal boundary.
-Persistence belongs to the caller's post-teardown abort or error path."
+(defun mevedel-goal-settle-failure (fsm &optional status)
+  "Settle Goal failure for FSM with terminal STATUS in memory.
+The post-teardown failure transaction persists this state."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (phase (plist-get info :mevedel-goal-phase))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when-let* ((goal (and (bound-and-true-p mevedel--session)
+                             (mevedel-session-goal mevedel--session))))
+        (let* ((status (or status 'error))
+               (reason (mevedel-goal--fsm-failure-reason fsm status))
+               (checkpoint (mevedel-goal--checkpoint-settle
+                            fsm 'failed reason))
+               (retry-count (1+ (or (plist-get checkpoint :retry-count) 0)))
+               (read-only (memq phase '(planning reviewing)))
+               (retry (and read-only
+                           (not (eq status 'aborted))
+                           (mevedel-goal--transient-failure-p reason)
+                           (< (or (plist-get checkpoint :retry-count) 0)
+                              mevedel-goal-max-transient-retries))))
+          (when checkpoint
+            (setf (mevedel-goal-checkpoint goal)
+                  (plist-put checkpoint :retry-count retry-count)))
+          (cond
+           ((mevedel-goal-pause-requested goal)
+            (setf (mevedel-goal-status goal) 'paused
+                  (mevedel-goal-reason goal) "Paused by user"))
+           (retry
+            (setf (mevedel-goal-status goal) 'active
+                  (mevedel-goal-reason goal)
+                  (format "Retrying transient %s failure: %s" phase reason)))
+           ((eq phase 'implementing)
+            (setf (mevedel-goal-status goal) 'paused
+                  (mevedel-goal-reason goal)
+                  (format "Implementation outcome is unknown; resume to audit actual work: %s"
+                          reason)))
+           (t
+            (setf (mevedel-goal-status goal) 'paused
+                  (mevedel-goal-reason goal)
+                  (if (eq status 'aborted)
+                      (format "Request was forcefully stopped; switch provider if needed, then resume: %s"
+                              reason)
+                    (format "%s failure; switch provider or preset if needed, then resume: %s"
+                            (if (mevedel-goal--terminal-provider-failure-p reason)
+                                "Provider" "Request")
+                            reason)))))
+          (setf (mevedel-goal-pause-requested goal) nil))))))
+
+(defun mevedel-goal-persist-failure (fsm)
+  "Persist FSM's Goal failure after request teardown."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when (and (bound-and-true-p mevedel--session)
+                 (mevedel-session-goal mevedel--session))
+        (mevedel-goal--persist-checkpoint mevedel--session chat-buffer)))))
+
+(defun mevedel-goal-dispatch-after-failure (fsm)
+  "Retry FSM's failed read-only Goal attempt when its bounded policy allows."
   (when-let* ((info (gptel-fsm-info fsm))
               (chat-buffer (plist-get info :buffer))
               ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
                              (mevedel-session-goal mevedel--session)))
-                  ((mevedel-goal-pause-requested goal)))
-        (setf (mevedel-goal-status goal) 'paused
-              (mevedel-goal-pause-requested goal) nil
-              (mevedel-goal-reason goal) "Paused by user")))))
+                  ((eq (mevedel-goal-status goal) 'active))
+                  (checkpoint (mevedel-goal-checkpoint goal))
+                  ((eq (plist-get checkpoint :dispatch-state) 'failed))
+                  (phase (plist-get checkpoint :phase))
+                  ((memq phase '(planning reviewing))))
+        (setf (mevedel-goal-reason goal) nil)
+        (condition-case err
+            (mevedel-goal--dispatch-phase
+             phase (copy-tree (plist-get checkpoint :input))
+             (format "Retry Goal %s after transient failure"
+                     (mevedel-goal-id goal)))
+          (error
+           (setf (mevedel-goal-status goal) 'paused
+                 (mevedel-goal-reason goal)
+                 (format "Automatic retry could not start; switch provider or preset, then resume: %s"
+                         (error-message-string err)))
+           (mevedel-goal--persist-checkpoint
+            mevedel--session chat-buffer)))))))
 
 (defun mevedel-goal-dispatch-after-turn (fsm)
   "Dispatch the next Goal phase after FSM has settled."
