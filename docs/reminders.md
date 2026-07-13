@@ -98,6 +98,11 @@ guidance in the rejection reminder.
 - **Compact file-reference:** compaction queues reminders for file
   references whose contents were not retained; the `pending-events`
   reminder consumes the session FIFO on the next prompt.
+- **Goal lifecycle event:** material transitions such as start, pause, resume,
+  plan acceptance, review outcome, budget exhaustion, and compaction enqueue a
+  one-shot event. These reminders only orient the next request; the Goal
+  sidecar and its generated context fragment remain authoritative, and
+  reminder delivery never changes controller state.
 - **Token usage:** `mevedel-reminders-make-token-usage` reports high
   context pressure using the compaction token state, with sparse
   repeat firing.

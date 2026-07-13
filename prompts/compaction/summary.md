@@ -57,4 +57,8 @@ Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
 {{PREVIOUS_SUMMARY_RULE}}- Preserve exact file paths, commands, error strings, and identifiers when known.
+- Preserve discoveries, constraints, decisions, evidence, completed work,
+  remaining work, and verification results needed by later Goal cycles.
+- Treat this as retained working context, never as authoritative Goal
+  lifecycle state or proof that a Goal is complete.
 - Do not mention the summary process or that context was compacted.

@@ -46,6 +46,10 @@
 
 (require 'mevedel-transcript)
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-context-fragment
+                  "mevedel-goal" (goal &optional session snapshot))
+
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
@@ -2095,6 +2099,10 @@ nil if SESSION is not yet materialized."
                 (goto-char (point-max))
                 (unless (bolp) (insert "\n"))
                 (insert "\n")
+                (when-let* ((goal (mevedel-session-goal session)))
+                  (require 'mevedel-goal)
+                  (insert (mevedel-goal-context-fragment goal session t)
+                          "\n\n"))
                 (insert (mevedel-session-persistence--summary-block summary))
                 (when tail-text
                   (unless (bolp) (insert "\n"))

@@ -369,13 +369,15 @@
               (mevedel--implement-plan
                (list :context 'full
                      :plan-file plan-file
-                     :permission-mode 'default))))
+                     :permission-mode 'default
+                     :goal-context "Goal ID: g1\nObjective: Ship safely"))))
           (should (string-match-p "Planning context" sent))
-          (should (string-match-p "Implement the following plan" sent))
+          (should (string-match-p "Goal ID: g1" sent))
+          (should (string-match-p "Implementation instructions" sent))
           (should (string-match-p "# Plan" sent)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (when (file-exists-p plan-file) (delete-file plan-file))))
-  :doc "sends only the objective and plan in focused context"
+  :doc "sends only authoritative Goal context and plan in focused context"
   (let ((plan-file (make-temp-file "mevedel-plan-focused-"))
         (buffer (generate-new-buffer " *mevedel-plan-focused*"))
         prompt)
@@ -395,8 +397,8 @@
               (mevedel--implement-plan
                (list :context 'focused :plan-file plan-file
                      :permission-mode 'default
-                     :goal-objective "Ship safely"
-                     :goal-context "Goal ID: g1\nCycle: 1"))))
+                     :goal-context
+                     "Goal ID: g1\nObjective: Ship safely\nCycle: 1"))))
           (should (string-match-p "Ship safely" prompt))
           (should (string-match-p "Goal ID: g1" prompt))
           (should (string-match-p "# Focused plan" prompt))

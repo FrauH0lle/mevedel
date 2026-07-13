@@ -94,6 +94,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-reminder
                   "mevedel-structs" (session body))
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-invoked-skills "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-touched-files "mevedel-structs" (cl-x) t)
@@ -1002,10 +1003,16 @@ summary."
       (user-error "Session is not materialized on disk"))
     (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
     (setq summary (mevedel--compact-append-hook-audits summary hook-audits))
-    (mevedel-session-persistence-rotate-segment
-     session (current-buffer) summary
-     :tail-text tail-text
-     :pending-text pending-text)))
+    (let ((path
+           (mevedel-session-persistence-rotate-segment
+            session (current-buffer) summary
+            :tail-text tail-text
+            :pending-text pending-text)))
+      (when (and path (mevedel-session-goal session))
+        (mevedel-session-enqueue-pending-reminder
+         session
+         "Compaction completed. Current Goal context and artifact pointers were regenerated from persisted state."))
+      path)))
 
 (defun mevedel--compact-preserved-tail-turn-count (tail-start limit aggressive)
   "Return the number of complete user-authored requests in retained tail.

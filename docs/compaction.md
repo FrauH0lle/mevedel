@@ -188,6 +188,18 @@ in the model-visible prompt except through the previous summary.
 Skill invocation records from the session are appended to the prompt so
 summaries can preserve user-side and model-side skill usage.
 
+When a session owns a Goal, every new segment begins with a
+`<goal-context authority="compaction-snapshot">` pointer block generated
+directly from the persisted Goal sidecar. It records the compaction-time
+objective, lifecycle state, policy, artifact pointers, budget, and execution
+home before the summary and preserved tail. Segment rotation regenerates this
+snapshot on every compaction; it is orientation, not later lifecycle truth.
+Every phase request carries a fresh `authority="session-sidecar"` fragment,
+which supersedes earlier snapshots. Neither the summary nor transcript prose
+is parsed to reconstruct Goal state. The anchored summary remains working
+memory for discoveries, constraints, decisions, progress, evidence, and next
+steps.
+
 ## Tail preservation
 
 Compaction summarizes only the old body and preserves a recent tail
