@@ -1836,28 +1836,25 @@ spanning lines")))
       (should (equal '("Ship safely" "Ship safely" automatic) started))
       (should (eq 'accept-edits
                   (mevedel-session-permission-mode session)))))
-  :doc "bare command reports the current Goal"
+  :doc "bare command opens the Goal cockpit with a current Goal"
   (with-temp-buffer
     (let* ((goal (mevedel-goal--create
                   :objective "Fix it" :status 'active :phase 'planning))
            (session (mevedel-session--create :name "main" :goal goal))
-           shown)
+           opened)
       (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'message)
-                 (lambda (format-string &rest args)
-                   (setq shown (apply #'format format-string args)))))
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (area) (setq opened area))))
         (mevedel-cmd--goal nil))
-      (should (equal "Goal nil [active/planning, cycle nil]: Fix it" shown))))
-  :doc "bare command offers creation when no Goal exists"
+      (should (eq 'goal opened))))
+  :doc "bare command opens Goal creation cockpit when no Goal exists"
   (with-temp-buffer
     (setq-local mevedel--session (mevedel-session--create :name "main"))
-    (let (started)
-      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Ship it"))
-                ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display)
-                   (setq started (list objective display)))))
+    (let (opened)
+      (cl-letf (((symbol-function 'mevedel-menu-open)
+                 (lambda (area) (setq opened area))))
         (mevedel-cmd--goal nil))
-      (should (equal '("Ship it" "Ship it") started))))
+      (should (eq 'goal opened))))
   :doc "dispatches edit, pause, resume, and clear as lifecycle actions"
   (with-temp-buffer
     (let ((goal (mevedel-goal--create

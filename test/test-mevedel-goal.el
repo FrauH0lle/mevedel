@@ -91,7 +91,7 @@
                               :name "main" :goal goal)))
       (should (eq goal (mevedel-goal--current))))))
 
-(mevedel-deftest mevedel-goal--owned-by-session-p ()
+(mevedel-deftest mevedel-goal-owned-by-session-p ()
   ,test
   (test)
   :doc "requires both lifecycle and execution-home ownership"
@@ -100,9 +100,9 @@
                 :owner-session "s1"
                 :execution-home
                 '(:kind current :directory "/tmp/" :session-id "s1"))))
-    (should (mevedel-goal--owned-by-session-p goal session))
+    (should (mevedel-goal-owned-by-session-p goal session))
     (setf (plist-get (mevedel-goal-execution-home goal) :session-id) "s2")
-    (should-not (mevedel-goal--owned-by-session-p goal session))))
+    (should-not (mevedel-goal-owned-by-session-p goal session))))
 
 (mevedel-deftest mevedel-goal--assert-execution-home ()
   ,test
@@ -237,14 +237,32 @@
                  (mevedel-goal--cycle-plan-relative-path
                   (mevedel-goal--create :id "goal-42" :cycle 7)))))
 
-(mevedel-deftest mevedel-goal--cycle-record ()
+(mevedel-deftest mevedel-goal-cycle-record ()
   ,test
   (test)
   :doc "returns only the current cycle's lightweight record"
   (let ((goal (mevedel-goal--create
                :cycle 2 :cycles '((:cycle 1) (:cycle 2 :plan "p")))))
     (should (equal '(:cycle 2 :plan "p")
-                   (mevedel-goal--cycle-record goal)))))
+                   (mevedel-goal-cycle-record goal)))))
+
+(mevedel-deftest mevedel-goal-latest-provider ()
+  ,test
+  (test)
+  :doc "returns the newest actual policy for a workload across cycles"
+  (let* ((goal (mevedel-goal--create
+                :cycles '((:cycle 1 :providers
+                           ((planning :provider "old" :effort low)))
+                          (:cycle 2 :providers
+                           ((review :provider "reviewer")
+                            (planning :provider "new" :effort high))))))
+         (before (copy-tree (mevedel-goal-cycles goal))))
+    (should (equal '(:provider "new" :effort high)
+                   (mevedel-goal-latest-provider goal 'planning)))
+    (should (equal '(:provider "reviewer")
+                   (mevedel-goal-latest-provider goal 'review)))
+    (should-not (mevedel-goal-latest-provider goal 'implementation))
+    (should (equal before (mevedel-goal-cycles goal)))))
 
 (mevedel-deftest mevedel-goal--cycle-put ()
   ,test
@@ -1656,7 +1674,7 @@
           (should (equal accepted (mevedel-goal-current-plan goal)))
           (should (file-exists-p (plist-get accepted :absolute-path)))
           (should (equal (plist-get accepted :path)
-                         (plist-get (mevedel-goal--cycle-record goal) :plan))))
+                         (plist-get (mevedel-goal-cycle-record goal) :plan))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-plan-queue--entry-execution-home ()
@@ -1887,7 +1905,7 @@
                         (plist-get (plist-get source-sidecar :goal-handoff)
                                    :state)))
             (should-not
-             (mevedel-goal--owned-by-session-p
+             (mevedel-goal-owned-by-session-p
               (mevedel-session-goal restored-source) restored-source))
             (setf (mevedel-goal-status (mevedel-session-goal restored-source))
                   'paused)
@@ -1902,7 +1920,7 @@
             (should (file-exists-p
                      (plist-get (mevedel-goal-current-plan restored-goal)
                                 :absolute-path)))
-            (should (mevedel-goal--owned-by-session-p
+            (should (mevedel-goal-owned-by-session-p
                      restored-goal restored-target))))
       (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
       (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
@@ -1960,7 +1978,7 @@
                   goal source-buffer "# Plan\n\nShip safely."))
                 (should-not (file-exists-p target-directory))
                 (should-not (mevedel-session-goal-handoff source-session))
-                (should (mevedel-goal--owned-by-session-p
+                (should (mevedel-goal-owned-by-session-p
                          goal source-session))
                 (let* ((result
                         (mevedel-goal--transfer-to-worktree
@@ -2037,7 +2055,7 @@
                                    :state)))
             (should (plist-get target-sidecar :goal))
             (should (mevedel-session-goal target-session))
-            (should-not (mevedel-goal--owned-by-session-p
+            (should-not (mevedel-goal-owned-by-session-p
                          (mevedel-session-goal source-session)
                          source-session))))
       (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
@@ -2119,16 +2137,16 @@
                         (plist-get (mevedel-session-goal-handoff
                                     restored-source)
                                    :state)))
-            (should-not (mevedel-goal--owned-by-session-p
+            (should-not (mevedel-goal-owned-by-session-p
                          source-goal restored-source))
-            (should (mevedel-goal--owned-by-session-p
+            (should (mevedel-goal-owned-by-session-p
                      target-goal restored-target))
             (should (= 1 (length
                           (delq nil
                                 (list
-                                 (mevedel-goal--owned-by-session-p
+                                 (mevedel-goal-owned-by-session-p
                                   source-goal restored-source)
-                                 (mevedel-goal--owned-by-session-p
+                                 (mevedel-goal-owned-by-session-p
                                   target-goal restored-target)))))))
       (when (buffer-live-p source-buffer) (kill-buffer source-buffer))
       (when (buffer-live-p target-buffer) (kill-buffer target-buffer))
@@ -2494,7 +2512,7 @@
          goal '(:verdict ask :reason "Clarify scope"
                  :provider "P:M" :effort high)
          "hash" session (current-buffer)))
-      (let ((record (car (plist-get (mevedel-goal--cycle-record goal)
+      (let ((record (car (plist-get (mevedel-goal-cycle-record goal)
                                     :guardian-audits))))
         (should (equal record appended))
         (should (eq 'goal-guardian (plist-get record :type)))

@@ -31,6 +31,9 @@
 (declare-function mevedel-plan-queue-abort-all
                   "mevedel-goal" (&optional session))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -44,9 +47,12 @@
                   "mevedel-permission-queue" (&optional session))
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -738,6 +744,24 @@ Kills the associated view buffer."
            (model (if (string= model-label "none")
                       "model none"
                     model-label))
+           (goal (and session (mevedel-session-goal session)))
+           (goal-phase (and goal (mevedel-goal-phase goal)))
+           (goal-workload (pcase goal-phase
+                            ('implementing 'implementation)
+                            ('reviewing 'review)
+                            ('awaiting-approval 'goal-guardian)
+                            (_ goal-phase)))
+           (cycle-record (and goal (mevedel-goal-cycle-record goal)))
+           (actual (and goal-workload
+                        (alist-get goal-workload
+                                   (plist-get cycle-record :providers))))
+           (phase-model
+            (if actual
+                (format "%s · %s/%s"
+                        goal-phase (plist-get actual :provider)
+                        (or (plist-get actual :effort) "default"))
+              model))
+           (preset-name (and session (mevedel-session-preset-name session)))
            (tool-count (mevedel-tools-active-count data-buffer))
            (tools (format "%d tool%s"
                           tool-count
@@ -745,15 +769,21 @@ Kills the associated view buffer."
            (rhs
             (mapconcat
              #'identity
-             (list
+             (delq nil
+                   (list
               (mevedel-view--status-strip-button
                mode 'mode "Open mode cockpit")
               (propertize state 'face (cond ((string= state "running") 'success)
                                             (t 'shadow)))
               (mevedel-view--status-strip-button
-               model 'model "Open model cockpit")
+               phase-model (if goal 'goal 'model)
+               (if goal "Open Goal cockpit" "Open model cockpit"))
+              (and preset-name
+                   (mevedel-view--status-strip-button
+                    (format "preset %s" preset-name)
+                    'preset "Open Preset cockpit"))
               (mevedel-view--status-strip-button
-               tools 'tools "Open tools cockpit"))
+               tools 'tools "Open tools cockpit")))
              " · "))
            (root-max
             (- (mevedel-view--status-strip-width)

@@ -42,6 +42,18 @@
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-clear "mevedel-goal" ())
+(declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
+(declare-function mevedel-goal-edit "mevedel-goal" (objective))
+(declare-function mevedel-goal-latest-provider "mevedel-goal" (goal workload))
+(declare-function mevedel-goal-owned-by-session-p "mevedel-goal" (goal session))
+(declare-function mevedel-goal-pause "mevedel-goal" ())
+(declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
+(declare-function mevedel-goal-set-token-budget "mevedel-goal" (budget))
+(declare-function mevedel-goal-start "mevedel-goal"
+                  (objective &optional display-text approval-policy))
+
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-open
                   "mevedel-gptel-bridge" (&optional context))
@@ -51,6 +63,10 @@
                   (&optional buffer))
 (declare-function mevedel-model-current-provider-label "mevedel-models"
                   (&optional buffer))
+(declare-function mevedel-model-resolve-workload "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
+(defvar mevedel-model-tiers)
+(defvar mevedel-model-workloads)
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-effective "mevedel-permissions"
@@ -68,6 +84,10 @@
 (declare-function mevedel-plugins-list-open "mevedel-plugins"
                   (&optional context))
 
+;; `mevedel-presets'
+(declare-function mevedel-preset-apply "mevedel-presets" (name &optional buffer))
+(defvar mevedel-preset--registry)
+
 ;; `mevedel-review'
 (declare-function mevedel-review "mevedel-review" (&optional instructions))
 (declare-function mevedel-verify "mevedel-review" (&optional instructions))
@@ -78,11 +98,27 @@
                   (&optional context))
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-execution-home "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-implementation-context "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-active-p "mevedel-structs"
                   (&optional buffer))
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tools'
@@ -111,7 +147,6 @@
 
 (defconst mevedel-menu-help-buffer-name "*mevedel help*"
   "Name of the session cockpit help buffer.")
-
 
 ;;
 ;;; Context resolution
@@ -282,6 +317,127 @@
                 (mevedel-menu--inactive-value worktree)
               (mevedel-menu--value worktree)))))
 
+(defun mevedel-menu--current-goal ()
+  "Return the current session Goal, or nil."
+  (mevedel-session-goal
+   (mevedel-cockpit-context-session (mevedel-menu--context))))
+
+(defun mevedel-menu--owned-goal ()
+  "Return the current Goal when this session owns it, or nil."
+  (when-let* ((goal (mevedel-menu--current-goal))
+              (session (mevedel-cockpit-context-session
+                        (mevedel-menu--context)))
+              ((mevedel-goal-owned-by-session-p goal session)))
+    goal))
+
+(defun mevedel-menu--goal-active-p ()
+  "Return non-nil when the current Goal can be paused."
+  (when-let* ((goal (mevedel-menu--owned-goal)))
+    (eq (mevedel-goal-status goal) 'active)))
+
+(defun mevedel-menu--goal-resumable-p ()
+  "Return non-nil when the current Goal can be resumed."
+  (when-let* ((goal (mevedel-menu--owned-goal)))
+    (memq (mevedel-goal-status goal) '(paused blocked))))
+
+(defun mevedel-menu--goal-start-inapt-p ()
+  "Return non-nil when an unfinished Goal already exists."
+  (when-let* ((goal (mevedel-menu--current-goal)))
+    (not (eq (mevedel-goal-status goal) 'complete))))
+
+(defun mevedel-menu--goal-editable-p ()
+  "Return non-nil when Goal settings may be changed here."
+  (when-let* ((goal (mevedel-menu--owned-goal)))
+    (not (eq (mevedel-goal-status goal) 'complete))))
+
+(defun mevedel-menu--goal-clearable-p ()
+  "Return non-nil when Goal state may be cleared now."
+  (and (mevedel-menu--current-goal)
+       (not (mevedel-menu--request-active-p))))
+
+(defun mevedel-menu--goal-description ()
+  "Return the complete Goal cockpit description."
+  (if-let* ((goal (mevedel-menu--current-goal)))
+      (let* ((home (mevedel-goal-execution-home goal))
+             (plan (mevedel-goal-current-plan goal))
+             (review (or (mevedel-goal-review-summary goal)
+                         (mevedel-goal-review-findings goal)))
+             (cycle-record (mevedel-goal-cycle-record goal))
+             (guardian (car (last (plist-get cycle-record :guardian-audits))))
+             (checkpoint (mevedel-goal-checkpoint goal))
+             (budget (mevedel-goal-token-budget goal)))
+        (string-join
+         (list
+          (format "Goal: %s" (mevedel-goal-objective goal))
+          (format "Status / phase: %s / %s (cycle %d)"
+                  (mevedel-goal-status goal) (mevedel-goal-phase goal)
+                  (mevedel-goal-cycle goal))
+          (format "Approval: %s" (mevedel-goal-approval-policy goal))
+          (format "Budget: %d%s" (or (mevedel-goal-token-usage goal) 0)
+                  (if budget (format "/%d tokens" budget)
+                    " tokens / unlimited"))
+          (format "Execution: %s · %s · %s"
+                  (or (plist-get home :kind) 'unknown)
+                  (or (plist-get home :directory) "unavailable")
+                  (or (mevedel-goal-implementation-context goal) 'full))
+          (format "Plan: %s"
+                  (or (plist-get plan :absolute-path)
+                      (plist-get plan :path) "none"))
+          (format "Latest review: %s"
+                  (cond ((and review (listp review))
+                         (format "%s — %s" (plist-get review :verdict)
+                                 (plist-get review :summary)))
+                        (review review) (t "none")))
+          (format "Guardian: %s"
+                  (if guardian
+                      (format "%s — %s" (plist-get guardian :verdict)
+                              (plist-get guardian :reason))
+                    "none"))
+          (format "Recovery: %s%s"
+                  (or (plist-get checkpoint :dispatch-state) "none")
+                  (if-let* ((reason (mevedel-goal-reason goal)))
+                      (format " — %s" reason) "")))
+         "\n"))
+    "No active Goal. Start one here or with /goal OBJECTIVE."))
+
+(defun mevedel-menu--preset-description ()
+  "Return selected preset, tiers, workloads, and actual request policies."
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context)))
+    (with-current-buffer (mevedel-cockpit-context-data-buffer context)
+      (let* ((goal (mevedel-session-goal session))
+             (workloads (delete-dups
+                         (append (mapcar #'car mevedel-model-workloads)
+                                 '(planning goal-guardian implementation review)))))
+        (string-join
+         (append
+          (list (format "Preset: %s"
+                        (or (mevedel-session-preset-name session) "none"))
+                (format "Tiers: %S" mevedel-model-tiers)
+                "Workloads:")
+          (mapcar
+           (lambda (workload)
+             (format "  %-18s %s%s"
+                     workload
+                     (condition-case err
+                         (let ((policy (mevedel-model-resolve-workload workload)))
+                           (format "%s:%s · effort %s"
+                                   (gptel-backend-name
+                                    (plist-get policy :backend))
+                                   (gptel--model-name (plist-get policy :model))
+                                   (or (plist-get policy :effort) "default")))
+                       (error (format "ERROR: %s — fix this preset before dispatch"
+                                      (error-message-string err))))
+                     (if-let* ((used (and goal
+                                          (mevedel-goal-latest-provider
+                                           goal workload))))
+                         (format " · actual %s / effort %s"
+                                 (plist-get used :provider)
+                                 (or (plist-get used :effort) "default"))
+                       "")))
+           workloads))
+         "\n")))))
+
 (defun mevedel-menu--mode-choice-description (mode detail)
   "Return the MODE surface row with DETAIL and current-state marker."
   (let* ((context (mevedel-menu--context))
@@ -401,6 +557,10 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (transient-setup 'mevedel-menu--mode))
       ('model
        (transient-setup 'mevedel-menu--model))
+      ('goal
+       (transient-setup 'mevedel-menu--goal))
+      ('preset
+       (transient-setup 'mevedel-menu--preset))
       ('skills
        (require 'mevedel-skills-ui)
        (mevedel-cockpit-call-in-data
@@ -470,6 +630,64 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu-open 'model))
 
+(defun mevedel-menu--open-goal ()
+  "Open the Goal cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'goal))
+
+(defun mevedel-menu--open-preset ()
+  "Open the Preset cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'preset))
+
+(defun mevedel-menu--goal-call (function &rest args)
+  "Call Goal FUNCTION with ARGS in the owning data buffer."
+  (apply #'mevedel-cockpit-call-in-data
+         (mevedel-menu--context) function args)
+  (force-mode-line-update t))
+
+(defun mevedel-menu--goal-start ()
+  "Prompt for and start a supervised Goal."
+  (interactive)
+  (mevedel-menu--goal-call
+   #'mevedel-goal-start (read-string "Goal objective: ")))
+
+(defun mevedel-menu--goal-start-auto ()
+  "Prompt for and start an automatic Goal."
+  (interactive)
+  (let ((objective (read-string "Automatic Goal objective: ")))
+    (mevedel-menu--goal-call
+     #'mevedel-goal-start objective objective 'automatic)))
+
+(defun mevedel-menu--goal-edit ()
+  "Edit the current Goal objective."
+  (interactive)
+  (mevedel-menu--goal-call
+   #'mevedel-goal-edit
+   (read-string "Goal objective: "
+                (and (mevedel-menu--current-goal)
+                     (mevedel-goal-objective
+                      (mevedel-menu--current-goal))))))
+
+(defun mevedel-menu--goal-set-budget ()
+  "Set the current Goal token budget."
+  (interactive)
+  (let ((value (read-string "Goal token budget (blank = unlimited): ")))
+    (mevedel-menu--goal-call
+     #'mevedel-goal-set-token-budget
+     (unless (string-blank-p value) (string-to-number value)))))
+
+(defun mevedel-menu--select-preset ()
+  "Select and apply a preset to the current session only."
+  (interactive)
+  (let* ((names (mapcar (lambda (entry) (symbol-name (car entry)))
+                        mevedel-preset--registry))
+         (name (intern (completing-read "Preset: " names nil t))))
+    (mevedel-cockpit-call-in-data
+     (mevedel-menu--context) #'mevedel-preset-apply name)
+    (force-mode-line-update t)
+    (message "mevedel: preset set to %s for this session" name)))
+
 (defun mevedel-menu--open-tools ()
   "Open the tools cockpit surface."
   (interactive)
@@ -508,6 +726,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/skills, /skills list       Skills"
      "/mode                       Mode"
      "/model                      Model"
+     "Cockpit G / P               Goal / Preset model team"
      "/tools, /tools list         Tools"
      "/worktree, /worktree status Worktree"
      "/help                       Help"
@@ -595,6 +814,12 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      :description mevedel-menu--mode-description)
     ("M" mevedel-menu--open-model
      :description mevedel-menu--model-description)
+    ("P" mevedel-menu--open-preset
+     :description (lambda () (format "%-9s %s" "Preset"
+                                     (or (mevedel-session-preset-name
+                                          (mevedel-cockpit-context-session
+                                           (mevedel-menu--context)))
+                                         "none"))))
     ("t" mevedel-menu--open-tools
      :description mevedel-menu--tools-description)
     ("s" mevedel-menu--open-skills
@@ -607,6 +832,14 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("g" "gptel menu" mevedel-menu--open-gptel)
     ("w" mevedel-menu--open-worktree
      :description mevedel-menu--worktree-description)
+    ("G" mevedel-menu--open-goal
+     :description (lambda () (format "%-9s %s" "Goal"
+                                     (if-let* ((goal (mevedel-menu--current-goal)))
+                                         (format "%s/%s cycle %d"
+                                                 (mevedel-goal-status goal)
+                                                 (mevedel-goal-phase goal)
+                                                 (mevedel-goal-cycle goal))
+                                       "none"))))
     ("?" "Help" mevedel-menu--open-help)]]
   (interactive)
   (mevedel-menu--context)
@@ -643,6 +876,45 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu--context)
   (transient-setup 'mevedel-menu--model))
+
+(transient-define-prefix mevedel-menu--goal ()
+  "Goal cockpit surface."
+  [:description mevedel-menu--goal-description
+   ["Lifecycle"
+    :pad-keys t
+    ("s" "Start supervised Goal" mevedel-menu--goal-start
+     :inapt-if mevedel-menu--goal-start-inapt-p)
+    ("a" "Start automatic Goal" mevedel-menu--goal-start-auto
+     :inapt-if mevedel-menu--goal-start-inapt-p)
+    ("p" "Pause" (lambda () (interactive)
+                     (mevedel-menu--goal-call #'mevedel-goal-pause))
+     :inapt-if-not mevedel-menu--goal-active-p)
+    ("r" "Resume" (lambda () (interactive)
+                      (mevedel-menu--goal-call #'mevedel-goal-resume))
+     :inapt-if-not mevedel-menu--goal-resumable-p)
+    ("e" "Edit objective" mevedel-menu--goal-edit
+     :inapt-if-not mevedel-menu--goal-editable-p)
+    ("b" "Set budget" mevedel-menu--goal-set-budget
+     :inapt-if-not mevedel-menu--goal-editable-p)
+    ("c" "Clear" (lambda () (interactive)
+                     (mevedel-menu--goal-call #'mevedel-goal-clear))
+     :inapt-if-not mevedel-menu--goal-clearable-p)]
+   ["Navigation" ("q" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--context)
+  (transient-setup 'mevedel-menu--goal))
+
+(transient-define-prefix mevedel-menu--preset ()
+  "Preset and model-team cockpit surface."
+  [:description mevedel-menu--preset-description
+   ["Preset"
+    :pad-keys t
+    ("RET" "Select session preset" mevedel-menu--select-preset)
+    ("g" "gptel menu" mevedel-menu--open-gptel)]
+   ["Navigation" ("q" "Back" mevedel-menu)]]
+  (interactive)
+  (mevedel-menu--context)
+  (transient-setup 'mevedel-menu--preset))
 
 (provide 'mevedel-menu)
 

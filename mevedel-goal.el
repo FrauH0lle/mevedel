@@ -221,10 +221,19 @@ CALLBACK receives a normalized guardian decision plist.")
    (mevedel-goal--relative-dir goal)
    (format "cycle-%03d-plan.md" (mevedel-goal-cycle goal))))
 
-(defun mevedel-goal--cycle-record (goal)
+(defun mevedel-goal-cycle-record (goal)
   "Return GOAL's current cycle record."
   (cl-find (mevedel-goal-cycle goal) (mevedel-goal-cycles goal)
            :key (lambda (record) (plist-get record :cycle))))
+
+(defun mevedel-goal-latest-provider (goal workload)
+  "Return GOAL's latest recorded provider policy for WORKLOAD."
+  (when-let* ((cycle
+               (cl-find-if
+                (lambda (record)
+                  (alist-get workload (plist-get record :providers)))
+                (mevedel-goal-cycles goal) :from-end t)))
+    (alist-get workload (plist-get cycle :providers))))
 
 (defun mevedel-goal--cycle-put (goal key value)
   "Set KEY to VALUE in GOAL's current cycle record."
@@ -263,7 +272,7 @@ CALLBACK receives a normalized guardian decision plist.")
                             mevedel--session))
               (goal (mevedel-session-goal session))
               ((eq (mevedel-goal-status goal) 'active)))
-    (let* ((record (mevedel-goal--cycle-record goal))
+    (let* ((record (mevedel-goal-cycle-record goal))
            (providers (copy-tree (plist-get record :providers)))
            (backend (plist-get policy :backend))
            (model (plist-get policy :model)))
@@ -307,7 +316,7 @@ CALLBACK receives a normalized guardian decision plist.")
   (require 'mevedel-session-persistence)
   (mevedel-session-persistence-save session buffer))
 
-(defun mevedel-goal--owned-by-session-p (goal session)
+(defun mevedel-goal-owned-by-session-p (goal session)
   "Return non-nil when GOAL is exclusively owned by SESSION."
   (let ((session-id (mevedel-session-session-id session))
         (home (mevedel-goal-execution-home goal)))
@@ -318,7 +327,7 @@ CALLBACK receives a normalized guardian decision plist.")
 
 (defun mevedel-goal--assert-execution-home (goal session)
   "Signal unless GOAL may execute from SESSION's recorded home."
-  (unless (mevedel-goal--owned-by-session-p goal session)
+  (unless (mevedel-goal-owned-by-session-p goal session)
     (error "Goal is owned by another session"))
   (let ((expected (file-name-as-directory
                    (expand-file-name
@@ -589,7 +598,7 @@ is non-nil, label the fragment as a compaction-time snapshot instead."
                         :provider (or (plist-get decision :provider) "unavailable")
                         :effort (plist-get decision :effort)
                         :at (format-time-string "%FT%T%z"))))
-         (cycle (mevedel-goal--cycle-record goal))
+         (cycle (mevedel-goal-cycle-record goal))
          (audits (append (plist-get cycle :guardian-audits) (list record))))
     (mevedel-goal--cycle-put goal :guardian-audits audits)
     (mevedel-goal--persist-cycle-index goal session chat-buffer)
@@ -857,7 +866,7 @@ The request has no tools or conversational transcript insertion."
   (let ((goal (mevedel-goal--current)))
     (when (bound-and-true-p mevedel--current-request)
       (user-error "A request is already active"))
-    (unless (mevedel-goal--owned-by-session-p goal mevedel--session)
+    (unless (mevedel-goal-owned-by-session-p goal mevedel--session)
       (user-error "Goal continuation belongs to its handoff target"))
     (unless (memq (mevedel-goal-status goal) '(paused blocked))
       (user-error "Goal is not paused or blocked"))
@@ -1808,7 +1817,7 @@ When exhausted, pause durably with progress and blocker context after SOURCE."
 
 (defun mevedel-goal--guardian-approved-p (goal)
   "Return non-nil when GOAL's current plan has a matching guardian approval."
-  (let* ((cycle (mevedel-goal--cycle-record goal))
+  (let* ((cycle (mevedel-goal-cycle-record goal))
          (audit (car (last (plist-get cycle :guardian-audits)))))
     (and audit
          (eq (plist-get audit :verdict) 'approve))))
@@ -1820,7 +1829,7 @@ When exhausted, pause durably with progress and blocker context after SOURCE."
    (prin1-to-string
     (list (mevedel-goal-id goal) source target (mevedel-goal-cycle goal)
           (plist-get (mevedel-goal-checkpoint goal) :attempt-id)
-          (plist-get (mevedel-goal--cycle-record goal) :plan-hash)
+          (plist-get (mevedel-goal-cycle-record goal) :plan-hash)
           (mevedel-goal-phase goal)))))
 
 (defun mevedel-goal-continuation-ready-p
@@ -1833,7 +1842,7 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
          (checkpoint (and goal (mevedel-goal-checkpoint goal))))
     (cond
      ((or (null goal)
-          (not (mevedel-goal--owned-by-session-p goal session))
+          (not (mevedel-goal-owned-by-session-p goal session))
           (not (eq (mevedel-goal-status goal) 'active))
           (bound-and-true-p mevedel--current-request)
           (mevedel-goal--pending-interaction-p session)
