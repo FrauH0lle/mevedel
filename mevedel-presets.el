@@ -111,10 +111,6 @@
 (declare-function mevedel--fail-turn "mevedel-turn" (fsm status))
 (declare-function mevedel--safe-fsm-handler "mevedel-turn" (handler))
 
-;; `mevedel-view-composer'
-(declare-function mevedel-view--handle-queued-user-message-inject
-                  "mevedel-view-composer" (fsm))
-
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-ensure-progress-for-fsm
                   "mevedel-view-stream" (fsm))
@@ -538,13 +534,6 @@ alist with mevedel-specific handlers added:
     (when wait-entry
       (setcdr wait-entry
               (cons #'mevedel-tools--handle-message-inject
-                    (cdr wait-entry)))))
-  ;; 1aa. Prepared composer queue delivery: drain user prompts queued
-  ;; during an active request into the next WAIT-cycle HTTP request.
-  (let ((wait-entry (assq 'WAIT handlers)))
-    (when wait-entry
-      (setcdr wait-entry
-              (cons #'mevedel-view--handle-queued-user-message-inject
                     (cdr wait-entry)))))
   ;; 1b. Apply skill request-scoped overrides BEFORE gptel--handle-wait
   ;; fires.  This handler runs every WAIT entry (not just the first),

@@ -104,7 +104,9 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-name
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-skill-invocation-record-trigger
+(declare-function mevedel-skill-invocation-record-origin
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-skill-invocation-record-role
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-turn
                   "mevedel-structs" (cl-x) t)
@@ -733,13 +735,14 @@ When NO-PROPERTIES is non-nil, strip text properties from copied text."
             (records (mevedel-session-invoked-skills session)))
       (mapconcat
        (lambda (rec)
-         (format "- $%s%s (trigger: %s, turn: %s)"
+         (format "- $%s%s (role: %s, origin: %s, turn: %s)"
                  (mevedel-skill-invocation-record-name rec)
                  (let ((args (mevedel-skill-invocation-record-args rec)))
                    (if (and args (not (string-empty-p args)))
                        (concat " " args)
                      ""))
-                 (or (mevedel-skill-invocation-record-trigger rec) "?")
+                 (or (mevedel-skill-invocation-record-role rec) "?")
+                 (or (mevedel-skill-invocation-record-origin rec) "?")
                  (or (mevedel-skill-invocation-record-turn rec) "?")))
        records "\n")
     "- (none)"))

@@ -143,8 +143,7 @@ When EXPANDED is non-nil, include ordered handler details."
     (let (records)
       (dolist (seg segments)
         (when (memq (car seg)
-                    '(user queued-message hook-context prompt
-                      render-data ignored))
+                    '(user hook-context prompt render-data ignored))
           (let ((start (cadr seg)))
             (dolist (span
                      (mevedel-transcript-audit-spans

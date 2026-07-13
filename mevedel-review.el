@@ -1048,7 +1048,7 @@ dispatched.  COMMAND defaults to `review'."
                          (eq (plist-get outcome :status) 'ok))
                     (mevedel-review--mark-command-outcome outcome)
                   outcome)))
-     :trigger 'user-skill
+     :origin 'user
      :description (or hint (mevedel-review--command-description command))
      :additional-context submit-context
      :on-invocation progress-callback

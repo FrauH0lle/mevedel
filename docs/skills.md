@@ -5,8 +5,9 @@ Skills are reusable prompt packages loaded from `SKILL.md` files.
 session installation, path-scoped activation state, and hot reload.
 `mevedel-tool-skills.el` registers the model-visible Skill tool schemas.
 `mevedel-skills-invoke.el` owns skill preparation, invocation, request-scoped
-overrides, direct fork response insertion, inline attachments, and model-tool
-behavior. `mevedel-turn.el` owns the canonical terminal transaction shared by
+overrides, direct fork response insertion, and model-tool behavior.
+`mevedel-skills-plan.el` owns deterministic composer invocation plans.
+`mevedel-turn.el` owns the canonical terminal transaction shared by
 ordinary responses and direct fork completion.
 `mevedel-skills-prompt.el` owns prompt roster rendering, event-shaped reminders,
 and path-activation notices. `mevedel-skills-ui.el` owns local commands, the
@@ -20,15 +21,17 @@ flowchart TD
     A[Scan skill directories] --> B[Parse SKILL.md frontmatter]
     B --> C[Register visible skills]
     C --> D{Invocation source}
-    D -- $skill --> E[User skill invoke]
-    D -- Model tool --> F[Skill tool invoke]
-    E --> G[Prepare body and arguments]
-    F --> G
-    G --> H{Context}
-    H -- Inline --> I[Inject expanded prompt]
-    H -- Fork --> J[Dispatch sub-agent]
-    I --> K[Apply hooks, tools, model, and permissions]
-    J --> K
+    D -- Composer $skill --> E[Bind and build command/instruction plan]
+    E --> F[Prepare unique skills sequentially]
+    F --> G[Run UserPromptExpansion per skill]
+    G --> H[Run UserPromptSubmit on complete inert prompt]
+    H --> I{Leading fork command?}
+    I -- No --> J[Dispatch one model request]
+    I -- Yes --> K[Dispatch one sub-agent]
+    D -- Model Skill tool --> L[Prepare one command]
+    L --> M{Context}
+    M -- Inline --> N[Return expanded body]
+    M -- Fork --> O[Dispatch one sub-agent]
 ```
 
 ## Discovery
@@ -262,78 +265,63 @@ user/model invocation gates.
 
 ## Invocation
 
-`mevedel-skills-invoke` is the unified internal entry point for `$skill`,
-model-side Skill tool, and internal invocation.
+Invocation role and origin are independent. Roles are `command` and
+`instruction`; origins are `user`, `model`, and `internal`. A leading user
+mention and a model-side `Skill` call are commands. A user mention embedded in
+ordinary prose is an instruction, regardless of the skill's `context` field.
 
-- `context: inline` prepares the body and injects or returns it in the
-  current request context.
-- `context: fork` dispatches a foreground sub-agent directly. It does
-  not ask the model to call `Agent` in prose. If `agent` names a
-  registered agent, that agent is used; otherwise mevedel synthesizes an
-  agent that inherits the parent context.
+The view composer builds one invocation plan from the original, atomically
+bound input before running prompt-submit hooks. Consecutive distinct leading
+`context: inline` commands form a stack of at most six commands and share the
+remaining text as their raw argument string. Duplicate commands collapse to
+their first canonical source. A standalone `--` ends the stack. A leading
+`context: fork` command runs alone; a fork skill after another command or in
+ordinary prose is an instruction and does not create a child.
 
-Leading `$skill [args]` uses command-style invocation when `$` is the
-first non-whitespace character: the skill receives the remaining prompt
-text as arguments. Inline `$skill` mentions elsewhere in the prompt use
-attachment-style invocation: mevedel prepares the named skill and keeps
-the original user prompt as the prompt body. Multiple inline mentions are
-prepared in first-occurrence text order with empty skill arguments;
-duplicate mentions of the same canonical skill are injected once. Unknown
-`$foo` text remains a normal prompt. A `$foo` mention that names a known
-but disabled skill blocks the send with guidance to enable it via
-`/skills enable foo` or escape it as literal text.
-Leading and inline explicit user skill invocations install the same
-skill-scoped permission rules, hooks, model override, and parsed effort
-state; only prompt body handling differs.
-Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, and `$foo` inside Markdown
-inline code spans or fenced code blocks stay literal text for inline
-detection.
+Commands prepare left to right, followed by instructions in first-occurrence
+order. Every occurrence remains represented, but preparation is deduplicated
+by exact canonical source across the complete submission. A command occurrence
+wins over instruction occurrences of the same source. Instruction occurrences
+become inert model-visible placeholders such as
+`[skill:to-prd -- attached]`, and each unique instruction body is supplied once
+as hidden turn context. Instruction preparation always receives empty
+arguments and ignores `context`, model, effort, agent, and declared skill
+hooks. Its allowed-tool rules exist only while preparing body injections.
 
-Inline attachment-style `$skill` is resolved by mevedel itself before the
-model request. It injects additive hidden skill context through the same
-`<system-reminder>` prompt-transform path used by `@file` and `@ref`
-mentions; the scanner is colocated with the mention transform but uses a
-separate `$skill` parser. It does not ask or nudge the model to call
-`Skill(name=...)`.
-The transcript keeps the user's original prompt text, while the
-model-visible prompt replaces recognized inline mentions with compact
-placeholders such as `[skill:to-prd -- attached]`.
-Inline attachment-style invocation only accepts `context: inline` skills.
-If a known user-invocable `context: fork` skill appears inline, mevedel
-blocks the send with a clear message telling the user to invoke it as
-leading `$skill ...` or escape, quote, or code-span it for literal text.
-Leading command-style `$skill` can still dispatch fork skills.
+Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, Markdown code spans and fences,
+and unknown `$foo` names remain literal. A bound or known skill that is
+missing, disabled, malformed, or no longer user-invocable blocks the whole
+submission with enable-or-escape guidance. Mevedel prepares every unique skill
+before dispatching anything; the first load, injection, permission, validation,
+or hook failure sends neither a partial request nor a child and leaves the
+direct draft or queued entry editable.
 
-`$skill` invocation may block chat input while async preparation or a
-foreground fork completes. Model-side Skill blocks the parent tool call.
-The companion `ListSkills` tool mirrors the active, model-invocable,
-enabled roster when called without a query. With a `query` string it
-searches all enabled model-invocable skills, including dormant path-scoped
-skills, and marks dormant matches in the result.
+`UserPromptExpansion` runs once per prepared canonical skill. After all bodies,
+placeholders, and instruction reminders exist, `UserPromptSubmit` runs once on
+the complete inert prompt. Hook output is never rescanned for skill syntax; a
+hook may add a prefix or suffix but cannot rewrite away any prepared
+contribution, and it cancels planned work only by blocking the whole
+submission. Skill bodies,
+prepared output, model output, child prompts and results, and model-supplied
+arguments are likewise never interpreted as new user `$skill` mentions.
 
-Leading command-style `$skill` invocations that replace the prompt keep the
-expanded body in the data buffer, then append an ignored
-`<!-- mevedel-render-data -->` side-channel block with the original skill name
-and arguments. The view buffer renders that as a compact `$skill` invocation
-user turn plus a collapsed `Prompt` section containing the full expanded body.
-Inline attachment-style invocations instead persist the original user text
-plus render metadata naming the attached skills; transformed placeholders and
-hidden reminder bodies are request-time only.
+Queued prompts retain their original bound text. Queueing performs no body
+preparation and runs no prompt hook. When an entry becomes the next turn, it is
+planned, prepared, and submitted independently; the entry leaves the queue
+only at the request or fork dispatch boundary.
 
-User `$skill` invocations fire `UserPromptExpansion` after body
-preparation and before the expanded prompt reaches the model. This covers
-both inline user skill invocations and foreground `context: fork` user
-skill invocations. Multiple inline attachments fire once per deduped
-attached skill in first-occurrence order. If any hook blocks, the whole
-send is blocked.
-Hooks can block the expansion, replace the expanded prompt with
-`:updated-input`, or append `<hook-context>` with `:additional-context`.
-For inline attachments, `:updated-input` replaces only that skill's hidden
-body; for leading command-style invocation it keeps the existing behavior of
-replacing the expanded prompt.
-When a user skill expansion is blocked, pending skill-scoped permission/model
-and hook context is cleared instead of leaking into the next request.
-Model-side Skill calls do not fire this event.
+The transcript and input history keep the exact original user text. An ignored
+render-data block connects that text to the prepared model prompt without
+exposing the control metadata to the model. `$skill` preparation may block chat
+input while asynchronous injections run, and a foreground fork blocks until
+its child settles. Cancellation or buffer death invalidates the preparation
+token so late callbacks cannot dispatch.
+
+The model-side `Skill` tool and internal callers use the same normalized
+preparation outcomes. Model failures remain ordinary tool errors, and fork
+dispatch uses the shared agent runtime rather than a skill-specific recursion
+or scheduling limit. `ListSkills` mirrors the active, enabled,
+model-invocable roster and can query dormant path-scoped skills.
 
 ## Review and Verify Commands
 
@@ -346,8 +334,8 @@ can name explicit target forms such as `current`, `HEAD`, `branch:<name>`, and
 
 `/review` runs a dedicated foreground reviewer task with the registered
 `reviewer` agent. The command ignores user/project skills named `review`,
-but keeps the bundled review skill metadata for `UserPromptExpansion` hook
-compatibility. The reviewer prompt asks for strict JSON with prioritized
+but keeps the bundled review skill metadata so its `UserPromptExpansion` hook
+policy still runs. The reviewer prompt asks for strict JSON with prioritized
 findings. The parent turn stores a synthetic `<user_action>` block
 containing the rendered review results before the assistant summary, so
 follow-up prompts like "fix finding 2" have the findings in model context.
@@ -383,18 +371,21 @@ come from the selected agent's tool list.
 `allowed-tools` is permission augmentation, not tool selection. It never
 removes tools from the model and never denies unspecified tools.
 
-Parsed entries become skill-scoped permission rules on the active
-request or agent invocation. These buckets outrank session and
-persistent rules for allow/ask resolution, while deny remains absolute
-across all buckets. Active Goal planning and review phases deny non-read-only
-tools before skill allow grants are considered.
+For command invocations, parsed entries become skill-scoped permission rules
+on the owned request or agent invocation. For instructions they exist only on
+the temporary preparation request and do not grant tools to the consuming
+request. These buckets outrank session and persistent rules for allow/ask
+resolution, while deny remains absolute across all buckets. Active Goal
+planning and review phases deny non-read-only tools before skill allow grants
+are considered.
 
 ## Hooks
 
 Skill frontmatter `hooks` uses the same event -> matcher -> handler shape
-as `.mevedel/hooks.el` and `.mevedel/hooks.json`. Inline skills install
-those rules on the active request while the skill is preparing or running.
-Fork skills install them on the sub-agent invocation. For fork skills, a
+as `.mevedel/hooks.el` and `.mevedel/hooks.json`. Command skills install
+those rules on their request or child invocation. Instruction invocations
+ignore their declared hooks; non-skill hook layers may still observe and
+rewrite or block instruction body preparation. For fork commands, a
 frontmatter `Stop` declaration is scoped to that child invocation and is
 normalized to `SubagentStop`; top-level `Stop` remains a main-turn event.
 Successful foreground fork user skills also complete the parent turn and

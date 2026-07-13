@@ -127,9 +127,6 @@ guidance in the rejection reminder.
   `mevedel-hooks-record-session-reminder`, consumed by `pending-events`;
   standalone `:system-message` remains a transient notification and hook-log
   entry. Additional hook context still uses `<hook-context>`.
-- **Queued user-message:** queued user-message batches are wrapped in
-  an inline `<system-reminder>` explaining that the input arrived while
-  the previous request was active.
 - **Background task status delta:** background agent transitions queue
   status reminders with agent id, type, description, reason,
   transcript path, and optional summary; `background-agents-pending`

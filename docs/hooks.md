@@ -159,10 +159,9 @@ Recommended locations:
   `<workspace>/.mevedel/hooks.el`, and
   `<workspace>/.mevedel/hooks.json`: project hooks, trusted per
   workspace.
-- Skill frontmatter `hooks`: scoped to an active skill invocation.  This
-  field is parsed and executed while the skill is active.  In `context:
-  fork` skills, a local `Stop` declaration is normalized to
-  `SubagentStop`.
+- Skill frontmatter `hooks`: scoped to a command invocation. Instruction
+  preparation ignores this field. In fork commands, a local `Stop`
+  declaration is normalized to `SubagentStop`.
 - Agent definition `:hooks`: scoped to invocations of that registered
   agent.  A local `Stop` declaration is normalized to `SubagentStop`.
 - Session/request/invocation hook lists: transient programmatic layers.
@@ -174,9 +173,9 @@ Layers merge additively in this order: `mevedel-hook-rules`, user
 `.mevedel/hooks.el`, user `.mevedel/hooks.json`, enabled plugin hooks,
 trusted project `.agents/hooks.el`, trusted project `.agents/hooks.json`,
 trusted project `.mevedel/hooks.el`, trusted project
-`.mevedel/hooks.json`, session, request, and agent invocation. Skill
-hooks are folded into the active request or agent invocation while the
-skill is active. Deny decisions remain restrictive across all layers;
+`.mevedel/hooks.json`, session, request, and agent invocation. Command-skill
+hooks are folded into the owned request or agent invocation. Deny decisions
+remain restrictive across all layers;
 allow decisions do not override existing explicit permission denies.
 
 Within a file layer, `.el` runs before `.json` when both exist.  Ordering only
@@ -405,10 +404,17 @@ context, matching the existing rule for all post-handler steps.
 
 ## Lifecycle integration
 
-`UserPromptSubmit` runs in the data buffer context for prompts submitted
-through the mevedel view input before the view renders or forwards the
-prompt to `gptel-send`.  A blocking decision stops the send without
-inserting a user turn.  `:updated-input` replaces the prompt text;
+`UserPromptSubmit` runs in the data buffer context after any deterministic
+skill plan has fully prepared its bodies, placeholders, and hidden instruction
+context, but before the view renders or forwards the prompt to `gptel-send`.
+Queueing runs no prompt hook; a queued entry fires this event once when it
+becomes its own turn. A blocking decision stops the send without
+inserting a user turn.  For ordinary prompts, `:updated-input` replaces the
+prompt text.  For a deterministic skill plan, the replacement is accepted
+only when it retains the complete prepared prompt unchanged as a substring;
+otherwise the rewrite and its audit record are ignored.  This lets a hook add
+prefix or suffix policy without deleting a prepared body, reminder, or
+placeholder.  Only an explicit blocking decision cancels the whole plan.
 `:additional-context` is appended to the model-visible prompt inside a
 `<hook-context>` block while staying out of the view-facing user message
 body.  The view shows a generic collapsed `◇ hook context added`
@@ -449,18 +455,13 @@ contributing handlers in execution order.  Each handler retains its own
 source, identity, reason, and context bodies where that audit surface exposes
 them.  Parent sub-agent rows omit the injected bodies.
 
-`UserPromptExpansion` runs for user `$skill` expansion after the skill
-body has been prepared and before it is installed as the prompt sent to
-the model.  This includes inline user skill invocations and foreground
-`context: fork` user skill invocations.  Multiple inline attachments fire once
-per deduped attached skill in first-occurrence order.  A blocking decision
-stops the whole send and clears the pending skill-scoped context for that
-invocation.
-`:updated-input`
-replaces the expanded prompt for leading command-style invocation, but for
-inline attachments replaces only that skill's hidden body.  `:additional-context`
-is appended inside a `<hook-context>` block.  Model-side Skill calls do not fire
-this event.
+`UserPromptExpansion` runs after each unique user-invoked skill body is
+prepared. Commands run first from left to right, followed by deduplicated
+instructions in first-occurrence order. `:updated-input` replaces that skill's
+prepared contribution; `:additional-context` is appended inside a
+`<hook-context>` block. A blocking decision stops the complete plan before any
+request or child dispatch. After all expansions settle, `UserPromptSubmit`
+sees the complete inert prompt. Model-side Skill calls do not fire this event.
 
 `PreCompact` runs after the compaction range and prompt have been prepared
 but before the compaction request is sent.  A blocking decision stops the

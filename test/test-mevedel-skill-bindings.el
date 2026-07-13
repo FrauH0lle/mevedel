@@ -138,6 +138,42 @@
           (should-not (mevedel-skill-bindings-starting-at input (1+ start))))
       (delete-file source))))
 
+(mevedel-deftest mevedel-skill-bindings-resolve-outcome ()
+  ,test
+  (test)
+  :doc "returns stable reasons independently of user-facing failure text"
+  (let* ((mevedel-skills-check-for-modifications nil)
+         (source (make-temp-file "mevedel-bound-source-" nil ".md"))
+         (skill (mevedel-skill--create
+                 :name "alpha" :source-file source
+                 :source 'project :active-p t :user-invocable-p t))
+         (session (mevedel-session--create :name "main" :skills (list skill)))
+         (missing-session (mevedel-session--create :name "missing"))
+         (input (mevedel-skill-bindings-test--bind
+                 "use $alpha" "alpha" source))
+         (start (string-match "\\$alpha" input)))
+    (unwind-protect
+        (progn
+          (should (eq 'bound-source
+                      (plist-get
+                       (mevedel-skill-bindings-resolve-outcome
+                        input missing-session start (+ start 6) "alpha")
+                       :reason)))
+          (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+                     (lambda (_skill) nil)))
+            (should (eq 'disabled
+                        (plist-get
+                         (mevedel-skill-bindings-resolve-outcome
+                          input session start (+ start 6) "alpha")
+                         :reason))))
+          (setf (mevedel-skill-user-invocable-p skill) nil)
+          (should (eq 'not-user-invocable
+                      (plist-get
+                       (mevedel-skill-bindings-resolve-outcome
+                        input session start (+ start 6) "alpha")
+                       :reason))))
+      (delete-file source))))
+
 (mevedel-deftest mevedel-skill-bindings-resolve ()
   ,test
   (test)
@@ -162,7 +198,25 @@
                       (mevedel-skill-bindings-resolve
                        input session start (+ start 6) "alpha"))))
       (delete-file bound-source)
-      (delete-file other-source))))
+      (delete-file other-source)))
+
+  :doc "preserves the exact user-facing message for structured failures"
+  (let* ((source (make-temp-file "mevedel-bound-source-" nil ".md"))
+         (session (mevedel-session--create :name "missing"))
+         (input (mevedel-skill-bindings-test--bind
+                 "use $alpha" "alpha" source))
+         (start (string-match "\\$alpha" input)))
+    (unwind-protect
+        (condition-case err
+            (progn
+              (mevedel-skill-bindings-resolve
+               input session start (+ start 6) "alpha")
+              (ert-fail "Expected bound-source failure"))
+          (user-error
+           (should
+            (equal (format "Bound skill $alpha is unavailable at %s" source)
+                   (error-message-string err)))))
+      (delete-file source))))
 
 
 ;;
