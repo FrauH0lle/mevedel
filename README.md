@@ -609,6 +609,17 @@ repository and chooses the next safe cycle boundary from that evidence.
 A checkpoint that proves implementation never started can instead retry its
 exact input directly.
 
+Every automatic continuation passes one durable idle-state gate: the prior
+checkpoint must be settled, no permission, approval, access, ask, generic
+interaction, or queued user intervention may remain, and automatic
+implementation requires the current guardian approval. Goals optionally use
+the buffer-local `mevedel-goal-token-budget`; provider-reported usage across
+planning, guardian, implementation, and review is accumulated, with the
+existing token estimator as fallback. Exhaustion pauses rather than completes.
+Use `M-x mevedel-goal-set-token-budget` to raise, remove, or add the limit,
+then `/goal resume`. Re-admitting identical durable state pauses the Goal to
+prevent request loops.
+
 ### Review and Verify Commands
 
 `M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run

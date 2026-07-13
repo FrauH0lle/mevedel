@@ -26,8 +26,24 @@
 
 (defun test-mevedel-goal--fsm (buffer phase)
   "Return a minimal FSM for BUFFER and Goal PHASE."
-  (gptel-make-fsm
-   :info (list :buffer buffer :mevedel-goal-phase phase)))
+  (let ((attempt-id
+         (when (buffer-live-p buffer)
+           (with-current-buffer buffer
+             (when-let* ((session (and (bound-and-true-p mevedel--session)
+                                       mevedel--session))
+                         (goal (mevedel-session-goal session))
+                         (checkpoint (mevedel-goal-checkpoint goal))
+                         ((eq phase (plist-get checkpoint :phase))))
+               (plist-get checkpoint :attempt-id))))))
+    (gptel-make-fsm
+     :info (list :buffer buffer :mevedel-goal-phase phase
+                 :mevedel-goal-attempt-id attempt-id))))
+
+(defun test-mevedel-goal--record-guardian (goal decision plan-hash &rest _)
+  "Record test guardian DECISION for GOAL and PLAN-HASH in its cycle."
+  (mevedel-goal--cycle-put
+   goal :guardian-audits
+   (list (append decision (list :plan-hash plan-hash)))))
 
 (mevedel-deftest mevedel-goal--current ()
   ,test
@@ -319,6 +335,36 @@
       (should (eq 'paused (mevedel-goal-status goal)))
       (should (eq 'planning (mevedel-goal-phase goal))))))
 
+(mevedel-deftest mevedel-goal-set-token-budget ()
+  ,test
+  (test)
+  :doc "sets, persists, and removes the session-local Goal budget"
+  (let* ((root (make-temp-file "mevedel-goal-budget-" t))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'paused :phase 'planning
+                :approval-policy 'supervised :cycle 1 :cycles '((:cycle 1))))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (mevedel-goal-set-token-budget 100)
+          (should (= 100 (mevedel-goal-token-budget goal)))
+          (should (= 100 mevedel-goal-token-budget))
+          (let* ((sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path session))))
+                 (saved (mevedel-session-persistence--goal-from-plist
+                         (plist-get sidecar :goal))))
+            (should (= 100 (mevedel-goal-token-budget saved))))
+          (mevedel-goal-set-token-budget nil)
+          (should-not (mevedel-goal-token-budget goal))
+          (should-error (mevedel-goal-set-token-budget 0)
+                        :type 'user-error))
+      (delete-directory root t))))
+
 (mevedel-deftest mevedel-goal-clear ()
   ,test
   (test)
@@ -470,6 +516,30 @@
             (mevedel-goal-resume))
           (should (equal input received))
           (should (eq 'implementing (mevedel-goal-phase goal))))
+      (delete-directory root t)))
+  :doc "continues the automatic cascade after the user raises its budget"
+  (let* ((root (make-temp-file "mevedel-goal-resume-budget-" t))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'paused
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1))
+                :token-budget 10 :token-usage 10
+                :checkpoint '(:phase planning :attempt-id "planning-1"
+                              :dispatch-state settled)))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         guarded)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session
+                      mevedel-goal-token-budget 20)
+          (setf (mevedel-session-goal session) goal)
+          (cl-letf (((symbol-function 'mevedel-goal--guard-current-plan)
+                     (lambda (&rest _) (setq guarded t))))
+            (mevedel-goal-resume))
+          (should guarded)
+          (should (= 20 (mevedel-goal-token-budget goal)))
+          (should (eq 'active (mevedel-goal-status goal))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal-settle-failure ()
@@ -782,6 +852,35 @@
   (should-not (mevedel-goal--terminal-provider-failure-p
                "Temporary network timeout")))
 
+(mevedel-deftest mevedel-goal--estimate-input-tokens ()
+  ,test
+  (test)
+  :doc "estimates strings and structured implementation inputs"
+  (should (= 2 (mevedel-goal--estimate-input-tokens "12345")))
+  (should (> (mevedel-goal--estimate-input-tokens '(:plan "p")) 0)))
+
+(mevedel-deftest mevedel-goal--record-token-usage ()
+  ,test
+  (test)
+  :doc "charges provider-reported usage once per checkpoint"
+  (let ((goal (mevedel-goal--create
+               :token-usage 3 :checkpoint '(:usage-recorded nil))))
+    (should (= 7 (mevedel-goal--record-token-usage
+                  goal '(:tokens (:input 2 :output 5)))))
+    (should (= 10 (mevedel-goal-token-usage goal)))
+    (should-not (mevedel-goal--record-token-usage
+                 goal '(:tokens (:input 100 :output 100))))
+    (should (= 10 (mevedel-goal-token-usage goal))))
+  :doc "falls back to the existing estimator when usage is unavailable"
+  (let ((goal (mevedel-goal--create
+               :token-usage 0
+               :checkpoint '(:usage-recorded nil :token-baseline 8
+                             :estimated-input-tokens 2))))
+    (cl-letf (((symbol-function 'mevedel--estimate-tokens)
+               (lambda () 13)))
+      (should (= 5 (mevedel-goal--record-token-usage goal nil)))
+      (should (= 5 (mevedel-goal-token-usage goal))))))
+
 (mevedel-deftest mevedel-goal--recovery-prompt ()
   ,test
   (test)
@@ -971,6 +1070,31 @@
           (should (eq 'awaiting-approval (mevedel-goal-phase goal)))
           (should-not presented)
           (should (equal "# Guard me" (mevedel-plan-current-body session))))
+      (delete-directory root t)))
+  :doc "planning without a required plan artifact pauses durably"
+  (let* ((root (make-temp-file "mevedel-goal-missing-plan-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active :phase 'planning
+                :approval-policy 'automatic :cycle 1 :cycles '((:cycle 1)))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (insert "I investigated the problem but omitted the artifact.")
+          (mevedel-goal--post-response (point-min) (point-max))
+          (should (eq 'paused (mevedel-goal-status goal)))
+          (should (string-match-p "no proposed plan"
+                                  (mevedel-goal-reason goal)))
+          (let* ((sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path session))))
+                 (saved (plist-get sidecar :goal)))
+            (should (eq 'paused (plist-get saved :status)))
+            (should (string-match-p "no proposed plan"
+                                    (plist-get saved :reason)))))
       (delete-directory root t)))
   :doc "reviewing captures evidence but cannot complete before settlement"
   (let* ((root (make-temp-file "mevedel-goal-review-" t))
@@ -1164,7 +1288,9 @@
          (goal (mevedel-goal--create
                 :status 'active :phase 'reviewing :objective "Fix it"
                 :cycle 1
-                :current-plan '(:absolute-path "/tmp/plan.md")))
+                :current-plan '(:absolute-path "/tmp/plan.md")
+                :checkpoint '(:phase implementing :attempt-id "i1"
+                              :dispatch-state settled)))
          dispatched)
     (unwind-protect
         (with-current-buffer buffer
@@ -1182,16 +1308,24 @@
   (with-temp-buffer
     (let* ((goal (mevedel-goal--create
                   :id "g1" :status 'active :phase 'awaiting-approval
-                  :approval-policy 'automatic :cycle 1))
-           (session (mevedel-session--create :name "main" :goal goal))
+                  :approval-policy 'automatic :cycle 1
+                  :checkpoint '(:phase planning :attempt-id "p1"
+                                :dispatch-state settled)))
+           (root (make-temp-file "mevedel-goal-guardian-dispatch-" t))
+           (session (mevedel-session-create
+                     "main" (test-mevedel-goal--workspace root)))
            guarded)
-      (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-goal--guard-current-plan)
-                 (lambda (selected buffer)
-                   (setq guarded (list selected buffer)))))
-        (mevedel-goal-dispatch-after-turn
-         (test-mevedel-goal--fsm (current-buffer) 'planning)))
-      (should (equal (list goal (current-buffer)) guarded)))))
+      (unwind-protect
+          (progn
+            (setq-local mevedel--session session)
+            (setf (mevedel-session-goal session) goal)
+            (cl-letf (((symbol-function 'mevedel-goal--guard-current-plan)
+                       (lambda (selected buffer)
+                         (setq guarded (list selected buffer)))))
+              (mevedel-goal-dispatch-after-turn
+               (test-mevedel-goal--fsm (current-buffer) 'planning)))
+            (should (equal (list goal (current-buffer)) guarded)))
+        (delete-directory root t)))))
 
 (mevedel-deftest mevedel-goal-supervised-cycle ()
   ,test
@@ -1218,8 +1352,9 @@
                        #'ignore)
                       ((symbol-function 'mevedel-goal--ensure-reference-reminder)
                        #'ignore)
-                      ((symbol-function 'mevedel-goal--call-with-workload)
-                       (lambda (_workload fn &rest _) (funcall fn)))
+                      ((symbol-function 'mevedel-model-resolve-workload)
+                       (lambda (&rest _)
+                         '(:backend nil :model test-model :effort nil)))
                       ((symbol-function 'mevedel--implement-plan)
                        (lambda (input)
                          (setq implementation input)
@@ -1264,8 +1399,9 @@
                        #'ignore)
                       ((symbol-function 'mevedel-goal--ensure-reference-reminder)
                        #'ignore)
-                      ((symbol-function 'mevedel-goal--call-with-workload)
-                       (lambda (_workload fn &rest _) (funcall fn)))
+                      ((symbol-function 'mevedel-model-resolve-workload)
+                       (lambda (&rest _)
+                         '(:backend nil :model test-model :effort nil)))
                       ((symbol-function 'mevedel--implement-plan)
                        (lambda (_input) nil)))
               (let ((goal (mevedel-session-goal session)))
@@ -1273,6 +1409,8 @@
                 (mevedel-goal--approval-callback
                  "# Cycle one\n\nImplement slice one." buffer 'implement)
                 (mevedel-goal-settle-turn
+                 (test-mevedel-goal--fsm buffer 'implementing))
+                (mevedel-goal-dispatch-after-turn
                  (test-mevedel-goal--fsm buffer 'implementing))
                 (erase-buffer)
                 (insert "<goal_review>\nverdict: continue\nsummary: Implement slice two.\n</goal_review>")
@@ -1288,6 +1426,8 @@
                 (mevedel-goal--approval-callback
                  "# Cycle two\n\nImplement slice two." buffer 'implement)
                 (mevedel-goal-settle-turn
+                 (test-mevedel-goal--fsm buffer 'implementing))
+                (mevedel-goal-dispatch-after-turn
                  (test-mevedel-goal--fsm buffer 'implementing))
                 (erase-buffer)
                 (insert "<goal_review>\nverdict: complete\nsummary: Both slices and tests pass.\n</goal_review>")
@@ -1333,6 +1473,76 @@
           (should (eq 'blocked (mevedel-goal-status goal)))
           (should (equal "Need an API credential."
                          (mevedel-goal-reason goal))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal-automatic-multi-cycle ()
+  ,test
+  (test)
+  :doc "runs two guardian-approved cycles without manual prompting"
+  (let* ((root (make-temp-file "mevedel-goal-auto-multi-" t))
+         (buffer (generate-new-buffer " *goal-auto-multi*"))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (dispatches nil)
+         (implementations 0))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (let ((mevedel-goal-dispatch-function
+                 (lambda (phase _prompt _display)
+                   (push phase dispatches)))
+                (mevedel-goal-guardian-function
+                 (lambda (goal _plan _buffer callback)
+                   (setf (mevedel-goal-checkpoint goal)
+                         (list :phase 'guardian
+                               :attempt-id
+                               (format "guardian-%d" (mevedel-goal-cycle goal))
+                               :dispatch-state 'started))
+                   (funcall callback
+                            '(:verdict approve :reason "Safe"
+                              :provider "P:M" :effort high)))))
+            (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                       (lambda (&rest _)
+                         '(:backend nil :model test-model :effort nil)))
+                      ((symbol-function 'mevedel--implement-plan)
+                       (lambda (_input) (cl-incf implementations) nil))
+                      ((symbol-function 'run-at-time)
+                       (lambda (_seconds _repeat function &rest args)
+                         (apply function args)
+                         nil)))
+              (mevedel-goal-start "Finish both slices" nil 'automatic)
+              (dolist (cycle '(("# Plan one" continue
+                                "Slice one done; implement slice two.")
+                               ("# Plan two" complete
+                                "Both slices and tests pass.")))
+                (erase-buffer)
+                (insert "<proposed_plan>\n" (nth 0 cycle)
+                        "\n</proposed_plan>")
+                (mevedel-goal--post-response (point-min) (point-max))
+                (let ((planning-fsm
+                       (test-mevedel-goal--fsm buffer 'planning)))
+                  (mevedel-goal-settle-turn planning-fsm)
+                  (mevedel-goal-dispatch-after-turn planning-fsm))
+                (let ((implementation-fsm
+                       (test-mevedel-goal--fsm buffer 'implementing)))
+                  (mevedel-goal-settle-turn implementation-fsm)
+                  (mevedel-goal-dispatch-after-turn implementation-fsm))
+                (erase-buffer)
+                (insert (format
+                         "<goal_review>\nverdict: %s\nsummary: %s\n</goal_review>"
+                         (nth 1 cycle) (nth 2 cycle)))
+                (mevedel-goal--post-response (point-min) (point-max))
+                (let ((review-fsm
+                       (test-mevedel-goal--fsm buffer 'reviewing)))
+                  (mevedel-goal-settle-turn review-fsm)
+                  (mevedel-goal-dispatch-after-turn review-fsm)))
+              (let ((goal (mevedel-session-goal session)))
+                (should (eq 'complete (mevedel-goal-status goal)))
+                (should (= 2 (mevedel-goal-cycle goal)))
+                (should (= 2 implementations))
+                (should (= 2
+                           (cl-count 'planning dispatches)))))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 
@@ -1573,35 +1783,145 @@
     (setf (mevedel-session-plan-metadata session) '(:guardian-pending nil))
     (should-not (mevedel-goal-guardian-pending-p session))))
 
-(mevedel-deftest mevedel-goal--automatic-continuation-ready-p ()
+(mevedel-deftest mevedel-goal--pending-interaction-p ()
   ,test
   (test)
-  :doc "requires an idle session without queued input or interactions"
+  :doc "detects every queued and visible user interaction gate"
   (with-temp-buffer
     (let ((session (mevedel-session--create :name "main")))
-      (should (mevedel-goal--automatic-continuation-ready-p session))
+      (should-not (mevedel-goal--pending-interaction-p session))
       (setf (mevedel-session-queued-user-messages session) '("wait"))
-      (should-not (mevedel-goal--automatic-continuation-ready-p session))
+      (should (mevedel-goal--pending-interaction-p session))
       (setf (mevedel-session-queued-user-messages session) nil
             (mevedel-session-permission-queue session) '(permission))
-      (should-not (mevedel-goal--automatic-continuation-ready-p session))
+      (should (mevedel-goal--pending-interaction-p session))
       (setf (mevedel-session-permission-queue session) nil
             (mevedel-session-plan-queue session) '(plan))
-      (should-not (mevedel-goal--automatic-continuation-ready-p session))))
-  :doc "blocks while the paired view is processing a submitted intervention"
+      (should (mevedel-goal--pending-interaction-p session))))
+  :doc "delegates live view interaction state to its owner"
   (let ((view (generate-new-buffer " *guardian-prompt-hook*")))
     (unwind-protect
         (with-temp-buffer
           (let ((session (mevedel-session--create :name "main")))
             (setq-local mevedel--view-buffer view)
-            (with-current-buffer view
-              (setq-local mevedel-view--prompt-hook-pending t))
-            (should-not
-             (mevedel-goal--automatic-continuation-ready-p session))
-            (with-current-buffer view
-              (setq-local mevedel-view--prompt-hook-pending nil))
-            (should (mevedel-goal--automatic-continuation-ready-p session))))
+            (cl-letf (((symbol-function 'mevedel-view-interaction-pending-p)
+                       (lambda (candidate)
+                         (should (eq view candidate))
+                         t)))
+              (should (mevedel-goal--pending-interaction-p session)))))
       (kill-buffer view))))
+
+(mevedel-deftest mevedel-goal--budget-available-p ()
+  ,test
+  (test)
+  :doc "pauses durably with progress, evidence, and blocker context"
+  (let* ((root (make-temp-file "mevedel-goal-budget-gate-" t))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active :phase 'planning
+                :approval-policy 'automatic :cycle 2
+                :cycles '((:cycle 1 :review (:verdict continue)) (:cycle 2))
+                :review-findings "One failing verifier remains"
+                :token-budget 50 :token-usage 50))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (should-not (mevedel-goal--budget-available-p
+                       goal session 'reviewing))
+          (should (eq 'paused (mevedel-goal-status goal)))
+          (should (string-match-p "Progress: 1 completed review cycle"
+                                  (mevedel-goal-reason goal)))
+          (should (string-match-p "One failing verifier remains"
+                                  (mevedel-goal-reason goal)))
+          (should (string-match-p "Blocker: raise or remove"
+                                  (mevedel-goal-reason goal)))
+          (let* ((sidecar
+                  (mevedel-session-persistence-load-sidecar
+                   (mevedel-session-persistence--sidecar-path
+                    (mevedel-session-save-path session))))
+                 (saved (plist-get sidecar :goal)))
+            (should (equal (mevedel-goal-reason goal)
+                           (plist-get saved :reason)))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal--guardian-approved-p ()
+  ,test
+  (test)
+  :doc "requires an approve audit in the current cycle"
+  (let ((goal (mevedel-goal--create
+               :cycle 1 :cycles '((:cycle 1 :guardian-audits
+                                    ((:verdict approve)))))))
+    (should (mevedel-goal--guardian-approved-p goal))
+    (mevedel-goal--cycle-put
+     goal :guardian-audits '((:verdict ask)))
+    (should-not (mevedel-goal--guardian-approved-p goal))))
+
+(mevedel-deftest mevedel-goal--continuation-key ()
+  ,test
+  (test)
+  :doc "is stable for equivalent state and changes with the durable attempt"
+  (let* ((goal (mevedel-goal--create
+                :id "g1" :phase 'reviewing :cycle 1 :cycles '((:cycle 1))
+                :checkpoint '(:attempt-id "a1")))
+         (first (mevedel-goal--continuation-key
+                 goal 'reviewing 'planning)))
+    (should (equal first (mevedel-goal--continuation-key
+                          goal 'reviewing 'planning)))
+    (setf (mevedel-goal-checkpoint goal) '(:attempt-id "a2"))
+    (should-not (equal first (mevedel-goal--continuation-key
+                              goal 'reviewing 'planning)))))
+
+(mevedel-deftest mevedel-goal-continuation-ready-p ()
+  ,test
+  (test)
+  :doc "requires settled state, idleness, guardian approval, and budget"
+  (let* ((root (make-temp-file "mevedel-goal-continuation-" t))
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship" :status 'active
+                :phase 'awaiting-approval :approval-policy 'automatic
+                :cycle 1 :cycles '((:cycle 1)) :token-usage 5
+                :checkpoint '(:phase guardian :attempt-id "guardian-1"
+                              :dispatch-state settled)))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (should-not (mevedel-goal-continuation-ready-p
+                       session 'guardian 'implementing))
+          (mevedel-goal--cycle-put
+           goal :guardian-audits '((:verdict approve)))
+          (setf (mevedel-goal-token-budget goal) 5)
+          (should-not (mevedel-goal-continuation-ready-p
+                       session 'guardian 'implementing))
+          (should (eq 'paused (mevedel-goal-status goal)))
+          (setf (mevedel-goal-status goal) 'active
+                (mevedel-goal-token-budget goal) 6
+                (mevedel-goal-reason goal) nil)
+          (should (mevedel-goal-continuation-ready-p
+                   session 'guardian 'implementing))
+          (should-not (mevedel-goal-continuation-ready-p
+                       session 'guardian 'implementing))
+          (should (eq 'paused (mevedel-goal-status goal))))
+      (delete-directory root t)))
+  :doc "rejects an unsettled checkpoint and any pending interaction"
+  (with-temp-buffer
+    (let* ((goal (mevedel-goal--create
+                  :id "g1" :status 'active :cycle 1 :cycles '((:cycle 1))
+                  :checkpoint '(:phase planning :attempt-id "p1"
+                                :dispatch-state started)))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (setq-local mevedel--session session)
+      (should-not (mevedel-goal-continuation-ready-p
+                   session 'planning 'guardian))
+      (setf (plist-get (mevedel-goal-checkpoint goal) :dispatch-state)
+            'settled
+            (mevedel-session-queued-user-messages session) '("stop"))
+      (should-not (mevedel-goal-continuation-ready-p
+                   session 'planning 'guardian)))))
 
 (mevedel-deftest mevedel-goal--guardian-finished ()
   ,test
@@ -1613,7 +1933,9 @@
          (goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'active
                 :phase 'awaiting-approval :approval-policy 'automatic
-                :cycle 1 :cycles '((:cycle 1))))
+                :cycle 1 :cycles '((:cycle 1))
+                :checkpoint '(:phase guardian :attempt-id "g1-guardian"
+                              :dispatch-state started)))
          approved presented scheduled)
     (unwind-protect
         (with-temp-buffer
@@ -1623,7 +1945,7 @@
            "# Plan" session (current-buffer)
            (mevedel-goal--current-plan-relative-path goal))
           (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
-                     #'ignore)
+                     #'test-mevedel-goal--record-guardian)
                     ((symbol-function 'run-at-time)
                      (lambda (_seconds _repeat function &rest args)
                        (setq scheduled (cons function args))))
@@ -1646,7 +1968,9 @@
          (goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'active
                 :phase 'awaiting-approval :approval-policy 'automatic
-                :cycle 1 :cycles '((:cycle 1))))
+                :cycle 1 :cycles '((:cycle 1))
+                :checkpoint '(:phase guardian :attempt-id "g1-guardian"
+                              :dispatch-state started)))
          reasons scheduled)
     (unwind-protect
         (with-temp-buffer
@@ -1656,7 +1980,7 @@
            "# Plan" session (current-buffer)
            (mevedel-goal--current-plan-relative-path goal))
           (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
-                     #'ignore)
+                     #'test-mevedel-goal--record-guardian)
                     ((symbol-function 'run-at-time)
                      (lambda (_seconds _repeat function &rest args)
                        (setq scheduled (cons function args))))
@@ -1684,7 +2008,9 @@
          (goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'active
                 :phase 'awaiting-approval :approval-policy 'automatic
-                :cycle 1 :cycles '((:cycle 1))))
+                :cycle 1 :cycles '((:cycle 1))
+                :checkpoint '(:phase guardian :attempt-id "g1-guardian"
+                              :dispatch-state started)))
          (view (generate-new-buffer " *guardian-hook-race*"))
          scheduled reason)
     (unwind-protect
@@ -1698,7 +2024,7 @@
            "# Plan" session (current-buffer)
            (mevedel-goal--current-plan-relative-path goal))
           (cl-letf (((symbol-function 'mevedel-goal--record-guardian-decision)
-                     #'ignore)
+                     #'test-mevedel-goal--record-guardian)
                     ((symbol-function 'run-at-time)
                      (lambda (_seconds _repeat function &rest args)
                        (setq scheduled (cons function args))))
@@ -1721,7 +2047,9 @@
          (goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'active
                 :phase 'awaiting-approval :approval-policy 'automatic
-                :cycle 1 :cycles '((:cycle 1))))
+                :cycle 1 :cycles '((:cycle 1))
+                :checkpoint '(:phase guardian :attempt-id "g1-guardian"
+                              :dispatch-state started)))
          reason)
     (unwind-protect
         (with-temp-buffer

@@ -56,6 +56,7 @@
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-continuation-key "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
@@ -68,6 +69,8 @@
 (declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -362,7 +365,10 @@ containment semantics as session creation."
         :cycles (mevedel-goal-cycles goal)
         :review-findings (mevedel-goal-review-findings goal)
         :reason (mevedel-goal-reason goal)
-        :checkpoint (mevedel-goal-checkpoint goal)))
+        :checkpoint (mevedel-goal-checkpoint goal)
+        :token-budget (mevedel-goal-token-budget goal)
+        :token-usage (mevedel-goal-token-usage goal)
+        :continuation-key (mevedel-goal-continuation-key goal)))
 
 (defun mevedel-session-persistence--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
@@ -376,6 +382,10 @@ containment semantics as session creation."
           (cycles (plist-get plist :cycles)))
       (unless
           (and (proper-list-p plist)
+               (cl-every
+                (lambda (key) (plist-member plist key))
+                '(:id :objective :status :phase :approval-policy :cycle
+                  :cycles :token-budget :token-usage :continuation-key))
                (stringp id)
                (string-match-p "\\`[[:alnum:]_.-]+\\'" id)
                (not (member id '("." "..")))
@@ -404,6 +414,12 @@ containment semantics as session creation."
                    (stringp (plist-get plist :review-findings)))
                (or (null (plist-get plist :reason))
                    (stringp (plist-get plist :reason)))
+               (or (null (plist-get plist :token-budget))
+                   (and (integerp (plist-get plist :token-budget))
+                        (> (plist-get plist :token-budget) 0)))
+               (natnump (or (plist-get plist :token-usage) 0))
+               (or (null (plist-get plist :continuation-key))
+                   (stringp (plist-get plist :continuation-key)))
                (or (null (plist-get plist :checkpoint))
                    (let ((checkpoint (plist-get plist :checkpoint)))
                      (and (proper-list-p checkpoint)
@@ -458,7 +474,10 @@ containment semantics as session creation."
      :cycles (copy-tree (plist-get plist :cycles))
      :review-findings (plist-get plist :review-findings)
      :reason (plist-get plist :reason)
-     :checkpoint (copy-tree (plist-get plist :checkpoint)))))
+     :checkpoint (copy-tree (plist-get plist :checkpoint))
+     :token-budget (plist-get plist :token-budget)
+     :token-usage (or (plist-get plist :token-usage) 0)
+     :continuation-key (plist-get plist :continuation-key))))
 
 
 ;;

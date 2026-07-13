@@ -36,6 +36,10 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
+;; `mevedel-compact'
+(declare-function mevedel--compact-token-usage-count "mevedel-compact" (tokens))
+(declare-function mevedel--estimate-tokens "mevedel-compact" ())
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
@@ -71,6 +75,7 @@
 (declare-function mevedel-goal--create "mevedel-structs" (&rest args))
 (declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-continuation-key "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
@@ -82,6 +87,8 @@
 (declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
@@ -109,11 +116,12 @@
                                 &optional kind hook-context no-spinner))
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
-(defvar mevedel-view--prompt-hook-pending)
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-anchor
                   "mevedel-view-interaction" ())
+(declare-function mevedel-view-interaction-pending-p
+                  "mevedel-view-interaction" (&optional view-buffer))
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction"
                   (descriptor))
@@ -136,6 +144,14 @@
   "Maximum automatic retries for a failed read-only Goal request."
   :type 'natnum
   :group 'mevedel)
+
+(defcustom mevedel-goal-token-budget nil
+  "Default aggregate token budget for a newly started Goal.
+Nil means no budget.  Presets may set this buffer-locally."
+  :type '(choice (const :tag "Unlimited" nil) pos-integer)
+  :group 'mevedel)
+
+(make-variable-buffer-local 'mevedel-goal-token-budget)
 
 (defvar mevedel-goal-guardian-function #'mevedel-goal--guardian-request
   "Function called with GOAL, PLAN, CHAT-BUFFER, and CALLBACK.
@@ -300,6 +316,12 @@ CALLBACK receives a normalized guardian decision plist.")
                 :retry-count (if same-boundary
                                  (or (plist-get prior :retry-count) 0)
                                0)
+                :estimated-input-tokens
+                (mevedel-goal--estimate-input-tokens input)
+                :token-baseline
+                (when (fboundp 'mevedel--estimate-tokens)
+                  (mevedel--estimate-tokens))
+                :usage-recorded nil
                 :dispatch-state 'prepared
                 :request-started nil
                 :last-settled-boundary last-settled
@@ -368,6 +390,38 @@ CALLBACK receives a normalized guardian decision plist.")
    (rx (or "quota" "credit" "billing" "authentication" "unauthorized"
            "forbidden" "api key" "unsupported" "rate limit" "429"))
    (downcase reason)))
+
+(defun mevedel-goal--estimate-input-tokens (input)
+  "Estimate token count for exact Goal request INPUT."
+  (max 1 (/ (+ (length (if (stringp input)
+                           input
+                         (prin1-to-string input)))
+               3)
+            4)))
+
+(defun mevedel-goal--record-token-usage (goal info &optional response)
+  "Charge GOAL once for request INFO, estimating from RESPONSE if needed."
+  (let ((checkpoint (copy-tree (mevedel-goal-checkpoint goal))))
+    (unless (plist-get checkpoint :usage-recorded)
+      (require 'mevedel-compact)
+      (let* ((reported
+              (mevedel--compact-token-usage-count
+               (or (plist-get info :tokens) (plist-get info :tokens-full))))
+             (baseline (plist-get checkpoint :token-baseline))
+             (estimated
+              (if (and (numberp baseline) (not response))
+                  (max (or (plist-get checkpoint :estimated-input-tokens) 1)
+                       (- (mevedel--estimate-tokens) baseline))
+                (+ (or (plist-get checkpoint :estimated-input-tokens) 1)
+                   (if (stringp response)
+                       (mevedel-goal--estimate-input-tokens response)
+                     0))))
+             (count (or (and reported (> reported 0) reported) estimated)))
+        (setf (mevedel-goal-token-usage goal)
+              (+ (or (mevedel-goal-token-usage goal) 0) count))
+        (setq checkpoint (plist-put checkpoint :usage-recorded t))
+        (setf (mevedel-goal-checkpoint goal) checkpoint)
+        count))))
 
 (defun mevedel-goal--append-guardian-audit (record chat-buffer)
   "Persist RECORD as a hidden, model-ignored disclosure in CHAT-BUFFER."
@@ -511,6 +565,9 @@ The request has no tools or conversational transcript insertion."
               (run-at-time
                mevedel-goal-guardian-timeout nil
                (lambda ()
+                 (when (buffer-live-p chat-buffer)
+                   (with-current-buffer chat-buffer
+                     (mevedel-goal--record-token-usage goal nil)))
                  (finish
                   (append
                    (list :verdict 'ask
@@ -539,11 +596,15 @@ The request has no tools or conversational transcript insertion."
                       :stream nil
                       :transforms nil
                       :callback
-                      (lambda (response _info)
+                      (lambda (response info)
                         (unless (and (consp response)
                                      (eq (car response) 'reasoning))
                           (let ((decision
                                  (mevedel-goal--parse-guardian response)))
+                            (when (buffer-live-p chat-buffer)
+                              (with-current-buffer chat-buffer
+                                (mevedel-goal--record-token-usage
+                                 goal info response)))
                             (finish
                              (append
                               (or decision
@@ -627,6 +688,20 @@ The request has no tools or conversational transcript insertion."
     (mevedel-goal--save-session-state mevedel--session (current-buffer))
     goal))
 
+(defun mevedel-goal-set-token-budget (budget)
+  "Set current Goal aggregate token BUDGET, or nil for unlimited."
+  (interactive
+   (list (let ((text (read-string "Goal token budget (blank = unlimited): ")))
+           (unless (string-blank-p text)
+             (string-to-number text)))))
+  (unless (or (null budget) (and (integerp budget) (> budget 0)))
+    (user-error "Goal token budget must be a positive integer or nil"))
+  (let ((goal (mevedel-goal--current)))
+    (setf (mevedel-goal-token-budget goal) budget)
+    (setq-local mevedel-goal-token-budget budget)
+    (mevedel-goal--save-session-state mevedel--session (current-buffer))
+    goal))
+
 (defun mevedel-goal-clear ()
   "Remove current Goal state while preserving transcript, artifacts, and work."
   (mevedel-goal--current)
@@ -645,6 +720,10 @@ The request has no tools or conversational transcript insertion."
       (user-error "A request is already active"))
     (unless (memq (mevedel-goal-status goal) '(paused blocked))
       (user-error "Goal is not paused or blocked"))
+    (when (local-variable-p 'mevedel-goal-token-budget)
+      (setf (mevedel-goal-token-budget goal) mevedel-goal-token-budget))
+    (unless (mevedel-goal--budget-available-p goal mevedel--session)
+      (user-error "%s" (mevedel-goal-reason goal)))
     (when-let* ((reason (mevedel-goal-reason goal)))
       (setf (mevedel-goal-review-findings goal)
             (string-join
@@ -671,14 +750,31 @@ The request has no tools or conversational transcript insertion."
                   (plist-get checkpoint :input)
                 (mevedel-goal--planning-prompt goal))
               (format "Resume Goal %s" (mevedel-goal-id goal))))
-            ('awaiting-approval
-             (if (and (eq (mevedel-goal-approval-policy goal) 'automatic)
-                      (eq (plist-get checkpoint :phase) 'guardian)
-                      (memq (plist-get checkpoint :dispatch-state)
-                            '(started unknown failed)))
-               (mevedel-goal--guard-current-plan goal (current-buffer))
-               (mevedel-goal-restore-pending-approval
-                mevedel--session (current-buffer))))
+          ('awaiting-approval
+           (cond
+            ((not (eq (mevedel-goal-approval-policy goal) 'automatic))
+             (mevedel-goal-restore-pending-approval
+              mevedel--session (current-buffer)))
+            ((and (eq (plist-get checkpoint :phase) 'planning)
+                  (eq (plist-get checkpoint :dispatch-state) 'settled)
+                  (mevedel-goal-continuation-ready-p
+                   mevedel--session 'planning 'guardian))
+             (mevedel-goal--guard-current-plan goal (current-buffer)))
+            ((and (eq (plist-get checkpoint :phase) 'guardian)
+                  (memq (plist-get checkpoint :dispatch-state)
+                        '(started unknown failed)))
+             (mevedel-goal--guard-current-plan goal (current-buffer)))
+            ((and (eq (plist-get checkpoint :phase) 'guardian)
+                  (eq (plist-get checkpoint :dispatch-state) 'settled)
+                  (mevedel-goal--guardian-approved-p goal)
+                  (mevedel-goal-continuation-ready-p
+                   mevedel--session 'guardian 'implementing))
+             (when-let* ((plan (mevedel-plan-current-body mevedel--session)))
+               (mevedel-goal--approval-callback
+                plan (current-buffer) 'implement)))
+            (t
+             (mevedel-goal-restore-pending-approval
+              mevedel--session (current-buffer)))))
           ('implementing
            (if (and (memq (plist-get checkpoint :dispatch-state)
                           '(prepared failed))
@@ -740,6 +836,8 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
           :status 'active
           :phase 'planning
           :approval-policy approval-policy
+          :token-budget mevedel-goal-token-budget
+          :token-usage 0
           :cycle 1
           :cycles (list (list :cycle 1
                               :started-at (format-time-string "%FT%T%z")))
@@ -1276,16 +1374,91 @@ when non-nil, explains why automatic approval escalated."
           (when (plist-get metadata :guardian-pending)
             "Automatic guardian review was interrupted; explicit approval is required.")))))))
 
-(defun mevedel-goal--automatic-continuation-ready-p (session)
-  "Return non-nil when SESSION has no pending user-facing continuation gate."
-  (and (null (mevedel-session-queued-user-messages session))
-       (null (mevedel-session-permission-queue session))
-       (null (mevedel-session-plan-queue session))
-       (not (and (boundp 'mevedel--view-buffer)
-                 (buffer-live-p mevedel--view-buffer)
-                 (buffer-local-value 'mevedel-view--prompt-hook-pending
-                                     mevedel--view-buffer)))
-       (not (bound-and-true-p mevedel--current-request))))
+(defun mevedel-goal--pending-interaction-p (session)
+  "Return non-nil when SESSION has queued or visible user interaction."
+  (or (mevedel-session-queued-user-messages session)
+      (mevedel-session-permission-queue session)
+      (mevedel-session-plan-queue session)
+      (and (boundp 'mevedel--view-buffer)
+           (buffer-live-p mevedel--view-buffer)
+           (mevedel-view-interaction-pending-p mevedel--view-buffer))))
+
+(defun mevedel-goal--budget-available-p (goal session &optional source)
+  "Return non-nil when GOAL has budget for another request in SESSION.
+When exhausted, pause durably with progress and blocker context after SOURCE."
+  (let ((budget (mevedel-goal-token-budget goal))
+        (usage (or (mevedel-goal-token-usage goal) 0)))
+    (if (or (null budget) (< usage budget))
+        t
+      (let* ((finished
+              (cl-count-if
+               (lambda (cycle) (plist-get cycle :review))
+               (mevedel-goal-cycles goal)))
+             (latest (or (mevedel-goal-review-findings goal)
+                         (and (mevedel-goal-review-summary goal)
+                              (plist-get (mevedel-goal-review-summary goal)
+                                         :summary))
+                         "No review evidence recorded")))
+        (setf (mevedel-goal-status goal) 'paused
+              (mevedel-goal-reason goal)
+              (format
+               "Goal token budget exhausted (%d/%d)%s. Progress: %d completed review cycle%s; latest evidence: %s. Blocker: raise or remove the budget, then resume"
+               usage budget (if source (format " after %s" source) "")
+               finished (if (= finished 1) "" "s") latest))
+        (mevedel-goal--persist-checkpoint session (current-buffer))
+        nil))))
+
+(defun mevedel-goal--guardian-approved-p (goal)
+  "Return non-nil when GOAL's current plan has a matching guardian approval."
+  (let* ((cycle (mevedel-goal--cycle-record goal))
+         (audit (car (last (plist-get cycle :guardian-audits)))))
+    (and audit
+         (eq (plist-get audit :verdict) 'approve))))
+
+(defun mevedel-goal--continuation-key (goal source target)
+  "Return stable key for GOAL continuation from SOURCE to TARGET."
+  (secure-hash
+   'sha256
+   (prin1-to-string
+    (list (mevedel-goal-id goal) source target (mevedel-goal-cycle goal)
+          (plist-get (mevedel-goal-checkpoint goal) :attempt-id)
+          (plist-get (mevedel-goal--cycle-record goal) :plan-hash)
+          (mevedel-goal-phase goal)))))
+
+(defun mevedel-goal-continuation-ready-p
+    (session source target &optional required-state)
+  "Admit one automatic SESSION continuation from SOURCE to TARGET.
+REQUIRED-STATE defaults to `settled'.  Admission requires a durable matching
+checkpoint, an idle interaction surface, any required guardian approval, and
+remaining budget.  Equivalent duplicate admissions pause instead of spin."
+  (let* ((goal (mevedel-session-goal session))
+         (checkpoint (and goal (mevedel-goal-checkpoint goal))))
+    (cond
+     ((or (null goal)
+          (not (eq (mevedel-goal-status goal) 'active))
+          (bound-and-true-p mevedel--current-request)
+          (mevedel-goal--pending-interaction-p session)
+          (not (eq source (plist-get checkpoint :phase)))
+          (not (eq (or required-state 'settled)
+                   (plist-get checkpoint :dispatch-state)))
+          (and (eq target 'implementing)
+               (eq (mevedel-goal-approval-policy goal) 'automatic)
+               (not (mevedel-goal--guardian-approved-p goal))))
+      nil)
+     ((not (mevedel-goal--budget-available-p goal session source))
+      nil)
+     (t
+      (let ((key (mevedel-goal--continuation-key goal source target)))
+        (if (equal key (mevedel-goal-continuation-key goal))
+            (progn
+              (setf (mevedel-goal-status goal) 'paused
+                    (mevedel-goal-reason goal)
+                    "Goal paused because an equivalent continuation was already admitted")
+              (mevedel-goal--persist-checkpoint session (current-buffer))
+              nil)
+          (setf (mevedel-goal-continuation-key goal) key)
+          (mevedel-goal--persist-checkpoint session (current-buffer))
+          t))))))
 
 (defun mevedel-goal-guardian-pending-p (&optional session)
   "Return non-nil when SESSION is waiting for an internal guardian result."
@@ -1342,8 +1515,8 @@ when non-nil, explains why automatic approval escalated."
                                ((eq (mevedel-goal-status current-goal) 'active))
                                ((eq (mevedel-goal-phase current-goal)
                                     'awaiting-approval)))
-                     (if (mevedel-goal--automatic-continuation-ready-p
-                          current-session)
+                     (if (mevedel-goal-continuation-ready-p
+                          current-session 'guardian 'implementing)
                          (mevedel-goal--approval-callback
                           plan chat-buffer 'implement)
                        (mevedel-goal-present-plan
@@ -1406,27 +1579,32 @@ when non-nil, explains why automatic approval escalated."
     (let ((response (mevedel-goal--response-text start end)))
       (pcase (mevedel-goal-phase goal)
         ('planning
-         (when-let* ((plan (mevedel-plan-extract-proposed response)))
-           (let* ((hash (mevedel-plan-hash plan))
-                  (previous (car (last (butlast
-                                        (mevedel-goal-cycles goal))))))
-             (if (and previous
-                      (equal hash (plist-get previous :plan-hash)))
-                 (progn
-                   (setf (mevedel-goal-status goal) 'paused
-                         (mevedel-goal-reason goal)
-                         "Planner repeated the previous accepted plan")
-                   (mevedel-goal--save-session-state session (current-buffer))
-                   (message "mevedel: goal paused after duplicate plan"))
-               (setf (mevedel-goal-phase goal) 'awaiting-approval)
-               (if (eq (mevedel-goal-approval-policy goal) 'automatic)
+         (if-let* ((plan (mevedel-plan-extract-proposed response)))
+             (let* ((hash (mevedel-plan-hash plan))
+                    (previous (car (last (butlast
+                                          (mevedel-goal-cycles goal))))))
+               (if (and previous
+                        (equal hash (plist-get previous :plan-hash)))
                    (progn
-                     (mevedel-plan-write-current
-                      plan session (current-buffer)
-                      (mevedel-goal--current-plan-relative-path goal))
-                     (mevedel-goal--save-session-state
-                      session (current-buffer)))
-                 (mevedel-goal-present-plan plan (current-buffer)))))))
+                     (setf (mevedel-goal-status goal) 'paused
+                           (mevedel-goal-reason goal)
+                           "Planner repeated the previous accepted plan")
+                     (mevedel-goal--save-session-state session (current-buffer))
+                     (message "mevedel: goal paused after duplicate plan"))
+                 (setf (mevedel-goal-phase goal) 'awaiting-approval)
+                 (if (eq (mevedel-goal-approval-policy goal) 'automatic)
+                     (progn
+                       (mevedel-plan-write-current
+                        plan session (current-buffer)
+                        (mevedel-goal--current-plan-relative-path goal))
+                       (mevedel-goal--save-session-state
+                        session (current-buffer)))
+                   (mevedel-goal-present-plan plan (current-buffer)))))
+           (setf (mevedel-goal-status goal) 'paused
+                 (mevedel-goal-reason goal)
+                 "Planner returned no proposed plan; resume to retry planning")
+           (mevedel-goal--save-session-state session (current-buffer))
+           (message "mevedel: goal paused because planning produced no plan")))
         ('reviewing
          (setf (mevedel-goal-review-summary goal)
                (mevedel-goal--parse-review response)))))))
@@ -1440,6 +1618,7 @@ when non-nil, explains why automatic approval escalated."
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
                              (mevedel-session-goal mevedel--session))))
+        (mevedel-goal--record-token-usage goal info)
         (mevedel-goal--checkpoint-settle fsm 'settled)
         (when (eq (mevedel-goal-status goal) 'active)
           (when (eq phase (mevedel-goal-phase goal))
@@ -1497,6 +1676,7 @@ The post-teardown failure transaction persists this state."
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
                              (mevedel-session-goal mevedel--session))))
+        (mevedel-goal--record-token-usage goal info)
         (let* ((status (or status 'error))
                (reason (mevedel-goal--fsm-failure-reason fsm status))
                (checkpoint (mevedel-goal--checkpoint-settle
@@ -1559,19 +1739,21 @@ The post-teardown failure transaction persists this state."
                   ((eq (plist-get checkpoint :dispatch-state) 'failed))
                   (phase (plist-get checkpoint :phase))
                   ((memq phase '(planning reviewing))))
-        (setf (mevedel-goal-reason goal) nil)
-        (condition-case err
-            (mevedel-goal--dispatch-phase
-             phase (copy-tree (plist-get checkpoint :input))
-             (format "Retry Goal %s after transient failure"
-                     (mevedel-goal-id goal)))
-          (error
-           (setf (mevedel-goal-status goal) 'paused
-                 (mevedel-goal-reason goal)
-                 (format "Automatic retry could not start; switch provider or preset, then resume: %s"
-                         (error-message-string err)))
-           (mevedel-goal--persist-checkpoint
-            mevedel--session chat-buffer)))))))
+        (when (mevedel-goal-continuation-ready-p
+               mevedel--session phase phase 'failed)
+          (setf (mevedel-goal-reason goal) nil)
+          (condition-case err
+              (mevedel-goal--dispatch-phase
+               phase (copy-tree (plist-get checkpoint :input))
+               (format "Retry Goal %s after transient failure"
+                       (mevedel-goal-id goal)))
+            (error
+             (setf (mevedel-goal-status goal) 'paused
+                   (mevedel-goal-reason goal)
+                   (format "Automatic retry could not start; switch provider or preset, then resume: %s"
+                           (error-message-string err)))
+             (mevedel-goal--persist-checkpoint
+              mevedel--session chat-buffer))))))))
 
 (defun mevedel-goal-dispatch-after-turn (fsm)
   "Dispatch the next Goal phase after FSM has settled."
@@ -1585,17 +1767,23 @@ The post-teardown failure transaction persists this state."
                   ((eq (mevedel-goal-status goal) 'active)))
         (pcase (cons settled-phase (mevedel-goal-phase goal))
           (`(planning . awaiting-approval)
-           (when (eq (mevedel-goal-approval-policy goal) 'automatic)
+           (when (and (eq (mevedel-goal-approval-policy goal) 'automatic)
+                      (mevedel-goal-continuation-ready-p
+                       mevedel--session 'planning 'guardian))
              (mevedel-goal--guard-current-plan goal chat-buffer)))
           (`(implementing . reviewing)
-           (mevedel-goal--dispatch-phase
-            'reviewing (mevedel-goal--review-prompt goal)
-            "Review Goal implementation"))
+           (when (mevedel-goal-continuation-ready-p
+                  mevedel--session 'implementing 'reviewing)
+             (mevedel-goal--dispatch-phase
+              'reviewing (mevedel-goal--review-prompt goal)
+              "Review Goal implementation")))
           (`(reviewing . planning)
-           (mevedel-goal--dispatch-phase
-            'planning (mevedel-goal--planning-prompt goal)
-            (format "Continue Goal with cycle %d"
-                    (mevedel-goal-cycle goal)))))))))
+           (when (mevedel-goal-continuation-ready-p
+                  mevedel--session 'reviewing 'planning)
+             (mevedel-goal--dispatch-phase
+              'planning (mevedel-goal--planning-prompt goal)
+              (format "Continue Goal with cycle %d"
+                      (mevedel-goal-cycle goal))))))))))
 
 
 (provide 'mevedel-goal)

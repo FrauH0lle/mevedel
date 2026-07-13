@@ -78,6 +78,12 @@ provider and effort, plan reference, attempt identity, dispatch state, retry
 count, whether request startup began, and prior settled boundary before
 transport starts.
 
+Goal sidecars also hold the optional aggregate token budget, charged usage,
+and the last admitted continuation key. Provider usage is authoritative when
+available; otherwise the existing chat estimator accounts for request growth.
+Budget exhaustion and duplicate continuation state both persist a paused Goal,
+never a completion verdict.
+
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree
 create`. The old session remains live; the new session does not inherit

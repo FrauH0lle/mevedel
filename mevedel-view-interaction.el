@@ -49,6 +49,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
 (declare-function mevedel-view--queued-user-messages-render "mevedel-view-composer" (&optional session))
+(defvar mevedel-view--prompt-hook-pending)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view--request-progress-region-start "mevedel-view-stream" ())
@@ -75,6 +76,18 @@
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays
               (make-hash-table :test #'equal)))
+
+(defun mevedel-view-interaction-pending-p (&optional view-buffer)
+  "Return non-nil when VIEW-BUFFER has a pending user interaction.
+VIEW-BUFFER defaults to the current buffer."
+  (let ((view (or view-buffer (current-buffer))))
+    (and (buffer-live-p view)
+         (with-current-buffer view
+           (or (bound-and-true-p mevedel-view--prompt-hook-pending)
+               (and (hash-table-p mevedel-view--interaction-descriptors)
+                    (> (hash-table-count
+                        mevedel-view--interaction-descriptors)
+                       0)))))))
 
 
 ;;

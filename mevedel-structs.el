@@ -271,7 +271,10 @@ workspace."
   review-findings    ; findings carried into the next planning cycle
   reason             ; pause or blocked reason
   pause-requested    ; pause continuation after the active request settles
-  checkpoint)        ; durable write-ahead phase dispatch/settlement record
+  checkpoint         ; durable write-ahead phase dispatch/settlement record
+  token-budget       ; optional aggregate provider-token ceiling
+  token-usage        ; aggregate tokens charged to all Goal workloads
+  continuation-key)  ; last durably admitted continuation state
 
 
 ;;
