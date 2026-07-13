@@ -72,7 +72,11 @@ provider/effort selections, hashes, and timestamps, but not plan or review
 bodies. Accepted plans are copied to sequential cycle files without overwrite;
 the mutable current plan is reused only while preparing the next acceptance.
 The Goal itself remains in the session sidecar, including its current cycle,
-carried review findings, and pause or blocked reason.
+carried review findings, pause or blocked reason, and its current write-ahead
+phase checkpoint. The checkpoint records the exact request input, resolved
+provider and effort, plan reference, attempt identity, dispatch state, retry
+count, whether request startup began, and prior settled boundary before
+transport starts.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree
@@ -117,21 +121,23 @@ system prompt dynamically.
 
 ### Resume contract
 
-On-disk state normally reflects a completed turn boundary. Mid-flight
-requests are not recoverable; their pending tool calls are discarded by
-virtue of never having been auto-saved. Abort/error teardown is an explicit
-save boundary after prompts, agents, and the current request have been
-cleared, so resumed sessions do not resurrect aborted runtime state.
+On-disk state normally reflects a completed turn boundary. Goal requests add a
+write-ahead boundary before dispatch and settle it after success or failure;
+pending tool calls themselves remain non-recoverable. Abort/error teardown is
+an explicit save boundary after prompts, agents, and the current request have
+been cleared, so resumed sessions do not resurrect aborted runtime state.
 
 An unfinished persisted Goal is always restored `paused`, with an explicit
 restoration reason; opening a session never dispatches a Goal phase. `/goal
 resume` is required to continue. Planning and review can be requested again
 only after that explicit action. A saved `implementing` phase is treated as
 potentially partial: resume advances to read-only review of repository evidence
-instead of blindly replaying mutations. Normal rewind forks copy session preset
+instead of blindly replaying mutations. Planning and review may replay their
+exact checkpoint input with policy resolved anew; uncertain implementation
+always enters a read-only repository recovery audit. Normal rewind forks copy session preset
 settings but clear Goal ownership, leaving the parent as the sole owner.
-An interrupted automatic guardian is not replayed on restore; resume exposes
-the persisted plan through explicit user approval.
+An interrupted automatic guardian can be retried from the persisted plan on
+explicit resume; every failure still fails closed to user approval.
 
 ### Rewind
 

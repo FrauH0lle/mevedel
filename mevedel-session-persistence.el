@@ -55,6 +55,7 @@
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
 (declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
@@ -360,7 +361,8 @@ containment semantics as session creation."
         :cycle (mevedel-goal-cycle goal)
         :cycles (mevedel-goal-cycles goal)
         :review-findings (mevedel-goal-review-findings goal)
-        :reason (mevedel-goal-reason goal)))
+        :reason (mevedel-goal-reason goal)
+        :checkpoint (mevedel-goal-checkpoint goal)))
 
 (defun mevedel-session-persistence--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
@@ -402,6 +404,44 @@ containment semantics as session creation."
                    (stringp (plist-get plist :review-findings)))
                (or (null (plist-get plist :reason))
                    (stringp (plist-get plist :reason)))
+               (or (null (plist-get plist :checkpoint))
+                   (let ((checkpoint (plist-get plist :checkpoint)))
+                     (and (proper-list-p checkpoint)
+                          (cl-every
+                           (lambda (key) (plist-member checkpoint key))
+                           '(:phase :cycle :input :workload :provider :effort
+                             :plan-reference :attempt :attempt-id :retry-count
+                             :dispatch-state :request-started
+                             :last-settled-boundary :prepared-at))
+                          (memq (plist-get checkpoint :phase)
+                                '(planning guardian implementing reviewing))
+                          (integerp (plist-get checkpoint :cycle))
+                          (> (plist-get checkpoint :cycle) 0)
+                          (memq (plist-get checkpoint :workload)
+                                '(planning goal-guardian implementation review))
+                          (stringp (plist-get checkpoint :provider))
+                          (or (null (plist-get checkpoint :plan-reference))
+                              (stringp
+                               (plist-get checkpoint :plan-reference)))
+                          (integerp (plist-get checkpoint :attempt))
+                          (> (plist-get checkpoint :attempt) 0)
+                          (stringp (plist-get checkpoint :attempt-id))
+                          (integerp (plist-get checkpoint :retry-count))
+                          (>= (plist-get checkpoint :retry-count) 0)
+                          (memq (plist-get checkpoint :dispatch-state)
+                                '(prepared started unknown failed settled))
+                          (memq (plist-get checkpoint :request-started)
+                                '(nil t))
+                          (or (null (plist-get checkpoint
+                                               :last-settled-boundary))
+                              (proper-list-p
+                               (plist-get checkpoint
+                                          :last-settled-boundary)))
+                          (stringp (plist-get checkpoint :prepared-at))
+                          (or (stringp (plist-get checkpoint :input))
+                              (and (proper-list-p
+                                    (plist-get checkpoint :input))
+                                   (plist-get checkpoint :input))))))
                (memq (plist-get plist :pause-requested) '(nil t)))
         (error "Invalid Goal sidecar")))
     (mevedel-goal--create
@@ -417,7 +457,8 @@ containment semantics as session creation."
      :cycle (plist-get plist :cycle)
      :cycles (copy-tree (plist-get plist :cycles))
      :review-findings (plist-get plist :review-findings)
-     :reason (plist-get plist :reason))))
+     :reason (plist-get plist :reason)
+     :checkpoint (copy-tree (plist-get plist :checkpoint)))))
 
 
 ;;

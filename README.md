@@ -596,6 +596,19 @@ or filesystem work. Starting over an unfinished Goal requires confirmation,
 while a complete Goal is replaced directly. Aborting an active request pauses
 its Goal.
 
+Every planning, guardian, implementation, and review request has a durable
+write-ahead checkpoint containing its exact input, resolved provider and
+effort, plan reference, attempt identity, and dispatch state. Successful and
+failed terminals settle that checkpoint with the Goal state. Transient
+planning and review transport failures retry once by default; quota, credit,
+authentication, rate-limit, and forced-stop failures pause with their recovery
+reason. Resume resolves the current preset again, so switching providers while
+paused affects the next attempt. An implementation with a started or unknown
+outcome is never replayed: resume first runs a read-only audit of the actual
+repository and chooses the next safe cycle boundary from that evidence.
+A checkpoint that proves implementation never started can instead retry its
+exact input directly.
+
 ### Review and Verify Commands
 
 `M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run

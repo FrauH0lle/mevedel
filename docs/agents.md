@@ -23,6 +23,12 @@ as a conversational turn. Its approve-or-ask decision is persisted and shown
 as an audit disclosure; every non-approval fails closed to the normal plan
 approval interaction.
 
+The controller persists a write-ahead checkpoint before each of those phase
+requests. Read-only planning, guardian, and review attempts are safe to retry.
+Implementation is deliberately asymmetric: if its outcome is not known, resume
+audits the current repository against the accepted plan and never resends the
+mutation request.
+
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per
 request (no caching). Each invocation gets a cloned reminder list with
