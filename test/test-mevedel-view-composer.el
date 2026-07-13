@@ -80,8 +80,8 @@
        (overlay-get mevedel-view--skill-argument-hint-overlay
                     'after-string)))
 
-(defun mevedel-view-test--write-skill (dir name frontmatter)
-  "Create DIR/NAME/SKILL.md with FRONTMATTER."
+(defun mevedel-view-test--write-skill (dir name frontmatter &optional body)
+  "Create DIR/NAME/SKILL.md with FRONTMATTER and optional BODY."
   (let* ((skill-dir (file-name-as-directory (file-name-concat dir name)))
          (skill-file (file-name-concat skill-dir "SKILL.md")))
     (make-directory skill-dir t)
@@ -90,8 +90,110 @@
       (insert frontmatter)
       (unless (string-suffix-p "\n" frontmatter)
         (insert "\n"))
-      (insert "---\n"))
-	    skill-file))
+      (insert "---\n")
+      (when body
+        (insert "\n" body)
+        (unless (string-suffix-p "\n" body)
+          (insert "\n"))))
+    skill-file))
+
+(defun mevedel-view-test--dry-run-request-data ()
+  "Return current gptel request data after normal prompt transforms."
+  (let ((fsm
+         (gptel-request
+             nil
+           :buffer (current-buffer)
+           :transforms
+           '(mevedel-skills--transform-expand-inline-attachments)
+           :dry-run t)))
+    (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
+
+(defun mevedel-view-test--complete-skill (candidate)
+  "Replace the current `$' completion fragment with CANDIDATE."
+  (let* ((capf (mevedel-view-slash-capf))
+         (exit (and capf (plist-get (nthcdr 3 capf) :exit-function))))
+    (should capf)
+    (delete-region (nth 0 capf) (nth 1 capf))
+    (insert candidate)
+    (funcall exit candidate 'finished)))
+
+(defun mevedel-view-test--bound-source-failure-case (mode)
+  "Assert unavailable bound source behavior for failure MODE."
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-inline-bound-failure-" t))
+         (project-skills (file-name-concat root ".mevedel/skills"))
+         (user-skills
+          (make-temp-file "mevedel-inline-bound-failure-user-" t))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "inline-bound-failure"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         source-file)
+    (unwind-protect
+        (progn
+          (setq source-file
+                (mevedel-view-test--write-skill
+                 project-skills "alpha"
+                 "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+                 "ORIGINAL ALPHA BODY"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws)
+              (mevedel-skills-install session data-buf))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "> diagnosis\nPlease use $al")
+              (mevedel-view-test--complete-skill "alpha"))
+            (pcase mode
+              ('missing
+               (delete-file source-file))
+              ('unreadable
+               (set-file-modes source-file 0))
+              ('malformed
+               (with-temp-file source-file
+                 (insert "---\nname: [invalid\n---\n")))
+              ('not-user-invocable
+               (mevedel-view-test--write-skill
+                project-skills "alpha"
+                (concat "name: alpha\ndescription: Project alpha\n"
+                        "context: inline\nuser-invocable: false\n")
+                "ORIGINAL ALPHA BODY"))
+              ('disabled
+               (with-current-buffer data-buf
+                 (mevedel-skills--set-enabled
+                  (mevedel-session-get-skill session "alpha") nil))))
+            (mevedel-view-test--write-skill
+             user-skills "alpha"
+             "name: alpha\ndescription: User alpha\ncontext: inline\n"
+             "COMPETING ALPHA BODY")
+            (setq mevedel-skill-dirs
+                  (list ".mevedel/skills" user-skills))
+            (with-current-buffer data-buf
+              (mevedel-skills-install session data-buf))
+            (let (send-called message-text raised)
+              (cl-letf (((symbol-function 'gptel-send)
+                         (lambda (&rest _) (setq send-called t)))
+                        ((symbol-function 'message)
+                         (lambda (format-string &rest args)
+                           (setq message-text
+                                 (apply #'format format-string args)))))
+                (with-current-buffer view-buf
+                  (setq raised
+                        (condition-case err
+                            (progn (mevedel-view-send) nil)
+                          (user-error (error-message-string err))))
+                  (should-not send-called)
+                  (should (or raised message-text))
+                  (should (equal "> diagnosis\nPlease use $alpha"
+                                 (mevedel-view--input-text)))
+                  (should-not (mevedel-view-history--entries)))))))
+      (delete-directory root t)
+      (delete-directory user-skills t))))
 
 (defun mevedel-view-test--stop-prompt-hook (_event)
   "Block prompt submission in view-send cases."
@@ -404,6 +506,46 @@
 	                               capf "b"))))))
 	      (delete-directory root t)))
 
+  :doc "view skill completion binds the exact discovered source"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-view-skill-binding-" t))
+         (mevedel-skill-dirs (list root))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "view-skill-binding"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (source-file
+          (mevedel-view-test--write-skill
+           root "alpha" "name: alpha\ndescription: A\n")))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (mevedel-skills-install session data-buf))
+          (with-current-buffer view-buf
+            (goto-char (mevedel-view--input-start))
+            (insert "$al")
+            (let* ((capf (mevedel-view-slash-capf))
+                   (exit (plist-get (nthcdr 3 capf) :exit-function)))
+              (delete-region (nth 0 capf) (nth 1 capf))
+              (insert "alpha")
+              (funcall exit "alpha" 'finished))
+            (let* ((start (mevedel-view--input-start))
+                   (binding (get-text-property
+                             start 'mevedel-mention-binding)))
+              (should (equal 'skill (plist-get binding :kind)))
+              (should (equal "alpha" (plist-get binding :name)))
+              (should (equal source-file
+                             (plist-get binding :source-file)))
+              (goto-char (point-max))
+              (insert "analyze")
+              (should (equal binding
+                             (get-text-property
+                              start 'mevedel-mention-binding))))))
+      (delete-directory root t)))
+
   :doc "view completes Goal commands and permission-mode arguments"
   (let* ((root (make-temp-file "mevedel-view-mode-capf-" t))
          (ws (mevedel-workspace--create
@@ -665,7 +807,41 @@
       (should send-called)
       (with-current-buffer data-buf
         (should (string-match-p "\\$PATH is relevant"
-                                (buffer-string)))))))
+                                (buffer-string))))))
+
+  :doc "history write failure warns without cancelling a valid view send"
+  (let ((root (make-temp-file "mevedel-history-send-" t))
+        warning
+        send-called)
+    (unwind-protect
+        (let* ((ws (mevedel-workspace--create
+                    :type 'test :id root :root root :name "history-send"
+                    :file-cache (mevedel-file-cache--create
+                                 :table (make-hash-table :test #'equal)
+                                 :order nil :total-bytes 0)))
+               (session (mevedel-session-create "main" ws)))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws))
+            (with-current-buffer view-buf
+              (mevedel-view-history-add "older input")
+              (cl-letf (((symbol-function
+                         'mevedel-session-persistence-write)
+                         (lambda (&rest _)
+                           (error "Simulated history write failure")))
+                        ((symbol-function 'display-warning)
+                         (lambda (_type message &rest _)
+                           (setq warning message))))
+                (mevedel-view-history-save))
+              (goto-char (mevedel-view--input-start))
+              (insert "valid prompt")
+              (cl-letf (((symbol-function 'gptel-send)
+                         (lambda (&rest _) (setq send-called t))))
+                (mevedel-view-send)))
+            (should (string-match-p "Input history save failed" warning))
+            (should send-called)))
+      (delete-directory root t))))
 
 (defmacro mevedel-view-test--with-fork-skill (skill-form &rest body)
   "Wire data-buf with a session containing SKILL-FORM, then run BODY.
@@ -1031,6 +1207,364 @@ finds it during `$' skill dispatch."
 	          (should (string-match-p "hook changed prompt" text))
 	          (should (string-match-p "hook context added" text))
 	          (should-not (string-match-p "model-only context" text))))))
+
+  :doc "manually typed queued mention keeps its exact source and latest body"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-inline-bound-queue-" t))
+         (project-skills (file-name-concat root ".mevedel/skills"))
+         (user-skills (make-temp-file "mevedel-inline-bound-user-" t))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "inline-bound-queue"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         source-file
+         request-data)
+    (unwind-protect
+        (progn
+          (setq source-file
+                (mevedel-view-test--write-skill
+                 project-skills "alpha"
+                 "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+                 "ORIGINAL ALPHA V1"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws
+                          mevedel--current-request
+                          (mevedel-request--create :session session))
+              (mevedel-skills-install session data-buf))
+            (cl-letf (((symbol-function
+                        'mevedel-view--schedule-late-queued-user-message-drain)
+                       #'ignore)
+                      ((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (with-current-buffer view-buf
+                (goto-char (mevedel-view--input-start))
+                (insert "Please use $alpha for the queued analysis")
+                (mevedel-view-send))
+              (let* ((queue (mevedel-session-queued-user-messages session))
+                     (input (plist-get (car queue) :input))
+                     (start (string-match "\\$alpha" input))
+                     (binding (and start
+                                   (get-text-property
+                                    start 'mevedel-mention-binding input))))
+                (should (= 1 (length queue)))
+                (should (equal source-file
+                               (plist-get binding :source-file))))
+              (mevedel-view-test--write-skill
+               user-skills "alpha"
+               "name: alpha\ndescription: User alpha\ncontext: inline\n"
+               "COMPETING ALPHA")
+              (setq mevedel-skill-dirs
+                    (list ".mevedel/skills" user-skills))
+              (delete-file source-file)
+              (with-current-buffer data-buf
+                (setq-local mevedel--current-request nil))
+              (mevedel-view--drain-queued-user-message-batch data-buf)
+              (should-not request-data)
+              (let* ((queue (mevedel-session-queued-user-messages session))
+                     (input (plist-get (car queue) :input))
+                     (start (string-match "\\$alpha" input)))
+                (should (= 1 (length queue)))
+                (should (equal source-file
+                               (plist-get
+                                (get-text-property
+                                 start 'mevedel-mention-binding input)
+                                :source-file))))
+              (mevedel-view-test--write-skill
+               project-skills "alpha"
+               "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+               "ORIGINAL ALPHA V2")
+              (mevedel-view--drain-queued-user-message-batch data-buf))
+            (should (string-search "ORIGINAL ALPHA V2" request-data))
+            (should-not (string-search "ORIGINAL ALPHA V1" request-data))
+            (should-not (string-search "COMPETING ALPHA" request-data))
+            (should-not (mevedel-session-queued-user-messages session))))
+      (delete-directory root t)
+      (delete-directory user-skills t)))
+
+  :doc "completion binding survives outside edits after a name collision"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-inline-bound-edit-" t))
+         (project-skills (file-name-concat root ".mevedel/skills"))
+         (user-skills (make-temp-file "mevedel-inline-bound-edit-user-" t))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "inline-bound-edit"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         request-data)
+    (unwind-protect
+        (progn
+          (mevedel-view-test--write-skill
+           project-skills "alpha"
+           "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+           "PROJECT ALPHA BODY")
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws)
+              (mevedel-skills-install session data-buf))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Please use $al")
+              (mevedel-view-test--complete-skill "alpha")
+              (insert "for details"))
+            (mevedel-view-test--write-skill
+             user-skills "alpha"
+             "name: alpha\ndescription: User alpha\ncontext: inline\n"
+             "COMPETING ALPHA BODY")
+            (setq mevedel-skill-dirs
+                  (list ".mevedel/skills" user-skills))
+            (with-current-buffer data-buf
+              (mevedel-skills-install session data-buf))
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (with-current-buffer view-buf
+                (mevedel-view-send)))
+            (should (string-search "PROJECT ALPHA BODY" request-data))
+            (should-not (string-search "COMPETING ALPHA BODY"
+                                       request-data))))
+      (delete-directory root t)
+      (delete-directory user-skills t)))
+
+  :doc "editing inside a completion-bound token resolves the edited skill"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-inline-bound-rebind-" t))
+         (skill-root (file-name-concat root ".mevedel/skills"))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "inline-bound-rebind"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         request-data)
+    (unwind-protect
+        (progn
+          (mevedel-view-test--write-skill
+           skill-root "alpha"
+           "name: alpha\ndescription: Alpha\ncontext: inline\n"
+           "ALPHA BODY")
+          (mevedel-view-test--write-skill
+           skill-root "beta"
+           "name: beta\ndescription: Beta\ncontext: inline\n"
+           "BETA BODY")
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws)
+              (mevedel-skills-install session data-buf))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Please use $al")
+              (mevedel-view-test--complete-skill "alpha")
+              (goto-char (mevedel-view--input-start))
+              (search-forward "$alpha")
+              (replace-match "$beta" t t))
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (with-current-buffer view-buf
+                (mevedel-view-send)))
+            (should (string-search "BETA BODY" request-data))
+            (should-not (string-search "ALPHA BODY" request-data))))
+      (delete-directory root t)))
+
+  :doc "manual punctuation binding survives failed preparation and retry collision"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-inline-bound-retry-" t))
+         (project-skills (file-name-concat root ".mevedel/skills"))
+         (user-skills (make-temp-file "mevedel-inline-bound-retry-user-" t))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "inline-bound-retry"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         source-file
+         request-data)
+    (unwind-protect
+        (progn
+          (setq source-file
+                (mevedel-view-test--write-skill
+                 project-skills "alpha"
+                 "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+                 "PROJECT ALPHA BODY"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws)
+              (mevedel-skills-install session data-buf))
+            (cl-letf (((symbol-function 'mevedel-skills-invoke)
+                       (lambda (_skill _args callback &rest _)
+                         (funcall callback
+                                  '(:status error
+                                    :reason blocked
+                                    :message "blocked")))))
+              (with-current-buffer view-buf
+                (goto-char (mevedel-view--input-start))
+                (insert "Please use $alpha.")
+                (mevedel-view-send)
+                (let* ((input (mevedel-view--input-text))
+                       (start (string-match "\\$alpha" input))
+                       (binding (get-text-property
+                                 start 'mevedel-mention-binding input)))
+                  (should (equal "Please use $alpha." input))
+                  (should (equal source-file
+                                 (plist-get binding :source-file)))
+                  (should-not (get-text-property
+                               (+ start 6) 'mevedel-mention-binding input)))))
+            (mevedel-view-test--write-skill
+             user-skills "alpha"
+             "name: alpha\ndescription: User alpha\ncontext: inline\n"
+             "COMPETING ALPHA BODY")
+            (setq mevedel-skill-dirs
+                  (list ".mevedel/skills" user-skills))
+            (with-current-buffer data-buf
+              (mevedel-skills-install session data-buf))
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (with-current-buffer view-buf
+                (mevedel-view-send)))
+            (should (string-search "PROJECT ALPHA BODY" request-data))
+            (should-not (string-search "COMPETING ALPHA BODY"
+                                       request-data))))
+      (delete-directory root t)
+      (delete-directory user-skills t)))
+
+  :doc "persisted history recall submits the latest exact source after a collision"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-inline-bound-history-" t))
+         (project-skills (file-name-concat root ".mevedel/skills"))
+         (user-skills
+          (make-temp-file "mevedel-inline-bound-history-user-" t))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "inline-bound-history"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         request-data)
+    (unwind-protect
+        (progn
+          (mevedel-view-test--write-skill
+           project-skills "alpha"
+           "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+           "PROJECT HISTORY BODY V1")
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws)
+              (mevedel-skills-install session data-buf))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Recall $al")
+              (mevedel-view-test--complete-skill "alpha")
+              (mevedel-view-history-add (mevedel-view--input-text))
+              (mevedel-view-history-save)
+              (setq mevedel-view-history--ring nil
+                    mevedel-view-history--loaded-entries nil)
+              (mevedel-view-history-load session)
+              (mevedel-view--clear-input)
+              (mevedel-view-history-previous))
+            (mevedel-view-test--write-skill
+             project-skills "alpha"
+             "name: alpha\ndescription: Project alpha\ncontext: inline\n"
+             "PROJECT HISTORY BODY V2")
+            (mevedel-view-test--write-skill
+             user-skills "alpha"
+             "name: alpha\ndescription: User alpha\ncontext: inline\n"
+             "COMPETING HISTORY BODY")
+            (setq mevedel-skill-dirs
+                  (list ".mevedel/skills" user-skills))
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (with-current-buffer view-buf
+                (mevedel-view-send)))
+            (should (string-search "PROJECT HISTORY BODY V2" request-data))
+            (should-not (string-search "PROJECT HISTORY BODY V1"
+                                       request-data))
+            (should-not (string-search "COMPETING HISTORY BODY"
+                                       request-data))))
+      (delete-directory root t)
+      (delete-directory user-skills t)))
+
+  :doc "source-backed bindings remain live in a session without a workspace"
+  (let* ((mevedel-skills-include-bundled nil)
+         (root (make-temp-file "mevedel-inline-bound-live-" t))
+         (skill-root (file-name-concat root "skills"))
+         (mevedel-skill-dirs (list skill-root))
+         (session (mevedel-session--create
+                   :name "main"
+                   :working-directory root
+                   :skills-snapshot :uninitialized
+                   :turn-count 0))
+         source-file
+         request-data)
+    (unwind-protect
+        (progn
+          (setq source-file
+                (mevedel-view-test--write-skill
+                 skill-root "alpha"
+                 "name: alpha\ndescription: Live alpha\ncontext: inline\n"
+                 "LIVE ALPHA BODY"))
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session)
+              (mevedel-skills-install session data-buf))
+            (cl-letf (((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (with-current-buffer view-buf
+                (goto-char (mevedel-view--input-start))
+                (insert "Use $alpha live")
+                (mevedel-view-send)
+                (let* ((entry (car (mevedel-view-history--entries)))
+                       (start (string-match "\\$alpha" entry)))
+                  (should (equal source-file
+                                 (plist-get
+                                  (get-text-property
+                                   start 'mevedel-mention-binding entry)
+                                  :source-file))))))
+            (should (string-search "LIVE ALPHA BODY" request-data))))
+      (delete-directory root t)))
+
+  :doc "missing exact source keeps the multiline draft and sends nothing"
+  (mevedel-view-test--bound-source-failure-case 'missing)
+
+  :doc "disabled exact source keeps the multiline draft and sends nothing"
+  (mevedel-view-test--bound-source-failure-case 'disabled)
+
+  :doc "unreadable exact source keeps the multiline draft and sends nothing"
+  (mevedel-view-test--bound-source-failure-case 'unreadable)
+
+  :doc "malformed exact source keeps the multiline draft and sends nothing"
+  (mevedel-view-test--bound-source-failure-case 'malformed)
+
+  :doc "non-invocable exact source keeps the multiline draft and sends nothing"
+  (mevedel-view-test--bound-source-failure-case 'not-user-invocable)
 
   :doc "inline attachment failure rolls back echoed prompt"
   (mevedel-view-test--with-fork-skill
@@ -1534,6 +2068,71 @@ finds it during `$' skill dispatch."
                            (mevedel-view--input-text)))))
       (should (= 1 (length (mevedel-session-queued-user-messages
                             session))))))
+
+  :doc "queue-time async hook preserves same text rebound to another source"
+  (let ((first-source (make-temp-file "mevedel-bound-first-"))
+        (second-source (make-temp-file "mevedel-bound-second-")))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (let* ((ws (mevedel-workspace--create
+                      :type 'test :id "vq-hook-binding"
+                      :root "/tmp/vq" :name "vq"
+                      :file-cache (mevedel-file-cache--create
+                                   :table (make-hash-table :test #'equal)
+                                   :order nil :total-bytes 0)))
+                 (session (mevedel-session-create "main" ws))
+                 (input (copy-sequence "draft $alpha"))
+                 (token-offset (string-match "\\$alpha" input))
+                 hook-callback)
+            (mevedel-mentions-set-binding
+             token-offset (+ token-offset 6)
+             (list :kind 'skill :name "alpha" :source-file first-source)
+             input)
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session
+                          mevedel--workspace ws
+                          mevedel--current-request
+                          (mevedel-request--create :session session)))
+            (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _event-plist callback &rest _)
+                         (setq hook-callback callback)))
+                      ((symbol-function 'mevedel-hooks-event-plist)
+                       (lambda (&rest _) nil))
+                      ((symbol-function
+                        'mevedel-hooks-additional-context-string)
+                       (lambda (&rest _) nil)))
+              (with-current-buffer view-buf
+                (goto-char (mevedel-view--input-start))
+                (insert input)
+                (mevedel-view--queue-user-message input)
+                (let ((start (+ (mevedel-view--input-start) token-offset)))
+                  (with-silent-modifications
+                    (remove-text-properties
+                     start (+ start 6)
+                     '(mevedel-mention-binding nil rear-nonsticky nil))
+                    (mevedel-mentions-set-binding
+                     start (+ start 6)
+                     (list :kind 'skill :name "alpha"
+                           :source-file second-source))))
+                (funcall hook-callback nil)
+                (let* ((draft (mevedel-view--input-text))
+                       (start (string-match "\\$alpha" draft)))
+                  (should (equal second-source
+                                 (plist-get
+                                  (get-text-property
+                                   start 'mevedel-mention-binding draft)
+                                  :source-file)))))
+              (let* ((entry (car (mevedel-session-queued-user-messages
+                                  session)))
+                     (queued (plist-get entry :input))
+                     (start (string-match "\\$alpha" queued)))
+                (should (equal first-source
+                               (plist-get
+                                (get-text-property
+                                 start 'mevedel-mention-binding queued)
+                                :source-file)))))))
+      (delete-file first-source)
+      (delete-file second-source)))
 
   :doc "queue-time async hook schedules fallback if request already ended"
   (mevedel-view-test--with-buffers

@@ -68,6 +68,7 @@
 (require 'mevedel-view-zone)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
+(require 'mevedel-skill-bindings)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-skills-ui)

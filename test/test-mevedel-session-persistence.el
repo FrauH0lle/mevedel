@@ -5371,7 +5371,7 @@ The result is a plist whose :tempdir owns every created file."
                   (make-directory (file-name-directory history-path) t)
                   (mevedel-session-persistence-write
                    history-path
-                   '(:version 1 :entries ("second" "first"))))
+                   '(:version 2 :entries ("second" "first"))))
                 (test-mevedel-session-persistence--release-and-kill
                  buf session)
                 (setq buf nil)

@@ -185,12 +185,16 @@ skills."
   "Return persisted disabled stable skill keys."
   (plist-get (mevedel-skills--read-state) :disabled-keys))
 
+(defun mevedel-skills--source-key (source-file)
+  "Return the stable identity key for SOURCE-FILE."
+  (when source-file
+    (concat "file:" (or (ignore-errors (file-truename source-file))
+                        (expand-file-name source-file)))))
+
 (defun mevedel-skills--state-key (skill)
   "Return stable persisted state key for SKILL."
-  (when-let* ((file (and (mevedel-skill-p skill)
-                         (mevedel-skill-source-file skill))))
-    (concat "file:" (or (ignore-errors (file-truename file))
-                        (expand-file-name file)))))
+  (and (mevedel-skill-p skill)
+       (mevedel-skills--source-key (mevedel-skill-source-file skill))))
 
 (defun mevedel-skills--set-enabled (skill enabled)
   "Persist file-backed SKILL as enabled or disabled according to ENABLED."
@@ -781,6 +785,15 @@ external skill changes are picked up before lookup."
     (mevedel-skills--ensure-fresh (current-buffer) session))
   (cl-find name (mevedel-session-skills session)
            :key #'mevedel-skill-name :test #'equal))
+
+(defun mevedel-session-get-skill-by-source (session source-file)
+  "Return SESSION skill discovered from exact SOURCE-FILE, or nil.
+No name fallback is attempted."
+  (when (buffer-live-p (current-buffer))
+    (mevedel-skills--ensure-fresh (current-buffer) session))
+  (when-let* ((key (mevedel-skills--source-key source-file)))
+    (cl-find key (mevedel-session-skills session)
+             :key #'mevedel-skills--state-key :test #'equal)))
 
 
 ;;

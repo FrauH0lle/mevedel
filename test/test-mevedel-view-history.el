@@ -19,6 +19,9 @@
 (require 'mevedel-mentions)
 (require 'mevedel-session-persistence)
 
+(declare-function mevedel-mentions-set-binding
+                  "mevedel-mentions" (start end binding &optional object))
+
 
 ;;
 ;;; Test helpers
@@ -49,6 +52,18 @@
 (defun mevedel-view-history-test--raw-bytes (&rest bytes)
   "Return BYTES as an Emacs string of raw byte characters."
   (apply #'string (mapcar #'unibyte-char-to-multibyte bytes)))
+
+(defun mevedel-view-history-test--bound-input (text name source-file)
+  "Return TEXT with its `$NAME' token bound to SOURCE-FILE."
+  (let* ((result (copy-sequence text))
+         (token (concat "$" name))
+         (start (string-match (regexp-quote token) result)))
+    (should start)
+    (mevedel-mentions-set-binding
+     start (+ start (length token))
+     (list :kind 'skill :name name :source-file source-file)
+     result)
+    result))
 
 (defmacro mevedel-view-history-test--with-view (&rest body)
   "Run BODY with a minimal data/view buffer pair.
@@ -82,7 +97,7 @@ Binds `data-buf' and `view-buf'."
 ;;; Ring and commands
 
 (mevedel-deftest mevedel-view-history--ring
-  (:doc "adds newest-first entries, trims input, skips empties and duplicate heads")
+  (:doc "adds newest-first entries, trims input, and keeps the newest logical duplicate")
   (let ((mevedel-view-input-history-size 3))
     (with-temp-buffer
       (mevedel-view-history-add "  first  ")
@@ -92,24 +107,61 @@ Binds `data-buf' and `view-buf'."
       (mevedel-view-history-add "third")
       (mevedel-view-history-add "fourth")
       (should (equal '("fourth" "third" "second")
-                     (mevedel-view-history--entries))))))
+                     (mevedel-view-history--entries)))
+      (let* ((old (mevedel-view-history-test--bound-input
+                   "  use $alpha  " "alpha" "/tmp/old/SKILL.md"))
+             (new (mevedel-view-history-test--bound-input
+                   "  use $alpha  " "alpha" "/tmp/new/SKILL.md")))
+        (put-text-property 0 (length old) 'face 'error old)
+        (mevedel-view-history-add old)
+        (mevedel-view-history-add new)
+        (let* ((entries (mevedel-view-history--entries))
+               (entry (car entries))
+               (token-start (string-match "\\$alpha" entry)))
+          (should (= 3 (length entries)))
+          (should (equal "use $alpha" entry))
+          (should (equal "/tmp/new/SKILL.md"
+                         (plist-get
+                          (get-text-property
+                           token-start 'mevedel-mention-binding entry)
+                          :source-file)))
+          (should-not (text-property-not-all
+                       0 (length entry) 'face nil entry)))))))
 
 (mevedel-deftest mevedel-view-history--navigation
-  (:doc "M-p / M-n navigate history and restore incomplete input")
+  (:doc "M-p / M-n preserve bindings in recalled and incomplete input")
   (mevedel-view-history-test--with-view
     (with-current-buffer view-buf
       (goto-char (point-max))
-      (insert "draft")
+      (insert (mevedel-view-history-test--bound-input
+               "draft with $alpha" "alpha" "/tmp/draft/SKILL.md"))
       (mevedel-view-history-add "first")
-      (mevedel-view-history-add "second")
+      (mevedel-view-history-add
+       (mevedel-view-history-test--bound-input
+        "second with $alpha" "alpha" "/tmp/sent/SKILL.md"))
       (mevedel-view-history-previous)
-      (should (equal "second" (mevedel-view-history--input-text)))
+      (let* ((input (mevedel-view-history--input-text))
+             (start (string-match "\\$alpha" input)))
+        (should (equal "second with $alpha" input))
+        (should (equal "/tmp/sent/SKILL.md"
+                       (plist-get
+                        (get-text-property
+                         start 'mevedel-mention-binding input)
+                        :source-file))))
       (mevedel-view-history-previous)
       (should (equal "first" (mevedel-view-history--input-text)))
       (mevedel-view-history-next)
-      (should (equal "second" (mevedel-view-history--input-text)))
+      (should (equal "second with $alpha"
+                     (mevedel-view-history--input-text)))
       (mevedel-view-history-next)
-      (should (equal "draft" (mevedel-view-history--input-text))))))
+      (let* ((input (mevedel-view-history--input-text))
+             (start (string-match "\\$alpha" input)))
+        (should (equal "draft with $alpha" input))
+        (should (equal "/tmp/draft/SKILL.md"
+                       (plist-get
+                        (get-text-property
+                         start 'mevedel-mention-binding input)
+                        :source-file)))))))
 
 (mevedel-deftest mevedel-view-history--outside-input-fallback
   (:doc "M-p / M-n outside the input region delegate to global bindings")
@@ -194,14 +246,23 @@ Binds `data-buf' and `view-buf'."
       (should (equal "draft" (mevedel-view-history--input-text))))))
 
 (mevedel-deftest mevedel-view-history--browse-picker
-  (:doc "C-c C-l inserts a completing-read history choice")
+  (:doc "C-c C-l restores the stored binding behind a plain picker choice")
   (mevedel-view-history-test--with-view
     (with-current-buffer view-buf
-      (mevedel-view-history-add "alpha")
+      (mevedel-view-history-add
+       (mevedel-view-history-test--bound-input
+        "use $alpha" "alpha" "/tmp/browse/SKILL.md"))
       (cl-letf (((symbol-function 'completing-read)
-                 (lambda (&rest _) "alpha")))
+                 (lambda (&rest _) "use $alpha")))
         (mevedel-view-history-browse))
-      (should (equal "alpha" (mevedel-view-history--input-text))))))
+      (let* ((input (mevedel-view-history--input-text))
+             (start (string-match "\\$alpha" input)))
+        (should (equal "use $alpha" input))
+        (should (equal "/tmp/browse/SKILL.md"
+                       (plist-get
+                        (get-text-property
+                         start 'mevedel-mention-binding input)
+                        :source-file)))))))
 
 (mevedel-deftest mevedel-view-history--ret-dispatch
   (:doc "plain RET inserts input newline; display and descriptors keep RET actions")
@@ -231,13 +292,26 @@ Binds `data-buf' and `view-buf'."
 ;;; Persistence
 
 (mevedel-deftest mevedel-view-history--persistence
-  (:doc "round-trips input-history.el using the workspace history file")
+  (:doc "round-trips visible input and its exact skill binding"
+   :doc "a write failure retains the live bound entry and disables later saves")
   (mevedel-view-history-test--with-temp-dir workspace-dir
     (mevedel-view-history-test--with-temp-dir session-dir
-      (let ((session (mevedel-view-history-test--session
-                      workspace-dir session-dir))
-            (path (mevedel-view-history-test--path workspace-dir))
-            (session-path (file-name-concat session-dir "input-history.el")))
+      (let* ((session (mevedel-view-history-test--session
+                       workspace-dir session-dir))
+             (path (mevedel-view-history-test--path workspace-dir))
+             (session-path (file-name-concat session-dir "input-history.el"))
+             (skill-dir (file-name-concat workspace-dir
+                                          ".agents/skills/alpha"))
+             (skill-file (file-name-concat skill-dir "SKILL.md"))
+             (body-marker "ALPHA BODY MUST NOT BE PERSISTED")
+             (bound-input nil))
+        (make-directory skill-dir t)
+        (with-temp-file skill-file
+          (insert "---\nname: alpha\ndescription: Test alpha\n---\n\n# Alpha\n\n"
+                  body-marker "\n"))
+        (setq bound-input
+              (mevedel-view-history-test--bound-input
+               "use $alpha." "alpha" skill-file))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-add "first")
@@ -248,18 +322,56 @@ Binds `data-buf' and `view-buf'."
                    (mevedel-view-history-test--raw-bytes
                     #xe2 #x80 #x9c ?x #xe2 #x80 #x9d)))
           (mevedel-view-history-add (concat "unicode " (string #x03bb)))
+          (mevedel-view-history-add bound-input)
           (mevedel-view-history-save (current-buffer)))
         (should (file-exists-p path))
         (should-not (file-exists-p session-path))
+        (let ((persisted (mevedel-session-persistence-read path)))
+          (should (equal 2 (plist-get persisted :version)))
+          (should-not
+           (string-match-p
+            (regexp-quote body-marker)
+            (with-temp-buffer
+              (insert-file-contents path)
+              (buffer-string)))))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-load session)
-          (should (equal (list (concat "unicode " (string #x03bb))
-                               "raw “x”"
-                               "multi\nline \"quoted\""
-                               "second"
-                               "first")
-                         (mevedel-view-history--entries))))))))
+          (let* ((entries (mevedel-view-history--entries))
+                 (restored (car entries))
+                 (token-start (string-match "\\$alpha" restored)))
+            (should (equal (list "use $alpha."
+                                 (concat "unicode " (string #x03bb))
+                                 "raw “x”"
+                                 "multi\nline \"quoted\""
+                                 "second"
+                                 "first")
+                           entries))
+            (should (equal (list :kind 'skill
+                                 :name "alpha"
+                                 :source-file skill-file)
+                           (get-text-property
+                            token-start 'mevedel-mention-binding
+                            restored))))))))
+  (mevedel-view-history-test--with-temp-dir workspace-dir
+    (let* ((session (mevedel-view-history-test--session workspace-dir))
+           (skill-file (file-name-concat workspace-dir "alpha/SKILL.md"))
+           (bound-input nil))
+      (make-directory (file-name-directory skill-file) t)
+      (with-temp-file skill-file
+        (insert "---\nname: alpha\ndescription: Alpha\n---\n"))
+      (setq bound-input
+            (mevedel-view-history-test--bound-input
+             "use $alpha" "alpha" skill-file))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (mevedel-view-history-add bound-input)
+        (cl-letf (((symbol-function 'mevedel-session-persistence-write)
+                   (lambda (&rest _) (error "Disk unavailable"))))
+          (should-not (mevedel-view-history-save (current-buffer))))
+        (should mevedel-view-history--save-failed)
+        (should (equal-including-properties
+                 bound-input (car (mevedel-view-history--entries))))))))
 
 (mevedel-deftest mevedel-view-history--persistence-merge
   (:doc "saving one view merges existing workspace history from other views"
@@ -299,7 +411,7 @@ Binds `data-buf' and `view-buf'."
                 (when initial
                   (make-directory (file-name-directory path) t)
                   (mevedel-session-persistence-write
-                   path (list :version 1 :entries initial)))
+                   path (list :version 2 :entries initial)))
                 (with-current-buffer buf-one
                   (setq-local mevedel--session session-one)
                   (mevedel-view-history-load session-one))
@@ -319,23 +431,77 @@ Binds `data-buf' and `view-buf'."
                  (equal (with-temp-buffer
                           (insert-file-contents path)
                           (read (current-buffer)))
-                        (list :version 1 :entries expected))))
+                        (list :version 2 :entries expected))))
             (when (buffer-live-p buf-one) (kill-buffer buf-one))
             (when (buffer-live-p buf-two) (kill-buffer buf-two))))))))
 
 (mevedel-deftest mevedel-view-history--persistence-corrupt
-  (:doc "renames corrupt workspace input-history.el to .bad and starts empty")
+  (:doc "rejects malformed binding persistence through the corrupt-history path")
   (mevedel-view-history-test--with-temp-dir dir
     (let* ((path (mevedel-view-history-test--path dir))
-           (session (mevedel-view-history-test--session dir)))
+           (session (mevedel-view-history-test--session dir))
+           (malformed-value (copy-sequence "use $alpha"))
+           (partial-token (copy-sequence "use $alpha"))
+           (extra-character (copy-sequence "use $alpha!"))
+           (unsupported-kind (copy-sequence "use $alpha"))
+           (unknown-field (copy-sequence "use $alpha"))
+           (duplicate-key (copy-sequence "use $alpha"))
+           (odd-plist (copy-sequence "use $alpha"))
+           (improper-plist (copy-sequence "use $alpha")))
+      (put-text-property
+       4 10 'mevedel-mention-binding
+       '(:kind skill :name "alpha") malformed-value)
+      (put-text-property
+       4 9 'mevedel-mention-binding
+       '(:kind skill :name "alpha" :source-file "/tmp/alpha/SKILL.md")
+       partial-token)
+      (put-text-property
+       4 11 'mevedel-mention-binding
+       '(:kind skill :name "alpha" :source-file "/tmp/alpha/SKILL.md")
+       extra-character)
+      (put-text-property
+       4 10 'mevedel-mention-binding
+       '(:kind file :name "alpha" :source-file "/tmp/alpha/SKILL.md")
+       unsupported-kind)
+      (put-text-property
+       4 10 'mevedel-mention-binding
+       '(:kind skill :name "alpha" :source-file "/tmp/alpha/SKILL.md"
+         :extra t)
+       unknown-field)
+      (put-text-property
+       4 10 'mevedel-mention-binding
+       '(:kind skill :name "alpha" :source-file "/tmp/alpha/SKILL.md"
+         :name "alpha")
+       duplicate-key)
+      (put-text-property
+       4 10 'mevedel-mention-binding
+       '(:kind skill :name "alpha" :source-file)
+       odd-plist)
+      (put-text-property
+       4 10 'mevedel-mention-binding
+       '(:kind skill :name "alpha" :source-file . "/tmp/alpha/SKILL.md")
+       improper-plist)
       (make-directory (file-name-directory path) t)
-      (with-temp-file path
-        (insert "not a plist"))
-      (with-temp-buffer
-        (setq-local mevedel--session session)
-        (mevedel-view-history-load session)
-        (should (equal nil (mevedel-view-history--entries))))
-      (should (file-exists-p (concat path ".bad"))))))
+      (dolist (contents
+               (list 'raw-reader-failure
+                     '(:version 1 :entries ("old unbound history"))
+                     (list :version 2 :entries (list malformed-value))
+                     (list :version 2 :entries (list partial-token))
+                     (list :version 2 :entries (list extra-character))
+                     (list :version 2 :entries (list unsupported-kind))
+                     (list :version 2 :entries (list unknown-field))
+                     (list :version 2 :entries (list duplicate-key))
+                     (list :version 2 :entries (list odd-plist))
+                     (list :version 2 :entries (list improper-plist))))
+        (if (eq contents 'raw-reader-failure)
+            (with-temp-file path
+              (insert "not a plist"))
+          (mevedel-session-persistence-write path contents))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (mevedel-view-history-load session)
+          (should (equal nil (mevedel-view-history--entries))))
+        (should (file-exists-p (concat path ".bad")))))))
 
 (mevedel-deftest mevedel-view-history--no-workspace
   (:doc "keeps history in memory only when no workspace is available")
@@ -363,7 +529,7 @@ Binds `data-buf' and `view-buf'."
           (progn
             (make-directory (file-name-directory path) t)
             (with-temp-file path
-              (prin1 '(:version 1 :entries ("old")) (current-buffer)))
+              (prin1 '(:version 2 :entries ("old")) (current-buffer)))
             (with-current-buffer data-buf
               (setq-local mevedel--session session)
               (setq-local mevedel-session--read-only-mode t))
@@ -377,7 +543,7 @@ Binds `data-buf' and `view-buf'."
             (should (equal (with-temp-buffer
                              (insert-file-contents path)
                              (read (current-buffer)))
-                           '(:version 1 :entries ("old")))))
+                           '(:version 2 :entries ("old")))))
         (when (buffer-live-p view-buf) (kill-buffer view-buf))
         (when (buffer-live-p data-buf) (kill-buffer data-buf))))))
 
@@ -392,7 +558,7 @@ Binds `data-buf' and `view-buf'."
           (progn
             (make-directory (file-name-directory path) t)
             (with-temp-file path
-              (prin1 '(:version 1 :entries ("parent")) (current-buffer)))
+              (prin1 '(:version 2 :entries ("parent")) (current-buffer)))
             (with-current-buffer data-buf
               (org-mode)
               (setq-local mevedel--session session)
@@ -410,7 +576,7 @@ Binds `data-buf' and `view-buf'."
             (should (equal (with-temp-buffer
                              (insert-file-contents path)
                              (read (current-buffer)))
-                           '(:version 1 :entries ("parent")))))
+                           '(:version 2 :entries ("parent")))))
         (when (buffer-live-p view-buf) (kill-buffer view-buf))
         (when (buffer-live-p data-buf) (kill-buffer data-buf))))))
 

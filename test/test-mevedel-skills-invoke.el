@@ -2052,13 +2052,88 @@ spanning lines")))
   ,test
   (test)
   :doc "centralizes root, inline, quote, escape, and code token classification"
-  (let ((lookup (lambda (name) (and (equal name "alpha") 'skill))))
+  (let ((lookup (lambda (name _start _end)
+                  (and (equal name "alpha") 'skill))))
     (should
      (equal '((:start 33 :end 39 :name "alpha" :value skill))
             (mevedel-skills--scan-skill-tokens
              "$alpha \\$alpha `$alpha` \"$alpha\" $alpha" lookup)))
     (should (= 2 (length (mevedel-skills--scan-skill-tokens
-                          "$alpha then $alpha" lookup t))))))
+                          "$alpha then $alpha" lookup t)))))
+
+  :doc "a bound shorter name wins before punctuation-like name lookup"
+  (let* ((source (make-temp-file "mevedel-bound-scan-" nil ".md"))
+         (input (copy-sequence "use $alpha."))
+         (start (string-match "\\$alpha" input))
+         (resolver
+          (lambda (name token-start token-end)
+            (let ((binding (mevedel-skill-bindings-starting-at
+                            input token-start)))
+              (if binding
+                  (and (mevedel-skill-bindings-at
+                        input token-start token-end name)
+                       'bound-alpha)
+                (and (equal name "alpha.") 'wrong-alpha-dot))))))
+    (unwind-protect
+        (progn
+          (mevedel-mentions-set-binding
+           start (+ start 6)
+           (list :kind 'skill :name "alpha" :source-file source)
+           input)
+          (let ((tokens (mevedel-skills--scan-skill-tokens
+                         input resolver)))
+            (should (equal '(bound-alpha)
+                           (mapcar (lambda (token)
+                                     (plist-get token :value))
+                                   tokens)))))
+      (delete-file source))))
+
+(mevedel-deftest mevedel-skills-refresh-bound-input ()
+  ,test
+  (test)
+  :doc "rescans only bound input and exposes the latest exact source body"
+  (let* ((mevedel-skills-include-bundled nil)
+         (mevedel-skills-check-for-modifications nil)
+         (root (make-temp-file "mevedel-refresh-bound-" t))
+         (skill-dir (file-name-concat root ".mevedel/skills"))
+         (mevedel-skill-dirs '(".mevedel/skills"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "refresh-bound"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         source
+         bound)
+    (unwind-protect
+        (progn
+          (setq source
+                (mevedel-skills-test--write-skill
+                 skill-dir "alpha"
+                 "name: alpha\ndescription: Alpha\ncontext: inline\n"
+                 "ALPHA V1"))
+          (with-temp-buffer
+            (mevedel-skills-install session (current-buffer))
+            (let ((installed (mevedel-session-skills session)))
+              (mevedel-skills-refresh-bound-input "plain text" session)
+              (should (eq installed (mevedel-session-skills session))))
+            (setq bound (copy-sequence "use $alpha"))
+            (mevedel-mentions-set-binding
+             4 10
+             (list :kind 'skill :name "alpha" :source-file source)
+             bound)
+            (mevedel-skills-test--write-skill
+             skill-dir "alpha"
+             "name: alpha\ndescription: Alpha\ncontext: inline\n"
+             "ALPHA V2")
+            (should (eq bound
+                        (mevedel-skills-refresh-bound-input bound session)))
+            (should (equal
+                     "ALPHA V2"
+                     (mevedel-skill-load-body
+                      (mevedel-session-get-skill-by-source
+                       session source))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills--dispatch-inline-attachments ()
   ,test
