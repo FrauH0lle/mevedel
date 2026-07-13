@@ -206,6 +206,25 @@
                  (regexp-quote "ask · idle · model none · 0 tools")
                  line)))))
 
+  :doc "status strip shows the Goal phase's actual provider and effort"
+  (mevedel-view-test--with-buffers
+    (let* ((goal (mevedel-goal--create
+                  :status 'active :phase 'planning :cycle 1
+                  :cycles '((:cycle 1 :providers
+                             ((planning :provider "Planner:glm"
+                                        :effort high))))))
+           (session (mevedel-session--create
+                     :name "main" :goal goal :preset-name 'team)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (let ((line (mevedel-view--status-strip)))
+          (should (string-match-p "planning · Planner:glm/high" line))
+          (should (string-match-p "preset team" line))
+          (dolist (area '(goal preset))
+            (should (text-property-any
+                     0 (length line) 'mevedel-view-cockpit-area area line)))))))
+
   :doc "status strip routes click targets to cockpit surfaces"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf

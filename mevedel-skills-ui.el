@@ -269,10 +269,8 @@ Routes through the lifecycle-aware permission transition path."
                     (mevedel-session-goal mevedel--session))))
     (pcase action
       ((or 'nil "")
-       (if goal
-           (message "%s" (mevedel-goal-description goal))
-         (let ((objective (read-string "Goal objective: ")))
-           (mevedel-goal-start objective objective))))
+       (require 'mevedel-menu)
+       (mevedel-menu-open 'goal))
       ("edit"
        (unless goal (user-error "No current Goal"))
        (mevedel-goal-edit

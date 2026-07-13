@@ -604,3 +604,20 @@ tool result row, not the next user turn, because the hook modifies the
 model-visible tool feedback.  A post-tool `:updated-result` rewrite is
 shown on the affected tool row as `◇ hook changed tool result`; expanding
 it shows original and updated model-visible result text.
+
+## Goal and Preset Cockpits
+
+The session cockpit exposes two session-owned workflow surfaces. The Goal
+surface shows the objective, status and phase, cycle, approval policy, budget,
+execution home and context, current plan, latest review, guardian audit, and
+recovery checkpoint. Its start, pause, resume, edit, budget, and clear actions
+are enabled only at compatible lifecycle states.
+
+The Preset surface selects a preset buffer-locally in the owning data buffer
+and displays its effective tier map, resolved provider and effort for each
+workload, and actual provider/effort recorded for the current Goal cycle.
+Resolution failures tell the user to fix the preset before dispatch. Presets
+remain configuration-as-code; the cockpit does not author or rewrite them. The
+view status strip links to both surfaces and, during a Goal, shows the current
+phase's actual provider and effort. Cockpit inspection and selection never
+rebuild the composer, so an active multiline draft is retained.
