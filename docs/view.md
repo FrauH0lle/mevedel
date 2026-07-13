@@ -615,7 +615,8 @@ are enabled only at compatible lifecycle states.
 
 The Preset surface selects a preset buffer-locally in the owning data buffer
 and displays its effective tier map, resolved provider and effort for each
-workload, and actual provider/effort recorded for the current Goal cycle.
+workload, and actual provider/effort recorded for the latest matching Goal
+request/cycle.
 Resolution failures tell the user to fix the preset before dispatch. Presets
 remain configuration-as-code; the cockpit does not author or rewrite them. The
 view status strip links to both surfaces and, during a Goal, shows the current

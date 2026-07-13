@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Supervised one-cycle Goal lifecycle tests.
+;; Goal lifecycle, continuation, routing, ownership, and recovery tests.
 
 ;;; Code:
 
@@ -10,6 +10,7 @@
 (require 'mevedel)
 (require 'mevedel-models)
 (require 'mevedel-goal)
+(require 'mevedel-presets)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -59,6 +60,29 @@
   (mevedel-goal--cycle-put
    goal :guardian-audits
    (list (append decision (list :plan-hash plan-hash)))))
+
+(defun test-mevedel-goal--apply-preset (name buffer)
+  "Apply test preset NAME to BUFFER without requiring registered agent tools."
+  (cl-letf (((symbol-function 'mevedel-agents--setup-for-request) #'ignore))
+    (mevedel-preset-apply name buffer)))
+
+(defmacro test-mevedel-goal--with-presets (bindings &rest body)
+  "Define BINDINGS for BODY and always remove their global registrations.
+Each binding is (NAME KEYS)."
+  (declare (indent 1) (debug t))
+  `(unwind-protect
+       (progn
+         ,@(mapcar
+            (lambda (binding)
+              `(mevedel-preset--define ',(nth 0 binding)
+                                       ',(nth 1 binding)))
+            bindings)
+         ,@body)
+     (dolist (name ',(mapcar #'car bindings))
+       (setq mevedel-preset--registry
+             (assq-delete-all name mevedel-preset--registry)
+             gptel--known-presets
+             (assq-delete-all name gptel--known-presets)))))
 
 (defun test-mevedel-goal--git (root &rest args)
   "Run Git ARGS at ROOT or signal with its output."
@@ -747,6 +771,121 @@
           (should guarded)
           (should (= 20 (mevedel-goal-token-budget goal)))
           (should (eq 'active (mevedel-goal-status goal))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-goal-provider-exhaustion-lifecycle ()
+  ,test
+  (test)
+  :doc "persists quota exhaustion, reopens, resumes with a new preset, and completes"
+  (let* ((root (make-temp-file "mevedel-goal-provider-lifecycle-" t))
+         (first-buffer (generate-new-buffer " *goal-provider-first*"))
+         (resumed-buffer (generate-new-buffer " *goal-provider-resumed*"))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         save-path
+         sidecar-path)
+    (unwind-protect
+        (test-mevedel-goal--with-presets
+            ((test-goal-provider-primary
+              (:model-workloads ((planning :effort low)
+                                 (implementation :effort low)
+                                 (review :effort low))))
+             (test-goal-provider-replacement
+              (:model-workloads ((planning :effort high)
+                                 (implementation :effort medium)
+                                 (review :effort high)))))
+          (with-current-buffer first-buffer
+            (setq-local mevedel--session session)
+            (test-mevedel-goal--apply-preset
+             'test-goal-provider-primary first-buffer)
+            (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                       (lambda (&rest _)
+                         '(:backend nil :model exhausted-model :effort low))))
+              (let ((mevedel-goal-dispatch-function #'ignore))
+                (mevedel-goal-start "Ship after provider recovery")))
+            (let ((fsm (test-mevedel-goal--fsm first-buffer 'planning)))
+              (setf (gptel-fsm-info fsm)
+                    (plist-put (gptel-fsm-info fsm) :error
+                               '(:type quota :message "Credits exhausted")))
+              (mevedel-goal-settle-failure fsm 'error)
+              (mevedel-goal-persist-failure fsm))
+            (let ((goal (mevedel-session-goal session)))
+              (should (eq 'paused (mevedel-goal-status goal)))
+              (should (string-match-p "Credits exhausted"
+                                      (mevedel-goal-reason goal))))
+            (setq save-path (mevedel-session-save-path session)
+                  sidecar-path
+                  (mevedel-session-persistence--sidecar-path save-path))
+            (should (file-exists-p sidecar-path)))
+          (kill-buffer first-buffer)
+          (mevedel-workspace-clear-registry)
+          (let* ((sidecar
+                  (mevedel-session-persistence-load-sidecar sidecar-path))
+                 (restored
+                  (plist-get
+                   (mevedel-session-persistence-deserialize sidecar)
+                   :session))
+                 (goal (mevedel-session-goal restored))
+                 dispatched
+                 implemented)
+            (setf (mevedel-session-save-path restored) save-path)
+            (with-current-buffer resumed-buffer
+              (setq-local mevedel--session restored)
+              (test-mevedel-goal--apply-preset
+               'test-goal-provider-replacement resumed-buffer)
+              (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                         (lambda (&rest _)
+                           '(:backend nil :model replacement-model
+                             :effort high)))
+                        ((symbol-function 'mevedel-goal-present-plan)
+                         #'ignore)
+                        ((symbol-function 'mevedel-goal--ensure-reference-reminder)
+                         #'ignore)
+                        ((symbol-function 'mevedel--implement-plan)
+                         (lambda (_input) (setq implemented t) nil)))
+                (let ((mevedel-goal-dispatch-function
+                       (lambda (phase _prompt _display)
+                         (push (list phase gptel-model
+                                     gptel-reasoning-effort)
+                               dispatched))))
+                  (mevedel-goal-resume)
+                  (should (equal (mevedel-session-session-id restored)
+                                 (mevedel-goal-owner-session goal)))
+                  (should (equal (mevedel-session-session-id restored)
+                                 (plist-get (mevedel-goal-execution-home goal)
+                                            :session-id)))
+                  (should-not (mevedel-session-goal-handoff restored))
+                  (should (mevedel-goal-owned-by-session-p goal restored))
+                  (should (eq 'test-goal-provider-replacement
+                              (mevedel-session-preset-name restored)))
+                  (should (equal '(planning replacement-model high)
+                                 (car dispatched)))
+                  (erase-buffer)
+                  (insert "<proposed_plan>\n# Recovery plan\n\nFinish and test.\n</proposed_plan>")
+                  (mevedel-goal--post-response (point-min) (point-max))
+                  (should (mevedel-goal-owned-by-session-p goal restored))
+                  (mevedel-goal--approval-callback
+                   "# Recovery plan\n\nFinish and test."
+                   resumed-buffer '(:context full))
+                  (should implemented)
+                  (let ((implementation-fsm
+                         (test-mevedel-goal--fsm
+                          resumed-buffer 'implementing)))
+                    (mevedel-goal-settle-turn implementation-fsm)
+                    (mevedel-goal-dispatch-after-turn implementation-fsm))
+                  (erase-buffer)
+                  (insert "<goal_review>\nverdict: complete\nsummary: Recovery implementation and tests pass.\n</goal_review>")
+                  (mevedel-goal--post-response (point-min) (point-max))
+                  (mevedel-goal-settle-turn
+                   (test-mevedel-goal--fsm resumed-buffer 'reviewing))))
+              (should (eq 'complete (mevedel-goal-status goal)))
+              (should (equal "replacement-model"
+                             (plist-get (mevedel-goal-latest-provider
+                                         goal 'review)
+                                        :provider))))))
+      (when (buffer-live-p first-buffer) (kill-buffer first-buffer))
+      (when (buffer-live-p resumed-buffer) (kill-buffer resumed-buffer))
+      (mevedel-workspace-clear-registry)
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal-settle-failure ()
@@ -1568,44 +1707,57 @@
          dispatched
          implementation)
     (unwind-protect
-        (with-current-buffer buffer
-          (setq-local mevedel--session session)
-          (let ((mevedel-goal-dispatch-function
-                 (lambda (phase prompt display)
-                   (push (list phase prompt display) dispatched))))
-            (mevedel-goal-start "Fix the race")
-            (insert "<proposed_plan>\n# Plan\n\nFix and test.\n</proposed_plan>")
-            (cl-letf (((symbol-function 'mevedel-goal-present-plan)
-                       #'ignore))
-              (mevedel-goal--post-response (point-min) (point-max)))
-            (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
-                       #'ignore)
-                      ((symbol-function 'mevedel-goal--ensure-reference-reminder)
-                       #'ignore)
-                      ((symbol-function 'mevedel-model-resolve-workload)
-                       (lambda (&rest _)
-                         '(:backend nil :model test-model :effort nil)))
-                      ((symbol-function 'mevedel--implement-plan)
-                       (lambda (input)
-                         (setq implementation input)
-                         nil)))
-              (mevedel-goal--approval-callback
-               "# Plan\n\nFix and test." buffer '(:context full)))
-            (should implementation)
-            (mevedel-goal-settle-turn
-             (test-mevedel-goal--fsm buffer 'implementing))
-            (mevedel-goal-dispatch-after-turn
-             (test-mevedel-goal--fsm buffer 'implementing))
-            (erase-buffer)
-            (insert "<goal_review>\nverdict: complete\nsummary: Review confirms the objective and tests pass.\n</goal_review>")
-            (mevedel-goal--post-response (point-min) (point-max))
-            (mevedel-goal-settle-turn
-             (test-mevedel-goal--fsm buffer 'reviewing))
-            (should (eq 'complete
-                        (mevedel-goal-status
-                         (mevedel-session-goal session))))
-            (should (equal '(reviewing planning)
-                           (mapcar #'car dispatched)))))
+        (test-mevedel-goal--with-presets
+            ((test-goal-supervised-team
+              (:goal-token-budget 1000
+               :model-workloads ((planning)
+                                 (implementation)
+                                 (review)))))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (test-mevedel-goal--apply-preset
+             'test-goal-supervised-team buffer)
+            (let ((mevedel-goal-dispatch-function
+                   (lambda (phase prompt display)
+                     (push (list phase prompt display) dispatched))))
+              (mevedel-goal-start "Fix the race")
+              (should (eq 'test-goal-supervised-team
+                          (mevedel-session-preset-name session)))
+              (should (= 1000
+                         (mevedel-goal-token-budget
+                          (mevedel-session-goal session))))
+              (insert "<proposed_plan>\n# Plan\n\nFix and test.\n</proposed_plan>")
+              (cl-letf (((symbol-function 'mevedel-goal-present-plan)
+                         #'ignore))
+                (mevedel-goal--post-response (point-min) (point-max)))
+              (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
+                         #'ignore)
+                        ((symbol-function 'mevedel-goal--ensure-reference-reminder)
+                         #'ignore)
+                        ((symbol-function 'mevedel-model-resolve-workload)
+                         (lambda (&rest _)
+                           '(:backend nil :model test-model :effort nil)))
+                        ((symbol-function 'mevedel--implement-plan)
+                         (lambda (input)
+                           (setq implementation input)
+                           nil)))
+                (mevedel-goal--approval-callback
+                 "# Plan\n\nFix and test." buffer '(:context full)))
+              (should implementation)
+              (mevedel-goal-settle-turn
+               (test-mevedel-goal--fsm buffer 'implementing))
+              (mevedel-goal-dispatch-after-turn
+               (test-mevedel-goal--fsm buffer 'implementing))
+              (erase-buffer)
+              (insert "<goal_review>\nverdict: complete\nsummary: Review confirms the objective and tests pass.\n</goal_review>")
+              (mevedel-goal--post-response (point-min) (point-max))
+              (mevedel-goal-settle-turn
+               (test-mevedel-goal--fsm buffer 'reviewing))
+              (should (eq 'complete
+                          (mevedel-goal-status
+                           (mevedel-session-goal session))))
+              (should (equal '(reviewing planning)
+                             (mapcar #'car dispatched))))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 
@@ -2264,64 +2416,87 @@
          (session (mevedel-session-create
                    "main" (test-mevedel-goal--workspace root)))
          (dispatches nil)
+         (escalations 0)
          (implementations 0))
     (unwind-protect
-        (with-current-buffer buffer
-          (setq-local mevedel--session session)
-          (let ((mevedel-goal-dispatch-function
-                 (lambda (phase _prompt _display)
-                   (push phase dispatches)))
-                (mevedel-goal-guardian-function
-                 (lambda (goal _plan _buffer callback)
-                   (setf (mevedel-goal-checkpoint goal)
-                         (list :phase 'guardian
-                               :attempt-id
-                               (format "guardian-%d" (mevedel-goal-cycle goal))
-                               :dispatch-state 'started))
-                   (funcall callback
-                            '(:verdict approve :reason "Safe"
-                              :provider "P:M" :effort high)))))
-            (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
-                       (lambda (&rest _)
-                         '(:backend nil :model test-model :effort nil)))
-                      ((symbol-function 'mevedel--implement-plan)
-                       (lambda (_input) (cl-incf implementations) nil))
-                      ((symbol-function 'run-at-time)
-                       (lambda (_seconds _repeat function &rest args)
-                         (apply function args)
-                         nil)))
-              (mevedel-goal-start "Finish both slices" nil 'automatic)
-              (dolist (cycle '(("# Plan one" continue
-                                "Slice one done; implement slice two.")
-                               ("# Plan two" complete
-                                "Both slices and tests pass.")))
-                (erase-buffer)
-                (insert "<proposed_plan>\n" (nth 0 cycle)
-                        "\n</proposed_plan>")
-                (mevedel-goal--post-response (point-min) (point-max))
-                (let ((planning-fsm
-                       (test-mevedel-goal--fsm buffer 'planning)))
-                  (mevedel-goal-settle-turn planning-fsm)
-                  (mevedel-goal-dispatch-after-turn planning-fsm))
-                (let ((implementation-fsm
-                       (test-mevedel-goal--fsm buffer 'implementing)))
-                  (mevedel-goal-settle-turn implementation-fsm)
-                  (mevedel-goal-dispatch-after-turn implementation-fsm))
-                (erase-buffer)
-                (insert (format
-                         "<goal_review>\nverdict: %s\nsummary: %s\n</goal_review>"
-                         (nth 1 cycle) (nth 2 cycle)))
-                (mevedel-goal--post-response (point-min) (point-max))
-                (let ((review-fsm
-                       (test-mevedel-goal--fsm buffer 'reviewing)))
-                  (mevedel-goal-settle-turn review-fsm)
-                  (mevedel-goal-dispatch-after-turn review-fsm)))
-              (let ((goal (mevedel-session-goal session)))
-                (should (eq 'complete (mevedel-goal-status goal)))
-                (should (= 2 (mevedel-goal-cycle goal)))
-                (should (= 2 implementations))
-                (should (= 2
-                           (cl-count 'planning dispatches)))))))
+        (test-mevedel-goal--with-presets
+            ((test-goal-automatic-team
+              (:goal-token-budget 2000
+               :model-workloads ((planning :effort medium)
+                                 (goal-guardian :effort high)
+                                 (implementation :effort low)
+                                 (review :effort high)))))
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (test-mevedel-goal--apply-preset
+             'test-goal-automatic-team buffer)
+            (let ((mevedel-goal-dispatch-function
+                   (lambda (phase _prompt _display)
+                     (push phase dispatches)))
+                  (mevedel-goal-guardian-function
+                   (lambda (goal _plan _buffer callback)
+                     (setf (mevedel-goal-checkpoint goal)
+                           (list :phase 'guardian
+                                 :attempt-id
+                                 (format "guardian-%d" (mevedel-goal-cycle goal))
+                                 :dispatch-state 'started))
+                     (funcall callback
+                              (if (= 1 (mevedel-goal-cycle goal))
+                                  '(:verdict ask :reason "Need user scope"
+                                             :provider "P:M" :effort high)
+                                '(:verdict approve :reason "Safe"
+                                           :provider "P:M" :effort high))))))
+              (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                         (lambda (&rest _)
+                           '(:backend nil :model test-model :effort nil)))
+                        ((symbol-function 'mevedel--implement-plan)
+                         (lambda (_input) (cl-incf implementations) nil))
+                        ((symbol-function 'run-at-time)
+                         (lambda (_seconds _repeat function &rest args)
+                           (apply function args)
+                           nil))
+                        ((symbol-function 'mevedel-goal-present-plan)
+                         (lambda (&rest _)
+                           (cl-incf escalations))))
+                (mevedel-goal-start "Finish both slices" nil 'automatic)
+                (should (eq 'test-goal-automatic-team
+                            (mevedel-session-preset-name session)))
+                (dolist (cycle '(("# Plan one" continue
+                                  "Slice one done; implement slice two.")
+                                 ("# Plan two" complete
+                                  "Both slices and tests pass.")))
+                  (erase-buffer)
+                  (insert "<proposed_plan>\n" (nth 0 cycle)
+                          "\n</proposed_plan>")
+                  (mevedel-goal--post-response (point-min) (point-max))
+                  (let ((planning-fsm
+                         (test-mevedel-goal--fsm buffer 'planning)))
+                    (mevedel-goal-settle-turn planning-fsm)
+                    (mevedel-goal-dispatch-after-turn planning-fsm))
+                  (when (= 1 (mevedel-goal-cycle
+                              (mevedel-session-goal session)))
+                    (mevedel-goal--approval-callback
+                     (nth 0 cycle) buffer '(:context full)))
+                  (let ((implementation-fsm
+                         (test-mevedel-goal--fsm buffer 'implementing)))
+                    (mevedel-goal-settle-turn implementation-fsm)
+                    (mevedel-goal-dispatch-after-turn implementation-fsm))
+                  (erase-buffer)
+                  (insert (format
+                           "<goal_review>\nverdict: %s\nsummary: %s\n</goal_review>"
+                           (nth 1 cycle) (nth 2 cycle)))
+                  (mevedel-goal--post-response (point-min) (point-max))
+                  (let ((review-fsm
+                         (test-mevedel-goal--fsm buffer 'reviewing)))
+                    (mevedel-goal-settle-turn review-fsm)
+                    (mevedel-goal-dispatch-after-turn review-fsm)))
+                (let ((goal (mevedel-session-goal session)))
+                  (should (eq 'complete (mevedel-goal-status goal)))
+                  (should (= 2 (mevedel-goal-cycle goal)))
+                  (should (= 2 implementations))
+                  (should (= 1 escalations))
+                  (should (= 2
+                             (cl-count 'planning dispatches))))))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 

@@ -565,70 +565,19 @@ override policy for one invocation.
 
 ### Goals
 
+See [`docs/goals.md`](docs/goals.md) for the authoritative lifecycle,
+continuation, recovery, execution-home, and model-routing contract.
+
 `/goal <objective>` starts a supervised Goal in the current session. Each cycle
-begins with read-only exploration and a `<proposed_plan>` block. mevedel keeps
-that proposal in the Goal's mutable `current-plan.md` and shows the plan
-approval prompt. Approval copies it to an immutable, sequential
-`cycle-NNN-plan.md`, then starts implementation with the selected session
-permission mode. A read-only review returns one structured verdict: `complete`
-finishes the whole Goal, `continue` carries its findings into a new planning
-cycle, and `blocked` stops with a concrete reason. Malformed reviews and a
-successive materially identical plan pause for intervention. Goal status is
-one of `active`, `paused`, `blocked`, or `complete`.
+plans, waits for approval, implements, and reviews until the complete objective
+is done or blocked. `/goal auto <objective>` sends each plan through a tool-free
+guardian and continues when it approves. Automatic Goals never change tool
+permissions; fully unattended mutation still requires selecting `trust-all`.
 
-`/goal auto <objective>` uses the same lifecycle but sends every proposed
-plan to a separate, tool-free Goal guardian. Only a structured `approve`
-verdict can start implementation automatically, and only while the session has
-no queued user input or unresolved interaction. `ask`, malformed output,
-timeout, request failure, or a pending intervention opens the ordinary plan
-approval prompt with the guardian reason. Guardian decisions are persisted in
-the cycle index and rendered as compact transcript disclosures. Automatic Goal
-approval never changes the session permission mode; unattended tool use still
-requires selecting `trust-all` explicitly.
-
-Bare `/goal` shows the current lifecycle position, or prompts for an objective
-when no Goal exists. `/goal edit <objective>` preserves identity and cycle
-history but pauses for explicit review; `/goal pause` waits for the active
-request to settle before stopping continuation; `/goal resume [context]`
-continues from the saved safe phase; and `/goal clear` removes only current
-lifecycle state. Clear and replacement never delete transcript, plan artifacts,
-or filesystem work. Starting over an unfinished Goal requires confirmation,
-while a complete Goal is replaced directly. Aborting an active request pauses
-its Goal.
-
-Every planning, guardian, implementation, and review request has a durable
-write-ahead checkpoint containing its exact input, resolved provider and
-effort, plan reference, attempt identity, and dispatch state. Successful and
-failed terminals settle that checkpoint with the Goal state. Transient
-planning and review transport failures retry once by default; quota, credit,
-authentication, rate-limit, and forced-stop failures pause with their recovery
-reason. Resume resolves the current preset again, so switching providers while
-paused affects the next attempt. An implementation with a started or unknown
-outcome is never replayed: resume first runs a read-only audit of the actual
-repository and chooses the next safe cycle boundary from that evidence.
-A checkpoint that proves implementation never started can instead retry its
-exact input directly.
-
-Every automatic continuation passes one durable idle-state gate: the prior
-checkpoint must be settled, no permission, approval, access, ask, generic
-interaction, or queued user intervention may remain, and automatic
-implementation requires the current guardian approval. Goals optionally use
-the buffer-local `mevedel-goal-token-budget`; provider-reported usage across
-planning, guardian, implementation, and review is accumulated, with the
-existing token estimator as fallback. Exhaustion pauses rather than completes.
-Use `M-x mevedel-goal-set-token-budget` to raise, remove, or add the limit,
-then `/goal resume`. Re-admitting identical durable state pauses the Goal to
-prevent request loops.
-
-Each Goal records one execution home. The default is the current session and
-full conversation context. At supervised plan approval, `w` toggles between
-the current checkout and one Goal-owned worktree; `RET` implements with full
-context and `I` uses focused context. Worktree selection transfers the complete
-Goal to the new worktree session, leaving only a durable handoff pointer in the
-source. Worktree Goals begin focused, but supervised approval may explicitly
-select full context. Automatic Goals read
-`mevedel-goal-execution-home` and `mevedel-goal-implementation-context` when
-they start. Clearing a Goal never removes its worktree.
+Bare `/goal` opens the Goal cockpit for status and lifecycle actions, including
+starting a Goal when none exists. Use `/goal pause`, `/goal resume [context]`,
+`/goal edit <objective>`, and `/goal clear` to manage it. Clear preserves the
+transcript, plan artifacts, worktrees, and filesystem changes.
 
 ### Review and Verify Commands
 
