@@ -4134,5 +4134,47 @@ state of its inner sections"
               (should (equal "plain media" (plist-get parsed :result))))))
       (delete-directory tmpdir t))))
 
+(mevedel-deftest mevedel-view--format-hook-audit-block ()
+  ,test
+  (test)
+  :doc "renders Goal guardian decisions as compact expandable disclosures"
+  (should
+   (equal "  \u25c7 Goal guardian: approve\n"
+          (mevedel-view--format-hook-audit-block
+           '(:type goal-guardian :verdict approve :reason "Safe"
+             :provider "P:M" :effort high :at "now")
+           nil)))
+  (let ((expanded
+         (mevedel-view--format-hook-audit-block
+          '(:type goal-guardian :verdict ask :reason "Need scope"
+            :provider "P:M" :effort high :at "now")
+          t)))
+    (dolist (needle '("Goal guardian: ask" "Need scope" "P:M" "high" "now"))
+      (should (string-match-p (regexp-quote needle) expanded)))))
+
+(mevedel-deftest mevedel-view--render-assistant-turn/guardian-audit ()
+  ,test
+  (test)
+  :doc "renders standalone guardian audit data without exposing it as reasoning"
+  (let ((data-buf (generate-new-buffer " *guardian-render-data*"))
+        audit-start)
+    (unwind-protect
+        (with-temp-buffer
+          (with-current-buffer data-buf
+            (insert "Planning complete.\n")
+            (setq audit-start (point))
+              (insert
+               (mevedel--format-hook-audit-record
+                '(:type goal-guardian :verdict approve :reason "Safe"
+                  :provider "P:M" :effort high :at "now"))))
+          (mevedel-view--render-assistant-turn
+           `((response 1 ,audit-start)
+             (ignored ,audit-start
+                      ,(with-current-buffer data-buf (point-max))))
+           data-buf)
+          (should (string-match-p "Goal guardian: approve" (buffer-string)))
+          (should-not (string-match-p "Thinking" (buffer-string))))
+      (kill-buffer data-buf))))
+
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here

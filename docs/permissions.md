@@ -76,6 +76,10 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Goal planning and review deny non-read-only tools before allow rules are
   considered. This restriction is independent of the session permission mode,
   so skill, session, persistent, and default allow rules cannot bypass it.
+- Automatic Goal guardians receive no tools at all. Guardian approval changes
+  lifecycle state only; it never raises the session permission mode. Fully
+  unattended implementation therefore still requires an explicit `trust-all`
+  selection.
 
 ## Rule format
 

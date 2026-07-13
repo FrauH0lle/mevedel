@@ -120,8 +120,8 @@ the chat buffer, only what is defined by the directive and its references.
 4. Type in the composer at the bottom of the view; use `/help` for local slash
    commands.
 5. Run `/init` or `M-x mevedel-init` to bootstrap or improve project guidance.
-6. Use `/goal <objective>` for a supervised plan, approval, implementation,
-   and review cycle.
+6. Use `/goal <objective>` for supervised work, or `/goal auto <objective>`
+   for guardian-approved automatic plan continuation.
 7. Use `/review` or `/verify` to inspect changes before committing.
 
 ### Workflow map
@@ -563,7 +563,7 @@ override policy for one invocation.
 | `mevedel-tool-ui-agent-description-width` | Maximum one-line task text width in agent handle headers.        |
 | `mevedel-agent-runtime-debug`              | Log sub-agent dispatch handoffs to `*Messages*` when non-nil.       |
 
-### Supervised Goals
+### Goals
 
 `/goal <objective>` starts a supervised Goal in the current session. Each cycle
 begins with read-only exploration and a `<proposed_plan>` block. mevedel keeps
@@ -575,6 +575,16 @@ finishes the whole Goal, `continue` carries its findings into a new planning
 cycle, and `blocked` stops with a concrete reason. Malformed reviews and a
 successive materially identical plan pause for intervention. Goal status is
 one of `active`, `paused`, `blocked`, or `complete`.
+
+`/goal auto <objective>` uses the same lifecycle but sends every proposed
+plan to a separate, tool-free Goal guardian. Only a structured `approve`
+verdict can start implementation automatically, and only while the session has
+no queued user input or unresolved interaction. `ask`, malformed output,
+timeout, request failure, or a pending intervention opens the ordinary plan
+approval prompt with the guardian reason. Guardian decisions are persisted in
+the cycle index and rendered as compact transcript disclosures. Automatic Goal
+approval never changes the session permission mode; unattended tool use still
+requires selecting `trust-all` explicitly.
 
 Bare `/goal` shows the current lifecycle position, or prompts for an objective
 when no Goal exists. `/goal edit <objective>` preserves identity and cycle

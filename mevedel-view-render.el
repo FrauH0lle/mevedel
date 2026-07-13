@@ -3654,8 +3654,22 @@ are merged into a single summary."
                  (setq tool-group nil))
                (push seg thinking-group))))
           ((or 'reasoning 'render-data 'ignored)
-           (if (mevedel-view--agent-transcript-render-segment-p
-                data-buf (cadr seg) (caddr seg))
+           (cond
+            ((and (eq type 'ignored)
+                  (mevedel-view--hook-audit-only-segment-p
+                   data-buf (cadr seg) (caddr seg))
+                  (not tool-group))
+             (mevedel-view--flush-thinking-group thinking-group data-buf)
+             (setq thinking-group nil)
+             (let* ((source (cons (cadr seg) (caddr seg)))
+                    (text (with-current-buffer data-buf
+                            (buffer-substring-no-properties
+                             (cadr seg) (caddr seg)))))
+               (dolist (record
+                        (mevedel-view--hook-audit-records-from-text text))
+                 (mevedel-view--insert-hook-audit-block record source))))
+            ((mevedel-view--agent-transcript-render-segment-p
+              data-buf (cadr seg) (caddr seg))
                (progn
                  (mevedel-view--flush-thinking-group thinking-group data-buf)
                  (setq thinking-group nil)
@@ -3664,11 +3678,12 @@ are merged into a single summary."
                     (nreverse tool-group) data-buf)
                    (setq tool-group nil))
                  (mevedel-view--render-agent-transcript-segment
-                  data-buf seg))
-             (if (and tool-group
-                      (mevedel-view--hook-audit-only-segment-p
-                       data-buf (cadr seg) (caddr seg)))
-                 (push seg tool-group)
+                  data-buf seg)))
+            ((and tool-group
+                  (mevedel-view--hook-audit-only-segment-p
+                   data-buf (cadr seg) (caddr seg)))
+             (push seg tool-group))
+            (t
                ;; Drop org-only glue (`#+end_tool', `#+begin_tool …', blank
                ;; lines) so it doesn't surface as a one-line `Thinking…'
                ;; between adjacent tool blocks.  Skip without flushing the

@@ -1151,6 +1151,20 @@ finds it during `$' skill dispatch."
         (should (string-match-p "PONYTAIL MODE ACTIVE - level: full"
                                 (buffer-string)))))))
 
+(mevedel-deftest mevedel-view--queued-user-message-auto-drain-blocked-p ()
+  ,test
+  (test)
+  :doc "blocks fallback drainage for plan approval and guardian review"
+  (let ((session (mevedel-session--create
+                  :name "main" :plan-queue '(plan))))
+    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+    (setf (mevedel-session-plan-queue session) nil
+          (mevedel-session-plan-metadata session) '(:guardian-pending t))
+    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+    (setf (mevedel-session-plan-metadata session) nil)
+    (should-not
+     (mevedel-view--queued-user-message-auto-drain-blocked-p session))))
+
 (mevedel-deftest mevedel-view-send/queued-user-messages ()
   ,test
   (test)
@@ -1189,6 +1203,35 @@ finds it during `$' skill dispatch."
                       :input)))
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
+
+  :doc "plain input during guardian review joins the intervention queue"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-guardian" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           send-called)
+      (setf (mevedel-session-plan-metadata session)
+            '(:guardian-pending t))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request nil))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t)))
+                ((symbol-function
+                  'mevedel-view--schedule-late-queued-user-message-drain)
+                 #'ignore))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "stop before implementing")
+          (mevedel-view-send)))
+      (should-not send-called)
+      (should (equal "stop before implementing"
+                     (plist-get
+                      (car (mevedel-session-queued-user-messages session))
+                      :input)))))
 
   :doc "queued inline skill waits for request-time transforms"
   (mevedel-view-test--with-fork-skill
@@ -2046,13 +2089,34 @@ finds it during `$' skill dispatch."
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display)
-                   (setq started (list objective display)
+                 (lambda (objective display &optional policy)
+                   (setq started (list objective display policy)
                          started-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal "/goal draft" "draft")))
       (should (eq data-buf started-buffer))
-      (should (equal '("expanded\n\nhook context" "expanded") started)))))
+      (should (equal '("expanded\n\nhook context" "expanded" supervised)
+                     started))))
+  :doc "strips the auto selector and starts an automatic Goal"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "main"))
+          started)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                 (lambda (objective _input callback)
+                   (should (equal "ship it" objective))
+                   (funcall callback objective nil nil)))
+                ((symbol-function 'mevedel-view-history-add) #'ignore)
+                ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
+                ((symbol-function 'mevedel-view--clear-input) #'ignore)
+                ((symbol-function 'mevedel-goal-start)
+                 (lambda (objective display policy)
+                   (setq started (list objective display policy)))))
+        (with-current-buffer view-buf
+          (mevedel-view--send-local-goal
+           "/goal auto ship it" "auto ship it")))
+      (should (equal '("ship it" "ship it" automatic) started)))))
 
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
@@ -2119,8 +2183,8 @@ finds it during `$' skill dispatch."
                      (lambda (&rest _)
                        (push 'fork events)))
                     ((symbol-function 'mevedel-goal-start)
-                     (lambda (objective display)
-                       (push (list objective display) events))))
+                     (lambda (objective display &optional policy)
+                       (push (list objective display policy) events))))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
               (insert "/goal draft")
