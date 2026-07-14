@@ -52,16 +52,20 @@
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-take-session-context "mevedel-hooks" (session))
 
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-copy-text
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-invalidate-edit
+                  "mevedel-mention-bindings" (start end minimum maximum))
+(declare-function mevedel-mention-bindings-ranges
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-set
+                  "mevedel-mention-bindings" (start end binding &optional object))
+
 ;; `mevedel-mentions'
-(declare-function mevedel-mentions-binding-ranges
-                  "mevedel-mentions" (text))
-(declare-function mevedel-mentions-copy-bound-text
-                  "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
-(declare-function mevedel-mentions-set-binding
-                  "mevedel-mentions" (start end binding &optional object))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -88,9 +92,6 @@
 (defvar mevedel-session--fork-pending)
 (defvar mevedel-session--read-only-mode)
 
-;; `mevedel-skill-bindings'
-(declare-function mevedel-skill-bindings-invalidate-edit
-                  "mevedel-skill-bindings" (start end minimum maximum))
 ;; `mevedel-skills-core'
 (declare-function mevedel-session-get-skill
                   "mevedel-skills-core" (session name))
@@ -111,9 +112,9 @@
                   "mevedel-skills-invoke" (text session))
 
 ;; `mevedel-skills-plan'
-(declare-function mevedel-skill-invocation-plan-entries
-                  "mevedel-skills-plan" (cl-x) t)
 (declare-function mevedel-skill-invocation-plan-fork-p
+                  "mevedel-skills-plan" (cl-x) t)
+(declare-function mevedel-skill-invocation-plan-occurrences
                   "mevedel-skills-plan" (cl-x) t)
 (declare-function mevedel-skills-plan-prepare
                   "mevedel-skills-plan" (plan callback &optional cancelled-p))
@@ -162,6 +163,10 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel--workspace)
+
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-prompt-transform-start
+                  "mevedel-transcript" ())
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
@@ -392,6 +397,9 @@ This covers the interval before the prompt has been accepted and before
 (defvar-local mevedel-view--pending-skill-submission nil
   "Cancellation token for skill-plan preparation before request dispatch.")
 
+(defvar-local mevedel-view--pending-model-input nil
+  "One-shot model input replacing the latest stored prompt at request time.")
+
 (defun mevedel-view--cancel-pending-skill-submission ()
   "Cancel this view's pending skill-plan preparation, if any."
   (when mevedel-view--pending-skill-submission
@@ -448,8 +456,8 @@ late callback accidentally inserts transcript content below the prompt."
                (marker-buffer mevedel-view--input-marker)))
          (text (and preserve-p
                     (progn
-                      (require 'mevedel-mentions)
-                      (mevedel-mentions-copy-bound-text
+                      (require 'mevedel-mention-bindings)
+                      (mevedel-mention-bindings-copy-text
                        (buffer-substring
                         (mevedel-view--input-start) (point-max))))))
          result)
@@ -459,7 +467,7 @@ late callback accidentally inserts transcript content below the prompt."
                (markerp mevedel-view--input-marker)
                (marker-buffer mevedel-view--input-marker))
       (let* ((start (mevedel-view--input-start))
-             (current (mevedel-mentions-copy-bound-text
+             (current (mevedel-mention-bindings-copy-text
                        (buffer-substring start (point-max)))))
         (unless (equal-including-properties current text)
           (let ((inhibit-read-only t)
@@ -954,8 +962,8 @@ follows `mevedel-view--input-marker'."
 
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."
-  (require 'mevedel-mentions)
-  (let ((text (mevedel-mentions-copy-bound-text
+  (require 'mevedel-mention-bindings)
+  (let ((text (mevedel-mention-bindings-copy-text
                (buffer-substring
                 (mevedel-view--input-start) (point-max)))))
     (string-trim text)))
@@ -964,10 +972,10 @@ follows `mevedel-view--input-marker'."
   "Bind skill mentions in the live composer for SESSION and return input.
 The visible text is unchanged.  Binding before asynchronous preparation
 means a failed attempt leaves the exact source attached for a retry."
-  (require 'mevedel-mentions)
+  (require 'mevedel-mention-bindings)
   (let* ((input-start (mevedel-view--input-start))
          (raw-input
-          (mevedel-mentions-copy-bound-text
+          (mevedel-mention-bindings-copy-text
            (buffer-substring input-start (point-max))))
          (bound-input
           (with-current-buffer mevedel--data-buffer
@@ -976,8 +984,8 @@ means a failed attempt leaves the exact source attached for a retry."
       (remove-text-properties
        input-start (point-max)
        '(mevedel-mention-binding nil rear-nonsticky nil))
-      (dolist (range (mevedel-mentions-binding-ranges bound-input))
-        (mevedel-mentions-set-binding
+      (dolist (range (mevedel-mention-bindings-ranges bound-input))
+        (mevedel-mention-bindings-set
          (+ input-start (plist-get range :start))
          (+ input-start (plist-get range :end))
          (plist-get range :binding))))
@@ -1196,8 +1204,8 @@ means a failed attempt leaves the exact source attached for a retry."
   (when (and (markerp mevedel-view--input-marker)
              (marker-buffer mevedel-view--input-marker)
              (>= start (mevedel-view--input-start)))
-    (require 'mevedel-skill-bindings)
-    (mevedel-skill-bindings-invalidate-edit
+    (require 'mevedel-mention-bindings)
+    (mevedel-mention-bindings-invalidate-edit
      start end (mevedel-view--input-start) (point-max)))
   (mevedel-view--refresh-skill-argument-hint))
 
@@ -1340,6 +1348,10 @@ in the view when present."
                (model-input (if hook-context
                                 (concat hook-input "\n\n" hook-context)
                               hook-input))
+               (transcript-input
+                (if hook-context
+                    (concat input "\n\n" hook-context)
+                  input))
                (view-context
                 (mevedel-view--join-hook-contexts
                  (mevedel-hooks-format-context
@@ -1358,11 +1370,13 @@ in the view when present."
               (progn
                 (when before-send
                   (funcall before-send))
+                (when-let* ((warnings (plist-get prepared :warnings)))
+                  (message "mevedel: %s" (string-join warnings "; ")))
                 (if fork-outcome
                     (let* ((skill (plist-get fork-outcome :skill))
                            (name (mevedel-skill-name skill)))
                       (mevedel-view--start-fork-skill-turn
-                       (concat model-input render-data)
+                       (concat transcript-input render-data)
                        input view-context)
                       (with-current-buffer data-buffer
                         (mevedel-skills-dispatch-prepared-fork
@@ -1377,8 +1391,9 @@ in the view when present."
                     (setq-local mevedel-skills--pending-request-context
                                 request-context))
                   (mevedel-view--forward-input
-                   (concat model-input render-data)
-                   input nil t nil view-context all-audits)))
+                   (concat transcript-input render-data)
+                   input nil t nil view-context all-audits
+                   (concat model-input render-data))))
             (error
              (when (buffer-live-p data-buffer)
                (with-current-buffer data-buffer
@@ -1421,19 +1436,12 @@ skill bodies and hook output are never scanned for additional invocations."
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session)))
     (require 'mevedel-skills-plan)
-    (let* ((planned
+    (let* ((plan
             (with-current-buffer data-buffer
               (mevedel-skills-refresh-bound-input input session)
-              (mevedel-skills-plan-user-input input session)))
-           (plan (plist-get planned :plan)))
-      (cond
-       ((not (eq (plist-get planned :status) 'ok))
-        (message "mevedel: skill invocation blocked: %s"
-                 (or (plist-get planned :message) "unknown planning error"))
-        (when on-block (funcall on-block)))
-       ((null (mevedel-skill-invocation-plan-entries plan))
-        (mevedel-view--forward-input input nil before-send nil on-block))
-       (t
+              (mevedel-skills-plan-user-input input session))))
+      (if (null (mevedel-skill-invocation-plan-occurrences plan))
+          (mevedel-view--forward-input input nil before-send nil on-block)
         (let* ((token (list :cancelled nil))
                (submission
                 (list :token token
@@ -1451,7 +1459,7 @@ skill bodies and hook output are never scanned for additional invocations."
                (mevedel-view--handle-prepared-plan submission prepared))
              (lambda ()
                (not (mevedel-view--skill-submission-active-p
-                     token view-buffer data-buffer)))))))))))
+                     token view-buffer data-buffer))))))))))
 
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
@@ -1679,7 +1687,7 @@ DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
 
 (defun mevedel-view--forward-input
     (input &optional display-text before-send prompt-checked on-block
-           hook-context hook-audits)
+           hook-context hook-audits model-input)
   "Render INPUT in the history region, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
 that in the view instead of INPUT (e.g., compact skill invocation).
@@ -1688,7 +1696,8 @@ before any user-visible prompt or data-buffer prompt is inserted.  When
 PROMPT-CHECKED is non-nil, skip `UserPromptSubmit' because the caller
 already ran it.  ON-BLOCK is called when a prompt hook blocks.
 HOOK-CONTEXT and HOOK-AUDITS are summarized in the view when
-PROMPT-CHECKED is non-nil.
+PROMPT-CHECKED is non-nil.  MODEL-INPUT, when non-nil, replaces INPUT only in
+the temporary request prompt.
 
 Anchors the incremental-render markers so progress hooks can redraw
 the in-flight assistant turn as tool calls complete:
@@ -1697,13 +1706,14 @@ the input zone (where the assistant turn will be rendered);
 `mevedel-view--data-turn-start' points into the data buffer just
 after the forwarded prompt, where the LLM's response will begin."
   (cl-labels
-      ((send-now (model-input view-text context audits)
+      ((send-now (stored-input view-text context audits request-input)
          (when before-send
            (funcall before-send))
          (mevedel-view--forward-input-now
-          model-input view-text context audits)))
+          stored-input view-text context audits request-input)))
     (if prompt-checked
-        (send-now input (or display-text input) hook-context hook-audits)
+        (send-now input (or display-text input) hook-context hook-audits
+                  model-input)
       (mevedel-view--run-prompt-submit-hook
        input display-text
        (lambda (hook-input context audits)
@@ -1713,14 +1723,17 @@ after the forwarded prompt, where the LLM's response will begin."
             hook-input)
           (or display-text hook-input)
           context
-          audits))
+          audits
+          nil))
        on-block))))
 
 (defun mevedel-view--forward-input-now
-    (input &optional display-text hook-context hook-audits)
+    (input &optional display-text hook-context hook-audits model-input)
   "Forward INPUT to gptel immediately, after prompt hooks have run.
 DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.
-HOOK-CONTEXT and HOOK-AUDITS are summarized in the view when present."
+HOOK-CONTEXT and HOOK-AUDITS are summarized in the view when present.
+MODEL-INPUT, when non-nil, replaces INPUT only in the temporary request
+prompt."
   (mevedel-view--ensure-interactive-chat-view)
   (when (buffer-local-value 'mevedel--compaction-in-flight mevedel--data-buffer)
     (message "mevedel: compacting, please wait...")
@@ -1729,7 +1742,8 @@ HOOK-CONTEXT and HOOK-AUDITS are summarized in the view when present."
          (display-text (and display-text
                             (mevedel--normalize-message-text display-text)))
          (prompt-summary-body
-          (mevedel-view--inline-skill-prompt-summary-body input))
+          (mevedel-view--inline-skill-prompt-summary-body
+           (or model-input input)))
          (session (mevedel-view--session))
          (dropped-file-grants
           (mevedel-view--pop-dropped-file-grants-for-input
@@ -1788,7 +1802,24 @@ HOOK-CONTEXT and HOOK-AUDITS are summarized in the view when present."
       (with-current-buffer mevedel--data-buffer
         (mevedel-view--activate-dropped-file-grants
          dropped-file-grants session)
-        (gptel-send)))))
+        (setq-local mevedel-view--pending-model-input model-input)
+        (unwind-protect
+            (gptel-send)
+          (setq-local mevedel-view--pending-model-input nil))))))
+
+(defun mevedel-view--transform-model-input (fsm)
+  "Replace the latest stored prompt with its one-shot model input for FSM."
+  (when-let* ((chat-buffer (plist-get (gptel-fsm-info fsm) :buffer))
+              ((buffer-live-p chat-buffer))
+              (model-input
+               (buffer-local-value 'mevedel-view--pending-model-input
+                                   chat-buffer)))
+    (with-current-buffer chat-buffer
+      (setq-local mevedel-view--pending-model-input nil))
+    (require 'mevedel-transcript)
+    (goto-char (mevedel-transcript-prompt-transform-start))
+    (delete-region (point) (point-max))
+    (insert model-input)))
 
 (defun mevedel-view--agent-fsm-p (info data-buffer)
   "Return non-nil when INFO or DATA-BUFFER belongs to an agent request."

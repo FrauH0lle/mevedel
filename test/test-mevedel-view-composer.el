@@ -105,7 +105,10 @@
            nil
            :buffer (current-buffer)
            :dry-run t
-           :transforms gptel-prompt-transform-functions)))
+           :transforms
+           (cons #'mevedel-view--transform-model-input
+                 (remove #'mevedel-view--transform-model-input
+                         gptel-prompt-transform-functions)))))
     (format "%S" (plist-get (gptel-fsm-info fsm) :data))))
 
 (defun mevedel-view-test--complete-skill (candidate)
@@ -175,9 +178,11 @@
                   (list ".mevedel/skills" user-skills))
             (with-current-buffer data-buf
               (mevedel-skills-install session data-buf))
-            (let (send-called message-text raised)
+            (let (sent message-text raised)
               (cl-letf (((symbol-function 'gptel-send)
-                         (lambda (&rest _) (setq send-called t)))
+                         (lambda (&rest _)
+                           (setq sent
+                                 (mevedel-view-test--dry-run-request-data))))
                         ((symbol-function 'message)
                          (lambda (format-string &rest args)
                            (setq message-text
@@ -187,13 +192,26 @@
                         (condition-case err
                             (progn (mevedel-view-send) nil)
                           (user-error (error-message-string err))))
-                  (should-not send-called)
-                  (should (or raised message-text))
+                  (should sent)
+                  (should-not raised)
+                  (should (string-match-p
+                           (regexp-quote "[skill:alpha -- unavailable]")
+                           sent))
+                  (should-not (string-match-p "COMPETING ALPHA BODY" sent))
+                  (should (string-match-p "mevedel:" message-text))
+                  (should (string-empty-p (mevedel-view--input-text)))
                   (should (equal "> diagnosis\nPlease use $alpha"
-                                 (mevedel-view--input-text)))
-                  (should-not (mevedel-view-history--entries)))))))
+                                 (car (mevedel-view-history--entries))))
+                  (with-current-buffer data-buf
+                    (should (string-match-p
+                             (regexp-quote "Please use $alpha")
+                             (buffer-string)))
+                    (should-not (string-match-p
+                                 (regexp-quote
+                                  "[skill:alpha -- unavailable]")
+                                 (buffer-string))))))))
       (delete-directory root t)
-      (delete-directory user-skills t))))
+      (delete-directory user-skills t)))))
 
 (defun mevedel-view-test--stop-prompt-hook (_event)
   "Block prompt submission in view-send cases."
@@ -536,7 +554,7 @@
                    (binding (get-text-property
                              start 'mevedel-mention-binding)))
               (should (equal 'skill (plist-get binding :kind)))
-              (should (equal "alpha" (plist-get binding :name)))
+              (should (equal "$alpha" (plist-get binding :token)))
               (should (equal source-file
                              (plist-get binding :source-file)))
               (goto-char (point-max))
@@ -1012,8 +1030,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA BODY"))
     (let* ((input "Use $alpha")
-           (plan (plist-get
-                  (mevedel-skills-plan-user-input input session) :plan))
+           (plan (mevedel-skills-plan-user-input input session))
            prepared
            forwarded
            before)
@@ -1034,9 +1051,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
              nil nil))
           (should-not mevedel-view--pending-skill-submission))
         (should before)
-        (should (string-match-p "ALPHA BODY" (car forwarded)))
+        (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))
         (should (string-match-p (regexp-quote "$literal")
-                                (car forwarded)))
+                                (nth 7 forwarded)))
         (with-current-buffer data-buf
           (should (equal (plist-get prepared :request-context)
                          mevedel-skills--pending-request-context)))))))
@@ -1048,8 +1065,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA BODY"))
     (let* ((input "Use $alpha")
-           (plan (plist-get
-                  (mevedel-skills-plan-user-input input session) :plan))
+           (plan (mevedel-skills-plan-user-input input session))
            prepared
            forwarded)
       (with-current-buffer data-buf
@@ -1063,7 +1079,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (cl-letf (((symbol-function 'mevedel-view--forward-input)
                      (lambda (&rest args) (setq forwarded args))))
             (mevedel-view--handle-prepared-plan submission prepared)))
-        (should (string-match-p "ALPHA BODY" (car forwarded)))))))
+        (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))))))
 
 (mevedel-deftest mevedel-view--submit-planned-input ()
   ,test
@@ -1073,7 +1089,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       '(("alpha" "inline" "ALPHA BODY"))
     (let (sent before blocked)
       (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (mevedel-view--submit-planned-input
            "Use $alpha"
@@ -1135,13 +1152,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
-            (should (string-match-p "Expanded hello" expanded))
+            (should (string-match-p (regexp-quote "$myskill hello")
+                                    expanded))
+            (should-not (string-match-p "Expanded hello" expanded))
             (should-not (string-match-p "mevedel-render-data" expanded)))
           (mevedel-view-toggle-section))
         (should send-called)
         (with-current-buffer data-buf
           (let ((text (buffer-string)))
-            (should (string-match-p "Expanded hello" text))
+            (should (string-match-p (regexp-quote "$myskill hello") text))
+            (should-not (string-match-p "Expanded hello" text))
             (should (string-search "<!-- mevedel-render-data -->" text))
             (goto-char (point-min))
             (search-forward "<!-- mevedel-render-data -->")
@@ -1149,7 +1169,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                         (get-text-property (match-beginning 0)
                                            'gptel)))
             (should (string-match-p
-                     "Expanded hello"
+                     (regexp-quote "$myskill hello")
                      (mevedel-pipeline--strip-render-data-blocks text)))))
 	        (with-current-buffer view-buf
 	          (mevedel-view--full-rerender)
@@ -1163,7 +1183,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	          (mevedel-view-toggle-section)
 	          (let ((expanded (buffer-substring-no-properties
 	                           (point-min) mevedel-view--input-marker)))
-	            (should (string-match-p "Expanded hello" expanded)))))))
+	            (should (string-match-p (regexp-quote "$myskill hello")
+                                      expanded))
+	            (should-not (string-match-p "Expanded hello" expanded)))))))
 
   :doc "inline skill expansion rewrites render hook audit and context"
   (mevedel-view-test--with-fork-skill
@@ -1215,15 +1237,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should-not (string-match-p "model-only context" expanded)))))
       (with-current-buffer data-buf
         (let ((text (buffer-string)))
-          (should (string-match-p "rewritten prompt" text))
-          (should (string-match-p "model-only context" text))
+          (should (string-match-p (regexp-quote "$myskill hello") text))
+          (should-not (string-match-p "rewritten prompt" text))
+          (should-not (string-match-p "model-only context" text))
           (should (string-match-p "<!-- mevedel-hook-audit -->" text))))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
 	          (should (string-match-p "hook changed prompt" text))
-	          (should (string-match-p "hook context added" text))
+	          (should-not (string-match-p "hook context added" text))
 	          (should-not (string-match-p "model-only context" text))))))
 
   :doc "manually typed queued mention keeps its exact source and latest body"
@@ -1284,23 +1307,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (delete-file source-file)
               (with-current-buffer data-buf
                 (setq-local mevedel--current-request nil))
-              (mevedel-view--drain-queued-user-message data-buf)
-              (should-not request-data)
-              (let* ((queue (mevedel-session-queued-user-messages session))
-                     (input (plist-get (car queue) :input))
-                     (start (string-match "\\$alpha" input)))
-                (should (= 1 (length queue)))
-                (should (equal source-file
-                               (plist-get
-                                (get-text-property
-                                 start 'mevedel-mention-binding input)
-                                :source-file))))
-              (mevedel-view-test--write-skill
-               project-skills "alpha"
-               "name: alpha\ndescription: Project alpha\ncontext: inline\n"
-               "ORIGINAL ALPHA V2")
               (mevedel-view--drain-queued-user-message data-buf))
-            (should (string-search "ORIGINAL ALPHA V2" request-data))
+            (should (string-search "[skill:alpha -- unavailable]"
+                                   request-data))
             (should-not (string-search "ORIGINAL ALPHA V1" request-data))
             (should-not (string-search "COMPETING ALPHA" request-data))
             (should-not (mevedel-session-queued-user-messages session))))
@@ -1400,6 +1409,28 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-search "BETA BODY" request-data))
             (should-not (string-search "ALPHA BODY" request-data))))
       (delete-directory root t)))
+
+  :doc "copy and yank preserve the exact binding on both occurrences"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY"))
+    (let (first second)
+      (with-current-buffer view-buf
+        (let ((kill-ring nil))
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $al")
+          (mevedel-view-test--complete-skill "alpha")
+          (setq first
+                (get-text-property
+                 (+ (mevedel-view--input-start) 4)
+                 'mevedel-mention-binding))
+          (kill-ring-save (+ (mevedel-view--input-start) 4) (point-max))
+          (goto-char (point-max))
+          (insert " and ")
+          (yank)
+          (setq second
+                (get-text-property
+                 (- (point-max) 6) 'mevedel-mention-binding))))
+      (should (equal first second))))
 
   :doc "persisted history recall submits the latest exact source after a collision"
   (let* ((mevedel-skills-include-bundled nil)
@@ -1503,19 +1534,46 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-search "LIVE ALPHA BODY" request-data))))
       (delete-directory root t)))
 
-  :doc "missing exact source keeps the multiline draft and sends nothing"
+  :doc "malformed live bindings block submission and preserve the draft"
+  (mevedel-view-test--with-fork-skill
+      (mevedel-skill--create
+       :name "alpha"
+       :body "ALPHA BODY"
+       :context 'inline
+       :user-invocable-p t)
+    (let (send-called raised)
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (let ((start (point)))
+            (insert "Use $alpha")
+            (with-silent-modifications
+              (add-text-properties
+               (+ start 4) (point)
+               '(mevedel-mention-binding
+                 (:kind skill :token "$alpha")))))
+          (setq raised
+                (condition-case err
+                    (progn (mevedel-view-send) nil)
+                  (user-error (error-message-string err))))
+          (should (equal "Malformed mention binding" raised))
+          (should-not send-called)
+          (should (equal "Use $alpha" (mevedel-view--input-text)))))))
+
+  :doc "missing exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'missing)
 
-  :doc "disabled exact source keeps the multiline draft and sends nothing"
+  :doc "disabled exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'disabled)
 
-  :doc "unreadable exact source keeps the multiline draft and sends nothing"
+  :doc "unreadable exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'unreadable)
 
-  :doc "malformed exact source keeps the multiline draft and sends nothing"
+  :doc "malformed exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'malformed)
 
-  :doc "non-invocable exact source keeps the multiline draft and sends nothing"
+  :doc "non-invocable exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'not-user-invocable))
 
 (mevedel-deftest mevedel-view-send/planned-skills ()
@@ -1528,8 +1586,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (mevedel-view-test--with-source-skills
         '(("alpha" "inline" "ALPHA ARGS=<$ARGUMENTS>"))
       (let (sent)
-        (cl-letf (((symbol-function 'gptel-send)
-                   (lambda (&rest _) (setq sent (buffer-string)))))
+      (cl-letf (((symbol-function 'gptel-send)
+                   (lambda (&rest _)
+                     (setq sent (mevedel-view-test--dry-run-request-data)))))
           (with-current-buffer view-buf
             (goto-char (mevedel-view--input-start))
             (insert (car case))
@@ -1671,7 +1730,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       '(("alpha" "inline" "UNIQUE ALPHA BODY"))
     (let (sent)
       (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "Use $alpha, then $alpha again")
@@ -1689,7 +1749,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         ("delta" "inline" "DELTA<$ARGUMENTS>"))
     (let (sent)
       (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "$alpha $alpha $beta -- $delta details")
@@ -1713,7 +1774,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         ("g" "inline" "G<$ARGUMENTS>"))
     (let (sent)
       (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "$a $b $c $d $e $f $g rest")
@@ -1734,7 +1796,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (_prepared _callback &rest keys)
                    (setq fork-prompt (plist-get keys :prompt))))
                 ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "$forker inspect with $alpha")
@@ -1742,7 +1805,16 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (string-match-p "FORK<inspect with" fork-prompt))
         (should (string-match-p
                  (regexp-quote "[skill:alpha -- attached]") fork-prompt))
-        (should-not sent)))
+        (should-not sent))
+      (with-current-buffer data-buf
+        (let ((text (buffer-string)))
+          (should (string-match-p (regexp-quote "$forker inspect with $alpha")
+                                  text))
+          (should-not (string-match-p "FORK<" text)))
+        (goto-char (point-min))
+        (search-forward "$forker")
+        (should (get-text-property
+                 (match-beginning 0) 'mevedel-mention-binding))))
     (with-current-buffer data-buf
       (setq-local mevedel--current-request nil))
     (with-current-buffer view-buf
@@ -1752,7 +1824,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
                  (lambda (&rest _) (setq fork-called t)))
                 ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (mevedel-view--clear-input)
           (goto-char (mevedel-view--input-start))
@@ -1761,16 +1834,19 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should-not fork-called)
         (should (string-match-p "FORK<>" sent)))))
 
-  :doc "preparation failure prevents every dispatch and preserves the draft"
+  :doc "preparation failure preserves the bound draft for retry"
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA")
         ("beta" "inline" "BETA"))
-    (let (calls sent)
+    (let ((fail-beta t)
+          calls sent first-binding second-binding)
       (cl-letf (((symbol-function 'mevedel-skills-prepare)
                  (lambda (skill _arguments callback &rest _)
                    (push (mevedel-skill-name skill) calls)
                    (funcall callback
-                            (if (equal "beta" (mevedel-skill-name skill))
+                            (if (and fail-beta
+                                     (equal "beta"
+                                            (mevedel-skill-name skill)))
                                 '(:status error :reason blocked
                                   :message "blocked")
                               '(:status ok :kind instruction :body "ALPHA"
@@ -1781,11 +1857,22 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (goto-char (mevedel-view--input-start))
           (insert "Use $alpha and $beta")
           (mevedel-view-send)
+          (setq first-binding
+                (get-text-property
+                 (+ (mevedel-view--input-start) 4)
+                 'mevedel-mention-binding))
           (should (equal "Use $alpha and $beta"
                          (mevedel-view--input-text)))
-          (should-not (mevedel-view-history--entries))))
-      (should (equal '("beta" "alpha") calls))
-      (should-not sent)))
+          (should-not (mevedel-view-history--entries))
+          (setq fail-beta nil
+                calls nil)
+          (mevedel-view-send)
+          (setq second-binding
+                (get-text-property
+                 4 'mevedel-mention-binding
+                 (car (mevedel-view-history--entries))))))
+      (should sent)
+      (should (equal first-binding second-binding))))
 
   :doc "submit hooks see the complete inert prompt and added skill text stays literal"
   (mevedel-view-test--with-source-skills
@@ -1804,7 +1891,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-hooks-event-plist)
                  (lambda (_event _session _workspace &rest extra) extra))
                 ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "Use $alpha")
@@ -1827,7 +1915,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-hooks-event-plist)
                  (lambda (_event _session _workspace &rest extra) extra))
                 ((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq sent (buffer-string)))))
+                 (lambda (&rest _)
+                   (setq sent (mevedel-view-test--dry-run-request-data)))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "Use $alpha")
@@ -1969,7 +2058,25 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (string-match-p "<hook-event name=\"SessionStart\">"
                                 (buffer-string)))
         (should (string-match-p "PONYTAIL MODE ACTIVE - level: full"
-                                (buffer-string)))))))
+                                  (buffer-string)))))))
+
+(mevedel-deftest mevedel-view--transform-model-input ()
+  ,test
+  (test)
+  :doc "uses and clears the data buffer's one-shot model input"
+  (let* ((chat-buffer (generate-new-buffer " *mevedel-model-input-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat-buffer))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buffer
+            (setq-local mevedel-view--pending-model-input "derived prompt"))
+          (with-temp-buffer
+            (insert "stored prompt")
+            (mevedel-view--transform-model-input fsm)
+            (should (equal "derived prompt" (buffer-string))))
+          (with-current-buffer chat-buffer
+            (should-not mevedel-view--pending-model-input)))
+      (kill-buffer chat-buffer))))
 
 (mevedel-deftest mevedel-view--queued-user-message-auto-drain-blocked-p ()
   ,test
@@ -2194,7 +2301,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (= 1 sends))
         (should-not (mevedel-session-queued-user-messages session)))))
 
-  :doc "failed queued preparation retains the exact FIFO entry"
+  :doc "an unavailable queued binding annotates, sends, and leaves the queue"
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA"))
     (let (sent original)
@@ -2220,9 +2327,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
         (mevedel-view--drain-queued-user-message data-buf))
-      (should-not sent)
-      (should (eq original
-                  (car (mevedel-session-queued-user-messages session))))))
+      (should sent)
+      (should-not (mevedel-session-queued-user-messages session))))
 
   :doc "fallback drain preserves queued entries while plan approval is pending"
   (mevedel-view-test--with-buffers
@@ -2651,7 +2757,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 	          (let ((text (mevedel--strip-hook-audit-blocks
                          (buffer-string))))
 	            (should-not (string-match-p "rewritten prompt" text))
-            (should (string-match-p "Expanded hello" text)))))))
+            (should (string-match-p (regexp-quote "$myskill hello") text))
+            (should-not (string-match-p "Expanded hello" text)))))))
 
   :doc "prompt rewrites render an expandable hook audit disclosure"
   (let* ((root (make-temp-file "mevedel-view-hooks-audit" t))
@@ -2751,7 +2858,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (let ((text (buffer-string)))
           (should-not (string-match-p "rewritten prompt" text))
-          (should (string-match-p "Expanded hello" text))
+          (should (string-match-p (regexp-quote "$myskill hello") text))
+          (should-not (string-match-p "Expanded hello" text))
           (should (string-match-p "model-only context" text))))))
 
   :doc "malformed UserPromptSubmit decisions are ignored"

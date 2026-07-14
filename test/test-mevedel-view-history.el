@@ -16,11 +16,8 @@
 (require 'mevedel-view)
 (require 'mevedel-view-history)
 (require 'mevedel-structs)
-(require 'mevedel-mentions)
+(require 'mevedel-mention-bindings)
 (require 'mevedel-session-persistence)
-
-(declare-function mevedel-mentions-set-binding
-                  "mevedel-mentions" (start end binding &optional object))
 
 
 ;;
@@ -59,9 +56,9 @@
          (token (concat "$" name))
          (start (string-match (regexp-quote token) result)))
     (should start)
-    (mevedel-mentions-set-binding
+    (mevedel-mention-bindings-set
      start (+ start (length token))
-     (list :kind 'skill :name name :source-file source-file)
+     (list :kind 'skill :token token :source-file source-file)
      result)
     result))
 
@@ -348,7 +345,7 @@ Binds `data-buf' and `view-buf'."
                                  "first")
                            entries))
             (should (equal (list :kind 'skill
-                                 :name "alpha"
+                                 :token "$alpha"
                                  :source-file skill-file)
                            (get-text-property
                             token-start 'mevedel-mention-binding

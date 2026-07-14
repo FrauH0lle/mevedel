@@ -15,9 +15,11 @@
 (require 'subr-x)
 (require 'mevedel-utilities)
 
-;; `mevedel-mentions'
-(declare-function mevedel-mentions-copy-bound-text
-                  "mevedel-mentions" (text))
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-copy-text
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-valid-p
+                  "mevedel-mention-bindings" (text))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-read
@@ -25,10 +27,6 @@
 (declare-function mevedel-session-persistence-write
                   "mevedel-session-persistence" (path plist))
 (defvar mevedel-session--read-only-mode)
-
-;; `mevedel-skill-bindings'
-(declare-function mevedel-skill-bindings-valid-p
-                  "mevedel-skill-bindings" (text))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -111,8 +109,8 @@
 
 (defun mevedel-view-history--input-text ()
   "Return current view input text, untrimmed."
-  (require 'mevedel-mentions)
-  (mevedel-mentions-copy-bound-text
+  (require 'mevedel-mention-bindings)
+  (mevedel-mention-bindings-copy-text
    (buffer-substring (mevedel-view--input-start) (point-max))))
 
 (defun mevedel-view-history--replace-input (text)
@@ -127,9 +125,9 @@
   "Add INPUT to the current view buffer's input history.
 INPUT is trimmed before insertion.  Empty entries and consecutive
 duplicates are skipped.  History navigation state is reset."
-  (require 'mevedel-mentions)
+  (require 'mevedel-mention-bindings)
   (let ((entry (string-trim
-                (mevedel-mentions-copy-bound-text
+                (mevedel-mention-bindings-copy-text
                  (mevedel--normalize-message-text (or input "")))))
         (ring (mevedel-view-history--ensure-ring)))
     (setq mevedel-view-history--index nil
@@ -196,18 +194,17 @@ Signal an error when PATH exists but does not contain the expected
 input-history plist."
   (let* ((plist (mevedel-session-persistence-read path))
          (entries (plist-get plist :entries)))
-    (require 'mevedel-mentions)
-    (require 'mevedel-skill-bindings)
+    (require 'mevedel-mention-bindings)
     (unless (and (equal 2 (plist-get plist :version))
                  (listp entries)
                  (cl-every
                   (lambda (entry)
                     (and (stringp entry)
-                         (mevedel-skill-bindings-valid-p entry)))
+                         (mevedel-mention-bindings-valid-p entry)))
                   entries))
       (error "Malformed input history"))
     (mapcar (lambda (entry)
-              (mevedel-mentions-copy-bound-text
+              (mevedel-mention-bindings-copy-text
                (mevedel--normalize-message-text entry)))
             entries)))
 

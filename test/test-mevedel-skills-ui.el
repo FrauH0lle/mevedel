@@ -19,11 +19,11 @@
 (require 'mevedel-file-state)
 (require 'mevedel-goal)
 (require 'mevedel-models)
+(require 'mevedel-mention-bindings)
 (require 'mevedel-permissions)
 (require 'mevedel-plugins)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
-(require 'mevedel-skill-bindings)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-ui)
@@ -1073,6 +1073,84 @@ spanning lines")))
       (mevedel-skills--gptel-send-advice
        (lambda (&rest _) (setq orig-called t)))
       (should orig-called)))
+
+  :doc "unavailable leading skills annotate and let the send proceed"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "alpha" :body "ignored" :user-invocable-p nil))
+         orig-called
+         staged)
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### $alpha")
+      (goto-char (point-max))
+      (mevedel-skills--gptel-send-advice
+       (lambda (&rest _)
+         (setq orig-called t
+               staged
+               (copy-tree mevedel-skills--pending-inline-attachments))))
+      (should orig-called)
+      (should (plist-get (car staged) :unavailable))))
+
+  :doc "an unavailable leading skill does not suppress later attachments"
+  (let* ((session (mevedel-skills-test--make-session))
+         (alpha (mevedel-skill--create
+                 :name "alpha" :body "ignored" :user-invocable-p nil))
+         (beta (mevedel-skill--create :name "beta" :body "BETA BODY"))
+         orig-called
+         staged)
+    (setf (mevedel-session-skills session) (list alpha beta))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### $alpha then use $beta")
+      (goto-char (point-max))
+      (mevedel-skills--gptel-send-advice
+       (lambda (&rest _)
+         (setq orig-called t
+               staged
+               (copy-tree mevedel-skills--pending-inline-attachments))))
+      (should orig-called)
+      (should (= 2 (length staged)))
+      (should (plist-get (car staged) :unavailable))
+      (should (equal "BETA BODY" (plist-get (cadr staged) :body)))))
+
+  :doc "manually typed raw skills bind their canonical source before send"
+  (let* ((session (mevedel-skills-test--make-session))
+         (source (make-temp-file "mevedel-raw-skill-" nil ".md"))
+         (skill (mevedel-skill--create
+                 :name "alpha" :body "ALPHA" :source-file source))
+         binding)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-skills session) (list skill))
+          (mevedel-skills-test--with-chat-buffer session
+            (insert "### use $alpha")
+            (goto-char (point-max))
+            (mevedel-skills--gptel-send-advice
+             (lambda (&rest _)
+               (save-excursion
+                 (goto-char (point-min))
+                 (search-forward "$alpha")
+                 (setq binding
+                       (get-text-property
+                        (match-beginning 0)
+                        'mevedel-mention-binding)))))
+            (should (equal source (plist-get binding :source-file)))))
+      (delete-file source)))
+
+  :doc "malformed bindings block raw gptel submission"
+  (let ((session (mevedel-skills-test--make-session))
+        orig-called)
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "### $alpha")
+      (with-silent-modifications
+        (put-text-property
+         (- (point) 6) (point) 'mevedel-mention-binding
+         '(:kind skill :token "$alpha")))
+      (should-error
+       (mevedel-skills--gptel-send-advice
+        (lambda (&rest _) (setq orig-called t)))
+       :type 'user-error)
+      (should-not orig-called)))
 
   :doc "no session: advice still calls orig-fn"
   (let ((orig-called nil))

@@ -290,11 +290,14 @@ hooks. Its allowed-tool rules exist only while preparing body injections.
 
 Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, Markdown code spans and fences,
 and unknown `$foo` names remain literal. A bound or known skill that is
-missing, disabled, malformed, or no longer user-invocable blocks the whole
-submission with enable-or-escape guidance. Mevedel prepares every unique skill
-before dispatching anything; the first load, injection, permission, validation,
-or hook failure sends neither a partial request nor a child and leaves the
-direct draft or queued entry editable.
+missing, disabled, malformed on disk, or no longer user-invocable emits a
+warning and becomes a temporary `[skill:foo -- unavailable]` annotation for
+that request; the stored prompt remains unchanged and the turn continues.
+A structurally malformed live binding still blocks submission because its
+intended target cannot be trusted. Mevedel prepares every unique available
+skill before dispatching anything; the first injection, permission,
+validation, or hook failure sends neither a partial request nor a child and
+leaves the direct draft or queued entry editable.
 
 `UserPromptExpansion` runs once per prepared canonical skill. After all bodies,
 placeholders, and instruction reminders exist, `UserPromptSubmit` runs once on

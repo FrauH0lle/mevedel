@@ -9,9 +9,9 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-mention-bindings)
 (require 'mevedel-mentions)
 (require 'mevedel-pipeline)
-(require 'mevedel-skill-bindings)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-plan)
@@ -57,19 +57,19 @@
     (unwind-protect
         (let* ((outcome (mevedel-skills-plan--resolve "Use $alpha" session))
                (token (car (plist-get outcome :tokens))))
-          (should (eq 'ok (plist-get outcome :status)))
           (should (equal "alpha" (plist-get token :name)))
           (should (eq alpha (plist-get token :value))))
       (delete-directory root t)))
 
-  :doc "consumes structured binding reasons without parsing their messages"
-  (cl-letf (((symbol-function 'mevedel-skill-bindings-resolve-outcome)
+  :doc "consumes structured binding outcomes without parsing their messages"
+  (cl-letf (((symbol-function 'mevedel-skills-resolve-user-mention-outcome)
              (lambda (&rest _)
-               '(:status error :reason not-user-invocable
+               '(:status unavailable :reason not-user-invocable
                  :message "Opaque policy rejection"))))
     (let ((outcome (mevedel-skills-plan--resolve "$alpha" nil)))
-      (should (eq 'not-user-invocable (plist-get outcome :reason)))
-      (should (equal "Opaque policy rejection" (plist-get outcome :message))))))
+      (should (equal "Opaque policy rejection"
+                     (mevedel-skill-plan-occurrence-message
+                      (car (plist-get outcome :unavailable))))))))
 
 (mevedel-deftest mevedel-skills-plan--command-layout ()
   ,test
@@ -211,10 +211,8 @@
          (beta (mevedel-skills-plan-test--skill root "beta"))
          (session (mevedel-skills-plan-test--session alpha beta)))
     (unwind-protect
-        (let* ((outcome (mevedel-skills-plan-user-input
-                         "Use $beta, then $alpha and $beta." session))
-               (plan (plist-get outcome :plan)))
-          (should (eq 'ok (plist-get outcome :status)))
+        (let ((plan (mevedel-skills-plan-user-input
+                     "Use $beta, then $alpha and $beta." session)))
           (should-not (mevedel-skill-invocation-plan-commands plan))
           (should (equal '("beta" "alpha")
                          (mevedel-skills-plan-test--names
@@ -236,9 +234,8 @@
          (delta (mevedel-skills-plan-test--skill root "delta"))
          (session (mevedel-skills-plan-test--session alpha beta delta)))
     (unwind-protect
-        (let* ((outcome (mevedel-skills-plan-user-input
-                         "$alpha $alpha $beta -- $delta details" session))
-               (plan (plist-get outcome :plan)))
+        (let ((plan (mevedel-skills-plan-user-input
+                     "$alpha $alpha $beta -- $delta details" session)))
           (should (equal '("alpha" "beta")
                          (mevedel-skills-plan-test--names
                           (mevedel-skill-invocation-plan-commands plan))))
@@ -261,10 +258,8 @@
                          '("a" "b" "c" "d" "e" "f" "g")))
          (session (apply #'mevedel-skills-plan-test--session skills)))
     (unwind-protect
-        (let* ((plan (plist-get
-                      (mevedel-skills-plan-user-input
-                       "$a $b $c $d $e $f $g rest" session)
-                      :plan)))
+        (let ((plan (mevedel-skills-plan-user-input
+                     "$a $b $c $d $e $f $g rest" session)))
           (should (equal '("a" "b" "c" "d" "e" "f")
                          (mevedel-skills-plan-test--names
                           (mevedel-skill-invocation-plan-commands plan))))
@@ -282,14 +277,10 @@
          (fork (mevedel-skills-plan-test--skill root "fork" 'fork))
          (session (mevedel-skills-plan-test--session alpha fork)))
     (unwind-protect
-        (let* ((leading (plist-get
-                         (mevedel-skills-plan-user-input
-                          "$fork inspect with $alpha" session)
-                         :plan))
-               (later (plist-get
-                       (mevedel-skills-plan-user-input
-                        "$alpha $fork inspect" session)
-                       :plan)))
+        (let ((leading (mevedel-skills-plan-user-input
+                        "$fork inspect with $alpha" session))
+              (later (mevedel-skills-plan-user-input
+                      "$alpha $fork inspect" session)))
           (should (mevedel-skill-invocation-plan-fork-p leading))
           (should (equal '("fork")
                          (mevedel-skills-plan-test--names
@@ -317,10 +308,8 @@
          (beta (mevedel-skills-plan-test--skill root "beta"))
          (session (mevedel-skills-plan-test--session alpha alias beta)))
     (unwind-protect
-        (let* ((plan (plist-get
-                      (mevedel-skills-plan-user-input
-                       "$alpha work with $alias and $beta" session)
-                      :plan)))
+        (let ((plan (mevedel-skills-plan-user-input
+                     "$alpha work with $alias and $beta" session)))
           (should (equal '("alpha" "beta")
                          (mevedel-skills-plan-test--names
                           (mevedel-skill-invocation-plan-entries plan))))
@@ -334,12 +323,18 @@
          (alpha (mevedel-skills-plan-test--skill root "alpha"))
          (session (mevedel-skills-plan-test--session alpha)))
     (unwind-protect
-        (let* ((plan (plist-get
-                      (mevedel-skills-plan-user-input
-                       "$unknown \\$alpha `$alpha` \"$alpha\"" session)
-                      :plan)))
+        (let ((plan (mevedel-skills-plan-user-input
+                     "$unknown \\$alpha `$alpha` \"$alpha\"" session)))
           (should-not (mevedel-skill-invocation-plan-occurrences plan)))
       (delete-directory root t)))
+
+  :doc "malformed hidden bindings block direct planning"
+  (let ((input (copy-sequence "Use $alpha")))
+    (put-text-property
+     4 10 'mevedel-mention-binding
+     '(:kind skill :token "$alpha") input)
+    (should-error (mevedel-skills-plan-user-input input nil)
+                  :type 'user-error))
 
   :doc "unavailable skills stay literal when escaped, quoted, or in code"
   (let* ((mevedel-skills-check-for-modifications nil)
@@ -352,22 +347,20 @@
                  "Use \\$disabled, \"$internal\", and `$missing`."))
          (missing-start (string-match "\\$missing" input)))
     (setf (mevedel-skill-user-invocable-p internal) nil)
-    (mevedel-mentions-set-binding
+    (mevedel-mention-bindings-set
      missing-start (+ missing-start (length "$missing"))
-     (list :kind 'skill :name "missing"
+     (list :kind 'skill :token "$missing"
            :source-file (file-name-concat root "missing/SKILL.md"))
      input)
     (unwind-protect
         (progn
           (mevedel-skills--set-enabled disabled nil)
-          (let* ((outcome (mevedel-skills-plan-user-input input session))
-                 (plan (plist-get outcome :plan)))
-            (should (eq 'ok (plist-get outcome :status)))
+          (let ((plan (mevedel-skills-plan-user-input input session)))
             (should-not (mevedel-skill-invocation-plan-occurrences plan))))
       (delete-directory root t)
       (delete-directory mevedel-user-dir t)))
 
-  :doc "missing exact bindings, disabled skills, and invocation gates are errors"
+  :doc "missing exact bindings, disabled skills, and invocation gates continue"
   (let* ((mevedel-skills-check-for-modifications nil)
          (root (make-temp-file "mevedel-skill-plan-" t))
          (mevedel-user-dir (make-temp-file "mevedel-skill-plan-state-" t))
@@ -377,24 +370,35 @@
          (bound (copy-sequence "Use $missing"))
          (missing (file-name-concat root "missing/SKILL.md")))
     (setf (mevedel-skill-user-invocable-p internal) nil)
-    (mevedel-mentions-set-binding
+    (mevedel-mention-bindings-set
      4 12
-     (list :kind 'skill :name "missing" :source-file missing)
+     (list :kind 'skill :token "$missing" :source-file missing)
      bound)
     (unwind-protect
         (progn
           (mevedel-skills--set-enabled disabled nil)
-          (should (eq 'bound-source
-                      (plist-get (mevedel-skills-plan-user-input bound session)
-                                 :reason)))
-          (should (eq 'disabled
-                      (plist-get
-                       (mevedel-skills-plan-user-input "$disabled" session)
-                       :reason)))
-          (should (eq 'not-user-invocable
-                      (plist-get
-                       (mevedel-skills-plan-user-input "$internal" session)
-                       :reason))))
+          (dolist (case `((,bound . "unavailable")
+                          ("$disabled" . "disabled")
+                          ("$internal" . "not user-invocable")))
+            (let* ((plan
+                    (mevedel-skills-plan-user-input (car case) session))
+                   (unavailable
+                    (cl-find-if
+                     (lambda (occurrence)
+                       (eq 'unavailable
+                           (mevedel-skill-plan-occurrence-role occurrence)))
+                     (mevedel-skill-invocation-plan-occurrences plan)))
+                   prepared)
+              (should (string-match-p
+                       (cdr case)
+                       (mevedel-skill-plan-occurrence-message unavailable)))
+              (mevedel-skills-plan-prepare
+               plan (lambda (value) (setq prepared value)))
+              (should (eq 'ok (plist-get prepared :status)))
+              (should (string-match-p
+                       "\\[skill:.* -- unavailable\\]"
+                       (plist-get prepared :model-input)))
+              (should (plist-get prepared :warnings)))))
       (delete-directory root t)
       (delete-directory mevedel-user-dir t))))
 
@@ -409,7 +413,7 @@
          (delta (mevedel-skills-plan-test--skill root "delta"))
          (session (mevedel-skills-plan-test--session alpha beta delta))
          (input "$alpha inspect $beta with $delta")
-         (plan (plist-get (mevedel-skills-plan-user-input input session) :plan))
+         (plan (mevedel-skills-plan-user-input input session))
          (offset (mevedel-skill-invocation-plan-arguments-start plan))
          (slice (substring input offset))
          (instructions (mevedel-skill-invocation-plan-occurrences plan)))
@@ -433,10 +437,8 @@
          (beta (mevedel-skills-plan-test--skill root "beta"))
          (delta (mevedel-skills-plan-test--skill root "delta"))
          (session (mevedel-skills-plan-test--session alpha beta delta))
-         (plan (plist-get
-                (mevedel-skills-plan-user-input
-                 "$alpha $beta inspect $delta and $alpha" session)
-                :plan))
+         (plan (mevedel-skills-plan-user-input
+                "$alpha $beta inspect $delta and $alpha" session))
          calls
          result)
     (unwind-protect
@@ -501,10 +503,8 @@
          (alias (mevedel-skills-plan-test--skill
                  root "alias" 'inline (mevedel-skill-source-file alpha)))
          (session (mevedel-skills-plan-test--session alpha alias))
-         (plan (plist-get
-                (mevedel-skills-plan-user-input
-                 "$alpha use $alias" session)
-                :plan))
+         (plan (mevedel-skills-plan-user-input
+                "$alpha use $alias" session))
          calls
          owner
          result)
@@ -534,10 +534,8 @@
          (root (make-temp-file "mevedel-skill-plan-" t))
          (alpha (mevedel-skills-plan-test--skill root "alpha"))
          (session (mevedel-skills-plan-test--session alpha))
-         (plan (plist-get
-                (mevedel-skills-plan-user-input
-                 "Use $alpha and $alpha; keep $body-literal" session)
-                :plan))
+         (plan (mevedel-skills-plan-user-input
+                "Use $alpha and $alpha; keep $body-literal" session))
          owner
          result)
     (unwind-protect
@@ -585,16 +583,12 @@
     (unwind-protect
         (progn
           (mevedel-skills-plan-prepare
-           (plist-get
-            (mevedel-skills-plan-user-input
-             "$alpha $beta inspect" session)
-            :plan)
+           (mevedel-skills-plan-user-input
+            "$alpha $beta inspect" session)
            (lambda (value) (setq stacked-result value)))
           (mevedel-skills-plan-prepare
-           (plist-get
-            (mevedel-skills-plan-user-input
-             "Use $delta to inspect" session)
-            :plan)
+           (mevedel-skills-plan-user-input
+            "Use $delta to inspect" session)
            (lambda (value) (setq instruction-result value))))
       (delete-directory root t))
     (should (eq 'ok (plist-get stacked-result :status)))
@@ -625,9 +619,7 @@
         (cl-letf (((symbol-function 'mevedel-model-validate-effort)
                    (lambda (_model effort) effort)))
           (mevedel-skills-plan-prepare
-           (plist-get
-            (mevedel-skills-plan-user-input "$alpha inspect" session)
-            :plan)
+           (mevedel-skills-plan-user-input "$alpha inspect" session)
            (lambda (value) (setq result value))))
       (delete-directory root t))
     (should (eq 'ok (plist-get result :status)))
@@ -643,10 +635,8 @@
          (beta (mevedel-skills-plan-test--skill root "beta"))
          (delta (mevedel-skills-plan-test--skill root "delta"))
          (session (mevedel-skills-plan-test--session alpha beta delta))
-         (plan (plist-get
-                (mevedel-skills-plan-user-input
-                 "$alpha $beta use $delta" session)
-                :plan))
+         (plan (mevedel-skills-plan-user-input
+                "$alpha $beta use $delta" session))
          calls
          result)
     (unwind-protect
@@ -672,9 +662,7 @@
          (alpha (mevedel-skills-plan-test--skill root "alpha"))
          (beta (mevedel-skills-plan-test--skill root "beta"))
          (session (mevedel-skills-plan-test--session alpha beta))
-         (plan (plist-get
-                (mevedel-skills-plan-user-input "$alpha $beta work" session)
-                :plan))
+         (plan (mevedel-skills-plan-user-input "$alpha $beta work" session))
          cancelled
          pending
          prepares

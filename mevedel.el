@@ -68,7 +68,7 @@
 (require 'mevedel-view-zone)
 (require 'mevedel-reminders)
 (require 'mevedel-skills-core)
-(require 'mevedel-skill-bindings)
+(require 'mevedel-mention-bindings)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-skills-plan)
 (require 'mevedel-skills-prompt)
@@ -533,6 +533,10 @@ always prompt for the session name."
   (add-hook 'gptel-prompt-transform-functions
             #'mevedel-skills--transform-apply-model-override -100)
 
+  ;; Substitute view-derived text only in gptel's temporary request buffer.
+  (add-hook 'gptel-prompt-transform-functions
+            #'mevedel-view--transform-model-input -91)
+
   ;; Expand @ref/@file mentions early in the gptel transform chain
   (add-hook 'gptel-prompt-transform-functions #'mevedel--transform-expand-mentions -90)
 
@@ -607,6 +611,10 @@ always prompt for the session name."
   ;; Remove skill model override transform
   (remove-hook 'gptel-prompt-transform-functions
                #'mevedel-skills--transform-apply-model-override)
+
+  ;; Remove view request-input substitution
+  (remove-hook 'gptel-prompt-transform-functions
+               #'mevedel-view--transform-model-input)
 
   ;; Remove reminder injection
   (remove-hook 'gptel-prompt-transform-functions #'mevedel-reminders--transform)

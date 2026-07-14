@@ -104,7 +104,7 @@ Data model
   mevedel-permission-queue.el permission/Bash/Eval queue
   mevedel-reminders.el        system-reminder injection
   mevedel-skills-core.el      skill model, discovery, state, reload
-  mevedel-skill-bindings.el   atomic skill mention validation and resolution
+  mevedel-mention-bindings.el shared atomic mention validation and edit lifecycle
   mevedel-skills-invoke.el    skill preparation, invocation, model tools
   mevedel-skills-plan.el      deterministic user invocation planning and preparation
   mevedel-skills-prompt.el    model-visible roster, reminders, activation

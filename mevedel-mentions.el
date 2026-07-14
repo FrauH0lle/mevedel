@@ -3,9 +3,9 @@
 ;;; Commentary:
 
 ;; @ref/@file expansion, completion-at-point, and font-lock support for
-;; mevedel view buffers, plus the generic atomic-binding primitives shared by
-;; mention kinds.  Expansion runs as a gptel prompt transform on the temporary
-;; prompt-buffer copy; raw mentions in the view and data buffers are untouched.
+;; mevedel view buffers.  Expansion runs as a gptel prompt transform on the
+;; temporary prompt-buffer copy; raw mentions in the view and data buffers are
+;; untouched.
 
 ;;; Code:
 
@@ -97,43 +97,6 @@
 ;;
 ;;; Reference resolution
 
-(defun mevedel-mentions-set-binding (start end binding &optional object)
-  "Attach atomic mention BINDING to START..END in OBJECT.
-OBJECT is a string or buffer and defaults to the current buffer.  The
-binding property is nonsticky at the end so text appended after a token
-does not become part of that token."
-  (add-text-properties
-   start end
-   `(mevedel-mention-binding ,(copy-tree binding)
-     rear-nonsticky (mevedel-mention-binding))
-   object))
-
-(defun mevedel-mentions-binding-ranges (text)
-  "Return atomic mention bindings in TEXT in occurrence order.
-Each result is a plist with :start, :end, and :binding."
-  (let ((position 0)
-        ranges)
-    (while (< position (length text))
-      (let* ((binding (get-text-property
-                       position 'mevedel-mention-binding text))
-             (end (next-single-property-change
-                   position 'mevedel-mention-binding text (length text))))
-        (when binding
-          (push (list :start position :end end :binding binding) ranges))
-        (setq position end)))
-    (nreverse ranges)))
-
-(defun mevedel-mentions-copy-bound-text (text)
-  "Return TEXT with only atomic mention binding properties retained."
-  (let ((copy (substring-no-properties text)))
-    (dolist (range (mevedel-mentions-binding-ranges text))
-      (mevedel-mentions-set-binding
-       (plist-get range :start)
-       (plist-get range :end)
-       (plist-get range :binding)
-       copy))
-    copy))
-
 (defun mevedel-mentions-replace-with-placeholder (start end placeholder)
   "Replace START..END with PLACEHOLDER, preserving prompt ownership.
 When the replaced region is marked with a `gptel' text property, copy
@@ -221,6 +184,10 @@ to drill down instead."
 Capture group 1 is the bare path or the braced path token.  Capture
 groups 2 and 3 are optional line-range bounds.")
 
+(defconst mevedel-mentions--mcp-regexp
+  "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)"
+  "Regexp matching an @mcp resource mention.")
+
 
 ;;
 ;;; Mention dispatch
@@ -228,7 +195,7 @@ groups 2 and 3 are optional line-range bounds.")
 (defvar mevedel-mention-handlers
   `(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)" . mevedel--handle-ref-mention)
     ("@agent:\\([[:alnum:]_-]+\\)" . mevedel--handle-agent-mention)
-    ("@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" . mevedel--handle-mcp-mention)
+    (,mevedel-mentions--mcp-regexp . mevedel--handle-mcp-mention)
     (,mevedel-mentions--file-regexp . mevedel--handle-file-mention))
   "Alist mapping mention regexes to handler functions.
 
@@ -989,7 +956,7 @@ Skips mentions in non-user regions or adjacent to quoting chars."
   "Font-lock matcher for @mcp:server:uri mentions up to END.
 Skips mentions in non-user regions or adjacent to quoting chars."
   (mevedel-mentions--fontify-keyword
-   "@mcp:\\([^: \t\n]+\\):\\(\\S-+\\)" end))
+   mevedel-mentions--mcp-regexp end))
 
 (defconst mevedel-mentions--font-lock-keywords
   '((mevedel--fontify-ref-id-keyword
