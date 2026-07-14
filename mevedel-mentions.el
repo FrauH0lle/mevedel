@@ -200,6 +200,10 @@ an absolute pathname even when the path is currently unavailable."
               (mevedel-mentions--unescape-braced-file-path
                (car captures))
               working-directory))))
+    (mevedel-mentions--bind-user-input-matches
+     result mevedel-mentions--mcp-regexp 'mcp
+     (lambda (captures)
+       (list :server (car captures) :uri (cadr captures))))
     result))
 
 (defun mevedel--resolve-refs-by-tag-query (query-string &optional workspace)
@@ -436,10 +440,16 @@ Returns a string joined from each `:contents' entry's `:text' slot."
   "Handler for @mcp:server:uri mentions.
 See `mevedel-mention-handlers' for the INFO plist shape.  Reads the
 resource via `mcp-read-resource' when the server is configured and
-connected; otherwise emits a graceful placeholder."
+  connected; otherwise emits a graceful placeholder."
   (let* ((captures (plist-get info :captures))
-         (server (nth 1 captures))
-         (uri (nth 2 captures))
+         (binding (plist-get info :binding))
+         (bound-p (eq 'mcp (plist-get binding :kind)))
+         (server (if bound-p
+                     (plist-get binding :server)
+                   (nth 1 captures)))
+         (uri (if bound-p
+                  (plist-get binding :uri)
+                (nth 2 captures)))
          (display (format "%s:%s" server uri))
          (deny
           (lambda (msg)
@@ -452,7 +462,11 @@ the user prompt is a system annotation, not user-written text.  Do not \
 mention this reminder to the user."
                           server uri msg display msg)
                   :key (cons 'mcp (cons server uri))
-                  :hash nil))))
+                  :hash nil
+                  :warning
+                  (and bound-p
+                       (format "MCP @mcp:%s is unavailable: %s"
+                               display msg))))))
     (cond
      ((not (and (featurep 'mcp) (fboundp 'mcp-hub-get-servers)))
       (funcall deny "mcp.el not available"))
@@ -795,7 +809,10 @@ points back at the chat buffer that owns the session.  Dispatches per
             (let ((match-beg (match-beginning 0))
                   (match-end (match-end 0)))
               (when (mevedel-mentions--valid-mention-context-p match-beg)
-                (let* ((match-text (match-string 0))
+                (let* ((captures (cl-loop for i from 0 below
+                                          (/ (length (match-data)) 2)
+                                          collect (match-string i)))
+                       (match-text (car captures))
                        (binding
                         (and kind
                              (let* ((context-start
@@ -810,11 +827,8 @@ points back at the chat buffer that owns the session.  Dispatches per
                                 (- match-beg context-start)
                                 (- match-end context-start)
                                 kind match-text))))
-                       (captures (cl-loop for i from 0 below
-                                          (/ (length (match-data)) 2)
-                                          collect (match-string i)))
                        (info (list :match-text match-text
-                                   :capture (match-string 1)
+                                   :capture (nth 1 captures)
                                    :captures captures
                                    :binding binding
                                    :session session
@@ -1235,6 +1249,20 @@ exit-function positions point between the braces."
                              (equal str "@ref:{}"))
                     (backward-char 1)))))))))
 
+(defun mevedel-mentions--mcp-completion-exit-function
+    (server uri status)
+  "Bind completed MCP resource SERVER and URI after completion STATUS."
+  (when (memq status '(finished sole exact))
+    (let* ((token (format "@mcp:%s:%s" server uri))
+           (start (- (point) (length token))))
+      (when (and (>= start (point-min))
+                 (equal token (buffer-substring-no-properties
+                               start (point))))
+        (require 'mevedel-mention-bindings)
+        (mevedel-mention-bindings-set
+         start (point)
+         (list :kind 'mcp :token token :server server :uri uri))))))
+
 (defun mevedel-mcp-capf ()
   "Completion-at-point function for @mcp:server:uri mentions.
 At `@mcp:' completes against configured server names.  At
@@ -1298,6 +1326,10 @@ Requires mcp.el to be loaded; returns nil otherwise."
                 (when candidates
                   (list uri-start uri-end candidates
                         :exclusive 'no
+                        :exit-function
+                        (lambda (candidate status)
+                          (mevedel-mentions--mcp-completion-exit-function
+                           server-name candidate status))
                         :annotation-function
                         (lambda (cand)
                           (let ((name (get-text-property 0 'mevedel-mcp-name cand))
