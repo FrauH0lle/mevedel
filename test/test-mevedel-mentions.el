@@ -48,14 +48,17 @@
     (should (eq 'prompt
                 (get-text-property (match-beginning 0) 'gptel)))))
 
-(defun mevedel-test--make-ref-buffer (content text)
+(defun mevedel-test--make-ref-buffer (content text &optional workspace)
   "Create a live file-visiting buffer with CONTENT and a reference on TEXT.
+When WORKSPACE is non-nil, associate the buffer with it.
 Returns (buffer . overlay)."
   (let* ((tmp (make-temp-file "mevedel-mention-" nil ".txt" content))
          (buf (find-file-noselect tmp))
          ov)
     (with-current-buffer buf
       (fundamental-mode)
+      (when workspace
+        (setq-local mevedel--workspace workspace))
       (set-buffer-modified-p nil)
       (goto-char (point-min))
       (re-search-forward (regexp-quote text))
@@ -66,10 +69,24 @@ Returns (buffer . overlay)."
 
 (defun mevedel-test--reset-instructions ()
   "Reset global and workspace-scoped instruction state for mentions."
-  (setf (mevedel--instruction-alist) nil)
-  (setf (mevedel--instruction-id-counter) 0)
-  (setf (mevedel--instruction-id-usage-map) (make-hash-table))
-  (setf (mevedel--instruction-retired-ids) nil)
+  (let (buffers)
+    (maphash
+     (lambda (_key state)
+       (dolist (entry (plist-get state :instructions))
+         (when (bufferp (car entry))
+           (push (car entry) buffers))))
+     mevedel--instruction-states)
+    (dolist (buffer (delete-dups buffers))
+      (when (buffer-live-p buffer)
+        (let ((file (buffer-file-name buffer)))
+          (with-current-buffer buffer
+            (setq-local kill-buffer-hook nil)
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (when (and file
+                     (file-exists-p file)
+                     (file-in-directory-p file temporary-file-directory))
+            (delete-file file))))))
   (setq mevedel--instruction-states (make-hash-table :test #'equal))
   (setq mevedel--instruction-current-state-key :global))
 
@@ -81,14 +98,6 @@ Returns (buffer . overlay)."
   (:before-each
    (mevedel-test--reset-instructions)
    :after-each
-   (dolist (entry (mevedel--instruction-alist))
-     (when (buffer-live-p (car entry))
-       (let ((file (buffer-file-name (car entry))))
-         (with-current-buffer (car entry)
-           (set-buffer-modified-p nil))
-         (kill-buffer (car entry))
-         (when (and file (file-exists-p file))
-           (delete-file file)))))
    (mevedel-test--reset-instructions))
   ,test
   (test)
@@ -106,6 +115,150 @@ Returns (buffer . overlay)."
         (kill-buffer buf)
         (when (and file (file-exists-p file))
           (delete-file file))))))
+
+(mevedel-deftest mevedel--resolve-ref-by-uuid
+  (:before-each
+   (mevedel-test--reset-instructions)
+   :after-each
+   (mevedel-test--reset-instructions))
+  ,test
+  (test)
+  :doc "returns only the reference carrying the exact UUID"
+  (let* ((cell (mevedel-test--make-ref-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (ref (cdr cell))
+         (uuid (overlay-get ref 'mevedel-uuid)))
+    (unwind-protect
+        (progn
+          (should (eq ref (mevedel--resolve-ref-by-uuid uuid)))
+          (should-not (mevedel--resolve-ref-by-uuid "missing-uuid")))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (file-exists-p file) (delete-file file)))))
+
+  :doc "dispatch restores a stashed reference and reads its current contents"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "restore-ref" :root "/tmp"
+                     :name "restore-ref"))
+         (cell (mevedel-test--make-ref-buffer
+                "alpha body\n" "alpha body" workspace))
+         (buffer (car cell))
+         (ref (cdr cell))
+         (uuid (overlay-get ref 'mevedel-uuid))
+         (id (mevedel--instruction-id ref))
+         (token (format "@ref:%d" id))
+         (session (mevedel-session-create "restore-ref" workspace))
+         (file (buffer-file-name buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)
+          (let ((result
+                 (mevedel--handle-ref-mention
+                  (list :match-text token
+                        :capture (number-to-string id)
+                        :captures (list token (number-to-string id) nil)
+                        :binding
+                        (list :kind 'ref :token token
+                              :reference-uuid uuid)
+                        :session session))))
+            (should (string-match-p "alpha body"
+                                    (plist-get result :reminder)))))
+      (mevedel-test--reset-instructions)
+      (when (file-exists-p file) (delete-file file)))))
+
+(mevedel-deftest mevedel--resolve-refs-by-tag-query
+  (:before-each
+   (mevedel-test--reset-instructions)
+   :after-each
+   (mevedel-test--reset-instructions))
+  ,test
+  (test)
+  :doc "limits a live query to its explicit workspace"
+  (let* ((workspace-a (mevedel-workspace--create
+                       :type 'test :id "query-a" :root "/tmp" :name "query-a"))
+         (workspace-b (mevedel-workspace--create
+                       :type 'test :id "query-b" :root "/tmp" :name "query-b"))
+         (first (mevedel-test--make-ref-buffer
+                 "first query body\n" "first query body" workspace-a))
+         (second (mevedel-test--make-ref-buffer
+                  "second query body\n" "second query body" workspace-b)))
+    (overlay-put (cdr first) 'mevedel-reference-tags '(shared))
+    (overlay-put (cdr second) 'mevedel-reference-tags '(shared))
+    (should (equal (list (cdr first))
+                   (mevedel--resolve-refs-by-tag-query
+                    "shared" workspace-a)))
+    (should (equal (list (cdr second))
+                   (mevedel--resolve-refs-by-tag-query
+                    "shared" workspace-b)))))
+
+(mevedel-deftest mevedel-mentions-prepare-user-input
+  (:before-each
+   (mevedel-test--reset-instructions)
+   :after-each
+   (mevedel-test--reset-instructions))
+  ,test
+  (test)
+  :doc "binds known direct references while leaving queries and misses live"
+  (let* ((cell (mevedel-test--make-ref-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (ref (cdr cell))
+         (id (mevedel--instruction-id ref))
+         (uuid (overlay-get ref 'mevedel-uuid))
+         (input (format "Use @ref:%d, @ref:{tag}, and @ref:99999" id))
+         (prepared (mevedel-mentions-prepare-user-input input))
+         (start (string-match (format "@ref:%d" id) prepared))
+         (binding (get-text-property start 'mevedel-mention-binding prepared)))
+    (unwind-protect
+        (progn
+          (should (equal 'ref (plist-get binding :kind)))
+          (should (equal (format "@ref:%d" id) (plist-get binding :token)))
+          (should (equal uuid (plist-get binding :reference-uuid)))
+          (should-not (get-text-property
+                       (string-match "@ref:{" prepared)
+                       'mevedel-mention-binding prepared))
+          (should-not (get-text-property
+                       (string-match "@ref:99999" prepared)
+                       'mevedel-mention-binding prepared))
+          (should-not (text-property-not-all
+                       0 (length input) 'mevedel-mention-binding nil input)))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (file-exists-p file) (delete-file file)))))
+
+  :doc "binds from the session workspace rather than the current buffer"
+  (let* ((workspace-a (mevedel-workspace--create
+                       :type 'test :id "prepare-a" :root "/tmp"
+                       :name "prepare-a"))
+         (workspace-b (mevedel-workspace--create
+                       :type 'test :id "prepare-b" :root "/tmp"
+                       :name "prepare-b"))
+         (first (mevedel-test--make-ref-buffer
+                 "first body\n" "first body" workspace-a))
+         (second (mevedel-test--make-ref-buffer
+                  "second body\n" "second body" workspace-b))
+         (first-reference (cdr first))
+         (second-reference (cdr second))
+         (id (mevedel--instruction-id first-reference))
+         (session (mevedel-session-create "prepare-a" workspace-a)))
+    (should (= id (mevedel--instruction-id second-reference)))
+    (with-current-buffer (car second)
+      (let* ((prepared (mevedel-mentions-prepare-user-input
+                        (format "Use @ref:%d" id) session))
+             (binding (get-text-property
+                       (string-match "@ref:" prepared)
+                       'mevedel-mention-binding prepared)))
+        (should (equal (overlay-get first-reference 'mevedel-uuid)
+                       (plist-get binding :reference-uuid))))))
+
+  :doc "rejects malformed existing mention bindings"
+  (let ((input (copy-sequence "Use @ref:1")))
+    (put-text-property 4 10 'mevedel-mention-binding
+                       '(:kind ref :token "@ref:1") input)
+    (should-error (mevedel-mentions-prepare-user-input input)
+                  :type 'user-error)))
 
 
 ;;
@@ -242,14 +395,6 @@ Returns (buffer . overlay)."
   (:before-each
    (mevedel-test--reset-instructions)
    :after-each
-   (dolist (entry (mevedel--instruction-alist))
-     (when (buffer-live-p (car entry))
-       (let ((file (buffer-file-name (car entry))))
-         (with-current-buffer (car entry)
-           (set-buffer-modified-p nil))
-         (kill-buffer (car entry))
-         (when (and file (file-exists-p file))
-           (delete-file file)))))
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry))
   ,test
@@ -259,6 +404,7 @@ Returns (buffer . overlay)."
          (buf (car cell))
          (ov (cdr cell))
          (id (mevedel--instruction-id ov))
+         (uuid (overlay-get ov 'mevedel-uuid))
          (id-str (number-to-string id))
          (gptel-default-mode 'text-mode))
     (unwind-protect
@@ -271,7 +417,7 @@ Returns (buffer . overlay)."
           (should (stringp (plist-get result :reminder)))
           (should (string-match-p (format "Reference #%d" id)
                                   (plist-get result :reminder)))
-          (should (equal (cons 'ref id) (plist-get result :key)))
+          (should (equal (cons 'ref uuid) (plist-get result :key)))
           (should (stringp (plist-get result :hash))))
       (let ((file (buffer-file-name buf)))
         (kill-buffer buf)
@@ -288,6 +434,70 @@ Returns (buffer . overlay)."
     (should (string-match-p "system annotation" (plist-get result :reminder)))
     (should (equal (cons 'ref 99999) (plist-get result :key)))
     (should (null (plist-get result :hash))))
+
+  :doc "unbound ID form never resolves from another session workspace"
+  (let* ((workspace-a (mevedel-workspace--create
+                       :type 'test :id "dispatch-a" :root "/tmp"
+                       :name "dispatch-a"))
+         (workspace-b (mevedel-workspace--create
+                       :type 'test :id "dispatch-b" :root "/tmp"
+                       :name "dispatch-b"))
+         (other (mevedel-test--make-ref-buffer
+                 "other workspace body\n" "other workspace body" workspace-b))
+         (id (mevedel--instruction-id (cdr other)))
+         (token (format "@ref:%d" id))
+         (session (mevedel-session-create "dispatch-a" workspace-a))
+         (result (mevedel--handle-ref-mention
+                  (list :match-text token
+                        :capture (number-to-string id)
+                        :captures (list token (number-to-string id) nil)
+                        :session session))))
+    (should (string-match-p "removed" (plist-get result :placeholder)))
+    (should-not (string-match-p "other workspace body"
+                                (plist-get result :reminder))))
+
+  :doc "bound ID form: deletion plus number reuse never retargets"
+  (let* ((first (mevedel-test--make-ref-buffer "alpha body\n" "alpha body"))
+         (first-buf (car first))
+         (first-ref (cdr first))
+         (id (mevedel--instruction-id first-ref))
+         (uuid (overlay-get first-ref 'mevedel-uuid))
+         (token (format "@ref:%d" id))
+         (binding (list :kind 'ref :token token :reference-uuid uuid))
+         second)
+    (unwind-protect
+        (progn
+          (mevedel--delete-instruction first-ref first-buf)
+          (setq second
+                (mevedel-test--make-ref-buffer "replacement body\n"
+                                               "replacement body"))
+          (should (= id (mevedel--instruction-id (cdr second))))
+          (let ((bound-result
+                 (mevedel--handle-ref-mention
+                  (list :match-text token
+                        :capture (number-to-string id)
+                        :captures (list token (number-to-string id) nil)
+                        :binding binding)))
+                (live-result
+                 (mevedel--handle-ref-mention
+                  (list :match-text token
+                        :capture (number-to-string id)
+                        :captures (list token (number-to-string id) nil)))))
+            (should (equal (cons 'ref uuid) (plist-get bound-result :key)))
+            (should (string-match-p "unavailable"
+                                    (plist-get bound-result :placeholder)))
+            (should (stringp (plist-get bound-result :warning)))
+            (should-not (string-match-p "replacement body"
+                                        (plist-get bound-result :reminder)))
+            (should (string-match-p "replacement body"
+                                    (plist-get live-result :reminder)))))
+      (dolist (buf (delq nil (list first-buf (car-safe second))))
+        (when (buffer-live-p buf)
+          (let ((file (buffer-file-name buf)))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf)
+            (when (and file (file-exists-p file))
+              (delete-file file)))))))
 
   :doc "tag form: no-match query yields graceful placeholder, nil hash"
   (let ((result (mevedel--handle-ref-mention
@@ -761,6 +971,83 @@ Returns (buffer . overlay)."
                                 (plist-get result :placeholder)))
         (should (null (plist-get result :hash)))))))
 
+(mevedel-deftest mevedel-mentions--ref-completion-exit-function
+  (:doc "`mevedel-mentions--ref-completion-exit-function' binds a UUID")
+  ,test
+  (test)
+  :doc "binds the completed visible token to the candidate UUID"
+  (with-temp-buffer
+    (insert "@ref:7")
+    (let ((candidate (propertize "7" 'mevedel-reference-uuid "uuid-7")))
+      (mevedel-mentions--ref-completion-exit-function
+       (list candidate) "7" 'finished)
+      (should
+       (equal '(:kind ref :token "@ref:7" :reference-uuid "uuid-7")
+              (get-text-property (point-min) 'mevedel-mention-binding))))))
+
+(mevedel-deftest mevedel-ref-capf
+  (:before-each
+   (mevedel-test--reset-instructions)
+   :after-each
+   (mevedel-test--reset-instructions))
+  ,test
+  (test)
+  :doc "direct reference completion binds the selected UUID immediately"
+  (let* ((cell (mevedel-test--make-ref-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (ref (cdr cell))
+         (id-string (number-to-string (mevedel--instruction-id ref)))
+         (uuid (overlay-get ref 'mevedel-uuid))
+         (state-key
+          (mevedel--instruction-workspace-key
+           (mevedel--instruction-buffer-workspace buf))))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "@ref:")
+          (let* ((mevedel--instruction-state-key-override state-key)
+                 (capf (mevedel-ref-capf))
+                 (start (nth 0 capf))
+                 (end (nth 1 capf))
+                 (exit (plist-get (nthcdr 3 capf) :exit-function)))
+            (should (functionp exit))
+            (delete-region start end)
+            (goto-char start)
+            (insert id-string)
+            (funcall exit id-string 'finished)
+            (let ((binding (get-text-property
+                            (point-min) 'mevedel-mention-binding)))
+              (should (equal 'ref (plist-get binding :kind)))
+              (should (equal (concat "@ref:" id-string)
+                             (plist-get binding :token)))
+              (should (equal uuid (plist-get binding :reference-uuid))))))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file)) (delete-file file)))))
+
+  :doc "reference query completion remains unbound"
+  (let* ((cell (mevedel-test--make-ref-buffer "alpha\n" "alpha"))
+         (buf (car cell))
+         (ref (cdr cell))
+         (state-key
+          (mevedel--instruction-workspace-key
+           (mevedel--instruction-buffer-workspace buf))))
+    (overlay-put ref 'mevedel-tags '(alpha))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "@ref:{a")
+          (let* ((mevedel--instruction-state-key-override state-key)
+                 (capf (mevedel-ref-capf)))
+            (should capf)
+            (should-not (plist-get (nthcdr 3 capf) :exit-function))
+            (should-not (text-property-not-all
+                         (point-min) (point-max)
+                         'mevedel-mention-binding nil))))
+      (let ((file (buffer-file-name buf)))
+        (with-current-buffer buf (set-buffer-modified-p nil))
+        (kill-buffer buf)
+        (when (and file (file-exists-p file)) (delete-file file))))))
+
 (mevedel-deftest mevedel-mention-capf
   (:doc "`mevedel-mention-capf' offers mention prefixes at bare @")
   ,test
@@ -872,14 +1159,6 @@ Returns (buffer . overlay)."
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry)
    :after-each
-   (dolist (entry (mevedel--instruction-alist))
-     (when (buffer-live-p (car entry))
-       (let ((file (buffer-file-name (car entry))))
-         (with-current-buffer (car entry)
-           (set-buffer-modified-p nil))
-         (kill-buffer (car entry))
-         (when (and file (file-exists-p file))
-           (delete-file file)))))
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry))
   ,test
@@ -920,13 +1199,13 @@ Returns (buffer . overlay)."
           (delete-file file)))))
 
   :doc "no reminder emitted when session dedup already has same hash"
-  (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
+  (let* ((ws (mevedel-workspace--create :type 'project :id "test1"
+                                        :root "/tmp" :name "test1"))
+         (cell (mevedel-test--make-ref-buffer "hello world\n" "hello" ws))
          (buf (car cell))
          (ov (cdr cell))
          (id (mevedel--instruction-id ov))
          (gptel-default-mode 'text-mode)
-         (ws (mevedel-workspace--create :type 'project :id "test1"
-                                        :root "/tmp" :name "test1"))
          (session (mevedel-session-create "main" ws))
          (chat (generate-new-buffer " *mevedel-test-chat*"))
          (fsm (gptel-make-fsm :info (list :buffer chat))))
@@ -951,13 +1230,13 @@ Returns (buffer . overlay)."
           (delete-file file)))))
 
   :doc "reminder re-emitted when content hash changes"
-  (let* ((cell (mevedel-test--make-ref-buffer "hello world\n" "hello"))
+  (let* ((ws (mevedel-workspace--create :type 'project :id "test2"
+                                        :root "/tmp" :name "test2"))
+         (cell (mevedel-test--make-ref-buffer "hello world\n" "hello" ws))
          (buf (car cell))
          (ov (cdr cell))
          (id (mevedel--instruction-id ov))
          (gptel-default-mode 'text-mode)
-         (ws (mevedel-workspace--create :type 'project :id "test2"
-                                        :root "/tmp" :name "test2"))
          (session (mevedel-session-create "main" ws))
          (chat (generate-new-buffer " *mevedel-test-chat2*"))
          (fsm (gptel-make-fsm :info (list :buffer chat))))
@@ -983,7 +1262,78 @@ Returns (buffer . overlay)."
           (set-buffer-modified-p nil))
         (kill-buffer buf)
         (when (and file (file-exists-p file))
-          (delete-file file))))))
+          (delete-file file)))))
+
+  :doc "reference queries expand only from the session workspace"
+  (let* ((workspace-a (mevedel-workspace--create
+                       :type 'test :id "transform-query-a" :root "/tmp"
+                       :name "transform-query-a"))
+         (workspace-b (mevedel-workspace--create
+                       :type 'test :id "transform-query-b" :root "/tmp"
+                       :name "transform-query-b"))
+         (first (mevedel-test--make-ref-buffer
+                 "first query body\n" "first query body" workspace-a))
+         (second (mevedel-test--make-ref-buffer
+                  "second query body\n" "second query body" workspace-b))
+         (session (mevedel-session-create "query-a" workspace-a))
+         (chat (generate-new-buffer " *mevedel-query-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (overlay-put (cdr first) 'mevedel-reference-tags '(shared))
+    (overlay-put (cdr second) 'mevedel-reference-tags '(shared))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session))
+          (with-temp-buffer
+            (insert (propertize "inspect @ref:{shared}" 'gptel 'prompt))
+            (mevedel--transform-expand-mentions fsm)
+            (should (string-match-p "first query body" (buffer-string)))
+            (should-not (string-match-p "second query body" (buffer-string)))))
+      (kill-buffer chat)))
+
+  :doc "unavailable bound reference warns without mutating stored input"
+  (let* ((first (mevedel-test--make-ref-buffer "alpha body\n" "alpha body"))
+         (first-buf (car first))
+         (first-ref (cdr first))
+         (id (mevedel--instruction-id first-ref))
+         (uuid (overlay-get first-ref 'mevedel-uuid))
+         (token (format "@ref:%d" id))
+         (input (copy-sequence (format "check %s and continue" token)))
+         (start (string-match (regexp-quote token) input))
+         second warning transformed)
+    (mevedel-mention-bindings-set
+     start (+ start (length token))
+     (list :kind 'ref :token token :reference-uuid uuid)
+     input)
+    (unwind-protect
+        (progn
+          (mevedel--delete-instruction first-ref first-buf)
+          (setq second
+                (mevedel-test--make-ref-buffer "replacement body\n"
+                                               "replacement body"))
+          (with-temp-buffer
+            (insert (propertize input 'gptel 'prompt))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (setq warning (apply #'format format-string args)))))
+              (mevedel--transform-expand-mentions nil))
+            (setq transformed (buffer-string)))
+          (should (string-match-p "unavailable" transformed))
+          (should-not (string-match-p "replacement body" transformed))
+          (should (string-match-p "mevedel: reference .* unavailable" warning))
+          (should (equal (format "check %s and continue" token) input))
+          (should (equal uuid
+                         (plist-get
+                          (get-text-property
+                           start 'mevedel-mention-binding input)
+                          :reference-uuid))))
+      (dolist (buf (delq nil (list first-buf (car-safe second))))
+        (when (buffer-live-p buf)
+          (let ((file (buffer-file-name buf)))
+            (with-current-buffer buf (set-buffer-modified-p nil))
+            (kill-buffer buf)
+            (when (and file (file-exists-p file))
+              (delete-file file))))))))
 
 (mevedel-deftest mevedel--transform-expand-mentions-media
   (:doc "`mevedel--transform-expand-mentions' adds gptel media context")
@@ -1064,14 +1414,6 @@ Returns (buffer . overlay)."
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry)
    :after-each
-   (dolist (entry (mevedel--instruction-alist))
-     (when (buffer-live-p (car entry))
-       (let ((file (buffer-file-name (car entry))))
-         (with-current-buffer (car entry)
-           (set-buffer-modified-p nil))
-         (kill-buffer (car entry))
-         (when (and file (file-exists-p file))
-           (delete-file file)))))
    (mevedel-test--reset-instructions)
    (mevedel-workspace-clear-registry))
   ,test

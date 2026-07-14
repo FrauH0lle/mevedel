@@ -72,6 +72,10 @@
 (declare-function mevedel-mention-bindings-skill-token-start-p
                   "mevedel-mention-bindings" (text start))
 
+;; `mevedel-mentions'
+(declare-function mevedel-mentions-prepare-user-input
+                  "mevedel-mentions" (text &optional session))
+
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
 
@@ -779,9 +783,13 @@ drain it."
              (mevedel-skills--clear-pending-inline-attachments))))
       (when-let* ((region (mevedel-skills--current-prompt-region)))
         (require 'mevedel-mention-bindings)
+        (require 'mevedel-mentions)
         (let* ((text (buffer-substring (car region) (cdr region)))
                (prepared
-                (mevedel-skills-prepare-user-input text mevedel--session)))
+                (mevedel-mentions-prepare-user-input
+                 (mevedel-skills-prepare-user-input
+                  text mevedel--session)
+                 mevedel--session)))
           (dolist (range (mevedel-mention-bindings-ranges prepared))
             (mevedel-mention-bindings-set
              (+ (car region) (plist-get range :start))

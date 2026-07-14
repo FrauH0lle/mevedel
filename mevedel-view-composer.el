@@ -66,6 +66,8 @@
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
+(declare-function mevedel-mentions-prepare-user-input
+                  "mevedel-mentions" (text &optional session))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -968,8 +970,8 @@ follows `mevedel-view--input-marker'."
                 (mevedel-view--input-start) (point-max)))))
     (string-trim text)))
 
-(defun mevedel-view--bind-input-skill-mentions (session)
-  "Bind skill mentions in the live composer for SESSION and return input.
+(defun mevedel-view--bind-input-mentions (session)
+  "Bind known mentions in the live composer for SESSION and return input.
 The visible text is unchanged.  Binding before asynchronous preparation
 means a failed attempt leaves the exact source attached for a retry."
   (require 'mevedel-mention-bindings)
@@ -979,7 +981,9 @@ means a failed attempt leaves the exact source attached for a retry."
            (buffer-substring input-start (point-max))))
          (bound-input
           (with-current-buffer mevedel--data-buffer
-            (mevedel-skills-prepare-user-input raw-input session))))
+            (mevedel-mentions-prepare-user-input
+             (mevedel-skills-prepare-user-input raw-input session)
+             session))))
     (with-silent-modifications
       (remove-text-properties
        input-start (point-max)
@@ -1492,7 +1496,7 @@ fork."
   (let* ((session (buffer-local-value 'mevedel--session
                                       mevedel--data-buffer))
          (input (if session
-                    (mevedel-view--bind-input-skill-mentions session)
+                    (mevedel-view--bind-input-mentions session)
                   (mevedel-view--input-text))))
     (when (string-empty-p input)
       (user-error "Nothing to send"))

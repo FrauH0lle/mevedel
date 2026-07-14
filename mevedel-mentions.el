@@ -36,10 +36,27 @@
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind &optional offset limit))
 
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-at
+                  "mevedel-mention-bindings" (text start end kind token))
+(declare-function mevedel-mention-bindings-copy-text
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-set
+                  "mevedel-mention-bindings"
+                  (start end binding &optional object))
+(declare-function mevedel-mention-bindings-valid-p
+                  "mevedel-mention-bindings" (text))
+
 ;; `mevedel-overlays'
+(declare-function mevedel--filter-references
+                  "mevedel-overlays" (query &optional workspace))
 (declare-function mevedel--instruction-activate-buffer
                   "mevedel-overlays" (&optional buffer))
 (declare-function mevedel--instruction-alist-value "mevedel-overlays" ())
+(declare-function mevedel--instruction-with-id
+                  "mevedel-overlays" (target-id &optional workspace))
+(declare-function mevedel--instruction-with-uuid
+                  "mevedel-overlays" (uuid &optional workspace))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission
@@ -109,28 +126,69 @@ user-prompt boundary."
                 (propertize placeholder 'gptel gptel-prop)
               placeholder))))
 
-(defun mevedel--resolve-ref-by-id (id)
-  "Look up reference by numeric ID.
+(defun mevedel--resolve-ref-by-id (id &optional workspace)
+  "Look up reference by numeric ID in WORKSPACE.
 Returns the reference overlay or nil if not found or not a reference."
-  (when-let* ((instr (mevedel--instruction-with-id id)))
+  (when-let* ((instr (mevedel--instruction-with-id id workspace)))
     (when (mevedel--referencep instr)
       instr)))
 
-(defun mevedel--resolve-refs-by-tag-query (query-string)
-  "Filter references by tag QUERY-STRING.
+(defun mevedel--resolve-ref-by-uuid (uuid &optional workspace)
+  "Look up the reference carrying UUID in WORKSPACE, or return nil.
+Restore stashed instructions in WORKSPACE before searching live overlays."
+  (when-let* ((instr (mevedel--instruction-with-uuid uuid workspace)))
+    (and (mevedel--referencep instr) instr)))
+
+(defun mevedel-mentions-prepare-user-input (text &optional session)
+  "Bind known direct reference mentions in user TEXT for SESSION.
+Existing valid bindings remain authoritative.  Direct numeric mentions
+whose current reference exists receive its UUID; missing references and
+reference queries remain unbound."
+  (require 'mevedel-mention-bindings)
+  (unless (mevedel-mention-bindings-valid-p text)
+    (user-error "Malformed mention binding"))
+  (let ((workspace (and session (mevedel-session-workspace session)))
+        (result (mevedel-mention-bindings-copy-text text))
+        (position 0))
+    (while (string-match "@ref:\\([0-9]+\\)" result position)
+      (let* ((start (match-beginning 0))
+             (end (match-end 0))
+             (token (match-string 0 result))
+             (live-context
+              (and (or (= start 0)
+                       (memq (char-syntax (aref result (1- start)))
+                             '(?\s ?>)))
+                   (or (= end (length result))
+                       (not (string-match-p
+                             "[[:alnum:]_]"
+                             (char-to-string (aref result end))))))))
+        (when (and live-context
+                   (not (get-text-property
+                         start 'mevedel-mention-binding result)))
+          (when-let* ((ref (mevedel--resolve-ref-by-id
+                            (string-to-number (match-string 1 result))
+                            workspace))
+                      (uuid (overlay-get ref 'mevedel-uuid)))
+            (mevedel-mention-bindings-set
+             start end
+             (list :kind 'ref :token token :reference-uuid uuid)
+             result)))
+        (setq position end)))
+    result))
+
+(defun mevedel--resolve-refs-by-tag-query (query-string &optional workspace)
+  "Filter references by tag QUERY-STRING in WORKSPACE.
 Returns list of reference overlays matching the query.
 For @ref mentions, excludes untagged references even if
 `mevedel-always-match-untagged-references' is t."
   (condition-case _err
       (let* ((query (mevedel--tag-query-prefix-from-infix
                      (read (concat "(" query-string ")"))))
-             ;; Temporarily disable always-match-untagged for explicit @ref queries
+             ;; Explicit @ref queries never include untagged references.
              (mevedel-always-match-untagged-references nil)
-             (refs (mevedel--filter-references query)))
+             (refs (mevedel--filter-references query workspace)))
         refs)
-    (error
-     ;; Return empty list if query is invalid
-     nil)))
+    (error nil)))
 
 (defun mevedel--format-single-reference (ref)
   "Format a single reference REF as markdown.
@@ -193,15 +251,17 @@ groups 2 and 3 are optional line-range bounds.")
 ;;; Mention dispatch
 
 (defvar mevedel-mention-handlers
-  `(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)" . mevedel--handle-ref-mention)
-    ("@agent:\\([[:alnum:]_-]+\\)" . mevedel--handle-agent-mention)
-    (,mevedel-mentions--mcp-regexp . mevedel--handle-mcp-mention)
-    (,mevedel-mentions--file-regexp . mevedel--handle-file-mention))
-  "Alist mapping mention regexes to handler functions.
+  `(("@ref:\\(?:\\([0-9]+\\)\\|{\\([^}]+\\)}\\)"
+     ref mevedel--handle-ref-mention)
+    ("@agent:\\([[:alnum:]_-]+\\)" nil mevedel--handle-agent-mention)
+    (,mevedel-mentions--mcp-regexp mcp mevedel--handle-mcp-mention)
+    (,mevedel-mentions--file-regexp file mevedel--handle-file-mention))
+  "List of mention regex, binding kind, and handler descriptors.
 
 Each handler is called with a plist containing:
   :match-text       the full matched text
   :capture          the first regex capture group
+  :binding          the exact atomic binding at the match, or nil
   :session          the `mevedel-session' struct (nil if unavailable)
   :workspace-root   the workspace root directory (nil if unavailable)
 
@@ -211,6 +271,7 @@ Handlers return a plist with these keys:
   :media-context (PATH MIME) context attachment for gptel media, or nil
   :key          (KIND . KEY) identifier used for deduplication
   :hash         content hash used for deduplication, or nil
+  :warning      nonblocking user-facing warning text, or nil
 
 Handlers should always return a `:placeholder', even for missing or
 invalid references, so that the user's prompt never leaks raw mention
@@ -223,30 +284,47 @@ regex exposes two capture groups: group 1 is the numeric ID variant,
 group 2 is the tag-query variant.  Exactly one is non-nil per match."
   (let* ((captures (plist-get info :captures))
          (id-str (nth 1 captures))
-         (query (nth 2 captures)))
+         (query (nth 2 captures))
+         (binding (plist-get info :binding))
+         (session (plist-get info :session))
+         (workspace (and session (mevedel-session-workspace session))))
     (cond
      (id-str
       (let* ((id (string-to-number id-str))
-             (ref (mevedel--resolve-ref-by-id id)))
+             (uuid (and (eq 'ref (plist-get binding :kind))
+                        (plist-get binding :reference-uuid)))
+             (ref (if uuid
+                      (mevedel--resolve-ref-by-uuid uuid workspace)
+                    (mevedel--resolve-ref-by-id id workspace))))
         (if ref
             (let ((content (with-current-buffer (overlay-buffer ref)
                              (buffer-substring-no-properties
                               (overlay-start ref) (overlay-end ref)))))
               (list :placeholder (format "[ref:%d -- contents attached above]" id)
                     :reminder (mevedel--format-single-reference ref)
-                    :key (cons 'ref id)
+                    :key (cons 'ref (overlay-get ref 'mevedel-uuid))
                     :hash (secure-hash 'sha1 content)))
-          (list :placeholder
-                (format "[ref:%d -- removed since an earlier turn]" id)
-                :reminder
-                (format "The user referenced reference #%d via an @ref mention, \
+          (if uuid
+              (list :placeholder (format "[ref:%d -- unavailable]" id)
+                    :reminder
+                    (format "The user selected reference #%d, but that exact \
+reference is unavailable.  The `[ref:%d -- unavailable]' token in the user \
+prompt is a system annotation, not user-written text.  Do not infer another \
+reference from the displayed number." id id)
+                    :key (cons 'ref uuid)
+                    :hash nil
+                    :warning (format "reference @ref:%d is unavailable" id))
+            (list :placeholder
+                  (format "[ref:%d -- removed since an earlier turn]" id)
+                  :reminder
+                  (format "The user referenced reference #%d via an @ref mention, \
 but that reference no longer exists.  The `[ref:%d -- removed since an \
 earlier turn]' token in the user prompt is a system annotation, not \
 user-written text.  Do not mention this reminder to the user." id id)
-                :key (cons 'ref id)
-                :hash nil))))
+                  :key (cons 'ref id)
+                  :hash nil)))))
      (query
-      (let ((refs (mevedel--resolve-refs-by-tag-query query)))
+      (let ((refs (mevedel--resolve-refs-by-tag-query query workspace)))
         (if (null refs)
             (list :placeholder (format "[ref:{%s} -- no matches]" query)
                   :reminder
@@ -665,22 +743,41 @@ points back at the chat buffer that owns the session.  Dispatches per
                               (mevedel-session-mentions-shown session)))
          (turn (and session (mevedel-session-turn-count session)))
          (seen-this-pass (make-hash-table :test #'equal))
-         (new-items nil))
+         (new-items nil)
+         (warnings nil))
+    (require 'mevedel-mention-bindings)
     (dolist (entry mevedel-mention-handlers)
       (let ((regex (car entry))
-            (handler (cdr entry)))
+            (kind (nth 1 entry))
+            (handler (nth 2 entry)))
         (save-excursion
           (goto-char (point-min))
           (while (re-search-forward regex nil t)
             (let ((match-beg (match-beginning 0))
                   (match-end (match-end 0)))
               (when (mevedel-mentions--valid-mention-context-p match-beg)
-                (let* ((captures (cl-loop for i from 0 below
+                (let* ((match-text (match-string 0))
+                       (binding
+                        (and kind
+                             (let* ((context-start
+                                     (max (point-min) (1- match-beg)))
+                                    (context-end
+                                     (min (point-max) (1+ match-end)))
+                                    (context
+                                     (buffer-substring
+                                      context-start context-end)))
+                               (mevedel-mention-bindings-at
+                                context
+                                (- match-beg context-start)
+                                (- match-end context-start)
+                                kind match-text))))
+                       (captures (cl-loop for i from 0 below
                                           (/ (length (match-data)) 2)
                                           collect (match-string i)))
-                       (info (list :match-text (match-string 0)
+                       (info (list :match-text match-text
                                    :capture (match-string 1)
                                    :captures captures
+                                   :binding binding
                                    :session session
                                    :workspace-root workspace-root
                                    :chat-buffer chat-buffer))
@@ -690,6 +787,7 @@ points back at the chat buffer that owns the session.  Dispatches per
                        (media-context (plist-get result :media-context))
                        (key (plist-get result :key))
                        (hash (plist-get result :hash))
+                       (warning (plist-get result :warning))
                        (prior (and mentions-shown key
                                    (gethash key mentions-shown)))
                        (already-sent-same (and prior hash
@@ -702,6 +800,8 @@ points back at the chat buffer that owns the session.  Dispatches per
                                       (not already-sent-same))))))
                   (mevedel-mentions-replace-with-placeholder
                    match-beg match-end placeholder)
+                  (when warning
+                    (push warning warnings))
                   (when media-context
                     (apply #'mevedel-mentions--add-media-context
                            media-context))
@@ -712,6 +812,9 @@ points back at the chat buffer that owns the session.  Dispatches per
                                 :hash hash
                                 :reminder (and fresh-reminder-p reminder))
                           new-items)))))))))
+    (when warnings
+      (message "mevedel: %s"
+               (mapconcat #'identity (delete-dups (nreverse warnings)) "; ")))
     (when-let* ((reminder-items
                  (delq nil
                        (mapcar (lambda (item)
@@ -739,6 +842,25 @@ points back at the chat buffer that owns the session.  Dispatches per
 
 ;;
 ;;; Completion-at-point support for @ref mentions
+
+(defun mevedel-mentions--ref-completion-exit-function
+    (candidates candidate status)
+  "Bind completed reference CANDIDATE selected from CANDIDATES.
+STATUS is the completion exit status."
+  (when (memq status '(finished exact sole))
+    (when-let* ((selected (cl-find candidate candidates :test #'string=))
+                (uuid (get-text-property
+                       0 'mevedel-reference-uuid selected))
+                (id-start (- (point) (length candidate)))
+                (start (- id-start (length "@ref:")))
+                ((>= start (point-min)))
+                (token (concat "@ref:" candidate))
+                ((equal token
+                        (buffer-substring-no-properties start (point)))))
+      (require 'mevedel-mention-bindings)
+      (mevedel-mention-bindings-set
+       start (point)
+       (list :kind 'ref :token token :reference-uuid uuid)))))
 
 (defun mevedel-ref-capf ()
   "Completion-at-point function for @ref mentions.
@@ -774,9 +896,10 @@ Provides completion for both @ref:ID and @ref:{tag-query} syntax."
                                     (preview (truncate-string-to-width
                                               (string-trim (replace-regexp-in-string "[\n\r]+" " " content))
                                               50 nil nil "...")))
-                               ;; Store reference info as text property for annotation
+                                ;; Store reference info as text property for annotation
                                (propertize id-str
-                                           'mevedel-ref ref
+                                           'mevedel-reference-uuid
+                                           (overlay-get ref 'mevedel-uuid)
                                            'mevedel-file rel-path
                                            'mevedel-line line
                                            'mevedel-preview preview)))
@@ -790,7 +913,11 @@ Provides completion for both @ref:ID and @ref:{tag-query} syntax."
                         (let ((file (get-text-property 0 'mevedel-file cand))
                               (line (get-text-property 0 'mevedel-line cand))
                               (preview (get-text-property 0 'mevedel-preview cand)))
-                          (format " %s [%s:%d]" preview file line)))))
+                          (format " %s [%s:%d]" preview file line)))
+                    :exit-function
+                    (lambda (candidate status)
+                      (mevedel-mentions--ref-completion-exit-function
+                       candidates candidate status))))
 
           ;; Try to match @ref:{tag-query} pattern
           (goto-char orig-point)

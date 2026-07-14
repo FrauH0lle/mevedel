@@ -230,7 +230,6 @@ that is ambiguous with prose."
          (equal token (plist-get binding :token))
          binding)))
 
-
 ;;
 ;;; Live editing
 

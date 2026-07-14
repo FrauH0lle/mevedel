@@ -15,7 +15,14 @@ from `@` mentions.
 
 ## Mention kinds
 
-- **@ref:N** / **@ref:{tag query}** — refs by ID or tag
+- **@ref:N** / **@ref:{tag query}** — direct references display their numeric
+  ID but bind the selected reference UUID. Completion binds immediately;
+  manually typed direct references bind at send when the reference exists.
+  Queueing and input history preserve that UUID, while dispatch reads the
+  reference's current contents. A deleted bound reference is annotated as
+  unavailable with a nonblocking warning and never falls back to a reused
+  numeric ID. Tag queries remain unbound and re-evaluate current matches at
+  every dispatch.
 - **@file:path** / **@file:{path with spaces}** — hierarchical file
   completion inserts the bare form; drag/drop and clipboard image paste
   use the braced form when quoting is needed. Optional
@@ -65,7 +72,9 @@ flowchart TD
 
 - Per-session: `mevedel-session-mentions-shown` keyed on `(KIND . KEY)`
   stores `(turn . content-hash)`; unchanged hashes skip re-injection and
-  media reattachment
+  media reattachment. Direct references use their UUID as `KEY`, so changed
+  contents are attached again without allowing displayed-number reuse to
+  collide.
 - Read dedup: `@file` records reads on `mevedel-session-touched-files`
   so later Read calls short-circuit
 
