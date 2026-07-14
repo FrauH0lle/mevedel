@@ -27,6 +27,7 @@
 (require 'mevedel-agents)
 (require 'gptel)
 (require 'mevedel-agent-runtime)
+(require 'mevedel-compact)
 (require 'mevedel-view-zone)
 
 (mevedel-deftest mevedel-view-agent-ownership ()
@@ -2030,13 +2031,18 @@
   ,test
   (test)
 
-  :doc "updates an expanded visible agent handle without full rerendering or changing draft"
+  :doc "agent and compaction refreshes preserve an expanded handle and draft"
   (mevedel-view-test--with-buffers
     (let* ((agent-id "explorer--refresh123")
            (draft "> quoted\nsecond line")
            (agent-tool (mevedel-tool--create
                         :name "Agent"
                         :renderer #'mevedel-tool-ui--render-agent))
+           (invocation
+            (mevedel-agent-invocation--create
+             :agent (mevedel-agent--create :name "explorer")
+             :agent-id agent-id
+             :parent-data-buffer data-buf))
            bounds
            (render-data
             (list :kind 'agent-transcript
@@ -2072,6 +2078,15 @@
           (goto-char (mevedel-view--input-start))
           (insert draft)
           (goto-char (+ (mevedel-view--input-start) 4)))
+        (let ((mevedel-view-agent-refresh-delay 0))
+          (cl-letf (((symbol-function 'gptel--update-status) #'ignore))
+            (mevedel--compact-agent-start
+             (list :invocation invocation))
+            (mevedel--compact-agent-complete
+             (list :invocation invocation) t)))
+        (with-current-buffer view-buf
+          (should (string= draft (mevedel-view--input-text)))
+          (should (= (point) (+ (mevedel-view--input-start) 4))))
         (with-current-buffer data-buf
           (pcase-let ((`(,start . ,end)
                        (mevedel-pipeline--find-render-data-block-by-agent-id
