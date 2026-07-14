@@ -135,21 +135,23 @@
 
 
 (defcustom mevedel-compact-context-limit nil
-  "Override model context window in tokens.
+  "Fallback context window in tokens.
 
-When nil, mevedel reads the active `gptel-model' `:context-window'
-property and falls back to 200000 tokens when the model does not expose
-one."
-  :type '(choice (const :tag "Use gptel context window" nil)
-          (natnum :tag "Token count"))
+Mevedel uses this only when the active model has no declared
+`:context-window'.  When nil, the fallback is 128000 tokens."
+  :type '(choice (const :tag "Use built-in fallback" nil)
+          (natnum :tag "Fallback token count"))
   :group 'mevedel)
 
 (defcustom mevedel-compact-token-threshold 0.80
-  "Estimated token threshold for auto-compaction.
-Can be either the number of tokens as an integer or a float between 0
-and 1, used as a fraction of usable context."
-  :type '(choice (natnum :tag "Absolute token count")
-          (float :tag "Fraction of usable context"))
+  "Fraction of usable context that triggers auto-compaction."
+  :type '(restricted-sexp
+          :tag "Fraction of usable context"
+          :match-alternatives
+          ((lambda (value)
+             (and (floatp value)
+                  (< 0.0 value)
+                  (< value 1.0)))))
   :group 'mevedel)
 
 (defcustom mevedel-compact-reserve-tokens 20000
@@ -244,10 +246,10 @@ thousands of tokens, sometimes as a float."
     (round (* kt 1000))))
 
 (defun mevedel--compact-context-limit ()
-  "Return the effective context window in tokens."
-  (or mevedel-compact-context-limit
-      (mevedel--model-context-window)
-      200000))
+  "Return the active model's effective context window in tokens."
+  (or (mevedel--model-context-window)
+      mevedel-compact-context-limit
+      128000))
 
 (defun mevedel--compact-model-max-output-tokens ()
   "Return the effective configured max-output token count, or 0."
@@ -280,14 +282,47 @@ thousands of tokens, sometimes as a float."
          (effective-reserve (min requested-reserve reserve-cap)))
     (max 1 (- context effective-reserve))))
 
-(defun mevedel--compact-threshold-tokens ()
-  "Return the effective compaction threshold in tokens."
+(defun mevedel--compact-threshold-tokens (&optional usable-tokens)
+  "Return the compaction threshold for USABLE-TOKENS."
   (let ((threshold mevedel-compact-token-threshold)
-        (usable (mevedel--compact-usable-tokens)))
-    (cond
-     ((integerp threshold) threshold)
-     ((floatp threshold) (round (* threshold usable)))
-     (t (round (* 0.80 usable))))))
+        (usable (or usable-tokens (mevedel--compact-usable-tokens))))
+    (unless (and (floatp threshold)
+                 (< 0.0 threshold)
+                 (< threshold 1.0))
+      (user-error "Compaction threshold must be a float strictly between 0.0 and 1.0"))
+    (round (* threshold usable))))
+
+(defun mevedel--compact-workload-policy ()
+  "Resolve and return the compaction workload model policy."
+  (require 'mevedel-models)
+  (append '(:max-tokens nil :request-params nil)
+          (mevedel-model-resolve-workload 'compaction)))
+
+(defun mevedel--compact-target-policy ()
+  "Return the current request's model policy for compaction budgeting."
+  (list :backend gptel-backend
+        :model gptel-model
+        :max-tokens gptel-max-tokens
+        :request-params gptel--request-params))
+
+(defun mevedel--compact-policy-usable-tokens (policy)
+  "Return usable input context tokens for model POLICY."
+  (let ((gptel-backend (plist-get policy :backend))
+        (gptel-model (plist-get policy :model))
+        (gptel-max-tokens (plist-get policy :max-tokens))
+        (gptel--request-params (plist-get policy :request-params)))
+    (mevedel--compact-usable-tokens)))
+
+(defun mevedel--compact-policy-threshold-tokens (policy)
+  "Return the compaction threshold for model POLICY."
+  (mevedel--compact-threshold-tokens
+   (mevedel--compact-policy-usable-tokens policy)))
+
+(defun mevedel--compact-summary-request-token-estimate (body system-prompt)
+  "Estimate tokens for summary BODY and SYSTEM-PROMPT."
+  (with-temp-buffer
+    (insert system-prompt "\n\n" body)
+    (mevedel--estimate-tokens)))
 
 (defun mevedel--compact-token-usage-count (tokens)
   "Return total prompt/output TOKENS from a gptel token-usage plist."
@@ -978,13 +1013,21 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
     "current buffer is not the active persisted segment")))
 
 (defun mevedel--compact-should-compact-p (&optional token-estimate)
-  "Return non-nil when TOKEN-ESTIMATE exceeds the configured threshold."
-  (let ((over-threshold (>= (or token-estimate
-                                (mevedel--estimate-tokens))
-                            (mevedel--compact-threshold-tokens))))
+  "Return automatic compaction admission for TOKEN-ESTIMATE, or nil."
+  (let* ((estimate (or token-estimate (mevedel--estimate-tokens)))
+         (target-policy (mevedel--compact-target-policy))
+         (summary-policy (mevedel--compact-workload-policy))
+         (target-threshold
+          (mevedel--compact-policy-threshold-tokens target-policy))
+         (summary-threshold
+          (mevedel--compact-policy-threshold-tokens summary-policy))
+         (over-threshold (>= estimate (min target-threshold
+                                           summary-threshold))))
     (cond
      ((not over-threshold) nil)
-     ((mevedel--compact-auto-eligible-p) t)
+     ((mevedel--compact-auto-eligible-p)
+      (list :summary-policy summary-policy
+            :target-pressure (>= estimate target-threshold)))
      ((not mevedel--compact-auto-ineligible-warning-shown)
       (setq mevedel--compact-auto-ineligible-warning-shown t)
       (display-warning
@@ -1090,12 +1133,14 @@ PRESERVED-TAIL-TURNS is the actual count returned by
     summary))
 
 (cl-defun mevedel--compact-run
-    (&key aggressive instructions pending-start callback auto)
+    (&key aggressive instructions pending-start callback auto
+          admission)
   "Run compaction in the current chat buffer.
 AGGRESSIVE drops the preserved tail.  INSTRUCTIONS are manual summary
 instructions.  PENDING-START marks an inserted-but-unsent prompt region.
 CALLBACK receives (ERR) when compaction settles.  AUTO marks an
-auto-compaction call."
+auto-compaction call.  ADMISSION carries the pre-resolved summarizer
+policy and whether the active model crossed its own threshold."
   (let ((chat-buffer (current-buffer))
         (tokens-before (mevedel--estimate-tokens))
         (settled nil))
@@ -1145,20 +1190,26 @@ auto-compaction call."
                 (mevedel--compact-prompt previous-summary
                                          instructions
                                          mevedel--session))
+               (policy (or (plist-get admission :summary-policy)
+                           (mevedel--compact-workload-policy)))
                (pre-compact-hook-audits nil)
                (attempt 0)
                (max-attempts 3))
           (when (string-blank-p old-content)
             (if auto
                 (cl-return-from mevedel--compact-run
-                  (when callback (funcall callback :skip)))
+                  (when callback
+                    (funcall callback
+                             (if (plist-get admission :target-pressure)
+                                 "No compactable history remains at target pressure"
+                               :skip))))
               (user-error "Not enough conversation content to compact")))
 	          (require 'mevedel-hooks)
 	          (let* ((session mevedel--session)
 	                 (workspace (and session (mevedel-session-workspace session)))
 	                 (trigger (if auto "auto" "manual")))
             (cl-labels
-                ((fail (fail-err retryable)
+                ((fail (fail-err retryable &optional ignore-failure-count)
                    (if (and retryable (< attempt max-attempts))
                        (let ((delay (expt 2 (1- attempt))))
                          (message
@@ -1170,7 +1221,8 @@ auto-compaction call."
                             (when (buffer-live-p chat-buffer)
                               (with-current-buffer chat-buffer
                                 (send-request))))))
-                     (cl-incf mevedel--compact-failure-count)
+                     (unless ignore-failure-count
+                       (cl-incf mevedel--compact-failure-count))
                      (display-warning 'mevedel fail-err :warning)
                      (unless auto
                        (when-let* ((vb mevedel--view-buffer)
@@ -1246,12 +1298,7 @@ auto-compaction call."
                                (error
                                 (fail (format "%s" apply-err) nil))))))
                        (condition-case request-err
-                           (let ((policy
-                                  (progn
-                                    (require 'mevedel-models)
-                                    (mevedel-model-resolve-workload
-                                     'compaction)))
-                                 (gptel-use-tools nil)
+                           (let ((gptel-use-tools nil)
                                  (gptel-tools nil))
                              (gptel-with-preset 'gptel-default
                                (let ((request-fn
@@ -1318,14 +1365,25 @@ auto-compaction call."
                                 decision))
                          (setq system-prompt
                                (concat system-prompt "\n\n" context)))
-                       (message "mevedel: compacting (%dk -> ...)"
-                                (/ tokens-before 1000))
-                       (when-let* ((vb mevedel--view-buffer)
-                                   (_ (buffer-live-p vb)))
-                         (with-current-buffer vb
-                           (mevedel-view--update-spinner "Compacting...")))
-                       (require 'gptel)
-                       (send-request))))
+                       (let ((request-tokens
+                              (mevedel--compact-summary-request-token-estimate
+                               old-content system-prompt))
+                             (usable-tokens
+                              (mevedel--compact-policy-usable-tokens policy)))
+                         (if (> request-tokens usable-tokens)
+                             (fail
+                              (format
+                               "Compaction request (%d tokens) exceeds summarizer usable context (%d tokens)"
+                               request-tokens usable-tokens)
+                              nil t)
+                           (message "mevedel: compacting (%dk -> ...)"
+                                    (/ tokens-before 1000))
+                           (when-let* ((vb mevedel--view-buffer)
+                                       (_ (buffer-live-p vb)))
+                             (with-current-buffer vb
+                               (mevedel-view--update-spinner "Compacting...")))
+                           (require 'gptel)
+                           (send-request))))))
                    session workspace nil nil)
                 (error
                  (finish (format "%s" hook-err))
@@ -1437,19 +1495,36 @@ set already stored on FSM's info plist."
             (not (buffer-live-p chat-buffer)))
         (gptel--handle-wait fsm)
       (with-current-buffer chat-buffer
-        (let ((token-estimate
-               (mevedel--compact-estimate-data-tokens
-                (plist-get info :data)))
-              (gptel-backend (or (plist-get info :backend) gptel-backend))
-              (gptel-model (or (plist-get info :model) gptel-model)))
-          (if (not (mevedel--compact-should-compact-p token-estimate))
+        (let* ((target-policy
+                (or (plist-get info :mevedel-compaction-target-policy)
+                    (let ((gptel-backend
+                           (or (plist-get info :backend) gptel-backend))
+                          (gptel-model
+                           (or (plist-get info :model) gptel-model)))
+                      (mevedel--compact-target-policy))))
+               (token-estimate
+                (mevedel--compact-estimate-data-tokens
+                 (plist-get info :data)))
+               (gptel-backend (plist-get target-policy :backend))
+               (gptel-model (plist-get target-policy :model))
+               (gptel-max-tokens (plist-get target-policy :max-tokens))
+               (gptel--request-params
+                (plist-get target-policy :request-params))
+               (admission
+                (mevedel--compact-should-compact-p token-estimate)))
+          (if (not admission)
               (gptel--handle-wait fsm)
             (let ((pending-start (mevedel--compact-find-boundary)))
               (if (not pending-start)
-                  (gptel--handle-wait fsm)
+                  (if (plist-get admission :target-pressure)
+                      (mevedel--compact-auto-failure
+                       chat-buffer
+                       "No compactable history remains at target pressure")
+                    (gptel--handle-wait fsm))
                 (mevedel--compact-run
                  :pending-start pending-start
                  :auto t
+                 :admission admission
                  :callback
                  (lambda (err)
                    (cond
@@ -1496,70 +1571,86 @@ state machine."
             (not (buffer-live-p source-buffer)))
         (funcall continue)
       (with-current-buffer source-buffer
-        (cond
-         (mevedel--compaction-in-flight
-          (user-error "Compaction already in progress"))
-         ((not (let ((gptel-backend effective-backend)
+        (let ((target-policy
+               (let ((gptel-backend effective-backend)
                      (gptel-model effective-model)
                      (gptel-max-tokens effective-max-tokens)
                      (gptel--request-params effective-request-params))
-                 (mevedel--compact-should-compact-p
-                  (mevedel--compact-estimate-transformed-request-tokens
-                   source-buffer prompt-buffer))))
-          (funcall continue))
-         (t
-          (let ((pending-start (mevedel--compact-find-boundary)))
-            (if (not pending-start)
-                (funcall continue)
-              (let ((source-pending-text
-                     (buffer-substring pending-start (point-max)))
-                    (prompt-history-start
-                     (when (buffer-live-p prompt-buffer)
-                       (with-current-buffer prompt-buffer
-                         (copy-marker (point-min) t))))
-                    (prompt-pending-start
-                     (when (buffer-live-p prompt-buffer)
-                       (with-current-buffer prompt-buffer
-                         (when-let* ((start (mevedel--compact-find-boundary)))
-                           (copy-marker start nil))))))
-                (mevedel--compact-run
-                 :pending-start pending-start
-                 :auto t
-                 :callback
-                 (lambda (err)
-                   (unwind-protect
-                       (cond
-                        ((eq err :skip)
-                         (funcall continue))
-                        (err
-                         (mevedel--compact-auto-failure source-buffer err))
-                        (t
-                         (when (and (buffer-live-p prompt-buffer)
-                                    (buffer-live-p source-buffer))
-                           (with-current-buffer source-buffer
-                             (when-let* ((marker (plist-get info :position)))
-                               (set-marker marker (point-max) source-buffer)))
-                           (when-let* ((vb mevedel--view-buffer)
-                                       (_ (buffer-live-p vb)))
-                             (with-current-buffer vb
-                               (mevedel-view--update-spinner "Thinking...")))
-                           (mevedel--compact-rebuild-prompt-buffer
-                            prompt-buffer source-buffer source-pending-text
-                            prompt-history-start prompt-pending-start)
-                           (when-let* ((reminder
-                                        (buffer-local-value
-                                         'mevedel--compact-current-request-reminder
-                                         source-buffer)))
-                             (with-current-buffer prompt-buffer
-                               (mevedel--compact-insert-current-request-reminder
-                                reminder))
+                 (mevedel--compact-target-policy)))
+              (admission
+               (unless mevedel--compaction-in-flight
+                 (let ((gptel-backend effective-backend)
+                       (gptel-model effective-model)
+                       (gptel-max-tokens effective-max-tokens)
+                       (gptel--request-params effective-request-params))
+                   (mevedel--compact-should-compact-p
+                    (mevedel--compact-estimate-transformed-request-tokens
+                     source-buffer prompt-buffer))))))
+          (plist-put info :mevedel-compaction-target-policy target-policy)
+          (cond
+           (mevedel--compaction-in-flight
+            (user-error "Compaction already in progress"))
+           ((not admission)
+            (funcall continue))
+           (t
+            (let ((pending-start (mevedel--compact-find-boundary)))
+              (if (not pending-start)
+                  (if (plist-get admission :target-pressure)
+                      (mevedel--compact-auto-failure
+                       source-buffer
+                       "No compactable history remains at target pressure")
+                    (funcall continue))
+                (let ((source-pending-text
+                       (buffer-substring pending-start (point-max)))
+                      (prompt-history-start
+                       (when (buffer-live-p prompt-buffer)
+                         (with-current-buffer prompt-buffer
+                           (copy-marker (point-min) t))))
+                      (prompt-pending-start
+                       (when (buffer-live-p prompt-buffer)
+                         (with-current-buffer prompt-buffer
+                           (when-let* ((start (mevedel--compact-find-boundary)))
+                             (copy-marker start nil))))))
+                  (mevedel--compact-run
+                   :pending-start pending-start
+                   :auto t
+                   :admission admission
+                   :callback
+                   (lambda (err)
+                     (unwind-protect
+                         (cond
+                          ((eq err :skip)
+                           (funcall continue))
+                          (err
+                           (mevedel--compact-auto-failure source-buffer err))
+                          (t
+                           (when (and (buffer-live-p prompt-buffer)
+                                      (buffer-live-p source-buffer))
                              (with-current-buffer source-buffer
-                               (setq mevedel--compact-current-request-reminder nil))))
-                         (funcall continue)))
-                     (when (markerp prompt-history-start)
-                       (set-marker prompt-history-start nil))
-                     (when (markerp prompt-pending-start)
-                       (set-marker prompt-pending-start nil))))))))))))))
+                               (when-let* ((marker (plist-get info :position)))
+                                 (set-marker marker (point-max) source-buffer)))
+                             (when-let* ((vb mevedel--view-buffer)
+                                         (_ (buffer-live-p vb)))
+                               (with-current-buffer vb
+                                 (mevedel-view--update-spinner "Thinking...")))
+                             (mevedel--compact-rebuild-prompt-buffer
+                              prompt-buffer source-buffer source-pending-text
+                              prompt-history-start prompt-pending-start)
+                             (when-let* ((reminder
+                                          (buffer-local-value
+                                           'mevedel--compact-current-request-reminder
+                                           source-buffer)))
+                               (with-current-buffer prompt-buffer
+                                 (mevedel--compact-insert-current-request-reminder
+                                  reminder))
+                               (with-current-buffer source-buffer
+                                 (setq mevedel--compact-current-request-reminder
+                                       nil))))
+                           (funcall continue)))
+                       (when (markerp prompt-history-start)
+                         (set-marker prompt-history-start nil))
+                       (when (markerp prompt-pending-start)
+                         (set-marker prompt-pending-start nil)))))))))))))))
 
 (provide 'mevedel-compact)
 ;;; mevedel-compact.el ends here
