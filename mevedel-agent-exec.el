@@ -151,6 +151,8 @@
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 
 ;; `mevedel-compact'
+(declare-function mevedel--compact-handle-agent-wait
+                  "mevedel-compact" (fsm))
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
 
@@ -1095,7 +1097,7 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
 
 (defvar mevedel-agent-exec--handlers
   `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
-     ,#'gptel--handle-wait)
+     ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage
           ,#'mevedel--compact-record-token-baseline
           ,#'gptel--handle-pre-tool
@@ -1476,6 +1478,15 @@ Returns the spawned FSM."
                  (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
            (setq req-info
                  (plist-put req-info :mevedel-agent-invocation invocation))
+           (setq req-info
+                 (plist-put
+                  req-info :mevedel-compaction-target-policy
+                  (list :backend effective-backend
+                        :model effective-model
+                        :max-tokens
+                        (alist-get 'gptel-max-tokens request-locals)
+                        :request-params
+                        (alist-get 'gptel--request-params request-locals))))
            (setf (gptel-fsm-info fsm)
                  (plist-put req-info :callback wrapped)))
          fsm))))

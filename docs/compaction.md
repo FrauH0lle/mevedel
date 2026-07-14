@@ -143,9 +143,36 @@ proceed. If eligible, it compacts the active persisted segment, rebuilds
 `info :data` from the compacted buffer, and then calls the original wait
 handler.
 
-Continuation compaction is limited to the active persisted session
-segment. Sub-agent buffers that do not own the current persisted segment
-remain ineligible.
+Continuation compaction supports the active persisted session segment and a
+persisted sub-agent transcript.  Agent compaction is considered only in the
+agent FSM's continuation `WAIT`, after the preceding response and tool result
+have settled and immediately before gptel would send the follow-up request.
+Initial requests and streaming responses are never interrupted.
+
+The shared compaction runner owns admission, tail selection, tool-output caps,
+summary requests, retries, preflight, and hooks for both targets.  The private
+target adapter supplies the protected transcript bounds and target-specific
+persistence, display, continuation, and failure operations.  Agent hooks run
+with the parent session, workspace, and invocation; their payload uses the
+agent ID as `:origin`, the stable canonical transcript as `:transcript-path`,
+and `"auto"` as `:trigger`.  Model-visible `PreCompact` additions retain their
+ignored audit record beside the summary.
+
+For a persisted agent, the original `* Agent Task:` block remains verbatim.
+Only older agent-owned history is summarized; parent goal state, session-wide
+skill history, and touched-file reminders are excluded.  Before rewriting,
+mevedel synchronously saves the full live transcript and copies it to the next
+unused sibling such as `explorer.compact-0001.chat.org`.  It then rewrites the
+same canonical `.chat.org` file as task plus anchored summary plus configured
+recent tail, rebuilds the pending request from that live buffer, and resumes it
+once.  Activity temporarily reports `Compacting...` and then returns to the
+ordinary continuation status.  Agent compaction emits neither the main-session
+file reminder nor the long-thread accuracy warning.
+
+If agent summarization or application fails, the continuation is not sent.
+The agent FSM enters its normal `ERRS` transaction so transcript finalization
+and the terminal callback deliver the ordinary bounded, transcript-backed
+error result to the parent.
 
 Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
 use a no-tools prompt preamble, respect the active `gptel-stream`

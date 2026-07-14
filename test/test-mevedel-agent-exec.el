@@ -65,12 +65,20 @@ fire-count and payload."
 ;;
 ;;; Transcript prompt injections
 
-(mevedel-deftest mevedel-agent-exec--handlers
-  (:doc "TOOL state keeps gptel's status and pending-tool cleanup handlers")
+(mevedel-deftest mevedel-agent-exec--handlers ()
+  ,test
+  (test)
+  :doc "TOOL state keeps gptel's status and pending-tool cleanup handlers"
   (let ((tool-entry (assq 'TOOL mevedel-agent-exec--handlers)))
     (should (member #'gptel--update-tool-call (cdr tool-entry)))
     (should (member #'gptel--handle-tool-use (cdr tool-entry)))
-    (should (member #'gptel--update-tool-ask (cdr tool-entry)))))
+    (should (member #'gptel--update-tool-ask (cdr tool-entry))))
+
+  :doc "WAIT routes continuations through the shared compaction gate"
+  (let ((wait-entry (assq 'WAIT mevedel-agent-exec--handlers)))
+    (should (member #'mevedel--compact-handle-agent-wait
+                    (cdr wait-entry)))
+    (should-not (member #'gptel--handle-wait (cdr wait-entry)))))
 
 (mevedel-deftest mevedel-agent-exec--insert-injected-prompt ()
   ,test
@@ -768,7 +776,8 @@ fire-count and payload."
 		       captured-buffer
 		       captured-include-reasoning
 		       captured-tiers
-		       captured-workloads)
+		       captured-workloads
+		       captured-fsm)
 		   (unwind-protect
 		       (progn
 			 (with-current-buffer parent-buf
@@ -803,17 +812,24 @@ fire-count and payload."
 						mevedel-model-workloads)))
 				       ((symbol-function 'gptel--update-status)
 					#'ignore))
-			       (mevedel-agent-exec--run
-				#'ignore "explorer" "count defcustoms" "prompt"
-				inv agent-buf))))
+		       (setq captured-fsm
+			     (mevedel-agent-exec--run
+			      #'ignore "explorer" "count defcustoms" "prompt"
+			      inv agent-buf)))))
 			 (should (eq captured-buffer agent-buf))
 			 (should (eq captured-include-reasoning t))
 			 (should (equal '((custom)) captured-tiers))
 			 (should (equal '((explorer :tier custom))
 					captured-workloads))
 			 (should-not (eq parent-tiers captured-tiers))
-			 (should-not (eq parent-workloads captured-workloads))
-			 (with-current-buffer agent-buf
+		 (should-not (eq parent-workloads captured-workloads))
+		 (should
+		  (equal
+		   '(:backend nil :model test-model :max-tokens nil
+		     :request-params nil)
+		   (plist-get (gptel-fsm-info captured-fsm)
+			      :mevedel-compaction-target-policy)))
+		 (with-current-buffer agent-buf
 			   (should (eq gptel-include-reasoning t))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
