@@ -28,6 +28,30 @@
 (defvar gptel-backend)
 (defvar gptel--request-params)
 
+(cl-defmacro test-mevedel-compact--with-persisted-buffer
+    ((buffer session) &rest body)
+  "Run BODY in persisted BUFFER owned by SESSION."
+  (declare (indent 1) (debug ((symbolp symbolp) body)))
+  `(let* ((tempdir (make-temp-file "mevedel-compact-test-" t))
+          (workspace
+           (mevedel-workspace-get-or-create
+            'project "compact-test" tempdir "compact-test"))
+          (,session (mevedel-session-create "main" workspace))
+          (,buffer (generate-new-buffer " *mevedel-compact-test*")))
+     (unwind-protect
+         (with-current-buffer ,buffer
+           (org-mode)
+           (setq-local mevedel--session ,session)
+           (mevedel-session-persistence-ensure-files ,session ,buffer)
+           ,@body)
+       (mevedel-session-persistence-lock-release tempdir)
+       (when (buffer-live-p ,buffer)
+         (with-current-buffer ,buffer
+           (set-buffer-modified-p nil))
+         (kill-buffer ,buffer))
+       (mevedel-workspace-clear-registry)
+       (delete-directory tempdir t))))
+
 (mevedel-deftest mevedel--compact-previous-summary ()
   ,test
   (test)
@@ -362,7 +386,8 @@
           (let ((fsm (gptel-make-fsm
                       :info (list :buffer source-buf))))
             (cl-letf (((symbol-function 'mevedel--compact-should-compact-p)
-                       (lambda (&optional _token-estimate) t))
+                       (lambda (&optional _token-estimate)
+                         '(:summary-policy nil :target-pressure nil)))
                       ((symbol-function 'mevedel--compact-run)
                        (lambda (&rest args)
                          (with-current-buffer prompt-buf
@@ -405,6 +430,34 @@
       (when (buffer-live-p source-buf)
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
+        (kill-buffer prompt-buf))))
+
+  :doc "blocks target-pressure prompt without a transcript boundary"
+  (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
+        (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
+        (continued 0) failure)
+    (unwind-protect
+        (progn
+          (with-current-buffer source-buf
+            (org-mode)
+            (insert "No response boundary\n"))
+          (with-current-buffer prompt-buf
+            (org-mode)
+            (insert-buffer-substring source-buf))
+          (let ((fsm (gptel-make-fsm :info (list :buffer source-buf))))
+            (cl-letf (((symbol-function 'mevedel--compact-should-compact-p)
+                       (lambda (&optional _tokens)
+                         '(:summary-policy nil :target-pressure t)))
+                      ((symbol-function 'mevedel--compact-auto-failure)
+                       (lambda (_buffer err) (setq failure err))))
+              (with-current-buffer prompt-buf
+                (mevedel--compact-transform-auto
+                 (lambda () (cl-incf continued)) fsm))))
+          (should (= continued 0))
+          (should (string-match-p "No compactable history" failure)))
+      (when (buffer-live-p source-buf)
+        (kill-buffer source-buf))
+      (when (buffer-live-p prompt-buf)
         (kill-buffer prompt-buf)))))
 
 (mevedel-deftest mevedel--compact-transform-auto-threshold ()
@@ -438,7 +491,8 @@
                          (setq ran t)
                          (funcall (plist-get args :callback) :skip))))
               (with-current-buffer prompt-buf
-                (let ((mevedel-compact-token-threshold 50)
+                (let ((mevedel-compact-token-threshold 0.5)
+                      (mevedel-compact-context-limit 200)
                       (gptel-backend nil)
                       (gptel-model nil)
                       (gptel-max-tokens nil)
@@ -479,7 +533,8 @@
                          (setq ran t)
                          (funcall (plist-get args :callback) :skip))))
               (with-current-buffer prompt-buf
-                (let ((mevedel-compact-token-threshold 50)
+                (let ((mevedel-compact-token-threshold 0.5)
+                      (mevedel-compact-context-limit 200)
                       (gptel-backend nil)
                       (gptel-model nil)
                       (gptel-max-tokens nil)
@@ -489,6 +544,65 @@
                    fsm)))))
           (should ran)
           (should continued))
+      (when (buffer-live-p source-buf)
+        (kill-buffer source-buf))
+      (when (buffer-live-p prompt-buf)
+        (kill-buffer prompt-buf))))
+
+  :doc "summarizer pressure triggers before target-model pressure"
+  (let ((source-buf (generate-new-buffer " *mevedel-compact-source*"))
+        (prompt-buf (generate-new-buffer " *mevedel-compact-prompt*"))
+        captured-args captured-policy)
+    (unwind-protect
+        (progn
+          (put 'mevedel-target-model :context-window 2)
+          (put 'mevedel-summary-model :context-window 0.2)
+          (with-current-buffer source-buf
+            (org-mode)
+            (setq-local mevedel--compaction-in-flight nil)
+            (insert "Old prompt\n")
+            (insert (propertize "Old response\n" 'gptel 'response))
+            (insert "Pending\n")
+            (setq-local mevedel--known-token-baseline
+                        (list :tokens 200
+                              :position (copy-marker (point-max)))))
+          (with-current-buffer prompt-buf
+            (org-mode)
+            (insert-buffer-substring source-buf))
+          (let ((fsm (gptel-make-fsm :info (list :buffer source-buf))))
+            (cl-letf (((symbol-function 'mevedel--compact-auto-eligible-p)
+                       (lambda () t))
+                      ((symbol-function 'mevedel-model-resolve-workload)
+                       (lambda (&rest _)
+                         '(:backend nil :model mevedel-summary-model)))
+                      ((symbol-function 'mevedel--compact-run)
+                       (lambda (&rest args)
+                         (setq captured-args args
+                               captured-policy
+                               (plist-get
+                                (gptel-fsm-info fsm)
+                                :mevedel-compaction-target-policy)))))
+              (with-current-buffer prompt-buf
+                (let ((mevedel-compact-token-threshold 0.8)
+                      (mevedel-compact-reserve-tokens 0)
+                      (gptel-backend nil)
+                      (gptel-model 'mevedel-target-model)
+                      (gptel-max-tokens 150)
+                      (gptel--request-params '(:temperature 0.5)))
+                  (mevedel--compact-transform-auto #'ignore fsm)))))
+          (should captured-args)
+          (should
+           (equal captured-policy
+                  '(:backend nil :model mevedel-target-model
+                    :max-tokens 150
+                    :request-params (:temperature 0.5))))
+          (should-not (plist-get (plist-get captured-args :admission)
+                                 :target-pressure))
+          (should (eq (plist-get
+                       (plist-get (plist-get captured-args :admission)
+                                  :summary-policy)
+                       :model)
+                      'mevedel-summary-model)))
       (when (buffer-live-p source-buf)
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
@@ -590,7 +704,8 @@
                      (lambda () t))
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest _args) (setq ran t))))
-            (let ((mevedel-compact-token-threshold 50))
+            (let ((mevedel-compact-token-threshold 0.5)
+                  (mevedel-compact-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
           (should-not ran))
@@ -622,11 +737,51 @@
                      (lambda (_fsm) (cl-incf sent)))
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest _args) (setq ran t))))
-            (let ((mevedel-compact-token-threshold 50)
+            (let ((mevedel-compact-token-threshold 0.5)
+                  (mevedel-compact-context-limit 200)
                   (mevedel-compact-image-token-estimate 10))
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
           (should-not ran))
+      (kill-buffer chat-buf)))
+
+  :doc "uses the realized request reserve instead of chat-buffer settings"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0)
+        (ran nil))
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info
+                    (list
+                     :buffer chat-buf
+                     :history '(TRET)
+                     :mevedel-compaction-target-policy
+                     '(:backend nil :model nil :max-tokens 100
+                       :request-params nil)
+                     :data
+                     (list :messages
+                           (vector
+                            (list :role "user"
+                                  :content (make-string 240 ?x))))))))
+          (with-current-buffer chat-buf
+            (setq-local gptel-max-tokens nil)
+            (insert "Prompt\n")
+            (insert (propertize "Response\n" 'gptel 'response))
+            (insert "Tool result\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-auto-eligible-p)
+                     (lambda () t))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest args)
+                       (setq ran t)
+                       (funcall (plist-get args :callback) :skip))))
+            (let ((mevedel-compact-token-threshold 0.5)
+                  (mevedel-compact-context-limit 200)
+                  (mevedel-compact-reserve-tokens 0))
+              (mevedel--compact-handle-wait fsm)))
+          (should ran)
+          (should (= sent 1)))
       (kill-buffer chat-buf)))
 
   :doc "runs continuation gate on TRET to WAIT over threshold"
@@ -654,7 +809,8 @@
                      (lambda (&rest args)
                        (setq ran t)
                        (funcall (plist-get args :callback) :skip))))
-            (let ((mevedel-compact-token-threshold 50))
+            (let ((mevedel-compact-token-threshold 0.5)
+                  (mevedel-compact-context-limit 200))
               (mevedel--compact-handle-wait fsm)))
           (should ran)
           (should (= sent 1)))
@@ -681,7 +837,8 @@
           (cl-letf (((symbol-function 'gptel--handle-wait)
                      (lambda (_fsm) (cl-incf sent)))
                     ((symbol-function 'mevedel--compact-should-compact-p)
-                     (lambda (&optional _tokens) t))
+                     (lambda (&optional _tokens)
+                       '(:summary-policy nil :target-pressure nil)))
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest args)
                        (setq callback (plist-get args :callback))))
@@ -717,7 +874,8 @@
           (cl-letf (((symbol-function 'gptel--handle-wait)
                      (lambda (_fsm) (cl-incf sent)))
                     ((symbol-function 'mevedel--compact-should-compact-p)
-                     (lambda (&optional _tokens) t))
+                     (lambda (&optional _tokens)
+                       '(:summary-policy nil :target-pressure nil)))
                     ((symbol-function 'mevedel--compact-run)
                      (lambda (&rest args)
                        (funcall (plist-get args :callback) "boom")))
@@ -731,6 +889,47 @@
           (should (string-match-p
                    "Auto-compaction failed; request not sent: boom"
                    warning)))
+      (kill-buffer chat-buf)))
+
+  :doc "blocks target-pressure continuation without a transcript boundary"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0) failure)
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(TRET)
+                                :data '(:messages [])))))
+          (with-current-buffer chat-buf
+            (insert "No response boundary\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-should-compact-p)
+                     (lambda (&optional _tokens)
+                       '(:summary-policy nil :target-pressure t)))
+                    ((symbol-function 'mevedel--compact-auto-failure)
+                     (lambda (_buffer err) (setq failure err))))
+            (mevedel--compact-handle-wait fsm))
+          (should (= sent 0))
+          (should (string-match-p "No compactable history" failure)))
+      (kill-buffer chat-buf)))
+
+  :doc "allows summarizer-only continuation without a transcript boundary"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        (sent 0))
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list :buffer chat-buf
+                                :history '(TRET)
+                                :data '(:messages [])))))
+          (with-current-buffer chat-buf
+            (insert "No response boundary\n"))
+          (cl-letf (((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf sent)))
+                    ((symbol-function 'mevedel--compact-should-compact-p)
+                     (lambda (&optional _tokens)
+                       '(:summary-policy nil :target-pressure nil))))
+            (mevedel--compact-handle-wait fsm))
+          (should (= sent 1)))
       (kill-buffer chat-buf))))
 
 (mevedel-deftest mevedel--compact-run ()
@@ -752,6 +951,142 @@
          :type 'user-error))
       (should-not hook-called)
       (should-not request-called)))
+
+  :doc "summarizer-only pressure skips when no compactable prefix remains"
+  (test-mevedel-compact--with-persisted-buffer (buffer session)
+    (insert "Prompt\n")
+    (insert (propertize "Response\n" 'gptel 'response))
+    (let ((pending-start (point)) result)
+      (insert "Pending\n")
+      (mevedel--compact-run
+       :pending-start pending-start
+       :auto t
+       :admission
+       '(:summary-policy (:backend nil :model nil :max-tokens 0)
+         :target-pressure nil)
+       :callback (lambda (err) (setq result err)))
+      (should (eq result :skip))))
+
+  :doc "target pressure fails when no compactable prefix remains"
+  (test-mevedel-compact--with-persisted-buffer (buffer session)
+    (insert "Prompt\n")
+    (insert (propertize "Response\n" 'gptel 'response))
+    (let ((pending-start (point)) result request-called)
+      (insert "Pending\n")
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _) (setq request-called t))))
+        (mevedel--compact-run
+         :pending-start pending-start
+         :auto t
+         :admission
+         '(:summary-policy (:backend nil :model nil :max-tokens 0)
+           :target-pressure t)
+         :callback (lambda (err) (setq result err))))
+      (should (string-match-p "No compactable history" result))
+      (should-not request-called)))
+
+  :doc "preflight includes the capped body, base prompt, and PreCompact context"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (result request-called)
+      (insert (make-string 120 ?b) "\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (put 'mevedel-small-summary-model :context-window 0.08)
+      (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                     (lambda (&rest _) (make-string 120 ?s)))
+                    ((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (_event _plist callback &rest _)
+                       (funcall callback
+                                (list :additional-context
+                                      (list (make-string 120 ?h))))))
+                    ((symbol-function 'display-warning) #'ignore)
+                    ((symbol-function 'gptel-request)
+                     (lambda (&rest _) (setq request-called t))))
+            (let ((mevedel-compact-reserve-tokens 0))
+              (mevedel--compact-run
+               :aggressive t
+               :pending-start (point-max)
+               :auto t
+               :admission
+               '(:summary-policy
+                 (:backend nil :model mevedel-small-summary-model
+                  :max-tokens 0 :request-params nil)
+               :target-pressure t)
+               :callback (lambda (err) (setq result err)))))
+      (should (string-match-p "exceeds summarizer usable context" result))
+      (should-not request-called)
+      (should (= mevedel--compact-failure-count 0))
+      (should-not mevedel--compaction-in-flight)))
+
+  :doc "preflight measures the capped tool body sent to the summarizer"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (captured-prompt result)
+      (insert "Prompt\n")
+      (let ((tool-start (point)))
+        (insert (make-string 400 ?t))
+        (put-text-property tool-start (point) 'gptel '(tool . "call-1")))
+      (insert (propertize "Response\n" 'gptel 'response))
+      (put 'mevedel-capped-summary-model :context-window 0.05)
+      (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                 (lambda (&rest _) "system prompt"))
+                ((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _plist callback &rest _)
+                   (funcall callback nil)))
+                ((symbol-function 'display-warning) #'ignore)
+                ((symbol-function 'gptel-request)
+                 (lambda (prompt &rest args)
+                   (setq captured-prompt prompt)
+                   (funcall (plist-get args :callback) 'abort nil))))
+        (let ((mevedel-compact-body-tool-output-max 8)
+              (mevedel-compact-reserve-tokens 0))
+          (mevedel--compact-run
+           :aggressive t
+           :pending-start (point-max)
+           :auto t
+           :admission
+           '(:summary-policy
+             (:backend nil :model mevedel-capped-summary-model
+              :max-tokens 0 :request-params nil)
+             :target-pressure t)
+           :callback (lambda (err) (setq result err)))))
+      (should captured-prompt)
+      (should (< (length captured-prompt) 200))
+      (should (equal result "Compaction aborted"))
+      (should (= mevedel--compact-failure-count 1))))
+
+  :doc "request failures retain three identical attempts"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let ((attempts 0) prompts result)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                     (lambda (&rest _) "system prompt"))
+                    ((symbol-function 'mevedel-hooks-run-event)
+                     (lambda (_event _plist callback &rest _)
+                       (funcall callback nil)))
+                    ((symbol-function 'gptel-get-preset)
+                     (lambda (&rest _) '(:description "test")))
+                    ((symbol-function 'run-at-time)
+                     (lambda (_delay _repeat function &rest args)
+                       (apply function args)))
+                    ((symbol-function 'message) #'ignore)
+                    ((symbol-function 'display-warning) #'ignore)
+                    ((symbol-function 'gptel-request)
+                     (lambda (prompt &rest args)
+                       (cl-incf attempts)
+                       (push prompt prompts)
+                       (funcall (plist-get args :callback)
+                                nil '(:error "temporary")))))
+            (mevedel--compact-run
+             :aggressive t
+             :pending-start (point-max)
+             :auto t
+             :admission
+             '(:summary-policy (:backend nil :model nil :max-tokens 0)
+               :target-pressure t)
+             :callback (lambda (err) (setq result err))))
+      (should (= attempts 3))
+      (should (= 1 (length (delete-dups prompts))))
+      (should (string-match-p "temporary" result))))
 
   :doc "manual compaction failure stops the view spinner"
   (let ((chat-buf (generate-new-buffer " *mevedel-compact-chat*"))
@@ -915,7 +1250,8 @@
         (captured-workload nil)
         (captured-backend nil)
         (captured-model nil)
-        (captured-effort nil))
+        (captured-effort nil)
+        captured-max-tokens captured-request-params)
     (unwind-protect
         (with-current-buffer chat-buf
           (org-mode)
@@ -923,6 +1259,8 @@
           (setq-local mevedel--session nil)
           (setq-local gptel-backend 'current-backend)
           (setq-local gptel-model 'current-model)
+          (setq-local gptel-max-tokens 999)
+          (setq-local gptel--request-params '(:temperature 0.5))
           (insert "Prompt\n")
           (insert (propertize "Response\n" 'gptel 'response))
           (require 'gptel)
@@ -936,12 +1274,15 @@
                        "system prompt"))
                     ((symbol-function 'gptel-get-preset)
                      (lambda (&rest _)
-                       '(:description "test")))
+                       '(:description "test" :max-tokens nil
+                         :request-params nil)))
                     ((symbol-function 'mevedel-model-resolve-workload)
                      (lambda (workload &rest _)
                        (setq captured-workload workload)
                        '(:backend workload-backend :model workload-model
                          :effort high)))
+                    ((symbol-function 'mevedel--compact-policy-usable-tokens)
+                     (lambda (_policy) 128000))
                     ((symbol-function 'message)
                      #'ignore)
                     ((symbol-function 'display-warning)
@@ -950,13 +1291,17 @@
                      (lambda (_prompt &rest args)
                        (setq captured-backend gptel-backend
                              captured-model gptel-model
-                             captured-effort gptel-reasoning-effort)
+                             captured-effort gptel-reasoning-effort
+                             captured-max-tokens gptel-max-tokens
+                             captured-request-params gptel--request-params)
                        (funcall (plist-get args :callback) 'abort nil))))
             (mevedel--compact-run :aggressive t :pending-start (point-max)))
           (should (eq captured-workload 'compaction))
           (should (eq captured-backend 'workload-backend))
           (should (eq captured-model 'workload-model))
           (should (eq captured-effort 'high))
+          (should-not captured-max-tokens)
+          (should-not captured-request-params)
           (should-not mevedel--compaction-in-flight))
       (when (buffer-live-p chat-buf)
         (kill-buffer chat-buf))))
@@ -1062,11 +1407,11 @@
 (mevedel-deftest mevedel--compact-context-limit ()
   ,test
   (test)
-  :doc "prefers explicit override"
+  :doc "prefers declared model metadata over the configured fallback"
   (let ((mevedel-compact-context-limit 12345)
         (gptel-model 'mevedel-test-model))
     (put 'mevedel-test-model :context-window 200)
-    (should (= (mevedel--compact-context-limit) 12345)))
+    (should (= (mevedel--compact-context-limit) 200000)))
 
   :doc "uses gptel model context-window in thousands of tokens"
   (let ((mevedel-compact-context-limit nil)
@@ -1074,11 +1419,79 @@
     (put 'mevedel-test-model :context-window 8.192)
     (should (= (mevedel--compact-context-limit) 8192)))
 
-  :doc "falls back when model has no context-window"
+  :doc "uses configured fallback when model has no context-window"
+  (let ((mevedel-compact-context-limit 64000)
+        (gptel-model 'mevedel-test-model-no-context))
+    (put 'mevedel-test-model-no-context :context-window nil)
+    (should (= (mevedel--compact-context-limit) 64000)))
+
+  :doc "falls back to 128000 tokens without model metadata or configuration"
   (let ((mevedel-compact-context-limit nil)
         (gptel-model 'mevedel-test-model-no-context))
     (put 'mevedel-test-model-no-context :context-window nil)
-    (should (= (mevedel--compact-context-limit) 200000))))
+    (should (= (mevedel--compact-context-limit) 128000))))
+
+(mevedel-deftest mevedel--compact-workload-policy ()
+  ,test
+  (test)
+  :doc "resolves the compaction workload with gptel-default request settings"
+  (let ((gptel-max-tokens 999)
+        (gptel--request-params '(:temperature 0.5)))
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (workload &rest _)
+                 (should (eq workload 'compaction))
+                 '(:backend summary-backend :model summary-model))))
+      (let ((policy (mevedel--compact-workload-policy)))
+        (should (eq (plist-get policy :backend) 'summary-backend))
+        (should (eq (plist-get policy :model) 'summary-model))
+        (should (plist-member policy :max-tokens))
+        (should-not (plist-get policy :max-tokens))
+        (should (plist-member policy :request-params))
+        (should-not (plist-get policy :request-params))))))
+
+(mevedel-deftest mevedel--compact-target-policy ()
+  ,test
+  (test)
+  :doc "captures the realized request settings used for target budgeting"
+  (let ((gptel-backend 'target-backend)
+        (gptel-model 'target-model)
+        (gptel-max-tokens 300)
+        (gptel--request-params '(:temperature 0.5)))
+    (should
+     (equal
+      (mevedel--compact-target-policy)
+      '(:backend target-backend :model target-model :max-tokens 300
+        :request-params (:temperature 0.5))))))
+
+(mevedel-deftest mevedel--compact-policy-usable-tokens ()
+  ,test
+  (test)
+  :doc "uses the policy model and response reserve"
+  (put 'mevedel-policy-model :context-window 0.2)
+  (let ((mevedel-compact-reserve-tokens 20))
+    (should
+     (= 180
+        (mevedel--compact-policy-usable-tokens
+         '(:backend nil :model mevedel-policy-model :max-tokens 10))))))
+
+(mevedel-deftest mevedel--compact-policy-threshold-tokens ()
+  ,test
+  (test)
+  :doc "applies the configured ratio to the policy's usable context"
+  (put 'mevedel-policy-model :context-window 0.2)
+  (let ((mevedel-compact-token-threshold 0.5)
+        (mevedel-compact-reserve-tokens 20))
+    (should
+     (= 90
+        (mevedel--compact-policy-threshold-tokens
+         '(:backend nil :model mevedel-policy-model :max-tokens 10))))))
+
+(mevedel-deftest mevedel--compact-summary-request-token-estimate ()
+  ,test
+  (test)
+  :doc "counts the summary system prompt, separator, and body"
+  (should (= 2 (mevedel--compact-summary-request-token-estimate
+                "1234" "12"))))
 
 (mevedel-deftest mevedel--compact-current-persisted-p ()
   ,test
@@ -1223,9 +1636,14 @@
 (mevedel-deftest mevedel--compact-threshold-tokens ()
   ,test
   (test)
-  :doc "integer threshold is absolute"
+  :doc "rejects an integer threshold"
   (let ((mevedel-compact-token-threshold 150000))
-    (should (= (mevedel--compact-threshold-tokens) 150000)))
+    (should-error (mevedel--compact-threshold-tokens) :type 'user-error))
+
+  :doc "rejects ratio endpoints and out-of-range values"
+  (dolist (threshold '(0.0 1.0 -0.1 1.1 invalid))
+    (let ((mevedel-compact-token-threshold threshold))
+      (should-error (mevedel--compact-threshold-tokens) :type 'user-error)))
 
   :doc "float threshold applies to usable context"
   (let ((mevedel-compact-context-limit 200000)

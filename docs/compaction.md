@@ -52,10 +52,10 @@ as a plain `message`, not a `display-warning`.
 
 The effective context window comes from:
 
-1. `mevedel-compact-context-limit` when non-nil.
-2. The active `gptel-model` `:context-window` property, converted from
+1. The active model's `:context-window` property, converted from
    thousands of tokens to raw tokens.
-3. A 200000 token fallback.
+2. `mevedel-compact-context-limit` when model metadata is absent.
+3. A 128000 token fallback.
 
 Usable context is:
 
@@ -69,10 +69,13 @@ usable = context-window - reserve
 The reserve cap keeps small-context models from collapsing the default
 fractional threshold to a near-zero value.
 
-`mevedel-compact-token-threshold` accepts both styles:
+`mevedel-compact-token-threshold` is a float strictly between `0.0` and
+`1.0`, default `0.80`.  Integer thresholds and invalid ratios are rejected.
+This is a breaking configuration change.
 
-- integer: absolute token threshold.
-- float: ratio of usable context, default `0.80`.
+Automatic admission resolves both the realized target model and the
+`compaction` workload model.  It triggers when the estimate reaches the
+smaller model's ratio-derived threshold.
 
 `mevedel--compact-should-compact-p` also checks eligibility:
 
@@ -152,9 +155,16 @@ backoff. After repeated failures,
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 
-If automatic compaction finds that there is no old body to summarize
-because the threshold is reached entirely by the preserved tail, it
-returns `:skip` and sends the original request.
+After `PreCompact`, mevedel preflights the tool-capped summary body and the
+complete system prompt, including hook additions, against the summarizer's
+usable context.  A locally oversized request fails without gptel dispatch or
+retry.  Ordinary gptel request failures still retry the identical request up
+to three times.
+
+If automatic compaction finds no old body to summarize because the threshold
+is reached entirely by the protected tail, it sends the original request only
+while the target model remains below its own threshold.  At target pressure it
+blocks the pending request.
 
 If automatic compaction fails, mevedel warns with
 `Auto-compaction failed; request not sent: ...`. For continuation WAIT
@@ -265,7 +275,7 @@ content.
 All are in `mevedel-compact.el`:
 
 - `mevedel-compact-auto` (default `t`)
-- `mevedel-compact-context-limit` (default `nil`, use gptel model)
+- `mevedel-compact-context-limit` (default `nil`, fallback for missing model metadata)
 - `mevedel-compact-token-threshold` (default `0.80`)
 - `mevedel-compact-reserve-tokens` (default `20000`)
 - `mevedel-compact-image-token-estimate` (default `1844`)
