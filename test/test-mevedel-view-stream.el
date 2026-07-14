@@ -1968,6 +1968,38 @@
         (should (= (point) point-before)))
       (mevedel-view--stop-spinner)))
 
+  :doc "spinner tick preserves point on a visible permission prompt"
+  (let ((mevedel-view-spinner-animate nil))
+    (mevedel-view-stream-test--with-buffers
+      (save-window-excursion
+        (switch-to-buffer view-buf)
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char (point-min))
+            (insert (make-string 10 ?\n))))
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 1
+               :body "Permission Request\nTool: Read\nPath: .git/HEAD\n"
+               :keymap (make-sparse-keymap)
+               :entry 'permission-entry :activate #'ignore))
+        (mevedel-view--start-spinner "Working...")
+        (goto-char (overlay-start (mevedel-view-zone-region 'interaction)))
+        (search-forward "Read")
+        (let ((permission-point (point)))
+          (save-excursion
+            (goto-char (point-min))
+            (forward-line 2)
+            (set-window-start (selected-window) (point) t))
+          (goto-char permission-point)
+          (set-window-point (selected-window) permission-point))
+        (redisplay t)
+        (should (> (window-start) (point-min)))
+        (should (>= (window-end nil t) (point-max)))
+        (let ((point-before (point)))
+          (mevedel-view--spinner-tick)
+          (should (= point-before (point))))
+        (mevedel-view--stop-spinner))))
+
   :doc "input read excludes request progress fragment"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf
@@ -2949,7 +2981,7 @@
           (should-not (string-match-p "VERDICT: PASS" text))
           (should-not (string-match-p "</agent-result>" text))))))
 
-  :doc "keeps proposed-plan tags visible outside Goal planning"
+  :doc "hides proposed-plan wrappers outside Goal planning"
   (mevedel-view-stream-test--with-buffers
     (let ((session (mevedel-session--create
                     :name "test"
@@ -2968,7 +3000,7 @@
       (with-current-buffer view-buf
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "<proposed_plan>" text))
+          (should-not (string-match-p "<proposed_plan>" text))
           (should (string-match-p "# Plan" text))))))
 
   :doc "strips proposed-plan tags from visible Goal planning responses"

@@ -670,10 +670,11 @@ through font-lock refontification cycles.  Returns S."
 (defun mevedel-view--visible-response-text (text)
   "Return response TEXT with model protocol hidden when appropriate."
   (let ((text (mevedel-view--strip-render-data-display-text text)))
-    (if (and (fboundp 'mevedel-plan-strip-proposed)
-             (mevedel-view--strip-proposed-plans-p text))
-        (mevedel-plan-strip-proposed text)
-      text)))
+    (when (and (fboundp 'mevedel-plan-strip-proposed)
+               (mevedel-view--strip-proposed-plans-p text))
+      (setq text (mevedel-plan-strip-proposed text)))
+    (replace-regexp-in-string
+     "^</?\\(?:proposed_plan\\|goal_review\\)>[ \t]*\n?" "" text)))
 
 (defmacro mevedel-view--with-render-temp-buffer (&rest body)
   "Run BODY in a temporary buffer with user mode hooks suppressed."
@@ -804,19 +805,29 @@ real user message."
                    (null current-role)
                    turns
                    (eq (plist-get (car turns) :role) 'user)))
-             (hook-audit-after-user-p
+             (hook-audit-only-p
               (and (eq type 'ignored)
                    data-buf
-                   (null current-role)
-                   turns
-                   (eq (plist-get (car turns) :role) 'user)
                    (mevedel-view--hook-audit-only-segment-p
                     data-buf seg-start (caddr seg))))
+             (hook-audit-after-user-p
+              (and hook-audit-only-p
+                   (null current-role)
+                   turns
+                   (eq (plist-get (car turns) :role) 'user)))
              (hook-context-after-user-p
               (and (eq type 'hook-context)
                    (null current-role)
                    turns
                    (eq (plist-get (car turns) :role) 'user)))
+             (user-display-after-user-p
+              (and (eq type 'render-data)
+                   data-buf
+                   (null current-role)
+                   turns
+                   (eq (plist-get (car turns) :role) 'user)
+                   (mevedel-view--user-turn-display-text
+                    (list seg) data-buf)))
              (scaffolding-before-hook-audit-p
               (and (eq type 'user)
                    data-buf
@@ -868,6 +879,7 @@ real user message."
          ((or prompt-drawer-after-user-p
               hook-audit-after-user-p
               hook-context-after-user-p
+              user-display-after-user-p
               (and inline-skill-render-p
                    (null current-role)
                    turns
@@ -925,6 +937,7 @@ real user message."
               (cond
                (system-reminder-p 'system-reminder)
                (request-summary-p 'response)
+               (hook-audit-only-p prev-type)
                (render-data-only-p prev-type)
                (scaffolding-before-hook-audit-p prev-type)
                (t type)))
@@ -2677,16 +2690,29 @@ TURN is a plist with :role, :segments, :start, :end."
                                'mevedel-view-turn-id
                                (cl-gensym "mevedel-view-turn-")))))))))
 
+(defun mevedel-view--user-turn-display-text (segments data-buf)
+  "Return persisted view text from user SEGMENTS in DATA-BUF, or nil."
+  (with-current-buffer data-buf
+    (cl-loop for seg in segments
+             when (eq (car seg) 'render-data)
+             for data = (cdr (mevedel-pipeline-extract-render-data
+                              (buffer-substring-no-properties
+                               (cadr seg) (caddr seg))))
+             when (and (eq (plist-get data :kind) 'user-display)
+                       (stringp (plist-get data :text)))
+             return (plist-get data :text))))
+
 (defun mevedel-view--user-turn-text (segments data-buf)
   "Extract cleaned user text from SEGMENTS in DATA-BUF.
 Returns the concatenated, trimmed text with org scaffolding removed.
 Empty string when the turn contains only whitespace or markers."
-  (with-current-buffer data-buf
-    (let (parts)
-      (dolist (seg segments)
-        (let* ((seg-start (cadr seg))
-               (seg-end (caddr seg))
-               (text (buffer-substring-no-properties seg-start seg-end)))
+  (or (mevedel-view--user-turn-display-text segments data-buf)
+      (with-current-buffer data-buf
+        (let (parts)
+          (dolist (seg segments)
+            (let* ((seg-start (cadr seg))
+                   (seg-end (caddr seg))
+                   (text (buffer-substring-no-properties seg-start seg-end)))
               ;; Strip org heading prefix (e.g., "*** ")
               (when (string-match "\\`\\*+ " text)
                 (setq text (substring text (match-end 0))))
@@ -2699,8 +2725,8 @@ Empty string when the turn contains only whitespace or markers."
               ;; buffer so the model can resolve follow-ups like "fix finding 2",
               ;; but the normal view should show only the user's visible prompt.
               (setq text (mevedel-view--strip-review-action-blocks text))
-              ;; Strip model-only prompt context added by UserPromptSubmit hooks.
-              (setq text (mevedel-view--strip-hook-context-blocks text))
+              ;; Strip model-only hook and Goal lifecycle context.
+              (setq text (mevedel-view--strip-model-context-blocks text))
               ;; Strip prompt drawer content
               (when (string-match "\\`:PROMPT:\n\\(?:.*\n\\)*?:END:\n?" text)
                 (setq text (replace-match "" t t text)))
@@ -2723,19 +2749,21 @@ Empty string when the turn contains only whitespace or markers."
                           "#\\+begin_tool[^\n]*\n?" "" text))
               (setq text (replace-regexp-in-string
                           "#\\+end_tool[^\n]*\n?" "" text))
-          (let ((trimmed (string-trim text)))
-            (unless (string-empty-p trimmed)
-              (push trimmed parts)))))
-      (string-join (nreverse parts) "\n"))))
+              (let ((trimmed (string-trim text)))
+                (unless (string-empty-p trimmed)
+                  (push trimmed parts)))))
+          (string-join (nreverse parts) "\n")))))
 
-(defun mevedel-view--strip-hook-context-blocks (text)
-  "Return TEXT without generated `<hook-context>' blocks."
+(defun mevedel-view--strip-model-context-blocks (text)
+  "Return TEXT without generated hook or Goal context blocks."
   (with-temp-buffer
     (insert text)
     (goto-char (point-min))
-    (while (search-forward "<hook-context>" nil t)
-      (let ((start (match-beginning 0)))
-        (if (search-forward "</hook-context>" nil t)
+    (while (re-search-forward
+            "<\\(hook\\|goal\\)-context\\(?:[ \\t][^>]*\\)?>" nil t)
+      (let ((start (match-beginning 0))
+            (close (format "</%s-context>" (match-string 1))))
+        (if (search-forward close nil t)
             (progn
               (delete-region start (point))
               (goto-char start))
@@ -2771,7 +2799,7 @@ Empty string when the turn contains only whitespace or markers."
     (let ((body (mevedel-view--strip-render-data-display-text text)))
       (setq body (mevedel--strip-hook-audit-blocks body))
       (setq body (mevedel-view--strip-review-action-blocks body))
-      (setq body (mevedel-view--strip-hook-context-blocks body))
+      (setq body (mevedel-view--strip-model-context-blocks body))
       (when (string-match
              "\\`[ \t\n]*:PROPERTIES:\n\\(?:.*\n\\)*?:END:\n?"
              body)

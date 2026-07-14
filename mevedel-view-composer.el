@@ -507,10 +507,7 @@ above the composer does not strand point in rendered transcript text."
                                ws
                                (and (mevedel-view--position-in-input-region-p wp)
                                     (- wp (mevedel-view--input-start)))
-                               (or (= wp (point-max))
-                                   (and (> ws (point-min))
-                                        (>= (window-end w t)
-                                            (point-max))))))))
+                               (= wp (point-max))))))
                    (get-buffer-window-list (current-buffer) nil t))))
      (prog1 (funcall thunk)
        (let ((restored-current-point

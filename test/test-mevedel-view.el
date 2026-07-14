@@ -225,6 +225,23 @@
             (should (text-property-any
                      0 (length line) 'mevedel-view-cockpit-area area line)))))))
 
+  :doc "status strip shows completion and the restored session model"
+  (mevedel-view-test--with-buffers
+    (let* ((goal (mevedel-goal--create
+                  :status 'complete :phase 'reviewing :cycle 1
+                  :cycles '((:cycle 1 :providers
+                             ((review :provider "Reviewer:model"
+                                      :effort high))))))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    gptel-model 'gpt-5.6-sol))
+      (with-current-buffer view-buf
+        (let ((line (mevedel-view--status-strip)))
+          (should (string-match-p "complete · gpt-5.6-sol" line))
+          (should-not (string-match-p "reviewing" line))
+          (should-not (string-match-p "Reviewer:model/high" line))))))
+
   :doc "status strip routes click targets to cockpit surfaces"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
