@@ -172,7 +172,23 @@ file reminder nor the long-thread accuracy warning.
 If agent summarization or application fails, the continuation is not sent.
 The agent FSM enters its normal `ERRS` transaction so transcript finalization
 and the terminal callback deliver the ordinary bounded, transcript-backed
-error result to the parent.
+error result to the parent exactly once.  The terminal transition clears the
+temporary compaction activity before reporting `error`.
+
+An ephemeral agent cannot satisfy the archive contract, so summarizer-only
+pressure does not trigger compaction or termination.  It continues while its
+target model remains below threshold and enters the same terminal error path
+without rewriting its buffer at target pressure.  A persisted agent whose
+protected task and recent tail leave no older prefix follows the same pressure
+rule: continue below target pressure, terminate without sending at target
+pressure.
+
+Archive creation happens before any live-buffer rewrite.  Failure to create the
+numbered archive leaves both the canonical transcript and live buffer intact;
+if a later local application step fails, the complete pre-compaction archive
+remains available for recovery.  These local eligibility, preflight, hook,
+abort, and application failures are non-retryable.  Only summary request
+failures receive the existing maximum of three identical attempts.
 
 Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
 use a no-tools prompt preamble, respect the active `gptel-stream`

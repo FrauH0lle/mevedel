@@ -1710,9 +1710,16 @@ set already stored on FSM's info plist."
     (mevedel--compact-rebuild-info-data-from-buffer fsm buffer)
     (gptel--handle-wait fsm)))
 
-(defun mevedel--compact-agent-terminal-failure (_target fsm err)
+(defun mevedel--compact-agent-terminal-failure (target fsm err)
   "Terminate agent FSM with compaction failure ERR."
-  (let ((info (gptel-fsm-info fsm)))
+  (let* ((info (gptel-fsm-info fsm))
+         (invocation
+          (or (plist-get target :invocation)
+              (plist-get info :mevedel-agent-invocation))))
+    (when (mevedel-agent-invocation-p invocation)
+      (mevedel-agent-exec--record-activity
+       invocation '(:type status :summary "error")))
+    (gptel--update-status " Agent failed" 'error)
     (plist-put info :status (format "Compaction failed: %s" err))
     (plist-put info :error
                (list :type "compaction_error" :message (format "%s" err)))
@@ -1771,15 +1778,26 @@ set already stored on FSM's info plist."
                (estimate
                 (mevedel--compact-estimate-data-tokens
                  (plist-get info :data)))
+               (auto-ready
+                (and mevedel-compact-auto
+                     (not mevedel--compact-auto-disabled)
+                     (not mevedel--compaction-in-flight)))
                (admission
                 (and target
-                     mevedel-compact-auto
-                     (not mevedel--compact-auto-disabled)
-                     (not mevedel--compaction-in-flight)
+                     auto-ready
                      (mevedel--compact-admission estimate target-policy))))
-          (if target
-              (mevedel--compact-handle-target-wait fsm target admission)
-            (gptel--handle-wait fsm)))))))
+          (cond
+           (target
+            (mevedel--compact-handle-target-wait fsm target admission))
+           ((and auto-ready
+                 (>= estimate
+                     (mevedel--compact-policy-threshold-tokens
+                      target-policy)))
+            (mevedel--compact-agent-terminal-failure
+             nil fsm
+             "Agent transcript is not eligible for compaction at target pressure"))
+           (t
+            (gptel--handle-wait fsm))))))))
 
 (defun mevedel--compact-handle-wait (fsm)
   "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
