@@ -301,7 +301,7 @@ Binds `data-buf' and `view-buf'."
                                           ".agents/skills/alpha"))
              (skill-file (file-name-concat skill-dir "SKILL.md"))
              (body-marker "ALPHA BODY MUST NOT BE PERSISTED")
-             (bound-input nil))
+             bound-input ref-input)
         (make-directory skill-dir t)
         (with-temp-file skill-file
           (insert "---\nname: alpha\ndescription: Test alpha\n---\n\n# Alpha\n\n"
@@ -309,6 +309,12 @@ Binds `data-buf' and `view-buf'."
         (setq bound-input
               (mevedel-view-history-test--bound-input
                "use $alpha." "alpha" skill-file))
+        (setq ref-input (copy-sequence "inspect @ref:7"))
+        (let ((start (string-match "@ref:7" ref-input)))
+          (mevedel-mention-bindings-set
+           start (+ start (length "@ref:7"))
+           '(:kind ref :token "@ref:7" :reference-uuid "uuid-7")
+           ref-input))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-add "first")
@@ -319,6 +325,7 @@ Binds `data-buf' and `view-buf'."
                    (mevedel-view-history-test--raw-bytes
                     #xe2 #x80 #x9c ?x #xe2 #x80 #x9d)))
           (mevedel-view-history-add (concat "unicode " (string #x03bb)))
+          (mevedel-view-history-add ref-input)
           (mevedel-view-history-add bound-input)
           (mevedel-view-history-save (current-buffer)))
         (should (file-exists-p path))
@@ -336,8 +343,11 @@ Binds `data-buf' and `view-buf'."
           (mevedel-view-history-load session)
           (let* ((entries (mevedel-view-history--entries))
                  (restored (car entries))
-                 (token-start (string-match "\\$alpha" restored)))
+                 (token-start (string-match "\\$alpha" restored))
+                 (restored-ref (cadr entries))
+                 (ref-start (string-match "@ref:7" restored-ref)))
             (should (equal (list "use $alpha."
+                                 "inspect @ref:7"
                                  (concat "unicode " (string #x03bb))
                                  "raw “x”"
                                  "multi\nline \"quoted\""
@@ -349,7 +359,12 @@ Binds `data-buf' and `view-buf'."
                                  :source-file skill-file)
                            (get-text-property
                             token-start 'mevedel-mention-binding
-                            restored))))))))
+                            restored)))
+            (should
+             (equal '(:kind ref :token "@ref:7"
+                      :reference-uuid "uuid-7")
+                    (get-text-property
+                     ref-start 'mevedel-mention-binding restored-ref))))))))
   (mevedel-view-history-test--with-temp-dir workspace-dir
     (let* ((session (mevedel-view-history-test--session workspace-dir))
            (skill-file (file-name-concat workspace-dir "alpha/SKILL.md"))

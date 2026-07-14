@@ -797,13 +797,34 @@ Adds specificly to REFERENCE if it is non-nil."
                 (message "%d tag%s removed" removed (if (= removed 1) "" "s"))))))
       (user-error "No reference at point"))))
 
-(declare-function mevedel--instruction-with-id "mevedel" (target-id))
+(defun mevedel--instruction-find-unique-live (predicate)
+  "Return the unique live instruction satisfying PREDICATE.
+Return nil when no instruction matches or when more than one does."
+  (let (found ambiguous)
+    (maphash
+     (lambda (_key state)
+       (dolist (entry (plist-get state :instructions))
+         (when (bufferp (car entry))
+           (dolist (instruction (cdr entry))
+             (when (and (overlayp instruction)
+                        (buffer-live-p (overlay-buffer instruction))
+                        (funcall predicate instruction))
+               (if found
+                   (setq ambiguous t)
+                 (setq found instruction)))))))
+     mevedel--instruction-states)
+    (and (not ambiguous) found)))
+
+(declare-function mevedel--instruction-with-id
+                  "mevedel" (target-id &optional workspace))
 (let ((map (make-hash-table))
       (map-key nil))
-  (cl-defun mevedel--instruction-with-id (target-id)
-    "Return the instruction with the given integer TARGET-ID.
+  (cl-defun mevedel--instruction-with-id (target-id &optional workspace)
+    "Return the instruction with integer TARGET-ID in WORKSPACE.
 
-Returns nil if no instruction with the spcific id was found."
+When WORKSPACE is nil, use the current buffer's workspace and fall back
+to a unique live match across workspaces only when that local state is
+empty.  Return nil when no unambiguous instruction is found."
     (cl-labels ((entry-live-p (entry)
                   (and (bufferp (car entry))
                        (cl-some (lambda (instr)
@@ -812,30 +833,15 @@ Returns nil if no instruction with the spcific id was found."
                                         (overlay-buffer instr))))
                                 (cdr entry))))
                 (current-state-live-p ()
-                  (cl-some #'entry-live-p (mevedel--instruction-alist)))
-                (find-in-all-states ()
-                  (let ((found nil)
-                        (ambiguous nil))
-                    (maphash
-                     (lambda (_key state)
-                       (dolist (entry (plist-get state :instructions))
-                         (when (bufferp (car entry))
-                           (dolist (instr (cdr entry))
-                             (when (and (overlayp instr)
-                                        (buffer-live-p (overlay-buffer instr))
-                                        (= target-id
-                                           (mevedel--instruction-id instr)))
-                               (if found
-                                   (setq ambiguous t)
-                                 (setq found instr)))))))
-                     mevedel--instruction-states)
-                    (and (not ambiguous) found))))
-      (let ((workspace (mevedel--instruction-buffer-workspace
-                        (current-buffer))))
-        (mevedel--instruction-activate-workspace workspace)
-        (unless (equal map-key mevedel--instruction-current-state-key)
+                  (cl-some #'entry-live-p (mevedel--instruction-alist))))
+      (let* ((lookup-workspace
+              (or workspace
+                  (mevedel--instruction-buffer-workspace (current-buffer))))
+             (lookup-key (mevedel--instruction-workspace-key lookup-workspace))
+             (mevedel--instruction-state-key-override lookup-key))
+        (unless (equal map-key lookup-key)
           (setq map (make-hash-table)
-                map-key mevedel--instruction-current-state-key))
+                map-key lookup-key))
         (when-let* ((instr (gethash target-id map)))
           (when (buffer-live-p (overlay-buffer instr))
             (cl-return-from mevedel--instruction-with-id instr)))
@@ -846,8 +852,28 @@ Returns nil if no instruction with the spcific id was found."
             ;; Prompt-copy and test buffers can have a workspace that is
             ;; unrelated to the source buffers holding references.  If the
             ;; current bucket is empty, fall back to a unique match anywhere.
-            (and (not (current-state-live-p))
-                 (find-in-all-states)))))))
+            (and (null workspace)
+                 (not (current-state-live-p))
+                 (mevedel--instruction-find-unique-live
+                  (lambda (instruction)
+                    (= target-id
+                       (mevedel--instruction-id instruction))))))))))
+
+(defun mevedel--instruction-with-uuid (uuid &optional workspace)
+  "Return the instruction carrying UUID in WORKSPACE.
+Stashed instructions are restored before lookup.  When WORKSPACE is nil,
+fall back to a unique live match across workspaces for prompt-copy callers
+that have no workspace context."
+  (or
+   (let ((mevedel--instruction-state-key-override
+          (and workspace (mevedel--instruction-workspace-key workspace))))
+     (mevedel--foreach-instruction instr
+       when (equal uuid (overlay-get instr 'mevedel-uuid))
+       return instr))
+   (unless workspace
+     (mevedel--instruction-find-unique-live
+      (lambda (instruction)
+        (equal uuid (overlay-get instruction 'mevedel-uuid)))))))
 
 (defun mevedel--instruction-id (instruction)
   "Return unique identifier for INSTRUCTION overlay."
@@ -1052,15 +1078,21 @@ Returns the validated query string."
             (cl-progv atoms atom-bindings
               (eval query))))))))
 
-(defun mevedel--filter-references (query)
-  "Return a list of all references filtered by the tag QUERY.
+(defun mevedel--filter-references (query &optional workspace)
+  "Return references in WORKSPACE filtered by tag QUERY.
 
 See `mevedel--tag-query-prefix-from-infix' for QUERY format."
-  (let ((atoms (cl-remove-duplicates (cl-remove-if (lambda (elm)
-                                                     (member elm '(not or and nil)))
-                                                   (flatten-tree query)))))
+  (let ((mevedel--instruction-state-key-override
+         (or (and workspace (mevedel--instruction-workspace-key workspace))
+             mevedel--instruction-state-key-override))
+        (atoms (cl-remove-duplicates
+                (cl-remove-if (lambda (elm)
+                                (member elm '(not or and nil)))
+                              (flatten-tree query)))))
     (if (and (null atoms) mevedel-empty-tag-query-matches-all)
-        (mevedel--foreach-instruction instr when (mevedel--referencep instr) collect instr)
+        (mevedel--foreach-instruction instr
+          when (mevedel--referencep instr)
+          collect instr)
       (mevedel--foreach-instruction instr
         when (and (mevedel--referencep instr)
                   (mevedel--reference-matches-query-p instr query))

@@ -20,7 +20,9 @@
 (require 'mevedel-goal)
 (require 'mevedel-models)
 (require 'mevedel-mention-bindings)
+(require 'mevedel-mentions)
 (require 'mevedel-permissions)
+(require 'mevedel-persistence)
 (require 'mevedel-plugins)
 (require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
@@ -1136,6 +1138,44 @@ spanning lines")))
                         'mevedel-mention-binding)))))
             (should (equal source (plist-get binding :source-file)))))
       (delete-file source)))
+
+  :doc "manually typed raw direct references bind their UUID before send"
+  (let* ((root (make-temp-file "mevedel-raw-ref-" t))
+         (file (file-name-concat root "reference.txt"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "raw-ref"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         ref-buffer ref binding)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "reference body\n"))
+          (setq ref-buffer (find-file-noselect file))
+          (with-current-buffer ref-buffer
+            (setq-local mevedel--workspace ws)
+            (setq ref (mevedel--create-reference-in
+                       ref-buffer (point-min) (1- (point-max)))))
+          (let ((token (format "@ref:%d" (mevedel--instruction-id ref))))
+            (mevedel-skills-test--with-chat-buffer session
+              (insert "### inspect " token)
+              (goto-char (point-max))
+              (mevedel-skills--gptel-send-advice
+               (lambda (&rest _)
+                 (save-excursion
+                   (goto-char (point-min))
+                   (search-forward token)
+                   (setq binding
+                         (get-text-property
+                          (match-beginning 0)
+                          'mevedel-mention-binding))))))
+            (should (equal (overlay-get ref 'mevedel-uuid)
+                           (plist-get binding :reference-uuid)))))
+      (when (buffer-live-p ref-buffer)
+        (with-current-buffer ref-buffer (set-buffer-modified-p nil))
+        (kill-buffer ref-buffer))
+      (when (file-directory-p root) (delete-directory root t))))
 
   :doc "malformed bindings block raw gptel submission"
   (let ((session (mevedel-skills-test--make-session))

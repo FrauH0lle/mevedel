@@ -32,6 +32,7 @@
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
 (require 'mevedel-permission-queue)
+(require 'mevedel-persistence)
 (require 'mevedel-review)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
@@ -2130,6 +2131,107 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                       :input)))
       (with-current-buffer data-buf
         (should (string-empty-p (buffer-string)))))))
+
+  :doc "queued direct reference keeps its UUID when the number is reused"
+  (let* ((root (make-temp-file "mevedel-ref-queue-" t))
+         (file (file-name-concat root "reference.txt"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "ref-queue"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         ref-buf ref replacement request-data warning)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "original reference body\n"))
+          (setq ref-buf (find-file-noselect file))
+          (with-current-buffer ref-buf
+            (setq-local mevedel--workspace ws)
+            (setq ref (mevedel--create-reference-in
+                       ref-buf (point-min) (1- (point-max)))))
+          (let* ((id (mevedel--instruction-id ref))
+                 (uuid (overlay-get ref 'mevedel-uuid))
+                 (token (format "@ref:%d" id)))
+            (mevedel-view-test--with-buffers
+              (with-current-buffer data-buf
+                (setq-local mevedel--session session
+                            mevedel--workspace ws
+                            mevedel--current-request
+                            (mevedel-request--create :session session)))
+              (with-current-buffer view-buf
+                (setq-local mevedel--session session))
+              (cl-letf (((symbol-function
+                          'mevedel-view--schedule-late-queued-user-message-drain)
+                         #'ignore))
+                (with-current-buffer view-buf
+                  (goto-char (mevedel-view--input-start))
+                  (insert "Inspect " token " after the current turn")
+                  (mevedel-view-send)))
+              (let* ((queued
+                      (plist-get
+                       (car (mevedel-session-queued-user-messages session))
+                       :input))
+                     (queued-start (string-match (regexp-quote token) queued))
+                     (history
+                      (with-current-buffer view-buf
+                        (car (mevedel-view-history--entries))))
+                     (history-start
+                      (string-match (regexp-quote token) history)))
+                (should (equal uuid
+                               (plist-get
+                                (get-text-property
+                                 queued-start 'mevedel-mention-binding queued)
+                                :reference-uuid)))
+                (should (equal uuid
+                               (plist-get
+                                (get-text-property
+                                 history-start 'mevedel-mention-binding history)
+                                :reference-uuid))))
+              (mevedel--delete-instruction ref ref-buf)
+              (with-current-buffer ref-buf
+                (erase-buffer)
+                (insert "replacement reference body\n")
+                (setq replacement
+                      (mevedel--create-reference-in
+                       ref-buf (point-min) (1- (point-max)))))
+              (should (= id (mevedel--instruction-id replacement)))
+              (with-current-buffer data-buf
+                (setq-local mevedel--current-request nil))
+              (let ((gptel-prompt-transform-functions
+                     (cons #'mevedel--transform-expand-mentions
+                           (remove #'mevedel--transform-expand-mentions
+                                   gptel-prompt-transform-functions))))
+                (cl-letf (((symbol-function 'message)
+                           (lambda (format-string &rest args)
+                             (let ((text (apply #'format format-string args)))
+                               (when (string-prefix-p "mevedel: reference" text)
+                                 (setq warning text)))))
+                          ((symbol-function 'gptel-send)
+                           (lambda (&rest _)
+                             (setq request-data
+                                   (mevedel-view-test--dry-run-request-data)))))
+                  (mevedel-view--drain-queued-user-message data-buf)))
+              (should (string-search (format "[ref:%d -- unavailable]" id)
+                                     request-data))
+              (should-not (string-search "replacement reference body"
+                                         request-data))
+              (should (string-match-p "mevedel: reference .* unavailable"
+                                      warning))
+              (with-current-buffer data-buf
+                (goto-char (point-min))
+                (should (search-forward token nil t))
+                (should (equal uuid
+                               (plist-get
+                                (get-text-property
+                                 (match-beginning 0)
+                                 'mevedel-mention-binding)
+                                :reference-uuid))))
+              (should-not (mevedel-session-queued-user-messages session)))))
+      (when (buffer-live-p ref-buf)
+        (with-current-buffer ref-buf (set-buffer-modified-p nil))
+        (kill-buffer ref-buf))
+      (when (file-directory-p root) (delete-directory root t))))
 
   :doc "plain input during guardian review joins the intervention queue"
   (mevedel-view-test--with-buffers
