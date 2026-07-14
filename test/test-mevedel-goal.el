@@ -369,7 +369,7 @@ Each binding is (NAME KEYS)."
         (with-temp-buffer
           (setq-local mevedel--session session)
           (let ((mevedel-goal-dispatch-function
-                 (lambda (phase prompt display)
+                 (lambda (phase prompt display _hook-context)
                    (setq dispatched (list phase prompt display)))))
             (let ((goal (mevedel-goal-start "Fix the race")))
               (should (eq goal (mevedel-session-goal session)))
@@ -926,7 +926,7 @@ Each binding is (NAME KEYS)."
                      (lambda (&rest _)
                        '(:backend nil :model new-model :effort high))))
             (let ((mevedel-goal-dispatch-function
-                   (lambda (_phase prompt _display)
+                   (lambda (_phase prompt _display _hook-context)
                      (setq observed
                            (list prompt gptel-model
                                  gptel-reasoning-effort)))))
@@ -1068,7 +1068,7 @@ Each binding is (NAME KEYS)."
                         ((symbol-function 'mevedel--implement-plan)
                          (lambda (_input) (setq implemented t) nil)))
                 (let ((mevedel-goal-dispatch-function
-                       (lambda (phase _prompt _display)
+                       (lambda (phase _prompt _display _hook-context)
                          (push (list phase gptel-model
                                      gptel-reasoning-effort)
                                dispatched))))
@@ -1188,7 +1188,7 @@ Each binding is (NAME KEYS)."
                      (lambda (&rest _)
                        '(:backend nil :model retry-model :effort high))))
             (let ((mevedel-goal-dispatch-function
-                   (lambda (_phase prompt _display)
+                   (lambda (_phase prompt _display _hook-context)
                      (setq observed
                            (list prompt gptel-model
                                  gptel-reasoning-effort)))))
@@ -1222,6 +1222,26 @@ Each binding is (NAME KEYS)."
     (should (eq gptel-backend 'session-backend))
     (should (eq gptel-model 'session-model))
     (should (eq gptel-reasoning-effort 'medium)))
+  :doc "reapplies workload policy after stored request properties"
+  (with-temp-buffer
+    (setq-local gptel-prompt-transform-functions nil)
+    (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+               (lambda (&rest _)
+                 '(:backend planning-backend
+                   :model planning-model
+                   :effort high))))
+      (mevedel-goal--call-with-workload
+       'planning
+       (lambda ()
+         (let ((transforms gptel-prompt-transform-functions))
+           (with-temp-buffer
+             (setq-local gptel-backend 'stored-backend
+                         gptel-model 'stored-model
+                         gptel-reasoning-effort 'medium)
+             (funcall (car transforms) nil)
+             (should (eq gptel-backend 'planning-backend))
+             (should (eq gptel-model 'planning-model))
+             (should (eq gptel-reasoning-effort 'high))))))))
   :doc "checkpoints and pauses policy failures before request startup"
   (let* ((root (make-temp-file "mevedel-goal-policy-failure-" t))
          (goal (mevedel-goal--create
@@ -1559,6 +1579,33 @@ Each binding is (NAME KEYS)."
         (mevedel-goal-settle-failure fsm 'error)
         (should (eq 'paused (mevedel-goal-status goal)))))))
 
+(mevedel-deftest mevedel-goal--insert-and-send ()
+  ,test
+  (test)
+  :doc "returns its FSM while keeping hook context out of the transcript"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local gptel-response-separator "\n\n"
+                gptel-prompt-prefix-alist '((org-mode . "* User\n"))
+                gptel-prompt-transform-functions '(transform)
+                gptel-stream t)
+    (let ((fsm (gptel-make-fsm))
+          model-input
+          request-args)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&optional _prompt &rest args)
+                   (setq model-input mevedel--pending-model-input
+                         request-args args)
+                   fsm)))
+        (should
+         (eq fsm
+             (mevedel-goal--insert-and-send
+              "Planning prompt" "Goal" "<hook-context>ctx</hook-context>"))))
+      (should (string-match-p "Planning prompt" (buffer-string)))
+      (should-not (string-match-p "hook-context" (buffer-string)))
+      (should (string-match-p "hook-context" model-input))
+      (should (equal '(transform) (plist-get request-args :transforms))))))
+
 (mevedel-deftest mevedel-goal--dispatch-gptel ()
   ,test
   (test)
@@ -1592,6 +1639,7 @@ Each binding is (NAME KEYS)."
                               (cadr received)))
       (should (string-match-p "Prompt" (cadr received)))
       (should (equal "Display" (caddr received)))
+      (should-not (nth 3 received))
       (should-error
        (mevedel-goal--dispatch-phase 'awaiting-approval "x" "x")))))
 
@@ -1942,7 +1990,7 @@ Each binding is (NAME KEYS)."
             (test-mevedel-goal--apply-preset
              'test-goal-supervised-team buffer)
             (let ((mevedel-goal-dispatch-function
-                   (lambda (phase prompt display)
+                   (lambda (phase prompt display _hook-context)
                      (push (list phase prompt display) dispatched))))
               (mevedel-goal-start "Fix the race")
               (should (eq 'test-goal-supervised-team
@@ -2541,7 +2589,7 @@ Each binding is (NAME KEYS)."
         (with-current-buffer buffer
           (setq-local mevedel--session session)
           (let ((mevedel-goal-dispatch-function
-                 (lambda (phase prompt display)
+                 (lambda (phase prompt display _hook-context)
                    (push (list phase prompt display) dispatched))))
             (mevedel-goal-start "Finish both slices")
             (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
@@ -2655,7 +2703,7 @@ Each binding is (NAME KEYS)."
             (test-mevedel-goal--apply-preset
              'test-goal-automatic-team buffer)
             (let ((mevedel-goal-dispatch-function
-                   (lambda (phase _prompt _display)
+                   (lambda (phase _prompt _display _hook-context)
                      (push phase dispatches)))
                   (mevedel-goal-guardian-function
                    (lambda (goal _plan _buffer callback)

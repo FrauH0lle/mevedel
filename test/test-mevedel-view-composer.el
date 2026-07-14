@@ -2221,13 +2221,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (unwind-protect
         (progn
           (with-current-buffer chat-buffer
-            (setq-local mevedel-view--pending-model-input "derived prompt"))
+            (setq-local mevedel--pending-model-input "derived prompt"))
           (with-temp-buffer
             (insert "stored prompt")
             (mevedel-view--transform-model-input fsm)
             (should (equal "derived prompt" (buffer-string))))
           (with-current-buffer chat-buffer
-            (should-not mevedel-view--pending-model-input)))
+            (should-not mevedel--pending-model-input)))
       (kill-buffer chat-buffer))))
 
 (mevedel-deftest mevedel-view--queued-user-message-auto-drain-blocked-p ()
@@ -2998,13 +2998,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display &optional policy)
-                   (setq started (list objective display policy)
+                 (lambda (objective display &optional policy hook-context)
+                   (setq started (list objective display policy hook-context)
                          started-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal "/goal draft" "draft")))
       (should (eq data-buf started-buffer))
-      (should (equal '("expanded\n\nhook context" "expanded" supervised)
+      (should (equal '("expanded" "expanded" supervised "hook context")
                      started))))
   :doc "strips the auto selector and starts an automatic Goal"
   (mevedel-view-test--with-buffers
@@ -3020,12 +3020,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display policy)
-                   (setq started (list objective display policy)))))
+                 (lambda (objective display policy &optional hook-context)
+                   (setq started
+                         (list objective display policy hook-context)))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal
            "/goal auto ship it" "auto ship it")))
-      (should (equal '("ship it" "ship it" automatic) started)))))
+      (should (equal '("ship it" "ship it" automatic nil) started)))))
 
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
@@ -3092,8 +3093,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (push 'fork events)))
                     ((symbol-function 'mevedel-goal-start)
-                     (lambda (objective display &optional policy)
-                       (push (list objective display policy) events))))
+                     (lambda (objective display &optional policy hook-context)
+                       (push (list objective display policy hook-context)
+                             events))))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
               (insert "/goal draft")
@@ -3104,8 +3106,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (should (equal "rewritten prompt" (cadr (cadr events))))
               (should (string-match-p "rewritten prompt"
                                       (car (cadr events))))
+              (should-not (string-match-p "model-only context"
+                                          (car (cadr events))))
               (should (string-match-p "model-only context"
-                                      (car (cadr events))))
+                                      (nth 3 (cadr events))))
               (should (string-empty-p (mevedel-view--input-text)))))
           (with-current-buffer view-buf
             (let ((text (buffer-substring-no-properties

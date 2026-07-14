@@ -21,18 +21,21 @@
 (declare-function gptel-backend-name "ext:gptel" (backend))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (declare-function gptel-request "ext:gptel" (prompt &rest args))
-(declare-function gptel-send "ext:gptel" (&optional arg))
 (defvar gptel-backend)
 (defvar gptel-model)
-(defvar gptel-prompt-prefix-alist)
+(defvar gptel-prompt-transform-functions)
 (defvar gptel-reasoning-effort)
-(defvar gptel-response-separator)
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
 
 ;; `mevedel-chat'
+(declare-function mevedel--gptel-send-request
+                  "mevedel-chat" (&optional model-input))
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
+(declare-function mevedel--insert-local-user-turn
+                  "mevedel-chat"
+                  (prompt &optional display-text kind hook-context no-spinner))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -128,10 +131,6 @@
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--begin-external-turn
-                  "mevedel-view-composer"
-                  (display-text data-turn-start
-                                &optional kind hook-context no-spinner))
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
 
@@ -157,7 +156,7 @@
 ;;; Lifecycle
 
 (defvar mevedel-goal-dispatch-function #'mevedel-goal--dispatch-gptel
-  "Function called with PHASE, PROMPT, and DISPLAY-TEXT for a Goal request.")
+  "Function called with PHASE, PROMPT, DISPLAY-TEXT, and HOOK-CONTEXT.")
 
 (defcustom mevedel-goal-guardian-timeout 60
   "Seconds before an automatic Goal guardian request escalates to the user."
@@ -1025,10 +1024,12 @@ The request has no tools or conversational transcript insertion."
        (signal (car err) (cdr err))))
     goal))
 
-(defun mevedel-goal-start (objective &optional display-text approval-policy)
+(defun mevedel-goal-start
+    (objective &optional display-text approval-policy hook-context)
   "Start a Goal for OBJECTIVE in the current session.
 DISPLAY-TEXT is the user-facing form of the planning turn.
-APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
+APPROVAL-POLICY is `supervised' by default or explicitly `automatic'.
+HOOK-CONTEXT is model-visible context for the initial planning turn."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (when-let* ((existing (mevedel-session-goal mevedel--session)))
@@ -1078,7 +1079,7 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
     (condition-case err
         (mevedel-goal--dispatch-phase
          'planning (mevedel-goal--planning-prompt goal)
-         (or display-text (mevedel-goal-objective goal)))
+         (or display-text (mevedel-goal-objective goal)) hook-context)
       (error
        (if (mevedel-goal-checkpoint goal)
            (message "mevedel: goal paused before planning dispatch: %s"
@@ -1096,9 +1097,11 @@ APPROVAL-POLICY is `supervised' by default or explicitly `automatic'."
             (mevedel-session-plan-metadata mevedel--session) nil))
     goal))
 
-(defun mevedel-goal--dispatch-gptel (phase prompt display-text)
+(defun mevedel-goal--dispatch-gptel
+    (phase prompt display-text &optional hook-context)
   "Dispatch PHASE with PROMPT, showing DISPLAY-TEXT in the transcript."
-  (let ((fsm (mevedel-goal--insert-and-send prompt display-text)))
+  (let ((fsm (mevedel-goal--insert-and-send
+              prompt display-text hook-context)))
     (when fsm
       (setf (gptel-fsm-info fsm)
             (plist-put (gptel-fsm-info fsm)
@@ -1142,7 +1145,17 @@ dispatch and attach the attempt identity to the returned FSM."
                 (mevedel-goal--checkpoint-state
                  'started :request-started t
                  :started-at (format-time-string "%FT%T%z")))
-              (let ((fsm (funcall function)))
+              (let* ((workload-transform
+                      (lambda (_fsm)
+                        (setq-local
+                         gptel-backend (plist-get policy :backend)
+                         gptel-model (plist-get policy :model)
+                         gptel-reasoning-effort
+                         (plist-get policy :effort))))
+                     (gptel-prompt-transform-functions
+                      (cons workload-transform
+                            gptel-prompt-transform-functions))
+                     (fsm (funcall function)))
                 (when (and checkpoint-enabled fsm)
                   (condition-case nil
                       (setf (gptel-fsm-info fsm)
@@ -1181,7 +1194,8 @@ dispatch and attach the attempt identity to the returned FSM."
                   gptel-model old-model
                   gptel-reasoning-effort old-effort))))
 
-(defun mevedel-goal--dispatch-phase (phase prompt display-text)
+(defun mevedel-goal--dispatch-phase
+    (phase prompt display-text &optional hook-context)
   "Dispatch Goal PHASE with PROMPT and DISPLAY-TEXT."
   (unless (memq phase '(planning reviewing))
     (error "Goal phase cannot dispatch: %s" phase))
@@ -1190,34 +1204,18 @@ dispatch and attach the attempt identity to the returned FSM."
     (mevedel-goal--call-with-workload
      (if (eq phase 'planning) 'planning 'review)
      (lambda ()
-       (funcall mevedel-goal-dispatch-function phase prompt display-text))
+       (funcall mevedel-goal-dispatch-function
+                phase prompt display-text hook-context))
      phase prompt)))
 
 (defun mevedel-goal--insert-and-send (prompt &optional display-text hook-context)
   "Insert PROMPT as a user turn in the current data buffer and send it.
 DISPLAY-TEXT is shown in the view instead of PROMPT.  HOOK-CONTEXT is
 shown as a collapsed hook-context disclosure."
-  (goto-char (point-max))
-  (let ((user-turn-start (point)))
-    (insert gptel-response-separator)
-    (when-let* ((prefix (alist-get major-mode gptel-prompt-prefix-alist)))
-      (unless (and (>= (point) (+ (point-min) (length prefix)))
-                   (string= (buffer-substring-no-properties
-                             (- (point) (length prefix)) (point))
-                            prefix))
-        (unless (bolp) (insert "\n"))
-        (insert prefix)))
-    (insert prompt "\n")
-    (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
-  (let ((data-turn-start (copy-marker (point) nil)))
-    (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                           mevedel--view-buffer))
-                ((buffer-live-p view))
-                ((fboundp 'mevedel-view--begin-external-turn)))
-      (with-current-buffer view
-        (mevedel-view--begin-external-turn
-         (or display-text prompt) data-turn-start nil hook-context))))
-  (gptel-send))
+  (mevedel--insert-local-user-turn
+   prompt display-text nil hook-context)
+  (mevedel--gptel-send-request
+   (and hook-context (concat prompt "\n\n" hook-context))))
 
 (defun mevedel-plan-queue--current-session ()
   "Resolve the session struct that owns the plan approval FIFO."

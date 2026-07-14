@@ -52,7 +52,7 @@
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-set-token-budget "mevedel-goal" (budget))
 (declare-function mevedel-goal-start "mevedel-goal"
-                  (objective &optional display-text approval-policy))
+                  (objective &optional display-text approval-policy hook-context))
 
 ;; `mevedel-gptel-bridge'
 (declare-function mevedel-gptel-bridge-open

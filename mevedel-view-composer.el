@@ -33,13 +33,14 @@
 
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
+(defvar mevedel--pending-model-input)
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-guardian-pending-p
                   "mevedel-goal" (&optional session))
 (declare-function mevedel-goal-start
                   "mevedel-goal"
-                  (objective &optional display-text approval-policy))
+                  (objective &optional display-text approval-policy hook-context))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
@@ -399,9 +400,6 @@ This covers the interval before the prompt has been accepted and before
 
 (defvar-local mevedel-view--pending-skill-submission nil
   "Cancellation token for skill-plan preparation before request dispatch.")
-
-(defvar-local mevedel-view--pending-model-input nil
-  "One-shot model input replacing the latest stored prompt at request time.")
 
 (defun mevedel-view--cancel-pending-skill-submission ()
   "Cancel this view's pending skill-plan preparation, if any."
@@ -1567,11 +1565,10 @@ INPUT is the original composer text, including the slash command."
          (with-current-buffer data-buffer
            (require 'mevedel-goal)
            (mevedel-goal-start
-            (if context
-                (concat hook-input "\n\n" context)
-              hook-input)
             hook-input
-            (if automatic 'automatic 'supervised))))))))
+            hook-input
+            (if automatic 'automatic 'supervised)
+            context)))))))
 
 (defun mevedel-view--fork-if-pending ()
   "Materialize the fork if the data buffer is in rewind preview state.
@@ -1791,20 +1788,20 @@ prompt."
       (with-current-buffer mevedel--data-buffer
         (mevedel-view--activate-dropped-file-grants
          dropped-file-grants session)
-        (setq-local mevedel-view--pending-model-input model-input)
+        (setq-local mevedel--pending-model-input model-input)
         (unwind-protect
             (gptel-send)
-          (setq-local mevedel-view--pending-model-input nil))))))
+          (setq-local mevedel--pending-model-input nil))))))
 
 (defun mevedel-view--transform-model-input (fsm)
   "Replace the latest stored prompt with its one-shot model input for FSM."
   (when-let* ((chat-buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p chat-buffer))
               (model-input
-               (buffer-local-value 'mevedel-view--pending-model-input
+               (buffer-local-value 'mevedel--pending-model-input
                                    chat-buffer)))
     (with-current-buffer chat-buffer
-      (setq-local mevedel-view--pending-model-input nil))
+      (setq-local mevedel--pending-model-input nil))
     (require 'mevedel-transcript)
     (goto-char (mevedel-transcript-prompt-transform-start))
     (delete-region (point) (point-max))

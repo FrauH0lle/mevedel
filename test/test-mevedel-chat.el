@@ -344,12 +344,34 @@
 		     (when (buffer-live-p view-buffer)
 		       (kill-buffer view-buffer)))))
 
+(mevedel-deftest mevedel--gptel-send-request ()
+  ,test
+  (test)
+  :doc "returns the FSM for a standard transformed streaming request"
+  (let ((gptel-prompt-transform-functions '(transform))
+        (gptel-stream t)
+        model-input
+        request-args)
+    (cl-letf (((symbol-function 'gptel-request)
+               (lambda (&optional _prompt &rest args)
+                 (setq model-input mevedel--pending-model-input
+                       request-args args)
+                 (plist-get args :fsm))))
+      (let ((fsm (mevedel--gptel-send-request "derived prompt")))
+        (should fsm)
+        (should (eq fsm (plist-get request-args :fsm)))
+        (should (equal "derived prompt" model-input))
+        (should (equal '(transform) (plist-get request-args :transforms)))
+        (should (plist-get request-args :stream)))
+      (should-not mevedel--pending-model-input))))
+
 (mevedel-deftest mevedel--implement-plan ()
   ,test
   (test)
   :doc "sends an accepted plan with the current conversation context"
   (let ((plan-file (make-temp-file "mevedel-plan-"))
         (buffer (generate-new-buffer " *mevedel-plan-implementation*"))
+        (fsm (gptel-make-fsm))
         sent)
     (unwind-protect
         (progn
@@ -360,17 +382,21 @@
             (setq-local gptel-prompt-prefix-alist
                         '((org-mode . "* User\n")))
             (insert "* User\nPlanning context.\n")
-            (cl-letf (((symbol-function 'gptel-send)
-                       (lambda (&optional _arg)
-                         (setq sent (buffer-string))))
+            (cl-letf (((symbol-function 'gptel-request)
+                       (lambda (&optional _prompt &rest _)
+                         (setq sent (buffer-string))
+                         fsm))
                       ((symbol-function
                         'mevedel--implementation-permission-mode-apply)
                        #'ignore))
-              (mevedel--implement-plan
-               (list :context 'full
-                     :plan-file plan-file
-                     :permission-mode 'default
-                     :goal-context "Goal ID: g1\nObjective: Ship safely"))))
+              (should
+               (eq fsm
+                   (mevedel--implement-plan
+                    (list :context 'full
+                          :plan-file plan-file
+                          :permission-mode 'default
+                          :goal-context
+                          "Goal ID: g1\nObjective: Ship safely"))))))
           (should (string-match-p "Planning context" sent))
           (should (string-match-p "Goal ID: g1" sent))
           (should (string-match-p "Implementation instructions" sent))

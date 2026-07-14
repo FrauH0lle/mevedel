@@ -1388,6 +1388,9 @@ the LLM may have left an open block.  This handles:
             (insert (format "#+end_%s\n" last-open))
             (org-cycle))))))))
 
+(defvar-local mevedel--pending-model-input nil
+  "One-shot model input replacing the latest stored prompt at request time.")
+
 (defun mevedel--insert-local-user-turn
     (prompt &optional display-text kind hook-context no-spinner)
   "Insert PROMPT as a user turn without sending a request.
@@ -1438,6 +1441,17 @@ with NO-SPINNER forwarded when non-nil."
          (mevedel-view--full-rerender))
        (signal (car err) (cdr err))))))
 
+(defun mevedel--gptel-send-request (&optional model-input)
+  "Send the current gptel prompt and return its standard send FSM.
+MODEL-INPUT replaces the stored prompt for this request only."
+  (let ((mevedel--pending-model-input model-input))
+    (gptel-request nil
+      :stream gptel-stream
+      :transforms gptel-prompt-transform-functions
+      :fsm (gptel-make-fsm
+            :table gptel-send--transitions
+            :handlers gptel-send--handlers))))
+
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.
 
@@ -1448,7 +1462,7 @@ ACTION-PLIST is a plist with keys:
   :goal-context   - Authoritative persisted lifecycle context
 
 For `full', the plan is inserted into the chat buffer as a user message and
-sent via `gptel-send', including full conversation context.
+sent as a standard gptel request, including full conversation context.
 
 For `focused', a fresh `gptel-request' is fired with Goal context and the plan,
 without prior conversation context."
@@ -1473,7 +1487,8 @@ without prior conversation context."
             (pcase context
               ('full
                (mevedel--send-plan-implementation-turn
-                prompt "Implement accepted plan" #'gptel-send))
+                prompt "Implement accepted plan"
+                #'mevedel--gptel-send-request))
               ('focused
                (mevedel--send-plan-implementation-turn
                 prompt "Implement accepted plan with cleared context"
