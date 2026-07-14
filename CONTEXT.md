@@ -35,6 +35,8 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **goal owner** — The single session allowed to continue a goal. Moving a goal to a worktree transfers ownership rather than copying it.
 - **implementation context** — The context supplied to a goal's implementer: either the full goal transcript or a focused handoff containing the goal objective and accepted plan.
 - **model workload** — A named kind of model request, such as planning, implementation, review, exploration, or compaction, whose model and reasoning effort can be configured by a preset.
+- **conversation compaction** — Replacement of older model-visible transcript history with an anchored summary and a recent verbatim tail while retaining the original transcript on disk.
+- **compaction target** — A model-visible transcript whose context pressure is managed independently through conversation compaction; currently either a main session segment or a persisted sub-agent transcript.
 - **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.

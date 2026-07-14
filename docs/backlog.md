@@ -18,63 +18,14 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   - Or find better names, also fine.
 - Pause the "working..." timer while user input is pending.
 - Parse shell commands with tree-sitter when available.
+- Warnings in Emacs are quite intrusive. Consider making warnings in mevedel target
+  the messages buffer ([mevedel] Something happened, can be colored, see corfu) and display the warning also in the view buffer (but not permanent via the data buffer).
 
 ## Entry format
 
 Each entry records its source, owed change, reason for deferral, current
 status, and blast radius. Keep entries terse and remove them when they
 become implemented, obsolete, or unjustified.
-
-## Sub-agents and coordination
-
-### Bound concurrent sub-agent execution
-
-- **Source:** `mevedel-agent-runtime.el`; `mevedel-agent-exec.el`;
-  `mevedel-skills-invoke.el`
-- **What's owed:** Apply one configurable session-wide concurrency limit to all
-  sub-agent dispatch, including the Agent tool, fork skills, and first-class
-  review/verification workers. Queue overflow in FIFO order, start queued work
-  as slots open, and clear queued work when its owning request is cancelled.
-  Cover nested agent dispatch with one shared depth policy and avoid
-  parent-waits-for-child deadlocks under the concurrency cap; skill dispatch
-  must not maintain a separate recursion limit.
-- **Why deferred:** Dispatch currently starts agents immediately. A shared
-  scheduler must preserve foreground/background waiting, cancellation, and
-  transcript lifecycle semantics across every dispatch origin.
-- **Status check:** Agent runtime tracks active background workers and FSMs but
-  does not impose a shared concurrency limit or queue pending launches.
-- **Blast radius:** Unbounded parallel dispatch can exhaust provider rate
-  limits and local resources; separate per-feature limits would produce
-  inconsistent ordering and resource accounting.
-
-### Retry transient sub-agent request turns
-
-- **Source:** `mevedel-agent-runtime.el`; `mevedel-agent-exec.el`;
-  gptel request FSM handlers
-- **What's owed:** Retry a bounded number of transient transport/provider
-  failures, initially two retries, on the same sub-agent invocation. Retry only
-  the failed HTTP turn while preserving its transcript, invocation identity,
-  and completed tool results; never restart the whole agent automatically.
-- **Why deferred:** Safe retry must reset partial response/FSM state without
-  duplicating earlier tool calls or edits, and must distinguish retryable rate
-  limits, timeouts, and selected 5xx responses from terminal failures.
-- **Status check:** Sub-agent request errors currently settle as terminal
-  outcomes; there is no general bounded transient retry policy.
-- **Blast radius:** Missing retries make temporary provider failures abort
-  otherwise useful work. Retrying at the wrong boundary can duplicate side
-  effects or corrupt the child transcript.
-
-### Git worktree isolation for parallel workers
-
-- **Source:** `mevedel-worktree.el`; `mevedel-agent-runtime.el`
-- **What's owed:** Assign isolated git worktrees to parallel workers that may
-  edit overlapping files.
-- **Why deferred:** The existing worktree UI manages user-created worktrees,
-  but automatic worker allocation and cleanup need separate lifecycle rules.
-- **Status check:** `mevedel-worktree.el` supports status, create, list, and
-  deletion for sessions; agent dispatch does not allocate worker worktrees.
-- **Blast radius:** Parallel workers must avoid or serialize conflicting file
-  edits.
 
 ## Request lifecycle
 
