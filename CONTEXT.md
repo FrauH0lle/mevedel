@@ -16,6 +16,11 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **worktree session** — A session whose working directory is a Git linked worktree while still belonging to the same mevedel workspace.
 - **instruction** — A user-authored overlay in source buffers that gives mevedel context or work to perform.
 - **reference** — An instruction that contributes context without asking the agent to act.
+- **reference mention binding** — The association between a direct `@ref:N` mention and the exact selected reference. It follows that reference's latest state, but never a later reference that reuses its displayed number.
+- **reference query mention** — An `@ref:{query}` mention that selects all currently matching references when dispatched rather than preserving an earlier result set.
+- **file mention binding** — The association between an `@file` mention and the absolute pathname selected when the mention is bound. It follows the latest contents at that pathname rather than a file snapshot or filesystem object.
+- **MCP mention binding** — The association between an `@mcp` mention and one server-name/resource-URI pair. It reads the resource's latest contents and treats a replacement server with the same name as the same locator.
+- **agent mention** — An `@agent:name` mention that selects the currently registered agent definition by its unique name when dispatched.
 - **directive** — An instruction that asks the agent to discuss, implement, revise, tutor, or process work.
 - **goal** — A durable user objective that may require multiple planning and execution cycles before it is complete or blocked.
 - **goal cycle** — One planning, approval, implementation, and review iteration toward a goal.
@@ -40,6 +45,9 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
 - **tool input repair** — A deterministic correction to a tool call that either responds to a specific contract violation or is explicitly requested by the tool. Ordinary default values are tool semantics, not repairs.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
+- **mention binding** — The association created when a mention's exact target first becomes known. A bound mention never falls back to a same-named target, editing its visible token removes the association, and an unavailable target becomes an explicit annotation in the temporary request without blocking the turn or changing the stored user text.
+- **malformed mention binding** — A binding whose stored shape or visible token is inconsistent, so its intended target cannot be trusted. It blocks live submission or causes persisted history to be quarantined rather than being reinterpreted as an unbound mention.
+- **unbound mention** — A mention whose exact target is not yet known. It remains eligible for live resolution rather than preserving a missing-target result.
 - **skill** — A reusable prompt package discovered from configured skill directories and invoked by `$skill` syntax or model-side `Skill` tool.
 - **skill invocation role** — The interpretation of one skill use as either an instruction or a command. The invocation surface determines the role; the skill does not declare it.
 - **skill instruction invocation** — An embedded `$skill` mention that contributes a prepared skill body to the current consumer without invocation arguments or changes to the consumer's request policy.

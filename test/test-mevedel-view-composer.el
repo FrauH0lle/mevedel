@@ -1536,7 +1536,72 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-search "LIVE ALPHA BODY" request-data))))
       (delete-directory root t)))
 
-  :doc "malformed live bindings block submission and preserve the draft"
+  :doc "mixed unavailable targets annotate safely and dispatch once"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA SECRET"))
+    (let* ((source (mevedel-skill-source-file
+                    (mevedel-session-get-skill session "alpha")))
+           (file (file-name-concat root "missing.txt"))
+           (prompt
+            "Use $alpha @ref:2 @file:missing.txt @mcp:docs:file:///guide")
+           (specs
+            (list
+             (list "$alpha"
+                   (list :kind 'skill :token "$alpha" :source-file source))
+             (list "@ref:2"
+                   '(:kind ref :token "@ref:2" :reference-uuid "uuid-2"))
+             (list "@file:missing.txt"
+                   (list :kind 'file :token "@file:missing.txt" :path file))
+             (list "@mcp:docs:file:///guide"
+                   '(:kind mcp :token "@mcp:docs:file:///guide"
+                     :server "docs" :uri "file:///guide"))))
+           (gptel-prompt-transform-functions
+            (cons #'mevedel--transform-expand-mentions
+                  (remove #'mevedel--transform-expand-mentions
+                          gptel-prompt-transform-functions)))
+           request-data messages (send-count 0))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert prompt)
+        (dolist (spec specs)
+          (goto-char (mevedel-view--input-start))
+          (search-forward (car spec))
+          (mevedel-mention-bindings-set
+           (match-beginning 0) (match-end 0) (cadr spec))))
+      (delete-file source)
+      (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                 (lambda ()
+                   (list (list :name "docs" :status 'stop))))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (let ((text (apply #'format format-string args)))
+                     (when (string-prefix-p "mevedel:" text)
+                       (push text messages)))))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (cl-incf send-count)
+                   (setq request-data
+                         (mevedel-view-test--dry-run-request-data)))))
+        (with-current-buffer view-buf
+          (mevedel-view-send)))
+      (should (= 1 send-count))
+      (dolist (annotation '("[skill:alpha -- unavailable]"
+                            "[ref:2 -- unavailable]"
+                            "[file:missing.txt -- does not exist]"
+                            "[mcp:docs:file:///guide -- server"))
+        (should (string-search annotation request-data)))
+      (should-not (string-search "ALPHA SECRET" request-data))
+      (dolist (fragment '("bound skill" "reference" "file" "MCP"))
+        (should (seq-some (lambda (text) (string-search fragment text))
+                          messages)))
+      (with-current-buffer data-buf
+        (should (string-search prompt (buffer-string)))
+        (should-not (string-search "[skill:alpha -- unavailable]"
+                                   (buffer-string))))
+      (should (equal prompt (car (with-current-buffer view-buf
+                                   (mevedel-view-history--entries)))))))
+
+  :doc "malformed mixed bindings block submission and preserve the draft"
   (mevedel-view-test--with-fork-skill
       (mevedel-skill--create
        :name "alpha"
@@ -1548,20 +1613,32 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (lambda (&rest _) (setq send-called t))))
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
-          (let ((start (point)))
-            (insert "Use $alpha")
+          (let ((start (point))
+                (prompt "Use $alpha @file:/tmp/a @mcp:docs:file:///api"))
+            (insert prompt)
             (with-silent-modifications
               (add-text-properties
-               (+ start 4) (point)
+               (+ start 4) (+ start 10)
                '(mevedel-mention-binding
-                 (:kind skill :token "$alpha")))))
+                 (:kind skill :token "$alpha")))
+              (dolist (spec
+                       '(("@file:/tmp/a"
+                          (:kind file :token "@file:/tmp/a" :path "/tmp/a"))
+                         ("@mcp:docs:file:///api"
+                          (:kind mcp :token "@mcp:docs:file:///api"
+                           :server "docs" :uri "file:///api"))))
+                (goto-char start)
+                (search-forward (car spec))
+                (mevedel-mention-bindings-set
+                 (match-beginning 0) (match-end 0) (cadr spec)))))
           (setq raised
                 (condition-case err
                     (progn (mevedel-view-send) nil)
                   (user-error (error-message-string err))))
           (should (equal "Malformed mention binding" raised))
           (should-not send-called)
-          (should (equal "Use $alpha" (mevedel-view--input-text)))))))
+          (should (equal "Use $alpha @file:/tmp/a @mcp:docs:file:///api"
+                         (mevedel-view--input-text)))))))
 
   :doc "missing exact source warns, annotates, and sends the multiline turn"
   (mevedel-view-test--bound-source-failure-case 'missing)
@@ -1875,6 +1952,79 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                  (car (mevedel-view-history--entries))))))
       (should sent)
       (should (equal first-binding second-binding))))
+
+  :doc "mixed locators survive retry, queueing, history, and recall"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA"))
+    (let* ((source (mevedel-skill-source-file
+                    (mevedel-session-get-skill session "alpha")))
+           (file (file-name-concat root "missing.txt"))
+           (prompt
+            "Use $alpha @ref:2 @file:missing.txt @mcp:docs:file:///guide")
+           (specs
+            (list
+             (list "$alpha"
+                   (list :kind 'skill :token "$alpha" :source-file source))
+             (list "@ref:2"
+                   '(:kind ref :token "@ref:2" :reference-uuid "uuid-2"))
+             (list "@file:missing.txt"
+                   (list :kind 'file :token "@file:missing.txt" :path file))
+             (list "@mcp:docs:file:///guide"
+                   '(:kind mcp :token "@mcp:docs:file:///guide"
+                     :server "docs" :uri "file:///guide"))))
+           (expected (mapcar #'cadr specs))
+           (fail t))
+      (cl-letf (((symbol-function 'mevedel-skills-prepare)
+                 (lambda (_skill _arguments callback &rest _)
+                   (funcall callback
+                            (if fail
+                                '(:status error :reason blocked
+                                  :message "blocked")
+                              '(:status ok :kind instruction :body "ALPHA"
+                                :request-context (:invoked-skills nil))))))
+                ((symbol-function
+                  'mevedel-view--schedule-late-queued-user-message-drain)
+                 #'ignore)
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (error "Gptel-send should not run"))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert prompt)
+          (dolist (spec specs)
+            (goto-char (mevedel-view--input-start))
+            (search-forward (car spec))
+            (mevedel-mention-bindings-set
+             (match-beginning 0) (match-end 0) (cadr spec)))
+          (mevedel-view-send)
+          (should (equal prompt (mevedel-view--input-text)))
+          (should
+           (equal expected
+                  (mapcar (lambda (range) (plist-get range :binding))
+                          (mevedel-mention-bindings-ranges
+                           (mevedel-view--input-text)))))
+          (setq fail nil)
+          (with-current-buffer data-buf
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (mevedel-view-send)
+          (let ((queued
+                 (plist-get
+                  (car (mevedel-session-queued-user-messages session))
+                  :input))
+                (history (car (mevedel-view-history--entries))))
+            (dolist (text (list queued history))
+              (should (equal prompt text))
+              (should
+               (equal expected
+                      (mapcar (lambda (range)
+                                (plist-get range :binding))
+                              (mevedel-mention-bindings-ranges text))))))
+          (mevedel-view-history-previous)
+          (should
+           (equal expected
+                  (mapcar (lambda (range) (plist-get range :binding))
+                          (mevedel-mention-bindings-ranges
+                           (mevedel-view--input-text)))))))))
 
   :doc "submit hooks see the complete inert prompt and added skill text stays literal"
   (mevedel-view-test--with-source-skills

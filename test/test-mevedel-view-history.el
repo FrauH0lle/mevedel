@@ -289,7 +289,7 @@ Binds `data-buf' and `view-buf'."
 ;;; Persistence
 
 (mevedel-deftest mevedel-view-history--persistence
-  (:doc "round-trips visible input and its exact skill binding"
+  (:doc "round-trips visible input and its exact mixed mention bindings"
    :doc "a write failure retains the live bound entry and disables later saves")
   (mevedel-view-history-test--with-temp-dir workspace-dir
     (mevedel-view-history-test--with-temp-dir session-dir
@@ -301,7 +301,7 @@ Binds `data-buf' and `view-buf'."
                                           ".agents/skills/alpha"))
              (skill-file (file-name-concat skill-dir "SKILL.md"))
              (body-marker "ALPHA BODY MUST NOT BE PERSISTED")
-             bound-input ref-input file-input mcp-input)
+             bound-input ref-input file-input mcp-input mixed-input)
         (make-directory skill-dir t)
         (with-temp-file skill-file
           (insert "---\nname: alpha\ndescription: Test alpha\n---\n\n# Alpha\n\n"
@@ -330,6 +330,8 @@ Binds `data-buf' and `view-buf'."
            '(:kind mcp :token "@mcp:docs:file:///guide"
              :server "docs" :uri "file:///guide")
            mcp-input))
+        (setq mixed-input
+              (concat bound-input " " ref-input " " file-input " " mcp-input))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-add "first")
@@ -344,6 +346,7 @@ Binds `data-buf' and `view-buf'."
           (mevedel-view-history-add file-input)
           (mevedel-view-history-add mcp-input)
           (mevedel-view-history-add bound-input)
+          (mevedel-view-history-add mixed-input)
           (mevedel-view-history-save (current-buffer)))
         (should (file-exists-p path))
         (should-not (file-exists-p session-path))
@@ -359,15 +362,17 @@ Binds `data-buf' and `view-buf'."
           (setq-local mevedel--session session)
           (mevedel-view-history-load session)
           (let* ((entries (mevedel-view-history--entries))
-                 (restored (car entries))
+                 (restored-mixed (car entries))
+                 (restored (cadr entries))
                  (token-start (string-match "\\$alpha" restored))
-                 (restored-mcp (cadr entries))
+                 (restored-mcp (nth 2 entries))
                  (mcp-start (string-match "@mcp:" restored-mcp))
-                 (restored-file (nth 2 entries))
+                 (restored-file (nth 3 entries))
                  (file-start (string-match "@file:" restored-file))
-                 (restored-ref (nth 3 entries))
+                 (restored-ref (nth 4 entries))
                  (ref-start (string-match "@ref:7" restored-ref)))
-            (should (equal (list "use $alpha."
+            (should (equal (list (substring-no-properties mixed-input)
+                                 "use $alpha."
                                  "consult @mcp:docs:file:///guide"
                                  "read @file:notes.txt#L2"
                                  "inspect @ref:7"
@@ -377,6 +382,20 @@ Binds `data-buf' and `view-buf'."
                                  "second"
                                  "first")
                            entries))
+            (should
+             (equal (list (list :kind 'skill :token "$alpha"
+                                :source-file skill-file)
+                          '(:kind ref :token "@ref:7"
+                            :reference-uuid "uuid-7")
+                          (list :kind 'file :token "@file:notes.txt#L2"
+                                :path (file-name-concat
+                                       workspace-dir "notes.txt"))
+                          '(:kind mcp :token "@mcp:docs:file:///guide"
+                            :server "docs" :uri "file:///guide"))
+                    (mapcar (lambda (range)
+                              (plist-get range :binding))
+                            (mevedel-mention-bindings-ranges
+                             restored-mixed))))
             (should (equal (list :kind 'skill
                                  :token "$alpha"
                                  :source-file skill-file)
