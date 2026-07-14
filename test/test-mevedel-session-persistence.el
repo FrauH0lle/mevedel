@@ -4185,6 +4185,12 @@ The result is a plist whose :tempdir owns every created file."
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
            (buf (generate-new-buffer "*test-data-buf*"))
+           (eligible-transcript
+            (concat "* Agent Task: inspect\n\n"
+                    "#+begin_summary\n"
+                    "## Goal\n- Continue.\n"
+                    "#+end_summary\n"
+                    "Recent agent turn.\n"))
            parent-path
            parent-id)
       (with-current-buffer buf
@@ -4209,9 +4215,14 @@ The result is a plist whose :tempdir owns every created file."
         (write-region "# Parent plan\n" nil
                       (file-name-concat parent-path "plans/current.md")
                       nil 'silent)
-        (write-region "eligible transcript\n" nil
+        (write-region eligible-transcript nil
                       (file-name-concat parent-path
                                         "agents/eligible.chat.org")
+                      nil 'silent)
+        (write-region "eligible recovery archive\n" nil
+                      (file-name-concat
+                       parent-path
+                       "agents/eligible.compact-0001.chat.org")
                       nil 'silent)
         (write-region "future transcript\n" nil
                       (file-name-concat parent-path
@@ -4262,6 +4273,7 @@ The result is a plist whose :tempdir owns every created file."
          :parent-lock parent-lock
          :parent-lock-state
          (mevedel-session-persistence--read-lock parent-lock)
+         :eligible-transcript eligible-transcript
          :parent-sidecar-text
          (mevedel-session-persistence--file-text
           (mevedel-session-persistence--sidecar-path parent-path))
@@ -4454,8 +4466,15 @@ The result is a plist whose :tempdir owns every created file."
           (should (equal "# Parent plan\n"
                          (mevedel-session-persistence--file-text
                           (file-name-concat new-path "plans/current.md"))))
-          (should (file-exists-p
-                   (file-name-concat new-path "agents/eligible.chat.org")))
+          (should
+           (equal
+            (plist-get fixture :eligible-transcript)
+            (mevedel-session-persistence--file-text
+             (file-name-concat new-path "agents/eligible.chat.org"))))
+          (should-not
+           (file-exists-p
+            (file-name-concat
+             new-path "agents/eligible.compact-0001.chat.org")))
           (should-not (file-exists-p
                        (file-name-concat new-path "agents/future.chat.org")))
           (should-not (file-exists-p
@@ -4989,6 +5008,13 @@ The result is a plist whose :tempdir owns every created file."
                   (org-mode)
                   (insert "New\n")
                   (mevedel-session-persistence-save s2 b2))
+                (let ((archive
+                       (file-name-concat
+                        (mevedel-session-save-path s1)
+                        "agents/old.compact-0001.chat.org")))
+                  (make-directory (file-name-directory archive) t)
+                  (write-region "recovery archive\n" nil archive nil 'silent)
+                  (should (file-exists-p archive)))
                 ;; Forge :updated-at on the old session to be 14 days ago.
                 (let* ((old-path (mevedel-session-save-path s1))
                        (sidecar  (mevedel-session-persistence--sidecar-path

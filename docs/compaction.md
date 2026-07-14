@@ -169,6 +169,14 @@ once.  Activity temporarily reports `Compacting...` and then returns to the
 ordinary continuation status.  Agent compaction emits neither the main-session
 file reminder nor the long-thread accuracy warning.
 
+Later continuation compactions update the existing anchored summary in place:
+the previous summary is supplied as authoritative retained context, the latest
+complete turns are merged into a replacement summary, and the original task
+block plus configured recent tail stay intact.  Every pass archives the current
+canonical transcript to the next collision-free numbered sibling, so a second
+pass creates `compact-0002` from the post-first-compaction transcript before
+rewriting the same canonical path again.
+
 If agent summarization or application fails, the continuation is not sent.
 The agent FSM enters its normal `ERRS` transaction so transcript finalization
 and the terminal callback deliver the ordinary bounded, transcript-backed
@@ -189,6 +197,13 @@ if a later local application step fails, the complete pre-compaction archive
 remains available for recovery.  These local eligibility, preflight, hook,
 abort, and application failures are non-retryable.  Only summary request
 failures receive the existing maximum of three identical attempts.
+
+Numbered agent archives are recovery artifacts, not transcript identities.
+They are deliberately absent from the session sidecar, session browser, and
+retention index.  They remain owned by the original session directory and are
+removed with it by normal session cleanup.  Rewind forks copy only canonical
+agent transcripts referenced by the fork's sidecar; they do not copy numbered
+archives.
 
 Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
 use a no-tools prompt preamble, respect the active `gptel-stream`
