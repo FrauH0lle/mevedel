@@ -301,7 +301,7 @@ Binds `data-buf' and `view-buf'."
                                           ".agents/skills/alpha"))
              (skill-file (file-name-concat skill-dir "SKILL.md"))
              (body-marker "ALPHA BODY MUST NOT BE PERSISTED")
-             bound-input ref-input file-input)
+             bound-input ref-input file-input mcp-input)
         (make-directory skill-dir t)
         (with-temp-file skill-file
           (insert "---\nname: alpha\ndescription: Test alpha\n---\n\n# Alpha\n\n"
@@ -323,6 +323,13 @@ Binds `data-buf' and `view-buf'."
                  :token "@file:notes.txt#L2"
                  :path (file-name-concat workspace-dir "notes.txt"))
            file-input))
+        (setq mcp-input (copy-sequence "consult @mcp:docs:file:///guide"))
+        (let ((start (string-match "@mcp:" mcp-input)))
+          (mevedel-mention-bindings-set
+           start (length mcp-input)
+           '(:kind mcp :token "@mcp:docs:file:///guide"
+             :server "docs" :uri "file:///guide")
+           mcp-input))
         (with-temp-buffer
           (setq-local mevedel--session session)
           (mevedel-view-history-add "first")
@@ -335,6 +342,7 @@ Binds `data-buf' and `view-buf'."
           (mevedel-view-history-add (concat "unicode " (string #x03bb)))
           (mevedel-view-history-add ref-input)
           (mevedel-view-history-add file-input)
+          (mevedel-view-history-add mcp-input)
           (mevedel-view-history-add bound-input)
           (mevedel-view-history-save (current-buffer)))
         (should (file-exists-p path))
@@ -353,11 +361,14 @@ Binds `data-buf' and `view-buf'."
           (let* ((entries (mevedel-view-history--entries))
                  (restored (car entries))
                  (token-start (string-match "\\$alpha" restored))
-                 (restored-file (cadr entries))
+                 (restored-mcp (cadr entries))
+                 (mcp-start (string-match "@mcp:" restored-mcp))
+                 (restored-file (nth 2 entries))
                  (file-start (string-match "@file:" restored-file))
-                 (restored-ref (nth 2 entries))
+                 (restored-ref (nth 3 entries))
                  (ref-start (string-match "@ref:7" restored-ref)))
             (should (equal (list "use $alpha."
+                                 "consult @mcp:docs:file:///guide"
                                  "read @file:notes.txt#L2"
                                  "inspect @ref:7"
                                  (concat "unicode " (string #x03bb))
@@ -377,6 +388,11 @@ Binds `data-buf' and `view-buf'."
                       :reference-uuid "uuid-7")
                     (get-text-property
                      ref-start 'mevedel-mention-binding restored-ref)))
+            (should
+             (equal '(:kind mcp :token "@mcp:docs:file:///guide"
+                      :server "docs" :uri "file:///guide")
+                    (get-text-property
+                     mcp-start 'mevedel-mention-binding restored-mcp)))
             (should
              (equal (list :kind 'file
                           :token "@file:notes.txt#L2"

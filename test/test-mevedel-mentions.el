@@ -326,6 +326,17 @@ Returns (buffer . overlay)."
                      (plist-get binding :path)))))
       (delete-directory root t)))
 
+  :doc "complete MCP mentions bind their locator even while unavailable"
+  (let* ((token "@mcp:docs:file:///guide")
+         (prepared (mevedel-mentions-prepare-user-input
+                    (concat "Use " token)))
+         (start (string-match (regexp-quote token) prepared)))
+    (should
+     (equal (list :kind 'mcp :token token
+                  :server "docs" :uri "file:///guide")
+            (get-text-property
+             start 'mevedel-mention-binding prepared))))
+
   :doc "rejects malformed existing mention bindings"
   (let ((input (copy-sequence "Use @ref:1")))
     (put-text-property 4 10 'mevedel-mention-binding
@@ -1100,6 +1111,21 @@ Returns (buffer . overlay)."
                               (plist-get result :placeholder)))
       (should (null (plist-get result :hash)))))
 
+  :doc "bound disconnected server yields a nonblocking warning"
+  (let ((token "@mcp:srv:uri"))
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'stop)))))
+      (let ((result
+             (mevedel--handle-mcp-mention
+              (list :match-text token
+                    :captures (list token "srv" "uri")
+                    :binding (list :kind 'mcp :token token
+                                   :server "srv" :uri "uri")))))
+        (should (string-match-p "not connected"
+                                (plist-get result :placeholder)))
+        (should (string-match-p "MCP @mcp:srv:uri is unavailable"
+                                (plist-get result :warning))))))
+
   :doc "successful read attaches content and computes hash"
   (let ((fake-conn (make-hash-table))
         (table (make-hash-table :test #'equal)))
@@ -1122,20 +1148,82 @@ Returns (buffer . overlay)."
                        (plist-get result :key)))
         (should (stringp (plist-get result :hash))))))
 
-  :doc "read failure yields graceful placeholder"
+  :doc "a replacement connection under the same server name is used"
+  (let ((first-connection (make-symbol "first-connection"))
+        (second-connection (make-symbol "second-connection"))
+        (table (make-hash-table :test #'equal))
+        (token "@mcp:srv:uri")
+        first second)
+    (puthash "srv" first-connection table)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'connected))))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (connection _uri)
+                 (list :contents
+                       (vector
+                        (list :type "text"
+                              :text (if (eq connection first-connection)
+                                        "first contents"
+                                      "replacement contents")))))))
+      (let ((mcp-server-connections table)
+            (info (list :match-text token
+                        :captures (list token "srv" "uri")
+                        :binding (list :kind 'mcp :token token
+                                       :server "srv" :uri "uri"))))
+        (setq first (mevedel--handle-mcp-mention info))
+        (puthash "srv" second-connection table)
+        (setq second (mevedel--handle-mcp-mention info))))
+    (should (string-match-p "first contents" (plist-get first :reminder)))
+    (should (string-match-p "replacement contents"
+                            (plist-get second :reminder)))
+    (should (equal (plist-get first :key) (plist-get second :key)))
+    (should-not (equal (plist-get first :hash) (plist-get second :hash))))
+
+  :doc "bound permission failure warns without exposing contents"
   (let ((fake-conn (make-hash-table))
         (table (make-hash-table :test #'equal)))
     (puthash "srv" fake-conn table)
     (cl-letf (((symbol-function 'mcp-hub-get-servers)
                (lambda () (list (list :name "srv" :status 'connected))))
               ((symbol-function 'mcp-read-resource)
-               (lambda (_conn _uri) (signal 'error '("boom")))))
+               (lambda (_conn _uri) (signal 'error '("Permission denied")))))
       (let* ((mcp-server-connections table)
+             (token "@mcp:srv:bad")
              (result (mevedel--handle-mcp-mention
-                      (list :match-text "@mcp:srv:bad"
-                            :captures '("@mcp:srv:bad" "srv" "bad")))))
-        (should (string-match-p "read failed: boom"
+                      (list :match-text token
+                            :captures (list token "srv" "bad")
+                            :binding (list :kind 'mcp :token token
+                                           :server "srv" :uri "bad")))))
+        (should (string-match-p "read failed: Permission denied"
                                 (plist-get result :placeholder)))
+        (should-not (string-match-p "protected contents"
+                                    (plist-get result :reminder)))
+        (should (string-match-p "MCP @mcp:srv:bad is unavailable"
+                                (plist-get result :warning)))
+        (should (null (plist-get result :hash))))))
+
+  :doc "missing bound resource warns and supplies no contents"
+  (let ((connection (make-symbol "connection"))
+        (connections (make-hash-table :test #'equal)))
+    (puthash "srv" connection connections)
+    (cl-letf (((symbol-function 'mcp-hub-get-servers)
+               (lambda () (list (list :name "srv" :status 'connected))))
+              ((symbol-function 'mcp-read-resource)
+               (lambda (_connection _uri)
+                 (signal 'error '("Resource not found")))))
+      (let* ((mcp-server-connections connections)
+             (token "@mcp:srv:missing")
+             (result (mevedel--handle-mcp-mention
+                      (list :match-text token
+                            :captures (list token "srv" "missing")
+                            :binding (list :kind 'mcp :token token
+                                           :server "srv" :uri "missing")))))
+        (should (string-match-p "read failed: Resource not found"
+                                (plist-get result :placeholder)))
+        (should-not (string-match-p "contents attached"
+                                    (plist-get result :reminder)))
+        (should (string-match-p "MCP @mcp:srv:missing is unavailable"
+                                (plist-get result :warning)))
         (should (null (plist-get result :hash)))))))
 
 (mevedel-deftest mevedel-mentions--ref-completion-exit-function
@@ -1279,6 +1367,20 @@ Returns (buffer . overlay)."
               (get-text-property
                (point-min) 'mevedel-mention-binding))))))
 
+(mevedel-deftest mevedel-mentions--mcp-completion-exit-function
+  (:doc "MCP resource completion binds the server and URI atomically")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "@mcp:docs:file:///guide")
+    (mevedel-mentions--mcp-completion-exit-function
+     "docs" "file:///guide" 'finished)
+    (should
+     (equal '(:kind mcp :token "@mcp:docs:file:///guide"
+              :server "docs" :uri "file:///guide")
+            (get-text-property
+             (point-min) 'mevedel-mention-binding)))))
+
 (mevedel-deftest mevedel-mention-capf
   (:doc "`mevedel-mention-capf' offers mention prefixes at bare @")
   ,test
@@ -1357,7 +1459,7 @@ Returns (buffer . overlay)."
           (should (member "alpha" candidates))
           (should (member "beta" candidates))))))
 
-  :doc "returns resource uri candidates at @mcp:server: prefix"
+  :doc "resource completion binds the selected server and URI immediately"
   (cl-letf (((symbol-function 'mcp-hub-get-servers)
              (lambda ()
                (list (list :name "alpha"
@@ -1366,13 +1468,26 @@ Returns (buffer . overlay)."
                            (list (list :uri "file:///a.txt" :name "A")
                                  (list :uri "file:///b.txt" :name "B")))))))
     (with-temp-buffer
-      (insert "@mcp:alpha:")
+      (insert "@mcp:alpha:file:///a")
       (goto-char (point-max))
-      (let ((result (mevedel-mcp-capf)))
+      (let* ((result (mevedel-mcp-capf))
+             (start (nth 0 result))
+             (end (nth 1 result))
+             (candidates (nth 2 result))
+             (candidate (car (all-completions "file:///a" candidates)))
+             (exit (plist-get (nthcdr 3 result) :exit-function)))
         (should result)
-        (let ((candidates (nth 2 result)))
-          (should (member "file:///a.txt" candidates))
-          (should (member "file:///b.txt" candidates))))))
+        (should (member "file:///a.txt" candidates))
+        (should (functionp exit))
+        (delete-region start end)
+        (goto-char start)
+        (insert candidate)
+        (funcall exit candidate 'finished)
+        (should
+         (equal '(:kind mcp :token "@mcp:alpha:file:///a.txt"
+                  :server "alpha" :uri "file:///a.txt")
+                (get-text-property
+                 (point-min) 'mevedel-mention-binding))))))
 
   :doc "returns nil when not at an @mcp: prefix"
   (cl-letf (((symbol-function 'mcp-hub-get-servers) (lambda () nil)))
@@ -1494,6 +1609,73 @@ Returns (buffer . overlay)."
         (kill-buffer buf)
         (when (and file (file-exists-p file))
           (delete-file file)))))
+
+  :doc "MCP dedup uses locator and current content hash"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "mcp-dedup" :root "/tmp"
+                     :name "mcp-dedup"))
+         (session (mevedel-session-create "main" workspace))
+         (chat (generate-new-buffer " *mevedel-mcp-dedup-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat)))
+         (connections (make-hash-table :test #'equal))
+         (connection (make-symbol "mcp-connection"))
+         (content "first MCP contents")
+         (input (mevedel-mentions-prepare-user-input
+                 "Use @mcp:docs:file:///guide" session)))
+    (puthash "docs" connection connections)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                     (lambda ()
+                       (list (list :name "docs" :status 'connected))))
+                    ((symbol-function 'mcp-read-resource)
+                     (lambda (_connection _uri)
+                       (list :contents
+                             (vector (list :type "text" :text content))))))
+            (let ((mcp-server-connections connections))
+              (with-temp-buffer
+                (insert (propertize input 'gptel 'prompt))
+                (mevedel--transform-expand-mentions fsm)
+                (should (string-match-p "first MCP contents"
+                                        (buffer-string))))
+              (with-temp-buffer
+                (insert (propertize input 'gptel 'prompt))
+                (mevedel--transform-expand-mentions fsm)
+                (should-not (string-match-p "<system-reminder>"
+                                            (buffer-string))))
+              (setq content "changed MCP contents")
+              (with-temp-buffer
+                (insert (propertize input 'gptel 'prompt))
+                (mevedel--transform-expand-mentions fsm)
+                (should (string-match-p "changed MCP contents"
+                                        (buffer-string)))))))
+      (kill-buffer chat)))
+
+  :doc "unavailable bound MCP resource warns without mutating stored input"
+  (let* ((token "@mcp:docs:file:///guide")
+         (input (mevedel-mentions-prepare-user-input
+                 (concat "Use " token " and continue")))
+         (start (string-match (regexp-quote token) input))
+         warning transformed)
+    (with-temp-buffer
+      (insert (propertize input 'gptel 'prompt))
+      (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                 (lambda () (list (list :name "docs" :status 'stop))))
+                ((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq warning (apply #'format format-string args)))))
+        (mevedel--transform-expand-mentions nil))
+      (setq transformed (buffer-string)))
+    (should (string-match-p "not connected" transformed))
+    (should (string-match-p "mevedel: MCP .* unavailable" warning))
+    (should (equal (concat "Use " token " and continue") input))
+    (should (equal "file:///guide"
+                   (plist-get
+                    (get-text-property
+                     start 'mevedel-mention-binding input)
+                    :uri))))
 
   :doc "reference queries expand only from the session workspace"
   (let* ((workspace-a (mevedel-workspace--create

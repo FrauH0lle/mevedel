@@ -41,6 +41,7 @@
 (require 'mevedel-view-zone)
 (require 'mevedel-view-history)
 (require 'gptel-request)
+(require 'mcp)
 
 (defun mevedel-view-composer-test--owner (symbol)
   "Return the source feature basename that defines SYMBOL."
@@ -2311,6 +2312,88 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                             :path))))
           (should-not (mevedel-session-queued-user-messages session)))
       (when (file-exists-p file) (delete-file file))
+      (delete-directory root t)))
+
+  :doc "queued MCP mention keeps its locator and reads after reconnect"
+  (let* ((root (make-temp-file "mevedel-mcp-queue-" t))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "mcp-queue"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         (token "@mcp:docs:file:///guide")
+         (connections (make-hash-table :test #'equal))
+         (connection (make-symbol "mcp-connection"))
+         request-data)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session
+                        mevedel--workspace ws
+                        mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function
+                      'mevedel-view--schedule-late-queued-user-message-drain)
+                     #'ignore))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Consult " token)
+              (mevedel-view-send))
+            (let* ((queued
+                    (plist-get
+                     (car (mevedel-session-queued-user-messages session))
+                     :input))
+                   (queued-start (string-match (regexp-quote token) queued))
+                   (history
+                    (with-current-buffer view-buf
+                      (car (mevedel-view-history--entries))))
+                   (history-start
+                    (string-match (regexp-quote token) history)))
+              (dolist (entry (list (cons queued queued-start)
+                                   (cons history history-start)))
+                (should
+                 (equal '(:kind mcp :token "@mcp:docs:file:///guide"
+                          :server "docs" :uri "file:///guide")
+                        (get-text-property
+                         (cdr entry) 'mevedel-mention-binding
+                         (car entry)))))))
+          (puthash "docs" connection connections)
+          (with-current-buffer data-buf
+            (setq-local mevedel--current-request nil))
+          (let ((gptel-prompt-transform-functions
+                 (cons #'mevedel--transform-expand-mentions
+                       (remove #'mevedel--transform-expand-mentions
+                               gptel-prompt-transform-functions)))
+                (mcp-server-connections connections))
+            (cl-letf (((symbol-function 'mcp-hub-get-servers)
+                       (lambda ()
+                         (list (list :name "docs" :status 'connected))))
+                      ((symbol-function 'mcp-read-resource)
+                       (lambda (actual uri)
+                         (should (eq connection actual))
+                         (should (equal "file:///guide" uri))
+                         (list :contents
+                               (vector (list :type "text"
+                                             :text "current guide")))))
+                      ((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (mevedel-view--drain-queued-user-message data-buf)))
+          (should (string-search "current guide" request-data))
+          (with-current-buffer data-buf
+            (goto-char (point-min))
+            (should (search-forward token nil t))
+            (should
+             (equal "file:///guide"
+                    (plist-get
+                     (get-text-property
+                      (match-beginning 0) 'mevedel-mention-binding)
+                     :uri))))
+          (should-not (mevedel-session-queued-user-messages session)))
       (delete-directory root t)))
 
   :doc "plain input during guardian review joins the intervention queue"
