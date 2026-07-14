@@ -29,6 +29,10 @@
 (defvar gptel-backend)
 (defvar gptel--request-params)
 
+(defun test-mevedel-compact--failing-hook (_event)
+  "Signal the hook failure used by fail-closed compaction tests."
+  (error "Hook failed"))
+
 (cl-defmacro test-mevedel-compact--with-persisted-buffer
     ((buffer session) &rest body)
   "Run BODY in persisted BUFFER owned by SESSION."
@@ -1076,7 +1080,67 @@
       (should (equal (buffer-string)
                      (with-temp-buffer
                        (insert-file-contents canonical-path)
-                       (buffer-string)))))))
+                       (buffer-string))))))
+
+  :doc "leaves live and canonical transcripts unchanged on archive failure"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (let ((start (point)))
+      (insert "Old response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (basic-save-buffer)
+    (let* ((target (mevedel--compact-agent-target invocation))
+           (directory (file-name-directory canonical-path))
+           (original-live (buffer-string))
+           (original-canonical
+            (with-temp-buffer
+              (insert-file-contents canonical-path)
+              (buffer-string))))
+      (unwind-protect
+          (progn
+            (set-file-modes directory #o500)
+            (should-error
+             (mevedel--compact-agent-apply
+              target "## Goal\n- Continue" nil nil nil)
+             :type 'file-error))
+        (set-file-modes directory #o700))
+      (should (equal original-live (buffer-string)))
+      (should (equal original-canonical
+                     (with-temp-buffer
+                       (insert-file-contents canonical-path)
+                       (buffer-string))))
+      (should-not
+       (directory-files directory nil "\\.compact-[0-9]+\\.chat\\.org\\'"))))
+
+  :doc "retains the full archive when canonical application later fails"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (let ((start (point)))
+      (insert "Old response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (basic-save-buffer)
+    (let* ((original (buffer-string))
+           (target (mevedel--compact-agent-target invocation)))
+      (add-hook
+       'before-change-functions
+       (lambda (&rest _)
+         (error "Stop compacted transcript application"))
+       nil t)
+      (should-error
+       (mevedel--compact-agent-apply
+        target "## Goal\n- Continue" nil nil nil)
+       :type 'error)
+      (let ((archives
+             (directory-files
+              (file-name-directory canonical-path) t
+              "\\.compact-[0-9]+\\.chat\\.org\\'")))
+        (should (= 1 (length archives)))
+        (should (equal original
+                       (with-temp-buffer
+                         (insert-file-contents (car archives))
+                         (buffer-string))))))))
 
 (mevedel-deftest mevedel--compact-main-apply ()
   ,test
@@ -1246,11 +1310,24 @@
 (mevedel-deftest mevedel--compact-agent-terminal-failure ()
   ,test
   (test)
-  :doc "records a structured compaction error and enters ERRS"
-  (let ((fsm (gptel-make-fsm :info (list :buffer nil))) transition)
+  :doc "clears activity, records a structured error, and enters ERRS"
+  (let* ((invocation
+          (mevedel-agent-invocation-create
+           (mevedel-agent--create :name "explorer")))
+         (fsm
+          (gptel-make-fsm
+           :info (list :buffer nil
+                       :mevedel-agent-invocation invocation)))
+         activity status transition)
     (cl-letf (((symbol-function 'gptel--fsm-transition)
-               (lambda (_fsm state) (setq transition state))))
+               (lambda (_fsm state) (setq transition state)))
+              ((symbol-function 'mevedel-agent-exec--record-activity)
+               (lambda (_invocation item) (setq activity item)))
+              ((symbol-function 'gptel--update-status)
+               (lambda (text &optional _face) (setq status text))))
       (mevedel--compact-agent-terminal-failure nil fsm "boom"))
+    (should (equal '(:type status :summary "error") activity))
+    (should (equal " Agent failed" status))
     (should (eq 'ERRS transition))
     (should (equal "Compaction failed: boom"
                    (plist-get (gptel-fsm-info fsm) :status)))
@@ -1486,32 +1563,93 @@
           (should-not compacted))
       (kill-buffer agent-buffer)))
 
-  :doc "settles a failed summary through persisted ERRS parent delivery once"
+  :doc "lets ephemeral agents ignore summarizer-only pressure but not target pressure"
+  (let* ((agent-buffer (generate-new-buffer " *mevedel-ephemeral-agent*"))
+         (invocation
+          (mevedel-agent-invocation-create
+           (mevedel-agent--create :name "explorer")))
+         (fsm
+          (gptel-make-fsm
+           :table gptel-send--transitions
+           :handlers (copy-tree mevedel-agent-exec--handlers)
+           :state 'WAIT
+           :info
+           (list :buffer agent-buffer
+                 :history '(TRET)
+                 :data
+                 (list :messages
+                       (vector
+                        (list :role "user" :content (make-string 1000 ?x))))
+                 :mevedel-agent-invocation invocation
+                 :mevedel-compaction-target-policy
+                 '(:backend nil :model mevedel-large-agent-model
+                   :max-tokens 0 :request-params nil))))
+         (waits 0) (terminal-events 0))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-buffer invocation) agent-buffer)
+          (setf (mevedel-agent-invocation-agent-id invocation)
+                "explorer--ephemeral")
+          (setf (mevedel-agent-invocation-transcript-status invocation)
+                'running)
+          (plist-put
+           (gptel-fsm-info fsm) :mevedel-agent-terminal-callback
+           (lambda (_event)
+             (cl-incf terminal-events)
+             (setf (mevedel-agent-invocation-transcript-status invocation)
+                   'error)))
+          (put 'mevedel-large-agent-model :context-window 2)
+          (put 'mevedel-small-agent-model :context-window 0.4)
+          (put 'mevedel-agent-summary-model :context-window 0.4)
+          (let ((mevedel-compact-token-threshold 0.5)
+                (mevedel-compact-reserve-tokens 0))
+            (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                       (lambda (&rest _)
+                         (error "Summarizer policy must not be resolved")))
+                      ((symbol-function 'gptel-get-preset)
+                       (lambda (&rest _)
+                         '(:description "test" :max-tokens nil
+                           :request-params nil)))
+                      ((symbol-function 'gptel--handle-wait)
+                       (lambda (_fsm) (cl-incf waits)))
+                      ((symbol-function 'gptel--handle-error) #'ignore)
+                      ((symbol-function 'gptel--update-status) #'ignore))
+              (with-current-buffer agent-buffer
+                (insert "Ephemeral transcript stays intact.\n"))
+              (mevedel--compact-handle-agent-wait fsm)
+              (should (= 1 waits))
+              (should (= 0 terminal-events))
+              (plist-put
+               (gptel-fsm-info fsm) :mevedel-compaction-target-policy
+               '(:backend nil :model mevedel-small-agent-model
+                 :max-tokens 0 :request-params nil))
+              (mevedel--compact-handle-agent-wait fsm)))
+          (should (= 1 waits))
+          (should (= 1 terminal-events))
+          (should (eq 'ERRS (gptel-fsm-state fsm)))
+          (should (eq 'error
+                      (mevedel-agent-invocation-transcript-status invocation)))
+          (with-current-buffer agent-buffer
+            (should-not buffer-file-name)
+            (should (equal "Ephemeral transcript stays intact.\n"
+                           (buffer-string)))))
+      (when (buffer-live-p agent-buffer)
+        (kill-buffer agent-buffer))))
+
+  :doc "lets a prefixless persisted agent proceed only below target pressure"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
     (insert "* Agent Task: inspect\n\nKeep this task.\n")
     (let ((start (point)))
-      (insert "Old response one.\n")
+      (insert "First recent response.\n")
       (put-text-property start (point) 'gptel 'response))
-    (insert "Old user two.\n")
+    (insert "Only recent user turn.\n")
     (let ((start (point)))
-      (insert "Old response two.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (insert "Recent user three.\n")
-    (let ((start (point)))
-      (insert "Partial analysis before failure.\n")
+      (insert "Second recent response.\n")
       (put-text-property start (point) 'gptel 'response))
     (insert "Pending tool result.\n")
     (basic-save-buffer)
-    (let* ((parent-fsm
-            (gptel-make-fsm
-             :info (list :buffer parent-buffer)
-             :handlers nil
-             :state 'BWAIT))
-           (data (list :messages
-                       (vector
-                        (list :role "user"
-                              :content (make-string 1000 ?x)))))
+    (let* ((original (buffer-string))
            (fsm
             (gptel-make-fsm
              :table gptel-send--transitions
@@ -1520,42 +1658,29 @@
              :info
              (list :buffer agent-buffer
                    :history '(TRET)
-                   :data data
-                   :model 'mevedel-agent-target-model
+                   :data
+                   (list :messages
+                         (vector
+                          (list :role "user"
+                                :content (make-string 1000 ?x))))
                    :mevedel-agent-invocation invocation
                    :mevedel-compaction-target-policy
-                   '(:backend nil :model mevedel-agent-target-model
+                   '(:backend nil :model mevedel-large-agent-model
                      :max-tokens 0 :request-params nil))))
-           (summary-attempts 0)
-           (continuation-sends 0))
-      (setf (mevedel-agent-invocation-background-p invocation) t)
-      (setf (mevedel-agent-invocation-description invocation) "inspect")
-      (setf (mevedel-agent-invocation-parent-fsm invocation) parent-fsm)
-      (setf (mevedel-session-agent-transcripts session)
-            `(("explorer--test" :agent-type "explorer"
-               :description "inspect"
-               :path "agents/explorer-test.chat.org"
-               :status running)))
-      (setf (mevedel-session-background-agents session)
-            '("explorer--test"))
-      (with-current-buffer parent-buffer
-        (setq-local mevedel-agent-runtime--fsms
-                    `(("explorer--test" . ,fsm))))
-      (setf
-       (gptel-fsm-info fsm)
-       (plist-put
-        (gptel-fsm-info fsm)
-        :mevedel-agent-terminal-callback
-        (lambda (event)
-          (mevedel-agent-runtime--complete-background-agent
-           invocation
-           (mevedel-agent-runtime--terminal-event-response
-            invocation event)))))
-      (put 'mevedel-agent-target-model :context-window 0.4)
-      (put 'mevedel-agent-summary-model :context-window 2)
+           (waits 0) (terminal-events 0) (requests 0))
+      (plist-put
+       (gptel-fsm-info fsm) :mevedel-agent-terminal-callback
+       (lambda (_event)
+         (cl-incf terminal-events)
+         (setf (mevedel-agent-invocation-transcript-status invocation)
+               'error)))
+      (put 'mevedel-large-agent-model :context-window 20)
+      (put 'mevedel-small-agent-model :context-window 0.4)
+      (put 'mevedel-agent-summary-model :context-window 0.4)
       (let ((mevedel-compact-token-threshold 0.5)
             (mevedel-compact-reserve-tokens 0)
-            (mevedel-compact-tail-turns 1))
+            (mevedel-compact-tail-turns 10)
+            (mevedel-compact-tail-budget 1.0))
         (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
                    (lambda (&rest _)
                      '(:backend nil :model mevedel-agent-summary-model)))
@@ -1564,41 +1689,194 @@
                      '(:description "test" :max-tokens nil
                        :request-params nil)))
                   ((symbol-function 'gptel-request)
-                   (lambda (_body &rest args)
-                     (cl-incf summary-attempts)
-                     (funcall (plist-get args :callback)
-                              nil '(:error "summary failed"))))
-                  ((symbol-function 'run-at-time)
-                   (lambda (_seconds _repeat function &rest args)
-                     (apply function args)))
+                   (lambda (&rest _) (cl-incf requests)))
                   ((symbol-function 'gptel--handle-wait)
-                   (lambda (_fsm) (cl-incf continuation-sends)))
+                   (lambda (_fsm) (cl-incf waits)))
                   ((symbol-function 'gptel--handle-error) #'ignore)
                   ((symbol-function 'gptel--update-status) #'ignore)
                   ((symbol-function 'display-warning) #'ignore))
+          (mevedel--compact-handle-agent-wait fsm)
+          (should (= 1 waits))
+          (should (= 0 terminal-events))
+          (plist-put
+           (gptel-fsm-info fsm) :mevedel-compaction-target-policy
+           '(:backend nil :model mevedel-small-agent-model
+             :max-tokens 0 :request-params nil))
           (mevedel--compact-handle-agent-wait fsm)))
-      (should (= 3 summary-attempts))
-      (should (= 0 continuation-sends))
+      (should (= 0 requests))
+      (should (= 1 waits))
+      (should (= 1 terminal-events))
       (should (eq 'ERRS (gptel-fsm-state fsm)))
-      (should (eq 'error
-                  (mevedel-agent-invocation-transcript-status invocation)))
+      (should (equal original (buffer-string)))
       (should
-       (mevedel-agent-invocation-background-result-reported-p invocation))
-      (should (null (mevedel-session-background-agents session)))
-      (should (= 1 (length (mevedel-session-messages session))))
-      (let ((body (plist-get (car (mevedel-session-messages session))
-                             :body)))
-        (should (string-match-p "compaction_error" body))
-        (should (string-match-p (regexp-quote canonical-path) body)))
-      (with-current-buffer parent-buffer
-        (should-not (assoc "explorer--test"
-                           mevedel-agent-runtime--fsms)))
-      (should (eq 'WAIT (gptel-fsm-state parent-fsm)))
-      (should (file-exists-p canonical-path))
-      (with-temp-buffer
-        (insert-file-contents canonical-path)
-        (should (string-match-p "Partial analysis before failure"
-                                (buffer-string)))))))
+       (equal original
+              (with-temp-buffer
+                (insert-file-contents canonical-path)
+                (buffer-string))))))
+
+  :doc "settles retryable and local failures through persisted ERRS once"
+  (dolist (failure '(request preflight abort hook-stop hook-error application))
+    (test-mevedel-compact--with-persisted-agent
+        (agent-buffer invocation session canonical-path parent-buffer)
+      (insert "* Agent Task: inspect\n\nKeep this task.\n")
+      (let ((start (point)))
+        (insert "Old response one.\n")
+        (put-text-property start (point) 'gptel 'response))
+      (insert "Old user two.\n")
+      (let ((start (point)))
+        (insert "Old response two.\n")
+        (put-text-property start (point) 'gptel 'response))
+      (insert "Recent user three.\n")
+      (let ((start (point)))
+        (insert "Partial analysis before failure.\n")
+        (put-text-property start (point) 'gptel 'response))
+      (insert "Pending tool result.\n")
+      (basic-save-buffer)
+      (when (eq failure 'application)
+        (add-hook
+         'before-change-functions
+         (lambda (&rest _)
+           (error "Stop compacted transcript application"))
+         nil t))
+      (let* ((original (buffer-string))
+             (parent-fsm
+              (gptel-make-fsm
+               :info (list :buffer parent-buffer)
+               :handlers nil
+               :state 'BWAIT))
+             (fsm
+              (gptel-make-fsm
+               :table gptel-send--transitions
+               :handlers (copy-tree mevedel-agent-exec--handlers)
+               :state 'WAIT
+               :info
+               (list :buffer agent-buffer
+                     :history '(TRET)
+                     :data
+                     (list :messages
+                           (vector
+                            (list :role "user"
+                                  :content (make-string 1000 ?x))))
+                     :model 'mevedel-agent-target-model
+                     :mevedel-agent-invocation invocation
+                     :mevedel-compaction-target-policy
+                     '(:backend nil :model mevedel-agent-target-model
+                       :max-tokens 0 :request-params nil))))
+             (summary-attempts 0)
+             (continuation-sends 0)
+             signaled)
+        (setf (mevedel-agent-invocation-background-p invocation) t)
+        (setf (mevedel-agent-invocation-description invocation) "inspect")
+        (setf (mevedel-agent-invocation-parent-fsm invocation) parent-fsm)
+        (setf (mevedel-session-agent-transcripts session)
+              `(("explorer--test" :agent-type "explorer"
+                 :description "inspect"
+                 :path "agents/explorer-test.chat.org"
+                 :status running)))
+        (setf (mevedel-session-background-agents session)
+              '("explorer--test"))
+        (with-current-buffer parent-buffer
+          (setq-local mevedel-agent-runtime--fsms
+                      `(("explorer--test" . ,fsm))))
+        (plist-put
+         (gptel-fsm-info fsm) :mevedel-agent-terminal-callback
+         (lambda (event)
+           (mevedel-agent-runtime--complete-background-agent
+            invocation
+            (mevedel-agent-runtime--terminal-event-response
+             invocation event))))
+        (put 'mevedel-agent-target-model :context-window 0.4)
+        (put 'mevedel-agent-summary-model :context-window
+             (if (eq failure 'preflight) 0.08 2))
+        (let ((mevedel-compact-token-threshold 0.5)
+              (mevedel-compact-reserve-tokens 0)
+              (mevedel-compact-tail-turns 1)
+              (mevedel-hook-rules
+               (when (eq failure 'hook-error)
+                 '((PreCompact
+                    ((:matcher "auto"
+                      :hooks
+                      ((:type elisp
+                        :function test-mevedel-compact--failing-hook
+                        :fail-closed t))))))))
+              (mevedel-pre-compact-functions
+               (pcase failure
+                 ('hook-stop
+                  (list (lambda (_event)
+                          '(:continue nil :stop-reason "hook stopped")))))))
+          (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                     (lambda (&rest _)
+                       '(:backend nil :model mevedel-agent-summary-model)))
+                    ((symbol-function 'gptel-get-preset)
+                     (lambda (&rest _)
+                       '(:description "test" :max-tokens nil
+                         :request-params nil)))
+                    ((symbol-function 'gptel-request)
+                     (lambda (_body &rest args)
+                       (cl-incf summary-attempts)
+                       (pcase failure
+                         ('request
+                          (funcall (plist-get args :callback)
+                                   nil '(:error "summary failed")))
+                         ('abort
+                          (funcall (plist-get args :callback) 'abort nil))
+                         ('application
+                          (funcall (plist-get args :callback)
+                                   "## Goal\n- Continue" nil))
+                         (_ (error "Unexpected summary dispatch")))))
+                    ((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat function &rest args)
+                       (apply function args)))
+                    ((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf continuation-sends)))
+                    ((symbol-function 'gptel--handle-error) #'ignore)
+                    ((symbol-function 'gptel--update-status) #'ignore)
+                    ((symbol-function 'display-warning) #'ignore))
+            (condition-case err
+                (mevedel--compact-handle-agent-wait fsm)
+              (error (setq signaled err)))))
+        (should-not signaled)
+        (should
+         (= (pcase failure
+              ('request 3)
+              ((or 'abort 'application) 1)
+              (_ 0))
+            summary-attempts))
+        (should (= 0 continuation-sends))
+        (should (eq 'ERRS (gptel-fsm-state fsm)))
+        (should (eq 'error
+                    (mevedel-agent-invocation-transcript-status invocation)))
+        (should-not (mevedel-agent-invocation-activity invocation))
+        (should
+         (mevedel-agent-invocation-background-result-reported-p invocation))
+        (should (null (mevedel-session-background-agents session)))
+        (should (= 1 (length (mevedel-session-messages session))))
+        (let ((body (plist-get (car (mevedel-session-messages session))
+                               :body)))
+          (should (string-match-p "compaction_error" body))
+          (should (string-match-p (regexp-quote canonical-path) body)))
+        (with-current-buffer parent-buffer
+          (should-not (assoc "explorer--test"
+                             mevedel-agent-runtime--fsms)))
+        (should (eq 'WAIT (gptel-fsm-state parent-fsm)))
+        (should (file-exists-p canonical-path))
+        (should
+         (equal original
+                (with-temp-buffer
+                  (insert-file-contents canonical-path)
+                  (buffer-string))))
+        (let ((archives
+               (directory-files
+                (file-name-directory canonical-path) t
+                "\\.compact-[0-9]+\\.chat\\.org\\'")))
+          (if (eq failure 'application)
+              (progn
+                (should (= 1 (length archives)))
+                (should (equal original
+                               (with-temp-buffer
+                                 (insert-file-contents (car archives))
+                                 (buffer-string)))))
+            (should-not archives)))))))
 
 (mevedel-deftest mevedel--compact-run ()
   ,test
