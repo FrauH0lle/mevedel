@@ -2233,6 +2233,86 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (kill-buffer ref-buf))
       (when (file-directory-p root) (delete-directory root t))))
 
+  :doc "queued file keeps its pathname and warns softly if deleted"
+  (let* ((root (make-temp-file "mevedel-file-queue-" t))
+         (file (file-name-concat root "queued.txt"))
+         (ws (mevedel-workspace--create
+              :type 'test :id root :root root :name "file-queue"
+              :file-cache (mevedel-file-cache--create
+                           :table (make-hash-table :test #'equal)
+                           :order nil :total-bytes 0)))
+         (session (mevedel-session-create "main" ws))
+         request-data warning)
+    (with-temp-file file (insert "queued file secret\n"))
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session
+                        mevedel--workspace ws
+                        mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function
+                      'mevedel-view--schedule-late-queued-user-message-drain)
+                     #'ignore))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "Inspect @file:queued.txt")
+              (mevedel-view-send)))
+          (let* ((queued
+                  (plist-get
+                   (car (mevedel-session-queued-user-messages session))
+                   :input))
+                 (queued-start (string-match "@file:" queued))
+                 (history
+                  (with-current-buffer view-buf
+                    (car (mevedel-view-history--entries))))
+                 (history-start (string-match "@file:" history)))
+            (should (equal file
+                           (plist-get
+                            (get-text-property
+                             queued-start 'mevedel-mention-binding queued)
+                            :path)))
+            (should (equal file
+                           (plist-get
+                            (get-text-property
+                             history-start 'mevedel-mention-binding history)
+                            :path))))
+          (delete-file file)
+          (with-current-buffer data-buf
+            (setq-local mevedel--current-request nil))
+          (let ((gptel-prompt-transform-functions
+                 (cons #'mevedel--transform-expand-mentions
+                       (remove #'mevedel--transform-expand-mentions
+                               gptel-prompt-transform-functions))))
+            (cl-letf (((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (let ((text (apply #'format format-string args)))
+                           (when (string-prefix-p "mevedel: file" text)
+                             (setq warning text)))))
+                      ((symbol-function 'gptel-send)
+                       (lambda (&rest _)
+                         (setq request-data
+                               (mevedel-view-test--dry-run-request-data)))))
+              (mevedel-view--drain-queued-user-message data-buf)))
+          (should (string-search
+                   "[file:queued.txt -- does not exist]" request-data))
+          (should-not (string-search "queued file secret" request-data))
+          (should (string-match-p
+                   "mevedel: file .* unavailable" warning))
+          (with-current-buffer data-buf
+            (goto-char (point-min))
+            (should (search-forward "@file:queued.txt" nil t))
+            (should (equal file
+                           (plist-get
+                            (get-text-property
+                             (match-beginning 0) 'mevedel-mention-binding)
+                            :path))))
+          (should-not (mevedel-session-queued-user-messages session)))
+      (when (file-exists-p file) (delete-file file))
+      (delete-directory root t)))
+
   :doc "plain input during guardian review joins the intervention queue"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create

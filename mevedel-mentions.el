@@ -73,6 +73,7 @@
 (declare-function mevedel-session-permission-mode "mevedel-structs" (session))
 (declare-function mevedel-session-permission-rules "mevedel-structs" (session))
 (declare-function mevedel-session-turn-count "mevedel-structs" (session))
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (session))
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
@@ -139,41 +140,66 @@ Restore stashed instructions in WORKSPACE before searching live overlays."
   (when-let* ((instr (mevedel--instruction-with-uuid uuid workspace)))
     (and (mevedel--referencep instr) instr)))
 
+(defun mevedel-mentions--bind-user-input-matches
+    (text regexp kind locator-function)
+  "Bind live REGEXP matches in TEXT as KIND.
+LOCATOR-FUNCTION receives the match capture strings and returns the
+kind-specific locator plist, or nil when the exact target is unknown.
+Existing bindings remain authoritative."
+  (let ((position 0)
+        (capture-count (regexp-opt-depth regexp)))
+    (while (string-match regexp text position)
+      (let* ((start (match-beginning 0))
+             (end (match-end 0))
+             (token (match-string 0 text))
+             (captures
+              (mapcar (lambda (index) (match-string index text))
+                      (number-sequence 1 capture-count))))
+        (when (and (or (= start 0)
+                       (memq (char-syntax (aref text (1- start)))
+                             '(?\s ?>)))
+                   (not (get-text-property
+                         start 'mevedel-mention-binding text)))
+          (when-let* ((locator (funcall locator-function captures)))
+            (mevedel-mention-bindings-set
+             start end
+             (append (list :kind kind :token token) locator)
+             text)
+            (unless (mevedel-mention-bindings-valid-p text)
+              (remove-text-properties
+               start end
+               '(mevedel-mention-binding nil rear-nonsticky nil)
+               text))))
+        (setq position end))))
+  text)
+
 (defun mevedel-mentions-prepare-user-input (text &optional session)
-  "Bind known direct reference mentions in user TEXT for SESSION.
-Existing valid bindings remain authoritative.  Direct numeric mentions
-whose current reference exists receive its UUID; missing references and
-reference queries remain unbound."
+  "Bind known mention locators in user TEXT for SESSION.
+Existing valid bindings remain authoritative.  Direct numeric references
+receive the current target's UUID when it exists.  File mentions receive
+an absolute pathname even when the path is currently unavailable."
   (require 'mevedel-mention-bindings)
   (unless (mevedel-mention-bindings-valid-p text)
     (user-error "Malformed mention binding"))
-  (let ((workspace (and session (mevedel-session-workspace session)))
-        (result (mevedel-mention-bindings-copy-text text))
-        (position 0))
-    (while (string-match "@ref:\\([0-9]+\\)" result position)
-      (let* ((start (match-beginning 0))
-             (end (match-end 0))
-             (token (match-string 0 result))
-             (live-context
-              (and (or (= start 0)
-                       (memq (char-syntax (aref result (1- start)))
-                             '(?\s ?>)))
-                   (or (= end (length result))
-                       (not (string-match-p
-                             "[[:alnum:]_]"
-                             (char-to-string (aref result end))))))))
-        (when (and live-context
-                   (not (get-text-property
-                         start 'mevedel-mention-binding result)))
-          (when-let* ((ref (mevedel--resolve-ref-by-id
-                            (string-to-number (match-string 1 result))
-                            workspace))
-                      (uuid (overlay-get ref 'mevedel-uuid)))
-            (mevedel-mention-bindings-set
-             start end
-             (list :kind 'ref :token token :reference-uuid uuid)
-             result)))
-        (setq position end)))
+  (let* ((workspace (and session (mevedel-session-workspace session)))
+         (working-directory
+          (and session (mevedel-session-working-directory session)))
+         (result (mevedel-mention-bindings-copy-text text)))
+    (mevedel-mentions--bind-user-input-matches
+     result "@ref:\\([0-9]+\\)" 'ref
+     (lambda (captures)
+       (when-let* ((ref (mevedel--resolve-ref-by-id
+                         (string-to-number (car captures)) workspace))
+                   (uuid (overlay-get ref 'mevedel-uuid)))
+         (list :reference-uuid uuid))))
+    (mevedel-mentions--bind-user-input-matches
+     result mevedel-mentions--file-regexp 'file
+     (lambda (captures)
+       (list :path
+             (expand-file-name
+              (mevedel-mentions--unescape-braced-file-path
+               (car captures))
+              working-directory))))
     result))
 
 (defun mevedel--resolve-refs-by-tag-query (query-string &optional workspace)
@@ -489,6 +515,14 @@ backslash quotes the following character."
         (cl-incf index))
       (apply #'string (nreverse chars)))))
 
+(defun mevedel-mentions-file-token (path)
+  "Return the visible @file mention token for PATH."
+  (format "@file:%s"
+          (if (string-match-p "[ \t\n#{}\\\\]" path)
+              (format "{%s}"
+                      (replace-regexp-in-string "[\\\\}]" "\\\\\\&" path))
+            path)))
+
 (defun mevedel-mentions--file-path-from-captures (info)
   "Return the @file path represented by INFO."
   (or (when-let* ((captures (plist-get info :captures))
@@ -554,6 +588,7 @@ The INFO :captures list for this handler is (WHOLE PATH START END), where
 PATH is either a bare path or a braced token, and START and END are
 optional strings from the `#L<start>[-<end>]' suffix."
   (let* ((path (mevedel-mentions--file-path-from-captures info))
+         (bound-path (plist-get (plist-get info :binding) :path))
          (captures (plist-get info :captures))
          (start-str (nth 2 captures))
          (end-str (nth 3 captures))
@@ -568,7 +603,7 @@ optional strings from the `#L<start>[-<end>]' suffix."
                        (max 1 (1+ (- end-line start-line))))
                       (start-line 1)
                       (t nil)))
-         (expanded (expand-file-name path))
+         (expanded (or bound-path (expand-file-name path)))
          (session (plist-get info :session))
          (workspace-root (plist-get info :workspace-root))
          (session-rules (and session
@@ -595,7 +630,11 @@ to the user."
                    (when guidance
                      (concat "\n\n" guidance)))
                   :key dedup-key
-                  :hash nil))))
+                  :hash nil
+                  :warning
+                  (and bound-path
+                       (format "file @file:%s is unavailable: %s"
+                               display-path msg))))))
     (cond
      ((not (file-exists-p expanded))
       (funcall deny-placeholder "does not exist"))
@@ -639,7 +678,7 @@ gitignore-filtered):\n\n```\n%s\n```%s"
                           (if (= (length entries) 1) "y" "ies")
                           body
                           truncation-note)
-                  :key (cons 'dir expanded)
+                  :key dedup-key
                   :hash hash))
         (error
          (funcall deny-placeholder (error-message-string err)))))
@@ -948,6 +987,28 @@ Provides completion for both @ref:ID and @ref:{tag-query} syntax."
                       (let ((count (get-text-property 0 'mevedel-match-count cand)))
                         (format " [%d ref%s]" count (if (= count 1) "" "s"))))))))))))
 
+(defun mevedel-mentions--file-completion-exit-function
+    (candidates prefix-start path-start candidate status)
+  "Replace and bind completed file CANDIDATE selected from CANDIDATES.
+PREFIX-START begins the whole mention, PATH-START begins its path, and
+STATUS is the completion exit status."
+  (when (memq status '(finished sole exact))
+    (when-let* ((selected (cl-find candidate candidates :test #'string=))
+                (abs-path (get-text-property
+                           0 'mevedel-abs-path selected)))
+      (let ((is-dir (get-text-property 0 'mevedel-is-dir selected)))
+        (when (or (not is-dir) (eq is-dir 'current))
+          (let* ((display-path (if (eq is-dir 'current)
+                                   (file-name-as-directory abs-path)
+                                 abs-path))
+                 (token (mevedel-mentions-file-token display-path)))
+            (delete-region path-start (point))
+            (insert (substring token (length "@file:")))
+            (require 'mevedel-mention-bindings)
+            (mevedel-mention-bindings-set
+             prefix-start (point)
+             (list :kind 'file :token token :path abs-path))))))))
+
 (defun mevedel-file-capf ()
   "Completion-at-point function for @file: mentions.
 Provides hierarchical directory-by-directory file completion.
@@ -1012,27 +1073,9 @@ When a file is selected, replaces @file:path with the absolute path."
                 (list path-start path-end candidates
                       :exclusive 'no
                       :exit-function
-                      (lambda (str status)
-                        ;; Replace @file:path with absolute path for:
-                        ;; 1. Files (not directories) - always expand
-                        ;; 2. Special "." entry (current dir) - expand to finalize on directory
-                        ;; Regular directories don't expand to allow navigation
-                        (when (memq status '(finished sole exact))
-                          (let ((abs-path (get-text-property 0 'mevedel-abs-path str))
-                                (is-dir (get-text-property 0 'mevedel-is-dir str)))
-                            ;; Convert to absolute if: it's a file OR it's the current dir marker
-                            (when (and abs-path
-                                       (or (not is-dir)              ; Files
-                                           (eq is-dir 'current)))    ; Current dir marker "."
-                              ;; Delete path portion (preserving @file: prefix) and
-                              ;; insert absolute path
-                              (let ((end-pos (point)))
-                                (delete-region path-start end-pos)
-                                (insert abs-path)
-                                ;; Add trailing / for current directory marker
-                                (when (and (eq is-dir 'current)
-                                           (not (eq (char-before) ?/)))
-                                  (insert "/")))))))
+                      (lambda (candidate status)
+                        (mevedel-mentions--file-completion-exit-function
+                         candidates prefix-start path-start candidate status))
                       :annotation-function
                       (lambda (cand)
                         (let ((is-dir (get-text-property 0 'mevedel-is-dir cand)))

@@ -108,6 +108,19 @@
       (mevedel-mention-bindings-test--bind
        (nth 0 case) (nth 1 case) (nth 2 case)))))
 
+  :doc "accepts self-delimited file bindings before punctuation"
+  (dolist (case
+           '(("Use @file:{/tmp/a b}."
+              "@file:{/tmp/a b}"
+              (:kind file :token "@file:{/tmp/a b}" :path "/tmp/a b"))
+             ("Use @file:/tmp/a#L2."
+              "@file:/tmp/a#L2"
+              (:kind file :token "@file:/tmp/a#L2" :path "/tmp/a"))))
+    (should
+     (mevedel-mention-bindings-valid-p
+      (mevedel-mention-bindings-test--bind
+       (nth 0 case) (nth 1 case) (nth 2 case)))))
+
   :doc "rejects malformed and token-mismatched bindings"
   (let ((malformed (copy-sequence "Use $alpha")))
     (put-text-property 4 10 'mevedel-mention-binding 'corrupt malformed)
@@ -238,7 +251,24 @@
       (insert "child")
       (mevedel-mention-bindings-invalidate-edit
        start (point) (point-min) (point-max)))
-    (should-not (get-text-property 12 'mevedel-mention-binding))))
+    (should-not (get-text-property 12 'mevedel-mention-binding)))
+
+  :doc "editing a file range invalidates the whole occurrence"
+  (with-temp-buffer
+    (let ((token "@file:/tmp/a.el#L2"))
+      (insert token)
+      (mevedel-mention-bindings-set
+       (point-min) (point-max)
+       (list :kind 'file :token token :path "/tmp/a.el"))
+      (goto-char (point-max))
+      (delete-char -1)
+      (let ((start (point)))
+        (insert "3")
+        (mevedel-mention-bindings-invalidate-edit
+         start (point) (point-min) (point-max)))
+      (should-not (text-property-not-all
+                   (point-min) (point-max)
+                   'mevedel-mention-binding nil)))))
 
 (provide 'test-mevedel-mention-bindings)
 ;;; test-mevedel-mention-bindings.el ends here
