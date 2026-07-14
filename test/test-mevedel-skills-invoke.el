@@ -17,12 +17,12 @@
 (require 'mevedel-compact)
 (require 'mevedel-file-state)
 (require 'mevedel-hooks)
+(require 'mevedel-mention-bindings)
 (require 'mevedel-mentions)
 (require 'mevedel-models)
 (require 'mevedel-permissions)
 (require 'mevedel-pipeline)
 (require 'mevedel-session-persistence)
-(require 'mevedel-skill-bindings)
 (require 'mevedel-skills-core)
 (require 'mevedel-skills-invoke)
 (require 'mevedel-structs)
@@ -2372,7 +2372,7 @@ spanning lines")))
                        (mapcar (lambda (item) (plist-get item :name))
                                result))))))
 
-  :doc "known disabled skill blocks inline attachment"
+  :doc "known disabled skill becomes an unavailable inline occurrence"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create :name "disabled" :body "D")))
     (setf (mevedel-session-skills session) (list skill))
@@ -2382,7 +2382,43 @@ spanning lines")))
                (lambda (_skill) nil)))
       (let ((result (mevedel-skills--inline-skill-mentions
                      "Please use $disabled here" session)))
-        (should (eq 'disabled (plist-get result :error)))))))
+        (should (equal "disabled" (plist-get (car result) :name)))
+        (should (plist-get (car result) :unavailable))
+        (should (string-match-p "disabled"
+                                (plist-get (car result) :message))))))
+
+  :doc "same-named bindings preserve distinct canonical sources"
+  (let* ((root (make-temp-file "mevedel-inline-sources-" t))
+         (source-a (file-name-concat root "a.md"))
+         (source-b (file-name-concat root "b.md"))
+         (session (mevedel-skills-test--make-session))
+         (skill-a (mevedel-skill--create
+                   :name "alpha" :body "A" :source-file source-a))
+         (skill-b (mevedel-skill--create
+                   :name "alpha" :body "B" :source-file source-b))
+         (input (copy-sequence "Use $alpha then $alpha")))
+    (unwind-protect
+        (progn
+          (with-temp-file source-a (insert "A"))
+          (with-temp-file source-b (insert "B"))
+          (setf (mevedel-session-skills session) (list skill-a skill-b))
+          (mevedel-mention-bindings-set
+           4 10
+           (list :kind 'skill :token "$alpha" :source-file source-a)
+           input)
+          (mevedel-mention-bindings-set
+           16 22
+           (list :kind 'skill :token "$alpha" :source-file source-b)
+           input)
+          (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+                     (lambda (&rest _) nil)))
+            (should (equal (list source-a source-b)
+                           (mapcar
+                            (lambda (mention)
+                              (plist-get mention :source-file))
+                            (mevedel-skills--inline-skill-mentions
+                             input session))))))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-skills--scan-skill-tokens ()
   ,test
@@ -2403,18 +2439,18 @@ spanning lines")))
          (start (string-match "\\$alpha" input))
          (resolver
           (lambda (name token-start token-end)
-            (let ((binding (mevedel-skill-bindings-starting-at
+            (let ((binding (mevedel-mention-bindings-starting-at
                             input token-start)))
               (if binding
-                  (and (mevedel-skill-bindings-at
-                        input token-start token-end name)
+                  (and (mevedel-mention-bindings-at
+                        input token-start token-end 'skill (concat "$" name))
                        'bound-alpha)
                 (and (equal name "alpha.") 'wrong-alpha-dot))))))
     (unwind-protect
         (progn
-          (mevedel-mentions-set-binding
+          (mevedel-mention-bindings-set
            start (+ start 6)
-           (list :kind 'skill :name "alpha" :source-file source)
+           (list :kind 'skill :token "$alpha" :source-file source)
            input)
           (let ((tokens (mevedel-skills--scan-skill-tokens
                          input resolver)))
@@ -2423,6 +2459,66 @@ spanning lines")))
                                      (plist-get token :value))
                                    tokens)))))
       (delete-file source))))
+
+(mevedel-deftest mevedel-skills-resolve-user-mention-outcome ()
+  ,test
+  (test)
+  :doc "bound mentions resolve only through their exact canonical source"
+  (let* ((root (make-temp-file "mevedel-resolve-bound-" t))
+         (source-a (file-name-concat root "a.md"))
+         (source-b (file-name-concat root "b.md"))
+         (skill-a (mevedel-skill--create
+                   :name "alpha" :source-file source-a))
+         (skill-b (mevedel-skill--create
+                   :name "alpha" :source-file source-b))
+         (session (mevedel-skills-test--make-session))
+         (input (copy-sequence "$alpha")))
+    (unwind-protect
+        (progn
+          (with-temp-file source-a (insert "A"))
+          (with-temp-file source-b (insert "B"))
+          (setf (mevedel-session-skills session) (list skill-a skill-b))
+          (mevedel-mention-bindings-set
+           0 6
+           (list :kind 'skill :token "$alpha" :source-file source-b)
+           input)
+          (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+                     (lambda (&rest _) nil)))
+            (let ((outcome (mevedel-skills-resolve-user-mention-outcome
+                            input session 0 6 "alpha")))
+              (should (eq 'ok (plist-get outcome :status)))
+              (should (eq skill-b (plist-get outcome :skill))))))
+      (delete-directory root t)))
+
+  :doc "a missing bound source is unavailable without same-name fallback"
+  (let* ((root (make-temp-file "mevedel-resolve-missing-" t))
+         (source (file-name-concat root "live.md"))
+         (missing (file-name-concat root "missing.md"))
+         (skill (mevedel-skill--create :name "alpha" :source-file source))
+         (session (mevedel-skills-test--make-session))
+         (input (copy-sequence "$alpha")))
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "live"))
+          (setf (mevedel-session-skills session) (list skill))
+          (mevedel-mention-bindings-set
+           0 6
+           (list :kind 'skill :token "$alpha" :source-file missing)
+           input)
+          (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
+                     (lambda (&rest _) nil)))
+            (let ((outcome (mevedel-skills-resolve-user-mention-outcome
+                            input session 0 6 "alpha")))
+              (should (eq 'unavailable (plist-get outcome :status)))
+              (should-not (plist-get outcome :skill)))))
+      (delete-directory root t)))
+
+  :doc "unknown unbound names remain literal successful text"
+  (let ((outcome (mevedel-skills-resolve-user-mention-outcome
+                  "$unknown" (mevedel-skills-test--make-session)
+                  0 8 "unknown")))
+    (should (eq 'ok (plist-get outcome :status)))
+    (should-not (plist-get outcome :skill))))
 
 (mevedel-deftest mevedel-skills-refresh-bound-input ()
   ,test
@@ -2454,9 +2550,9 @@ spanning lines")))
               (mevedel-skills-refresh-bound-input "plain text" session)
               (should (eq installed (mevedel-session-skills session))))
             (setq bound (copy-sequence "use $alpha"))
-            (mevedel-mentions-set-binding
+            (mevedel-mention-bindings-set
              4 10
-             (list :kind 'skill :name "alpha" :source-file source)
+             (list :kind 'skill :token "$alpha" :source-file source)
              bound)
             (mevedel-skills-test--write-skill
              skill-dir "alpha"
@@ -2499,6 +2595,23 @@ spanning lines")))
         (should (= 1 (length (plist-get
                               mevedel-skills--pending-request-context
                               :invoked-skills)))))))
+
+  :doc "unavailable inline skills stage an annotation and continue"
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create :name "alpha" :body "Alpha body")))
+    (setf (mevedel-session-skills session) (list skill))
+    (mevedel-skills-test--with-chat-buffer session
+      (insert "Please use $alpha here")
+      (let (continued)
+        (cl-letf (((symbol-function 'mevedel-skills--skill-enabled-p)
+                   (lambda (_skill) nil)))
+          (should (eq 'skill
+                      (mevedel-skills--dispatch-inline-attachments
+                       (lambda () (setq continued t))))))
+        (should continued)
+        (should (plist-get
+                 (car mevedel-skills--pending-inline-attachments)
+                 :unavailable)))))
 
   :doc "raw fork-context attachment is an instruction and ignores policy"
   (let* ((session (mevedel-skills-test--make-session))
@@ -2572,6 +2685,36 @@ spanning lines")))
             (should-not mevedel-skills--pending-inline-attachments)))
       (kill-buffer chat)))
 
+  :doc "same-named bound skills retain distinct canonical sources"
+  (let* ((session (mevedel-skills-test--make-session))
+         (chat (generate-new-buffer " *mevedel-inline-skill-source-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat)))
+         (source-a "/tmp/source-a/SKILL.md")
+         (source-b "/tmp/source-b/SKILL.md")
+         (input (propertize "Use $alpha then $alpha." 'gptel 'prompt)))
+    (mevedel-mention-bindings-set
+     4 10 (list :kind 'skill :token "$alpha" :source-file source-a) input)
+    (mevedel-mention-bindings-set
+     16 22 (list :kind 'skill :token "$alpha" :source-file source-b) input)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local
+             mevedel-skills--pending-inline-attachments
+             (list (list :name "alpha" :source-file source-a :body "Body A")
+                   (list :name "alpha" :source-file source-b :body "Body B"))))
+          (with-temp-buffer
+            (insert input)
+            (mevedel-skills--transform-expand-inline-attachments fsm)
+            (should (= 2 (how-many "\\[skill:alpha -- attached\\]"
+                                   (point-min) (point-max))))
+            (should (string-match-p "Body A" (buffer-string)))
+            (should (string-match-p "Body B" (buffer-string)))
+            (should (= 2 (how-many "<system-reminder>"
+                                   (point-min) (point-max))))))
+      (kill-buffer chat)))
+
   :doc "coexists with earlier mention expansion reminders"
   (let* ((root (make-temp-file "mevedel-inline-skill-mentions-" t))
          (file (file-name-concat root "notes.txt"))
@@ -2628,6 +2771,27 @@ spanning lines")))
               (should (= 1 (how-many "\\[skill:alpha -- attached\\]"
                                       (point-min) (point-max))))
               (should (string-match-p "Alpha body" text)))))
+      (kill-buffer chat)))
+
+  :doc "replaces unavailable mentions without injecting instructions"
+  (let* ((session (mevedel-skills-test--make-session))
+         (chat (generate-new-buffer " *mevedel-inline-unavailable-chat*"))
+         (fsm (gptel-make-fsm :info (list :buffer chat))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel-skills--pending-inline-attachments
+                        '((:name "alpha" :unavailable t
+                           :message "skill $alpha is disabled"))))
+          (with-temp-buffer
+            (insert (propertize "Use $alpha here" 'gptel 'prompt))
+            (mevedel-skills--transform-expand-inline-attachments fsm)
+            (should (string-match-p
+                     (regexp-quote "[skill:alpha -- unavailable]")
+                     (buffer-string)))
+            (should-not (string-match-p "<system-reminder>"
+                                        (buffer-string)))))
       (kill-buffer chat))))
 
 (mevedel-deftest mevedel-skills--dispatch-skill-command ()
@@ -2650,10 +2814,7 @@ spanning lines")))
         (should (string-search "<!-- mevedel-render-data -->"
                                (buffer-string))))))
 
-  :doc "user-invocable: false skill returns 'unknown and aborts the send"
-  ;; User invocation of a skill marked `user-invocable: false'
-  ;; must message and abort.  Returning `unknown' makes the surrounding
-  ;; advice skip gptel-send so the literal `$internal-only' text is not sent.
+  :doc "user-invocable: false leading skill falls through to inline planning"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
                  :name "internal-only"
@@ -2664,9 +2825,9 @@ spanning lines")))
       (let ((mevedel-slash-commands nil))
         (insert "### $internal-only")
         (goto-char (point-max))
-        (should (eq 'unknown (mevedel-skills--dispatch-skill-command)))
-        ;; Buffer left untouched.
-        (should (equal "### $internal-only" (buffer-string))))))
+        (should-not (mevedel-skills--dispatch-skill-command))
+        (should (string-match-p "\\$internal-only" (buffer-string)))
+        (should-not mevedel-skills--pending-inline-attachments))))
 
   :doc "unknown dollar command is left for normal sending"
   (let ((session (mevedel-skills-test--make-session)))

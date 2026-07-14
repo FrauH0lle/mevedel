@@ -31,63 +31,6 @@
 
 
 ;;
-;;; Atomic bindings
-
-(mevedel-deftest mevedel-mentions-set-binding ()
-  ,test
-  (test)
-  :doc "copies bindings and prevents appended text from inheriting them"
-  (with-temp-buffer
-    (let ((binding '(:kind skill :name "alpha"
-                     :source-file "/tmp/alpha/SKILL.md")))
-      (insert "use $alpha")
-      (mevedel-mentions-set-binding 5 11 binding)
-      (setf (plist-get binding :name) "changed")
-      (should
-       (equal '(:kind skill :name "alpha"
-                :source-file "/tmp/alpha/SKILL.md")
-              (get-text-property 5 'mevedel-mention-binding)))
-      (goto-char 11)
-      (insert "x")
-      (should-not (get-text-property 11 'mevedel-mention-binding)))))
-
-(mevedel-deftest mevedel-mentions-binding-ranges ()
-  ,test
-  (test)
-  :doc "returns bound ranges in occurrence order and skips unbound text"
-  (let ((text (copy-sequence "$alpha then $beta"))
-        (alpha '(:kind skill :name "alpha"
-                 :source-file "/tmp/alpha/SKILL.md"))
-        (beta '(:kind skill :name "beta"
-                :source-file "/tmp/beta/SKILL.md")))
-    (mevedel-mentions-set-binding 0 6 alpha text)
-    (mevedel-mentions-set-binding 12 17 beta text)
-    (should
-     (equal `((:start 0 :end 6 :binding ,alpha)
-              (:start 12 :end 17 :binding ,beta))
-            (mevedel-mentions-binding-ranges text)))))
-
-(mevedel-deftest mevedel-mentions-copy-bound-text ()
-  ,test
-  (test)
-  :doc "copies atomic bindings while discarding unrelated text properties"
-  (let* ((binding '(:kind skill :name "alpha"
-                    :source-file "/tmp/alpha/SKILL.md"))
-         (text (propertize "$alpha here" 'face 'bold 'gptel 'prompt)))
-    (mevedel-mentions-set-binding 0 6 binding text)
-    (let ((copy (mevedel-mentions-copy-bound-text text)))
-      (should (equal "$alpha here" copy))
-      (should (equal binding
-                     (get-text-property 0 'mevedel-mention-binding copy)))
-      (should-not (eq (get-text-property
-                       0 'mevedel-mention-binding text)
-                      (get-text-property
-                       0 'mevedel-mention-binding copy)))
-      (should-not (get-text-property 0 'face copy))
-      (should-not (get-text-property 0 'gptel copy)))))
-
-
-;;
 ;;; Helper
 
 (mevedel-deftest mevedel-mentions-replace-with-placeholder ()

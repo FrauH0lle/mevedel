@@ -12,23 +12,18 @@
 (eval-when-compile
   (require 'cl-lib))
 
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-valid-p
+                  "mevedel-mention-bindings" (text))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
-
-;; `mevedel-skill-bindings'
-(declare-function mevedel-skill-bindings-resolve-outcome
-                  "mevedel-skill-bindings"
-                  (text session start end name))
 
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skill-user-invocable-p
-                  "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skills--skill-enabled-p
-                  "mevedel-skills-core" (skill))
 (declare-function mevedel-skills--source-key
                   "mevedel-skills-core" (source-file))
 
@@ -40,6 +35,9 @@
 (declare-function mevedel-skills-prepare
                   "mevedel-skills-invoke"
                   (skill arguments callback &rest keys))
+(declare-function mevedel-skills-resolve-user-mention-outcome
+                  "mevedel-skills-invoke"
+                  (text session start end name))
 
 
 ;;
@@ -54,7 +52,8 @@
   name
   source-key
   skill
-  role)
+  role
+  message)
 
 (cl-defstruct
     (mevedel-skill-plan-entry
@@ -83,59 +82,38 @@
 
 (defun mevedel-skills-plan--resolve (text session)
   "Resolve live skill tokens in TEXT against SESSION.
-Return `(:status ok :tokens TOKENS)' or the first structured resolution
-error.  Unknown and intentionally literal tokens remain unresolved without
-failing the phase."
+Return available tokens and unavailable bound occurrences separately.
+Unknown and intentionally literal tokens remain unresolved."
   (unless (fboundp 'mevedel-skills--scan-skill-tokens)
     (require 'mevedel-skills-invoke))
-  (let (problem)
-    (let ((tokens
-           (mevedel-skills--scan-skill-tokens
-            text
-            (lambda (name start end)
-              (unless problem
-                (let* ((outcome
-                        (mevedel-skill-bindings-resolve-outcome
-                         text session start end name))
-                       (skill (plist-get outcome :skill)))
-                  (if (not (eq (plist-get outcome :status) 'ok))
-                      (progn
-                        (setq problem
-                              (append outcome
-                                      (list :name name
-                                            :start start :end end)))
-                        nil)
-                    (when skill
-                      (cond
-                       ((not (mevedel-skills--skill-enabled-p skill))
-                        (setq problem
-                              (list :status 'error :reason 'disabled
-                                    :name name :start start :end end
-                                    :message
-                                    (format "Skill $%s is disabled; enable it or escape it as \\$%s"
-                                            name name)))
-                        nil)
-                       ((not (mevedel-skill-user-invocable-p skill))
-                        (setq problem
-                              (list :status 'error
-                                    :reason 'not-user-invocable
-                                    :name name :start start :end end
-                                    :message
-                                    (format "Skill $%s is not user-invocable; escape it as \\$%s"
-                                            name name)))
-                        nil)
-                       ((not (mevedel-skills--source-key
-                              (mevedel-skill-source-file skill)))
-                        (setq problem
-                              (list :status 'error :reason 'bound-source
-                                    :name name :start start :end end
-                                    :message
-                                    (format "Skill $%s has no canonical source"
-                                            name)))
-                        nil)
-                       (t skill)))))))
-            t)))
-      (or problem (list :status 'ok :tokens tokens)))))
+  (let (available unavailable)
+    (dolist
+        (token
+         (mevedel-skills--scan-skill-tokens
+          text
+          (lambda (name start end)
+            (let ((outcome
+                   (mevedel-skills-resolve-user-mention-outcome
+                    text session start end name)))
+              (when (or (eq (plist-get outcome :status) 'unavailable)
+                        (plist-get outcome :skill))
+                outcome)))
+          t))
+      (let* ((outcome (plist-get token :value))
+             (skill (plist-get outcome :skill)))
+        (if (eq (plist-get outcome :status) 'unavailable)
+            (push
+             (mevedel-skill-plan-occurrence--create
+              :start (plist-get token :start)
+              :end (plist-get token :end)
+              :name (plist-get token :name)
+              :role 'unavailable
+              :message (plist-get outcome :message))
+             unavailable)
+          (setf (plist-get token :value) skill)
+          (push token available))))
+    (list :tokens (nreverse available)
+          :unavailable (nreverse unavailable))))
 
 (defun mevedel-skills-plan--command-layout (text tokens)
   "Return leading command layout for resolved TOKENS in TEXT.
@@ -232,8 +210,8 @@ the leading command forks."
           :arguments-start arguments-start
           :fork-p (plist-get layout :fork-p))))
 
-(defun mevedel-skills-plan--build (text classification)
-  "Build an invocation plan for TEXT from CLASSIFICATION."
+(defun mevedel-skills-plan--build (text classification &optional unavailable)
+  "Build an invocation plan for TEXT from CLASSIFICATION and UNAVAILABLE."
   (let* ((occurrences (plist-get classification :occurrences))
          (commands
           (cl-remove-duplicates
@@ -269,7 +247,11 @@ the leading command forks."
                   instructions)))
     (mevedel-skill-invocation-plan--create
      :text (copy-sequence text)
-     :occurrences occurrences
+     :occurrences
+     (sort (append occurrences unavailable)
+           (lambda (a b)
+             (< (mevedel-skill-plan-occurrence-start a)
+                (mevedel-skill-plan-occurrence-start b))))
      :commands command-entries
      :instructions instruction-entries
      :entries (append command-entries instruction-entries)
@@ -278,34 +260,34 @@ the leading command forks."
      :fork-p (plist-get classification :fork-p))))
 
 (defun mevedel-skills-plan-user-input (text session)
-  "Return a deterministic user skill invocation outcome for TEXT and SESSION.
+  "Return a deterministic user skill invocation plan for TEXT and SESSION.
 
-Success has the shape `(:status ok :plan PLAN)'.  PLAN preserves every
-recognized occurrence and exposes unique command and instruction entries.
+The plan preserves every recognized occurrence and exposes unique command and
+instruction entries.
 Commands are ordered before instructions.  Exact canonical sources are
 deduplicated, with a command entry winning over instruction occurrences of the
 same source.
 
-Failure has the shape `(:status error :reason REASON :name NAME :start START
-:end END :message MESSAGE)'.  Unknown names and escaped, quoted, or code-span
-syntax are not planned and do not fail."
+Unknown names and escaped, quoted, or code-span syntax are not planned.
+Malformed atomic binding data signals a `user-error'."
+  (require 'mevedel-mention-bindings)
+  (unless (mevedel-mention-bindings-valid-p text)
+    (user-error "Malformed mention binding"))
   (let ((resolved (mevedel-skills-plan--resolve text session)))
-    (if (not (eq (plist-get resolved :status) 'ok))
-        resolved
-      (list :status 'ok
-            :plan
-            (mevedel-skills-plan--build
-             text
-             (mevedel-skills-plan--classify
-              text (plist-get resolved :tokens)))))))
+    (mevedel-skills-plan--build
+     text
+     (mevedel-skills-plan--classify
+      text (plist-get resolved :tokens))
+     (plist-get resolved :unavailable))))
 
 (defun mevedel-skills-plan-replace-instructions
     (text occurrences &optional source-offset)
-  "Replace selected instruction OCCURRENCES in TEXT with inert placeholders.
+  "Replace selected derived OCCURRENCES in TEXT with inert placeholders.
 
 TEXT may be the complete original prompt or a source slice.  SOURCE-OFFSET is
 the slice's zero-based position in the original prompt and defaults to zero.
-Only instruction occurrences fully contained in the slice are replaced.  The
+Instruction and unavailable occurrences fully contained in the slice are
+replaced.  The
 function uses recorded extents and never scans TEXT."
   (let* ((offset (or source-offset 0))
          (limit (+ offset (length text)))
@@ -313,8 +295,8 @@ function uses recorded extents and never scans TEXT."
     (dolist (occurrence occurrences)
       (let ((start (mevedel-skill-plan-occurrence-start occurrence))
             (end (mevedel-skill-plan-occurrence-end occurrence)))
-        (when (and (eq (mevedel-skill-plan-occurrence-role occurrence)
-                       'instruction)
+        (when (and (memq (mevedel-skill-plan-occurrence-role occurrence)
+                         '(instruction unavailable))
                    (>= start offset)
                    (<= end limit))
           (push occurrence replacements))))
@@ -331,8 +313,13 @@ function uses recorded extents and never scans TEXT."
                       offset)))
           (delete-region (1+ start) (1+ end))
           (goto-char (1+ start))
-          (insert (format "[skill:%s -- attached]"
-                          (mevedel-skill-plan-occurrence-name occurrence)))))
+          (insert
+           (format "[skill:%s -- %s]"
+                   (mevedel-skill-plan-occurrence-name occurrence)
+                   (if (eq (mevedel-skill-plan-occurrence-role occurrence)
+                           'unavailable)
+                       "unavailable"
+                     "attached")))))
       (buffer-string))))
 
 (defun mevedel-skills-plan--aggregate-prepared (pairs)
@@ -386,6 +373,11 @@ function uses recorded extents and never scans TEXT."
   "Return the complete successful preparation outcome for PLAN and PAIRS."
   (let* ((aggregate (mevedel-skills-plan--aggregate-prepared pairs))
          (command-bodies (plist-get aggregate :command-bodies))
+         (reminder-blocks
+          (mapcar
+           (lambda (reminder)
+             (format "<system-reminder>\n%s\n</system-reminder>" reminder))
+           (plist-get aggregate :instruction-reminders)))
          (main-input
           (if command-bodies
               (mapconcat #'identity command-bodies "\n\n")
@@ -395,12 +387,7 @@ function uses recorded extents and never scans TEXT."
          (model-input
           (mapconcat
            #'identity
-           (append
-            (mapcar
-             (lambda (reminder)
-               (format "<system-reminder>\n%s\n</system-reminder>" reminder))
-             (plist-get aggregate :instruction-reminders))
-            (list main-input))
+           (append reminder-blocks (list main-input))
            "\n\n"))
          (request-context
           (list :permission-rules (plist-get aggregate :permission-rules)
@@ -418,6 +405,13 @@ function uses recorded extents and never scans TEXT."
     (list :status 'ok
           :prepared-entries pairs
           :model-input model-input
+          :warnings
+          (mapcar #'mevedel-skill-plan-occurrence-message
+                  (cl-remove-if-not
+                   (lambda (occurrence)
+                     (eq (mevedel-skill-plan-occurrence-role occurrence)
+                         'unavailable))
+                   (mevedel-skill-invocation-plan-occurrences plan)))
           :request-context request-context
           :hook-audits (plist-get aggregate :hook-audits))))
 

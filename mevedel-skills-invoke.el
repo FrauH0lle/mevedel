@@ -51,11 +51,25 @@
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-at
+                  "mevedel-mention-bindings" (text start end kind token))
+(declare-function mevedel-mention-bindings-copy-text
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-ranges
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-set
+                  "mevedel-mention-bindings" (start end binding &optional object))
+(declare-function mevedel-mention-bindings-skill-token-occurrences
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-starting-at
+                  "mevedel-mention-bindings" (text start))
+(declare-function mevedel-mention-bindings-valid-p
+                  "mevedel-mention-bindings" (text))
+
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-replace-with-placeholder
                   "mevedel-mentions" (start end placeholder))
-(declare-function mevedel-mentions-set-binding
-                  "mevedel-mentions" (start end binding &optional object))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-merge-skill-policy
@@ -71,18 +85,6 @@
                   "mevedel-pipeline" (render-data))
 (declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
                   (tool callback args))
-
-;; `mevedel-skill-bindings'
-(declare-function mevedel-skill-bindings-at
-                  "mevedel-skill-bindings" (text start end name))
-(declare-function mevedel-skill-bindings-resolve
-                  "mevedel-skill-bindings" (text session start end name))
-(declare-function mevedel-skill-bindings-sanitize
-                  "mevedel-skill-bindings" (text))
-(declare-function mevedel-skill-bindings-starting-at
-                  "mevedel-skill-bindings" (text start))
-(declare-function mevedel-skill-bindings-token-occurrences
-                  "mevedel-skill-bindings" (text))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-begin "mevedel-structs"
@@ -1102,26 +1104,39 @@ original `$skill' invocation compactly."
     (attachments start end)
   "Replace prompt mentions for prepared ATTACHMENTS between START and END.
 Return attachments that were actually referenced, preserving first use."
-  (let* ((text (buffer-substring-no-properties start end))
+  (require 'mevedel-mention-bindings)
+  (let* ((text (buffer-substring start end))
          (by-name (make-hash-table :test #'equal))
-         (seen (make-hash-table :test #'equal))
+         (by-source (make-hash-table :test #'equal))
+         (seen (make-hash-table :test #'eq))
          replacements
          used)
     (dolist (attachment attachments)
-      (puthash (plist-get attachment :name) attachment by-name))
+      (if-let* ((source-file (plist-get attachment :source-file)))
+          (puthash source-file attachment by-source)
+        (puthash (plist-get attachment :name) attachment by-name)))
     (dolist (token
              (mevedel-skills--scan-skill-tokens
               text
-              (lambda (candidate _start _end)
-                (gethash candidate by-name))))
+              (lambda (candidate token-start token-end)
+                (if-let* ((binding
+                           (mevedel-mention-bindings-at
+                            text token-start token-end 'skill
+                            (concat "$" candidate))))
+                    (gethash (plist-get binding :source-file) by-source)
+                  (gethash candidate by-name)))))
       (let ((name (plist-get token :name))
             (attachment (plist-get token :value)))
         (push (list (+ start (plist-get token :start))
                     (+ start (plist-get token :end))
-                    (format "[skill:%s -- attached]" name))
+                    (format "[skill:%s -- %s]"
+                            name
+                            (if (plist-get attachment :unavailable)
+                                "unavailable"
+                              "attached")))
               replacements)
-        (unless (gethash name seen)
-          (puthash name t seen)
+        (unless (gethash attachment seen)
+          (puthash attachment t seen)
           (push attachment used))))
     (require 'mevedel-mentions)
     (dolist (replacement (sort replacements
@@ -1146,13 +1161,14 @@ Return attachments that were actually referenced, preserving first use."
       (when used
         (goto-char start)
         (dolist (attachment used)
-          (let ((insert-start (point)))
-            (insert "<system-reminder>\n"
-                    (mevedel-skills--inline-attachment-reminder attachment)
-                    "\n</system-reminder>\n\n")
-            (remove-text-properties
-             insert-start (point)
-             '(gptel nil response nil invisible nil front-sticky nil))))))))
+          (unless (plist-get attachment :unavailable)
+            (let ((insert-start (point)))
+              (insert "<system-reminder>\n"
+                      (mevedel-skills--inline-attachment-reminder attachment)
+                      "\n</system-reminder>\n\n")
+              (remove-text-properties
+               insert-start (point)
+               '(gptel nil response nil invisible nil front-sticky nil)))))))))
 
 (cl-defun mevedel-skills--activate-context
     (origin &key permission-rules model effort hook-rules invoked-skill)
@@ -2001,7 +2017,7 @@ ALLOW-ROOT is non-nil, include the leading root invocation."
         (code-ranges (mevedel-skills--markdown-code-ranges text))
         tokens)
     (dolist (occurrence
-             (mevedel-skill-bindings-token-occurrences text))
+             (mevedel-mention-bindings-skill-token-occurrences text))
       (let* ((start (plist-get occurrence :start))
              (resolved
               (cl-loop
@@ -2026,8 +2042,12 @@ ALLOW-ROOT is non-nil, include the leading root invocation."
 Return TEXT unchanged.  Call this at a submission boundary so an exact
 source resolves against its latest on-disk contents even when automatic
 modification checking is disabled."
-  (when (text-property-not-all
-         0 (length text) 'mevedel-mention-binding nil text)
+  (require 'mevedel-mention-bindings)
+  (when (cl-some
+         (lambda (range)
+           (eq 'skill
+               (plist-get (plist-get range :binding) :kind)))
+         (mevedel-mention-bindings-ranges text))
     (mevedel-skills-install session (current-buffer)))
   text)
 
@@ -2037,19 +2057,20 @@ Existing valid bindings remain authoritative.  Manually typed known
 tokens receive a binding when their skill has a stable source file.
 Existing bindings trigger one explicit discovery refresh so exact
 sources are checked before the submission leaves the composer."
-  (require 'mevedel-mentions)
-  (require 'mevedel-skill-bindings)
-  (let ((result (mevedel-skill-bindings-sanitize text)))
+  (require 'mevedel-mention-bindings)
+  (unless (mevedel-mention-bindings-valid-p text)
+    (user-error "Malformed mention binding"))
+  (let ((result (mevedel-mention-bindings-copy-text text)))
     (mevedel-skills-refresh-bound-input result session)
     (dolist (token
              (mevedel-skills--scan-skill-tokens
               result
               (lambda (candidate start end)
-                (let ((binding (mevedel-skill-bindings-starting-at
+                (let ((binding (mevedel-mention-bindings-starting-at
                                 result start)))
                   (if binding
-                      (mevedel-skill-bindings-at
-                       result start end candidate)
+                      (mevedel-mention-bindings-at
+                       result start end 'skill (concat "$" candidate))
                     (mevedel-session-get-skill session candidate))))
               t))
       (let ((start (plist-get token :start))
@@ -2058,54 +2079,96 @@ sources are checked before the submission leaves the composer."
         (unless (get-text-property start 'mevedel-mention-binding result)
           (when-let* (((mevedel-skill-p skill))
                       (source-file (mevedel-skill-source-file skill)))
-            (mevedel-mentions-set-binding
+            (mevedel-mention-bindings-set
              start end
              (list :kind 'skill
-                   :name (plist-get token :name)
+                   :token (concat "$" (plist-get token :name))
                    :source-file source-file)
              result)))))
     result))
 
-(defun mevedel-skills--inline-skill-mentions (text session)
+(defun mevedel-skills-resolve-user-mention-outcome
+    (text session start end name)
+  "Return the resolution outcome for user skill NAME at START..END in TEXT.
+Success is `(:status ok :skill SKILL)'.  A valid binding whose target is
+unavailable returns `(:status unavailable :message MESSAGE)'.
+Unknown unbound names are successful with a nil skill."
+  (require 'mevedel-mention-bindings)
+  (let* ((token (concat "$" name))
+         (property (and (< start (length text))
+                        (get-text-property
+                         start 'mevedel-mention-binding text)))
+         (bound (mevedel-mention-bindings-starting-at text start))
+         (binding (and bound
+                       (mevedel-mention-bindings-at
+                        text start end 'skill token)))
+         (source-file (plist-get binding :source-file))
+         (skill
+          (cond
+           (binding
+            (mevedel-session-get-skill-by-source session source-file))
+           (bound nil)
+           (t (mevedel-session-get-skill session name)))))
+    (cond
+     ((and property (null bound))
+      (user-error "Malformed mention binding"))
+     ((and binding (null skill))
+      (list :status 'unavailable
+            :message (format "bound skill $%s is unavailable" name)))
+     ((and skill (not (mevedel-skills--skill-enabled-p skill)))
+      (list :status 'unavailable
+            :message (format "skill $%s is disabled" name)))
+     ((and skill (not (mevedel-skill-user-invocable-p skill)))
+      (list :status 'unavailable
+            :message (format "skill $%s is not user-invocable" name)))
+     (t (list :status 'ok :skill skill)))))
+
+(defun mevedel-skills--inline-skill-mentions
+    (text session &optional allow-root)
   "Return live inline `$skill' mentions in TEXT for SESSION.
 
-Unknown `$foo' text is ignored.  Known but unavailable skills return
-a single plist with :error and :message so callers can block the send."
+Unknown `$foo' text is ignored.  Known but unavailable skills remain
+occurrences marked with :unavailable and :message so dispatch can annotate
+them without preparing a skill body.  When ALLOW-ROOT is non-nil, include a
+leading mention after command dispatch has declined it."
+  (require 'mevedel-mention-bindings)
+  (unless (mevedel-mention-bindings-valid-p text)
+    (user-error "Malformed mention binding"))
   (let* ((tokens
           (and session
                (mevedel-skills--scan-skill-tokens
                 text
                 (lambda (candidate start end)
-                  (condition-case err
-                      (mevedel-skill-bindings-resolve
-                       text session start end candidate)
-                    (user-error
-                     (list :error 'bound-source
-                           :message (error-message-string err))))))))
+                  (let ((outcome
+                         (mevedel-skills-resolve-user-mention-outcome
+                          text session start end candidate)))
+                    (if (eq (plist-get outcome :status) 'ok)
+                        (plist-get outcome :skill)
+                      (list :unavailable t
+                            :message (plist-get outcome :message)))))
+                allow-root)))
         (seen (make-hash-table :test #'equal))
-        mentions
-        problem)
-    (while (and tokens (not problem))
+        mentions)
+    (while tokens
       (let* ((token (pop tokens))
              (start (plist-get token :start))
              (end (plist-get token :end))
              (name (plist-get token :name))
-             (skill (plist-get token :value)))
+             (skill (plist-get token :value))
+             (binding (mevedel-mention-bindings-starting-at text start))
+             (source-file
+              (or (plist-get binding :source-file)
+                  (and (mevedel-skill-p skill)
+                       (mevedel-skill-source-file skill)))))
         (cond
-           ((and (listp skill) (plist-get skill :error))
-            (setq problem skill))
-           ((not (mevedel-skills--skill-enabled-p skill))
-            (setq problem
-                  (list :error 'disabled
-                        :message
-                        (format "Skill $%s is disabled. Enable it with /skills enable %s or escape it as \\$%s."
-                                name name name))))
-           ((not (mevedel-skill-user-invocable-p skill))
-            (setq problem
-                  (list :error 'not-user-invocable
-                        :message
-                        (format "Skill $%s is not user-invocable. Escape it as \\$%s to send it literally."
-                                name name))))
+           ((and (listp skill) (plist-get skill :unavailable))
+            (push (list :name name
+                        :start start
+                        :end end
+                        :source-file source-file
+                        :unavailable t
+                        :message (plist-get skill :message))
+                  mentions))
            ((not (gethash (or (mevedel-skill-source-file skill)
                               (mevedel-skill-name skill))
                           seen))
@@ -2115,9 +2178,10 @@ a single plist with :error and :message so callers can block the send."
             (push (list :name name
                         :start start
                         :end end
+                        :source-file source-file
                         :skill skill)
                   mentions)))))
-    (or problem (nreverse mentions))))
+    (nreverse mentions)))
 
 (defun mevedel-skills--ensure-fresh-line ()
   "Leave point at the start of an empty line with a blank line above.
@@ -2256,39 +2320,43 @@ insert their result when the foreground agent finishes."
 Returns:
 - `skill'   a skill was expanded into the prompt region; caller
             should proceed with the send if CONTINUE-FN was nil.
-- `unknown' a named skill existed but could not be invoked; caller
-            should abort the send.
-- nil       no known `$skill' present; caller should proceed as usual."
+- `unknown' preparation failed and the caller should abort the send.
+- nil       no invocable leading `$skill' is present; caller should scan the
+            complete prompt for inline attachments."
   (when-let* ((region (mevedel-skills--current-prompt-region))
               (text (buffer-substring (car region) (cdr region)))
               (parsed (mevedel-skills--parse-skill-line text)))
     (let* ((name (nth 0 parsed))
            (args (nth 1 parsed))
            (skill-pos (+ (car region) (nth 2 parsed)))
-           (skill (mevedel-skill-bindings-resolve
-                   text mevedel--session
-                   (nth 2 parsed)
-                   (+ (nth 2 parsed) 1 (length name))
-                   name)))
-      (when skill
-        (let* ((delete-context
-                (mevedel-skills--command-delete-context skill-pos))
-               (delete-start (plist-get delete-context :delete-start))
-               (after-prefix (plist-get delete-context :after-prefix))
-               (buffer (current-buffer))
-               (region-end (cdr region))
-               (dispatch-result 'skill))
-          (mevedel-skills-invoke
-           skill args
-           (lambda (outcome)
-             (when (buffer-live-p buffer)
-               (with-current-buffer buffer
-                 (setq dispatch-result
-                       (mevedel-skills--handle-user-skill-outcome
-                        skill outcome delete-start region-end
-                        after-prefix continue-fn)))))
-           :origin 'user)
-          dispatch-result)))))
+           (outcome
+            (mevedel-skills-resolve-user-mention-outcome
+             text mevedel--session
+             (nth 2 parsed)
+             (+ (nth 2 parsed) 1 (length name))
+             name))
+           (skill (plist-get outcome :skill)))
+      (if (not (eq (plist-get outcome :status) 'ok))
+          nil
+        (when skill
+          (let* ((delete-context
+                  (mevedel-skills--command-delete-context skill-pos))
+                 (delete-start (plist-get delete-context :delete-start))
+                 (after-prefix (plist-get delete-context :after-prefix))
+                 (buffer (current-buffer))
+                 (region-end (cdr region))
+                 (dispatch-result 'skill))
+            (mevedel-skills-invoke
+             skill args
+             (lambda (outcome)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq dispatch-result
+                         (mevedel-skills--handle-user-skill-outcome
+                          skill outcome delete-start region-end
+                          after-prefix continue-fn)))))
+             :origin 'user)
+            dispatch-result))))))
 
 (defun mevedel-skills--prepare-inline-attachments
     (mentions callback &optional prepared)
@@ -2301,52 +2369,59 @@ PREPARED is the accumulator used for sequential async preparation."
     (let* ((mention (car mentions))
            (skill (plist-get mention :skill))
            (name (plist-get mention :name)))
-      (mevedel-skills-prepare
-       skill ""
-       (lambda (outcome)
-         (pcase (plist-get outcome :status)
-           ('ok
-            (if (eq (plist-get outcome :kind) 'instruction)
-                (mevedel-skills--prepare-inline-attachments
-                 (cdr mentions) callback
-                 (cons (list :name name
-                             :skill skill
-                             :arguments ""
-                             :body (plist-get outcome :body)
-                             :invoked-skills
-                             (plist-get
-                              (plist-get outcome :request-context)
-                              :invoked-skills))
-                       prepared))
-              (funcall callback
-                       (list :status 'error
-                             :reason 'unsupported-context
-                             :message
-                             (format "Skill $%s cannot be attached inline."
-                                     name)))))
-           (_
-            (funcall callback outcome))))
-       :role 'instruction :origin 'user :policy-owner-p nil))))
+      (if (plist-get mention :unavailable)
+          (mevedel-skills--prepare-inline-attachments
+           (cdr mentions) callback (cons mention prepared))
+        (mevedel-skills-prepare
+         skill ""
+         (lambda (outcome)
+           (pcase (plist-get outcome :status)
+             ('ok
+              (if (eq (plist-get outcome :kind) 'instruction)
+                  (mevedel-skills--prepare-inline-attachments
+                   (cdr mentions) callback
+                   (cons (list :name name
+                               :start (plist-get mention :start)
+                               :end (plist-get mention :end)
+                               :source-file
+                               (plist-get mention :source-file)
+                               :skill skill
+                               :arguments ""
+                               :body (plist-get outcome :body)
+                               :invoked-skills
+                               (plist-get
+                                (plist-get outcome :request-context)
+                                :invoked-skills))
+                         prepared))
+                (funcall callback
+                         (list :status 'error
+                               :reason 'unsupported-context
+                               :message
+                               (format "Skill $%s cannot be attached inline."
+                                       name)))))
+             (_
+              (funcall callback outcome))))
+         :role 'instruction :origin 'user :policy-owner-p nil)))))
 
 (defun mevedel-skills--prepare-inline-attachments-for-text
-    (text session callback)
+    (text session callback &optional allow-root)
   "Prepare inline `$skill' attachments in TEXT for SESSION.
-CALLBACK receives the prepared outcome.  Return `skill' when async
-preparation took ownership, `unknown' when a known skill blocks the
-send, or nil when TEXT has no inline attachments."
+CALLBACK receives the prepared outcome.  Return `skill' when preparation
+took ownership or nil when TEXT has no inline attachments.  ALLOW-ROOT is
+forwarded to inline mention scanning."
   (when-let* ((mentions (mevedel-skills--inline-skill-mentions
-                         text session)))
-    (cond
-     ((plist-get mentions :error)
-      (message "%s" (plist-get mentions :message))
-      'unknown)
-     (t
-      (mevedel-skills--prepare-inline-attachments mentions callback)
-      'skill))))
+                         text session allow-root)))
+    (mevedel-skills--prepare-inline-attachments mentions callback)
+    'skill))
 
 (defun mevedel-skills--stage-inline-attachments (attachments)
   "Store prepared inline ATTACHMENTS and return their render-data block."
   (setq-local mevedel-skills--pending-inline-attachments attachments)
+  (when-let* ((warnings
+               (delq nil (mapcar (lambda (attachment)
+                                   (plist-get attachment :message))
+                                 attachments))))
+    (message "mevedel: %s" (mapconcat #'identity warnings "; ")))
   (let ((records
          (mapcan (lambda (attachment)
                    (copy-sequence (plist-get attachment :invoked-skills)))
@@ -2367,11 +2442,12 @@ send, or nil when TEXT has no inline attachments."
   (setq-local mevedel-skills--pending-request-context nil)
   (setq-local mevedel-skills--pending-inline-attachments nil))
 
-(defun mevedel-skills--dispatch-inline-attachments (&optional continue-fn)
+(defun mevedel-skills--dispatch-inline-attachments
+    (&optional continue-fn allow-root)
   "Prepare inline `$skill' attachments in the current prompt.
 Return `skill' when preparation took ownership of continuing the send,
-`unknown' when a known skill blocks the send, or nil when no inline
-attachments exist."
+or nil when no inline attachments exist.  Unavailable skills are annotated
+without blocking the send."
   (when-let* ((region (mevedel-skills--current-prompt-region))
               (session (and (bound-and-true-p mevedel--session)
                             mevedel--session))
@@ -2396,7 +2472,8 @@ attachments exist."
                 (mevedel-skills--clear-pending-inline-attachments)
                 (message "Inline skill failed: %s"
                          (or (plist-get outcome :message)
-                             "unknown error")))))))))))
+                             "unknown error")))))))
+       allow-root))))
 
 
 ;;

@@ -32,20 +32,27 @@
 ;; `gptel'
 (defvar gptel-default-mode)
 
-;; `subr'
-(defvar read-eval)
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-ranges
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-set
+                  "mevedel-mention-bindings"
+                  (start end binding &optional object))
 
 ;; `mevedel-preview-mode'
 (defvar mevedel-preview-mode--current-overlay)
 
-;; `mevedel-tool-fs'
-(defvar mevedel--real-path)
-
 ;; `mevedel-structs'
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
+;; `mevedel-tool-fs'
+(defvar mevedel--real-path)
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+
+;; `subr'
+(defvar read-eval)
 
 
 ;;
@@ -438,9 +445,17 @@ line by itself."
       (string-trim (buffer-string)))))
 
 (defun mevedel--clear-user-turn-gptel-properties (start end)
-  "Clear inherited text properties between START and END."
-  (let ((inhibit-read-only t))
-    (set-text-properties start end nil))
+  "Clear inherited properties between START and END except mention bindings."
+  (require 'mevedel-mention-bindings)
+  (let ((inhibit-read-only t)
+        (bindings (mevedel-mention-bindings-ranges
+                   (buffer-substring start end))))
+    (set-text-properties start end nil)
+    (dolist (range bindings)
+      (mevedel-mention-bindings-set
+       (+ start (plist-get range :start))
+       (+ start (plist-get range :end))
+       (plist-get range :binding))))
   (require 'mevedel-transcript)
   (mevedel-transcript-restore-ignored-properties start end))
 

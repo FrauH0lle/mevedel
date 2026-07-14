@@ -221,6 +221,21 @@
         (should-not (text-properties-at (point)))
         (forward-char 1))))
 
+  :doc "preserves atomic mention bindings while clearing copied UI properties"
+  (with-temp-buffer
+    (let ((start (point))
+          (binding '(:kind skill :token "$alpha"
+                     :source-file "/tmp/alpha/SKILL.md")))
+      (insert (propertize "$alpha"
+                          'mevedel-mention-binding binding
+                          'gptel 'response
+                          'read-only t))
+      (mevedel--clear-user-turn-gptel-properties start (point))
+      (should (equal binding
+                     (get-text-property start 'mevedel-mention-binding)))
+      (should-not (get-text-property start 'gptel))
+      (should-not (get-text-property start 'read-only))))
+
   :doc "keeps internal render-data blocks ignored inside user turns"
   (with-temp-buffer
     (let (start block-start block-end)

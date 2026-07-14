@@ -64,9 +64,13 @@
                   "mevedel-goal"
                   (objective &optional display-text approval-policy))
 
-;; `mevedel-mentions'
-(declare-function mevedel-mentions-set-binding
-                  "mevedel-mentions" (start end binding &optional object))
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-ranges
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-set
+                  "mevedel-mention-bindings" (start end binding &optional object))
+(declare-function mevedel-mention-bindings-skill-token-start-p
+                  "mevedel-mention-bindings" (text start))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -91,17 +95,14 @@
                   "mevedel-session-persistence" (session buffer &rest args))
 (defvar mevedel-session--read-only-mode)
 
-;; `mevedel-skill-bindings'
-(declare-function mevedel-skill-bindings-token-start-p
-                  "mevedel-skill-bindings" (text start))
-
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--clear-pending-inline-attachments
                   "mevedel-skills-invoke" ())
 (declare-function mevedel-skills--command-delete-context
                   "mevedel-skills-invoke" (command-pos))
 (declare-function mevedel-skills--dispatch-inline-attachments
-                  "mevedel-skills-invoke" (&optional continue-fn))
+                  "mevedel-skills-invoke"
+                  (&optional continue-fn allow-root))
 (declare-function mevedel-skills--dispatch-skill-command
                   "mevedel-skills-invoke" (&optional continue-fn))
 (declare-function mevedel-skills--ensure-fresh-line
@@ -110,6 +111,8 @@
                   "mevedel-skills-invoke" (text prefix))
 (declare-function mevedel-skills--scan-skill-tokens
                   "mevedel-skills-invoke" (text lookup &optional allow-root))
+(declare-function mevedel-skills-prepare-user-input
+                  "mevedel-skills-invoke" (text session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
@@ -774,13 +777,24 @@ drain it."
            (unwind-protect
                (apply orig-fn args)
              (mevedel-skills--clear-pending-inline-attachments))))
+      (when-let* ((region (mevedel-skills--current-prompt-region)))
+        (require 'mevedel-mention-bindings)
+        (let* ((text (buffer-substring (car region) (cdr region)))
+               (prepared
+                (mevedel-skills-prepare-user-input text mevedel--session)))
+          (dolist (range (mevedel-mention-bindings-ranges prepared))
+            (mevedel-mention-bindings-set
+             (+ (car region) (plist-get range :start))
+             (+ (car region) (plist-get range :end))
+             (plist-get range :binding)))))
       (pcase (mevedel-skills--dispatch-slash-command)
         ((or 'local 'unknown) nil)
         (_
          (pcase (mevedel-skills--dispatch-skill-command #'continue)
            ((or 'unknown 'skill) nil)
            (_
-            (pcase (mevedel-skills--dispatch-inline-attachments #'continue)
+            (pcase (mevedel-skills--dispatch-inline-attachments
+                    #'continue t)
               ((or 'unknown 'skill) nil)
               (_ (continue))))))))))
 
@@ -1075,11 +1089,11 @@ completion exit status."
                 ((>= start (point-min)))
                 ((equal (buffer-substring-no-properties start end)
                         (concat "$" candidate))))
-      (require 'mevedel-mentions)
-      (mevedel-mentions-set-binding
+      (require 'mevedel-mention-bindings)
+      (mevedel-mention-bindings-set
        start end
        (list :kind 'skill
-             :name candidate
+             :token (concat "$" candidate)
              :source-file source-file))))
   (mevedel-skills--slash-root-exit-function candidate status))
 
@@ -1198,8 +1212,8 @@ return value is a plist with :kind `root', :start, :end, and
             (let* ((line-text (buffer-substring-no-properties
                                line-start line-end))
                    (relative-dollar (- dollar-pos line-start)))
-              (require 'mevedel-skill-bindings)
-              (when (and (mevedel-skill-bindings-token-start-p
+              (require 'mevedel-mention-bindings)
+              (when (and (mevedel-mention-bindings-skill-token-start-p
                           line-text relative-dollar)
                          (not (mevedel-skills--escaped-position-p
                                line-text relative-dollar)))
