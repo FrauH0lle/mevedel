@@ -197,6 +197,66 @@
              (get-text-property 0 'mevedel-mention-binding copy)))
     (should-not (get-text-property 7 'face copy))))
 
+(mevedel-deftest mevedel-mention-bindings-mixed-prompt ()
+  ,test
+  (test)
+  :doc "mixed bindings copy and invalidate independently without UI state"
+  (let* ((text (copy-sequence
+                "$alpha @ref:2 @file:/tmp/a @mcp:docs:file:///api"))
+         (specs
+          '(("$alpha"
+             (:kind skill :token "$alpha"
+              :source-file "/skills/alpha/SKILL.md"))
+            ("@ref:2"
+             (:kind ref :token "@ref:2" :reference-uuid "uuid-2"))
+            ("@file:/tmp/a"
+             (:kind file :token "@file:/tmp/a" :path "/tmp/a"))
+            ("@mcp:docs:file:///api"
+             (:kind mcp :token "@mcp:docs:file:///api"
+              :server "docs" :uri "file:///api")))))
+    (dolist (spec specs)
+      (let ((start (string-match (regexp-quote (car spec)) text)))
+        (mevedel-mention-bindings-set
+         start (+ start (length (car spec))) (cadr spec) text)))
+    (let ((copy (mevedel-mention-bindings-copy-text text)))
+      (should (equal specs
+                     (mapcar
+                      (lambda (range)
+                        (list (substring copy
+                                         (plist-get range :start)
+                                         (plist-get range :end))
+                              (plist-get range :binding)))
+                      (mevedel-mention-bindings-ranges copy))))
+      (dolist (range (mevedel-mention-bindings-ranges copy))
+        (should-not (get-text-property
+                     (plist-get range :start) 'face copy)))
+      (with-temp-buffer
+        (insert copy " and " copy)
+        (goto-char (point-min))
+        (search-forward "@ref:2")
+        (let ((start (point)))
+          (insert "3")
+          (mevedel-mention-bindings-invalidate-edit
+           start (point) (point-min) (point-max)))
+        (let ((ranges (mevedel-mention-bindings-ranges (buffer-string))))
+          (should (= 7 (length ranges)))
+          (should (= 2 (cl-count 'skill ranges
+                                 :key (lambda (range)
+                                        (plist-get
+                                         (plist-get range :binding) :kind)))))
+          (should (= 1 (cl-count 'ref ranges
+                                 :key (lambda (range)
+                                        (plist-get
+                                         (plist-get range :binding) :kind)))))
+          (should (= 2 (cl-count 'file ranges
+                                 :key (lambda (range)
+                                        (plist-get
+                                         (plist-get range :binding) :kind)))))
+          (should (= 2 (cl-count 'mcp ranges
+                                 :key (lambda (range)
+                                        (plist-get
+                                         (plist-get range :binding) :kind))))))))))
+
 
 ;;
 ;;; Live editing

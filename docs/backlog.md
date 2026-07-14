@@ -25,28 +25,6 @@ Each entry records its source, owed change, reason for deferral, current
 status, and blast radius. Keep entries terse and remove them when they
 become implemented, obsolete, or unjustified.
 
-## Composer and mentions
-
-### Atomic mention bindings
-
-- **Source:** `mevedel-view-composer.el`; `mevedel-view-history.el`;
-  `mevedel-mentions.el`
-- **What's owed:** First, let completed `$skill` mentions retain the exact
-  resolved skill independently of their visible text and carry those bindings
-  through dispatch, queueing, retries, and history. Follow with the same atomic
-  binding contract for `@ref`, `@file`, and `@mcp` mentions once the skill path
-  has established the shared representation.
-- **Why deferred:** The binding must survive composer edits, queueing, input
-  history, and mention expansion without making ordinary prompt strings
-  harder to use.
-- **Status check:** Claimed for the skill invocation and model/effort policy
-  implementation. The completed design preserves exact source identity,
-  reloads that source's latest contents, and invalidates the binding only when
-  its token is edited. Composer, queue, and history still need the shared
-  representation. The non-skill mention kinds remain the next slice.
-- **Blast radius:** Duplicate names, renamed targets, and restored prompts can
-  resolve differently from the target originally selected by completion.
-
 ## Sub-agents and coordination
 
 ### Bound concurrent sub-agent execution

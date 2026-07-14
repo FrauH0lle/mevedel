@@ -337,6 +337,13 @@ Returns (buffer . overlay)."
             (get-text-property
              start 'mevedel-mention-binding prepared))))
 
+  :doc "reference queries and agent mentions intentionally stay unbound"
+  (let* ((input "Ask @ref:{tag} and @agent:explorer")
+         (prepared (mevedel-mentions-prepare-user-input input)))
+    (should (equal input prepared))
+    (should-not (text-property-not-all
+                 0 (length prepared) 'mevedel-mention-binding nil prepared)))
+
   :doc "rejects malformed existing mention bindings"
   (let ((input (copy-sequence "Use @ref:1")))
     (put-text-property 4 10 'mevedel-mention-binding

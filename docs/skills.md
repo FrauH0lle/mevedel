@@ -7,6 +7,9 @@ session installation, path-scoped activation state, and hot reload.
 `mevedel-skills-invoke.el` owns skill preparation, invocation, request-scoped
 overrides, direct fork response insertion, and model-tool behavior.
 `mevedel-skills-plan.el` owns deterministic composer invocation plans.
+`mevedel-mention-bindings.el` owns the atomic text-property lifecycle shared
+with direct reference, file, and MCP mentions; skill resolution remains in the
+skill modules.
 `mevedel-turn.el` owns the canonical terminal transaction shared by
 ordinary responses and direct fork completion.
 `mevedel-skills-prompt.el` owns prompt roster rendering, event-shaped reminders,
@@ -298,6 +301,16 @@ intended target cannot be trusted. Mevedel prepares every unique available
 skill before dispatching anything; the first injection, permission,
 validation, or hook failure sends neither a partial request nor a child and
 leaves the direct draft or queued entry editable.
+
+Skill completion binds the exact visible token to the selected canonical
+`SKILL.md` source immediately. Manually typed known skills bind at send before
+preparation, queueing, and history insertion. Dispatch reloads the selected
+source's current contents and metadata; the source pathname is identity, not a
+body snapshot or durable permission grant. A bound skill never falls back to a
+later same-visible-name discovery result. Copy, edit invalidation, retry,
+history persistence, corrupt-binding handling, and soft-failure behavior follow
+the shared lifecycle documented in
+[`mentions.md`](mentions.md#atomic-binding-lifecycle).
 
 `UserPromptExpansion` runs once per prepared canonical skill. After all bodies,
 placeholders, and instruction reminders exist, `UserPromptSubmit` runs once on

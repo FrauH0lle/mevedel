@@ -98,6 +98,20 @@ follow-ups, and send/fork dispatch. `mevedel-view.el` coordinates the view
 mode, zones, and session lifecycle. The authoritative text remains in the
 gptel data buffer.
 
+`mevedel-mention-bindings.el` owns atomic mention identity as validated text
+properties on ordinary prompt strings. Completion or programmatic insertion
+binds when an exact target first becomes known; the composer binds remaining
+resolvable mentions before asynchronous preparation, queueing, or history
+insertion. Draft, queue, retry, transcript, and history paths transport the
+same propertized string, while kind-specific skill and mention modules resolve
+the stored locator against current state and permissions at dispatch. Valid
+unavailability annotates only the temporary request and continues the turn;
+malformed live data blocks submission. Input-history persistence rejects and
+quarantines incompatible binding data rather than migrating it. The supported
+kinds are a closed explicit dispatch over skill source path, reference UUID,
+absolute file pathname, and MCP server/URI; there is no resolver registry or
+sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle).
+
 `mevedel-turn.el` owns the single top-level completion boundary. The ordinary
 gptel `DONE` state and direct foreground fork skills both call it after response
 hooks, while error and abort terminals retain their separate
