@@ -694,6 +694,8 @@ The request has no tools or conversational transcript insertion."
       (funcall callback
                (list :verdict 'ask :reason "Goal guardian is unavailable"))
     (let ((done nil)
+          (stream (buffer-local-value 'gptel-stream chat-buffer))
+          chunks
           policy
           timer)
       (cl-labels
@@ -703,7 +705,22 @@ The request has no tools or conversational transcript insertion."
                (when timer (cancel-timer timer))
                (when (buffer-live-p chat-buffer)
                  (with-current-buffer chat-buffer
-                   (funcall callback decision))))))
+                   (funcall callback decision)))))
+           (settle-response (response info)
+             (let ((decision (mevedel-goal--parse-guardian response)))
+               (when (buffer-live-p chat-buffer)
+                 (with-current-buffer chat-buffer
+                   (mevedel-goal--record-token-usage goal info response)))
+               (finish
+                (append
+                 (or decision
+                     (list :verdict 'ask
+                           :reason
+                           "Goal guardian returned malformed output"))
+                 (list
+                  :provider
+                  (mevedel-goal--guardian-provider-label policy)
+                  :effort (plist-get policy :effort)))))))
         (setq timer
               (run-at-time
                mevedel-goal-guardian-timeout nil
@@ -736,30 +753,22 @@ The request has no tools or conversational transcript insertion."
                      (gptel-request
                       prompt
                       :buffer chat-buffer
-                      :stream nil
+                      :stream stream
                       :transforms nil
                       :callback
                       (lambda (response info)
-                        (unless (and (consp response)
-                                     (eq (car response) 'reasoning))
-                          (let ((decision
-                                 (mevedel-goal--parse-guardian response)))
-                            (when (buffer-live-p chat-buffer)
-                              (with-current-buffer chat-buffer
-                                (mevedel-goal--record-token-usage
-                                 goal info response)))
-                            (finish
-                             (append
-                              (or decision
-                                  (list
-                                   :verdict 'ask
-                                   :reason
-                                   "Goal guardian returned malformed output"))
-                              (list
-                               :provider
-                               (mevedel-goal--guardian-provider-label policy)
-                               :effort (plist-get policy :effort)))))))))))
-                 'guardian prompt))
+                        (cond
+                         (done nil)
+                         ((and (consp response)
+                               (eq (car response) 'reasoning)))
+                         ((and (plist-get info :stream)
+                               (stringp response))
+                          (push response chunks))
+                         ((eq response t)
+                          (settle-response
+                           (apply #'concat (nreverse chunks)) info))
+                         (t (settle-response response info)))))))
+                 'guardian prompt)))
           (error
            (finish
             (append

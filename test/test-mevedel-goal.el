@@ -2849,6 +2849,7 @@ Each binding is (NAME KEYS)."
   (test)
   :doc "uses the goal-guardian workload with no tools or conversational transforms"
   (with-temp-buffer
+    (setq-local gptel-stream t)
     (let ((goal (mevedel-goal--create
                  :objective "Ship" :status 'active :phase 'awaiting-approval
                  :approval-policy 'automatic :cycle 1))
@@ -2865,13 +2866,18 @@ Each binding is (NAME KEYS)."
                    (should-not gptel-tools)
                    (should-not gptel-use-context)
                    (should-not (plist-get args :transforms))
+                   (should (plist-get args :stream))
                    (funcall (plist-get args :callback)
                             '(reasoning . "Safety analysis") nil)
                    (should-not decision)
                    (funcall
                     (plist-get args :callback)
-                    "<goal_guardian>\nverdict: approve\nreason: Safe.\n</goal_guardian>"
-                    nil))))
+                    "<goal_guardian>\nverdict: approve\n" '(:stream t))
+                   (should-not decision)
+                   (funcall (plist-get args :callback)
+                            "reason: Safe.\n</goal_guardian>" '(:stream t))
+                   (should-not decision)
+                   (funcall (plist-get args :callback) t '(:stream t)))))
         (mevedel-goal--guardian-request
          goal "# Plan" (current-buffer)
          (lambda (value) (setq decision value))))
@@ -2880,6 +2886,37 @@ Each binding is (NAME KEYS)."
       (should (eq 'approve (plist-get decision :verdict)))
       (should (equal "guardian-model" (plist-get decision :provider)))
       (should (eq 'high (plist-get decision :effort)))))
+  :doc "settles complete responses for disabled and downgraded streaming"
+  (with-temp-buffer
+    (setq-local gptel-stream nil)
+    (dolist (chat-stream '(t nil))
+      (let ((chat-buffer (generate-new-buffer " *goal-guardian-chat*"))
+            (goal (mevedel-goal--create
+                   :objective "Ship" :status 'active :phase 'awaiting-approval
+                   :approval-policy 'automatic :cycle 1))
+            decision)
+        (unwind-protect
+            (progn
+              (with-current-buffer chat-buffer
+                (setq-local gptel-stream chat-stream))
+              (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                         (lambda (&rest _)
+                           '(:backend nil :model guardian-model :effort high)))
+                        ((symbol-function 'mevedel-goal--record-phase-policy)
+                         #'ignore)
+                        ((symbol-function 'gptel-request)
+                         (lambda (_prompt &rest args)
+                           (should (eq chat-stream
+                                       (and (plist-get args :stream) t)))
+                           (funcall
+                            (plist-get args :callback)
+                            "<goal_guardian>\nverdict: approve\nreason: Safe.\n</goal_guardian>"
+                            nil))))
+                (mevedel-goal--guardian-request
+                 goal "# Plan" chat-buffer
+                 (lambda (value) (setq decision value))))
+              (should (eq 'approve (plist-get decision :verdict))))
+          (kill-buffer chat-buffer)))))
   :doc "fails closed when request startup errors"
   (with-temp-buffer
     (let ((goal (mevedel-goal--create

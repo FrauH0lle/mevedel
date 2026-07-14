@@ -27,6 +27,7 @@
 (defvar gptel-model)
 (defvar gptel-max-tokens)
 (defvar gptel-backend)
+(defvar gptel-reasoning-effort)
 (defvar gptel--request-params)
 
 (defun test-mevedel-compact--failing-hook (_event)
@@ -656,6 +657,7 @@
           (should
            (equal captured-policy
                   '(:backend nil :model mevedel-target-model
+                    :effort nil
                     :max-tokens 150
                     :request-params (:temperature 0.5))))
           (should-not (plist-get (plist-get captured-args :admission)
@@ -771,6 +773,34 @@
               (mevedel--compact-handle-wait fsm)))
           (should (= sent 1))
           (should-not ran))
+      (kill-buffer chat-buf)))
+
+  :doc "preserves the realized reasoning effort during continuation admission"
+  (let ((chat-buf (generate-new-buffer " *mevedel-compact-wait*"))
+        captured-effort
+        sent-effort)
+    (unwind-protect
+        (let ((fsm (gptel-make-fsm
+                    :info (list
+                           :buffer chat-buf
+                           :history '(TRET)
+                           :mevedel-compaction-target-policy
+                           '(:backend target-backend :model target-model
+                             :effort max :max-tokens nil
+                             :request-params nil)
+                           :data '(:messages [])))))
+          (with-current-buffer chat-buf
+            (setq-local gptel-reasoning-effort 'medium))
+          (cl-letf (((symbol-function 'mevedel--compact-should-compact-p)
+                     (lambda (&optional _tokens)
+                       (setq captured-effort gptel-reasoning-effort)
+                       nil))
+                    ((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm)
+                       (setq sent-effort gptel-reasoning-effort))))
+            (mevedel--compact-handle-wait fsm))
+          (should (eq captured-effort 'max))
+          (should (eq sent-effort 'max)))
       (kill-buffer chat-buf)))
 
   :doc "does not compact continuation when image payload is below media-aware threshold"
@@ -2533,12 +2563,13 @@
   :doc "captures the realized request settings used for target budgeting"
   (let ((gptel-backend 'target-backend)
         (gptel-model 'target-model)
+        (gptel-reasoning-effort 'high)
         (gptel-max-tokens 300)
         (gptel--request-params '(:temperature 0.5)))
     (should
      (equal
       (mevedel--compact-target-policy)
-      '(:backend target-backend :model target-model :max-tokens 300
+      '(:backend target-backend :model target-model :effort high :max-tokens 300
         :request-params (:temperature 0.5))))))
 
 (mevedel-deftest mevedel--compact-policy-usable-tokens ()

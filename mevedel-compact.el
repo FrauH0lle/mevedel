@@ -324,6 +324,8 @@ thousands of tokens, sometimes as a float."
   "Return the current request's model policy for compaction budgeting."
   (list :backend gptel-backend
         :model gptel-model
+        :effort (and (boundp 'gptel-reasoning-effort)
+                     gptel-reasoning-effort)
         :max-tokens gptel-max-tokens
         :request-params gptel--request-params))
 
@@ -1819,6 +1821,8 @@ set already stored on FSM's info plist."
                  (plist-get info :data)))
                (gptel-backend (plist-get target-policy :backend))
                (gptel-model (plist-get target-policy :model))
+               (gptel-reasoning-effort
+                (plist-get target-policy :effort))
                (gptel-max-tokens (plist-get target-policy :max-tokens))
                (gptel--request-params
                 (plist-get target-policy :request-params))
