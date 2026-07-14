@@ -306,6 +306,13 @@
             (mevedel-view--insert-dropped-file-mentions (list path))
             (should (equal (format "@file:{%s}" path)
                            (mevedel-view--input-text)))
+            (let* ((input (mevedel-view--input-text))
+                   (binding (get-text-property
+                             0 'mevedel-mention-binding input)))
+              (should (equal (list :kind 'file
+                                   :token (format "@file:{%s}" path)
+                                   :path path)
+                             binding)))
             (should (equal (list path)
                            (mevedel-session-dropped-file-grants session)))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))

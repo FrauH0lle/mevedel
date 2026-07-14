@@ -185,10 +185,13 @@ that is ambiguous with prose."
                       "[[:alnum:]_]"
                       (char-to-string (aref text end))))))
            ((or 'file 'mcp)
-            (or (= end (length text))
-                (string-match-p
-                 "[[:space:]]"
-                 (char-to-string (aref text end)))))
+            (let ((regexp (if (eq (plist-get binding :kind) 'file)
+                              mevedel-mentions--file-regexp
+                            mevedel-mentions--mcp-regexp)))
+              (save-match-data
+                (and (string-match regexp text start)
+                     (= start (match-beginning 0))
+                     (= end (match-end 0))))))
            (_ nil)))))
 
 (defun mevedel-mention-bindings-valid-p (text)

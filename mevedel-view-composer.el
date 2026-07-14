@@ -65,6 +65,7 @@
 ;; `mevedel-mentions'
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
+(declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
 (declare-function mevedel-mentions-prepare-user-input
                   "mevedel-mentions" (text &optional session))
@@ -596,38 +597,22 @@ all displayed windows plus the editable composer text around THUNK."
 ;;
 ;;; File input
 
-(defun mevedel-view--file-mention-needs-braces-p (path)
-  "Return non-nil when PATH needs braced @file syntax."
-  (string-match-p "[ \t\n#{}\\\\]" path))
-
-(defun mevedel-view--escape-braced-file-path (path)
-  "Escape PATH for `@file:{...}' syntax."
-  (with-temp-buffer
-    (dotimes (index (length path))
-      (let ((ch (aref path index)))
-        (when (memq ch '(?\\ ?\}))
-          (insert "\\"))
-        (insert-char ch)))
-    (buffer-string)))
-
-(defun mevedel-view--file-mention-token (path)
-  "Return the visible @file mention token for PATH."
-  (format "@file:%s"
-          (if (mevedel-view--file-mention-needs-braces-p path)
-              (format "{%s}"
-                      (mevedel-view--escape-braced-file-path path))
-            path)))
-
 (defun mevedel-view--insert-dropped-file-mentions (paths)
   "Insert @file mentions for dropped PATHS into the composer."
+  (require 'mevedel-mention-bindings)
   (mevedel-view--ensure-interactive-chat-view)
   (let ((session (mevedel-view--session))
         tokens)
     (unless session
       (user-error "No active session for dropped files"))
     (dolist (path paths)
-      (let ((expanded (expand-file-name path)))
-        (push (mevedel-view--file-mention-token expanded) tokens)
+      (let* ((expanded (expand-file-name path))
+             (token (mevedel-mentions-file-token expanded)))
+        (mevedel-mention-bindings-set
+         0 (length token)
+         (list :kind 'file :token token :path expanded)
+         token)
+        (push token tokens)
         (mevedel-session-add-dropped-file-grant session expanded)))
     (setq tokens (nreverse tokens))
     (when tokens

@@ -193,6 +193,29 @@ Returns (buffer . overlay)."
                    (mevedel--resolve-refs-by-tag-query
                     "shared" workspace-b)))))
 
+(mevedel-deftest mevedel-mentions--bind-user-input-matches
+  (:doc "the shared scanner binds live matches and rejects invalid boundaries")
+  ,test
+  (test)
+  (let ((text (copy-sequence "@file:a.txt x@file:b.txt")))
+    (mevedel-mentions--bind-user-input-matches
+     text mevedel-mentions--file-regexp 'file
+     (lambda (captures)
+       (list :path (expand-file-name (car captures) "/tmp"))))
+    (should
+     (equal '(:kind file :token "@file:a.txt" :path "/tmp/a.txt")
+            (get-text-property 0 'mevedel-mention-binding text)))
+    (should-not
+     (get-text-property
+      (string-match "@file:b" text) 'mevedel-mention-binding text)))
+  (let ((text (copy-sequence "@ref:1x")))
+    (mevedel-mentions--bind-user-input-matches
+     text "@ref:\\([0-9]+\\)" 'ref
+     (lambda (_captures) '(:reference-uuid "uuid-1")))
+    (should-not
+     (text-property-not-all
+      0 (length text) 'mevedel-mention-binding nil text))))
+
 (mevedel-deftest mevedel-mentions-prepare-user-input
   (:before-each
    (mevedel-test--reset-instructions)
@@ -252,6 +275,56 @@ Returns (buffer . overlay)."
                        'mevedel-mention-binding prepared)))
         (should (equal (overlay-get first-reference 'mevedel-uuid)
                        (plist-get binding :reference-uuid))))))
+
+  :doc "binds file locators relative to the session working directory at send"
+  (let* ((root (make-temp-file "mevedel-file-binding-" t))
+         (working-directory (file-name-concat root "package"))
+         (elsewhere (make-temp-file "mevedel-file-binding-cwd-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "file-binding"))
+         (session (mevedel-session-create
+                   "main" workspace working-directory))
+         (default-directory elsewhere)
+         (token "@file:notes.txt#L2")
+         (prepared (mevedel-mentions-prepare-user-input
+                    (concat "Read " token) session))
+         (start (string-match (regexp-quote token) prepared))
+         (binding (get-text-property
+                   start 'mevedel-mention-binding prepared)))
+    (unwind-protect
+        (progn
+          (should (equal 'file (plist-get binding :kind)))
+          (should (equal token (plist-get binding :token)))
+          (should (equal (expand-file-name "notes.txt" working-directory)
+                         (plist-get binding :path))))
+      (delete-directory elsewhere t)
+      (delete-directory root t)))
+
+  :doc "binds self-delimited file mentions before prose punctuation"
+  (let* ((root (make-temp-file "mevedel-file-punctuation-" t))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "punctuation"))
+         (session (mevedel-session-create "main" workspace))
+         (braced "@file:{notes file.txt}")
+         (ranged "@file:notes.txt#L2")
+         (prepared (mevedel-mentions-prepare-user-input
+                    (format "Read %s. Then %s." braced ranged)
+                    session)))
+    (unwind-protect
+        (dolist (token (list braced ranged))
+          (let ((binding
+                 (get-text-property
+                  (string-match (regexp-quote token) prepared)
+                  'mevedel-mention-binding prepared)))
+            (should (equal token (plist-get binding :token)))
+            (should (equal
+                     (expand-file-name
+                      (if (equal token braced)
+                          "notes file.txt"
+                        "notes.txt")
+                      root)
+                     (plist-get binding :path)))))
+      (delete-directory root t)))
 
   :doc "rejects malformed existing mention bindings"
   (let ((input (copy-sequence "Use @ref:1")))
@@ -540,7 +613,8 @@ Returns (buffer . overlay)."
             (should (stringp (plist-get result :reminder)))
             (should (string-match-p "alpha.txt" (plist-get result :reminder)))
             (should (string-match-p "beta.txt" (plist-get result :reminder)))
-            (should (equal (cons 'dir dir) (plist-get result :key)))))
+            (should (equal (cons 'file (cons dir ""))
+                           (plist-get result :key)))))
       (delete-directory dir t)))
 
   :doc "directory listing is truncated when it exceeds the max cap"
@@ -847,6 +921,99 @@ Returns (buffer . overlay)."
                        :workspace-root temporary-file-directory))))
     (unwind-protect
         (should-not (equal (plist-get whole :key) (plist-get range :key)))
+      (delete-file tmp)))
+
+  :doc "bound locator overrides the visible path during delayed dispatch"
+  (let* ((tmp (make-temp-file "mevedel-bound-file-" nil ".txt"
+                              "bound contents\n"))
+         (token "@file:visible.txt")
+         (binding (list :kind 'file :token token :path tmp))
+         (elsewhere (make-temp-file "mevedel-bound-cwd-" t))
+         (default-directory elsewhere)
+         (result (mevedel--handle-file-mention
+                  (list :match-text token
+                        :capture "visible.txt"
+                        :captures (list token "visible.txt" nil nil)
+                        :binding binding
+                        :workspace-root temporary-file-directory))))
+    (unwind-protect
+        (progn
+          (should (string-match-p "bound contents"
+                                  (plist-get result :reminder)))
+          (should (equal (cons 'file (cons tmp ""))
+                         (plist-get result :key))))
+      (delete-directory elsewhere t)
+      (delete-file tmp)))
+
+  :doc "bound deletion warns without falling back to the visible path"
+  (let* ((dir (make-temp-file "mevedel-bound-delete-" t))
+         (bound (expand-file-name "gone.txt" dir))
+         (visible (expand-file-name "visible.txt" dir))
+         (token "@file:visible.txt")
+         (binding (list :kind 'file :token token :path bound))
+         result)
+    (with-temp-file visible (insert "must not leak\n"))
+    (let ((default-directory dir))
+      (setq result
+            (mevedel--handle-file-mention
+             (list :match-text token
+                   :capture "visible.txt"
+                   :captures (list token "visible.txt" nil nil)
+                   :binding binding
+                   :workspace-root dir))))
+    (unwind-protect
+        (progn
+          (should (string-match-p "does not exist"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :warning)))
+          (should-not (string-match-p "must not leak"
+                                      (plist-get result :reminder))))
+      (delete-directory dir t)))
+
+  :doc "same-path replacement changes the current content hash"
+  (let* ((tmp (make-temp-file "mevedel-bound-replace-" nil ".txt" "first\n"))
+         (token "@file:stable.txt")
+         (binding (list :kind 'file :token token :path tmp))
+         (info (list :match-text token
+                     :capture "stable.txt"
+                     :captures (list token "stable.txt" nil nil)
+                     :binding binding
+                     :workspace-root temporary-file-directory))
+         (first (mevedel--handle-file-mention info)))
+    (unwind-protect
+        (progn
+          (delete-file tmp)
+          (with-temp-file tmp (insert "second\n"))
+          (let ((second (mevedel--handle-file-mention info)))
+            (should (equal (plist-get first :key) (plist-get second :key)))
+            (should-not (equal (plist-get first :hash)
+                               (plist-get second :hash)))
+            (should (string-match-p "second"
+                                    (plist-get second :reminder)))))
+      (delete-file tmp)))
+
+  :doc "current permission denial of a bound path warns and exposes no contents"
+  (let* ((tmp (make-temp-file "mevedel-bound-deny-" nil ".txt" "secret\n"))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id "bound-deny"
+                     :root temporary-file-directory :name "bound-deny"))
+         (session (mevedel-session-create "main" workspace))
+         (token "@file:visible.txt")
+         (binding (list :kind 'file :token token :path tmp)))
+    (mevedel-permission--add-session-rule session "Read" 'deny tmp)
+    (unwind-protect
+        (let ((result (mevedel--handle-file-mention
+                       (list :match-text token
+                             :capture "visible.txt"
+                             :captures (list token "visible.txt" nil nil)
+                             :binding binding
+                             :session session
+                             :workspace-root temporary-file-directory))))
+          (should (string-match-p "permission denied"
+                                  (plist-get result :placeholder)))
+          (should (stringp (plist-get result :warning)))
+          (should-not (string-match-p "secret"
+                                      (plist-get result :reminder))))
       (delete-file tmp))))
 
 (mevedel-deftest mevedel--handle-agent-mention
@@ -1047,6 +1214,70 @@ Returns (buffer . overlay)."
         (with-current-buffer buf (set-buffer-modified-p nil))
         (kill-buffer buf)
         (when (and file (file-exists-p file)) (delete-file file))))))
+
+(mevedel-deftest mevedel-file-capf
+  (:doc "`mevedel-file-capf' binds a completed file's absolute pathname")
+  ,test
+  (test)
+  (let* ((root (make-temp-file "mevedel file capf-" t))
+         (path (expand-file-name "target file.txt" root))
+         (workspace (mevedel-workspace--create
+                     :type 'test :id root :root root :name "file-capf")))
+    (with-temp-file path (insert "target\n"))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "@file:tar")
+          (cl-letf (((symbol-function 'mevedel-workspace)
+                     (lambda (&optional _buffer) workspace)))
+            (let* ((capf (mevedel-file-capf))
+                   (start (nth 0 capf))
+                   (end (nth 1 capf))
+                   (candidate (car (all-completions "tar" (nth 2 capf))))
+                   (exit (plist-get (nthcdr 3 capf) :exit-function)))
+              (delete-region start end)
+              (goto-char start)
+              (insert candidate)
+              (funcall exit candidate 'finished)
+              (should (equal (format "@file:{%s}" path) (buffer-string)))
+              (should
+               (equal (list :kind 'file
+                            :token (format "@file:{%s}" path)
+                            :path path)
+                      (get-text-property
+                       (point-min) 'mevedel-mention-binding))))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-mentions-file-token
+  (:doc "`mevedel-mentions-file-token' braces paths that need quoting")
+  ,test
+  (test)
+  (should (equal "@file:/tmp/a.el"
+                 (mevedel-mentions-file-token "/tmp/a.el")))
+  (should (equal "@file:{/tmp/a b#c.el}"
+                 (mevedel-mentions-file-token "/tmp/a b#c.el")))
+  (should (equal "@file:{a\\\\b\\}c}"
+                 (mevedel-mentions-file-token "a\\b}c"))))
+
+(mevedel-deftest mevedel-mentions--file-completion-exit-function
+  (:doc "file completion replaces and binds one exact path atomically")
+  ,test
+  (test)
+  (with-temp-buffer
+    (insert "@file:target")
+    (let ((candidate
+           (propertize "target"
+                       'mevedel-abs-path "/tmp/target file.txt"
+                       'mevedel-is-dir nil)))
+      (mevedel-mentions--file-completion-exit-function
+       (list candidate) (point-min) (+ (point-min) 6)
+       "target" 'finished)
+      (should (equal "@file:{/tmp/target file.txt}" (buffer-string)))
+      (should
+       (equal '(:kind file
+                :token "@file:{/tmp/target file.txt}"
+                :path "/tmp/target file.txt")
+              (get-text-property
+               (point-min) 'mevedel-mention-binding))))))
 
 (mevedel-deftest mevedel-mention-capf
   (:doc "`mevedel-mention-capf' offers mention prefixes at bare @")
