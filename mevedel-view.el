@@ -48,6 +48,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -756,11 +757,14 @@ Kills the associated view buffer."
                         (alist-get goal-workload
                                    (plist-get cycle-record :providers))))
            (phase-model
-            (if actual
-                (format "%s · %s/%s"
-                        goal-phase (plist-get actual :provider)
-                        (or (plist-get actual :effort) "default"))
-              model))
+            (cond
+             ((and goal (eq (mevedel-goal-status goal) 'complete))
+              (format "complete · %s" model))
+             (actual
+              (format "%s · %s/%s"
+                      goal-phase (plist-get actual :provider)
+                      (or (plist-get actual :effort) "default")))
+             (t model)))
            (preset-name (and session (mevedel-session-preset-name session)))
            (tool-count (mevedel-tools-active-count data-buffer))
            (tools (format "%d tool%s"

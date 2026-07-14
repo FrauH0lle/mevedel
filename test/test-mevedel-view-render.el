@@ -151,6 +151,46 @@
                        (mapcar (lambda (turn) (plist-get turn :role))
                                turns))))))
 
+  :doc "guardian audit does not absorb the following Goal turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Planning complete.\n" 'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind request-summary :elapsed-seconds 19))
+     'ignore)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel--format-hook-audit-record
+      '(:type goal-guardian :verdict approve :reason "Safe"))
+     'ignore)
+    (mevedel-view-test--insert-data
+     data-buf "Implementation instructions:\nDo nothing.\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind user-display :text "Implement accepted plan"))
+     'ignore)
+    (mevedel-view-test--insert-data data-buf "Implementation complete.\n"
+                                    'response)
+    (mevedel-view-test--insert-data
+     data-buf
+     (mevedel-pipeline--format-render-data-block
+      '(:kind request-summary :elapsed-seconds 7))
+     'ignore)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-transcript-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (equal '(assistant user assistant)
+                       (mapcar (lambda (turn) (plist-get turn :role))
+                               turns)))
+        (should (equal '(1 0 1)
+                       (mapcar
+                        (lambda (turn)
+                          (cl-count 'request-summary
+                                    (plist-get turn :segments) :key #'car))
+                        turns))))))
+
   :doc "scaffolding-only gap after response is still absorbed"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
@@ -1010,7 +1050,34 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
-        (should (string-match-p "Calling Read" text))))))
+        (should (string-match-p "Calling Read" text)))))
+
+  :doc "restores Goal display text and hides protocol wrapper tags"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data
+     data-buf
+     (concat "<goal-context authority=\"session-sidecar\">\n"
+             "Objective: Dry-run Goal\n"
+             "</goal-context>\n\n"
+             "Planning instructions:\nDo nothing.\n")
+     nil)
+    (with-current-buffer data-buf
+      (let ((start (point)))
+        (insert (mevedel-pipeline--format-render-data-block
+                 '(:kind user-display :text "Dry-run Goal")))
+        (add-text-properties start (point) '(gptel ignore))))
+    (mevedel-view-test--insert-data
+     data-buf
+     "<goal_review>\nverdict: complete\nsummary: Done.\n</goal_review>\n"
+     'response)
+    (with-current-buffer view-buf
+      (mevedel-view--full-rerender)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "Dry-run Goal" text))
+        (should-not (string-match-p "Planning instructions" text))
+        (should (string-match-p "verdict: complete" text))
+        (should-not (string-match-p "goal_review" text))))))
 
 
 (mevedel-deftest mevedel-view--full-rerender-live-tail ()
@@ -3485,6 +3552,26 @@ state of its inner sections"
       (should-not (string-match-p "hook-context" text))
       (should-not (string-match-p "Model-only context" text))))
 
+  :doc "Goal context blocks are stripped from visible user turn text"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "<goal-context authority=\"session-sidecar\">\n")
+      (insert "Phase: planning\n")
+      (insert "</goal-context>\n\n")
+      (insert "Planning instructions:\nDo nothing.\n")
+      (let ((start (point)))
+        (insert (mevedel-pipeline--format-render-data-block
+                 '(:kind user-display :text "Dry-run Goal")))
+        (add-text-properties start (point) '(gptel ignore))))
+    (let* ((segments
+            (with-current-buffer data-buf
+              (mevedel-transcript-segments (point-min) (point-max))))
+           (text (mevedel-view--user-turn-text segments data-buf)))
+      (should (equal "Dry-run Goal" text))
+      (should-not (string-match-p "Planning instructions" text))
+      (should-not (string-match-p "goal-context" text))
+      (should-not (string-match-p "Phase: planning" text))))
+
   :doc "hook context renders as a collapsible view-only disclosure"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
@@ -3577,6 +3664,21 @@ state of its inner sections"
           (should (string-match-p "UserPromptSubmit" text))
           (should (string-match-p (regexp-quote body) text))
           (should-not (string-match-p "&lt;/hook-event&gt;" text)))))))
+
+(mevedel-deftest mevedel-view--visible-response-text ()
+  ,test
+  (test)
+  :doc "Goal protocol wrapper tags stay out of rendered responses"
+  (let ((text
+         (mevedel-view--visible-response-text
+          (concat "Implemented.\n<proposed_plan>\n"
+                  "Transition to review.\n</proposed_plan>\n"
+                  "<goal_review>\nverdict: complete\n"
+                  "summary: Done.\n</goal_review>\n"))))
+    (should (string-match-p "Transition to review" text))
+    (should (string-match-p "verdict: complete" text))
+    (should-not (string-match-p "proposed_plan" text))
+    (should-not (string-match-p "goal_review" text))))
 
 (mevedel-deftest mevedel-view--render-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")

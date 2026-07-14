@@ -97,6 +97,10 @@
 (declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
 (declare-function mevedel--update-instruction-overlay "mevedel-overlays" (instruction &optional force))
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--format-render-data-block
+                  "mevedel-pipeline" (render-data))
+
 ;; `mevedel-presets'
 (declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
 (declare-function mevedel-preset-apply
@@ -1411,7 +1415,13 @@ with NO-SPINNER forwarded when non-nil."
           (unless (bolp) (insert "\n"))
           (insert prefix))))
     (insert prompt "\n")
-    (mevedel--clear-user-turn-gptel-properties user-turn-start (point)))
+    (mevedel--clear-user-turn-gptel-properties user-turn-start (point))
+    (when (and display-text (not (equal display-text prompt)))
+      (require 'mevedel-pipeline)
+      (let ((start (point)))
+        (insert (mevedel-pipeline--format-render-data-block
+                 (list :kind 'user-display :text display-text)))
+        (add-text-properties start (point) '(gptel ignore)))))
   (let ((data-turn-start (copy-marker (point) nil)))
     (when-let* ((view (and (boundp 'mevedel--view-buffer)
                            mevedel--view-buffer))
@@ -1444,13 +1454,15 @@ with NO-SPINNER forwarded when non-nil."
 (defun mevedel--gptel-send-request (&optional model-input)
   "Send the current gptel prompt and return its standard send FSM.
 MODEL-INPUT replaces the stored prompt for this request only."
-  (let ((mevedel--pending-model-input model-input))
-    (gptel-request nil
-      :stream gptel-stream
-      :transforms gptel-prompt-transform-functions
-      :fsm (gptel-make-fsm
-            :table gptel-send--transitions
-            :handlers gptel-send--handlers))))
+  (setq-local mevedel--pending-model-input model-input)
+  (unwind-protect
+      (gptel-request nil
+        :stream gptel-stream
+        :transforms gptel-prompt-transform-functions
+        :fsm (gptel-make-fsm
+              :table gptel-send--transitions
+              :handlers gptel-send--handlers))
+    (setq-local mevedel--pending-model-input nil)))
 
 (defun mevedel--implement-plan (action-plist)
   "Implement the plan described by ACTION-PLIST.

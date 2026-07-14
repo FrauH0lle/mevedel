@@ -303,7 +303,7 @@
 ;;; Local user turns
 
 (mevedel-deftest mevedel--insert-local-user-turn
-		 (:doc "inserts a model-visible user turn, mirrors it to the view, and does not send")
+		 (:doc "persists distinct view text without exposing it to the model")
 		 (let ((data-buffer (generate-new-buffer " *mevedel-local-turn-data*"))
 		       (view-buffer (generate-new-buffer " *mevedel-local-turn-view*"))
 		       (displayed nil)
@@ -327,13 +327,23 @@
 					 '((org-mode . "* User\n")))
 			     (setq-local mevedel--view-buffer view-buffer)
 			     (let ((marker (mevedel--insert-local-user-turn
-					    "Setup context" nil 'worktree)))
+					    "Setup context" "Show setup" 'worktree)))
 			       (should (markerp marker))
 			       (should (string-match-p
 					"Setup context"
 					(buffer-substring-no-properties
-					 (point-min) (point-max)))))))
-			 (should (equal "Setup context" displayed))
+					 (point-min) (point-max))))
+			       (goto-char (point-min))
+			       (search-forward "<!-- mevedel-render-data -->")
+			       (should (eq 'ignore
+					   (get-text-property (match-beginning 0) 'gptel)))
+			       (should
+				(equal
+				 '(:kind user-display :text "Show setup")
+				 (cdr (mevedel-pipeline-extract-render-data
+				       (buffer-substring-no-properties
+					(point-min) (point-max)))))))))
+			 (should (equal "Show setup" displayed))
 			 (should (eq 'worktree kind))
 			 (should-not sent))
 		     (if original-view-fn
@@ -348,22 +358,24 @@
   ,test
   (test)
   :doc "returns the FSM for a standard transformed streaming request"
-  (let ((gptel-prompt-transform-functions '(transform))
-        (gptel-stream t)
-        model-input
-        request-args)
-    (cl-letf (((symbol-function 'gptel-request)
-               (lambda (&optional _prompt &rest args)
-                 (setq model-input mevedel--pending-model-input
-                       request-args args)
-                 (plist-get args :fsm))))
-      (let ((fsm (mevedel--gptel-send-request "derived prompt")))
-        (should fsm)
-        (should (eq fsm (plist-get request-args :fsm)))
-        (should (equal "derived prompt" model-input))
-        (should (equal '(transform) (plist-get request-args :transforms)))
-        (should (plist-get request-args :stream)))
-      (should-not mevedel--pending-model-input))))
+  (with-temp-buffer
+    (setq-local gptel-prompt-transform-functions '(transform)
+                gptel-stream t)
+    (let (model-input request-args)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&optional _prompt &rest args)
+                   (should (local-variable-p 'mevedel--pending-model-input))
+                   (setq model-input mevedel--pending-model-input
+                         request-args args)
+                   (setq-local mevedel--pending-model-input nil)
+                   (plist-get args :fsm))))
+        (let ((fsm (mevedel--gptel-send-request "derived prompt")))
+          (should fsm)
+          (should (eq fsm (plist-get request-args :fsm)))
+          (should (equal "derived prompt" model-input))
+          (should (equal '(transform) (plist-get request-args :transforms)))
+          (should (plist-get request-args :stream)))
+        (should-not mevedel--pending-model-input)))))
 
 (mevedel-deftest mevedel--implement-plan ()
   ,test
