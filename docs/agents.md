@@ -201,6 +201,14 @@ parent session mirrors an
 `agent-transcripts` alist into the sidecar with agent id, type,
 description, path, status, timestamps, parent turn, and call count.
 
+Persisted agents may compact older history immediately before a continuation
+request.  The canonical transcript path remains stable, the original task and
+recent tail remain visible, and later compactions update the existing anchored
+summary instead of stacking summaries.  Each rewrite first creates the next
+numbered `compact-NNNN` sibling as a recovery artifact.  Those siblings are not
+agent handles or sidecar entries; they belong only to the original session and
+are not copied by rewind forks.
+
 `mevedel-view-agent.el` owns transcript lookup and inspection views plus the
 aggregate live-agent status and targeted handle refresh. The main view renders
 compact one-line agent handles from tool render-data and sidecar state.

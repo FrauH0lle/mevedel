@@ -1543,6 +1543,138 @@
                     messages))
           (should-not mevedel--compact-current-request-reminder)))))
 
+  :doc "updates the anchored summary and archives each persisted continuation"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (let ((task "* Agent Task: inspect\n\nKeep this exact task.\n")
+          (request-data
+           (list :messages
+                 (vector
+                  (list :role "user" :content (make-string 1000 ?x)))))
+          systems bodies (resumed 0)
+          first-canonical before-second)
+      (insert task)
+      (dolist (turn '(("Old response one.\n" . "Old user two.\n")
+                      ("Old response two.\n" . "Old user three.\n")
+                      ("Old response three.\n" . "Recent user four.\n")))
+        (let ((start (point)))
+          (insert (car turn))
+          (put-text-property start (point) 'gptel 'response))
+        (insert (cdr turn)))
+      (let ((start (point)))
+        (insert "Recent response four.\n")
+        (put-text-property start (point) 'gptel 'response))
+      (insert "Pending result four.\n")
+      (basic-save-buffer)
+      (let ((original (buffer-string))
+            (fsm
+             (gptel-make-fsm
+              :info
+              (list :buffer agent-buffer
+                    :history '(TRET)
+                    :data request-data
+                    :backend nil
+                    :model 'mevedel-agent-target-model
+                    :mevedel-agent-invocation invocation
+                    :mevedel-compaction-target-policy
+                    '(:backend nil :model mevedel-agent-target-model
+                      :max-tokens 0 :request-params nil)))))
+        (put 'mevedel-agent-target-model :context-window 0.4)
+        (put 'mevedel-agent-summary-model :context-window 2)
+        (let ((mevedel-compact-token-threshold 0.5)
+              (mevedel-compact-reserve-tokens 0)
+              (mevedel-compact-tail-turns 1)
+              (mevedel-compact-tail-budget 1.0)
+              (gptel-backend nil)
+              (gptel-model 'mevedel-agent-target-model)
+              (gptel-max-tokens 0)
+              (gptel--request-params nil)
+              (gptel-stream nil))
+          (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
+                     (lambda (&rest _)
+                       '(:backend nil :model mevedel-agent-summary-model)))
+                    ((symbol-function 'gptel-get-preset)
+                     (lambda (&rest _)
+                       '(:description "test" :max-tokens nil
+                         :request-params nil)))
+                    ((symbol-function 'gptel-request)
+                     (lambda (body &rest args)
+                       (push body bodies)
+                       (push (plist-get args :system) systems)
+                       (funcall
+                        (plist-get args :callback)
+                        (if (= (length bodies) 1)
+                            "## Goal\n- First retained fact."
+                          "## Goal\n- Updated retained fact.")
+                        nil)))
+                    ((symbol-function
+                      'mevedel--compact-rebuild-info-data-from-buffer)
+                     (lambda (rebuild-fsm _buffer)
+                       (plist-put (gptel-fsm-info rebuild-fsm)
+                                  :data request-data)))
+                    ((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf resumed)))
+                    ((symbol-function 'gptel--update-status) #'ignore)
+                    ((symbol-function 'display-warning) #'ignore)
+                    ((symbol-function 'message) #'ignore))
+            (mevedel--compact-handle-agent-wait fsm)
+            (setq first-canonical (buffer-string))
+            (goto-char (point-max))
+            (insert "New user five.\n")
+            (let ((start (point)))
+              (insert "New response five.\n")
+              (put-text-property start (point) 'gptel 'response))
+            (insert "New user six.\n")
+            (let ((start (point)))
+              (insert "New response six.\n")
+              (put-text-property start (point) 'gptel 'response))
+            (insert "Latest user seven.\n")
+            (let ((start (point)))
+              (insert "Latest response seven.\n")
+              (put-text-property start (point) 'gptel 'response))
+            (insert "Pending result seven.\n")
+            (basic-save-buffer)
+            (setq before-second (buffer-string))
+            (plist-put (gptel-fsm-info fsm) :data request-data)
+            (mevedel--compact-handle-agent-wait fsm)))
+        (let* ((canonical (buffer-string))
+               (archive-directory (file-name-directory canonical-path))
+               (first-archive
+                (expand-file-name
+                 "explorer-test.compact-0001.chat.org"
+                 archive-directory))
+               (second-archive
+                (expand-file-name
+                 "explorer-test.compact-0002.chat.org"
+                 archive-directory)))
+          (should (= 2 resumed))
+          (should (= 2 (length bodies)))
+          (should (file-exists-p first-archive))
+          (should (file-exists-p second-archive))
+          (should
+           (equal original
+                  (with-temp-buffer
+                    (insert-file-contents first-archive)
+                    (buffer-string))))
+          (should
+           (equal before-second
+                  (with-temp-buffer
+                    (insert-file-contents second-archive)
+                    (buffer-string))))
+          (should (string-prefix-p task first-canonical))
+          (should (string-prefix-p task canonical))
+          (should (= 1 (how-many "^#\\+begin_summary" (point-min)
+                                 (point-max))))
+          (should (string-match-p "Updated retained fact" canonical))
+          (should (string-match-p "Latest user seven" canonical))
+          (should (string-match-p "Pending result seven" canonical))
+          (should-not (string-match-p "New user five" canonical))
+          (should (string-match-p "<previous-summary>" (car systems)))
+          (should (string-match-p "First retained fact" (car systems)))
+          (should (string-match-p "New user five" (car bodies)))
+          (should-not (string-match-p "Latest user seven" (car bodies)))
+          (should (equal canonical-path buffer-file-name))))))
+
   :doc "does not inspect or compact an agent's initial WAIT"
   (let* ((agent-buffer (generate-new-buffer " *mevedel-agent-initial-wait*"))
          (invocation (mevedel-agent-invocation-create

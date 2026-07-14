@@ -183,8 +183,10 @@ When the user sends in a buffer with `fork-pending` set,
 `mevedel-session-persistence-fork-now` materializes a fresh fork
 session — predecessor segment files copied verbatim, picked segment
 truncated, file-history backups referenced by the target state copied,
-and referenced agent transcript files copied — then the send proceeds
-onto the fork's segment file. The parent session is never modified.
+and referenced canonical agent transcript files copied — then the send
+proceeds onto the fork's segment file. Numbered agent compaction archives are
+unindexed recovery artifacts and are not copied. The parent session is never
+modified.
 
 ### Agent transcripts
 

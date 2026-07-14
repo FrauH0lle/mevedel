@@ -97,36 +97,6 @@ become implemented, obsolete, or unjustified.
   model, tool, and agent work.  Incorrect cleanup can drain a laptop battery or
   block explicit suspend after mevedel becomes idle.
 
-## Compaction
-
-### Size-reducing retry for oversized compaction requests
-
-- **Source:** `mevedel-compact.el`; `docs/compaction.md`
-- **What's owed:** When a compaction request exceeds the provider context,
-  retry with a smaller source body and fail clearly if the reduced request
-  still does not fit.
-- **Why deferred:** Tool outputs are now capped before summarization, which
-  handles the common oversized-input case; arbitrary large non-tool content
-  still needs a bounded fallback policy.
-- **Status check:** Compaction has transport retries and body/tail tool-output
-  caps, but retries resend the same source body.
-- **Blast radius:** A transcript dominated by very large user or assistant
-  prose can still make compaction fail at the API boundary.
-
-### Sub-agent auto-compaction
-
-- **Source:** `mevedel-compact.el`; `docs/compaction.md`
-- **What's owed:** Give sub-agent transcripts an independent compaction and
-  rotation path.
-- **Why deferred:** The compaction writer rotates the parent session's current
-  segment; an agent transcript is persisted separately and is not a session
-  segment.
-- **Status check:** Continuation compaction is wired into agent FSMs, but the
-  eligibility check rejects agent buffers because they are not the active
-  parent segment.
-- **Blast radius:** A sufficiently long sub-agent run can exhaust its context
-  even when the parent session remains below its threshold.
-
 ## Tools
 
 ### Bedrock backend support for deferred tool loading
