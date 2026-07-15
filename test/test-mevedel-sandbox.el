@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'mevedel-sandbox)
 (require 'helpers
          (file-name-concat
@@ -391,6 +392,50 @@
       (mevedel-sandbox-cleanup default)
       (mevedel-sandbox-cleanup network)
       (delete-directory root t)))
+  :doc "additive filesystem profile:
+exact read and write mounts follow protected masks without broadening siblings"
+  (let* ((root (make-temp-file "mevedel-sandbox-filesystem-" t))
+         (dot-git (file-name-concat root ".git"))
+         (config (file-name-concat dot-git "config"))
+         (head (file-name-concat dot-git "HEAD"))
+         (credentials (file-name-concat root "credentials"))
+         (token (file-name-concat credentials "token"))
+         (sibling (file-name-concat credentials "sibling"))
+         (mevedel-protected-paths
+          `(("**/.git/**" . read-only)
+            (,(concat credentials "/**") . inaccessible)))
+         (mevedel-sandbox-mode 'required)
+         (mevedel-sandbox--probe-cache
+          '(:available t :executable "/test/bwrap"))
+         prepared)
+    (unwind-protect
+        (progn
+          (make-directory dot-git)
+          (make-directory credentials)
+          (dolist (file (list config head token sibling))
+            (with-temp-file file (insert "value")))
+          (setq prepared
+                (mevedel-sandbox-prepare
+                 '("true") root (list root)
+                 `(:file-system ((:path ,token :access read)
+                                 (:path ,config :access write)))))
+          (let ((command (plist-get prepared :command)))
+            (should
+             (cl-loop for tail on command
+                      thereis (equal (seq-take tail 3)
+                                     (list "--ro-bind-fd" "10" token))))
+            (should
+             (cl-loop for tail on command
+                      thereis (equal (seq-take tail 3)
+                                     (list "--bind-fd" "11" config))))
+            (should (member "/test/bwrap" command))
+            (should-not (member head command))
+            (should-not (member sibling command))
+            (should (member "--unshare-net" command))
+            (should (= 2 (plist-get (plist-get prepared :facts)
+                                    :additional-filesystem)))))
+      (mevedel-sandbox-cleanup prepared)
+      (delete-directory root t)))
   :doc "required backend:
 `mevedel-sandbox-prepare' refuses execution when confinement is unavailable"
   (let ((mevedel-sandbox-mode 'required)
@@ -511,6 +556,77 @@ default confinement cannot reach a host listener but network escalation can"
           (when (processp server) (delete-process server))
           (mevedel-sandbox-cleanup default)
           (mevedel-sandbox-cleanup network)
+          (delete-directory root t)))))
+  :doc "real additive filesystem:
+the named protected files reopen while parent and sibling restrictions remain"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (or (plist-get availability :reason)
+                      "Bubblewrap unavailable")))
+      (let* ((root (make-temp-file "mevedel-sandbox-filesystem-real-" t))
+             (dot-git (file-name-concat root ".git"))
+             (config (file-name-concat dot-git "config"))
+             (head (file-name-concat dot-git "HEAD"))
+             (credentials (file-name-concat root "credentials"))
+             (token (file-name-concat credentials "token"))
+             (sibling (file-name-concat credentials "sibling"))
+             (token-copy (file-name-concat root "token-copy"))
+             (sibling-copy (file-name-concat root "sibling-copy"))
+             (mevedel-protected-paths
+              `(("**/.git/**" . read-only)
+                (,(concat credentials "/**") . inaccessible)))
+             prepared)
+        (unwind-protect
+            (progn
+              (make-directory dot-git)
+              (make-directory credentials)
+              (with-temp-file config (insert "old-config"))
+              (with-temp-file head (insert "old-head"))
+              (with-temp-file token (insert "token-value"))
+              (with-temp-file sibling (insert "sibling-value"))
+              (let ((command
+                     (list
+                      "sh" "-c"
+                      (format
+                       (concat
+                        "cat %s > %s; "
+                        "printf new-config > %s; "
+                        "if value=$(cat %s 2>/dev/null); then "
+                        "printf '%%s' \"$value\" > %s; fi; "
+                        "printf new-head > %s 2>/dev/null || true")
+                       (shell-quote-argument token)
+                       (shell-quote-argument token-copy)
+                       (shell-quote-argument config)
+                       (shell-quote-argument sibling)
+                       (shell-quote-argument sibling-copy)
+                       (shell-quote-argument head)))))
+                (setq prepared
+                      (mevedel-sandbox-prepare
+                       command root (list root)
+                       `(:file-system
+                         ((:path ,token :access read)
+                          (:path ,config :access write)))))
+                (should
+                 (zerop
+                  (apply #'call-process
+                         (car (plist-get prepared :command)) nil nil nil
+                         (cdr (plist-get prepared :command))))))
+              (should (equal "token-value"
+                             (with-temp-buffer
+                               (insert-file-contents token-copy)
+                               (buffer-string))))
+              (should (equal "new-config"
+                             (with-temp-buffer
+                               (insert-file-contents config)
+                               (buffer-string))))
+              (should-not (file-exists-p sibling-copy))
+              (should (equal "old-head"
+                             (with-temp-buffer
+                               (insert-file-contents head)
+                               (buffer-string)))))
+          (mevedel-sandbox-cleanup prepared)
           (delete-directory root t)))))
   :doc "real protected paths:
 `mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"

@@ -2022,6 +2022,45 @@
 					      :additional-permissions)))))
 		     (mevedel-tool-clear-registry)
 		     (delete-directory root t)))
+		 :doc "filesystem authority does not authorize its Bash consumer"
+		 (let* ((root (make-temp-file "mevedel-resource-authority-" t))
+			(secret (file-name-concat root "secret"))
+			(workspace (mevedel-workspace--create :root root))
+			(session (mevedel-session--create
+				  :name "resource-authority"
+				  :workspace workspace
+				  :save-path root
+				  :permission-mode 'ask
+				  :resource-grants
+				  (list (list :path secret :access 'read))))
+			(mevedel--session session)
+			(mevedel-permission-rules nil)
+			enqueued-kinds launched result)
+		   (mevedel-tool-exec--register)
+		   (unwind-protect
+		       (let ((tool (mevedel-tool-get "Bash")))
+			 (cl-letf
+			     (((symbol-function 'mevedel-permission--enqueue)
+			       (lambda (entry &optional _session)
+				 (push (plist-get entry :kind) enqueued-kinds)
+				 (funcall (plist-get entry :callback) 'deny-once)))
+			      ((symbol-function
+				'mevedel-tool-exec--start-sandboxed-child-process)
+			       (lambda (&rest _args) (setq launched t))))
+			   (mevedel-pipeline-run-tool
+			    tool (lambda (value) (setq result value))
+			    (list :command (format "custom-reader %s" secret)
+				  :sandbox_permissions
+				  "with_additional_permissions"
+				  :additional_permissions
+				  (list :file_system
+					(list :read (vector secret)))
+				  :justification "Read the requested secret?")))
+			 (should (equal '(bash) enqueued-kinds))
+			 (should-not launched)
+			 (should (string-match-p "Permission denied" result)))
+		     (mevedel-tool-clear-registry)
+		     (delete-directory root t)))
 		 :doc "tool handlers default to the workspace root"
 		 (let* ((root (make-temp-file "mevedel-tool-root-" t))
 			(other (make-temp-file "mevedel-tool-other-" t))

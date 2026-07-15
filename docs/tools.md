@@ -345,6 +345,7 @@ accidental calls like `delete-other-windows` from surprising the user;
 `preserve_ui: false` opts out for deliberate UI manipulation.  `batch`
 runs a child `emacs --batch -Q` process with the current `load-path` and
 the session working directory. Bash and batch Eval share child-process output,
-cleanup, and process-group handling; live Eval does not use that child seam.
-Batch mode isolates the interactive Emacs session from UI/global-state changes,
-but it is not yet an OS security sandbox.
+cleanup, process-group handling, and optional Bubblewrap confinement; live Eval
+does not use that child seam. Batch mode isolates interactive Emacs state and,
+when the platform sandbox is active, applies the same filesystem, protected
+path, process, and network boundaries as Bash.

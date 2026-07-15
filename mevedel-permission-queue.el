@@ -41,6 +41,8 @@
                   "mevedel-permissions" (context))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
+(declare-function mevedel-permission--resource-granted-p
+                  "mevedel-permissions" (path access grants))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -108,7 +110,8 @@ SESSION defaults to the current session."
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
-                   :protected-path :resource-access :origin :command-class
+                   :protected-path :resource-path :resource-access
+                   :origin :command-class
                    :mode :commands-summary :sandbox-permissions
                    :additional-permissions :justification))
       (when (plist-member entry key)
@@ -142,6 +145,7 @@ ENTRY plist keys:
   :specifier-key         -- `:path' / `:pattern' / `:domain' / `:name'
   :specifier-value       -- display path / pattern / domain
   :protected-path        -- non-nil when the original path is protected
+  :resource-path         -- exact additive filesystem path (`sandbox' only)
   :resource-access       -- `read' / `write' for exact filesystem grants
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
@@ -405,7 +409,24 @@ to it as well."
                     (error 'ask))))
              (if (memq safety '(allow deny)) safety 'ask)))
           (t 'ask))))
-      ((or 'eval 'sandbox) 'ask)
+      ('sandbox
+       (if-let* ((path (plist-get entry :resource-path))
+                 (access (plist-get entry :resource-access)))
+           (let* ((context
+                   (plist-put
+                    (mevedel-permission--invocation-context
+                     :tool-name (plist-get entry :tool-name)
+                     :session session
+                     :workspace workspace
+                     :path path)
+                    :resource-access access))
+                  (grants (plist-get context :resource-grants)))
+             (if (mevedel-permission--resource-granted-p
+                  path access grants)
+                 'allow
+               'ask))
+         'ask))
+      ('eval 'ask)
       (_ 'ask))))
 
 (defun mevedel-permission-queue-abort-all (&optional session)

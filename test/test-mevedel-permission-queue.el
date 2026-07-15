@@ -27,6 +27,7 @@
 (require 'mevedel-permissions)
 (require 'mevedel-permission-log)
 (require 'mevedel-permission-queue)
+(require 'mevedel-session-persistence)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tools)
@@ -429,7 +430,26 @@
              :callback (lambda (o) (push o outcomes))))
       (mevedel-permission-queue--coalesce 'allow-session session))
     (should-not outcomes)
-    (should (= 2 (length (mevedel-session-permission-queue session))))))
+    (should (= 2 (length (mevedel-session-permission-queue session)))))
+
+  :doc "filesystem sandbox siblings coalesce through exact resource grants"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         outcomes)
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (dotimes (_ 2)
+        (mevedel-permission--enqueue
+         (list :kind 'sandbox :tool-name "Bash"
+               :resource-path "/tmp/secret"
+               :resource-access 'read
+               :origin "main"
+               :callback (lambda (outcome) (push outcome outcomes)))))
+      (mevedel-permission-add-session-resource-grant
+       session "/tmp/secret" 'read)
+      (mevedel-permission-queue--coalesce 'allow-session session))
+    (should (equal '(allow-once allow-once) outcomes))
+    (should-not (mevedel-session-permission-queue session))))
 
 
 ;;
@@ -954,6 +974,26 @@
     (should (equal "curl https://example.test" (nth 1 captured)))
     (should (equal "Download the requested page?" (nth 2 captured)))
     (should (= 1 (nth 5 captured)))
+    (should (eq entry (nth 6 captured))))
+
+  :doc "filesystem request preserves its exact resource metadata"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'sandbox
+                      :tool-name "Bash"
+                      :detail "cat /tmp/secret"
+                      :justification "Read the requested file?"
+                      :resource-path "/tmp/secret"
+                      :resource-access 'read
+                      :origin "main"
+                      :session session
+                      :callback #'ignore))
+         captured)
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-sandbox)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission-queue--render-sandbox entry))
+    (should (equal "cat /tmp/secret" (nth 1 captured)))
+    (should (= 1 (nth 5 captured)))
     (should (eq entry (nth 6 captured)))))
 
 
@@ -984,7 +1024,15 @@
   :doc "eval kind translates 'allow to authoritative allow-once"
   (should (eq 'allow-once
               (mevedel-permission-queue--translate-coalesce-outcome
-               'eval 'allow))))
+               'eval 'allow)))
+
+  :doc "sandbox kind translates both outcomes to once-only vocabulary"
+  (should (eq 'allow-once
+              (mevedel-permission-queue--translate-coalesce-outcome
+               'sandbox 'allow)))
+  (should (eq 'deny-once
+              (mevedel-permission-queue--translate-coalesce-outcome
+               'sandbox 'deny))))
 
 
 ;;

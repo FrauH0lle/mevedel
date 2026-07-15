@@ -169,7 +169,7 @@ heterogeneous FIFO with four entry kinds:
 - `generic` for pipeline permission asks
 - `bash` for Bash command confirmation
 - `eval` for Eval expression confirmation
-- `sandbox` for once-only additive execution-authority confirmation
+- `sandbox` for additive network or exact filesystem authority
 
 Only the head is visible in the view interaction zone. The permission UI
 registers that head with `mevedel-view-interaction.el`, which owns ordering,
@@ -236,6 +236,17 @@ also isolates the network. A justified additive network request prompts in
 `ask` and `auto`, proceeds automatically in `full-auto` after command
 authorization, and changes only network isolation for that invocation. The
 namespace and mount boundary is inherited by descendants.
+
+A justified additive filesystem request names exact absolute paths and marks
+each as read or write. Ungranted paths prompt in every permission mode;
+invocation, session, and persistent approvals use the same exact resource-grant
+store as native filesystem tools. Approved paths are rebound at only the
+requested access level after protected masks are installed. Inaccessible
+parents expose traversal only far enough to reach the named mount, so their
+contents and sibling resources remain hidden. Command or Eval authorization is
+resolved independently and is never supplied by the resource grant. Explicit
+path denies remain final. Network and filesystem additions may be combined
+without changing any unrequested confinement boundary.
 
 `auto` executes directly when the initial probe is unavailable. For the narrow
 race where a later Bubblewrap launch fails, a marker emitted immediately before

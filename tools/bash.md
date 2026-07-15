@@ -38,6 +38,22 @@ access is the only requested change; the selected filesystem and process
 profile remains unchanged. If confinement is unavailable, the result discloses
 that execution was unrestricted.
 
+### Filesystem escalation
+
+If a confined command fails because it needs a protected path, make a new Bash
+call with `sandbox_permissions="with_additional_permissions"`, a concise
+`justification`, and only the exact absolute paths needed:
+
+- `additional_permissions={"file_system":{"read":["/exact/path"]}}`
+- `additional_permissions={"file_system":{"write":["/exact/path"]}}`
+
+Request the access in the tool call, not separately in prose. Read and write
+are distinct; write also permits reading the same path. Approval reopens only
+the named resource. Its parent, siblings, other protected paths, network, and
+process confinement remain unchanged. Filesystem approval does not authorize
+the Bash command itself, which is checked independently. Network and exact
+filesystem permissions may be requested together when both are necessary.
+
 ### When to use `Bash`
 
 - System commands: git, make, compiler commands, etc.

@@ -368,19 +368,33 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
 
 (defun mevedel-permission--prompt-async-sandbox
     (tool-name detail justification origin cont &optional count entry)
-  "Prompt for additive network authority for TOOL-NAME and DETAIL.
+  "Prompt for additive child authority for TOOL-NAME and DETAIL.
 JUSTIFICATION is the model's user-facing reason.  ORIGIN, CONT, COUNT, and
 ENTRY follow the shared permission prompt contract."
-  (let ((content
+  (let* ((path (plist-get entry :resource-path))
+         (access (plist-get entry :resource-access))
+         (filesystem-p (and path access))
+         (content
          (concat
-          (propertize "Additional Network Permission Request\n"
+          (propertize
+           (if filesystem-p
+               "Additional Filesystem Permission Request\n"
+             "Additional Network Permission Request\n")
                       'font-lock-face '(:inherit bold :inherit warning))
           (mevedel-permission--build-attribution-line origin)
           "\n"
           (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
           (format "%s\n" tool-name)
-          (propertize "Network: " 'font-lock-face 'font-lock-escape-face)
-          "unrestricted for this invocation\n"
+          (if filesystem-p
+              (concat
+               (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
+               (propertize (format "%s\n" path)
+                           'font-lock-face 'font-lock-string-face)
+               (propertize "Access: " 'font-lock-face 'font-lock-escape-face)
+               (format "%s\n" access))
+            (concat
+             (propertize "Network: " 'font-lock-face 'font-lock-escape-face)
+             "unrestricted for this invocation\n"))
           (propertize "Justification: "
                       'font-lock-face 'font-lock-escape-face)
           (format "%s\n\n" justification)
@@ -388,12 +402,19 @@ ENTRY follow the shared permission prompt contract."
           (propertize (format "%s\n\n" detail)
                       'font-lock-face 'font-lock-string-face)
           (propertize
-           (concat
-            "Network access is the only requested change. The selected "
-            "filesystem and process profile remains unchanged.\n")
+           (if filesystem-p
+               (concat
+                "Only the named resource is reopened at the requested access "
+                "level. Other protected paths, network, and process "
+                "confinement remain unchanged.\n")
+             (concat
+              "Network access is the only requested change. The selected "
+              "filesystem and process profile remains unchanged.\n"))
            'font-lock-face 'font-lock-comment-face))))
     (mevedel-permission--prompt-async-with-content
-     content nil cont count entry t t)))
+     content
+     (and filesystem-p (plist-get entry :include-always))
+     cont count entry (not filesystem-p) (not filesystem-p))))
 
 (provide 'mevedel-permission-prompt)
 
