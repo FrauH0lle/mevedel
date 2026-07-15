@@ -368,33 +368,43 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
 
 (defun mevedel-permission--prompt-async-sandbox
     (tool-name detail justification origin cont &optional count entry)
-  "Prompt for additive child authority for TOOL-NAME and DETAIL.
+  "Prompt for changed child authority for TOOL-NAME and DETAIL.
 JUSTIFICATION is the model's user-facing reason.  ORIGIN, CONT, COUNT, and
 ENTRY follow the shared permission prompt contract."
   (let* ((path (plist-get entry :resource-path))
          (access (plist-get entry :resource-access))
          (filesystem-p (and path access))
+         (full-p (eq (plist-get entry :sandbox-permissions)
+                     'require-escalated))
          (content
          (concat
           (propertize
-           (if filesystem-p
-               "Additional Filesystem Permission Request\n"
-             "Additional Network Permission Request\n")
+           (cond
+            (full-p "Full Execution Escalation Request\n")
+            (filesystem-p "Additional Filesystem Permission Request\n")
+            (t "Additional Network Permission Request\n"))
                       'font-lock-face '(:inherit bold :inherit warning))
           (mevedel-permission--build-attribution-line origin)
           "\n"
           (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
           (format "%s\n" tool-name)
-          (if filesystem-p
-              (concat
-               (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
-               (propertize (format "%s\n" path)
-                           'font-lock-face 'font-lock-string-face)
-               (propertize "Access: " 'font-lock-face 'font-lock-escape-face)
-               (format "%s\n" access))
+          (cond
+           (full-p
+            (concat
+             (propertize "Confinement: "
+                         'font-lock-face 'font-lock-escape-face)
+             "disabled for this invocation\n"))
+           (filesystem-p
+            (concat
+             (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
+             (propertize (format "%s\n" path)
+                         'font-lock-face 'font-lock-string-face)
+             (propertize "Access: " 'font-lock-face 'font-lock-escape-face)
+             (format "%s\n" access)))
+           (t
             (concat
              (propertize "Network: " 'font-lock-face 'font-lock-escape-face)
-             "unrestricted for this invocation\n"))
+             "unrestricted for this invocation\n")))
           (propertize "Justification: "
                       'font-lock-face 'font-lock-escape-face)
           (format "%s\n\n" justification)
@@ -402,19 +412,28 @@ ENTRY follow the shared permission prompt contract."
           (propertize (format "%s\n\n" detail)
                       'font-lock-face 'font-lock-string-face)
           (propertize
-           (if filesystem-p
-               (concat
-                "Only the named resource is reopened at the requested access "
-                "level. Other protected paths, network, and process "
-                "confinement remain unchanged.\n")
+           (cond
+            (full-p
+             (concat
+              "Warning: this command runs directly as your user. Filesystem, "
+              "network, and process confinement are all disabled for this "
+              "invocation.\n"))
+            (filesystem-p
+             (concat
+              "Only the named resource is reopened at the requested access "
+              "level. Other protected paths, network, and process "
+              "confinement remain unchanged.\n"))
+            (t
              (concat
               "Network access is the only requested change. The selected "
-              "filesystem and process profile remains unchanged.\n"))
+              "filesystem and process profile remains unchanged.\n")))
            'font-lock-face 'font-lock-comment-face))))
     (mevedel-permission--prompt-async-with-content
      content
-     (and filesystem-p (plist-get entry :include-always))
-     cont count entry (not filesystem-p) (not filesystem-p))))
+     (and (or filesystem-p full-p) (plist-get entry :include-always))
+     cont count entry
+     (not (or filesystem-p full-p))
+     (not (or filesystem-p full-p)))))
 
 (provide 'mevedel-permission-prompt)
 

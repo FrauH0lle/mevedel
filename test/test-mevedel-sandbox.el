@@ -314,6 +314,24 @@
 (mevedel-deftest mevedel-sandbox-prepare ()
   ,test
   (test)
+  :doc "full escalation:
+`mevedel-sandbox-prepare' bypasses the backend after explicit approval"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache 'unconsulted))
+    (let ((prepared
+           (mevedel-sandbox-prepare
+            '("sh" "-c" "printf ok") temporary-file-directory nil nil
+            'require-escalated)))
+      (should (eq (plist-get prepared :state) 'unrestricted))
+      (should (equal (plist-get prepared :command)
+                     '("sh" "-c" "printf ok")))
+      (should (eq (plist-get (plist-get prepared :facts) :sandbox)
+                  'escalated))
+      (should (eq (plist-get (plist-get prepared :facts) :filesystem)
+                  'unrestricted))
+      (should (eq (plist-get (plist-get prepared :facts) :network)
+                  'unrestricted))
+      (should (eq mevedel-sandbox--probe-cache 'unconsulted))))
   :doc "available backend:
 `mevedel-sandbox-prepare' builds the confined read-only-host profile"
   (let* ((executable (or (executable-find "bwrap") "bwrap"))
@@ -650,7 +668,8 @@ the named protected files reopen while parent and sibling restrictions remain"
                                    (shell-quote-argument directory-write)))
                      root (list root)
                      `(:file-system
-                       ((:path ,credentials :access write)))))
+                       ((:path ,(file-name-as-directory credentials)
+                         :access write)))))
               (should
                (zerop
                 (apply #'call-process

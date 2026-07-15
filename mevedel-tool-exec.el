@@ -66,15 +66,16 @@
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" t t)
-(declare-function mevedel-permission--any-deny "mevedel-permissions"
+(declare-function mevedel-permission--bucket-decision
+                  "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--collect-buckets
                   "mevedel-permissions"
                   (invocation-rules request-rules
                                     session-rules persistent-rules))
-(declare-function mevedel-permission--first-non-nil-action
+(declare-function mevedel-permission--execution-level-decision
                   "mevedel-permissions"
-                  (buckets tool-name path pattern domain name))
+                  (buckets tool-name level pattern))
 (declare-function mevedel-permission--first-non-nil-action-with-bucket
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
@@ -102,7 +103,7 @@
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
-                           additional-permissions))
+                           additional-permissions sandbox-permissions))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
@@ -277,7 +278,17 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
              (mevedel-tool-exec--normalize-additional-permissions additional)
              :justification (string-trim justification)))
       ('escalated
-       (error "Full sandbox escalation is not available yet")))))
+       (unless (and (stringp justification)
+                    (not (string-empty-p (string-trim justification))))
+         (error "Full sandbox escalation requires a justification"))
+       (when (and additional (not (eq additional :json-false)))
+         (error "Full sandbox escalation cannot include additional permissions"))
+       (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
+         (error "Full sandbox escalation is available only to batch Eval"))
+       (list :level 'escalated
+             :sandbox-permissions 'require-escalated
+             :additional-permissions nil
+             :justification (string-trim justification))))))
 
 (defun mevedel-tool-exec--permission-allow-p (outcome)
   "Return non-nil when permission OUTCOME authorizes execution."
@@ -356,13 +367,9 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
   "Return the authoritative `deny' or `ask' rule for TOOL-NAME's GRANT."
   (let ((buckets (mevedel-tools--bash-buckets permission-context))
         (path (plist-get grant :path)))
-    (if (mevedel-permission--any-deny
-         buckets tool-name path nil nil nil)
-        'deny
-      (when (eq 'ask
-                (mevedel-permission--first-non-nil-action
-                 buckets tool-name path nil nil nil))
-        'ask))))
+    (let ((action (mevedel-permission--bucket-decision
+                   buckets tool-name path nil nil nil)))
+      (and (memq action '(deny ask)) action))))
 
 (defun mevedel-tool-exec--check-filesystem-permissions-async
     (tool-name detail grants request command-outcome permission-context
@@ -470,7 +477,138 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
                (funcall cont network-outcome)
              (mevedel-tool-exec--check-filesystem-permissions-async
               tool-name detail (plist-get profile :file-system) request
-              command-outcome permission-context metadata-p cont))))))))
+             command-outcome permission-context metadata-p cont))))))))
+
+(defun mevedel-tool-exec--full-escalation-explicit-deny-p
+    (tool-name detail buckets)
+  "Return non-nil when ordinary rules deny TOOL-NAME and DETAIL."
+  (if (equal tool-name "Bash")
+      (mevedel-tool-exec--bash-explicit-deny-p buckets detail)
+    (eq 'deny
+        (mevedel-permission--bucket-decision
+         buckets tool-name nil detail nil nil))))
+
+(defun mevedel-tool-exec--full-escalation-denial
+    (metadata-p via &optional feedback)
+  "Return a full-escalation denial through VIA for METADATA-P."
+  (mevedel-tool-exec--permission-decision-result
+   metadata-p
+   (if feedback
+       (cons 'deny
+             (format "Full execution escalation denied. Feedback: %s"
+                     feedback))
+     'deny)
+   via
+   :sandbox-permissions 'require-escalated))
+
+(defun mevedel-tool-exec--check-full-escalation-async
+    (tool-name detail input request cont)
+  "Authorize REQUEST to run TOOL-NAME and DETAIL without confinement.
+Only direct, user-authored rules qualified with `require-escalated' may skip
+the prompt.  Delegated expansion never prompts for or grants this authority."
+  (let* ((permission-context (plist-get input :permission-context))
+         (metadata-p (plist-get input :permission-decision-metadata))
+         (trust-literal-p (plist-get input :trust-literal-p))
+         (buckets (mevedel-tools--bash-buckets permission-context))
+         (level (plist-get request :sandbox-permissions))
+         (decision
+          (mevedel-permission--execution-level-decision
+           buckets tool-name level detail))
+         (session (or (plist-get permission-context :session)
+                      (and (boundp 'mevedel--session) mevedel--session)))
+         (workspace (or (plist-get permission-context :workspace)
+                        (and session (mevedel-session-workspace session)))))
+    (cond
+     ((or (eq decision 'deny)
+          (mevedel-tool-exec--full-escalation-explicit-deny-p
+           tool-name detail buckets))
+      (when metadata-p
+        (mevedel-tool-exec--log-permission-decision
+         tool-name 'deny 'sandbox-full-escalation
+         :sandbox-permissions level
+         :specifier-key :pattern :specifier-value detail))
+      (funcall cont
+               (mevedel-tool-exec--full-escalation-denial
+                metadata-p 'sandbox-full-escalation)))
+     (trust-literal-p
+      (funcall
+       cont
+       (mevedel-tool-exec--permission-decision-result
+        metadata-p
+        (cons 'deny
+              "Delegated expansion cannot request full execution escalation")
+        'sandbox-policy
+        :sandbox-permissions level)))
+     ((eq decision 'allow)
+      (when metadata-p
+        (mevedel-tool-exec--log-permission-decision
+         tool-name 'allow 'sandbox-full-escalation
+         :sandbox-permissions level
+         :specifier-key :pattern :specifier-value detail))
+      (funcall
+       cont
+       (mevedel-tool-exec--permission-decision-result
+        metadata-p 'allow 'sandbox-full-escalation
+        :sandbox-permissions level
+        :specifier-key :pattern :specifier-value detail)))
+     (t
+      (when metadata-p
+        (mevedel-tool-exec--log-permission-decision
+         tool-name 'ask 'sandbox-full-escalation
+         :sandbox-permissions level
+         :specifier-key :pattern :specifier-value detail))
+      (apply
+       #'mevedel-permission--enqueue
+       (list
+        :kind 'sandbox
+        :tool-name tool-name
+        :detail detail
+        :sandbox-permissions level
+        :justification (plist-get request :justification)
+        :specifier-key :pattern
+        :specifier-value detail
+        :include-always t
+        :workspace workspace
+        :origin (mevedel-tool-exec--current-origin)
+        :callback
+        (lambda (outcome)
+          (pcase outcome
+            ('allow-once
+             (funcall
+              cont
+              (mevedel-tool-exec--permission-decision-result
+               metadata-p 'allow 'sandbox-full-escalation
+               :sandbox-permissions level)))
+            ((or 'allow-session 'always-allow)
+             (mevedel-permission--apply-prompt-result
+              outcome tool-name session workspace nil
+              :spec-key :pattern :spec-value detail
+              :sandbox-permissions level)
+             (funcall
+              cont
+              (mevedel-tool-exec--permission-decision-result
+               metadata-p 'allow 'sandbox-full-escalation
+               :sandbox-permissions level)))
+            ('deny-session
+             (mevedel-permission--apply-prompt-result
+              outcome tool-name session workspace nil
+              :spec-key :pattern :spec-value detail
+              :sandbox-permissions level)
+             (funcall cont (mevedel-tool-exec--full-escalation-denial
+                            metadata-p 'sandbox-full-escalation)))
+            (`(feedback . ,text)
+             (funcall cont (mevedel-tool-exec--full-escalation-denial
+                            metadata-p 'sandbox-full-escalation text)))
+            ('aborted
+             (funcall
+              cont
+              (mevedel-tool-exec--permission-decision-result
+               metadata-p 'aborted 'sandbox-full-escalation
+               :sandbox-permissions level)))
+            (_
+             (funcall cont (mevedel-tool-exec--full-escalation-denial
+                            metadata-p 'sandbox-full-escalation))))))
+       (and session (list session)))))))
 
 (defun mevedel-tool-exec--separate-resource-authority (input request)
   "Return INPUT with REQUEST's filesystem gate marked as independent."
@@ -1198,11 +1336,10 @@ absolutely."
   (let* ((buckets (mevedel-tools--bash-buckets permission-context))
          (mode (mevedel-tool-exec--effective-permission-mode
                 permission-context))
-         (action (mevedel-permission--first-non-nil-action
+         (action (mevedel-permission--bucket-decision
                   buckets "Eval" nil nil nil nil)))
     (cond
-     ((mevedel-permission--any-deny buckets "Eval" nil nil nil nil)
-      'deny)
+     ((eq action 'deny) 'deny)
      ((eq mode 'full-auto)
       'allow)
      (trust-literal-p
@@ -1330,11 +1467,14 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
              (command-input
               (mevedel-tool-exec--separate-resource-authority
                input request)))
-        (mevedel-tool-exec--eval-check-command-permission-async
-         tool-struct command-input
-         (lambda (outcome)
-           (mevedel-tool-exec--check-additional-permission-async
-            "Eval" (plist-get input :expression) input request outcome cont))))
+        (if (eq (plist-get request :level) 'escalated)
+            (mevedel-tool-exec--check-full-escalation-async
+             "Eval" (plist-get input :expression) input request cont)
+          (mevedel-tool-exec--eval-check-command-permission-async
+           tool-struct command-input
+           (lambda (outcome)
+             (mevedel-tool-exec--check-additional-permission-async
+              "Eval" (plist-get input :expression) input request outcome cont)))))
     (error
      (funcall
       cont
@@ -1570,11 +1710,14 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
              (command-input
               (mevedel-tool-exec--separate-resource-authority
                input request)))
-        (mevedel-tool-exec--check-command-permission-async
-         tool-struct command-input
-         (lambda (outcome)
-           (mevedel-tool-exec--check-additional-permission-async
-            "Bash" (plist-get input :command) input request outcome cont))))
+        (if (eq (plist-get request :level) 'escalated)
+            (mevedel-tool-exec--check-full-escalation-async
+             "Bash" (plist-get input :command) input request cont)
+          (mevedel-tool-exec--check-command-permission-async
+           tool-struct command-input
+           (lambda (outcome)
+             (mevedel-tool-exec--check-additional-permission-async
+              "Bash" (plist-get input :command) input request outcome cont)))))
     (error
      (funcall
       cont
@@ -1834,18 +1977,20 @@ On systems with `setsid', timeout signals cover the whole process group."
 
 (defun mevedel-tool-exec--start-sandboxed-child-process
     (name command workdir writable-roots timeout callback
-          &optional additional-permissions)
+          &optional additional-permissions sandbox-permissions)
   "Start COMMAND through the selected confinement boundary.
 
 NAME, WORKDIR, TIMEOUT, and CALLBACK follow
 `mevedel-tool-exec--start-child-process'.  WRITABLE-ROOTS are the approved
 filesystem roots.  In `auto' mode only a Bubblewrap failure before the marker
 may retry COMMAND directly; a started command is never replayed.
-ADDITIONAL-PERMISSIONS is the validated additive execution profile."
+ADDITIONAL-PERMISSIONS is the validated additive execution profile.
+SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (require 'mevedel-sandbox)
   (let ((preparation
          (mevedel-sandbox-prepare
-          command workdir writable-roots additional-permissions)))
+          command workdir writable-roots additional-permissions
+          sandbox-permissions)))
     (pcase (plist-get preparation :state)
       ('refused
        (funcall
@@ -1962,7 +2107,8 @@ and optional :timeout_seconds."
                  timeout))
               child-result
               (plist-get args :suppress-sandbox-disclosure-p))))))
-       (plist-get request :additional-permissions)))))
+       (plist-get request :additional-permissions)
+       (plist-get request :sandbox-permissions)))))
 
 
 ;;
@@ -2115,9 +2261,11 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
         (read (current-buffer))))))
 
 (defun mevedel-tool-exec--eval-batch
-    (callback expression result-format additional-permissions)
+    (callback expression result-format additional-permissions
+              &optional sandbox-permissions)
   "Evaluate EXPRESSION in a confined child and call CALLBACK.
-ADDITIONAL-PERMISSIONS is the validated additive execution profile."
+ADDITIONAL-PERMISSIONS is the validated additive execution profile.
+SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (let* ((workdir (mevedel-tool-exec--default-directory))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
@@ -2165,7 +2313,7 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
                       child-result)))
                  (ignore-errors (delete-file script-file))
                  (ignore-errors (delete-file result-file)))))
-           additional-permissions))
+           additional-permissions sandbox-permissions))
       (error
        (ignore-errors (delete-file script-file))
        (ignore-errors (delete-file result-file))
@@ -2191,7 +2339,8 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
         ('batch
          (mevedel-tool-exec--eval-batch
           callback expression result-format
-          (plist-get request :additional-permissions)))))))
+          (plist-get request :additional-permissions)
+          (plist-get request :sandbox-permissions)))))))
 
 
 ;;
@@ -2255,7 +2404,7 @@ Header shows a truncated first line of the command; body fontifies as
            (timeout_seconds integer :optional
                             "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive.")
            (sandbox_permissions string :optional
-                                "Child-execution authority: use_default or with_additional_permissions."
+                                "Child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
                                 :enum ["use_default"
                                        "with_additional_permissions"
                                        "require_escalated"])
@@ -2296,7 +2445,7 @@ Header shows a truncated first line of the command; body fontifies as
                  :enum ["live" "batch"])
            (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true.")
            (sandbox_permissions string :optional
-                                "Batch child-execution authority: use_default or with_additional_permissions."
+                                "Batch child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
                                 :enum ["use_default"
                                        "with_additional_permissions"
                                        "require_escalated"])

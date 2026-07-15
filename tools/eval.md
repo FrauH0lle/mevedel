@@ -48,6 +48,15 @@ protected paths, network, and process confinement remain unchanged. The Eval
 expression is authorized independently. Network and filesystem permissions
 may be combined in one justified batch invocation.
 
+If an important batch expression still fails because the sandbox itself blocks
+the operation, make a new batch Eval call with
+`sandbox_permissions="require_escalated"` and a concise, user-facing
+`justification`. Request approval in the tool call rather than asking in prose.
+Use additive permissions when they are sufficient: full escalation runs the
+batch child directly as the user with unrestricted filesystem, network, and
+process access. It is a distinct invocation, never an automatic replay, and is
+not available to live Eval.
+
 Output from `print`, `prin1`, and `princ` is captured and returned as
 STDOUT. Use `print` for diagnostic output, not `message` (which goes
 to `*Messages*` and is not captured).

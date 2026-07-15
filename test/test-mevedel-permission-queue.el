@@ -468,6 +468,46 @@
             (mevedel-session-permission-rules session))
       (mevedel-permission-queue--coalesce 'deny-session session))
     (should (equal '(deny-once deny-once) outcomes))
+    (should-not (mevedel-session-permission-queue session)))
+
+  :doc "full escalation siblings coalesce through a qualified session allow"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         outcomes)
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (dotimes (_ 2)
+        (mevedel-permission--enqueue
+         (list :kind 'sandbox :tool-name "Bash"
+               :detail "emacs --batch -Q"
+               :sandbox-permissions 'require-escalated
+               :origin "main"
+               :callback (lambda (outcome) (push outcome outcomes)))))
+      (push '("Bash" :pattern "emacs --batch -Q"
+                     :sandbox-permissions require-escalated
+                     :action allow)
+            (mevedel-session-permission-rules session))
+      (mevedel-permission-queue--coalesce 'allow-session session))
+    (should (equal '(allow-once allow-once) outcomes))
+    (should-not (mevedel-session-permission-queue session)))
+
+  :doc "full escalation siblings coalesce through a qualified session deny"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         outcomes)
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (dotimes (_ 2)
+        (mevedel-permission--enqueue
+         (list :kind 'sandbox :tool-name "Eval"
+               :detail "(message \"hello\")"
+               :sandbox-permissions 'require-escalated
+               :origin "main"
+               :callback (lambda (outcome) (push outcome outcomes)))))
+      (push '("Eval" :sandbox-permissions require-escalated :action deny)
+            (mevedel-session-permission-rules session))
+      (mevedel-permission-queue--coalesce 'deny-session session))
+    (should (equal '(deny-once deny-once) outcomes))
     (should-not (mevedel-session-permission-queue session))))
 
 

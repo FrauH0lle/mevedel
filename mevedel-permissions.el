@@ -587,8 +587,9 @@ matching rules in order (later entries = higher priority)."
                   (:name    . ,name))))
     (dolist (rule rules)
       (let ((rule-tool (car rule)))
-        (when (or (equal rule-tool "*")
-                  (equal rule-tool tool-name))
+        (when (and (not (plist-member (cdr rule) :sandbox-permissions))
+                   (or (equal rule-tool "*")
+                       (equal rule-tool tool-name)))
           (let* ((spec (mevedel-permission--rule-specifier rule))
                  (kind (car spec))
                  (rule-value (cdr spec)))
@@ -771,6 +772,52 @@ PATH, PATTERN, DOMAIN, and NAME are the specifier values."
 PATH, PATTERN, DOMAIN, and NAME are the specifier values."
   (car (mevedel-permission--first-non-nil-action-with-bucket
         buckets tool-name path pattern domain name)))
+
+(defun mevedel-permission--bucket-decision
+    (buckets tool-name path pattern domain name)
+  "Resolve BUCKETS with absolute deny precedence, then inner-first authority."
+  (if (mevedel-permission--any-deny
+       buckets tool-name path pattern domain name)
+      'deny
+    (mevedel-permission--first-non-nil-action
+     buckets tool-name path pattern domain name)))
+
+(defun mevedel-permission--execution-level-rules (rules level)
+  "Return RULES qualified for execution LEVEL without the qualifier field."
+  (cl-loop
+   for rule in rules
+   when (eq (plist-get (cdr rule) :sandbox-permissions) level)
+   collect
+   (cons (car rule)
+         (cl-loop for (key value) on (cdr rule) by #'cddr
+                  unless (eq key :sandbox-permissions)
+                  append (list key value)))))
+
+(defun mevedel-permission--execution-level-decision
+    (buckets tool-name level pattern)
+  "Resolve direct user authority for TOOL-NAME, LEVEL, and PATTERN.
+Qualified denies in any bucket remain final.  Only session, persistent, and
+defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
+  (let ((qualified
+         (mapcar
+          (lambda (entry)
+            (cons (car entry)
+                  (mevedel-permission--execution-level-rules
+                   (cdr entry) level)))
+          buckets)))
+    (if (cl-some
+         (lambda (entry)
+           (eq 'deny
+               (mevedel-permission--rules-action
+                (cdr entry) tool-name :pattern pattern)))
+         qualified)
+        'deny
+      (cl-loop for (bucket . rules) in qualified
+               when (memq bucket '(:session :persistent :defcustom))
+               do (when-let* ((action
+                               (mevedel-permission--rules-action
+                                rules tool-name :pattern pattern)))
+                    (cl-return action))))))
 
 (defun mevedel-permission--normalize-outcome (outcome)
   "Return the log-safe decision symbol for permission OUTCOME."
@@ -1299,19 +1346,25 @@ mode, and native-resource tail."
           (cl-remove grant (mevedel-session-resource-grants session)
                      :test #'equal))))
 
-(defun mevedel-permission--build-rule (tool-name action spec-key spec-value)
+(cl-defun mevedel-permission--build-rule
+    (tool-name action spec-key spec-value &key sandbox-permissions)
   "Build a permission rule list from the given components.
 
 TOOL-NAME is the tool name string or \"*\".  ACTION is `allow', `deny',
 or `ask'.  SPEC-KEY is one of `:path', `:pattern', `:domain', `:name',
 or nil for an unqualified rule.  SPEC-VALUE is the glob associated with
-SPEC-KEY (ignored when SPEC-KEY is nil)."
-  (if (and spec-key spec-value)
-      (list tool-name spec-key spec-value :action action)
-    (list tool-name :action action)))
+SPEC-KEY (ignored when SPEC-KEY is nil).  SANDBOX-PERMISSIONS optionally
+qualifies the already requested child-execution level."
+  (append
+   (list tool-name)
+   (and spec-key spec-value (list spec-key spec-value))
+   (and sandbox-permissions
+        (list :sandbox-permissions sandbox-permissions))
+   (list :action action)))
 
 (cl-defun mevedel-permission--add-session-rule
-    (session tool-name action &optional path &key spec-key spec-value)
+    (session tool-name action &optional path
+             &key spec-key spec-value sandbox-permissions)
   "Add a permission rule to SESSION's rule list.
 
 TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
@@ -1319,7 +1372,8 @@ TOOL-NAME is the tool name string.  ACTION is `allow' or `deny'.
 Positional PATH is retained for existing call sites; when supplied it is
 equivalent to SPEC-KEY `:path' with that value.  Callers specifying
 another specifier should pass SPEC-KEY (e.g. `:pattern') and SPEC-VALUE
-instead, leaving PATH nil.
+instead, leaving PATH nil.  SANDBOX-PERMISSIONS qualifies an already requested
+execution level.
 
 Mutates SESSION's `permission-rules' slot via `setf' -- this is a
 **by-reference** write.  Sub-agents share the parent session by
@@ -1330,7 +1384,9 @@ and to every other live sub-agent sharing the same session struct.  This
 is a deliberate contract, not an accident of the buffer-local plumbing."
   (let* ((key (or spec-key (and path :path)))
          (value (or spec-value path))
-         (rule (mevedel-permission--build-rule tool-name action key value))
+         (rule (mevedel-permission--build-rule
+                tool-name action key value
+                :sandbox-permissions sandbox-permissions))
          (rules (mevedel-session-permission-rules session)))
     (unless (member rule rules)
       (setf (mevedel-session-permission-rules session)
@@ -1393,20 +1449,24 @@ Returns a merged list in `mevedel-permission-rules' format."
               :resource-grants)))
 
 (cl-defun mevedel-permission--save-persistent-rule
-    (workspace tool-name action &optional path &key spec-key spec-value)
+    (workspace tool-name action &optional path
+               &key spec-key spec-value sandbox-permissions)
   "Append a permission rule to WORKSPACE's persistent rules file.
 
 TOOL-NAME and ACTION define the rule.  Positional PATH is equivalent
 to SPEC-KEY `:path'.  SPEC-KEY/SPEC-VALUE let callers store rules
 qualified by any specifier (`:path', `:pattern', `:domain', `:name').
-The file is created if it does not exist."
+SANDBOX-PERMISSIONS qualifies an already requested execution level.  The file
+is created if it does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
          (store (or (mevedel-permission--read-store-file file)
                     (list :rules nil :resource-grants nil)))
          (existing (plist-get store :rules))
          (key (or spec-key (and path :path)))
          (value (or spec-value path))
-         (rule (mevedel-permission--build-rule tool-name action key value))
+         (rule (mevedel-permission--build-rule
+                tool-name action key value
+                :sandbox-permissions sandbox-permissions))
          (updated (if (member rule existing)
                       existing
                     (append existing (list rule)))))
@@ -1446,7 +1506,7 @@ The file is created if it does not exist."
 
 (cl-defun mevedel-permission--apply-prompt-result
     (result tool-name &optional session workspace path
-            &key spec-key spec-value resource-access)
+            &key spec-key spec-value resource-access sandbox-permissions)
   "Dispatch a permission prompt RESULT to the correct storage.
 
 RESULT is one of:
@@ -1460,12 +1520,14 @@ TOOL-NAME is the tool being permitted.  SESSION and WORKSPACE are used
 for storage.  Positional PATH scopes the authority to a file path (kept
 for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow rule
 scoping by any other specifier (`:pattern', `:domain', `:name').
-RESOURCE-ACCESS stores exact path authority separately from rules."
+RESOURCE-ACCESS stores exact path authority separately from rules.
+SANDBOX-PERMISSIONS qualifies an already requested execution level."
   (cl-flet ((session-rule (action)
               (when session
                 (mevedel-permission--add-session-rule
                  session tool-name action path
-                 :spec-key spec-key :spec-value spec-value)))
+                 :spec-key spec-key :spec-value spec-value
+                 :sandbox-permissions sandbox-permissions)))
             (session-resource-grant ()
               (when (and session path resource-access)
                 (mevedel-permission-add-session-resource-grant
@@ -1479,7 +1541,8 @@ RESOURCE-ACCESS stores exact path authority separately from rules."
                (workspace
                 (mevedel-permission--save-persistent-rule
                  workspace tool-name action path
-                 :spec-key spec-key :spec-value spec-value))
+                 :spec-key spec-key :spec-value spec-value
+                 :sandbox-permissions sandbox-permissions))
                (t
                 ;; User clicked always-allow but no workspace is
                 ;; in scope (gone since enqueue, or session not

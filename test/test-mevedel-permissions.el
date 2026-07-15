@@ -186,7 +186,11 @@
   (let ((rules '(("Agent" :name "explorer" :action allow))))
     (should (eq (mevedel-permission--rules-action
                  rules "Agent" :name "explorer")
-                'allow))))
+                'allow)))
+  :doc "execution-level qualifiers never match ordinary tool resolution"
+  (let ((rules '(("Bash" :sandbox-permissions require-escalated
+                         :action allow))))
+    (should-not (mevedel-permission--rules-action rules "Bash"))))
 
 
 ;;
@@ -833,6 +837,25 @@
     (unwind-protect
         (should-not (mevedel-permission--load-persistent-rules ws))
       (delete-directory tmp-dir t)))
+  :doc "round-trips an execution-level-qualified persistent rule"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil)))
+    (unwind-protect
+        (progn
+          (mevedel-permission--save-persistent-rule
+           ws "Eval" 'allow nil
+           :spec-key :pattern :spec-value "(message *)"
+           :sandbox-permissions 'require-escalated)
+          (should
+           (equal
+            '(("Eval" :pattern "(message *)"
+                      :sandbox-permissions require-escalated
+                      :action allow))
+            (mevedel-permission--load-persistent-rules ws))))
+      (delete-directory tmp-dir t)))
   :doc "merges global and project rules, project rules last"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (global-dir (file-name-concat tmp-dir "global/"))
@@ -1032,6 +1055,20 @@
                  'allow-session "Edit" session)
                 'allow))
     (should (= (length (mevedel-session-permission-rules session)) 1)))
+  :doc "allow-session stores an execution-level-qualified pattern rule"
+  (let ((session (mevedel-session--create :name "test")))
+    (should
+     (eq 'allow
+         (mevedel-permission--apply-prompt-result
+          'allow-session "Bash" session nil nil
+          :spec-key :pattern :spec-value "emacs --batch *"
+          :sandbox-permissions 'require-escalated)))
+    (should
+     (equal
+      '(("Bash" :pattern "emacs --batch *"
+                :sandbox-permissions require-escalated
+                :action allow))
+      (mevedel-session-permission-rules session))))
   :doc "allow-session stores exact resource authority separately from rules"
   (let* ((session (mevedel-session--create :name "test"))
          (path (expand-file-name "/outside/file.el")))
@@ -1645,6 +1682,84 @@ must restore the prior value to avoid cross-test pollution."
           nil nil nil)))
     (should-not (mevedel-permission--any-deny
                  buckets-no-deny "Bash" nil "rm /etc" nil nil))))
+
+(mevedel-deftest mevedel-permission--bucket-decision ()
+  ,test
+  (test)
+  :doc "an outer deny remains absolute over an inner allow"
+  (let ((mevedel-permission-rules nil)
+        (buckets
+         (mevedel-permission--collect-buckets
+          '(("Bash" :path "/secret" :action allow))
+          nil
+          '(("Bash" :path "/secret" :action deny))
+          nil)))
+    (should (eq 'deny
+                (mevedel-permission--bucket-decision
+                 buckets "Bash" "/secret" nil nil nil))))
+
+  :doc "without a deny the innermost matching action wins"
+  (let ((mevedel-permission-rules nil)
+        (buckets
+         (mevedel-permission--collect-buckets
+          '(("Bash" :path "/secret" :action ask))
+          nil
+          '(("Bash" :path "/secret" :action allow))
+          nil)))
+    (should (eq 'ask
+                (mevedel-permission--bucket-decision
+                 buckets "Bash" "/secret" nil nil nil)))))
+
+(mevedel-deftest mevedel-permission--execution-level-decision ()
+  ,test
+  (test)
+  :doc "direct scoped rule authorizes only its requested execution level"
+  (let ((mevedel-permission-rules nil)
+        (buckets
+         (mevedel-permission--collect-buckets
+          nil nil
+          '(("Bash" :pattern "emacs --batch *"
+                    :sandbox-permissions require-escalated
+                    :action allow))
+          nil)))
+    (should
+     (eq 'allow
+         (mevedel-permission--execution-level-decision
+          buckets "Bash" 'require-escalated "emacs --batch -Q")))
+    (should-not
+     (mevedel-permission--execution-level-decision
+      buckets "Bash" 'require-escalated "curl example.test")))
+
+  :doc "deliberately broad direct rule may authorize full escalation"
+  (let ((mevedel-permission-rules
+         '(("Eval" :sandbox-permissions require-escalated :action allow))))
+    (should
+     (eq 'allow
+         (mevedel-permission--execution-level-decision
+          (mevedel-permission--collect-buckets nil nil nil nil)
+          "Eval" 'require-escalated "(message \"hello\")"))))
+
+  :doc "delegated allow cannot grant full escalation"
+  (let ((mevedel-permission-rules nil)
+        (buckets
+         (mevedel-permission--collect-buckets
+          '(("Bash" :sandbox-permissions require-escalated :action allow))
+          nil nil nil)))
+    (should-not
+     (mevedel-permission--execution-level-decision
+      buckets "Bash" 'require-escalated "pwd")))
+
+  :doc "delegated deny remains final over a direct allow"
+  (let ((mevedel-permission-rules
+         '(("Bash" :sandbox-permissions require-escalated :action allow)))
+        (buckets
+         (mevedel-permission--collect-buckets
+          '(("Bash" :sandbox-permissions require-escalated :action deny))
+          nil nil nil)))
+    (should
+     (eq 'deny
+         (mevedel-permission--execution-level-decision
+          buckets "Bash" 'require-escalated "pwd")))))
 
 (mevedel-deftest mevedel-check-permission/bucket-precedence ()
   ,test

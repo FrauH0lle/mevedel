@@ -199,6 +199,27 @@
       (should (string-match-p "Only the named resource" content)))
     (should (eq t (nth 1 captured)))
     (should-not (nth 5 captured))
+    (should-not (nth 6 captured)))
+
+  :doc "renders full escalation with an explicit bypass warning"
+  (let (captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-sandbox
+       "Eval" "(delete-file \"important\")" "Run outside confinement?"
+       "main" #'ignore 1
+       '(:kind sandbox
+         :sandbox-permissions require-escalated
+         :include-always t)))
+    (let ((content (nth 0 captured)))
+      (should (string-match-p "Full Execution Escalation Request" content))
+      (should (string-match-p "runs directly as your user" content))
+      (should (string-match-p
+               "Filesystem, network, and process confinement.*disabled"
+               content)))
+    (should (eq t (nth 1 captured)))
+    (should-not (nth 5 captured))
     (should-not (nth 6 captured))))
 
 (mevedel-deftest mevedel-permission--format-bash-guardian
