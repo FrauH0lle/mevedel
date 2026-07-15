@@ -185,12 +185,22 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
          (search-tree
           (root pattern mode directory-p)
           (when (file-directory-p root)
-            (dolist (path
-                     (cons root
-                           (directory-files-recursively
-                            root "." t #'file-readable-p nil)))
-              (when (mevedel-permission--match-path-pattern path pattern)
-                (add-candidate path mode directory-p))))))
+            (if (not (file-readable-p root))
+                (add-candidate root 'inaccessible t)
+              (dolist
+                  (path
+                   (cons
+                    root
+                    (directory-files-recursively
+                     root "." t
+                     (lambda (directory)
+                       (if (file-readable-p directory)
+                           t
+                         (add-candidate directory 'inaccessible t)
+                         nil))
+                     nil)))
+                (when (mevedel-permission--match-path-pattern path pattern)
+                  (add-candidate path mode directory-p)))))))
       (dolist (entry (mevedel-permission-protected-path-policy))
         (let* ((pattern (car entry))
                (mode (cdr entry))
