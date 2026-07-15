@@ -177,7 +177,29 @@
     (should (= 2 (nth 3 captured)))
     (should (equal '(:kind sandbox) (nth 4 captured)))
     (should (eq t (nth 5 captured)))
-    (should (eq t (nth 6 captured)))))
+    (should (eq t (nth 6 captured))))
+
+  :doc "renders exact filesystem access with rule-creating choices"
+  (let (captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-sandbox
+       "Bash" "cat /tmp/secret" "Read the requested file?"
+       "main" #'ignore 1
+       '(:kind sandbox
+         :resource-path "/tmp/secret"
+         :resource-access read
+         :include-always t)))
+    (let ((content (nth 0 captured)))
+      (should (string-match-p "Additional Filesystem Permission Request"
+                              content))
+      (should (string-match-p "/tmp/secret" content))
+      (should (string-match-p "Access: .*read" content))
+      (should (string-match-p "Only the named resource" content)))
+    (should (eq t (nth 1 captured)))
+    (should-not (nth 5 captured))
+    (should-not (nth 6 captured))))
 
 (mevedel-deftest mevedel-permission--format-bash-guardian
   ()

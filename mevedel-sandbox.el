@@ -322,7 +322,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                                 :mode mode
                                 :directory-p (file-directory-p canonical))
                           restrictions))))))
-          (let (arguments resolved)
+          (let (arguments post-arguments resolved)
             (dolist (restriction restrictions)
               (let* ((path (plist-get restriction :path))
                      (existing (assoc path resolved)))
@@ -357,11 +357,15 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                           (list "--ro-bind" path path))
                          ('inaccessible
                           (if directory-p
-                              (list "--perms" "000" "--tmpfs" path
-                                    "--remount-ro" path)
+                              (progn
+                                (setq post-arguments
+                                      (append post-arguments
+                                              (list "--remount-ro" path)))
+                                (list "--perms" "000" "--tmpfs" path))
                             (list "--ro-bind" "/dev/null" path
                                   "--chmod" "000" path))))))))
             (list :arguments arguments
+                  :post-arguments post-arguments
                   :cleanup-paths (nreverse cleanup-paths)
                   :count (length resolved))))
       (error
@@ -384,6 +388,76 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
   (let ((facts (mevedel-sandbox--unrestricted-facts sandbox reason)))
     (setq mevedel-sandbox--last-facts facts)
     (list :state 'unrestricted :command command :facts facts)))
+
+(defun mevedel-sandbox--additional-filesystem-mounts (permissions)
+  "Return FD-backed exact mounts for normalized filesystem PERMISSIONS."
+  (let (arguments paths)
+    (dolist (grant (plist-get permissions :file-system))
+      (let ((path (plist-get grant :path))
+            (access (plist-get grant :access))
+            (fd (+ 10 (length paths))))
+        (unless (and (stringp path)
+                     (file-name-absolute-p path)
+                     (file-exists-p path))
+          (signal
+           'mevedel-sandbox-policy-error
+           (list (format "Additional filesystem path is unavailable: %S"
+                         path))))
+        (unless (memq access '(read write))
+          (signal
+           'mevedel-sandbox-policy-error
+           (list (format "Invalid additional filesystem access: %S"
+                         access))))
+        (setq arguments
+              (append arguments
+                      (list (if (eq access 'write)
+                                "--bind-fd"
+                              "--ro-bind-fd")
+                            (number-to-string fd) path))
+              paths (append paths (list path)))))
+    (list :arguments arguments :paths paths)))
+
+(defun mevedel-sandbox--fd-backed-command (command paths)
+  "Return COMMAND wrapped to preserve exact host PATHS on file descriptors."
+  (if (not paths)
+      command
+    (let ((bash (executable-find "bash")))
+      (unless bash
+        (signal 'mevedel-sandbox-policy-error
+                '("Additive filesystem confinement requires 'bash'")))
+      (let* ((count (length paths))
+             (open-forms
+              (cl-loop for index from 1 to count
+                       for fd from 10
+                       collect (format "exec %d<\"$%d\"" fd index)))
+             (script
+              (string-join
+               (append open-forms
+                       (list (format "shift %d" count) "exec \"$@\""))
+               "; ")))
+        (append (list bash "-c" script "mevedel-sandbox-fds")
+                paths command)))))
+
+(defun mevedel-sandbox--open-granted-parent-traversal
+    (arguments permissions)
+  "Allow traversal through masked parents in ARGUMENTS for exact PERMISSIONS."
+  (let ((updated (copy-sequence arguments))
+        (grants (plist-get permissions :file-system)))
+    (cl-loop for tail on updated
+             when (and (equal (car tail) "--perms")
+                       (equal (nth 1 tail) "000")
+                       (equal (nth 2 tail) "--tmpfs")
+                       (stringp (nth 3 tail))
+                       (cl-some
+                        (lambda (grant)
+                          (let ((parent (file-name-as-directory
+                                         (expand-file-name (nth 3 tail))))
+                                (path (expand-file-name
+                                       (plist-get grant :path))))
+                            (string-prefix-p parent path)))
+                        grants))
+             do (setcar (cdr tail) "0111"))
+    updated))
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable additional-permissions)
@@ -411,13 +485,20 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
              canonical-workdir roots))
            (network-access-p
             (eq t (plist-get additional-permissions :network)))
+           (filesystem-permissions
+            (plist-get additional-permissions :file-system))
+           (filesystem-mounts
+            (mevedel-sandbox--additional-filesystem-mounts
+             additional-permissions))
            (facts (list :sandbox 'bubblewrap
                         :filesystem 'workspace-write
                         :network (if network-access-p
                                      'unrestricted
                                    'isolated)
                         :writable-roots roots
-                        :protected-paths (plist-get protected :count)))
+                        :protected-paths (plist-get protected :count)
+                        :additional-filesystem
+                        (length filesystem-permissions)))
            (arguments
             (append
              (list "--new-session"
@@ -427,7 +508,11 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
              (cl-mapcan
               (lambda (root) (list "--bind" root root))
               roots)
-             (plist-get protected :arguments)
+             (mevedel-sandbox--open-granted-parent-traversal
+              (plist-get protected :arguments)
+              additional-permissions)
+             (plist-get filesystem-mounts :arguments)
+             (plist-get protected :post-arguments)
              (list "--unshare-user"
                    "--unshare-pid")
              (unless network-access-p
@@ -441,7 +526,10 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
              command)))
       (setq mevedel-sandbox--last-facts facts)
       (list :state 'confined
-            :command (cons executable arguments)
+            :command
+            (mevedel-sandbox--fd-backed-command
+             (cons executable arguments)
+             (plist-get filesystem-mounts :paths))
             :original-command command
             :marker marker
             :cleanup-paths (plist-get protected :cleanup-paths)

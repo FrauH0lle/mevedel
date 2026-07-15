@@ -39,6 +39,15 @@ change to the selected filesystem and process profile. If confinement is
 unavailable, the result discloses unrestricted execution. Additional sandbox
 permissions do not apply to live Eval.
 
+For a protected-path failure in batch mode, make a new call with the same
+`sandbox_permissions` value, a concise `justification`, and exact absolute
+paths under `additional_permissions.file_system.read` or
+`additional_permissions.file_system.write`. Write access includes reading the
+same path. Approval reopens only each named resource; parents, siblings, other
+protected paths, network, and process confinement remain unchanged. The Eval
+expression is authorized independently. Network and filesystem permissions
+may be combined in one justified batch invocation.
+
 Output from `print`, `prin1`, and `princ` is captured and returned as
 STDOUT. Use `print` for diagnostic output, not `message` (which goes
 to `*Messages*` and is not captured).

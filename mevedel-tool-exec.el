@@ -84,6 +84,8 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
+(declare-function mevedel-permission--resource-granted-p
+                  "mevedel-permissions" (path access grants))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
 (declare-function mevedel-permission-protected-path-policy
@@ -110,6 +112,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -174,6 +177,71 @@ that has unwound."
                          :via via)
                    props))))
 
+(defun mevedel-tool-exec--validate-additional-plist (value allowed label)
+  "Return VALUE after validating its keys against ALLOWED for LABEL."
+  (unless (and (listp value)
+               (proper-list-p value)
+               (zerop (% (length value) 2)))
+    (error "%s must be an object" label))
+  (let ((tail value))
+    (while tail
+      (let ((key (pop tail)))
+        (pop tail)
+        (unless (memq key allowed)
+          (error "Unknown %s field: %s" label key)))))
+  value)
+
+(defun mevedel-tool-exec--filesystem-paths (value access)
+  "Return exact filesystem permission entries from VALUE at ACCESS."
+  (let ((paths
+         (cond
+          ((or (null value) (eq value :json-false)) nil)
+          ((vectorp value) (append value nil))
+          ((proper-list-p value) value)
+          (t (error "Filesystem %s permission must be an array" access)))))
+    (mapcar
+     (lambda (path)
+       (unless (and (stringp path)
+                    (not (string-empty-p path))
+                    (file-name-absolute-p path))
+         (error "Filesystem permission path must be absolute: %S" path))
+       (list :path (expand-file-name path) :access access))
+     paths)))
+
+(defun mevedel-tool-exec--normalize-additional-permissions (additional)
+  "Return validated ADDITIONAL network and exact filesystem permissions."
+  (mevedel-tool-exec--validate-additional-plist
+   additional '(:network :file_system) "Additional permissions")
+  (let ((network (plist-get additional :network))
+        (file-system (plist-get additional :file_system))
+        grants profile)
+    (unless (memq network '(nil t :json-false))
+      (error "Network permission must be true or false"))
+    (when (and file-system (not (eq file-system :json-false)))
+      (mevedel-tool-exec--validate-additional-plist
+       file-system '(:read :write) "Filesystem permissions")
+      (let ((reads (mevedel-tool-exec--filesystem-paths
+                    (plist-get file-system :read) 'read))
+            (writes (mevedel-tool-exec--filesystem-paths
+                     (plist-get file-system :write) 'write)))
+        (dolist (grant (append reads writes))
+          (let* ((path (plist-get grant :path))
+                 (existing
+                  (cl-find path grants
+                           :key (lambda (item) (plist-get item :path))
+                           :test #'string-equal)))
+            (if existing
+                (when (eq (plist-get grant :access) 'write)
+                  (plist-put existing :access 'write))
+              (setq grants (append grants (list grant))))))))
+    (when (eq network t)
+      (setq profile (plist-put profile :network t)))
+    (when grants
+      (setq profile (plist-put profile :file-system grants)))
+    (unless profile
+      (error "Additional permissions must contain a non-empty capability"))
+    profile))
+
 (defun mevedel-tool-exec--sandbox-request
     (args tool &optional eval-mode)
   "Return the validated child-execution request from ARGS.
@@ -199,19 +267,14 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
          (error "Default sandbox execution cannot include escalation arguments"))
        '(:level use-default :additional-permissions nil))
       ('additive
-       (unless (and (listp additional)
-                    (proper-list-p additional)
-                    (zerop (% (length additional) 2))
-                    (= (length additional) 2)
-                    (eq t (plist-get additional :network)))
-         (error "Additional permissions must contain non-empty network access"))
        (unless (and (stringp justification)
                     (not (string-empty-p (string-trim justification))))
          (error "Additional permissions require a justification"))
        (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
          (error "Additional permissions are available only to batch Eval"))
        (list :level 'additive
-             :additional-permissions '(:network t)
+             :additional-permissions
+             (mevedel-tool-exec--normalize-additional-permissions additional)
              :justification (string-trim justification)))
       ('escalated
        (error "Full sandbox escalation is not available yet")))))
@@ -225,6 +288,153 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
           (plist-get outcome :outcome)
         outcome)))
 
+(defun mevedel-tool-exec--additional-denial
+    (metadata-p via &optional feedback)
+  "Return an additional-authority denial through VIA for METADATA-P."
+  (mevedel-tool-exec--permission-decision-result
+   metadata-p
+   (if feedback
+       (cons 'deny
+             (format "Additional permission denied. Feedback: %s" feedback))
+     'deny)
+   via))
+
+(defun mevedel-tool-exec--check-network-permission-async
+    (tool-name detail request command-outcome permission-context metadata-p cont)
+  "Check REQUEST's network authority, then call CONT with COMMAND-OUTCOME."
+  (if (not (eq t (plist-get (plist-get request :additional-permissions)
+                            :network)))
+      (funcall cont command-outcome)
+    (if (eq (mevedel-tool-exec--effective-permission-mode permission-context)
+            'full-auto)
+        (progn
+          (when metadata-p
+            (mevedel-tool-exec--log-permission-decision
+             tool-name 'allow 'sandbox-network
+             :sandbox-permissions 'additive
+             :additional-permissions '(:network t)))
+          (funcall cont command-outcome))
+      (apply
+       #'mevedel-permission--enqueue
+       (list
+        :kind 'sandbox
+        :tool-name tool-name
+        :detail detail
+        :sandbox-permissions 'additive
+        :additional-permissions '(:network t)
+        :justification (plist-get request :justification)
+        :origin (mevedel-tool-exec--current-origin)
+        :callback
+        (lambda (outcome)
+          (pcase outcome
+            ('allow-once (funcall cont command-outcome))
+            (`(feedback . ,text)
+             (funcall cont (mevedel-tool-exec--additional-denial
+                            metadata-p 'sandbox-network text)))
+            ('aborted
+             (funcall
+              cont
+              (mevedel-tool-exec--permission-decision-result
+               metadata-p 'aborted 'sandbox-network)))
+            (_ (funcall cont (mevedel-tool-exec--additional-denial
+                              metadata-p 'sandbox-network))))))
+       (and (plist-get permission-context :session)
+            (list (plist-get permission-context :session)))))))
+
+(defun mevedel-tool-exec--filesystem-resource-granted-p
+    (grant permission-context)
+  "Return non-nil when PERMISSION-CONTEXT already authorizes GRANT."
+  (let* ((session (plist-get permission-context :session))
+         (grants
+          (append (plist-get permission-context :resource-grants)
+                  (and session (mevedel-session-resource-grants session)))))
+    (mevedel-permission--resource-granted-p
+     (plist-get grant :path) (plist-get grant :access) grants)))
+
+(defun mevedel-tool-exec--filesystem-resource-denied-p
+    (tool-name grant permission-context)
+  "Return non-nil when an explicit rule denies TOOL-NAME's GRANT."
+  (mevedel-permission--any-deny
+   (mevedel-tools--bash-buckets permission-context)
+   tool-name (plist-get grant :path) nil nil nil))
+
+(defun mevedel-tool-exec--check-filesystem-permissions-async
+    (tool-name detail grants request command-outcome permission-context
+               metadata-p cont)
+  "Authorize exact filesystem GRANTS, then call CONT with COMMAND-OUTCOME."
+  (if (not grants)
+      (funcall cont command-outcome)
+    (let* ((grant (car grants))
+           (path (plist-get grant :path))
+           (access (plist-get grant :access))
+           (session (plist-get permission-context :session))
+           (workspace (or (plist-get permission-context :workspace)
+                          (and session (mevedel-session-workspace session))))
+           (continue
+            (lambda ()
+              (when metadata-p
+                (mevedel-tool-exec--log-permission-decision
+                 tool-name 'allow 'sandbox-filesystem
+                 :sandbox-permissions 'additive
+                 :specifier-key :path :specifier-value path
+                 :resource-access access))
+              (mevedel-tool-exec--check-filesystem-permissions-async
+               tool-name detail (cdr grants) request command-outcome
+               permission-context metadata-p cont))))
+      (cond
+       ((mevedel-tool-exec--filesystem-resource-denied-p
+         tool-name grant permission-context)
+        (funcall cont (mevedel-tool-exec--additional-denial
+                       metadata-p 'sandbox-filesystem)))
+       ((mevedel-tool-exec--filesystem-resource-granted-p
+         grant permission-context)
+        (funcall continue))
+       (t
+        (apply
+         #'mevedel-permission--enqueue
+         (list
+          :kind 'sandbox
+          :tool-name tool-name
+          :detail detail
+          :sandbox-permissions 'additive
+          :additional-permissions (list :file-system (list grant))
+          :justification (plist-get request :justification)
+          :specifier-key :path
+          :specifier-value path
+          :resource-path path
+          :resource-access access
+          :include-always (not (null workspace))
+          :workspace workspace
+          :origin (mevedel-tool-exec--current-origin)
+          :callback
+          (lambda (outcome)
+            (pcase outcome
+              ((or 'allow 'allow-once 'allow-session 'always-allow)
+               (when (memq outcome '(allow-session always-allow))
+                 (mevedel-permission--apply-prompt-result
+                  outcome tool-name session workspace path
+                  :spec-key :path :spec-value path
+                  :resource-access access))
+               (funcall continue))
+              ('deny-session
+               (mevedel-permission--apply-prompt-result
+                outcome tool-name session workspace path
+                :spec-key :path :spec-value path
+                :resource-access access)
+               (funcall cont (mevedel-tool-exec--additional-denial
+                              metadata-p 'sandbox-filesystem)))
+              (`(feedback . ,text)
+               (funcall cont (mevedel-tool-exec--additional-denial
+                              metadata-p 'sandbox-filesystem text)))
+              ('aborted
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p 'aborted 'sandbox-filesystem)))
+              (_ (funcall cont (mevedel-tool-exec--additional-denial
+                                metadata-p 'sandbox-filesystem))))))
+         (and session (list session))))))))
+
 (defun mevedel-tool-exec--check-additional-permission-async
     (tool-name detail input request command-outcome cont)
   "Layer REQUEST authority for TOOL-NAME and DETAIL over COMMAND-OUTCOME.
@@ -235,65 +445,34 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
     (let* ((permission-context (plist-get input :permission-context))
            (metadata-p (plist-get input :permission-decision-metadata))
            (trust-literal-p (plist-get input :trust-literal-p))
-           (mode (mevedel-tool-exec--effective-permission-mode
-                  permission-context)))
-      (cond
-       (trust-literal-p
-        (funcall
-         cont
-         (mevedel-tool-exec--permission-decision-result
-          metadata-p
-          (cons 'deny
-                "Delegated expansion cannot request additional sandbox authority")
-          'sandbox-network)))
-       ((eq mode 'full-auto)
-        (when metadata-p
-          (mevedel-tool-exec--log-permission-decision
-           tool-name 'allow 'sandbox-network
-           :sandbox-permissions 'additive
-           :additional-permissions '(:network t)))
-        (funcall cont command-outcome))
-       (t
-        (apply
-         #'mevedel-permission--enqueue
-         (list
-          :kind 'sandbox
-          :tool-name tool-name
-          :detail detail
-          :sandbox-permissions 'additive
-          :additional-permissions '(:network t)
-          :justification (plist-get request :justification)
-          :origin (mevedel-tool-exec--current-origin)
-          :callback
-          (lambda (outcome)
-            (pcase outcome
-              ('allow-once (funcall cont command-outcome))
-              ('deny-once
-               (funcall
-                cont
-                (mevedel-tool-exec--permission-decision-result
-                 metadata-p 'deny 'sandbox-network)))
-              (`(feedback . ,text)
-               (funcall
-                cont
-                (mevedel-tool-exec--permission-decision-result
-                 metadata-p
-                 (cons 'deny
-                       (format "Additional permission denied. Feedback: %s"
-                               text))
-                 'sandbox-network)))
-              ('aborted
-               (funcall
-                cont
-                (mevedel-tool-exec--permission-decision-result
-                 metadata-p 'aborted 'sandbox-network)))
-              (_
-               (funcall
-                cont
-                (mevedel-tool-exec--permission-decision-result
-                 metadata-p 'deny 'sandbox-network))))))
-         (and (plist-get permission-context :session)
-              (list (plist-get permission-context :session)))))))))
+           (profile (plist-get request :additional-permissions)))
+      (if trust-literal-p
+          (funcall
+           cont
+           (mevedel-tool-exec--permission-decision-result
+            metadata-p
+            (cons 'deny
+                  "Delegated expansion cannot request additional sandbox authority")
+            'sandbox-policy))
+        (mevedel-tool-exec--check-network-permission-async
+         tool-name detail request command-outcome permission-context metadata-p
+         (lambda (network-outcome)
+           (if (not (mevedel-tool-exec--permission-allow-p network-outcome))
+               (funcall cont network-outcome)
+             (mevedel-tool-exec--check-filesystem-permissions-async
+              tool-name detail (plist-get profile :file-system) request
+              command-outcome permission-context metadata-p cont))))))))
+
+(defun mevedel-tool-exec--separate-resource-authority (input request)
+  "Return INPUT with REQUEST's filesystem gate marked as independent."
+  (if (not (plist-get (plist-get request :additional-permissions)
+                      :file-system))
+      input
+    (let* ((copy (copy-sequence input))
+           (context (copy-sequence (plist-get copy :permission-context))))
+      (setq context
+            (plist-put context :resource-authority-separated-p t))
+      (plist-put copy :permission-context context))))
 
 (defun mevedel-tool-exec--analyze-bash (command)
   "Return normalized Bash analysis for COMMAND."
@@ -671,7 +850,9 @@ authorize dangerous or complex syntax."
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command analysis)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
-    (when (mevedel-tool-exec--bash-protected-path-p command analysis)
+    (when (and (not (plist-get permission-context
+                               :resource-authority-separated-p))
+               (mevedel-tool-exec--bash-protected-path-p command analysis))
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (cond
@@ -1136,9 +1317,12 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
   (condition-case err
       (let* ((mode (mevedel-tool-exec--eval-mode input))
              (request (mevedel-tool-exec--sandbox-request
-                       input 'eval mode)))
+                       input 'eval mode))
+             (command-input
+              (mevedel-tool-exec--separate-resource-authority
+               input request)))
         (mevedel-tool-exec--eval-check-command-permission-async
-         tool-struct input
+         tool-struct command-input
          (lambda (outcome)
            (mevedel-tool-exec--check-additional-permission-async
             "Eval" (plist-get input :expression) input request outcome cont))))
@@ -1373,9 +1557,12 @@ parity with the sync slot."
   "Authorize Bash INPUT, then layer any requested child authority.
 TOOL-STRUCT and CONT follow the async permission slot contract."
   (condition-case err
-      (let ((request (mevedel-tool-exec--sandbox-request input 'bash)))
+      (let* ((request (mevedel-tool-exec--sandbox-request input 'bash))
+             (command-input
+              (mevedel-tool-exec--separate-resource-authority
+               input request)))
         (mevedel-tool-exec--check-command-permission-async
-         tool-struct input
+         tool-struct command-input
          (lambda (outcome)
            (mevedel-tool-exec--check-additional-permission-async
             "Bash" (plist-get input :command) input request outcome cont))))
@@ -2068,7 +2255,19 @@ Header shows a truncated first line of the command; body fontifies as
                                    :properties
                                    (:network
                                     (:type boolean
-                                     :description "Allow network access for this invocation.")))
+                                     :description "Allow network access for this invocation.")
+                                    :file_system
+                                    (:type object
+                                     :description "Exact filesystem paths to reopen inside confinement."
+                                     :properties
+                                     (:read
+                                      (:type array
+                                       :items (:type string)
+                                       :description "Absolute paths requiring read access.")
+                                      :write
+                                      (:type array
+                                       :items (:type string)
+                                       :description "Absolute paths requiring write access.")))))
            (justification string :optional
                           "Concise user-facing reason for a non-default permission request."))
     :async-p t
@@ -2097,7 +2296,19 @@ Header shows a truncated first line of the command; body fontifies as
                                    :properties
                                    (:network
                                     (:type boolean
-                                     :description "Allow network access for this batch invocation.")))
+                                     :description "Allow network access for this batch invocation.")
+                                    :file_system
+                                    (:type object
+                                     :description "Exact filesystem paths to reopen inside confinement."
+                                     :properties
+                                     (:read
+                                      (:type array
+                                       :items (:type string)
+                                       :description "Absolute paths requiring read access.")
+                                      :write
+                                      (:type array
+                                       :items (:type string)
+                                       :description "Absolute paths requiring write access.")))))
            (justification string :optional
                           "Concise user-facing reason for a non-default batch permission request."))
     :async-p t

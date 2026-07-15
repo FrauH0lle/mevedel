@@ -133,6 +133,54 @@
              :additional_permissions (:network t)
              :justification "  Download dependencies?  ")
            'bash)))
+  :doc "filesystem request:
+additive authority normalizes exact read and write paths"
+  (let ((read-path (expand-file-name "readable" temporary-file-directory))
+        (write-path (expand-file-name "writable" temporary-file-directory)))
+    (should
+     (equal
+      `(:level additive
+        :additional-permissions
+        (:file-system ((:path ,read-path :access read)
+                       (:path ,write-path :access write)))
+        :justification "Inspect and update the protected files?")
+      (mevedel-tool-exec--sandbox-request
+       `(:sandbox_permissions "with_additional_permissions"
+         :additional_permissions
+         (:file_system (:read [,read-path] :write (,write-path)))
+         :justification "Inspect and update the protected files?")
+       'bash))))
+  :doc "write subsumes read:
+duplicate exact paths normalize to the stronger access level"
+  (let ((path (expand-file-name "resource" temporary-file-directory)))
+    (should
+     (equal
+      `(:level additive
+        :additional-permissions
+        (:file-system ((:path ,path :access write)))
+        :justification "Update the protected file?")
+      (mevedel-tool-exec--sandbox-request
+       `(:sandbox_permissions "with_additional_permissions"
+         :additional_permissions
+         (:file_system (:read [,path] :write [,path]))
+         :justification "Update the protected file?")
+       'bash))))
+  :doc "relative filesystem path:
+filesystem authority requires exact absolute paths"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "with_additional_permissions"
+      :additional_permissions (:file_system (:read ["relative/path"]))
+      :justification "Read the protected file?")
+    'bash))
+  :doc "empty filesystem profile:
+an additive profile must contain a real capability"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "with_additional_permissions"
+      :additional_permissions (:file_system (:read [] :write []))
+      :justification "Allow this?")
+    'bash))
   :doc "empty profile:
 additive authority cannot be requested without a capability"
   (should-error
@@ -234,6 +282,109 @@ network authority proceeds without a prompt"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'allow outcome)))
+  :doc "full-auto protected resource:
+an ungranted exact filesystem path still prompts and stores session authority"
+  (let* ((root (make-temp-file "mevedel-bash-resource-" t))
+         (path (file-name-concat root "secret"))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create
+                   :name "resource" :workspace workspace
+                   :permission-mode 'full-auto))
+         (mevedel--session session)
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths `((,path . inaccessible)))
+         entry outcome)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "secret"))
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (queued &optional _session)
+                       (setq entry queued)
+                       (funcall (plist-get queued :callback)
+                                'allow-session))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command ,(format "cat %s" path)
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:file_system (:read [,path]))
+               :justification "Read the protected file?"
+               :permission-context
+               (:mode full-auto :session ,session :workspace ,workspace
+                :resource-grants nil))
+             (lambda (result) (setq outcome result))))
+          (should (eq 'sandbox (plist-get entry :kind)))
+          (should (equal path (plist-get entry :resource-path)))
+          (should (eq 'read (plist-get entry :resource-access)))
+          (should (eq 'allow outcome))
+          (should
+           (member `(:path ,path :access read)
+                   (mevedel-session-resource-grants session))))
+      (delete-directory root t)))
+  :doc "pregranted protected resource:
+an exact session grant skips only the filesystem prompt"
+  (let* ((root (make-temp-file "mevedel-bash-pregrant-" t))
+         (path (file-name-concat root "secret"))
+         (workspace (mevedel-workspace--create :root root))
+         (grant `(:path ,path :access read))
+         (session (mevedel-session--create
+                   :name "resource" :workspace workspace
+                   :permission-mode 'full-auto
+                   :resource-grants (list grant)))
+         (mevedel--session session)
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths `((,path . inaccessible)))
+         enqueued outcome)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "secret"))
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (&rest _) (setq enqueued t))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command ,(format "cat %s" path)
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:file_system (:read [,path]))
+               :justification "Read the protected file?"
+               :permission-context
+               (:mode full-auto :session ,session :workspace ,workspace
+                :resource-grants (,grant)))
+             (lambda (result) (setq outcome result))))
+          (should-not enqueued)
+          (should (eq 'allow outcome)))
+      (delete-directory root t)))
+  :doc "resource deny:
+an explicit exact path deny prevents filesystem escalation"
+  (let* ((root (make-temp-file "mevedel-bash-resource-deny-" t))
+         (path (file-name-concat root "secret"))
+         (workspace (mevedel-workspace--create :root root))
+         (session (mevedel-session--create
+                   :name "resource" :workspace workspace
+                   :permission-mode 'full-auto))
+         (mevedel--session session)
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules
+          `(("Bash" :path ,path :action deny)))
+         (mevedel-protected-paths `((,path . inaccessible)))
+         enqueued outcome)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "secret"))
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (&rest _) (setq enqueued t))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command ,(format "cat %s" path)
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:file_system (:read [,path]))
+               :justification "Read the protected file?"
+               :permission-context
+               (:mode full-auto :session ,session :workspace ,workspace))
+             (lambda (result) (setq outcome result))))
+          (should-not enqueued)
+          (should (eq 'deny outcome)))
+      (delete-directory root t)))
   :doc "explicit Bash deny:
 command denial prevents network authority even in full-auto"
   (let ((mevedel-permission-mode 'full-auto)
@@ -1791,7 +1942,9 @@ both Eval and network authority proceed without prompts"
          (justification
           (seq-find (lambda (arg)
                       (equal "justification" (plist-get arg :name)))
-                    args)))
+                    args))
+         (filesystem
+          (plist-get (plist-get additional :properties) :file_system)))
     (should (equal ["use_default" "with_additional_permissions"
                     "require_escalated"]
                    (plist-get sandbox :enum)))
@@ -1799,6 +1952,11 @@ both Eval and network authority proceed without prompts"
                    (plist-get (plist-get (plist-get additional :properties)
                                          :network)
                               :type)))
+    (dolist (access '(:read :write))
+      (let ((schema (plist-get (plist-get filesystem :properties) access)))
+        (should (equal "array" (plist-get schema :type)))
+        (should (equal "string"
+                       (plist-get (plist-get schema :items) :type)))))
     (should (equal "string" (plist-get justification :type)))
     (should (plist-get justification :optional)))
   :doc "registers Eval mode and preserve_ui optional arguments"
@@ -1819,7 +1977,9 @@ both Eval and network authority proceed without prompts"
          (additional (seq-find (lambda (arg)
                                  (equal "additional_permissions"
                                         (plist-get arg :name)))
-                               args)))
+                               args))
+         (filesystem
+          (plist-get (plist-get additional :properties) :file_system)))
     (should (equal "string" (plist-get mode :type)))
     (should (equal ["live" "batch"] (plist-get mode :enum)))
     (should (plist-get mode :optional))
@@ -1832,6 +1992,11 @@ both Eval and network authority proceed without prompts"
                    (plist-get (plist-get (plist-get additional :properties)
                                          :network)
                               :type)))
+    (dolist (access '(:read :write))
+      (let ((schema (plist-get (plist-get filesystem :properties) access)))
+        (should (equal "array" (plist-get schema :type)))
+        (should (equal "string"
+                       (plist-get (plist-get schema :items) :type)))))
     (should
      (eq 'invalid-enum
          (plist-get
