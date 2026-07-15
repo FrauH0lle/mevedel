@@ -125,6 +125,7 @@
          (nested (file-name-concat root "nested"))
          (dot-git (file-name-concat nested ".git"))
          (secondary-dot-git (file-name-concat secondary "nested" ".git"))
+         (unreadable (file-name-concat secondary "unreadable"))
          (credentials (file-name-concat root "credentials"))
          (missing (file-name-concat root "missing"))
          (mevedel-protected-paths
@@ -135,6 +136,8 @@
         (progn
           (make-directory dot-git t)
           (make-directory secondary-dot-git t)
+          (make-directory unreadable)
+          (set-file-modes unreadable #o000)
           (make-directory credentials)
           (let ((candidates
                  (mevedel-sandbox--protected-candidates
@@ -155,6 +158,7 @@
                              :key (lambda (item) (plist-get item :path))
                              :test #'string-equal))))
       (delete-directory root t)
+      (set-file-modes unreadable #o700)
       (delete-directory secondary t))))
 
 (mevedel-deftest mevedel-sandbox-cleanup ()

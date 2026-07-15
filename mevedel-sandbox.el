@@ -188,7 +188,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
             (dolist (path
                      (cons root
                            (directory-files-recursively
-                            root "." t nil nil)))
+                            root "." t #'file-readable-p nil)))
               (when (mevedel-permission--match-path-pattern path pattern)
                 (add-candidate path mode directory-p))))))
       (dolist (entry (mevedel-permission-protected-path-policy))
