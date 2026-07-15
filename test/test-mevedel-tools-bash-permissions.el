@@ -209,13 +209,47 @@ default execution rejects stray escalation arguments"
   (should-error
    (mevedel-tool-exec--sandbox-request
     '(:additional_permissions (:network t)) 'bash))
-  :doc "unsupported full escalation:
-the additive ticket does not silently implement confinement bypass"
+  :doc "full Bash escalation:
+full authority requires a justification and no additive profile"
+  (should
+   (equal '(:level escalated
+            :sandbox-permissions require-escalated
+            :additional-permissions nil
+            :justification "Run without confinement?")
+          (mevedel-tool-exec--sandbox-request
+           '(:sandbox_permissions "require_escalated"
+             :justification "  Run without confinement?  ")
+           'bash)))
+  :doc "full batch Eval escalation:
+batch Eval may request full authority"
+  (should
+   (eq 'escalated
+       (plist-get
+        (mevedel-tool-exec--sandbox-request
+         '(:sandbox_permissions "require_escalated"
+           :justification "Run batch Eval without confinement?")
+         'eval 'batch)
+        :level)))
+  :doc "full escalation justification:
+full authority rejects a missing justification"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "require_escalated") 'bash))
+  :doc "full escalation profile:
+full authority cannot be combined with additive permissions"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "require_escalated"
+      :additional_permissions (:network t)
+      :justification "Run without confinement?")
+    'bash))
+  :doc "full live Eval escalation:
+live Eval cannot request child-confinement authority"
   (should-error
    (mevedel-tool-exec--sandbox-request
     '(:sandbox_permissions "require_escalated"
       :justification "Run without confinement?")
-    'bash))
+    'eval 'live))
   :doc "live Eval:
 additive child permissions are available only to batch Eval"
   (should-error
@@ -473,6 +507,193 @@ both Eval and network authority proceed without prompts"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'allow outcome))))
+
+(mevedel-deftest mevedel-tool-exec--check-full-escalation-async ()
+  ,test
+  (test)
+  :doc "full-auto still asks:
+full escalation prompts without a directly authored qualified rule"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules nil)
+        entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (setq entry queued)
+                 (funcall (plist-get queued :callback) 'allow-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should (eq 'sandbox (plist-get entry :kind)))
+    (should (eq 'require-escalated
+                (plist-get entry :sandbox-permissions)))
+    (should (eq 'allow outcome)))
+  :doc "qualified direct allow:
+an exact user-authored escalation rule skips the prompt"
+  (let ((mevedel-permission-mode 'ask)
+        (mevedel-permission-rules
+         '(("Bash" :pattern "pwd"
+                   :sandbox-permissions require-escalated
+                   :action allow)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'allow outcome)))
+  :doc "ordinary allow is insufficient:
+an unqualified command rule cannot authorize full escalation"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules
+         '(("Bash" :pattern "pwd" :action allow)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (setq enqueued t)
+                 (funcall (plist-get entry :callback) 'deny-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should enqueued)
+    (should (eq 'deny outcome)))
+  :doc "delegated allow is insufficient:
+an invocation-qualified rule cannot grant full escalation"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules nil)
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (setq enqueued t)
+                 (funcall (plist-get entry :callback) 'deny-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?"
+         :permission-context
+         (:buckets
+          ((:invocation
+            ("Bash" :sandbox-permissions require-escalated
+                    :action allow)))))
+       (lambda (result) (setq outcome result))))
+    (should enqueued)
+    (should (eq 'deny outcome)))
+  :doc "ordinary deny remains final:
+an explicit command deny prevents escalation without prompting"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules
+         '(("Bash" :pattern "pwd" :action deny)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'deny outcome)))
+  :doc "session approval:
+the prompt stores an exact execution-level-qualified pattern rule"
+  (let* ((session (mevedel-session--create :name "full-escalation"))
+         (mevedel--session session)
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (funcall (plist-get entry :callback) 'allow-session))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       `(:command "pwd"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?"
+         :permission-context (:session ,session))
+       (lambda (result) (setq outcome result))))
+    (should (eq 'allow outcome))
+    (should
+     (equal
+      '(("Bash" :pattern "pwd"
+                :sandbox-permissions require-escalated
+                :action allow))
+      (mevedel-session-permission-rules session))))
+  :doc "delegated expansion:
+trust-literal execution cannot use even a matching direct escalation rule"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules
+         '(("Bash" :pattern "pwd"
+                   :sandbox-permissions require-escalated
+                   :action allow)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :trust-literal-p t
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'deny (car outcome))))
+  :doc "batch Eval direct allow:
+a broad qualified Eval rule authorizes unconfined batch execution"
+  (let ((mevedel-permission-mode 'ask)
+        (mevedel-permission-rules
+         '(("Eval" :sandbox-permissions require-escalated :action allow)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil
+       '(:expression "(+ 1 2)"
+         :mode "batch"
+         :sandbox_permissions "require_escalated"
+         :justification "Run batch Eval without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'allow outcome)))
+  :doc "full escalation diagnostics:
+the decision log identifies complete confinement bypass authority"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-full-escalation-log-" t)))
+         (session (mevedel-session--create
+                   :name "full-escalation" :save-path dir))
+         (mevedel--session session)
+         (mevedel-permission-log-enabled t)
+         (mevedel-permission-rules
+          '(("Bash" :pattern "pwd"
+                    :sandbox-permissions require-escalated
+                    :action allow)))
+         outcome)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--check-permission-async
+           nil
+           `(:command "pwd"
+             :sandbox_permissions "require_escalated"
+             :justification "Run without confinement?"
+             :permission-decision-metadata t
+             :permission-context (:session ,session))
+           (lambda (result) (setq outcome result)))
+          (should (eq 'allow (plist-get outcome :outcome)))
+          (let ((entry (car (test-bash-permissions--read-permission-log
+                             session))))
+            (should (eq 'sandbox-full-escalation (plist-get entry :via)))
+            (should (eq 'require-escalated
+                        (plist-get entry :sandbox-permissions)))))
+      (delete-directory dir t))))
 
 
 (mevedel-deftest mevedel-tools--check-bash-permission ()
@@ -1290,6 +1511,27 @@ both Eval and network authority proceed without prompts"
          :justification "Download the requested page?")))
     (should (equal '(:network t) (nth 6 captured)))
     (should (string-match-p "network: unrestricted" result)))
+  :doc "passes approved full escalation to the child launcher"
+  (let (captured result)
+    (cl-letf (((symbol-function
+                'mevedel-tool-exec--start-sandboxed-child-process)
+               (lambda (&rest args)
+                 (setq captured args)
+                 (funcall (nth 5 args)
+                          '(:exit-code 0 :output "ok" :timed-out-p nil
+                            :sandbox-facts
+                            (:sandbox escalated
+                             :filesystem unrestricted
+                             :network unrestricted))))))
+      (mevedel-tool-exec--bash
+       (lambda (envelope)
+         (setq result (test-bash-permissions--handler-result envelope)))
+       '(:command "emacs --batch -Q"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")))
+    (should-not (nth 6 captured))
+    (should (eq 'require-escalated (nth 7 captured)))
+    (should (string-match-p "sandbox: escalated" result)))
   :doc "executes simple command and returns output"
   (let ((result nil)
         (done nil))
@@ -2071,8 +2313,10 @@ both Eval and network authority proceed without prompts"
   :doc "passes approved network authority only to batch Eval"
   (let (captured)
     (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
-               (lambda (_callback expression result-format additional)
-                 (setq captured (list expression result-format additional)))))
+               (lambda (_callback expression result-format additional
+                        &optional sandbox-permissions)
+                 (setq captured (list expression result-format additional
+                                      sandbox-permissions)))))
       (mevedel-tool-exec--eval
        #'ignore
        '(:expression "(+ 1 2)"
@@ -2080,7 +2324,21 @@ both Eval and network authority proceed without prompts"
          :sandbox_permissions "with_additional_permissions"
          :additional_permissions (:network t)
          :justification "Fetch package metadata?")))
-    (should (equal '("(+ 1 2)" nil (:network t)) captured)))
+    (should (equal '("(+ 1 2)" nil (:network t) nil) captured)))
+  :doc "passes approved full escalation only to batch Eval"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
+               (lambda (_callback expression _result-format additional
+                        &optional sandbox-permissions)
+                 (setq captured (list expression additional
+                                      sandbox-permissions)))))
+      (mevedel-tool-exec--eval
+       #'ignore
+       '(:expression "(+ 1 2)"
+         :mode "batch"
+         :sandbox_permissions "require_escalated"
+         :justification "Run batch Eval without confinement?")))
+    (should (equal '("(+ 1 2)" nil require-escalated) captured)))
   :doc "evaluates simple expression"
   (let (result)
     (mevedel-tool-exec--eval

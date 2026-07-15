@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Heterogeneous FIFO on the session struct holding generic
-;; permission, Bash, Eval, and additive-sandbox entries.  Render-head
+;; permission, Bash, Eval, and execution-authority entries.  Render-head
 ;; dispatches on `:kind' so a single visible prompt covers all cases at any
 ;; moment.  Coalesce on rule-creating outcomes
 ;; (`allow-session', `deny-session', `always-allow') re-evaluates
@@ -37,14 +37,14 @@
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
-(declare-function mevedel-permission--any-deny
+(declare-function mevedel-permission--bucket-decision
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--checker-args
                   "mevedel-permissions" (context))
-(declare-function mevedel-permission--first-non-nil-action
+(declare-function mevedel-permission--execution-level-decision
                   "mevedel-permissions"
-                  (buckets tool-name path pattern domain name))
+                  (buckets tool-name level pattern))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
 (declare-function mevedel-permission--resource-granted-p
@@ -58,6 +58,8 @@
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
                   (expression callback &optional origin count entry
                               mode preserve-ui))
+(declare-function mevedel-tool-exec--bash-explicit-deny-p
+                  "mevedel-tool-exec" (buckets command &optional analysis))
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &rest args))
 
@@ -255,7 +257,7 @@ final mapping)."
      origin count entry mode preserve-ui)))
 
 (defun mevedel-permission-queue--render-sandbox (entry)
-  "Render an additive sandbox permission ENTRY."
+  "Render a child-execution permission ENTRY."
   (require 'mevedel-permission-prompt)
   (unless (fboundp 'mevedel-permission--prompt-async-sandbox)
     (error "Additional permission UI unavailable"))
@@ -416,8 +418,32 @@ to it as well."
              (if (memq safety '(allow deny)) safety 'ask)))
           (t 'ask))))
       ('sandbox
-       (if-let* ((path (plist-get entry :resource-path))
-                 (access (plist-get entry :resource-access)))
+       (if (eq (plist-get entry :sandbox-permissions) 'require-escalated)
+           (let* ((tool-name (plist-get entry :tool-name))
+                  (detail (plist-get entry :detail))
+                  (context
+                   (mevedel-permission--invocation-context
+                    :tool-name tool-name
+                    :session session
+                    :workspace workspace
+                    :pattern detail))
+                  (buckets (plist-get context :buckets))
+                  (ordinary-deny-p
+                   (if (equal tool-name "Bash")
+                       (mevedel-tool-exec--bash-explicit-deny-p
+                        buckets detail)
+                     (eq 'deny
+                         (mevedel-permission--bucket-decision
+                          buckets tool-name nil detail nil nil))))
+                  (level-action
+                   (mevedel-permission--execution-level-decision
+                    buckets tool-name 'require-escalated detail)))
+             (cond
+              ((or ordinary-deny-p (eq level-action 'deny)) 'deny)
+              ((eq level-action 'allow) 'allow)
+              (t 'ask)))
+         (if-let* ((path (plist-get entry :resource-path))
+                   (access (plist-get entry :resource-access)))
            (let* ((context
                    (plist-put
                     (mevedel-permission--invocation-context
@@ -430,18 +456,15 @@ to it as well."
                   (buckets (plist-get context :buckets))
                   (tool-name (plist-get entry :tool-name))
                   (rule-action
-                   (if (mevedel-permission--any-deny
-                        buckets tool-name path nil nil nil)
-                       'deny
-                     (mevedel-permission--first-non-nil-action
-                      buckets tool-name path nil nil nil))))
+                   (mevedel-permission--bucket-decision
+                    buckets tool-name path nil nil nil)))
              (cond
               ((memq rule-action '(deny ask)) rule-action)
               ((mevedel-permission--resource-granted-p
                 path access grants)
                'allow)
               (t 'ask)))
-         'ask))
+           'ask)))
       ('eval 'ask)
       (_ 'ask))))
 

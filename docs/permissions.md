@@ -100,18 +100,28 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 ## Rule format
 
 Rules live on `mevedel-permission-rules` with form
-`(TOOL-NAME &key SPECIFIER VALUE :action ACTION)`. One specifier per rule:
+`(TOOL-NAME &key SPECIFIER VALUE :sandbox-permissions LEVEL :action ACTION)`.
+One specifier per rule:
 
 | Key        | Matches                | Used by                           |
 |------------|------------------------|-----------------------------------|
 | `:path`    | path (glob, `~` exp.)  | Read, Edit, Write, Glob, Grep, ...|
-| `:pattern` | command string (glob)  | Bash                              |
+| `:pattern` | command/expression glob | Bash; full-escalation Eval rules |
 | `:domain`  | host name (glob)       | WebFetch, YouTube                 |
 | `:name`    | free-form name (glob)  | Agent (subagent_type)             |
 
 Precedence: specifier rules outrank generic; within a group
 `deny > ask > allow`. Protected paths prompt unless an exact resource grant
 with sufficient access already exists.
+
+`:sandbox-permissions` is an execution-level qualifier, not a request to raise
+authority. A rule carrying `require-escalated` is considered only after Bash or
+batch Eval has explicitly requested that level. Ordinary command allows cannot
+authorize full escalation. Only direct user-authored session, persistent, and
+defcustom rules may allow it; delegated invocation/request rules cannot. A
+pattern scopes authority to the matching Bash command or Eval expression, and
+omitting the pattern deliberately authorizes every expression for that tool at
+that execution level. Qualified and ordinary explicit denies remain final.
 
 `mevedel-protected-paths` is an alist from glob to `read-only` or
 `inaccessible`. The default `.git` glob is read-only; the default SSH and GnuPG
@@ -169,7 +179,7 @@ heterogeneous FIFO with four entry kinds:
 - `generic` for pipeline permission asks
 - `bash` for Bash command confirmation
 - `eval` for Eval expression confirmation
-- `sandbox` for additive network or exact filesystem authority
+- `sandbox` for additive network, exact filesystem, or full execution authority
 
 Only the head is visible in the view interaction zone. The permission UI
 registers that head with `mevedel-view-interaction.el`, which owns ordering,
@@ -247,6 +257,16 @@ contents and sibling resources remain hidden. Command or Eval authorization is
 resolved independently and is never supplied by the resource grant. Explicit
 path denies remain final. Network and filesystem additions may be combined
 without changing any unrequested confinement boundary.
+
+`require_escalated` is a separate complete bypass for Bash and batch Eval. It
+requires a justification and cannot be combined with additive permissions. It
+prompts in every permission mode, including `full-auto`, unless a matching
+direct user-authored `:sandbox-permissions require-escalated` rule already
+exists. The prompt and diagnostics explicitly identify that filesystem,
+network, and process confinement will all be disabled. Once approved, the child
+runs directly as the user and reports `sandbox: escalated`; delegated workflows
+cannot request this authority interactively or create reusable escalation
+rules.
 
 `auto` executes directly when the initial probe is unavailable. For the narrow
 race where a later Bubblewrap launch fails, a marker emitted immediately before

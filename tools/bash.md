@@ -54,6 +54,21 @@ process confinement remain unchanged. Filesystem approval does not authorize
 the Bash command itself, which is checked independently. Network and exact
 filesystem permissions may be requested together when both are necessary.
 
+### Full execution escalation
+
+Start confined and request only additive authority when that is sufficient. If
+an important command still fails because the sandbox itself prevents the
+operation, make a new Bash call with
+`sandbox_permissions="require_escalated"` and a concise, user-facing
+`justification`. Request approval in the tool call; do not ask separately in
+prose.
+
+This is a complete confinement bypass, not a larger additive grant. The command
+runs directly as the user with unrestricted filesystem, network, and process
+access. The new call is a distinct invocation and is never an automatic replay.
+Do not request full escalation merely to avoid a normal command permission
+prompt or before a relevant confined failure.
+
 ### When to use `Bash`
 
 - System commands: git, make, compiler commands, etc.

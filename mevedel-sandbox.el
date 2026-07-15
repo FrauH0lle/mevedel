@@ -465,9 +465,10 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
            unless (cl-some
                    (lambda (grant)
                      (and (eq (plist-get grant :access) 'write)
-                          (string= (expand-file-name path)
-                                   (expand-file-name
-                                    (plist-get grant :path)))))
+                          (string=
+                           (directory-file-name (expand-file-name path))
+                           (directory-file-name
+                            (expand-file-name (plist-get grant :path))))))
                    (plist-get permissions :file-system))
            append (list option path)))
 
@@ -554,14 +555,23 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
 ;;; Public execution interface
 
 (defun mevedel-sandbox-prepare
-    (command workdir writable-roots &optional additional-permissions)
+    (command workdir writable-roots
+             &optional additional-permissions sandbox-permissions)
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
 carry :marker and :original-command.  A required but unavailable backend
 returns :state `refused' and :error without a command.
-ADDITIONAL-PERMISSIONS is a validated additive execution profile."
-  (pcase mevedel-sandbox-mode
+ADDITIONAL-PERMISSIONS is a validated additive execution profile.
+SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
+  (if (eq sandbox-permissions 'require-escalated)
+      (progn
+        (when additional-permissions
+          (signal 'mevedel-sandbox-policy-error
+                  '("Full escalation cannot include additive permissions")))
+        (mevedel-sandbox--direct-preparation
+         command 'escalated "Full execution escalation approved"))
+    (pcase mevedel-sandbox-mode
     ('off
      (mevedel-sandbox--direct-preparation
       command 'off "Confinement disabled by mevedel-sandbox-mode"))
@@ -602,7 +612,7 @@ ADDITIONAL-PERMISSIONS is a validated additive execution profile."
                  (list :state 'refused :error reason :facts facts))
              (mevedel-sandbox--direct-preparation
               command 'unavailable reason))))))
-    (_ (error "Unknown sandbox mode: %s" mevedel-sandbox-mode))))
+      (_ (error "Unknown sandbox mode: %s" mevedel-sandbox-mode)))))
 
 (defun mevedel-sandbox-launch-failed-p (preparation child-result)
   "Return non-nil when PREPARATION failed before CHILD-RESULT ran the command."
