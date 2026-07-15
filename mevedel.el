@@ -51,6 +51,7 @@
 (require 'mevedel-file-state)
 (require 'mevedel-models)
 (require 'mevedel-plan)
+(require 'mevedel-sandbox)
 (require 'mevedel-tools)
 (require 'mevedel-tools-list)
 (require 'mevedel-system)

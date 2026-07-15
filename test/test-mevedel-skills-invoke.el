@@ -14,6 +14,7 @@
 (require 'gptel)
 (require 'gptel-openai)
 (require 'mevedel-agents)
+(require 'mevedel-bash-analysis)
 (require 'mevedel-compact)
 (require 'mevedel-file-state)
 (require 'mevedel-hooks)

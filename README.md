@@ -709,6 +709,17 @@ run before mevedel terminates it. Defaults to 120 seconds; `timeout_seconds`
 can override it per Bash call. Bash runs as a login shell (`bash -lc`), and
 login initialization is covered by the same output capture and timeout.
 
+**Child confinement** (`mevedel-sandbox-mode`): Bash and batch Eval use
+Bubblewrap on Linux when available. Mevedel finds `bwrap` through the current
+executable path and probes the real namespace profile before first use. The
+confined profile exposes the host read-only, reopens allowed roots writable,
+uses the session working directory, and gives descendants fresh process and
+network namespaces. `auto` falls back to direct execution only when the
+requested process has not started and reports unrestricted filesystem and
+network access; `required` refuses instead; `off` runs directly with the same
+unrestricted disclosure. Every child result includes the active confinement
+facts.
+
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or
 a custom function, and never overrides explicit deny rules, filesystem resource
@@ -916,6 +927,7 @@ Useful commands:
 | `mevedel-deferred-tool-ttl`                | Turns a ToolSearch-loaded deferred tool stays active after last use.     |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-permission-mode`                  | Default permission mode (`ask` / `auto` / `full-auto`).                   |
+| `mevedel-sandbox-mode`                     | Child confinement (`auto` / `required` / `off`).                          |
 | `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
 | `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
 | `mevedel-bash-timeout`                     | Seconds before a Bash command is terminated; nil disables timeouts.      |

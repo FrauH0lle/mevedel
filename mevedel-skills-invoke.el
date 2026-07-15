@@ -574,7 +574,9 @@ original shell-injection marker used in diagnostics."
       (setf (mevedel-tool-args tool)
             (append (mevedel-tool-args tool)
                     '((trust-literal-p boolean :optional
-                                       "Internal trusted skill input.")))))
+                                       "Internal trusted skill input.")
+                      (suppress-sandbox-disclosure-p boolean :optional
+                                                     "Keep execution metadata out of substituted output.")))))
     (cond
      ((null tool)
       (funcall callback
@@ -605,6 +607,7 @@ original shell-injection marker used in diagnostics."
                           `(:status ok :output ,(string-trim-right
                                                  (or result "")))))))
              (list :command command
+                   :suppress-sandbox-disclosure-p t
                    :trust-literal-p
                    (mevedel-skills--author-ranges-p
                     command 0 (length command)))))
