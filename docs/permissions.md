@@ -218,6 +218,30 @@ default to ask. Direct user-authored session, persistent, and defcustom
 patterns may authorize dangerous or complex forms. Invocation- and
 request-scoped delegated patterns may not. Explicit denies always win.
 
+### Child confinement
+
+Bash and batch Eval share the guarded child launcher and, independently of the
+permission mode, consult `mevedel-sandbox-mode`. On Linux, `auto` resolves
+`bwrap` with `executable-find` and caches one real probe of the core mount,
+user, process, and network namespaces. A successful profile mounts `/`
+read-only, rebinds the workspace, temporary directory, memory roots, manually
+configured roots, and session working directory writable, installs a fresh
+`/proc`, changes to the canonical working directory, and isolates the network.
+The namespace and mount boundary is inherited by descendants.
+
+`auto` executes directly when the initial probe is unavailable. For the narrow
+race where a later Bubblewrap launch fails, a marker emitted immediately before
+`exec` proves whether the requested process started: only a missing marker
+permits one direct fallback. A command failure, signal, or timeout after the
+marker is returned exactly once and is never replayed. `required` returns an
+execution error instead of falling back, while `off` selects direct execution
+deliberately. Direct execution always reports `filesystem: unrestricted` and
+`network: unrestricted`; confined and direct child results both append their
+active sandbox facts for the model and audit trail.
+Trusted skill substitutions keep those facts out of the substituted literal;
+an unrestricted substitution instead emits a user-visible warning while the
+active facts remain recorded.
+
 ### Bash guardian guidance
 
 `mevedel-permission-guardian` can add model-reviewed risk guidance to
@@ -272,8 +296,9 @@ callers can pass `preserve_ui: false` only when intentional UI
 manipulation is desired.  `batch` starts a child `emacs --batch -Q`
 process with the current `load-path` and the session working directory.
 Batch Eval protects the interactive Emacs session from UI/global-state
-mutation, but it is not a security sandbox: the expression still runs as
-the same OS user and can touch files or processes.
+mutation and uses the same optional child confinement as Bash. When
+confinement is unavailable or disabled, it still runs as the same OS user and
+the result explicitly reports unrestricted filesystem and network access.
 
 Skill body elisp injections (`!el` inline and ` ```!el ` fenced blocks)
 are the exception: they pass a trusted-literal flag because the

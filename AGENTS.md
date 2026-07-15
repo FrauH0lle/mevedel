@@ -95,6 +95,7 @@ Data model
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
   mevedel-bash-policy.el      argument-aware read-only command policies
+  mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads

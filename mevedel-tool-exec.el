@@ -90,6 +90,17 @@
 (defvar mevedel-permission-rules)
 (defvar mevedel-protected-paths)
 
+;; `mevedel-sandbox'
+(declare-function mevedel-sandbox--record-launch-failure
+                  "mevedel-sandbox" (child-result))
+(declare-function mevedel-sandbox-launch-failed-p
+                  "mevedel-sandbox" (preparation child-result))
+(declare-function mevedel-sandbox-prepare
+                  "mevedel-sandbox" (command workdir writable-roots))
+(declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
+(declare-function mevedel-sandbox-strip-marker
+                  "mevedel-sandbox" (preparation child-result))
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
@@ -107,6 +118,10 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-collapse-by-height-p "mevedel-view" (body))
+
+;; `mevedel-workspace'
+(declare-function mevedel--all-allowed-roots
+                  "mevedel-workspace" (&optional buffer))
 
 
 ;;
@@ -1437,6 +1452,108 @@ On systems with `setsid', timeout signals cover the whole process group."
          (finish -1 err)
          nil)))))
 
+(defun mevedel-tool-exec--sandbox-writable-roots (workdir)
+  "Return writable child-confinement roots for WORKDIR."
+  (let ((roots
+         (condition-case nil
+             (progn
+               (require 'mevedel-workspace)
+               (mevedel--all-allowed-roots (current-buffer)))
+           (error nil))))
+    (delete-dups
+     (append (or roots
+                 (list (file-name-as-directory (expand-file-name workdir))))
+             (list (file-name-as-directory
+                    (expand-file-name temporary-file-directory)))))))
+
+(defun mevedel-tool-exec--child-with-sandbox-facts (child-result facts)
+  "Return a copy of CHILD-RESULT carrying sandbox FACTS."
+  (plist-put (copy-sequence child-result) :sandbox-facts facts))
+
+(defun mevedel-tool-exec--start-sandboxed-child-process
+    (name command workdir writable-roots timeout callback)
+  "Start COMMAND through the selected confinement boundary.
+
+NAME, WORKDIR, TIMEOUT, and CALLBACK follow
+`mevedel-tool-exec--start-child-process'.  WRITABLE-ROOTS are the approved
+filesystem roots.  In `auto' mode only a Bubblewrap failure before the marker
+may retry COMMAND directly; a started command is never replayed."
+  (require 'mevedel-sandbox)
+  (let ((preparation
+         (mevedel-sandbox-prepare command workdir writable-roots)))
+    (pcase (plist-get preparation :state)
+      ('refused
+       (funcall
+        callback
+        (list :exit-code -1
+              :output ""
+              :timed-out-p nil
+              :error (list 'error (plist-get preparation :error))
+              :sandbox-facts (plist-get preparation :facts)))
+       nil)
+      ('unrestricted
+       (mevedel-tool-exec--start-child-process
+        name (plist-get preparation :command) workdir timeout
+        (lambda (child-result)
+          (funcall
+           callback
+           (mevedel-tool-exec--child-with-sandbox-facts
+            child-result (plist-get preparation :facts))))))
+      ('confined
+       (mevedel-tool-exec--start-child-process
+        name (plist-get preparation :command) workdir timeout
+        (lambda (child-result)
+          (if (and (plist-get preparation :fallback-p)
+                   (mevedel-sandbox-launch-failed-p
+                    preparation child-result))
+              (let ((facts
+                     (mevedel-sandbox--record-launch-failure
+                      child-result)))
+                (mevedel-tool-exec--start-child-process
+                 name (plist-get preparation :original-command)
+                 workdir timeout
+                 (lambda (fallback-result)
+                   (funcall
+                    callback
+                    (mevedel-tool-exec--child-with-sandbox-facts
+                     fallback-result facts)))))
+            (let ((facts
+                   (if (mevedel-sandbox-launch-failed-p
+                        preparation child-result)
+                       (mevedel-sandbox--record-launch-failure
+                        child-result)
+                     (plist-get preparation :facts)))
+                  (clean-result
+                   (mevedel-sandbox-strip-marker
+                    preparation child-result)))
+              (funcall
+               callback
+               (mevedel-tool-exec--child-with-sandbox-facts
+                clean-result facts)))))))
+      (_ (error "Unknown sandbox preparation state: %s"
+                (plist-get preparation :state))))))
+
+(defun mevedel-tool-exec--sandbox-disclosure
+    (text child-result &optional suppress-p)
+  "Append confinement facts from CHILD-RESULT to TEXT unless SUPPRESS-P."
+  (let ((facts (plist-get child-result :sandbox-facts)))
+    (cond
+     ((not facts) text)
+     (suppress-p
+      (when (eq (plist-get facts :filesystem) 'unrestricted)
+        (require 'mevedel-sandbox)
+        (display-warning
+         'mevedel
+         (concat "Skill shell expansion ran without confinement: "
+                 (mevedel-sandbox-status-text facts))
+         :warning))
+      text)
+     (t
+      (require 'mevedel-sandbox)
+      (concat text
+              (unless (string-empty-p (or text "")) "\n\n")
+              "[" (mevedel-sandbox-status-text facts) "]")))))
+
 (defun mevedel-tool-exec--bash-format-result (exit-code output timed-out timeout)
   "Return Bash result text for EXIT-CODE, OUTPUT, TIMED-OUT, and TIMEOUT."
   (cond
@@ -1455,24 +1572,28 @@ and optional :timeout_seconds."
   (let ((command (plist-get args :command)))
     (unless (stringp command)
       (error "Parameter command is required"))
-    (let ((timeout (mevedel-tool-exec--bash-timeout-seconds args)))
-      (mevedel-tool-exec--start-child-process
+    (let* ((timeout (mevedel-tool-exec--bash-timeout-seconds args))
+           (workdir (mevedel-tool-exec--default-directory)))
+      (mevedel-tool-exec--start-sandboxed-child-process
        "mevedel-bash" (list "bash" "-lc" command)
-       (mevedel-tool-exec--default-directory) timeout
+       workdir (mevedel-tool-exec--sandbox-writable-roots workdir) timeout
        (lambda (child-result)
          (let ((error-data (plist-get child-result :error)))
            (funcall
             callback
             (list
              :result
-             (if error-data
-                 (format "Failed to start process: %s" error-data)
-               (mevedel-tool-exec--bash-format-result
-                (plist-get child-result :exit-code)
-                (mevedel-tool-exec--truncate-output
-                 (plist-get child-result :output))
-                (plist-get child-result :timed-out-p)
-                timeout))))))))))
+             (mevedel-tool-exec--sandbox-disclosure
+              (if error-data
+                  (format "Failed to start process: %s" error-data)
+                (mevedel-tool-exec--bash-format-result
+                 (plist-get child-result :exit-code)
+                 (mevedel-tool-exec--truncate-output
+                  (plist-get child-result :output))
+                 (plist-get child-result :timed-out-p)
+                 timeout))
+              child-result
+              (plist-get args :suppress-sandbox-disclosure-p))))))))))
 
 
 ;;
@@ -1635,11 +1756,11 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
         (progn
           (with-temp-file script-file
             (insert script))
-          (mevedel-tool-exec--start-child-process
+          (mevedel-tool-exec--start-sandboxed-child-process
            "mevedel-eval-batch"
            (list (expand-file-name invocation-name invocation-directory)
                  "-Q" "--batch" "-l" script-file)
-           workdir nil
+           workdir (mevedel-tool-exec--sandbox-writable-roots workdir) nil
            (lambda (child-result)
              (let* ((exit-code (plist-get child-result :exit-code))
                     (diagnostics (plist-get child-result :output))
@@ -1653,22 +1774,24 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
                     callback
                     (list
                      :result
-                     (mevedel-tool-exec--truncate-output
-                      (cond
-                       ((eq (plist-get payload :status) 'ok)
-                        (or (plist-get payload :text) ""))
-                       ((eq (plist-get payload :status) 'error)
-                        (or (plist-get payload :text) "Error: Eval failed"))
-                       ((plist-get child-result :error)
-                        (format "Failed to start Eval batch process: %s"
-                                (plist-get child-result :error)))
-                       (t
-                        (format
-                         "Error: Eval batch process failed with exit code %d%s"
-                         exit-code
-                         (if (string-empty-p (or diagnostics ""))
-                             ""
-                           (format ":\n%s" diagnostics))))))))
+                     (mevedel-tool-exec--sandbox-disclosure
+                      (mevedel-tool-exec--truncate-output
+                       (cond
+                        ((eq (plist-get payload :status) 'ok)
+                         (or (plist-get payload :text) ""))
+                        ((eq (plist-get payload :status) 'error)
+                         (or (plist-get payload :text) "Error: Eval failed"))
+                        ((plist-get child-result :error)
+                         (format "Failed to start Eval batch process: %s"
+                                 (plist-get child-result :error)))
+                        (t
+                         (format
+                          "Error: Eval batch process failed with exit code %d%s"
+                          exit-code
+                          (if (string-empty-p (or diagnostics ""))
+                              ""
+                            (format ":\n%s" diagnostics))))))
+                      child-result)))
                  (ignore-errors (delete-file script-file))
                  (ignore-errors (delete-file result-file)))))))
       (error

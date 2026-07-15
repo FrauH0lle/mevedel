@@ -14,6 +14,7 @@
 (require 'mevedel-models)
 (require 'mevedel-pipeline)
 (require 'mevedel-permission-log)
+(require 'mevedel-sandbox)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -934,6 +935,24 @@
       (while (not done)
         (accept-process-output nil 0.1)))
     (should (string-match-p "exit code 42" result)))
+  :doc "discloses automatic unrestricted fallback"
+  (let ((mevedel-sandbox-mode 'auto)
+        (mevedel-sandbox--probe-cache
+         '(:available nil :reason "test confinement unavailable"))
+        result done)
+    (mevedel-tool-exec--bash
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)
+             done t))
+     (list :command "printf fallback"))
+    (with-timeout (5 (error "Timed out"))
+      (while (not done)
+        (accept-process-output nil 0.1)))
+    (should (string-prefix-p "fallback" result))
+    (should (string-match-p "sandbox: unavailable" result))
+    (should (string-match-p "filesystem: unrestricted" result))
+    (should (string-match-p "network: unrestricted" result))
+    (should (string-match-p "test confinement unavailable" result)))
   :doc "loads Bash login initialization from an isolated home"
   (let* ((home (make-temp-file "mevedel-bash-login-" t))
          (profile (file-name-concat home ".bash_profile"))
@@ -952,7 +971,7 @@
           (with-timeout (5 (error "Timed out"))
             (while (not done)
               (accept-process-output nil 0.1)))
-          (should (equal "loaded" result)))
+          (should (string-prefix-p "loaded\n\n[sandbox: " result)))
       (delete-directory home t)))
   :doc "runs from the session working directory when current buffer is elsewhere"
   (let* ((root (make-temp-file "mevedel-bash-cwd-" t))
@@ -977,9 +996,10 @@
           (with-timeout (5 (error "Timed out"))
             (while (not done)
               (accept-process-output nil 0.1)))
-          (should (equal (file-name-as-directory module-dir)
-                         (file-name-as-directory
-                          (string-trim result)))))
+          (should
+           (equal (file-name-as-directory module-dir)
+                  (file-name-as-directory
+                   (car (split-string result "\n" t))))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry))))
   :doc "terminates command after per-call timeout and returns partial output"
@@ -1198,6 +1218,172 @@
         (when (and child-pid (process-attributes child-pid))
           (ignore-errors (signal-process child-pid 'KILL)))
         (delete-directory root t)))))
+
+(mevedel-deftest mevedel-tool-exec--sandbox-writable-roots ()
+  ,test
+  (test)
+  :doc "sandbox root fallback:
+`mevedel-tool-exec--sandbox-writable-roots' includes work and temp directories"
+  (let ((roots
+         (mevedel-tool-exec--sandbox-writable-roots default-directory)))
+    (should
+     (cl-some (lambda (root)
+                (or (string-equal
+                     (file-truename root) (file-truename default-directory))
+                    (file-in-directory-p default-directory root)))
+              roots))
+    (should (member (file-name-as-directory
+                     (expand-file-name temporary-file-directory))
+                    roots))))
+
+(mevedel-deftest mevedel-tool-exec--child-with-sandbox-facts ()
+  ,test
+  (test)
+  :doc "child execution facts:
+`mevedel-tool-exec--child-with-sandbox-facts' preserves the original result"
+  (let* ((result '(:exit-code 0 :output "ok"))
+         (facts '(:sandbox bubblewrap))
+         (combined
+          (mevedel-tool-exec--child-with-sandbox-facts result facts)))
+    (should (equal (plist-get combined :output) "ok"))
+    (should (eq (plist-get combined :sandbox-facts) facts))
+    (should-not (plist-member result :sandbox-facts))))
+
+(mevedel-deftest mevedel-tool-exec--sandbox-disclosure ()
+  ,test
+  (test)
+  :doc "normal disclosure:
+`mevedel-tool-exec--sandbox-disclosure' appends active execution boundaries"
+  (should
+   (equal
+    (mevedel-tool-exec--sandbox-disclosure
+     "ok" '(:sandbox-facts
+            (:sandbox bubblewrap :filesystem workspace-write :network isolated)))
+    "ok\n\n[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]"))
+  :doc "suppressed unrestricted disclosure:
+`mevedel-tool-exec--sandbox-disclosure' warns without contaminating substitution"
+  (let (warning)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &optional _level _buffer-name)
+                 (setq warning message))))
+      (should
+       (equal
+        (mevedel-tool-exec--sandbox-disclosure
+         "literal"
+         '(:sandbox-facts
+           (:sandbox unavailable :filesystem unrestricted
+            :network unrestricted :reason "probe failed"))
+         t)
+        "literal"))
+      (should (string-match-p "without confinement" warning))
+      (should (string-match-p "network: unrestricted" warning)))))
+
+(mevedel-deftest mevedel-tool-exec--start-sandboxed-child-process ()
+  ,test
+  (test)
+  :doc "disabled confinement:
+`mevedel-tool-exec--start-sandboxed-child-process' runs directly with facts"
+  (let* ((root (make-temp-file "mevedel-sandbox-direct-" t))
+         (mevedel-sandbox-mode 'off)
+         result done)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--start-sandboxed-child-process
+           "mevedel-test-direct" '("sh" "-c" "printf direct")
+           root (list root) nil
+           (lambda (child-result)
+             (setq result child-result done t)))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.05)))
+          (should (equal (plist-get result :output) "direct"))
+          (should (eq (plist-get (plist-get result :sandbox-facts) :sandbox)
+                      'off)))
+      (delete-directory root t)))
+  :doc "automatic pre-exec fallback:
+`mevedel-tool-exec--start-sandboxed-child-process' retries directly once"
+  (let* ((root (make-temp-file "mevedel-sandbox-fallback-" t))
+         (result-file (file-name-concat root "result"))
+         (mevedel-sandbox-mode 'auto)
+         (mevedel-sandbox--probe-cache
+          '(:available t :executable "/bin/false"))
+         (mevedel-sandbox--last-facts nil)
+         result done (callback-count 0))
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--start-sandboxed-child-process
+           "mevedel-test-fallback"
+           (list "sh" "-c"
+                 (format "printf fallback > %s"
+                         (shell-quote-argument result-file)))
+           root (list root) nil
+           (lambda (child-result)
+             (cl-incf callback-count)
+             (setq result child-result done t)))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.05)))
+          (should (= callback-count 1))
+          (should (file-exists-p result-file))
+          (should (eq (plist-get (plist-get result :sandbox-facts) :sandbox)
+                      'unavailable))
+          (should (eq (plist-get (plist-get result :sandbox-facts) :network)
+                      'unrestricted))
+          (should (eq (plist-get mevedel-sandbox--last-facts :sandbox)
+                      'unavailable)))
+      (delete-directory root t)))
+  :doc "post-start failure:
+`mevedel-tool-exec--start-sandboxed-child-process' never replays after marker"
+  (let* ((root (make-temp-file "mevedel-sandbox-no-replay-" t))
+         (fake-bwrap (file-name-concat root "fake-bwrap"))
+         (result-file (file-name-concat root "must-not-exist"))
+         (mevedel-sandbox-mode 'auto)
+         result done)
+    (unwind-protect
+        (progn
+          (with-temp-file fake-bwrap
+            (insert
+             (concat
+              "#!/bin/sh\n"
+              "next=\n"
+              "for arg do\n"
+              "  if [ \"$next\" ]; then printf '%s\\n' \"$arg\"; exit 23; fi\n"
+              "  if [ \"$arg\" = mevedel-sandbox ]; then next=1; fi\n"
+              "done\n"
+              "exit 24\n")))
+          (set-file-modes fake-bwrap #o755)
+          (let ((mevedel-sandbox--probe-cache
+                 (list :available t :executable fake-bwrap)))
+            (mevedel-tool-exec--start-sandboxed-child-process
+             "mevedel-test-no-replay"
+             (list "sh" "-c"
+                   (format "printf replayed > %s"
+                           (shell-quote-argument result-file)))
+             root (list root) nil
+             (lambda (child-result)
+               (setq result child-result done t))))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.05)))
+          (should (= (plist-get result :exit-code) 23))
+          (should-not (file-exists-p result-file))
+          (should (eq (plist-get (plist-get result :sandbox-facts) :sandbox)
+                      'bubblewrap)))
+      (delete-directory root t)))
+  :doc "required unavailable backend:
+`mevedel-tool-exec--start-sandboxed-child-process' refuses before launch"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache
+         '(:available nil :reason "test unavailable"))
+        result)
+    (should-not
+     (mevedel-tool-exec--start-sandboxed-child-process
+      "mevedel-test-required" '("true") temporary-file-directory nil nil
+      (lambda (child-result) (setq result child-result))))
+    (should (equal (plist-get result :exit-code) -1))
+    (should (string-match-p "test unavailable"
+                            (error-message-string
+                             (plist-get result :error))))))
 
 
 
