@@ -99,8 +99,12 @@ than this unconditional list.")
   "Return best-effort literal path resources visible in SOURCE.
 This intentionally does not evaluate expansions.  Its purpose is to preserve
 protected-path checks even when unsupported syntax prevents argv extraction."
-  (let (resources)
-    (dolist (raw (split-string source "[[:space:]]+" t))
+  (require 'shell)
+  (let ((words (condition-case nil
+                   (split-string-shell-command source)
+                 (error (split-string source "[[:space:]]+" t))))
+        resources)
+    (dolist (raw words)
       (let ((word raw))
         (setq word (replace-regexp-in-string
                     "\\`[0-9]*\\(?:<<-?\\|<>\\|>>\\|>\\|<\\)" "" word))
