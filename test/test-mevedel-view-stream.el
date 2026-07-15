@@ -2986,7 +2986,7 @@
     (let ((session (mevedel-session--create
                     :name "test"
                     :workspace nil
-                    :permission-mode 'default)))
+                    :permission-mode 'ask)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -3009,7 +3009,7 @@
            (mevedel-session--create
             :name "test"
             :workspace nil
-            :permission-mode 'default
+            :permission-mode 'ask
             :goal (mevedel-goal--create
                    :status 'active
                    :phase 'planning))))
@@ -3037,7 +3037,7 @@
            (mevedel-session--create
             :name "test"
             :workspace nil
-            :permission-mode 'default
+            :permission-mode 'ask
             :goal (mevedel-goal--create
                    :status 'active
                    :phase 'planning))))
@@ -3057,7 +3057,7 @@
                      :name "test"
                      :workspace nil
                      :save-path tmp
-                     :permission-mode 'default
+                     :permission-mode 'ask
                      :plan-metadata
                      (list :path "plans/current.md"
                            :status 'approved

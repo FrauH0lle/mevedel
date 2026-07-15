@@ -142,12 +142,10 @@
 (defvar mevedel-slash-commands)
 
 (defconst mevedel-skills--mode-command-candidates
-  '(("default" . " ask before write tools")
-    ("accept-edits" . " auto-apply edit previews")
-    ("trust-all" . " auto-allow tools")
-    ("edit" . " alias for accept-edits")
-    ("edits" . " alias for accept-edits")
-    ("auto" . " alias for trust-all"))
+  '(("ask" . " prompt for edits and uncertain execution")
+    ("auto" . " auto-apply edit previews")
+    ("full-auto" . " auto-allow tools")
+    ("edit" . " alias for auto"))
   "Completion candidates and annotations for `/mode'.")
 
 (defconst mevedel-skills--validation-target-command-candidates
@@ -193,7 +191,7 @@
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
     ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
-    ("mode" . " [command] default | accept-edits | trust-all")
+    ("mode" . " [command] ask | auto | full-auto")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
     ("auto" . " [command] no args; toggle auto mode")
@@ -262,11 +260,11 @@ current buffer belongs to a live session pair."
 (defun mevedel-cmd--mode (args)
   "Show or set `mevedel-permission-mode' for the current chat buffer.
 ARGS is the raw slash-command argument string.
-Recognized modes: default, accept-edits, trust-all, and UI aliases.
+Recognized modes: ask, auto, full-auto, and the UI alias edit.
 
 Routes through the lifecycle-aware permission transition path."
   (if (and args (not (string-blank-p args)))
-      (let ((mode (mevedel-permission-mode-normalize args)))
+      (let ((mode (mevedel-permission-mode-parse-user-input args)))
         (mevedel-permission-mode-transition mode)
         (message "Permission mode set to %s" mode))
     (mevedel-skills--open-menu-or-message
@@ -312,15 +310,15 @@ Routes through the lifecycle-aware permission transition path."
        'mevedel-view-sent))))
 
 (defun mevedel-cmd--auto (_args)
-  "Toggle trust-all auto mode for the current session."
+  "Toggle auto edit mode for the current session."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (let* ((current (or (mevedel-session-permission-mode mevedel--session)
                       mevedel-permission-mode
-                      'default))
-         (auto-on-p (eq current 'trust-all)))
+                      'ask))
+         (auto-on-p (eq current 'auto)))
     (mevedel-permission-mode-transition
-     (if auto-on-p 'default 'trust-all))
+     (if auto-on-p 'ask 'auto))
     (if auto-on-p
         (message "mevedel: auto mode off")
       (message "mevedel: auto mode on"))))

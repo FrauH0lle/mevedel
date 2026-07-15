@@ -362,7 +362,7 @@
                                  :description "Verify tracked diff"
                                  :calls 19))))
                   ((symbol-function 'gptel-agent--block-bg)
-                   (lambda () 'default)))
+                   (lambda () 'ask)))
           (mevedel-view--render-agent-status))
         (let (agent-pos separator-pos prompt-pos)
           (save-excursion
@@ -449,7 +449,7 @@
                       :name "test"
                       :workspace nil
                       :permission-rules nil
-                      :permission-mode 'default
+                      :permission-mode 'ask
                       :permission-queue nil
                       :plan-queue nil))
             outcomes)
@@ -460,7 +460,7 @@
           (setq-local mevedel--session session)
           (mevedel-view--start-spinner "Working..."))
         (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                   (lambda () 'default)))
+                   (lambda () 'ask)))
           (with-current-buffer data-buf
             (dolist (path '("/tmp/one.el" "/tmp/two.el" "/tmp/three.el"))
               (let ((captured-path path))
@@ -729,7 +729,7 @@
                        :name "test"
                        :workspace nil
                        :permission-rules nil
-                       :permission-mode 'default
+                       :permission-mode 'ask
                        :permission-queue nil
                        :plan-queue nil))
              (plan-outcomes nil)
@@ -775,7 +775,7 @@
                        :name "test"
                        :workspace nil
                        :permission-rules nil
-                       :permission-mode 'default
+                       :permission-mode 'ask
                        :permission-queue nil
                        :plan-queue nil))
              (agent (mevedel-agent--create :name "verifier"))
@@ -801,7 +801,7 @@
                 (setq-local mevedel--agent-invocation inv)
                 (setq-local mevedel--view-buffer view-buf))
               (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                         (lambda () 'default)))
+                         (lambda () 'ask)))
                 (with-current-buffer agent-buf
                   (mevedel-permission--enqueue
                    (list :kind 'generic
@@ -842,7 +842,7 @@
                   (should (gethash interaction-id
                                    mevedel-view--interaction-overlays))
                   (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                             (lambda () 'default)))
+                             (lambda () 'ask)))
                     (mevedel-view--full-rerender))
                   (should-not outcomes)
                   (should (= 1 (length

@@ -490,28 +490,28 @@
   ,test
   (test)
 
-  :doc "does not fire when session permission mode is `default'"
+  :doc "does not fire when session permission mode is `ask'"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints))
-         (mevedel-permission-mode 'default))
+         (mevedel-permission-mode 'ask))
     (should-not (mevedel-reminders--should-fire-p r 0 session)))
 
-  :doc "fires when session permission mode is non-default"
+  :doc "fires when session permission mode is not `ask'"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints)))
-    (setf (mevedel-session-permission-mode session) 'accept-edits)
+    (setf (mevedel-session-permission-mode session) 'auto)
     (should (mevedel-reminders--should-fire-p r 0 session))
-    (should (string-match-p "accept-edits"
+    (should (string-match-p "auto"
                             (funcall (mevedel-reminder-content r) session))))
 
   :doc "content varies by mode and falls back for unknown modes"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-mode-constraints)))
-    (setf (mevedel-session-permission-mode session) 'accept-edits)
-    (should (string-match-p "accept-edits"
+    (setf (mevedel-session-permission-mode session) 'auto)
+    (should (string-match-p "auto"
                             (funcall (mevedel-reminder-content r) session)))
     (setf (mevedel-session-permission-mode session) 'weird-mode)
     (should (string-match-p "weird-mode"
@@ -521,26 +521,26 @@
   (let ((r (mevedel-reminders-make-mode-constraints)))
     (should (equal 5 (mevedel-reminder-interval r)))))
 
-(mevedel-deftest mevedel-reminders-make-auto-mode
+(mevedel-deftest mevedel-reminders-make-full-auto-mode
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
-  :doc "fires on trust-all entry and then sparsely"
+  :doc "fires on full-auto entry and then sparsely"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-auto-mode)))
-    (setf (mevedel-session-permission-mode session) 'trust-all)
+         (r (mevedel-reminders-make-full-auto-mode)))
+    (setf (mevedel-session-permission-mode session) 'full-auto)
     (should (mevedel-reminders--should-fire-p r 0 session))
     (setf (mevedel-reminder-last-fired r) 0)
     (should-not (mevedel-reminders--should-fire-p r 1 session))
     (should (mevedel-reminders--should-fire-p r 5 session)))
 
-  :doc "auto-mode-exit fires once after leaving trust-all"
+  :doc "full-auto-mode-exit fires once after leaving full-auto"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p2/" "/tmp/p2/" "p2"))
          (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-auto-mode-exit)))
-    (setf (mevedel-session-permission-mode session) 'default)
+         (r (mevedel-reminders-make-full-auto-mode-exit)))
+    (setf (mevedel-session-permission-mode session) 'ask)
     (should (mevedel-reminders--should-fire-p r 0 session))
     (setf (mevedel-reminder-last-fired r) 0)
     (should-not (mevedel-reminders--should-fire-p r 1 session))))

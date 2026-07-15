@@ -2184,7 +2184,7 @@
                               (match-beginning 0))))
           (should status-bounds)
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default)))
+                     (lambda () 'ask)))
             (mevedel-permission-queue--render-head session))
           (should (string-match-p "The LLM is requesting permission to evaluate elisp"
                                   (buffer-string)))

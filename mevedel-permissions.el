@@ -27,9 +27,9 @@
                   "mevedel-reminders" (session reminder))
 (declare-function mevedel-session-remove-reminder
                   "mevedel-reminders" (session type))
-(declare-function mevedel-reminders-make-auto-mode
+(declare-function mevedel-reminders-make-full-auto-mode
                   "mevedel-reminders" ())
-(declare-function mevedel-reminders-make-auto-mode-exit
+(declare-function mevedel-reminders-make-full-auto-mode-exit
                   "mevedel-reminders" ())
 
 ;; `mevedel-skills-ui'
@@ -211,7 +211,7 @@ Example:
   '("**/.git/**" "~/.ssh/**" "~/.gnupg/**")
   "Path patterns that require exact resource authority.
 
-Even `trust-all' mode prompts when a matching path lacks an exact resource
+Even `full-auto' mode prompts when a matching path lacks an exact resource
 grant.  Each entry is a glob pattern matched against the full expanded path."
   :type '(repeat string)
   :group 'mevedel)
@@ -240,16 +240,24 @@ session -- Customize UI, `*scratch*', init-file load, etc."
 
 (defun mevedel-permission-mode-normalize (mode)
   "Return canonical permission MODE.
-Accepts command-facing aliases used by the UI and slash commands."
+Only values valid in configuration and persisted state are accepted."
   (let ((mode (cond
                ((symbolp mode) mode)
                ((stringp mode) (intern (string-trim mode)))
                (t mode))))
-    (pcase mode
-      ((or 'default 'ask) 'default)
-      ((or 'accept-edits 'edit 'edits) 'accept-edits)
-      ((or 'trust-all 'auto) 'trust-all)
-      (_ (user-error "Unknown permission mode: %s" mode)))))
+    (if (memq mode '(ask auto full-auto))
+        mode
+      (user-error "Unknown permission mode: %s" mode))))
+
+(defun mevedel-permission-mode-parse-user-input (mode)
+  "Return canonical permission MODE from user-facing input.
+The `edit' alias names `auto' only at this interactive boundary."
+  (let ((mode (cond
+               ((symbolp mode) mode)
+               ((stringp mode) (intern (string-trim mode)))
+               (t mode))))
+    (mevedel-permission-mode-normalize
+     (if (eq mode 'edit) 'auto mode))))
 
 (defun mevedel-permission-mode-set-raw (mode)
   "Set permission MODE in the current scope without transition lifecycle.
@@ -264,7 +272,7 @@ they are responsible for."
   "Return SESSION's effective permission mode."
   (or (mevedel-session-permission-mode session)
       (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
-      'default))
+      'ask))
 
 (defun mevedel-permission-mode-effective
     (&optional session data-buffer surface-buffer)
@@ -297,18 +305,15 @@ DATA-BUFFER, the current buffer is used."
                (and (boundp 'mevedel-permission-mode)
                     mevedel-permission-mode)))
         global-mode
-        'default)))
+        'ask)))
 
 (defun mevedel-permission-mode-label (&optional mode)
   "Return the compact user-facing label for permission MODE."
-  (pcase (or mode 'default)
-    ('accept-edits "edits")
-    ('trust-all "auto!")
-    (_ "ask")))
+  (symbol-name (if (memq mode '(ask auto full-auto)) mode 'ask)))
 
-(defun mevedel-permission-mode-apply-auto-lifecycle
+(defun mevedel-permission-mode-apply-full-auto-lifecycle
     (previous-mode target-mode &optional session)
-  "Synchronize Auto-mode reminders for PREVIOUS-MODE -> TARGET-MODE.
+  "Synchronize full-auto reminders for PREVIOUS-MODE -> TARGET-MODE.
 SESSION defaults to the current data buffer's session."
   (let* ((previous-mode (mevedel-permission-mode-normalize previous-mode))
          (target-mode (mevedel-permission-mode-normalize target-mode))
@@ -319,15 +324,15 @@ SESSION defaults to the current data buffer's session."
     (when session
       (require 'mevedel-reminders)
       (cond
-       ((eq target-mode 'trust-all)
-        (mevedel-session-remove-reminder session 'auto-mode-exit)
+       ((eq target-mode 'full-auto)
+        (mevedel-session-remove-reminder session 'full-auto-mode-exit)
         (mevedel-session-ensure-reminder
-         session (mevedel-reminders-make-auto-mode)))
+         session (mevedel-reminders-make-full-auto-mode)))
        (t
-        (mevedel-session-remove-reminder session 'auto-mode)
-        (when (eq previous-mode 'trust-all)
+        (mevedel-session-remove-reminder session 'full-auto-mode)
+        (when (eq previous-mode 'full-auto)
           (mevedel-session-ensure-reminder
-           session (mevedel-reminders-make-auto-mode-exit))))))))
+           session (mevedel-reminders-make-full-auto-mode-exit))))))))
 
 (defun mevedel-permission-mode-transition (mode)
   "Transition the current session to permission MODE.
@@ -342,7 +347,7 @@ Runs mode-specific lifecycle hooks."
         (let ((previous (mevedel-permission-mode--effective-session-mode
                          session)))
           (mevedel-permission-mode-set-raw target)
-          (mevedel-permission-mode-apply-auto-lifecycle
+          (mevedel-permission-mode-apply-full-auto-lifecycle
            previous target session)
           (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
             (mevedel-skills--refresh-view-input-prompt)))))
@@ -434,24 +439,22 @@ made from inside a session; otherwise returns the global default."
   (mevedel-permission--get-session-scoped
    sym #'mevedel-session-permission-mode))
 
-(defcustom mevedel-permission-mode 'default
+(defcustom mevedel-permission-mode 'ask
   "Current permission mode.
 
 Controls the default permission behavior when no explicit rules match.
 
-  `default'      - Prompt for non-read-only tools; inline diff
-                   previews require interactive approval.
-  `accept-edits' - Same permission semantics as `default', but inline
-                   diff previews from Write/Edit/MkDir are auto-applied
-                   without an interactive overlay.
-  `trust-all'    - Skip policy prompts except explicit hard policies such
-                   as denies; protected and outside-root paths still need
-                   resource authority.
+  `ask'       - Allow recognized inspection and prompt for edits,
+                uncertain Bash, and Eval.
+  `auto'      - Apply native edits inside allowed roots automatically;
+                Bash and Eval retain their normal checks.
+  `full-auto' - Skip heuristic Bash and Eval prompts and run live Eval
+                automatically.  Explicit denies and missing protected
+                resource authority remain effective.
 
-Note: at the permission layer `default' and `accept-edits' behave the
-same.  The difference lives in `mevedel-preview-mode': under
-`accept-edits' the preview step auto-applies the change, under
-`default' it shows an interactive overlay.
+At the generic permission layer `ask' and `auto' behave the same.  The
+difference lives in native edit previews: `auto' applies them without
+an interactive overlay, while `ask' prompts.
 
 To change this mode at runtime, use `setopt' from the relevant buffer:
 when called from inside a session buffer (a data buffer or its view
@@ -474,9 +477,9 @@ execution reads the session slot first, so it would keep using the
 old value.  See `mevedel-permission-mode--set' and
 `mevedel-permission--set-session-scoped'."
   :type '(choice
-          (const :tag "Default -- prompt, interactive diff preview" default)
-          (const :tag "Accept Edits -- auto-apply diff previews" accept-edits)
-          (const :tag "Trust All -- skip prompts except hard policies" trust-all))
+          (const :tag "Ask -- prompt for edits and uncertain execution" ask)
+          (const :tag "Auto -- apply native edits, check Bash and Eval" auto)
+          (const :tag "Full Auto -- skip heuristic execution prompts" full-auto))
   :set #'mevedel-permission-mode--set
   :get #'mevedel-permission-mode--get
   :local 'permanent
@@ -771,9 +774,9 @@ Returns non-nil if the path is protected."
 
 Returns `allow', `deny', or `ask'."
   (pcase mode
-    ('trust-all 'allow)
-    ('accept-edits (if read-only-p 'allow 'ask))
-    ('default (if read-only-p 'allow 'ask))
+    ('full-auto 'allow)
+    ('auto (if read-only-p 'allow 'ask))
+    ('ask (if read-only-p 'allow 'ask))
     ;; Unknown mode: fall through to ask
     (_ 'ask)))
 

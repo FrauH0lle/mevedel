@@ -22,7 +22,7 @@
 ;;    :latest-user-message "..."
 ;;    :task-status-notes ((nil :note "..." :updated-turn 12) ...)
 ;;    :forked-from-session-id nil :forked-from-turn nil
-;;    :permission-mode default
+;;    :permission-mode ask
 ;;    :permission-rules ((TOOL-NAME ...) ...)
 ;;    :resource-grants ((:path "/abs/path" :access read) ...)
 ;;    :additional-roots (("name" . "/abs/path") ...)
@@ -160,6 +160,7 @@
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel--current-request)
+(defvar mevedel-permission-mode)
 (defvar mevedel-workspace-additional-roots)
 (defvar mevedel-agent-runtime--fsms)
 (defvar gptel-mode)
@@ -576,7 +577,14 @@ ADDITIONAL-ROOTS is the buffer-local value of
 
 The resulting plist is round-trippable via
 `mevedel-session-persistence-deserialize'."
-  (list
+  (let ((permission-mode
+         (or (mevedel-session-permission-mode session)
+             (and (boundp 'mevedel-permission-mode)
+                  (default-toplevel-value 'mevedel-permission-mode))
+             'ask)))
+    (unless (memq permission-mode '(ask auto full-auto))
+      (error "Invalid persisted permission mode: %S" permission-mode))
+    (list
    :version                (mevedel-version)
    :session-id             (mevedel-session-session-id session)
    :session-name           (mevedel-session-name session)
@@ -595,7 +603,7 @@ The resulting plist is round-trippable via
    :latest-user-message    latest-user-message
    :forked-from-session-id (mevedel-session-forked-from-session-id session)
    :forked-from-turn       (mevedel-session-forked-from-turn session)
-   :permission-mode        (mevedel-session-permission-mode session)
+   :permission-mode        permission-mode
    :permission-rules       (mevedel-session-permission-rules session)
    :resource-grants        (mevedel-session-resource-grants session)
    :preset-name            (mevedel-session-preset-name session)
@@ -618,7 +626,7 @@ The resulting plist is round-trippable via
    ;; parent's next WAIT drains them, the messages would otherwise
    ;; be lost.  Each message is a plist with :from, :body and
    ;; :timestamp -- prin1/read clean.
-   :messages               (mevedel-session-messages session)))
+   :messages               (mevedel-session-messages session))))
 
 (defun mevedel-session-persistence--validate-current-sidecar (plist)
   "Return PLIST when it contains every current-version sidecar key."
@@ -627,6 +635,9 @@ The resulting plist is round-trippable via
   (dolist (key mevedel-session-persistence--required-sidecar-keys)
     (unless (plist-member plist key)
       (error "Missing session sidecar key: %s" key)))
+  (unless (memq (plist-get plist :permission-mode) '(ask auto full-auto))
+    (error "Invalid persisted permission mode: %S"
+           (plist-get plist :permission-mode)))
   (dolist (segment (plist-get plist :prompt-index))
     (unless (and (consp segment) (integerp (car segment)))
       (error "Invalid session prompt-index segment: %S" segment))
@@ -2712,7 +2723,7 @@ WORKSPACE is the current workspace (resolved by the caller)."
      :created-at      now
      :updated-at      now
      :turn-count      0
-     :permission-mode 'default)))
+     :permission-mode 'ask)))
 
 (defun mevedel-session-persistence--find-live-buffer (session-id buf-name)
   "Return live buffer for SESSION-ID and BUF-NAME, or nil.

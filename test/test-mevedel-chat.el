@@ -406,7 +406,7 @@
                    (mevedel--implement-plan
                     (list :context 'full
                           :plan-file plan-file
-                          :permission-mode 'default
+                          :permission-mode 'ask
                           :goal-context
                           "Goal ID: g1\nObjective: Ship safely"))))))
           (should (string-match-p "Planning context" sent))
@@ -434,7 +434,7 @@
                        #'ignore))
               (mevedel--implement-plan
                (list :context 'focused :plan-file plan-file
-                     :permission-mode 'default
+                     :permission-mode 'ask
                      :goal-context
                      "Goal ID: g1\nObjective: Ship safely\nCycle: 1"))))
           (should (string-match-p "Ship safely" prompt))
@@ -945,7 +945,7 @@
              (let* ((session (mevedel-session--create
                               :name "test"
                               :workspace nil
-                              :permission-mode 'default
+                              :permission-mode 'ask
                               :permission-rules nil
                               :permission-queue nil
                               :plan-queue nil))
@@ -956,23 +956,23 @@
                               (lambda () (cl-incf refreshed))))
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)
-                       (mevedel--implementation-permission-mode-apply 'accept-edits)
-                       (should (eq 'accept-edits
+                       (mevedel--implementation-permission-mode-apply 'auto)
+                       (should (eq 'auto
                                    (mevedel-session-permission-mode session)))
-                       (should (equal '(default)
+                       (should (equal '(ask)
                                       mevedel--implementation-permission-mode-restore))
                        (mevedel--implementation-permission-mode-restore)
-                       (should (eq 'default
+                       (should (eq 'ask
                                    (mevedel-session-permission-mode session)))
                        (should-not mevedel--implementation-permission-mode-restore)
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer))))
 
-             :doc "temporarily applies explicit default mode over restored auto mode"
+             :doc "temporarily applies explicit ask mode over restored full-auto mode"
              (let* ((session (mevedel-session--create
                               :name "test"
                               :workspace nil
-                              :permission-mode 'trust-all
+                              :permission-mode 'full-auto
                               :permission-rules nil
                               :permission-queue nil
                               :plan-queue nil))
@@ -983,13 +983,13 @@
                               (lambda () (cl-incf refreshed))))
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)
-                       (mevedel--implementation-permission-mode-apply 'default)
-                       (should (eq 'default
+                       (mevedel--implementation-permission-mode-apply 'ask)
+                       (should (eq 'ask
                                    (mevedel-session-permission-mode session)))
-                       (should (equal '(trust-all)
+                       (should (equal '(full-auto)
                                       mevedel--implementation-permission-mode-restore))
                        (mevedel--implementation-permission-mode-restore)
-                       (should (eq 'trust-all
+                       (should (eq 'full-auto
                                    (mevedel-session-permission-mode session)))
                        (should-not mevedel--implementation-permission-mode-restore)
                        (should (= 2 refreshed))))
@@ -1004,7 +1004,7 @@
                               :permission-queue nil
                               :plan-queue nil))
                     (buffer (generate-new-buffer " *mev-chat-mode*"))
-                    (mevedel-permission-mode 'default)
+                    (mevedel-permission-mode 'ask)
                     (refreshed 0))
                (unwind-protect
                    (cl-letf (((symbol-function 'mevedel-skills--refresh-view-input-prompt)
@@ -1012,8 +1012,8 @@
                      (with-current-buffer buffer
                        (setq-local mevedel--session session)
                        (setq-local mevedel-permission-mode nil)
-                       (mevedel--implementation-permission-mode-apply 'trust-all)
-                       (should (eq 'trust-all
+                       (mevedel--implementation-permission-mode-apply 'full-auto)
+                       (should (eq 'full-auto
                                    (mevedel-session-permission-mode session)))
                        (should (equal '(nil)
                                       mevedel--implementation-permission-mode-restore))
@@ -1021,7 +1021,7 @@
                        (should-not (mevedel-session-permission-mode session))
                        (should-not (local-variable-p 'mevedel-permission-mode
                                                      buffer))
-                       (should (eq 'default mevedel-permission-mode))
+                       (should (eq 'ask mevedel-permission-mode))
                        (should-not mevedel--implementation-permission-mode-restore)
                        (should (= 2 refreshed))))
                  (when (buffer-live-p buffer) (kill-buffer buffer)))))

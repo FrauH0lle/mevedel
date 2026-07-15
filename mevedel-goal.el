@@ -1282,15 +1282,15 @@ shown as a collapsed hook-context disclosure."
    mevedel-plan-queue--spec origin 'aborted session))
 
 (defconst mevedel-goal--implementation-modes
-  '(default accept-edits trust-all)
+  '(ask auto full-auto)
   "Plan implementation permission modes cycled by the approval prompt.")
 
 (defun mevedel-goal--implementation-mode-label (mode)
   "Return compact display label for implementation MODE."
   (pcase mode
-    ('accept-edits "edit")
-    ('trust-all "auto")
-    (_ "default")))
+    ('auto "auto")
+    ('full-auto "full-auto")
+    (_ "ask")))
 
 (defun mevedel-goal--next-implementation-mode (mode)
   "Return the next implementation mode after MODE."
@@ -1303,7 +1303,7 @@ shown as a collapsed hook-context disclosure."
   (or (mevedel-queue--entry-metadata-get entry :implementation-mode)
       (when-let* ((session (plist-get entry :session)))
         (mevedel-session-permission-mode session))
-      'default))
+      'ask))
 
 (defun mevedel-plan-queue--cycle-entry-implementation-mode (entry)
   "Cycle ENTRY's implementation mode and rerender the plan prompt."
@@ -1515,9 +1515,9 @@ When FEEDBACK is non-nil, prefill it in the feedback section."
 (defun mevedel-goal--approval-implementation-mode (outcome)
   "Return implementation permission mode represented by OUTCOME."
   (let ((mode (and (consp outcome) (plist-get outcome :mode))))
-    (if (memq mode '(default accept-edits trust-all))
+    (if (memq mode '(ask auto full-auto))
         mode
-      (or (mevedel-session-permission-mode mevedel--session) 'default))))
+      (or (mevedel-session-permission-mode mevedel--session) 'ask))))
 
 (defun mevedel-goal--approval-execution-home (goal outcome)
   "Return execution-home kind selected for GOAL by OUTCOME."

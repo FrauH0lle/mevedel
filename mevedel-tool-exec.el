@@ -679,12 +679,12 @@ avoids saving a brittle whole-chain string such as
 
 (defun mevedel-tool-exec--effective-trust-p (trust-literal-p &optional mode)
   "Return non-nil when TRUST-LITERAL-P or MODE bypasses heuristics.
-Trusted skill literals and `trust-all' mode share this predicate for
+Trusted skill literals and `full-auto' mode share this predicate for
 skipping Bash/Eval heuristic prompts.  Explicit deny rules and protected
 paths are checked separately before callers use this result."
   (or trust-literal-p
       (eq (or mode (mevedel-tool-exec--effective-permission-mode))
-          'trust-all)))
+          'full-auto)))
 
 (defun mevedel-tool-exec--bash-path-word (word)
   "Return the literal path part of shell WORD, or nil.
@@ -797,7 +797,7 @@ full command."
   "Return non-nil if BUCKETS deny an extracted command from COMMAND.
 
 This preserves hard denies such as `(\"Bash\" :pattern \"rm\" :action
-deny)' for `rm /tmp/foo' and `echo $(rm /tmp/foo)' in `trust-all'
+deny)' for `rm /tmp/foo' and `echo $(rm /tmp/foo)' in `full-auto'
 mode.  Only specifier-carrying `:pattern' rules are considered here, so
 a generic unqualified Bash deny does not override a more specific allow
 for the full command."
@@ -880,7 +880,7 @@ precedence -- unparseable syntax and dangerous-blocklisted commands
 downgrade to `ask'.  Otherwise the full command is tested first, then
 each extracted sub-command for defence in depth.  Within the results,
 `deny' wins over `ask' which wins over `allow'.  If nothing matches,
-`ask' is returned unless the effective permission mode is `trust-all'.
+`ask' is returned unless the effective permission mode is `full-auto'.
 
 When TRUST-LITERAL-P is non-nil (skill body shell expansion
 path), the dangerous-commands blocklist and the fail-safe-
@@ -891,9 +891,9 @@ Explicit deny rules and protected-path guards still apply --
 the flag only relaxes the heuristic overlays that exist to
 catch hallucinated shell from the model.
 
-In `trust-all' mode, explicit deny rules and protected path tokens still
+In `full-auto' mode, explicit deny rules and protected path tokens still
 win, then unknown, dangerous, and complex Bash invocations are allowed.
-When IGNORE-EFFECTIVE-TRUST-P is non-nil, `trust-all' is ignored; this
+When IGNORE-EFFECTIVE-TRUST-P is non-nil, `full-auto' is ignored; this
 is used by the guardian to decide whether a command would have been
 suspicious under the normal classifier.
 
@@ -910,7 +910,7 @@ without requiring a session-level rule."
          (effective-trust-p
           (and (not ignore-effective-trust-p)
                (mevedel-tool-exec--effective-trust-p trust-literal-p mode)))
-         (trust-all-p (and effective-trust-p (eq mode 'trust-all))))
+         (full-auto-p (and effective-trust-p (eq mode 'full-auto))))
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
@@ -936,7 +936,7 @@ without requiring a session-level rule."
                                 (member cmd mevedel-bash-dangerous-commands))
                               commands))))
 
-      (when (and trust-all-p
+      (when (and full-auto-p
                  (not (eq full-action 'deny)))
         (cl-return-from mevedel-tools--check-bash-permission 'allow))
 
@@ -1163,17 +1163,17 @@ CALLBACK receives nil or a normalized guidance plist."
     (mevedel-tool-exec--bash-guardian-model-async
      command context callback))))
 
-(defun mevedel-tool-exec--bash-trust-all-guardian-needed-p
+(defun mevedel-tool-exec--bash-full-auto-guardian-needed-p
     (command &optional permission-context)
   "Return non-nil when COMMAND and PERMISSION-CONTEXT need guardian review.
-This is only for `trust-all' mode.  The guardian is consulted when the
+This is only for `full-auto' mode.  The guardian is consulted when the
 normal classifier would have asked, avoiding latency for routine allowed
 commands while still giving the optional guardian a chance to veto
 suspicious Bash."
   (and mevedel-permission-guardian
        (eq (mevedel-tool-exec--effective-permission-mode
             permission-context)
-           'trust-all)
+           'full-auto)
        (eq (mevedel-tools--check-bash-permission
             command :ignore-effective-trust-p t
             :permission-context permission-context)
@@ -1283,7 +1283,7 @@ PRESERVE-UI describe the requested execution scope."
   "Decide Eval permission for TRUST-LITERAL-P and PERMISSION-CONTEXT.
 
 Normal model-requested Eval asks unless an explicit deny rule applies
-or the effective permission mode is `trust-all'.  When TRUST-LITERAL-P
+or the effective permission mode is `full-auto'.  When TRUST-LITERAL-P
 is non-nil, as with author-written skill body injections, an active
 allow rule for Eval may bypass the prompt.  Deny rules still win
 absolutely."
@@ -1295,7 +1295,7 @@ absolutely."
     (cond
      ((mevedel-permission--any-deny buckets "Eval" nil nil nil nil)
       'deny)
-     ((eq mode 'trust-all)
+     ((eq mode 'full-auto)
       'allow)
      (trust-literal-p
       (or action 'ask))
@@ -1440,7 +1440,7 @@ parity with the sync slot."
         (cond
          ((not (eq decision 'ask))
           (if (and (eq decision 'allow)
-                   (mevedel-tool-exec--bash-trust-all-guardian-needed-p
+                   (mevedel-tool-exec--bash-full-auto-guardian-needed-p
                     command permission-context))
               (mevedel-tool-exec--bash-deny-only-guardian-async
                command cont metadata-p)

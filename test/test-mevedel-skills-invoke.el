@@ -489,7 +489,7 @@ configuration."
 
 (defmacro mevedel-skills-test--with-eval-allowed (&rest body)
   "Run BODY with a deterministic trusted Eval allow rule."
-  `(let ((mevedel-permission-mode 'trust-all)
+  `(let ((mevedel-permission-mode 'full-auto)
          (mevedel-permission-rules '(("Eval" :action allow))))
      ,@body))
 

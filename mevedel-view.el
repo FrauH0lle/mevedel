@@ -303,19 +303,19 @@
   "Face for the read-only `> ' prompt in the input zone."
   :group 'mevedel)
 
-(defface mevedel-view-permission-mode-default
+(defface mevedel-view-permission-mode-ask
   '((t :inherit font-lock-keyword-face :weight bold))
-  "Face for the default permission mode prompt label."
+  "Face for the ask permission mode prompt label."
   :group 'mevedel)
 
-(defface mevedel-view-permission-mode-accept-edits
+(defface mevedel-view-permission-mode-auto
   '((t :inherit success :weight bold))
-  "Face for the accept-edits permission mode prompt label."
+  "Face for the auto permission mode prompt label."
   :group 'mevedel)
 
-(defface mevedel-view-permission-mode-trust-all
+(defface mevedel-view-permission-mode-full-auto
   '((t :inherit error :weight bold))
-  "Face for the trust-all permission mode prompt label."
+  "Face for the full-auto permission mode prompt label."
   :group 'mevedel)
 
 (defface mevedel-view-zone-separator

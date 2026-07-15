@@ -395,7 +395,7 @@ Each binding is (NAME KEYS)."
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (setf (mevedel-session-permission-mode session) 'accept-edits)
+          (setf (mevedel-session-permission-mode session) 'auto)
           (let* ((mevedel-goal-execution-home 'worktree)
                  (mevedel-goal-implementation-context 'full)
                  (mevedel-goal-dispatch-function #'ignore)
@@ -405,7 +405,7 @@ Each binding is (NAME KEYS)."
                         (plist-get (mevedel-goal-execution-home goal) :kind)))
             (should (eq 'focused
                         (mevedel-goal-implementation-context goal)))
-            (should (eq 'accept-edits
+            (should (eq 'auto
                         (mevedel-session-permission-mode session)))))
       (delete-directory root t)))
   :doc "rejects a blank objective and declined unfinished replacement"
@@ -940,7 +940,7 @@ Each binding is (NAME KEYS)."
       (delete-directory root t)))
   :doc "directly retries implementation known not to have started"
   (let* ((root (make-temp-file "mevedel-goal-resume-not-started-" t))
-         (input '(:plan-file "plan.md" :permission-mode default))
+         (input '(:plan-file "plan.md" :permission-mode ask))
          (goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'paused
                 :phase 'implementing :cycle 1 :cycles '((:cycle 1))
@@ -1655,7 +1655,7 @@ Each binding is (NAME KEYS)."
     (unwind-protect
         (progn
           (setf (mevedel-session-goal session) goal
-                (mevedel-session-permission-mode session) 'trust-all)
+                (mevedel-session-permission-mode session) 'full-auto)
           (should (mevedel-goal-read-only-phase-p session))
           (setf (mevedel-goal-phase goal) 'implementing)
           (should-not (mevedel-goal-read-only-phase-p session))
@@ -1770,7 +1770,7 @@ Each binding is (NAME KEYS)."
           (setq-local mevedel--session session)
           (test-mevedel-goal--own goal session root)
           (setf (mevedel-session-goal session) goal
-                (mevedel-session-permission-mode session) 'accept-edits)
+                (mevedel-session-permission-mode session) 'auto)
           (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
                      #'ignore)
                     ((symbol-function 'mevedel-goal--ensure-reference-reminder)
@@ -1786,7 +1786,7 @@ Each binding is (NAME KEYS)."
             (mevedel-goal--approval-callback
              "# Plan\n\nImplement it." buffer '(:context full)))
           (should (eq 'implementing (mevedel-goal-phase goal)))
-          (should (eq 'accept-edits
+          (should (eq 'auto
                       (plist-get implementation :permission-mode)))
           (should (file-exists-p (plist-get implementation :plan-file))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
@@ -2155,13 +2155,13 @@ Each binding is (NAME KEYS)."
   :doc "shows full/focused context, permission mode, and execution home"
   (let ((text (substring-no-properties
                (mevedel-plan-queue--keys-line
-                'accept-edits 'worktree t))))
+                'auto 'worktree t))))
     (dolist (needle '("implement (full)" "implement (focused)"
-                      "mode: edit" "home: worktree"))
+                      "mode: auto" "home: worktree"))
       (should (string-match-p (regexp-quote needle) text)))
     (let ((locked (substring-no-properties
                    (mevedel-plan-queue--keys-line
-                    'default 'worktree nil))))
+                    'ask 'worktree nil))))
       (should (string-match-p "home: worktree (locked)" locked))
       (should-not (string-match-p "w home" locked)))))
 

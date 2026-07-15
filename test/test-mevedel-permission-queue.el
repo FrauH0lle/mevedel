@@ -40,7 +40,7 @@
    :name "test"
    :workspace nil
    :permission-rules rules
-   :permission-mode 'default
+   :permission-mode 'ask
    :permission-queue nil
    :plan-queue nil))
 
@@ -460,7 +460,7 @@
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default))
+                     (lambda () 'ask))
                     ((symbol-function 'display-warning)
                      (lambda (_type message &optional _level _buffer-name)
                        (when (string-match-p "permission-queue: render error"
@@ -526,7 +526,7 @@
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default)))
+                     (lambda () 'ask)))
             (with-current-buffer data-buf
               (mevedel-permission--enqueue
                (list :kind 'generic
@@ -596,9 +596,9 @@
             (setq-local temporary-file-directory workspace-root))
           (mevedel-view--setup view-buf data-buf)
           (let ((mevedel-permission-rules nil)
-                (mevedel-permission-mode 'default))
+                (mevedel-permission-mode 'ask))
             (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                       (lambda () 'default)))
+                       (lambda () 'ask)))
               (with-current-buffer data-buf
                 (dolist (path paths)
                   (funcall (gptel-tool-function gptel-tool)
@@ -664,9 +664,9 @@
             (setq-local temporary-file-directory workspace-root))
           (mevedel-view--setup view-buf data-buf)
           (let ((mevedel-permission-rules nil)
-                (mevedel-permission-mode 'default))
+                (mevedel-permission-mode 'ask))
             (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                       (lambda () 'default)))
+                       (lambda () 'ask)))
               (with-current-buffer data-buf
                 (dolist (path paths)
                   (funcall (gptel-tool-function gptel-tool)
@@ -800,7 +800,7 @@
                          :agent-id
                          "verifier--abcdef123456abcdef123456abcdef12")))
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default)))
+                     (lambda () 'ask)))
             (with-current-buffer agent-data
               (mevedel-permission--enqueue
                (list :kind 'eval
@@ -841,7 +841,7 @@
                          :agent-id
                          "verifier--abcdef123456abcdef123456abcdef12")))
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default))
+                     (lambda () 'ask))
                     ((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
                        (list (list :agent-id
@@ -1012,7 +1012,7 @@
             (setq-local mevedel--session session))
           (mevedel-view--setup view-buf data-buf)
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default)))
+                     (lambda () 'ask)))
             (with-current-buffer data-buf
               (mevedel-permission--enqueue
                (list :kind 'generic

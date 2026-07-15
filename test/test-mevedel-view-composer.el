@@ -247,22 +247,22 @@
   ,test
   (test)
 
-  :doc "default mode renders ask"
-  (let ((prompt (mevedel-view--input-prompt-string 'default)))
+  :doc "ask mode renders an undecorated prompt"
+  (let ((prompt (mevedel-view--input-prompt-string 'ask)))
     (should (string= "\n> " prompt))
     (should (eq 'mevedel-view-input-prompt
                 (get-text-property 0 'font-lock-face prompt))))
 
-  :doc "accept-edits mode renders edits"
-  (let ((prompt (mevedel-view--input-prompt-string 'accept-edits)))
-    (should (string= "\n[edits] > " prompt))
-    (should (eq 'mevedel-view-permission-mode-accept-edits
+  :doc "auto mode renders its canonical name"
+  (let ((prompt (mevedel-view--input-prompt-string 'auto)))
+    (should (string= "\n[auto] > " prompt))
+    (should (eq 'mevedel-view-permission-mode-auto
                 (get-text-property 2 'font-lock-face prompt))))
 
-  :doc "trust-all mode renders auto warning"
-  (let ((prompt (mevedel-view--input-prompt-string 'trust-all)))
-    (should (string= "\n[auto!] > " prompt))
-    (should (eq 'mevedel-view-permission-mode-trust-all
+  :doc "full-auto mode renders its canonical name"
+  (let ((prompt (mevedel-view--input-prompt-string 'full-auto)))
+    (should (string= "\n[full-auto] > " prompt))
+    (should (eq 'mevedel-view-permission-mode-full-auto
                 (get-text-property 2 'font-lock-face prompt)))))
 
 (mevedel-deftest mevedel-view--next-permission-mode
@@ -270,24 +270,24 @@
   ,test
   (test)
 
-  :doc "default mode moves to accept-edits"
-  (should (eq 'accept-edits
-              (mevedel-view--next-permission-mode 'default)))
+  :doc "ask mode moves to auto"
+  (should (eq 'auto
+              (mevedel-view--next-permission-mode 'ask)))
 
-  :doc "accept-edits mode moves to trust-all"
-  (should (eq 'trust-all
-              (mevedel-view--next-permission-mode 'accept-edits)))
+  :doc "auto mode moves to full-auto"
+  (should (eq 'full-auto
+              (mevedel-view--next-permission-mode 'auto)))
 
-  :doc "trust-all mode wraps to default"
-  (should (eq 'default
-              (mevedel-view--next-permission-mode 'trust-all)))
+  :doc "full-auto mode wraps to ask"
+  (should (eq 'ask
+              (mevedel-view--next-permission-mode 'full-auto)))
 
-  :doc "nil mode starts at accept-edits"
-  (should (eq 'accept-edits
+  :doc "nil mode starts at auto"
+  (should (eq 'auto
               (mevedel-view--next-permission-mode nil)))
 
-  :doc "unknown mode starts at accept-edits"
-  (should (eq 'accept-edits
+  :doc "unknown mode starts at auto"
+  (should (eq 'auto
               (mevedel-view--next-permission-mode 'bogus))))
 
 (mevedel-deftest mevedel-view-cycle-permission-mode
@@ -301,41 +301,41 @@
         (mevedel-view-test--with-buffers
           (let ((session (mevedel-session--create
                           :name "main"
-                          :permission-mode 'default)))
+                          :permission-mode 'ask)))
             (with-current-buffer data-buf
               (setq-local mevedel--session session)
               (setq-local mevedel--view-buffer view-buf)
-              (setq-local mevedel-permission-mode 'default))
+              (setq-local mevedel-permission-mode 'ask))
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
-              (setq-local mevedel-permission-mode 'default)
-              (should (eq 'accept-edits
+              (setq-local mevedel-permission-mode 'ask)
+              (should (eq 'auto
                           (mevedel-view-cycle-permission-mode)))
-              (should (eq 'accept-edits
+              (should (eq 'auto
                           (mevedel-session-permission-mode session)))
-              (should (eq 'accept-edits
+              (should (eq 'auto
                           (buffer-local-value
                            'mevedel-permission-mode data-buf)))
-              (should (eq 'accept-edits mevedel-permission-mode))
+              (should (eq 'auto mevedel-permission-mode))
               (should (eq saved
                           (default-toplevel-value 'mevedel-permission-mode)))
-              (should (string= "\n[edits] > "
+              (should (string= "\n[auto] > "
                                (buffer-substring-no-properties
                                 mevedel-view--input-marker
                                 (mevedel-view--input-start)))))
             (with-current-buffer view-buf
-              (should (eq 'trust-all
+              (should (eq 'full-auto
                           (mevedel-view-cycle-permission-mode)))
-              (should (memq 'auto-mode
+              (should (memq 'full-auto-mode
                             (mapcar #'mevedel-reminder-type
                                     (mevedel-session-reminders session))))
-              (should (eq 'default
+              (should (eq 'ask
                           (mevedel-view-cycle-permission-mode)))
               (let ((types (mapcar #'mevedel-reminder-type
                                    (mevedel-session-reminders session))))
-                (should-not (memq 'auto-mode types))
-                (should (memq 'auto-mode-exit types)))
-              (should (eq 'default
+                (should-not (memq 'full-auto-mode types))
+                (should (memq 'full-auto-mode-exit types)))
+              (should (eq 'ask
                           (mevedel-session-permission-mode session))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
@@ -344,7 +344,7 @@
   ,test
   (test)
 
-  :doc "setup renders the default mode prompt"
+  :doc "setup renders the ask mode prompt"
   (mevedel-view-test--with-buffers
     (with-current-buffer view-buf
       (should (string= "\n> "
@@ -357,9 +357,9 @@
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
       (insert "draft")
-      (setq-local mevedel-permission-mode 'trust-all)
+      (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "\n[auto!] > "
+      (should (string= "\n[full-auto] > "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
@@ -370,9 +370,9 @@
     (with-current-buffer view-buf
       (goto-char (mevedel-view--input-start))
       (insert "> quoted\nsecond line")
-      (setq-local mevedel-permission-mode 'trust-all)
+      (setq-local mevedel-permission-mode 'full-auto)
       (mevedel-view-refresh-input-prompt)
-      (should (string= "\n[auto!] > "
+      (should (string= "\n[full-auto] > "
                        (buffer-substring-no-properties
                         mevedel-view--input-marker
                         (mevedel-view--input-start))))
@@ -389,10 +389,10 @@
         (set-marker mevedel-view--status-marker (point-max))
         (set-marker mevedel-view--interaction-marker (point-max))
         (set-marker mevedel-view--input-marker (point-max))
-        (setq-local mevedel-permission-mode 'trust-all)
+        (setq-local mevedel-permission-mode 'full-auto)
         (mevedel-view-refresh-input-prompt)
         (should (string= draft (mevedel-view--input-text)))
-        (should (string= "\n[auto!] > "
+        (should (string= "\n[full-auto] > "
                          (buffer-substring-no-properties
                           mevedel-view--input-marker
                           (mevedel-view--input-start))))))))
@@ -588,12 +588,12 @@
                               capf "go"))))
             (mevedel-view--clear-input)
             (goto-char (mevedel-view--input-start))
-            (insert "/mode tr")
+            (insert "/mode fu")
             (let ((capf (mevedel-view-slash-capf)))
               (should capf)
-              (should (equal '("trust-all")
+              (should (equal '("full-auto")
                              (mevedel-view-test--capf-candidates
-                              capf "tr"))))))
+                              capf "fu"))))))
       (delete-directory root t)))
 
   :doc "view review command completes target arguments"

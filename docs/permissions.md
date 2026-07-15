@@ -38,7 +38,7 @@ Single decision function `mevedel-check-permission`. Decision chain:
 7. For a path not directly covered by a native path rule, resolve an allowed
    root, exact allowed path, or exact resource grant
 8. A protected or outside-root path without that authority → ask
-9. Permission mode/default decision when no earlier policy decides
+9. Permission-mode fallback when no earlier policy decides
 
 For a tool with a command checker, command authority and filesystem resource
 authority are layered: both must allow. A command rule cannot authorize its
@@ -88,7 +88,7 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   so skill, session, persistent, and default allow rules cannot bypass it.
 - Automatic Goal guardians receive no tools at all. Guardian approval changes
   lifecycle state only; it never raises the session permission mode. Fully
-  unattended implementation therefore still requires an explicit `trust-all`
+  unattended implementation therefore still requires an explicit `full-auto`
   selection.
 
 ## Rule format
@@ -107,9 +107,19 @@ Precedence: specifier rules outrank generic; within a group
 `deny > ask > allow`. Protected paths prompt unless an exact resource grant
 with sufficient access already exists.
 
-Modes: `default` / `accept-edits` / `trust-all`. Slash-command
-aliases normalize `ask` to `default`, `edit` / `edits` to `accept-edits`,
-and `auto` to `trust-all`.
+The three canonical modes are `ask`, `auto`, and `full-auto`:
+
+- `ask` allows recognized inspection and prompts for edits and uncertain
+  Bash or Eval execution.
+- `auto` additionally applies native edits inside allowed roots, but grants no
+  blanket Bash or Eval authority.
+- `full-auto` bypasses heuristic Bash and Eval prompts, including live Eval,
+  while explicit denies and protected resources without exact authority still
+  win.
+
+Configuration and persisted sessions accept only these canonical values. The
+interactive `/mode` command additionally accepts `edit` as a user-facing alias
+for `auto`; the alias is normalized before it reaches session state.
 
 The prompt offers allow/deny choices for the invocation, session, or persistent
 workspace scope. `.mevedel/permissions.el` stores a plist containing both
@@ -186,9 +196,9 @@ Bash has domain logic in `check-permission`: parses commands, enforces
 `eval` / `exec` / here-docs / brace expansion. Bash does not use the
 pipeline's generic permission prompt or `PermissionRequest` hook path;
 when it needs a decision it enqueues a Bash-specific permission entry.
-Under `trust-all`, unknown, dangerous, and complex Bash commands are
+Under `full-auto`, unknown, dangerous, and complex Bash commands are
 allowed without a prompt after explicit deny rules and literal protected
-path tokens have been checked. Outside `trust-all`, unknown commands
+path tokens have been checked. Outside `full-auto`, unknown commands
 default to ask. The dangerous blocklist only downgrades `allow` to
 `ask`; explicit `deny`/`ask` wins.
 
@@ -199,11 +209,11 @@ heuristics do not fire. Explicit deny rules still win.
 ### Bash guardian guidance
 
 `mevedel-permission-guardian` can add model-reviewed risk guidance to
-Bash prompts. Outside `trust-all`, it is advisory only: the normal
+Bash prompts. Outside `full-auto`, it is advisory only: the normal
 permission chain still decides `allow` / `ask` / `deny`, explicit deny
 rules still win, Goal phase restrictions and protected-path policy are
 unchanged, and
-the user remains authoritative. In `trust-all`, the guardian is
+the user remains authoritative. In `full-auto`, the guardian is
 deny-only for commands that the normal classifier would have treated as
 suspicious; deny recommendations veto, while timeouts, failures, invalid
 output, and non-deny recommendations allow by default.
@@ -235,7 +245,7 @@ reviewer output; the default is 20 seconds. The model prompt lives in
 ## Eval
 
 Eval asks through the same session permission queue's Eval-specific
-entry type unless the effective permission mode is `trust-all`. Like
+entry type unless the effective permission mode is `full-auto`. Like
 Bash, it does not use the generic `PermissionRequest` hook path. The
 expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.  The prompt also shows the

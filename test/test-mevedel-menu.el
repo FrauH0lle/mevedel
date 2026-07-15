@@ -65,7 +65,7 @@
              (org-mode)
              (setq-local default-directory (file-name-as-directory root))
              (setq-local mevedel--session session)
-             (setq-local mevedel-permission-mode 'default)
+             (setq-local mevedel-permission-mode 'ask)
              (setq-local gptel-model 'gpt-5.5)
              (setq-local gptel-tools '(read edit)))
            (mevedel-view--setup view-buf data-buf)
@@ -251,7 +251,7 @@
       (with-current-buffer view-buf
         (let ((text (mevedel-menu--goal-description)))
           (dolist (needle '("Ship the feature" "paused / implementing"
-                            "Approval: automatic · Tool permissions: default"
+                            "Approval: automatic · Tool permissions: ask"
                             "400/1000"
                             "worktree" "focused" "cycle-002-plan.md"
                             "One test remains" "Needs confirmation"
@@ -617,23 +617,23 @@
   :doc "marks the active mode without exposing internal mode names"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (should (string= "ask     current ask before write tools"
+      (should (string= "ask     current prompt for edits and uncertain execution"
                        (substring-no-properties
-                        (mevedel-menu--mode-default-description))))
-      (should (string= "edits           auto-apply edit previews"
+                        (mevedel-menu--mode-ask-description))))
+      (should (string= "auto            auto-apply edit previews"
                        (substring-no-properties
-                        (mevedel-menu--mode-accept-edits-description))))))
+                        (mevedel-menu--mode-auto-description))))))
 
   :doc "updates the current marker when the session mode changes"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (mevedel-menu--set-mode 'trust-all)
-      (should (string= "auto!   current auto-allow tools"
+      (mevedel-menu--set-mode 'full-auto)
+      (should (string= "full-auto current auto-allow tools"
                        (substring-no-properties
-                        (mevedel-menu--mode-trust-all-description))))
-      (should (string= "ask             ask before write tools"
+                        (mevedel-menu--mode-full-auto-description))))
+      (should (string= "ask             prompt for edits and uncertain execution"
                        (substring-no-properties
-                        (mevedel-menu--mode-default-description)))))))
+                        (mevedel-menu--mode-ask-description)))))))
 
 (mevedel-deftest mevedel-menu-help--text ()
   ,test
@@ -659,11 +659,11 @@
   :doc "uses the cockpit view as the permission surface"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (setq-local mevedel-permission-mode 'trust-all)
+      (setq-local mevedel-permission-mode 'full-auto)
       (should (eq (mevedel-menu--mode-symbol
                    session data-buf view-buf)
-                  'trust-all))
-      (should (string= "Mode      auto!"
+                  'full-auto))
+      (should (string= "Mode      full-auto"
                        (substring-no-properties
                         (mevedel-menu--mode-description)))))))
 
@@ -673,11 +673,11 @@
   :doc "mode setter updates the paired data buffer session"
   (mevedel-menu-test--with-buffers
     (with-current-buffer view-buf
-      (mevedel-menu--set-mode 'accept-edits))
+      (mevedel-menu--set-mode 'auto))
     (with-current-buffer data-buf
-      (should (eq 'accept-edits
+      (should (eq 'auto
                   (mevedel-session-permission-mode mevedel--session)))
-      (should (eq 'accept-edits mevedel-permission-mode)))))
+      (should (eq 'auto mevedel-permission-mode)))))
 
 (mevedel-deftest mevedel-menu--model-surface-description ()
   ,test

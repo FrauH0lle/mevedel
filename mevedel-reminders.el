@@ -368,49 +368,49 @@ prompt text."
 Falls back to the global `mevedel-permission-mode' default."
   (or (mevedel-session-permission-mode session)
       (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
-      'default))
+      'ask))
 
 (defvar mevedel-reminders--mode-constraint-messages
-  '((accept-edits . "Permission mode: `accept-edits'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
-    (trust-all . "Permission mode: `trust-all'. Most confirmation prompts are skipped. Double-check destructive operations before calling tools; protected paths still prompt."))
+  '((auto . "Permission mode: `auto'. File edits are auto-approved; shell commands still require confirmation. Keep changes minimal, targeted, and correct.")
+    (full-auto . "Permission mode: `full-auto'. Most confirmation prompts are skipped. Double-check destructive operations before calling tools; protected paths still prompt."))
   "Alist mapping permission mode symbols to reminder body strings.")
 
 (defun mevedel-reminders-make-mode-constraints (&optional interval)
   "Create the mode-constraints reminder.
 
-Fires when the session's permission mode is non-default.  INTERVAL
+Fires when the session's permission mode is not `ask'.  INTERVAL
 defaults to 5 turns so the reminder repeats sparsely across long
 sessions rather than spamming every turn."
   (mevedel-reminder-create
    :type 'mode-constraints
    :trigger (lambda (session)
-              (not (eq (mevedel-reminders--session-mode session) 'default)))
+              (not (eq (mevedel-reminders--session-mode session) 'ask)))
    :content (lambda (session)
               (let ((mode (mevedel-reminders--session-mode session)))
                 (or (alist-get mode mevedel-reminders--mode-constraint-messages)
                     (format "Permission mode: `%s'." mode))))
    :interval (or interval 5)))
 
-(defun mevedel-reminders-make-auto-mode (&optional interval)
-  "Create the `auto-mode' reminder with INTERVAL.
-Fires immediately after `/auto' enters trust-all mode, then repeats
+(defun mevedel-reminders-make-full-auto-mode (&optional interval)
+  "Create the `full-auto-mode' reminder with INTERVAL.
+Fires immediately after entering full-auto mode, then repeats
 sparsely while that mode remains active."
   (mevedel-reminder-create
-   :type 'auto-mode
+   :type 'full-auto-mode
    :trigger (lambda (session)
-              (eq (mevedel-reminders--session-mode session) 'trust-all))
+              (eq (mevedel-reminders--session-mode session) 'full-auto))
    :content (lambda (_session)
-              "Auto mode is active. Permission prompts are skipped for Bash, Eval, and other tools unless an explicit deny or protected-path policy requires intervention. Keep tool calls deliberate and check destructive operations before running them.")
+              "Full-auto mode is active. Heuristic Bash and Eval prompts are skipped, but explicit denies and protected-resource authority still apply. Keep destructive tool calls deliberate.")
    :interval (or interval 5)))
 
-(defun mevedel-reminders-make-auto-mode-exit ()
-  "Create the one-shot `auto-mode-exit' reminder."
+(defun mevedel-reminders-make-full-auto-mode-exit ()
+  "Create the one-shot `full-auto-mode-exit' reminder."
   (mevedel-reminder-create
-   :type 'auto-mode-exit
+   :type 'full-auto-mode-exit
    :trigger (lambda (session)
-              (not (eq (mevedel-reminders--session-mode session) 'trust-all)))
+              (not (eq (mevedel-reminders--session-mode session) 'full-auto)))
    :content (lambda (_session)
-              "Auto mode has been turned off. Permission behavior is back to `default'; ask before file edits, Bash, Eval, and other non-read-only actions unless a rule explicitly allows them.")
+              "Full-auto mode has been turned off. Normal permission checks are active again.")
    :interval 'one-shot))
 
 (defun mevedel-reminders--plan-path (session)
