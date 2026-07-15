@@ -196,11 +196,10 @@ Dispatches on entry's `:kind' via `--render-entry'."
 (defun mevedel-permission-queue--render-bash (entry)
   "Render a bash-kind permission ENTRY using the Bash permission UI.
 
-Bash uses the same FIFO machinery as generic permissions; for
-non-dangerous commands, `allow-session' / `always-allow' produce
-pattern rules.  If the helper is unavailable, signal so the shared
-queue engine removes the head and returns the pinned tool-level
-denial."
+Bash uses the same FIFO machinery as generic permissions.  Read-only and
+unknown commands may offer rule-creating outcomes; dangerous and complex
+commands do not.  If the helper is unavailable, signal so the shared queue
+engine removes the head and returns the pinned tool-level denial."
   (require 'mevedel-permission-prompt)
   (let ((command (plist-get entry :command))
         (command-class (plist-get entry :command-class))

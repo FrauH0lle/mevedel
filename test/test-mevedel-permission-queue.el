@@ -205,7 +205,7 @@
              (list :kind 'bash
                    :command "printf SECRET_TOKEN"
                    :commands-summary "printf"
-                   :dangerous nil
+                   :command-class 'unknown
                    :origin "main"
                    :callback #'ignore)
              session))
@@ -718,7 +718,6 @@
          (entry (list :kind 'bash
                       :command "sudo ls"
                       :command-class 'dangerous
-                      :dangerous t
                       :include-always nil
                       :session session))
          (outcome nil)
@@ -743,7 +742,6 @@
          (entry (list :kind 'bash
                       :command "git status"
                       :command-class 'read-only
-                      :dangerous nil
                       :include-always nil
                       :session session))
          (outcomes nil)

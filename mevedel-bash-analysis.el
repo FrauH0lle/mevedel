@@ -449,8 +449,11 @@ quotes or escaped with a backslash do not close the substitution."
   "Return normalized conservative Bash analysis for SOURCE.
 The result contains `:class', `:commands', `:parser', `:resources', and
 `:reasons'.  Tree-sitter is selected only through normal Emacs grammar
-configuration; no grammar path is added here."
+  configuration; no grammar path is added here."
   (require 'subr-x)
+  (setq source
+        (replace-regexp-in-string
+         (concat (regexp-quote "\\") "\n") "" source t t))
   (if (and (fboundp 'treesit-language-available-p)
            (treesit-language-available-p 'bash))
       (condition-case _err
