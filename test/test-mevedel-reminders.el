@@ -534,8 +534,12 @@
     (should (mevedel-reminders--should-fire-p r 0 session))
     (setf (mevedel-reminder-last-fired r) 0)
     (should-not (mevedel-reminders--should-fire-p r 1 session))
-    (should (mevedel-reminders--should-fire-p r 5 session)))
+    (should (mevedel-reminders--should-fire-p r 5 session))))
 
+(mevedel-deftest mevedel-reminders-make-full-auto-mode-exit
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
   :doc "full-auto-mode-exit fires once after leaving full-auto"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p2/" "/tmp/p2/" "p2"))
          (session (mevedel-session-create "main" ws))
