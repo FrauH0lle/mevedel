@@ -196,12 +196,30 @@
                  (setq captured-include include-always)
                  (setq captured-suppress suppress-allow-session))))
       (mevedel-permission--prompt-async-bash
-       "sudo pwd" t t nil #'ignore nil
+       "sudo pwd" 'dangerous t nil #'ignore nil
        (list :allow-patterns '("sudo pwd"))))
     (should-not captured-include)
     (should captured-suppress)
     (should (string-match-p
              "Session/permanent allow is disabled" captured-content))
+    (should-not (string-match-p
+                 "Session/always allow will add" captured-content)))
+
+  :doc "complex prompts suppress session and persistent allow"
+  (let (captured-include captured-suppress captured-content)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-with-content)
+               (lambda (content include-always _cont &optional _count _entry
+                                suppress-allow-session)
+                 (setq captured-content content)
+                 (setq captured-include include-always)
+                 (setq captured-suppress suppress-allow-session))))
+      (mevedel-permission--prompt-async-bash
+       "FOO=bar make test" 'complex t nil #'ignore nil
+       (list :unparseable t :allow-patterns '("FOO=bar make test"))))
+    (should-not captured-include)
+    (should captured-suppress)
+    (should (string-match-p
+             "disabled for complex Bash commands" captured-content))
     (should-not (string-match-p
                  "Session/always allow will add" captured-content)))
 
@@ -212,7 +230,7 @@
                                 _suppress-allow-session)
                  (setq captured-content (substring-no-properties content)))))
       (mevedel-permission--prompt-async-bash
-       "git add -- a && git add -- b" nil t nil #'ignore nil
+       "git add -- a && git add -- b" 'unknown t nil #'ignore nil
        (list :commands '("git" "git")
              :commands-summary "git (2)")))
     (should (string-match-p "Detected commands: git (2)" captured-content))

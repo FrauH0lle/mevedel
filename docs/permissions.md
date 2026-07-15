@@ -196,21 +196,21 @@ Bash commands or Eval expressions.
 
 ## Bash specifics
 
-Bash has domain logic in `check-permission`: parses commands, enforces
-`mevedel-bash-dangerous-commands` blocklist, fails safe under
-`mevedel-bash-fail-safe-on-complex-syntax` on variable expansion /
-`eval` / `exec` / here-docs / brace expansion. Bash does not use the
+Bash analysis returns a normalized command class, structured argument vectors,
+parser source, literal resources, and human-readable reasons.  It uses a
+normally configured Bash Tree-sitter grammar when available and a conservative
+scanner otherwise.  Redirections, substitutions, expansions, assignments,
+subshells, here-documents, control flow, parse errors, and unsupported operators
+are complex.  A dangerous component takes precedence in a compound request.
+Bash does not use the
 pipeline's generic permission prompt or `PermissionRequest` hook path;
 when it needs a decision it enqueues a Bash-specific permission entry.
 Under `full-auto`, unknown, dangerous, and complex Bash commands are
 allowed without a prompt after explicit deny rules and literal protected
 path tokens have been checked. Outside `full-auto`, unknown commands
-default to ask. The dangerous blocklist only downgrades `allow` to
-`ask`; explicit `deny`/`ask` wins.
-
-Skill body shell expansion passes a trusted-literal flag for
-author-written commands so the dangerous-command and complex-syntax
-heuristics do not fire. Explicit deny rules still win.
+default to ask. Direct user-authored session, persistent, and defcustom
+patterns may authorize dangerous or complex forms. Invocation- and
+request-scoped delegated patterns may not. Explicit denies always win.
 
 ### Bash guardian guidance
 
@@ -328,7 +328,7 @@ defaults, which is the actual hazard. The warning surfaces it.
 ```
 
 Use space-boundary patterns (`"ls"` + `"ls *"`) rather than `"ls*"` to
-avoid matching `lsof`. Parseable: simple commands, chains (`&&`/`||`/`;`),
-pipes, command substitutions (incl. nested), sudo/env/nice prefixes.
-Fails safe: variable expansion (`$VAR`), `eval`/`exec`, here-docs, brace
-expansion, unbalanced quotes.
+avoid matching `lsof`. Supported plain syntax is commands joined by
+`&&`, `||`, `;`, or `|`. Dynamic shell forms are complex and require either
+an interactive decision, `full-auto`, or a deliberately authored direct-user
+pattern.

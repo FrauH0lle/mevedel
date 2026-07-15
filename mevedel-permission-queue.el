@@ -102,8 +102,8 @@ SESSION defaults to the current session."
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
-                   :protected-path :resource-access :origin :dangerous :mode
-                   :commands-summary))
+                   :protected-path :resource-access :origin :command-class
+                   :mode :commands-summary))
       (when (plist-member entry key)
         (setq base (plist-put base key (plist-get entry key)))))
     (when-let* ((id (mevedel-queue--entry-metadata-get
@@ -140,7 +140,8 @@ ENTRY plist keys:
   :workspace             -- workspace struct or nil
   :origin                -- \"main\" or canonical agent-id (leaf)
   :command               -- string (`bash' only)
-  :dangerous             -- boolean (`bash' only)
+  :analysis              -- normalized Bash analysis (`bash' only)
+  :command-class         -- Bash command class (`bash' only)
   :expression            -- string (`eval' only)
   :callback              -- function: (lambda (outcome) ...)"
   (let ((origin (plist-get entry :origin)))
@@ -202,14 +203,14 @@ queue engine removes the head and returns the pinned tool-level
 denial."
   (require 'mevedel-permission-prompt)
   (let ((command (plist-get entry :command))
-        (dangerous (plist-get entry :dangerous))
+        (command-class (plist-get entry :command-class))
         (include-always (plist-get entry :include-always))
         (count (length (mevedel-permission-queue--get
                         (plist-get entry :session)))))
     (unless (fboundp 'mevedel-permission--prompt-async-bash)
       (error "Bash permission UI unavailable"))
     (mevedel-permission--prompt-async-bash
-     command dangerous include-always (plist-get entry :origin)
+     command command-class include-always (plist-get entry :origin)
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome))
      count entry)))

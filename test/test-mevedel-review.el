@@ -264,50 +264,46 @@
   ,test
   (test)
   :doc "allow common reviewer git inspection commands"
-  (let ((mevedel-permission-rules (mevedel-review--permission-rules))
-        (mevedel-bash-dangerous-commands nil)
-        (mevedel--session nil)
-        (mevedel--current-request nil))
-    (should
-     (eq 'allow
-         (mevedel-tools--check-bash-permission
-          "git show --stat --oneline --decorate --no-renames 52e4748 && git show --format=fuller --no-ext-diff --unified=80 --no-renames 52e4748")))
-    (should
-     (eq 'allow
-         (mevedel-tools--check-bash-permission
-          "git rev-parse 52e4748 && git diff --stat 52e4748^ 52e4748")))
-    (should
-     (eq 'allow
-         (mevedel-tools--check-bash-permission
-          "GIT_PAGER=cat git diff --name-only 52e4748^ 52e4748")))
-    (should
-     (eq 'allow
-         (mevedel-tools--check-bash-permission
-          "GIT_PAGER=cat git diff --name-only '52e4748^' 52e4748")))
-    (should
-     (eq 'allow
-         (mevedel-tools--check-bash-permission
-          "git cat-file -p 52e4748 | head")))
-    (should
-     (eq 'allow
-         (mevedel-tools--check-bash-permission
-          "git diff --stat HEAD~2 HEAD~1 && git diff --unified=80 HEAD~2 HEAD~1 -- mevedel-review.el"))))
+  (let* ((rules (mevedel-review--permission-rules))
+         (context (list :mode 'ask :buckets
+                        (list (cons :defcustom rules))))
+         (mevedel-bash-dangerous-commands nil))
+    (cl-labels ((decide (command)
+                  (mevedel-tools--check-bash-permission
+                   command :permission-context context)))
+      (should
+       (eq 'allow
+           (decide
+            "git show --stat --oneline --decorate --no-renames 52e4748 && git show --format=fuller --no-ext-diff --unified=80 --no-renames 52e4748")))
+      (should
+       (eq 'allow
+           (decide
+            "git rev-parse 52e4748 && git diff --stat 52e4748^ 52e4748")))
+      (should
+       (eq 'allow
+           (decide "git --no-pager diff --name-only 52e4748^ 52e4748")))
+      (should
+       (eq 'allow
+           (decide "git --no-pager diff --name-only '52e4748^' 52e4748")))
+      (should
+       (eq 'allow
+           (decide "git cat-file -p 52e4748 | head")))
+      (should
+       (eq 'allow
+           (decide
+            "git diff --stat HEAD~2 HEAD~1 && git diff --unified=80 HEAD~2 HEAD~1 -- mevedel-review.el")))))
 
   :doc "deny commands outside the reviewer inspection allowlist"
-  (let ((mevedel-permission-rules (mevedel-review--permission-rules))
-        (mevedel-bash-dangerous-commands nil)
-        (mevedel--session nil)
-        (mevedel--current-request nil))
-    (should
-     (eq 'deny
-         (mevedel-tools--check-bash-permission "git checkout main")))
-    (should
-     (eq 'deny
-         (mevedel-tools--check-bash-permission
-          "GIT_EXTERNAL_DIFF=sh git diff HEAD")))
-    (should
-     (eq 'deny
-         (mevedel-tools--check-bash-permission "make test")))))
+  (let* ((rules (mevedel-review--permission-rules))
+         (context (list :mode 'ask :buckets
+                        (list (cons :defcustom rules))))
+         (mevedel-bash-dangerous-commands nil))
+    (cl-labels ((decide (command)
+                  (mevedel-tools--check-bash-permission
+                   command :permission-context context)))
+      (should (eq 'deny (decide "git checkout main")))
+      (should (eq 'deny (decide "GIT_EXTERNAL_DIFF=sh git diff HEAD")))
+      (should (eq 'deny (decide "make test"))))))
 
 (mevedel-deftest mevedel-review--review-skill ()
   ,test

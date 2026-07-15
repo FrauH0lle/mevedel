@@ -966,21 +966,17 @@ allowed-tools:
 (mevedel-deftest mevedel-skills--check-bash-permission/trust-literal ()
   ,test
   (test)
-  :doc ":trust-literal-p t skips dangerous-commands downgrade"
-  ;; The dangerous-commands list does not downgrade allow to ask.
+  :doc "direct user patterns deliberately authorize dangerous commands"
   (let ((mevedel-bash-dangerous-commands '("rm"))
         (mevedel-permission-rules '(("Bash" :pattern "rm *" :action allow))))
     (should (eq 'allow
                 (mevedel-tools--check-bash-permission
                  "rm /tmp/foo" :trust-literal-p t)))
-    (should (eq 'ask
+    (should (eq 'allow
                 (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
 
-  :doc ":trust-literal-p t skips fail-safe-complex-syntax"
-  ;; Fail-safe complex-syntax checks are bypassed.
-  (let ((mevedel-bash-fail-safe-on-complex-syntax t)
-        (mevedel-permission-rules '(("Bash" :pattern "echo *" :action allow))))
-    ;; Variable expansion would normally trip fail-safe.
+  :doc "direct user patterns deliberately authorize complex syntax"
+  (let ((mevedel-permission-rules '(("Bash" :pattern "echo *" :action allow))))
     (should (eq 'allow
                 (mevedel-tools--check-bash-permission
                  "echo $VAR" :trust-literal-p t))))

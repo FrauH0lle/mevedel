@@ -717,6 +717,7 @@
          (mevedel--session session)
          (entry (list :kind 'bash
                       :command "sudo ls"
+                      :command-class 'dangerous
                       :dangerous t
                       :include-always nil
                       :session session))
@@ -741,6 +742,7 @@
   (let* ((session (test-pq--make-session))
          (entry (list :kind 'bash
                       :command "git status"
+                      :command-class 'read-only
                       :dangerous nil
                       :include-always nil
                       :session session))
