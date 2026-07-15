@@ -102,7 +102,7 @@ protected-path checks even when unsupported syntax prevents argv extraction."
   (require 'shell)
   (let (resources)
     (dolist (fragment
-             (cons source (mevedel-bash-analysis--substitution-bodies source)))
+             (cons source (mevedel-bash-analysis--substitution-fragments source)))
       (let ((words (condition-case nil
                        (split-string-shell-command fragment)
                      (error (split-string fragment "[[:space:]]+" t)))))
@@ -199,6 +199,16 @@ quotes or escaped with a backslash do not close the substitution."
           (push nested expanded)))
       (delete-dups (nreverse expanded)))))
 
+(defun mevedel-bash-analysis--substitution-fragments (source)
+  "Return substitution bodies and their command-chain segments from SOURCE."
+  (let ((bodies (mevedel-bash-analysis--substitution-bodies source)))
+    (append
+     bodies
+     (cl-mapcan
+      (lambda (body)
+        (car (mevedel-bash-analysis--scan-segments body)))
+      bodies))))
+
 (defun mevedel-bash-analysis--candidate-from-argv (argv)
   "Return a deny-policy candidate string from ARGV, or nil."
   (when argv
@@ -224,13 +234,9 @@ quotes or escaped with a backslash do not close the substitution."
 
 (defun mevedel-bash-analysis--candidates (source segments commands)
   "Return best-effort command forms from SOURCE, SEGMENTS, and COMMANDS."
-  (let* ((bodies (mevedel-bash-analysis--substitution-bodies source))
-         (nested-segments
-          (cl-mapcan
-           (lambda (body)
-             (car (mevedel-bash-analysis--scan-segments body)))
-           bodies))
-         (fragments (append segments bodies nested-segments))
+  (let* ((fragments
+          (append segments
+                  (mevedel-bash-analysis--substitution-fragments source)))
          candidates)
     (dolist (fragment fragments)
       (when-let* ((candidate

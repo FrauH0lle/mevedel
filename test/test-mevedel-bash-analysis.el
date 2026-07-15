@@ -107,7 +107,7 @@ cat file"
              (lambda (_language) nil)))
     (let ((analysis
            (mevedel-bash-analysis-analyze
-            "echo \"$(printf ')' && rm file && cat .git/config)\"")))
+            "echo \"$(printf ')' && cat .git/config && rm file)\"")))
       (should (member "rm file" (plist-get analysis :candidates)))
       (should (member ".git/config" (plist-get analysis :resources)))))
   :doc "nested substitution parsing:
