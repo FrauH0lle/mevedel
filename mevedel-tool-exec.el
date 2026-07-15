@@ -1657,8 +1657,8 @@ stays exact to avoid broad negative rules from a single rejection."
   "Hard cap on Bash/Eval tool output size in bytes.
 Output exceeding this limit is truncated with a notice appended.")
 
-(defconst mevedel-tool-exec--bash-timeout-kill-delay 2
-  "Seconds to wait before force-killing a timed-out Bash process.")
+(defconst mevedel-tool-exec--child-kill-delay 2
+  "Seconds to wait before force-killing a timed-out child process.")
 
 (defun mevedel-tool-exec--truncate-output (output)
   "Truncate OUTPUT string if it exceeds the byte limit.
@@ -1710,12 +1710,35 @@ direct non-workspace uses."
      (t
       (error "Variable mevedel-bash-timeout must be nil or a positive integer")))))
 
-(defun mevedel-tool-exec--bash-process-command (command)
-  "Return a plist describing how to spawn Bash COMMAND."
-  (list :command (list "bash" "-c" command)
-        :process-group-p (not (eq system-type 'windows-nt))))
+(defun mevedel-tool-exec--child-spawn-command (command)
+  "Return spawn metadata for child process COMMAND.
+Use `setsid' when available so timeout signals can reach descendants."
+  (let ((setsid (and (not (eq system-type 'windows-nt))
+                     (executable-find "setsid"))))
+    (if (not setsid)
+        (list :command command)
+      (let ((group-file (make-temp-file "mevedel-child-group-")))
+        (list
+         :command
+         (append
+          (list setsid "--fork" "--wait"
+                "sh" "-c"
+                "printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\""
+                "mevedel-child" group-file)
+          command)
+         :group-file group-file)))))
 
-(defun mevedel-tool-exec--signal-process
+(defun mevedel-tool-exec--child-group-id (group-file)
+  "Return the positive process group id recorded in GROUP-FILE."
+  (when (and group-file (file-readable-p group-file))
+    (let ((id (string-to-number
+               (string-trim
+                (with-temp-buffer
+                  (insert-file-contents group-file)
+                  (buffer-string))))))
+      (and (> id 0) id))))
+
+(defun mevedel-tool-exec--signal-child-process
     (process process-group-p signal &optional pid)
   "Send SIGNAL to PROCESS, using PROCESS-GROUP-P and PID when requested.
 When PID is non-nil, use it as the process group id even if PROCESS
@@ -1731,18 +1754,111 @@ has already exited."
          (ignore-errors
            (signal-process process signal)))))))
 
-(defun mevedel-tool-exec--terminate-bash-process (process process-group-p)
+(defun mevedel-tool-exec--terminate-child-process
+    (process process-group-p &optional pid)
   "Terminate PROCESS and its children when PROCESS-GROUP-P is non-nil."
   (when (process-live-p process)
-    (mevedel-tool-exec--signal-process process process-group-p 'TERM)))
+    (mevedel-tool-exec--signal-child-process
+     process process-group-p 'TERM pid)))
 
-(defun mevedel-tool-exec--kill-bash-process
+(defun mevedel-tool-exec--kill-child-process
     (process process-group-p &optional pid)
   "Force-kill PROCESS and its children when PROCESS-GROUP-P is non-nil.
 PID preserves the process group id after PROCESS exits."
   (when (or (and process-group-p (integerp pid) (> pid 0))
             (process-live-p process))
-    (mevedel-tool-exec--signal-process process process-group-p 'KILL pid)))
+    (mevedel-tool-exec--signal-child-process
+     process process-group-p 'KILL pid)))
+
+(defun mevedel-tool-exec--start-child-process
+    (name command workdir timeout callback)
+  "Start COMMAND as NAME in WORKDIR and call CALLBACK when it settles.
+
+CALLBACK receives a plist with :exit-code, :output, :timed-out-p,
+and optional :error.  TIMEOUT is nil or a positive number of seconds.
+On systems with `setsid', timeout signals cover the whole process group."
+  (let* ((output-buffer (generate-new-buffer (format " *%s*" name)))
+         (spawn (mevedel-tool-exec--child-spawn-command command))
+         (group-file (plist-get spawn :group-file))
+         timer force-timer timed-out finished exit-code process)
+    (cl-labels
+        ((process-output ()
+           (if (buffer-live-p output-buffer)
+               (with-current-buffer output-buffer
+                 (buffer-string))
+             ""))
+         (cleanup ()
+           (when (processp process)
+             (set-process-query-on-exit-flag process nil)
+             (when (process-live-p process)
+               (ignore-errors (delete-process process))))
+           (when (buffer-live-p output-buffer)
+             (let ((kill-buffer-query-functions nil))
+               (kill-buffer output-buffer)))
+           (when group-file
+             (ignore-errors (delete-file group-file))))
+         (finish (status &optional error-data)
+           (unless finished
+             (setq finished t)
+             (when (timerp timer)
+               (cancel-timer timer))
+             (when (timerp force-timer)
+               (cancel-timer force-timer))
+             (let ((output (process-output)))
+               (cleanup)
+               (funcall callback
+                        (list :exit-code status
+                              :output output
+                              :timed-out-p timed-out
+                              :error error-data)))))
+         (process-ended (child)
+           (when (memq (process-status child) '(exit signal))
+             (setq exit-code (process-exit-status child))
+             ;; A timed-out process group still needs the delayed KILL even
+             ;; when its leader exits promptly after TERM.
+             (unless (and timed-out (timerp force-timer))
+               (finish exit-code))))
+         (force-kill ()
+           (unless finished
+             (let ((group-id
+                    (mevedel-tool-exec--child-group-id group-file)))
+               (mevedel-tool-exec--kill-child-process
+                process (and group-id t) group-id)
+               (finish (or exit-code -1)))))
+         (time-out ()
+           (unless finished
+             (if (not (process-live-p process))
+                 (finish (process-exit-status process))
+               (let ((group-id
+                      (mevedel-tool-exec--child-group-id group-file)))
+                 (setq timed-out t)
+                 (mevedel-tool-exec--terminate-child-process
+                  process (and group-id t) group-id)
+                 (setq force-timer
+                       (run-at-time mevedel-tool-exec--child-kill-delay
+                                    nil #'force-kill)))))))
+      (condition-case err
+          (progn
+            (setq process
+                  (let ((default-directory workdir))
+                    (with-current-buffer output-buffer
+                      (setq-local default-directory workdir))
+                    (make-process
+                     :name name
+                     :buffer output-buffer
+                     :command (plist-get spawn :command)
+                     :connection-type 'pipe
+                     :noquery t
+                     :sentinel
+                     (lambda (child _event)
+                       (process-ended child)))))
+            (when timeout
+              (setq timer
+                    (run-at-time timeout nil #'time-out)))
+            process)
+        (error
+         (finish -1 err)
+         nil)))))
 
 (defun mevedel-tool-exec--bash-format-result (exit-code output timed-out timeout)
   "Return Bash result text for EXIT-CODE, OUTPUT, TIMED-OUT, and TIMEOUT."
@@ -1763,104 +1879,23 @@ and optional :timeout_seconds."
     (unless (stringp command)
       (error "Parameter command is required"))
     (let ((timeout (mevedel-tool-exec--bash-timeout-seconds args)))
-      (condition-case err
-          (let* ((output-buffer (generate-new-buffer " *mevedel-bash*"))
-                 (workdir (mevedel-tool-exec--default-directory))
-                 (spawn (mevedel-tool-exec--bash-process-command command))
-                 (process-group-p (plist-get spawn :process-group-p))
-                 timer
-                 force-timer
-                 timed-out
-                 finished
-                 proc-pid
-                 proc)
-            (cl-labels
-                ((process-output ()
-                   (let ((buffer (and (processp proc)
-                                      (process-buffer proc))))
-                     (if (buffer-live-p buffer)
-                         (mevedel-tool-exec--truncate-output
-                          (with-current-buffer buffer
-                            (buffer-string)))
-                       "")))
-                 (cleanup-buffer ()
-                   (let ((buffer (and (processp proc)
-                                      (process-buffer proc))))
-                     (when (process-live-p proc)
-                       (set-process-query-on-exit-flag proc nil)
-                       (ignore-errors
-                         (delete-process proc)))
-                     (when (buffer-live-p buffer)
-                       (let ((kill-buffer-query-functions nil))
-                         (kill-buffer buffer)))))
-                 (finish (exit-code)
-                   (unless finished
-                     (setq finished t)
-                     (when (timerp timer)
-                       (cancel-timer timer))
-                     (when (timerp force-timer)
-                       (cancel-timer force-timer))
-                     (let ((output (process-output)))
-                       (cleanup-buffer)
-                       (funcall
-                        callback
-                        (list :result
-                              (mevedel-tool-exec--bash-format-result
-                               exit-code output timed-out timeout)))))))
-              (setq proc
-                    (let ((default-directory workdir))
-                      (with-current-buffer output-buffer
-                        (setq-local default-directory workdir))
-                      (make-process
-                       :name "mevedel-bash"
-                       :buffer output-buffer
-                       :command (plist-get spawn :command)
-                       :connection-type 'pipe
-                       :sentinel
-                       (lambda (process _event)
-                         (condition-case sentinel-err
-                             (when (memq (process-status process)
-                                         '(exit signal))
-                               (finish (process-exit-status process)))
-                           (error
-                            (cleanup-buffer)
-                            (funcall callback
-                                     (list :result
-                                           (format "Error in sentinel: %s"
-                                                   sentinel-err)))))))))
-              (setq proc-pid (process-id proc))
-              (when timeout
-                (setq timer
-                      (run-at-time
-                       timeout nil
-                       (lambda ()
-                         (when (and (not finished)
-                                    (process-live-p proc))
-                           (setq timed-out t)
-                           (condition-case nil
-                               (mevedel-tool-exec--terminate-bash-process
-                                proc process-group-p)
-                             (error (finish -1)))
-                           (unless finished
-                             (setq force-timer
-                                   (run-at-time
-                                    mevedel-tool-exec--bash-timeout-kill-delay
-                                    nil
-                                    (lambda ()
-                                      (unless finished
-                                        (ignore-errors
-                                          (mevedel-tool-exec--kill-bash-process
-                                           proc process-group-p proc-pid))
-                                        (finish -1)
-                                        (when (process-live-p proc)
-                                          (ignore-errors
-                                            (delete-process proc)))))))))))))
-              proc))
-        (error
-         (funcall callback
-                  (list :result
-                        (format "Failed to start process: %s" err)))
-         nil)))))
+      (mevedel-tool-exec--start-child-process
+       "mevedel-bash" (list "bash" "-lc" command)
+       (mevedel-tool-exec--default-directory) timeout
+       (lambda (child-result)
+         (let ((error-data (plist-get child-result :error)))
+           (funcall
+            callback
+            (list
+             :result
+             (if error-data
+                 (format "Failed to start process: %s" error-data)
+               (mevedel-tool-exec--bash-format-result
+                (plist-get child-result :exit-code)
+                (mevedel-tool-exec--truncate-output
+                 (plist-get child-result :output))
+                (plist-get child-result :timed-out-p)
+                timeout))))))))))
 
 
 ;;
@@ -2017,68 +2052,49 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
   (let* ((workdir (mevedel-tool-exec--default-directory))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
-         (output-buffer (generate-new-buffer " *mevedel-eval-batch*"))
          (script (mevedel-tool-exec--eval-batch-script
                   expression result-file workdir load-path result-format)))
-    (with-temp-file script-file
-      (insert script))
     (condition-case err
-        (let ((proc
-               (make-process
-                :name "mevedel-eval-batch"
-                :buffer output-buffer
-                :command (list (expand-file-name invocation-name
-                                                  invocation-directory)
-                               "-Q" "--batch" "-l" script-file)
-                :connection-type 'pipe
-                :sentinel
-                (lambda (process _event)
-                  (when (memq (process-status process) '(exit signal))
-                    (let* ((exit-code (process-exit-status process))
-                           (diagnostics
-                            (when (buffer-live-p output-buffer)
-                              (with-current-buffer output-buffer
-                                (buffer-string))))
-                           (payload (condition-case _
-                                        (mevedel-tool-exec--eval-read-batch-result
-                                         result-file)
-                                      (error nil))))
-                      (unwind-protect
-                          (cond
-                           ((eq (plist-get payload :status) 'ok)
-                            (funcall callback
-                                     (list
-                                      :result
-                                      (mevedel-tool-exec--truncate-output
-                                       (or (plist-get payload :text) "")))))
-                           ((eq (plist-get payload :status) 'error)
-                            (funcall callback
-                                     (list
-                                      :result
-                                      (mevedel-tool-exec--truncate-output
-                                       (or (plist-get payload :text)
-                                           "Error: Eval failed")))))
-                           (t
-                            (funcall callback
-                                     (list
-                                      :result
-                                      (mevedel-tool-exec--truncate-output
-                                       (format
-                                        "Error: Eval batch process failed with exit code %d%s"
-                                        exit-code
-                                        (if (string-empty-p
-                                             (or diagnostics ""))
-                                            ""
-                                          (format ":\n%s"
-                                                  diagnostics))))))))
-                        (when (buffer-live-p output-buffer)
-                          (kill-buffer output-buffer))
-                        (ignore-errors (delete-file script-file))
-                        (ignore-errors (delete-file result-file)))))))))
-          proc)
+        (progn
+          (with-temp-file script-file
+            (insert script))
+          (mevedel-tool-exec--start-child-process
+           "mevedel-eval-batch"
+           (list (expand-file-name invocation-name invocation-directory)
+                 "-Q" "--batch" "-l" script-file)
+           workdir nil
+           (lambda (child-result)
+             (let* ((exit-code (plist-get child-result :exit-code))
+                    (diagnostics (plist-get child-result :output))
+                    (payload
+                     (condition-case nil
+                         (mevedel-tool-exec--eval-read-batch-result
+                          result-file)
+                       (error nil))))
+               (unwind-protect
+                   (funcall
+                    callback
+                    (list
+                     :result
+                     (mevedel-tool-exec--truncate-output
+                      (cond
+                       ((eq (plist-get payload :status) 'ok)
+                        (or (plist-get payload :text) ""))
+                       ((eq (plist-get payload :status) 'error)
+                        (or (plist-get payload :text) "Error: Eval failed"))
+                       ((plist-get child-result :error)
+                        (format "Failed to start Eval batch process: %s"
+                                (plist-get child-result :error)))
+                       (t
+                        (format
+                         "Error: Eval batch process failed with exit code %d%s"
+                         exit-code
+                         (if (string-empty-p (or diagnostics ""))
+                             ""
+                           (format ":\n%s" diagnostics))))))))
+                 (ignore-errors (delete-file script-file))
+                 (ignore-errors (delete-file result-file)))))))
       (error
-       (when (buffer-live-p output-buffer)
-         (kill-buffer output-buffer))
        (ignore-errors (delete-file script-file))
        (ignore-errors (delete-file result-file))
        (funcall callback

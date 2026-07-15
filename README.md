@@ -698,7 +698,8 @@ here-docs, brace expansion) automatically escalate to `ask`.
 
 **Bash timeout** (`mevedel-bash-timeout`): maximum seconds a Bash command may
 run before mevedel terminates it. Defaults to 120 seconds; `timeout_seconds`
-can override it per Bash call.
+can override it per Bash call. Bash runs as a login shell (`bash -lc`), and
+login initialization is covered by the same output capture and timeout.
 
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or

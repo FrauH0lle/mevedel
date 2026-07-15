@@ -1327,6 +1327,26 @@
       (while (not done)
         (accept-process-output nil 0.1)))
     (should (string-match-p "exit code 42" result)))
+  :doc "loads Bash login initialization from an isolated home"
+  (let* ((home (make-temp-file "mevedel-bash-login-" t))
+         (profile (file-name-concat home ".bash_profile"))
+         (process-environment (copy-sequence process-environment))
+         result done)
+    (unwind-protect
+        (progn
+          (with-temp-file profile
+            (insert "export MEVEDEL_LOGIN_MARKER=loaded\n"))
+          (setenv "HOME" home)
+          (mevedel-tool-exec--bash
+           (lambda (r)
+             (setq result (test-bash-permissions--handler-result r)
+                   done t))
+           (list :command "printf %s \"$MEVEDEL_LOGIN_MARKER\""))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.1)))
+          (should (equal "loaded" result)))
+      (delete-directory home t)))
   :doc "runs from the session working directory when current buffer is elsewhere"
   (let* ((root (make-temp-file "mevedel-bash-cwd-" t))
          (module-dir (file-name-concat root "packages" "api"))
@@ -1388,6 +1408,29 @@
     (should (string-match-p "default-started" result))
     (unless (eq system-type 'windows-nt)
       (should-not (string-match-p "default-done" result))))
+  :doc "applies the command timeout while login initialization runs"
+  (let* ((home (make-temp-file "mevedel-bash-login-timeout-" t))
+         (profile (file-name-concat home ".bash_profile"))
+         (process-environment (copy-sequence process-environment))
+         (mevedel-tool-exec--child-kill-delay 0.1)
+         result done)
+    (unwind-protect
+        (progn
+          (with-temp-file profile
+            (insert "printf login-started; sleep 5\n"))
+          (setenv "HOME" home)
+          (mevedel-tool-exec--bash
+           (lambda (r)
+             (setq result (test-bash-permissions--handler-result r)
+                   done t))
+           (list :command "printf command-ran" :timeout_seconds 1))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.1)))
+          (should (string-match-p "Command timed out after 1s" result))
+          (should (string-match-p "login-started" result))
+          (should-not (string-match-p "command-ran" result)))
+      (delete-directory home t)))
   :doc "rejects non-positive per-call timeout"
   (should-error
    (mevedel-tool-exec--bash
@@ -1410,6 +1453,66 @@
   (let ((mevedel-bash-timeout nil))
     (should (null (mevedel-tool-exec--bash-timeout-seconds
                    (list :timeout_seconds 1))))))
+
+(mevedel-deftest mevedel-tool-exec--start-child-process ()
+  ,test
+  (test)
+  :doc "captures combined output and a nonzero exit status"
+  (let (result done)
+    (mevedel-tool-exec--start-child-process
+     "mevedel-test-child"
+     (list "bash" "-c" "printf child-output; exit 7")
+     default-directory nil
+     (lambda (child-result)
+       (setq result child-result
+             done t)))
+    (with-timeout (5 (error "Timed out"))
+      (while (not done)
+        (accept-process-output nil 0.1)))
+    (should (= 7 (plist-get result :exit-code)))
+    (should (equal "child-output" (plist-get result :output)))
+    (should-not (plist-get result :timed-out-p)))
+  :doc "times out once, terminates descendants, and cleans its buffer"
+  (when (or (eq system-type 'windows-nt)
+            (not (executable-find "setsid")))
+    (ert-skip "Process-group test requires setsid"))
+  (let* ((root (make-temp-file "mevedel-child-timeout-" t))
+         (pid-file (file-name-concat root "child.pid"))
+         (script (format "sleep 30 & child=$!; printf %%s $child > %s; wait $child"
+                         (shell-quote-argument pid-file)))
+         (mevedel-tool-exec--child-kill-delay 0.1)
+         result process child-pid done
+         (callback-count 0))
+    (unwind-protect
+        (progn
+          (setq process
+                (mevedel-tool-exec--start-child-process
+                 "mevedel-test-timeout"
+                 (list "bash" "-c" script)
+                 default-directory 1
+                 (lambda (child-result)
+                   (cl-incf callback-count)
+                   (setq result child-result
+                         done t))))
+          (with-timeout (5 (error "Timed out"))
+            (while (not done)
+              (accept-process-output nil 0.05)))
+          (should (= 1 callback-count))
+          (should (plist-get result :timed-out-p))
+          (should (file-exists-p pid-file))
+          (setq child-pid
+                (string-to-number
+                 (string-trim
+                  (with-temp-buffer
+                    (insert-file-contents pid-file)
+                    (buffer-string)))))
+          (with-timeout (2 (error "Descendant survived timeout"))
+            (while (process-attributes child-pid)
+              (accept-process-output nil 0.05)))
+          (should-not (buffer-live-p (process-buffer process))))
+      (when (and child-pid (process-attributes child-pid))
+        (ignore-errors (signal-process child-pid 'KILL)))
+      (delete-directory root t))))
 
 
 
@@ -1743,14 +1846,51 @@
           (should (= 1 (length (window-list)))))
       (set-window-configuration original)))
   :doc "evaluates simple expressions in batch mode"
-  (let (result)
-    (mevedel-tool-exec--eval
-     (lambda (r)
-       (setq result (test-bash-permissions--handler-result r)))
-     (list :expression "(+ 4 5)" :mode "batch"))
-    (while (null result)
-      (accept-process-output nil 0.1))
+  (let ((original-start
+         (symbol-function 'mevedel-tool-exec--start-child-process))
+        (child-starts 0)
+        result)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--start-child-process)
+               (lambda (&rest args)
+                 (cl-incf child-starts)
+                 (apply original-start args))))
+      (mevedel-tool-exec--eval
+       (lambda (r)
+         (setq result (test-bash-permissions--handler-result r)))
+       (list :expression "(+ 4 5)" :mode "batch"))
+      (while (null result)
+        (accept-process-output nil 0.1)))
+    (should (= 1 child-starts))
     (should (string-match-p "Result:\n9" result)))
+  :doc "live mode does not use the child-process seam"
+  (let ((child-starts 0)
+        result)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--start-child-process)
+               (lambda (&rest _args)
+                 (cl-incf child-starts))))
+      (mevedel-tool-exec--eval
+       (lambda (r)
+         (setq result (test-bash-permissions--handler-result r)))
+       (list :expression "(+ 2 3)" :mode "live")))
+    (should (= 0 child-starts))
+    (should (string-match-p "Result:\n5" result)))
+  :doc "batch mode removes its temporary script and result files"
+  (let* ((temp-dir (make-temp-file "mevedel-eval-cleanup-" t))
+         (temporary-file-directory (file-name-as-directory temp-dir))
+         result)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--eval
+           (lambda (r)
+             (setq result (test-bash-permissions--handler-result r)))
+           (list :expression "(error \"cleanup\")" :mode "batch"))
+          (with-timeout (5 (error "Timed out"))
+            (while (null result)
+              (accept-process-output nil 0.1)))
+          (should (string-prefix-p "Error:" result))
+          (should-not
+           (directory-files temp-dir nil directory-files-no-dot-files-regexp)))
+      (delete-directory temp-dir t)))
   :doc "captures printed output in batch mode"
   (let (result)
     (mevedel-tool-exec--eval
