@@ -104,7 +104,7 @@ Data model
   mevedel-tool-repair-gptel.el  lossless gptel argument decoding bridge
   mevedel-tool-repair-diagnostics.el  repair audit and telemetry
   mevedel-queue.el            shared FIFO queue machinery
-  mevedel-permission-queue.el permission/Bash/Eval queue
+  mevedel-permission-queue.el permission/Bash/Eval/execution-authority queue
   mevedel-reminders.el        system-reminder injection
   mevedel-skills-core.el      skill model, discovery, state, reload
   mevedel-mention-bindings.el shared atomic mention validation and edit lifecycle
