@@ -146,6 +146,17 @@
           :permission-context
           '(:mode ask
             :buckets ((:session . (("Bash" :pattern "rm *" :action allow)))))))))
+  :doc "segment authority:
+\`mevedel-tools--check-bash-permission' honors a direct dangerous segment allow"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "pwd && rm file"
+          :permission-context
+          '(:mode ask
+            :buckets ((:session . (("Bash" :pattern "rm *" :action allow)))))))))
   :doc "persistent authority:
 \`mevedel-tools--check-bash-permission' honors a direct complex allow"
   (let ((mevedel-permission-rules nil))
@@ -188,6 +199,18 @@
             :buckets
             ((:request .
               (("Bash" :pattern "FOO=bar make test" :action allow)))))))))
+  :doc "delegated append assignment:
+\`mevedel-tools--check-bash-permission' reserves append assignments for users"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "FOO+=bar make test"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:request .
+              (("Bash" :pattern "FOO+=bar make test" :action allow)))))))))
   :doc "delegated unknown rule:
 \`mevedel-tools--check-bash-permission' permits ordinary delegated commands"
   (let ((mevedel-permission-rules nil))
@@ -232,6 +255,18 @@
      (eq 'deny
          (mevedel-tools--check-bash-permission
          "echo $(rm file)"
+          :permission-context
+          '(:mode full-auto
+            :buckets
+            ((:persistent . (("Bash" :pattern "rm *" :action deny)))))))))
+  :doc "explicit deny after a quoted parenthesis:
+\`mevedel-tools--check-bash-permission' fully scans substitution bodies"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission
+          "echo \"$(printf ')' && rm file)\""
           :permission-context
           '(:mode full-auto
             :buckets
@@ -290,6 +325,15 @@
      (eq 'ask
          (mevedel-tools--check-bash-permission
           "echo \"$(cat .git/config)\""
+          :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "protected path after a quoted parenthesis:
+\`mevedel-tools--check-bash-permission' fully scans nested protected resources"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '("**/.git/**")))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "echo \"$(printf ')' && cat .git/config)\""
           :permission-context '(:mode full-auto :buckets nil)))))
   :doc "complex protected path:
 \`mevedel-tools--check-bash-permission' keeps resource checks after direct allow"
