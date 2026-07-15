@@ -34,8 +34,9 @@ is, make a new Bash call with:
 
 Request permission in the tool call itself; do not ask separately in prose.
 The new call is a distinct invocation and is never an automatic replay. Network
-access is added for that invocation while filesystem mounts, protected paths,
-and process confinement remain active.
+access is the only requested change; the selected filesystem and process
+profile remains unchanged. If confinement is unavailable, the result discloses
+that execution was unrestricted.
 
 ### When to use `Bash`
 

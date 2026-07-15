@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Renders and settles generic, Bash, and Eval permission prompts.
+;; Renders and settles generic, Bash, Eval, and execution-authority prompts.
 
 ;;; Code:
 
@@ -388,7 +388,9 @@ ENTRY follow the shared permission prompt contract."
           (propertize (format "%s\n\n" detail)
                       'font-lock-face 'font-lock-string-face)
           (propertize
-           "Filesystem mounts, protected paths, and process confinement remain active.\n"
+           (concat
+            "Network access is the only requested change. The selected "
+            "filesystem and process profile remains unchanged.\n")
            'font-lock-face 'font-lock-comment-face))))
     (mevedel-permission--prompt-async-with-content
      content nil cont count entry t t)))

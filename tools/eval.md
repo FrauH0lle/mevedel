@@ -34,8 +34,10 @@ new batch Eval call with
 `sandbox_permissions="with_additional_permissions"`,
 `additional_permissions={"network":true}`, and a concise user-facing
 `justification`. Request approval in the tool call rather than asking in prose.
-The retry is a distinct invocation; it retains filesystem, protected-path, and
-process confinement. Additional sandbox permissions do not apply to live Eval.
+The retry is a distinct invocation; network access is the only requested
+change to the selected filesystem and process profile. If confinement is
+unavailable, the result discloses unrestricted execution. Additional sandbox
+permissions do not apply to live Eval.
 
 Output from `print`, `prin1`, and `princ` is captured and returned as
 STDOUT. Use `print` for diagnostic output, not `message` (which goes
