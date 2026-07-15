@@ -73,11 +73,11 @@
                   "mevedel-permissions"
                   (invocation-rules request-rules
                                     session-rules persistent-rules))
+(declare-function mevedel-permission--execution-level-buckets
+                  "mevedel-permissions" (buckets level))
 (declare-function mevedel-permission--execution-level-decision
                   "mevedel-permissions"
                   (buckets tool-name level pattern))
-(declare-function mevedel-permission--execution-level-buckets
-                  "mevedel-permissions" (buckets level))
 (declare-function mevedel-permission--first-non-nil-action-with-bucket
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
