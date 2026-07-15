@@ -92,8 +92,7 @@
 (defvar mevedel-tool-fs--media-max-bytes)
 
 ;; `mevedel-tool-registry'
-(declare-function mevedel-tool-get
-                  "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-ensure "mevedel-tool-registry" (name))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -657,7 +656,7 @@ to the user."
      ((not (eq 'allow
                (mevedel-check-permission
                 "Read"
-                :tool-struct (ignore-errors (mevedel-tool-get "Read"))
+                :tool-struct (ignore-errors (mevedel-tool-ensure "Read"))
                 :path expanded
                 :session-rules session-rules
                 :mode (and session (mevedel-session-permission-mode session))

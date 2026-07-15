@@ -15,15 +15,20 @@ flowchart TD
     F -- Allow --> G{Path supplied?}
     E -- No --> N{Protected path without<br/>an exact grant?}
     N -- Yes --> X[Ask for resource authority]
-    N -- No --> H{Native rules, roots,<br/>and mode outcome?}
+    N -- No --> H{Matching native rule?}
     H -- Deny or ask --> Q
     H -- Allow --> Y
+    H -- None --> J{Allowed root, exact path,<br/>or exact resource grant?}
+    J -- No --> X
+    J -- Yes --> K{Mode authorizes tool?}
+    K -- Yes --> Y
+    K -- No --> Q
     G -- No --> Y[Allow]
     G -- Yes --> I{Protected path without<br/>an exact grant?}
     I -- Yes --> X[Ask for resource authority]
-    I -- No --> J{Allowed root, exact path,<br/>or exact resource grant?}
-    J -- Yes --> Y
-    J -- No --> X
+    I -- No --> L{Allowed root, exact path,<br/>or exact resource grant?}
+    L -- Yes --> Y
+    L -- No --> X
 ```
 
 Single decision function `mevedel-check-permission`. Decision chain:
@@ -34,11 +39,12 @@ Single decision function `mevedel-check-permission`. Decision chain:
 3. Active Goal planning or review with a non-read-only tool → deny
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
-6. Permission mode decision
+6. Permission-mode hard deny, if any
 7. For a path not directly covered by a native path rule, resolve an allowed
    root, exact allowed path, or exact resource grant
 8. A protected or outside-root path without that authority → ask
-9. Permission-mode fallback when no earlier policy decides
+9. Permission-mode fallback when no earlier policy decides; satisfied resource
+   authority does not itself authorize a mutating operation
 
 For a tool with a command checker, command authority and filesystem resource
 authority are layered: both must allow. A command rule cannot authorize its

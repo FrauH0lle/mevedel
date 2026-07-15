@@ -248,10 +248,11 @@
   (progn
     (should (eq (mevedel-permission--mode-decision 'full-auto nil) 'allow))
     (should (eq (mevedel-permission--mode-decision 'full-auto t) 'allow)))
-  :doc "auto allows read-only and asks for non-native writes"
+  :doc "auto allows read-only and native edits but asks for other writes"
   (progn
     (should (eq (mevedel-permission--mode-decision 'auto t) 'allow))
-    (should (eq (mevedel-permission--mode-decision 'auto nil) 'ask)))
+    (should (eq (mevedel-permission--mode-decision 'auto nil t) 'allow))
+    (should (eq (mevedel-permission--mode-decision 'auto nil nil) 'ask)))
   :doc "ask allows read-only and asks for writes"
   (progn
     (should (eq (mevedel-permission--mode-decision 'ask t) 'allow))
@@ -573,19 +574,25 @@
                  :workspace-root "/project"
                  :resource-grants '((:path "/etc/passwd" :access read)))
                 'ask)))
-  :doc "exact write resource grant allows Write without covering siblings"
+  :doc "write resource grants satisfy only the resource gate"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
-        (mock-tool (mevedel-tool--create :name "Write" :read-only-p nil))
+        (mock-tool (mevedel-tool--create
+                    :name "Write" :groups '(edit) :read-only-p nil))
         (grants '((:path "/outside/target.el" :access write))))
     (should (eq (mevedel-check-permission
                  "Write" :tool-struct mock-tool
                  :path "/outside/target.el" :mode 'ask
                  :workspace-root "/project" :resource-grants grants)
+                'ask))
+    (should (eq (mevedel-check-permission
+                 "Write" :tool-struct mock-tool
+                 :path "/outside/target.el" :mode 'auto
+                 :workspace-root "/project" :resource-grants grants)
                 'allow))
     (should (eq (mevedel-check-permission
                  "Write" :tool-struct mock-tool
-                 :path "/outside/sibling.el" :mode 'ask
+                 :path "/outside/sibling.el" :mode 'auto
                  :workspace-root "/project" :resource-grants grants)
                 'ask)))
   :doc "resource grant does not override a command-specific ask"
@@ -1436,6 +1443,18 @@ must restore the prior value to avoid cross-test pollution."
 (mevedel-deftest mevedel-permission--invocation-context ()
   ,test
   (test)
+  :doc "resolves a named built-in tool before deriving capability facts"
+  (let ((tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (cl-letf (((symbol-function 'mevedel-tool-ensure)
+               (lambda (name)
+                 (and (equal name "Read") tool))))
+      (let ((context (mevedel-permission--invocation-context
+                      :tool-name "Read"
+                      :path "/outside/file.el"
+                      :workspace-root "/workspace")))
+        (should (eq tool (plist-get context :tool)))
+        (should (eq 'read (plist-get context :resource-access))))))
+
   :doc "extracts checker facts and prompt rule facts for an outside path"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-perm-root-" t)))
@@ -1671,12 +1690,14 @@ must restore the prior value to avoid cross-test pollution."
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-workspace-root-" t)))
          (root-without-slash (directory-file-name root))
+         (mock-tool (mevedel-tool--create :name "Grep" :read-only-p t))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil))
     (unwind-protect
         (should (eq 'allow
                     (mevedel-check-permission
                      "Grep"
+                     :tool-struct mock-tool
                      :path root-without-slash
                      :workspace-root root
                      :mode 'ask)))
@@ -1686,12 +1707,14 @@ must restore the prior value to avoid cross-test pollution."
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-workspace-child-" t)))
          (child (file-name-concat root "file.el"))
+         (mock-tool (mevedel-tool--create :name "Read" :read-only-p t))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil))
     (unwind-protect
         (should (eq 'allow
                     (mevedel-check-permission
                      "Read"
+                     :tool-struct mock-tool
                      :path child
                      :workspace-root root
                      :mode 'ask)))
@@ -1721,12 +1744,14 @@ must restore the prior value to avoid cross-test pollution."
          (extra (file-name-as-directory
                  (make-temp-file "mevedel-workspace-extra-root-" t)))
          (child (file-name-concat extra "file.el"))
+         (mock-tool (mevedel-tool--create :name "Read" :read-only-p t))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil))
     (unwind-protect
         (should (eq 'allow
                     (mevedel-check-permission
                      "Read"
+                     :tool-struct mock-tool
                      :path child
                      :workspace-root root
                      :allowed-roots (list root extra)

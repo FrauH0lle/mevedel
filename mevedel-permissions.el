@@ -64,6 +64,7 @@
 (declare-function mevedel-tool-get-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-path "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get-pattern "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-read-only-p "mevedel-tool-registry" (cl-x) t)
 
@@ -452,9 +453,10 @@ Controls the default permission behavior when no explicit rules match.
                 automatically.  Explicit denies and missing protected
                 resource authority remain effective.
 
-At the generic permission layer `ask' and `auto' behave the same.  The
-difference lives in native edit previews: `auto' applies them without
-an interactive overlay, while `ask' prompts.
+At the generic permission layer, `auto' authorizes tools in the native
+`edit' group after their resource boundary is satisfied.  It does not
+authorize Bash, Eval, or unrelated mutating tools.  Native edit previews
+also apply without an interactive overlay in `auto'; `ask' prompts.
 
 To change this mode at runtime, use `setopt' from the relevant buffer:
 when called from inside a session buffer (a data buffer or its view
@@ -769,13 +771,16 @@ Returns non-nil if the path is protected."
 ;;
 ;;; Mode decisions
 
-(defun mevedel-permission--mode-decision (mode read-only-p)
-  "Determine permission based on MODE and whether the tool is READ-ONLY-P.
+(defun mevedel-permission--mode-decision
+    (mode read-only-p &optional native-edit-p)
+  "Determine permission from MODE and the tool's capability flags.
+READ-ONLY-P identifies inspection tools.  NATIVE-EDIT-P identifies tools in
+the native `edit' group; it never applies to Bash or Eval.
 
 Returns `allow', `deny', or `ask'."
   (pcase mode
     ('full-auto 'allow)
-    ('auto (if read-only-p 'allow 'ask))
+    ('auto (if (or read-only-p native-edit-p) 'allow 'ask))
     ('ask (if read-only-p 'allow 'ask))
     ;; Unknown mode: fall through to ask
     (_ 'ask)))
@@ -893,7 +898,9 @@ PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
 EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
 PERSISTENT-RULES, RESOURCE-GRANTS, and WARN-NO-SESSION-P provide the
 context facts."
-  (setq tool-name (or tool-name (and tool (mevedel-tool-name tool))))
+  (setq tool (or tool
+                 (and tool-name (mevedel-tool-ensure tool-name)))
+        tool-name (or tool-name (and tool (mevedel-tool-name tool))))
   (when (and tool args)
     (cl-flet ((extract (getter current)
                 (or current
@@ -1287,7 +1294,13 @@ mode, and native-resource tail."
          (skip-resource-boundary-p
           (plist-get context :skip-resource-boundary-p))
          (mode (plist-get context :mode))
-         (read-only-p (plist-get context :read-only-p)))
+         (read-only-p (plist-get context :read-only-p))
+         (tool (plist-get context :tool))
+         (native-edit-p
+          (and tool (memq 'edit (mevedel-tool-groups tool))))
+         (resource-decision
+          (and (not skip-resource-boundary-p)
+               (mevedel-permission--resource-decision context))))
     (cond
      ;; Protected resources require exact grants even when a path rule allows.
      ((and (not skip-resource-boundary-p)
@@ -1304,22 +1317,33 @@ mode, and native-resource tail."
            ((eq action 'allow)
             (mevedel-permission--decision 'allow 'rule :bucket bucket))
            ((eq action 'ask)
-            (if (eq (mevedel-permission--mode-decision mode read-only-p)
+            (if (eq (mevedel-permission--mode-decision
+                     mode read-only-p native-edit-p)
                     'deny)
                 (mevedel-permission--decision 'deny 'mode :bucket bucket)
               (mevedel-permission--decision 'ask 'rule :bucket bucket)))))))
      ;; Step 6: mode hard-deny.
-     ((eq (mevedel-permission--mode-decision mode read-only-p) 'deny)
+     ((eq (mevedel-permission--mode-decision
+           mode read-only-p native-edit-p)
+          'deny)
       (mevedel-permission--decision 'deny 'mode))
-     ;; Steps 7-8: independent resource authority for native tools.
-     ((and (not skip-resource-boundary-p)
-           (mevedel-permission--resource-decision context)))
+     ;; Steps 7-8: missing native resource authority forces a prompt.  An
+     ;; allowed root or exact grant satisfies only the resource half; the mode
+     ;; still decides whether the operation itself is automatic.
+     ((and resource-decision
+           (eq (mevedel-permission-decision-raw-outcome resource-decision)
+               'ask))
+      resource-decision)
      ;; Step 9: mode/default decision.
      (t (let ((mode-result (mevedel-permission--mode-decision
-                            mode read-only-p)))
-          (mevedel-permission--decision
-           (if (eq mode-result 'ask) 'ask mode-result)
-           'mode))))))
+                            mode read-only-p native-edit-p)))
+          (if (and (eq mode-result 'allow)
+                   resource-decision
+                   (eq (mevedel-permission-decision-raw-outcome
+                        resource-decision)
+                       'allow))
+              resource-decision
+            (mevedel-permission--decision mode-result 'mode)))))))
 
 ;;
 ;;; Session rule storage
