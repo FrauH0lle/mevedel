@@ -1378,7 +1378,8 @@
   :doc "terminates command after per-call timeout and returns partial output"
   (let ((result nil)
         (done nil)
-        (mevedel-bash-timeout 30))
+        (mevedel-bash-timeout 30)
+        (mevedel-tool-exec--child-kill-delay 0.1))
     (mevedel-tool-exec--bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
@@ -1395,7 +1396,8 @@
   :doc "uses default Bash timeout when per-call timeout is absent"
   (let ((result nil)
         (done nil)
-        (mevedel-bash-timeout 1))
+        (mevedel-bash-timeout 1)
+        (mevedel-tool-exec--child-kill-delay 0.1))
     (mevedel-tool-exec--bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
@@ -1457,6 +1459,22 @@
 (mevedel-deftest mevedel-tool-exec--start-child-process ()
   ,test
   (test)
+  :doc "settles once and leaks no buffer when launcher setup fails"
+  (let ((buffer-name " *mevedel-test-setup-failure*")
+        result
+        (callback-count 0))
+    (cl-letf (((symbol-function 'mevedel-tool-exec--child-spawn-command)
+               (lambda (_command)
+                 (error "setup failed"))))
+      (should-not
+       (mevedel-tool-exec--start-child-process
+        "mevedel-test-setup-failure" (list "true") default-directory nil
+        (lambda (child-result)
+          (cl-incf callback-count)
+          (setq result child-result)))))
+    (should (= 1 callback-count))
+    (should (equal '(error "setup failed") (plist-get result :error)))
+    (should-not (get-buffer buffer-name)))
   :doc "captures combined output and a nonzero exit status"
   (let (result done)
     (mevedel-tool-exec--start-child-process
@@ -1473,46 +1491,65 @@
     (should (equal "child-output" (plist-get result :output)))
     (should-not (plist-get result :timed-out-p)))
   :doc "times out once, terminates descendants, and cleans its buffer"
-  (when (or (eq system-type 'windows-nt)
-            (not (executable-find "setsid")))
-    (ert-skip "Process-group test requires setsid"))
-  (let* ((root (make-temp-file "mevedel-child-timeout-" t))
-         (pid-file (file-name-concat root "child.pid"))
-         (script (format "sleep 30 & child=$!; printf %%s $child > %s; wait $child"
-                         (shell-quote-argument pid-file)))
-         (mevedel-tool-exec--child-kill-delay 0.1)
-         result process child-pid done
-         (callback-count 0))
-    (unwind-protect
-        (progn
-          (setq process
-                (mevedel-tool-exec--start-child-process
-                 "mevedel-test-timeout"
-                 (list "bash" "-c" script)
-                 default-directory 1
-                 (lambda (child-result)
-                   (cl-incf callback-count)
-                   (setq result child-result
-                         done t))))
-          (with-timeout (5 (error "Timed out"))
-            (while (not done)
-              (accept-process-output nil 0.05)))
-          (should (= 1 callback-count))
-          (should (plist-get result :timed-out-p))
-          (should (file-exists-p pid-file))
-          (setq child-pid
-                (string-to-number
-                 (string-trim
-                  (with-temp-buffer
-                    (insert-file-contents pid-file)
-                    (buffer-string)))))
-          (with-timeout (2 (error "Descendant survived timeout"))
-            (while (process-attributes child-pid)
-              (accept-process-output nil 0.05)))
-          (should-not (buffer-live-p (process-buffer process))))
-      (when (and child-pid (process-attributes child-pid))
-        (ignore-errors (signal-process child-pid 'KILL)))
-      (delete-directory root t))))
+  (if (or (eq system-type 'windows-nt)
+          (not (executable-find "setsid")))
+      (ert-skip "Process-group test requires setsid")
+    (let* ((root (make-temp-file "mevedel-child-timeout-" t))
+           (pid-file (file-name-concat root "child.pid"))
+           (script (format "sleep 30 & child=$!; printf %%s $child > %s; wait $child"
+                           (shell-quote-argument pid-file)))
+           (mevedel-tool-exec--child-kill-delay 0.1)
+           result process child-pid done
+           (callback-count 0))
+      (unwind-protect
+          (progn
+            (setq process
+                  (mevedel-tool-exec--start-child-process
+                   "mevedel-test-timeout"
+                   (list "bash" "-c" script)
+                   default-directory 1
+                   (lambda (child-result)
+                     (cl-incf callback-count)
+                     (setq result child-result
+                           done t))))
+            (with-timeout (5 (error "Timed out"))
+              (while (not done)
+                (accept-process-output nil 0.05)))
+            (should (= 1 callback-count))
+            (should (plist-get result :timed-out-p))
+            (should (file-exists-p pid-file))
+            (setq child-pid
+                  (string-to-number
+                   (string-trim
+                    (with-temp-buffer
+                      (insert-file-contents pid-file)
+                      (buffer-string)))))
+            (with-timeout (2 (error "Descendant survived timeout"))
+              (while (process-attributes child-pid)
+                (accept-process-output nil 0.05)))
+            (should-not (buffer-live-p (process-buffer process))))
+        (when (and child-pid (process-attributes child-pid))
+          (ignore-errors (signal-process child-pid 'KILL)))
+        (delete-directory root t))))
+  :doc "drains output written after TERM before forced KILL settles"
+  (if (or (eq system-type 'windows-nt)
+          (not (executable-find "setsid")))
+      (ert-skip "Process-group test requires setsid")
+    (let ((mevedel-tool-exec--child-kill-delay 0.2)
+          result done)
+      (mevedel-tool-exec--start-child-process
+       "mevedel-test-drain"
+       (list "bash" "-c"
+             "trap 'printf before-kill; trap \"\" TERM' TERM; while :; do sleep 1; done")
+       default-directory 1
+       (lambda (child-result)
+         (setq result child-result
+               done t)))
+      (with-timeout (5 (error "Timed out"))
+        (while (not done)
+          (accept-process-output nil 0.05)))
+      (should (plist-get result :timed-out-p))
+      (should (string-match-p "before-kill" (plist-get result :output))))))
 
 
 
