@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Heterogeneous FIFO on the session struct holding generic
-;; permission, Bash, and Eval entries.  Render-head dispatches on
-;; `:kind' so a single visible prompt covers all three cases at any
+;; permission, Bash, Eval, and additive-sandbox entries.  Render-head
+;; dispatches on `:kind' so a single visible prompt covers all cases at any
 ;; moment.  Coalesce on rule-creating outcomes
 ;; (`allow-session', `deny-session', `always-allow') re-evaluates
 ;; queued entries through the decision chain; protected paths skip
@@ -30,6 +30,10 @@
                   "mevedel-permission-prompt"
                   (command dangerous include-always origin cont
                            &optional count entry))
+(declare-function mevedel-permission--prompt-async-sandbox
+                  "mevedel-permission-prompt"
+                  (tool-name detail justification origin cont
+                             &optional count entry))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
@@ -66,10 +70,12 @@
    :coalesce (lambda (outcome session)
                (when (memq outcome '(allow-session deny-session always-allow))
                  (mevedel-permission-queue--coalesce outcome session)))
-   :render-error-outcome (lambda (entry _error)
-                           (if (eq (plist-get entry :kind) 'bash)
-                               '(deny . "Bash permission UI unavailable")
-                             'aborted))
+   :render-error-outcome
+   (lambda (entry _error)
+     (pcase (plist-get entry :kind)
+       ('bash '(deny . "Bash permission UI unavailable"))
+       ('sandbox '(deny . "Additional permission UI unavailable"))
+       (_ 'aborted)))
    :entry-origin (lambda (entry) (plist-get entry :origin)))
   "Shared FIFO spec for the permission queue.")
 
@@ -103,7 +109,8 @@ SESSION defaults to the current session."
   (let ((base nil))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
                    :protected-path :resource-access :origin :command-class
-                   :mode :commands-summary))
+                   :mode :commands-summary :sandbox-permissions
+                   :additional-permissions :justification))
       (when (plist-member entry key)
         (setq base (plist-put base key (plist-get entry key)))))
     (when-let* ((id (mevedel-queue--entry-metadata-get
@@ -129,8 +136,8 @@ When no session is available, settle ENTRY as aborted; the queue's
 ordering and coalesce semantics require a session struct.
 
 ENTRY plist keys:
-  :kind                  -- `generic' / `bash' / `eval'
-  :tool-name             -- string (`generic' only)
+  :kind                  -- `generic' / `bash' / `eval' / `sandbox'
+  :tool-name             -- string (`generic' and `sandbox')
   :args                  -- keyword plist
   :specifier-key         -- `:path' / `:pattern' / `:domain' / `:name'
   :specifier-value       -- display path / pattern / domain
@@ -143,6 +150,9 @@ ENTRY plist keys:
   :analysis              -- normalized Bash analysis (`bash' only)
   :command-class         -- Bash command class (`bash' only)
   :expression            -- string (`eval' only)
+  :detail                -- command or expression (`sandbox' only)
+  :additional-permissions -- additive profile (`sandbox' only)
+  :justification         -- user-facing reason (`sandbox' only)
   :callback              -- function: (lambda (outcome) ...)"
   (let ((origin (plist-get entry :origin)))
     (unless (and (stringp origin)
@@ -162,6 +172,7 @@ Used by the queue's render-head and by the no-session fallback."
     ('generic (mevedel-permission-queue--render-generic entry))
     ('bash (mevedel-permission-queue--render-bash entry))
     ('eval (mevedel-permission-queue--render-eval entry))
+    ('sandbox (mevedel-permission-queue--render-sandbox entry))
     (_
      (display-warning
       'mevedel
@@ -233,6 +244,21 @@ final mapping)."
        (mevedel-permission-queue--on-head-outcome entry outcome))
      origin count entry mode preserve-ui)))
 
+(defun mevedel-permission-queue--render-sandbox (entry)
+  "Render an additive sandbox permission ENTRY as a once-only prompt."
+  (require 'mevedel-permission-prompt)
+  (unless (fboundp 'mevedel-permission--prompt-async-sandbox)
+    (error "Additional permission UI unavailable"))
+  (mevedel-permission--prompt-async-sandbox
+   (plist-get entry :tool-name)
+   (plist-get entry :detail)
+   (plist-get entry :justification)
+   (plist-get entry :origin)
+   (lambda (outcome)
+     (mevedel-permission-queue--on-head-outcome entry outcome))
+   (length (mevedel-permission-queue--get (plist-get entry :session)))
+   entry))
+
 (defun mevedel-permission-queue--on-head-outcome (entry outcome)
   "Settle ENTRY with OUTCOME, then advance ENTRY's session queue.
 Coalesce on rule-creating outcomes (`allow-session',
@@ -256,7 +282,7 @@ queue vocabulary."
      ;; The pipeline's wrapper at mevedel-pipeline.el handles
      ;; `'allow' / `'deny' directly; Bash's adapter does too.
      resolved)
-    ('eval
+    ((or 'eval 'sandbox)
      (pcase resolved
        ('allow 'allow-once)
        ('deny 'deny-once)
@@ -379,7 +405,7 @@ to it as well."
                     (error 'ask))))
              (if (memq safety '(allow deny)) safety 'ask)))
           (t 'ask))))
-      ('eval 'ask)
+      ((or 'eval 'sandbox) 'ask)
       (_ 'ask))))
 
 (defun mevedel-permission-queue-abort-all (&optional session)

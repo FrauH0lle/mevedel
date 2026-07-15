@@ -181,7 +181,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                      :priority 100
                      :keymap map
                      :help-echo (if once-only
-                                    "Eval permission prompt"
+                                    "One-time permission prompt"
                                   "Permission prompt")
                      :entry entry
                      :activate cont)))
@@ -365,6 +365,33 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
   "Display an Eval permission prompt and call CONT with its outcome."
   (mevedel-permission--prompt-async-with-content
    content nil cont count entry t t))
+
+(defun mevedel-permission--prompt-async-sandbox
+    (tool-name detail justification origin cont &optional count entry)
+  "Prompt for additive network authority for TOOL-NAME and DETAIL.
+JUSTIFICATION is the model's user-facing reason.  ORIGIN, CONT, COUNT, and
+ENTRY follow the shared permission prompt contract."
+  (let ((content
+         (concat
+          (propertize "Additional Network Permission Request\n"
+                      'font-lock-face '(:inherit bold :inherit warning))
+          (mevedel-permission--build-attribution-line origin)
+          "\n"
+          (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
+          (format "%s\n" tool-name)
+          (propertize "Network: " 'font-lock-face 'font-lock-escape-face)
+          "unrestricted for this invocation\n"
+          (propertize "Justification: "
+                      'font-lock-face 'font-lock-escape-face)
+          (format "%s\n\n" justification)
+          (propertize "Request:\n" 'font-lock-face 'font-lock-escape-face)
+          (propertize (format "%s\n\n" detail)
+                      'font-lock-face 'font-lock-string-face)
+          (propertize
+           "Filesystem mounts, protected paths, and process confinement remain active.\n"
+           'font-lock-face 'font-lock-comment-face))))
+    (mevedel-permission--prompt-async-with-content
+     content nil cont count entry t t)))
 
 (provide 'mevedel-permission-prompt)
 

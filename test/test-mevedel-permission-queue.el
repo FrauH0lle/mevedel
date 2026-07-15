@@ -238,6 +238,38 @@
             (should (equal "live" (plist-get entry :mode)))
             (should-not (plist-member entry :expression))))
       (when (file-directory-p dir)
+        (delete-directory dir t))))
+  :doc "network escalation records authority without the command payload"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-permission-log-" t)))
+         (session (test-pq--make-session))
+         (mevedel--session session)
+         (mevedel-permission-log-enabled t))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) dir)
+          (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+                     #'ignore))
+            (mevedel-permission--enqueue
+             (list :kind 'sandbox
+                   :tool-name "Bash"
+                   :detail "curl https://secret.example"
+                   :sandbox-permissions 'additive
+                   :additional-permissions '(:network t)
+                   :justification "Download the requested page?"
+                   :origin "main"
+                   :callback #'ignore)
+             session))
+          (let ((entry (car (test-pq--read-permission-log session))))
+            (should (eq 'permission-enqueued (plist-get entry :event)))
+            (should (eq 'additive
+                        (plist-get entry :sandbox-permissions)))
+            (should (equal '(:network t)
+                           (plist-get entry :additional-permissions)))
+            (should (equal "Download the requested page?"
+                           (plist-get entry :justification)))
+            (should-not (plist-member entry :detail))))
+      (when (file-directory-p dir)
         (delete-directory dir t)))))
 
 
@@ -897,6 +929,32 @@
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p parent-view) (kill-buffer parent-view))
       (when (buffer-live-p parent-data) (kill-buffer parent-data)))))
+
+(mevedel-deftest mevedel-permission-queue--render-sandbox
+  (:doc "renders additive sandbox permission prompts")
+  ,test
+  (test)
+
+  :doc "network request uses the once-only sandbox prompt adapter"
+  (let* ((session (test-pq--make-session))
+         (entry (list :kind 'sandbox
+                      :tool-name "Bash"
+                      :detail "curl https://example.test"
+                      :justification "Download the requested page?"
+                      :additional-permissions '(:network t)
+                      :origin "main"
+                      :session session
+                      :callback #'ignore))
+         captured)
+    (setf (mevedel-session-permission-queue session) (list entry))
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-sandbox)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission-queue--render-sandbox entry))
+    (should (equal "Bash" (nth 0 captured)))
+    (should (equal "curl https://example.test" (nth 1 captured)))
+    (should (equal "Download the requested page?" (nth 2 captured)))
+    (should (= 1 (nth 5 captured)))
+    (should (eq entry (nth 6 captured)))))
 
 
 ;;

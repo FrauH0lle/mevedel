@@ -98,7 +98,9 @@
 (declare-function mevedel-sandbox-launch-failed-p
                   "mevedel-sandbox" (preparation child-result))
 (declare-function mevedel-sandbox-prepare
-                  "mevedel-sandbox" (command workdir writable-roots))
+                  "mevedel-sandbox"
+                  (command workdir writable-roots &optional
+                           additional-permissions))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
@@ -171,6 +173,127 @@ that has unwound."
                          :outcome (mevedel-permission--normalize-outcome outcome)
                          :via via)
                    props))))
+
+(defun mevedel-tool-exec--sandbox-request
+    (args tool &optional eval-mode)
+  "Return the validated child-execution request from ARGS.
+TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
+  (let* ((raw-level (plist-get args :sandbox_permissions))
+         (level
+          (cond
+           ((or (null raw-level)
+                (eq raw-level :json-false)
+                (and (stringp raw-level) (string-empty-p raw-level))
+                (equal raw-level "use_default"))
+            'use-default)
+           ((equal raw-level "with_additional_permissions") 'additive)
+           ((equal raw-level "require_escalated") 'escalated)
+           (t (error "Unknown sandbox permission level: %s" raw-level))))
+         (additional (plist-get args :additional_permissions))
+         (justification (plist-get args :justification)))
+    (pcase level
+      ('use-default
+       (when (or (and additional (not (eq additional :json-false)))
+                 (and (stringp justification)
+                      (not (string-empty-p (string-trim justification)))))
+         (error "Default sandbox execution cannot include escalation arguments"))
+       '(:level use-default :additional-permissions nil))
+      ('additive
+       (unless (and (listp additional)
+                    (proper-list-p additional)
+                    (zerop (% (length additional) 2))
+                    (= (length additional) 2)
+                    (eq t (plist-get additional :network)))
+         (error "Additional permissions must contain non-empty network access"))
+       (unless (and (stringp justification)
+                    (not (string-empty-p (string-trim justification))))
+         (error "Additional permissions require a justification"))
+       (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
+         (error "Additional permissions are available only to batch Eval"))
+       (list :level 'additive
+             :additional-permissions '(:network t)
+             :justification (string-trim justification)))
+      ('escalated
+       (error "Full sandbox escalation is not available yet")))))
+
+(defun mevedel-tool-exec--permission-allow-p (outcome)
+  "Return non-nil when permission OUTCOME authorizes execution."
+  (eq 'allow
+      (if (and (consp outcome)
+               (keywordp (car outcome))
+               (plist-member outcome :outcome))
+          (plist-get outcome :outcome)
+        outcome)))
+
+(defun mevedel-tool-exec--check-additional-permission-async
+    (tool-name detail input request command-outcome cont)
+  "Layer REQUEST authority for TOOL-NAME and DETAIL over COMMAND-OUTCOME.
+INPUT supplies permission context and delegated trust.  Call CONT once."
+  (if (or (not (mevedel-tool-exec--permission-allow-p command-outcome))
+          (eq (plist-get request :level) 'use-default))
+      (funcall cont command-outcome)
+    (let* ((permission-context (plist-get input :permission-context))
+           (metadata-p (plist-get input :permission-decision-metadata))
+           (trust-literal-p (plist-get input :trust-literal-p))
+           (mode (mevedel-tool-exec--effective-permission-mode
+                  permission-context)))
+      (cond
+       (trust-literal-p
+        (funcall
+         cont
+         (mevedel-tool-exec--permission-decision-result
+          metadata-p
+          (cons 'deny
+                "Delegated expansion cannot request additional sandbox authority")
+          'sandbox-network)))
+       ((eq mode 'full-auto)
+        (when metadata-p
+          (mevedel-tool-exec--log-permission-decision
+           tool-name 'allow 'sandbox-network
+           :sandbox-permissions 'additive
+           :additional-permissions '(:network t)))
+        (funcall cont command-outcome))
+       (t
+        (apply
+         #'mevedel-permission--enqueue
+         (list
+          :kind 'sandbox
+          :tool-name tool-name
+          :detail detail
+          :sandbox-permissions 'additive
+          :additional-permissions '(:network t)
+          :justification (plist-get request :justification)
+          :origin (mevedel-tool-exec--current-origin)
+          :callback
+          (lambda (outcome)
+            (pcase outcome
+              ('allow-once (funcall cont command-outcome))
+              ('deny-once
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p 'deny 'sandbox-network)))
+              (`(feedback . ,text)
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p
+                 (cons 'deny
+                       (format "Additional permission denied. Feedback: %s"
+                               text))
+                 'sandbox-network)))
+              ('aborted
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p 'aborted 'sandbox-network)))
+              (_
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p 'deny 'sandbox-network))))))
+         (and (plist-get permission-context :session)
+              (list (plist-get permission-context :session)))))))))
 
 (defun mevedel-tool-exec--analyze-bash (command)
   "Return normalized Bash analysis for COMMAND."
@@ -896,7 +1019,8 @@ absolutely."
       (or action 'ask))
      (t 'ask))))
 
-(defun mevedel-tool-exec--eval-check-permission-async (_tool-struct input cont)
+(defun mevedel-tool-exec--eval-check-command-permission-async
+    (_tool-struct input cont)
   "Async permission check for Eval tool INPUT.
 
 Routes the prompt through the session permission queue rather
@@ -1005,11 +1129,32 @@ denial parity with the sync slot is preserved."
             (and (plist-get permission-context :session)
                  (list (plist-get permission-context :session)))))))))))
 
+(defun mevedel-tool-exec--eval-check-permission-async
+    (tool-struct input cont)
+  "Authorize Eval INPUT, then layer any requested child authority.
+TOOL-STRUCT and CONT follow the async permission slot contract."
+  (condition-case err
+      (let* ((mode (mevedel-tool-exec--eval-mode input))
+             (request (mevedel-tool-exec--sandbox-request
+                       input 'eval mode)))
+        (mevedel-tool-exec--eval-check-command-permission-async
+         tool-struct input
+         (lambda (outcome)
+           (mevedel-tool-exec--check-additional-permission-async
+            "Eval" (plist-get input :expression) input request outcome cont))))
+    (error
+     (funcall
+      cont
+      (mevedel-tool-exec--permission-decision-result
+       (plist-get input :permission-decision-metadata)
+       (cons 'deny (error-message-string err)) 'sandbox-policy)))))
+
 
 ;;
 ;;; Bash Prompt UI
 
-(defun mevedel-tool-exec--check-permission-async (_tool-struct input cont)
+(defun mevedel-tool-exec--check-command-permission-async
+    (_tool-struct input cont)
   "Async permission check for Bash tool INPUT.
 
 Pattern matching first: when `mevedel-tools--check-bash-permission'
@@ -1222,6 +1367,24 @@ parity with the sync slot."
                        (with-current-buffer source-buffer
                          (mevedel-permission-queue--render-head
                           session)))))))))))))))
+
+(defun mevedel-tool-exec--check-permission-async
+    (tool-struct input cont)
+  "Authorize Bash INPUT, then layer any requested child authority.
+TOOL-STRUCT and CONT follow the async permission slot contract."
+  (condition-case err
+      (let ((request (mevedel-tool-exec--sandbox-request input 'bash)))
+        (mevedel-tool-exec--check-command-permission-async
+         tool-struct input
+         (lambda (outcome)
+           (mevedel-tool-exec--check-additional-permission-async
+            "Bash" (plist-get input :command) input request outcome cont))))
+    (error
+     (funcall
+      cont
+      (mevedel-tool-exec--permission-decision-result
+       (plist-get input :permission-decision-metadata)
+       (cons 'deny (error-message-string err)) 'sandbox-policy)))))
 
 (defun mevedel-tool-exec--apply-bash-prompt-result
     (outcome session workspace command allow-patterns)
@@ -1474,16 +1637,19 @@ On systems with `setsid', timeout signals cover the whole process group."
   (plist-put (copy-sequence child-result) :sandbox-facts facts))
 
 (defun mevedel-tool-exec--start-sandboxed-child-process
-    (name command workdir writable-roots timeout callback)
+    (name command workdir writable-roots timeout callback
+          &optional additional-permissions)
   "Start COMMAND through the selected confinement boundary.
 
 NAME, WORKDIR, TIMEOUT, and CALLBACK follow
 `mevedel-tool-exec--start-child-process'.  WRITABLE-ROOTS are the approved
 filesystem roots.  In `auto' mode only a Bubblewrap failure before the marker
-may retry COMMAND directly; a started command is never replayed."
+may retry COMMAND directly; a started command is never replayed.
+ADDITIONAL-PERMISSIONS is the validated additive execution profile."
   (require 'mevedel-sandbox)
   (let ((preparation
-         (mevedel-sandbox-prepare command workdir writable-roots)))
+         (mevedel-sandbox-prepare
+          command workdir writable-roots additional-permissions)))
     (pcase (plist-get preparation :state)
       ('refused
        (funcall
@@ -1577,7 +1743,8 @@ and optional :timeout_seconds."
   (let ((command (plist-get args :command)))
     (unless (stringp command)
       (error "Parameter command is required"))
-    (let* ((timeout (mevedel-tool-exec--bash-timeout-seconds args))
+    (let* ((request (mevedel-tool-exec--sandbox-request args 'bash))
+           (timeout (mevedel-tool-exec--bash-timeout-seconds args))
            (workdir (mevedel-tool-exec--default-directory)))
       (mevedel-tool-exec--start-sandboxed-child-process
        "mevedel-bash" (list "bash" "-lc" command)
@@ -1598,7 +1765,8 @@ and optional :timeout_seconds."
                  (plist-get child-result :timed-out-p)
                  timeout))
               child-result
-              (plist-get args :suppress-sandbox-disclosure-p))))))))))
+              (plist-get args :suppress-sandbox-disclosure-p))))))
+       (plist-get request :additional-permissions)))))
 
 
 ;;
@@ -1750,8 +1918,10 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
       (let ((read-eval nil))
         (read (current-buffer))))))
 
-(defun mevedel-tool-exec--eval-batch (callback expression result-format)
-  "Evaluate EXPRESSION in a child Emacs process and call CALLBACK."
+(defun mevedel-tool-exec--eval-batch
+    (callback expression result-format additional-permissions)
+  "Evaluate EXPRESSION in a confined child and call CALLBACK.
+ADDITIONAL-PERMISSIONS is the validated additive execution profile."
   (let* ((workdir (mevedel-tool-exec--default-directory))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
@@ -1798,7 +1968,8 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
                             (format ":\n%s" diagnostics))))))
                       child-result)))
                  (ignore-errors (delete-file script-file))
-                 (ignore-errors (delete-file result-file)))))))
+                 (ignore-errors (delete-file result-file)))))
+           additional-permissions))
       (error
        (ignore-errors (delete-file script-file))
        (ignore-errors (delete-file result-file))
@@ -1815,13 +1986,16 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
         (mode (mevedel-tool-exec--eval-mode args)))
     (unless (stringp expression)
       (error "Parameter expression is required"))
-    (pcase mode
-      ('live
-       (mevedel-tool-exec--eval-live
-        callback expression result-format
-        (mevedel-tool-exec--eval-preserve-ui-p args)))
-      ('batch
-       (mevedel-tool-exec--eval-batch callback expression result-format)))))
+    (let ((request (mevedel-tool-exec--sandbox-request args 'eval mode)))
+      (pcase mode
+        ('live
+         (mevedel-tool-exec--eval-live
+          callback expression result-format
+          (mevedel-tool-exec--eval-preserve-ui-p args)))
+        ('batch
+         (mevedel-tool-exec--eval-batch
+          callback expression result-format
+          (plist-get request :additional-permissions)))))))
 
 
 ;;
@@ -1883,7 +2057,20 @@ Header shows a truncated first line of the command; body fontifies as
     :args ((command string :required
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
            (timeout_seconds integer :optional
-                            "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive."))
+                            "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive.")
+           (sandbox_permissions string :optional
+                                "Child-execution authority: use_default or with_additional_permissions."
+                                :enum ["use_default"
+                                       "with_additional_permissions"
+                                       "require_escalated"])
+           (additional_permissions object :optional
+                                   "Capabilities requested in addition to the default confinement profile."
+                                   :properties
+                                   (:network
+                                    (:type boolean
+                                     :description "Allow network access for this invocation.")))
+           (justification string :optional
+                          "Concise user-facing reason for a non-default permission request."))
     :async-p t
     :max-result-size 30000
     :groups (eval)
@@ -1899,7 +2086,20 @@ Header shows a truncated first line of the command; body fontifies as
     :args ((expression string :required "A single elisp sexp to evaluate with default-directory set to the session working directory.")
            (mode string :optional "Execution mode: live (default) evaluates in the current Emacs; batch evaluates in a child emacs --batch process."
                  :enum ["live" "batch"])
-           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true."))
+           (preserve_ui boolean :optional "In live mode, restore the current window configuration after evaluation. Defaults to true.")
+           (sandbox_permissions string :optional
+                                "Batch child-execution authority: use_default or with_additional_permissions."
+                                :enum ["use_default"
+                                       "with_additional_permissions"
+                                       "require_escalated"])
+           (additional_permissions object :optional
+                                   "Capabilities requested in addition to default batch confinement."
+                                   :properties
+                                   (:network
+                                    (:type boolean
+                                     :description "Allow network access for this batch invocation.")))
+           (justification string :optional
+                          "Concise user-facing reason for a non-default batch permission request."))
     :async-p t
     :max-result-size 30000
     :groups (eval)

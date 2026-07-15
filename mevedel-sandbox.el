@@ -386,8 +386,9 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
     (list :state 'unrestricted :command command :facts facts)))
 
 (defun mevedel-sandbox--confined-preparation
-    (command workdir writable-roots executable)
-  "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE."
+    (command workdir writable-roots executable additional-permissions)
+  "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
+ADDITIONAL-PERMISSIONS is the validated additive execution profile."
   (require 'cl-lib)
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
@@ -408,9 +409,13 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
            (protected
             (mevedel-sandbox--protected-restrictions
              canonical-workdir roots))
+           (network-access-p
+            (eq t (plist-get additional-permissions :network)))
            (facts (list :sandbox 'bubblewrap
                         :filesystem 'workspace-write
-                        :network 'isolated
+                        :network (if network-access-p
+                                     'unrestricted
+                                   'isolated)
                         :writable-roots roots
                         :protected-paths (plist-get protected :count)))
            (arguments
@@ -424,8 +429,10 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
               roots)
              (plist-get protected :arguments)
              (list "--unshare-user"
-                   "--unshare-pid"
-                   "--unshare-net"
+                   "--unshare-pid")
+             (unless network-access-p
+               (list "--unshare-net"))
+             (list
                    "--proc" "/proc"
                    "--chdir" canonical-workdir
                    "--"
@@ -444,12 +451,14 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 ;;
 ;;; Public execution interface
 
-(defun mevedel-sandbox-prepare (command workdir writable-roots)
+(defun mevedel-sandbox-prepare
+    (command workdir writable-roots &optional additional-permissions)
   "Prepare child COMMAND for WORKDIR and WRITABLE-ROOTS.
 
 Return a plist with :state, :command, and :facts.  Confined preparations also
 carry :marker and :original-command.  A required but unavailable backend
-returns :state `refused' and :error without a command."
+returns :state `refused' and :error without a command.
+ADDITIONAL-PERMISSIONS is a validated additive execution profile."
   (pcase mevedel-sandbox-mode
     ('off
      (mevedel-sandbox--direct-preparation
@@ -461,7 +470,8 @@ returns :state `refused' and :error without a command."
                (let ((preparation
                       (mevedel-sandbox--confined-preparation
                        command workdir writable-roots
-                       (plist-get availability :executable))))
+                       (plist-get availability :executable)
+                       additional-permissions)))
                  (plist-put preparation :fallback-p
                             (eq mevedel-sandbox-mode 'auto)))
              (mevedel-sandbox-policy-error

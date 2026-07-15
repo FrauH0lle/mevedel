@@ -116,6 +116,178 @@
 ;;
 ;;; Permission Checking Integration Tests
 
+(mevedel-deftest mevedel-tool-exec--sandbox-request ()
+  ,test
+  (test)
+  :doc "default request:
+`mevedel-tool-exec--sandbox-request' normalizes omitted authority"
+  (should (equal '(:level use-default :additional-permissions nil)
+                 (mevedel-tool-exec--sandbox-request nil 'bash)))
+  :doc "network request:
+`mevedel-tool-exec--sandbox-request' accepts a justified non-empty profile"
+  (should
+   (equal '(:level additive :additional-permissions (:network t)
+            :justification "Download dependencies?")
+          (mevedel-tool-exec--sandbox-request
+           '(:sandbox_permissions "with_additional_permissions"
+             :additional_permissions (:network t)
+             :justification "  Download dependencies?  ")
+           'bash)))
+  :doc "empty profile:
+additive authority cannot be requested without a capability"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "with_additional_permissions"
+      :additional_permissions nil
+      :justification "Allow this?")
+    'bash))
+  :doc "false network:
+JSON false does not make an additive profile non-empty"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "with_additional_permissions"
+      :additional_permissions (:network :json-false)
+      :justification "Allow this?")
+    'bash))
+  :doc "missing justification:
+non-default authority requires a user-facing question"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "with_additional_permissions"
+      :additional_permissions (:network t))
+    'bash))
+  :doc "default extras:
+default execution rejects stray escalation arguments"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:additional_permissions (:network t)) 'bash))
+  :doc "unsupported full escalation:
+the additive ticket does not silently implement confinement bypass"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "require_escalated"
+      :justification "Run without confinement?")
+    'bash))
+  :doc "live Eval:
+additive child permissions are available only to batch Eval"
+  (should-error
+   (mevedel-tool-exec--sandbox-request
+    '(:sandbox_permissions "with_additional_permissions"
+      :additional_permissions (:network t)
+      :justification "Fetch package metadata?")
+    'eval 'live)))
+
+(mevedel-deftest mevedel-tool-exec--additional-network-permission ()
+  ,test
+  (test)
+  :doc "ask Bash:
+recognized command authority is followed by a once-only network prompt"
+  (let ((mevedel-permission-mode 'ask)
+        (mevedel-permission-rules nil)
+        entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (setq entry queued)
+                 (funcall (plist-get queued :callback) 'allow-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Reach the package registry?")
+       (lambda (result) (setq outcome result))))
+    (should (eq 'sandbox (plist-get entry :kind)))
+    (should (equal '(:network t)
+                   (plist-get entry :additional-permissions)))
+    (should (eq 'allow outcome)))
+  :doc "auto Bash:
+additive network authority still prompts in auto mode"
+  (let ((mevedel-permission-mode 'auto)
+        (mevedel-permission-rules nil)
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (setq enqueued t)
+                 (funcall (plist-get entry :callback) 'deny-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Contact the service?")
+       (lambda (result) (setq outcome result))))
+    (should enqueued)
+    (should (eq 'deny outcome)))
+  :doc "full-auto Bash:
+network authority proceeds without a prompt"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules nil)
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _args) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Contact the service?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'allow outcome)))
+  :doc "explicit Bash deny:
+command denial prevents network authority even in full-auto"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules '(("Bash" :pattern "pwd" :action deny)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _args) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Contact the service?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'deny outcome)))
+  :doc "ask batch Eval:
+Eval approval is followed by the additive network prompt"
+  (let ((mevedel-permission-mode 'ask)
+        (mevedel-permission-rules nil)
+        kinds outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (push (plist-get entry :kind) kinds)
+                 (funcall (plist-get entry :callback) 'allow-once))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil
+       '(:expression "(+ 1 2)"
+         :mode "batch"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Fetch package metadata?")
+       (lambda (result) (setq outcome result))))
+    (should (equal '(sandbox eval) kinds))
+    (should (eq 'allow outcome)))
+  :doc "full-auto batch Eval:
+both Eval and network authority proceed without prompts"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules nil)
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _args) (setq enqueued t))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil
+       '(:expression "(+ 1 2)"
+         :mode "batch"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Fetch package metadata?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'allow outcome))))
+
+
 (mevedel-deftest mevedel-tools--check-bash-permission ()
   ,test
   (test)
@@ -910,6 +1082,27 @@
   (should-error
    (mevedel-tool-exec--bash #'ignore (list))
    :type 'error)
+  :doc "passes approved network authority to the child launcher"
+  (let (captured result)
+    (cl-letf (((symbol-function
+                'mevedel-tool-exec--start-sandboxed-child-process)
+               (lambda (&rest args)
+                 (setq captured args)
+                 (funcall (nth 5 args)
+                          '(:exit-code 0 :output "ok" :timed-out-p nil
+                            :sandbox-facts
+                            (:sandbox bubblewrap
+                             :filesystem workspace-write
+                             :network unrestricted))))))
+      (mevedel-tool-exec--bash
+       (lambda (envelope)
+         (setq result (test-bash-permissions--handler-result envelope)))
+       '(:command "curl https://example.test"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Download the requested page?")))
+    (should (equal '(:network t) (nth 6 captured)))
+    (should (string-match-p "network: unrestricted" result)))
   :doc "executes simple command and returns output"
   (let ((result nil)
         (done nil))
@@ -1580,6 +1773,35 @@
 ;;
 ;;; Eval handler
 
+(mevedel-deftest mevedel-tool-exec--register/bash-sandbox-schema ()
+  ,test
+  (test)
+  :doc "registers the shared execution escalation vocabulary for Bash"
+  (mevedel-tool-exec--register)
+  (let* ((tool (mevedel-tool-get "Bash"))
+         (args (gptel-tool-args (mevedel-tool-gptel-tool tool)))
+         (sandbox
+          (seq-find (lambda (arg)
+                      (equal "sandbox_permissions" (plist-get arg :name)))
+                    args))
+         (additional
+          (seq-find (lambda (arg)
+                      (equal "additional_permissions" (plist-get arg :name)))
+                    args))
+         (justification
+          (seq-find (lambda (arg)
+                      (equal "justification" (plist-get arg :name)))
+                    args)))
+    (should (equal ["use_default" "with_additional_permissions"
+                    "require_escalated"]
+                   (plist-get sandbox :enum)))
+    (should (equal "boolean"
+                   (plist-get (plist-get (plist-get additional :properties)
+                                         :network)
+                              :type)))
+    (should (equal "string" (plist-get justification :type)))
+    (should (plist-get justification :optional))))
+
 (mevedel-deftest mevedel-tool-exec--register/eval-schema ()
   ,test
   (test)
@@ -1593,12 +1815,27 @@
          (preserve-ui (seq-find (lambda (arg)
                                   (equal "preserve_ui"
                                          (plist-get arg :name)))
-                                args)))
+                                args))
+         (sandbox (seq-find (lambda (arg)
+                              (equal "sandbox_permissions"
+                                     (plist-get arg :name)))
+                            args))
+         (additional (seq-find (lambda (arg)
+                                 (equal "additional_permissions"
+                                        (plist-get arg :name)))
+                               args)))
     (should (equal "string" (plist-get mode :type)))
     (should (equal ["live" "batch"] (plist-get mode :enum)))
     (should (plist-get mode :optional))
     (should (equal "boolean" (plist-get preserve-ui :type)))
     (should (plist-get preserve-ui :optional))
+    (should (equal ["use_default" "with_additional_permissions"
+                    "require_escalated"]
+                   (plist-get sandbox :enum)))
+    (should (equal "boolean"
+                   (plist-get (plist-get (plist-get additional :properties)
+                                         :network)
+                              :type)))
     (should
      (eq 'invalid-enum
          (plist-get
@@ -1634,6 +1871,19 @@
   (should-error
    (mevedel-tool-exec--eval #'ignore (list))
    :type 'error)
+  :doc "passes approved network authority only to batch Eval"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-tool-exec--eval-batch)
+               (lambda (_callback expression result-format additional)
+                 (setq captured (list expression result-format additional)))))
+      (mevedel-tool-exec--eval
+       #'ignore
+       '(:expression "(+ 1 2)"
+         :mode "batch"
+         :sandbox_permissions "with_additional_permissions"
+         :additional_permissions (:network t)
+         :justification "Fetch package metadata?")))
+    (should (equal '("(+ 1 2)" nil (:network t)) captured)))
   :doc "evaluates simple expression"
   (let (result)
     (mevedel-tool-exec--eval
