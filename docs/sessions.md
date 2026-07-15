@@ -58,7 +58,7 @@ Layout:
 The data buffer is locked to `org-mode` so `gptel-org--save-state`
 can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
 holds session-wide state that doesn't live in the buffer text:
-permission rules, tasks, prompt-index (driving the rewind picker and
+permission rules, exact session resource grants, tasks, prompt-index (driving the rewind picker and
 latest resume preview), `:file-snapshots` (per-turn map of tracked files
 to backup names), workspace identity, `:working-directory`, fork lineage
 (`:forked-from-session-id` / `:forked-from-turn`), and
@@ -138,8 +138,8 @@ into live session state on resume.  Entries recorded before first
 materialization are backfilled when the session directory is created.
 
 Permission diagnostics are also append-only. `permission-log.el` records
-permission queue and `RequestAccess` prompt lifecycle events so transient
-overlays can be diagnosed after a turn or agent is aborted. It is not read
+permission queue lifecycle events so transient overlays can be diagnosed after
+a turn or agent is aborted. It is not read
 back into live session state on resume.  Pre-materialization entries wait in
 a transient session queue and flush with the other diagnostic logs.
 

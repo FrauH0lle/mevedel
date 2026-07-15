@@ -363,7 +363,7 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
         (setq-local mevedel--workspace parent-workspace))
       ;; also expose the parent's view buffer so tools that
       ;; target `mevedel--view-buffer' (permission prompts, async
-      ;; questionnaires, RequestAccess, ...) surface in the parent
+      ;; questionnaires, permission prompts, ...) surface in the parent
       ;; UI instead of inside the hidden agent buffer.
       (when (and parent-view-buffer (buffer-live-p parent-view-buffer))
         (setq-local mevedel--view-buffer parent-view-buffer))

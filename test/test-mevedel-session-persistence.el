@@ -60,6 +60,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           '(("Read"  :path "/tmp/foo/**" :action allow)
             ("Bash"  :pattern "git log*" :action allow)
             ("Write" :path "/tmp/bar"    :action deny)))
+    (setf (mevedel-session-resource-grants session)
+          '((:path "/tmp/exact-read" :access read)
+            (:path "/tmp/exact-write" :access write)))
     (setf (mevedel-session-turn-count session) 5)
     (setf (mevedel-session-last-task-write-turn session) 4)
     (setf (mevedel-session-task-status-notes session)
@@ -117,6 +120,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :forked-from-turn nil
                :permission-mode 'default
                :permission-rules nil
+               :resource-grants nil
                :preset-name nil
                :preset-settings nil
                :last-observed-date "2026-01-01"
@@ -216,6 +220,24 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                  ("Bash" :pattern "echo" :action allow))))
     (should (= 2 (length
                   (mevedel-session-persistence--filter-permission-rules rules))))))
+
+(mevedel-deftest mevedel-session-persistence--filter-resource-grants ()
+  ,test
+  (test)
+  :doc "keeps exact read and write grants"
+  (let ((grants '((:path "/tmp/read" :access read)
+                  (:path "/tmp/write" :access write))))
+    (should (equal grants
+                   (mevedel-session-persistence--filter-resource-grants
+                    grants))))
+  :doc "drops malformed grants and unknown access levels"
+  (should
+   (equal '((:path "/tmp/read" :access read))
+          (mevedel-session-persistence--filter-resource-grants
+           '((:path "/tmp/read" :access read)
+             (:path "/tmp/future" :access execute)
+             (:access write)
+             "not a grant")))))
 
 
 ;;
@@ -426,6 +448,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal '(("alpha" . "Alpha helper"))
                          (plist-get plist :skills-snapshot)))
           (should (= 3 (length (plist-get plist :permission-rules))))
+          (should (= 2 (length (plist-get plist :resource-grants))))
           (should (= 2 (length (plist-get plist :tasks))))
           (should (plist-get plist :workspace))
           (should (plist-get plist :prompt-index))
@@ -456,6 +479,12 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   :doc "rejects a current-version sidecar with a missing required key"
   (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
     (cl-remf plist :working-directory)
+    (should-error
+     (mevedel-session-persistence--validate-current-sidecar plist)
+     :type 'error))
+  :doc "requires resource grants even when none are stored"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (cl-remf plist :resource-grants)
     (should-error
      (mevedel-session-persistence--validate-current-sidecar plist)
      :type 'error))
@@ -514,6 +543,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (= 3 (mevedel-task-completed-turn
                         (car (mevedel-session-tasks session)))))
           (should (= 3 (length (mevedel-session-permission-rules session))))
+          (should (equal '((:path "/tmp/exact-read" :access read)
+                           (:path "/tmp/exact-write" :access write))
+                         (mevedel-session-resource-grants session)))
           (should (equal "Hi" (plist-get result :first-user-message)))
           (should (equal "Later" (plist-get result :latest-user-message)))
           ;; touched-files / mentions-shown reset to empty hash tables

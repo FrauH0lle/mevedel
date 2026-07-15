@@ -924,6 +924,8 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                      :specifier-value rule-value
                      :protected-path
                      (plist-get permission-context :protected-path)
+                     :resource-access
+                     (plist-get permission-context :resource-access)
                      :include-always
                      (plist-get permission-context :include-always)
                      :workspace workspace
@@ -961,7 +963,10 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                                       prompt-outcome rule-tool session workspace
                                       (and (eq rule-key :path) rule-value)
                                       :spec-key rule-key
-                                      :spec-value rule-value))
+                                      :spec-value rule-value
+                                      :resource-access
+                                      (plist-get permission-context
+                                                 :resource-access)))
                                     ((or 'allow 'deny 'aborted) prompt-outcome)
                                     (other other))))
                              (mevedel-pipeline--dispatch-permission-outcome

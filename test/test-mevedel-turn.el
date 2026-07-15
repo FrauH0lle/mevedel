@@ -83,21 +83,6 @@
             (should (eq request (nth 4 failure)))))
       (kill-buffer chat-buf))))
 
-(mevedel-deftest mevedel--turn-clear-access-state ()
-  ,test
-  (test)
-  :doc "clears pending access state in the live request buffer"
-  (let ((chat-buf (generate-new-buffer " *mevedel-turn-access*"))
-        called-buffer)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel--clear-pending-access-requests)
-                   (lambda (&rest _)
-                     (setq called-buffer (current-buffer)))))
-          (mevedel--turn-clear-access-state
-           (gptel-make-fsm :info (list :buffer chat-buf)))
-          (should (eq chat-buf called-buffer)))
-      (kill-buffer chat-buf))))
-
 (mevedel-deftest mevedel--turn-increment
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))
@@ -202,10 +187,6 @@
           (with-current-buffer chat-buf
             (setq-local mevedel--current-request 'live))
           (cl-letf (((symbol-function 'display-warning) #'ignore)
-                    ((symbol-function 'mevedel--turn-clear-access-state)
-                     (lambda (_fsm)
-                       (push 'access events)
-                       (error "Access cleanup failed")))
                     ((symbol-function 'mevedel--turn-increment)
                      (lambda (_fsm) (push 'turn events)))
                     ((symbol-function 'mevedel--compact-record-token-baseline)
@@ -237,7 +218,7 @@
             (mevedel--complete-turn
              (gptel-make-fsm :info (list :buffer chat-buf)))))
           (should (equal (nreverse events)
-                         '(access turn baseline save
+                         '(turn baseline save
                            (Stop completed live)
                            restore request-end (drain t) mailbox)))
           (with-current-buffer chat-buf
@@ -250,8 +231,6 @@
   :doc "failure statuses skip autosave and queued-message drainage"
   (let (events saved drained)
     (cl-letf (((symbol-function 'display-warning) #'ignore)
-              ((symbol-function 'mevedel--turn-clear-access-state)
-               (lambda (_fsm) (push 'access events)))
               ((symbol-function 'mevedel--turn-increment)
                (lambda (_fsm) (push 'turn events)))
               ((symbol-function 'mevedel--compact-record-token-baseline)
@@ -281,7 +260,7 @@
         (setq events nil)
         (mevedel--fail-turn 'fsm (car case))
         (should (equal (nreverse events)
-                       `(access turn baseline goal-failure
+                       `(turn baseline goal-failure
                                 (StopFailure ,(car case))
                                 restore request-end goal-save goal-retry
                                 mailbox)))))

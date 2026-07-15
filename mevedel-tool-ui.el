@@ -3,9 +3,8 @@
 ;;; Commentary:
 
 ;; Assembles the user-interaction tool surface and owns the small adapters for
-;; Agent, StopAgent, ToolSearch, and SendMessage.  Ask and RequestAccess live
-;; in focused tool modules; generic, Bash, and Eval prompts live in the
-;; permission-prompt module.
+;; Agent, StopAgent, ToolSearch, and SendMessage.  Ask lives in a focused tool
+;; module; generic, Bash, and Eval prompts live in the permission-prompt module.
 
 ;;; Code:
 
@@ -38,9 +37,6 @@
 (declare-function mevedel-session-plan-queue
                   "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
-
-;; `mevedel-tool-access'
-(declare-function mevedel-tool-access-register "mevedel-tool-access" ())
 
 ;; `mevedel-tool-ask'
 (declare-function mevedel-tool-ask-register "mevedel-tool-ask" ())
@@ -336,10 +332,8 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
 
 (defun mevedel-tool-ui--register ()
   "Register the user-interaction tool surface."
-  (require 'mevedel-tool-access)
   (require 'mevedel-tool-ask)
   (mevedel-tool-ask-register)
-  (mevedel-tool-access-register)
   (mevedel-define-tool
     :name "Agent"
     :description "Launch a specialized agent to handle complex, multi-step tasks autonomously."

@@ -139,9 +139,8 @@ families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
 
 `mevedel-tool-ui.el` assembles the user-interaction tool surface and owns only
 the Agent, StopAgent, ToolSearch, and SendMessage adapters. Ask's questionnaire,
-handler, renderer, and schema live in `mevedel-tool-ask.el`. RequestAccess's
-deduplication cache, access grant, diagnostics, prompt, handler, renderer, and
-schema live in `mevedel-tool-access.el`.
+handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
+authority is part of the normal permission pipeline, not a model-visible tool.
 
 All direct user interactions share the settlement and cancellation primitive in
 `mevedel-interaction-prompt.el`. Domain owners supply their own text, keymaps,

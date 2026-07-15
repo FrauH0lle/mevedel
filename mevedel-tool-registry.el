@@ -120,7 +120,6 @@ created as a side effect of registration and handles serialization."
     ("GetHints" "RecordHint" mevedel-tool-tutor mevedel-tool-tutor--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
-    ("RequestAccess" mevedel-tool-access mevedel-tool-access-register)
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)
     ("TaskCreate" "TaskGet" "TaskList" "TaskNote" "TaskUpdate"
      mevedel-tool-task mevedel-tool-task--register)

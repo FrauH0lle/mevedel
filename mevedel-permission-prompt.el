@@ -225,7 +225,14 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
             (concat
              (propertize "Path: " 'font-lock-face 'font-lock-escape-face)
              (propertize (format "%s\n" path)
-                         'font-lock-face 'font-lock-string-face)))
+                         'font-lock-face 'font-lock-string-face)
+             (when-let* ((access (and entry
+                                      (plist-get entry :resource-access))))
+               (concat
+                (propertize "Access: "
+                            'font-lock-face 'font-lock-escape-face)
+                (propertize (format "%s\n" access)
+                            'font-lock-face 'font-lock-constant-face)))))
           "\n")))
     (mevedel-permission--prompt-async-with-content
      content include-always cont count entry)))

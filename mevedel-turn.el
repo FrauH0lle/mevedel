@@ -50,10 +50,6 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
-;; `mevedel-tool-access'
-(declare-function mevedel--clear-pending-access-requests
-                  "mevedel-tool-access" (&rest _))
-
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-terminal-mailbox
                   "mevedel-tools" (fsm))
@@ -104,14 +100,6 @@
            #'ignore
            mevedel--session workspace request nil))))))
 
-
-(defun mevedel--turn-clear-access-state (fsm)
-  "Clear pending access state for FSM's live request buffer."
-  (when-let* ((info (gptel-fsm-info fsm))
-              (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer)))
-    (with-current-buffer chat-buffer
-      (mevedel--clear-pending-access-requests))))
 
 (defun mevedel--turn-increment (fsm)
   "Increment the session turn count for FSM's live request buffer."
@@ -168,8 +156,7 @@
   "Run the canonical successful top-level turn transaction for FSM."
   (mevedel--run-turn-steps
    fsm
-   (list #'mevedel--turn-clear-access-state
-         #'mevedel--turn-increment
+   (list #'mevedel--turn-increment
          #'mevedel-goal-settle-turn
          #'mevedel--compact-record-token-baseline
          #'mevedel--turn-autosave
@@ -185,8 +172,7 @@
   "Run failure cleanup for FSM with terminal STATUS."
   (mevedel--run-turn-steps
    fsm
-   (list #'mevedel--turn-clear-access-state
-         #'mevedel--turn-increment
+   (list #'mevedel--turn-increment
          #'mevedel--compact-record-token-baseline
          (lambda (machine)
            (mevedel-goal-settle-failure machine status))

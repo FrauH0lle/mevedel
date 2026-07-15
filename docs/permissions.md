@@ -54,7 +54,7 @@ Hook integration sits around this chain:
 
 Permission invocation context is normalized in the permission module before
 callers enter the decision chain. That context centralizes specifier
-extraction, rule buckets, mode, allowed roots, dropped-file exact grants,
+extraction, rule buckets, mode, allowed roots, exact resource grants,
 missing-session fallback warnings, and the prompt rule shape used for
 outside-root approvals.
 
@@ -100,13 +100,20 @@ Modes: `default` / `accept-edits` / `trust-all`. Slash-command
 aliases normalize `ask` to `default`, `edit` / `edits` to `accept-edits`,
 and `auto` to `trust-all`.
 
-Prompt offers 5 choices (allow/deny × once/session/always). Persisted
-rules live in `.mevedel/permissions.el`.
+The prompt offers allow/deny choices for the invocation, session, or persistent
+workspace scope. `.mevedel/permissions.el` stores a plist containing both
+`:rules` and `:resource-grants`.
 
 Default allowed roots are the workspace root, the system temporary directory,
-configured memory roots, and session-added roots
-granted through `RequestAccess`. These roots bypass the workspace-boundary
-prompt but not explicit deny rules or protected-path prompts.
+configured memory roots, and manually configured additional roots. A native
+filesystem operation outside those roots prompts for exact `read` or `write`
+authority. A session grant is stored on the session; an always grant is also
+stored in the workspace permission file. Write authority covers reading the
+same exact path, but read authority does not cover writes. These grants do not
+cover siblings or descendants, add workspace roots, or authorize Bash/Eval
+code. Revoking the grant restores the underlying workspace/protected-path
+restriction. Invocation-only authority is consumed by the approved call and is
+not stored.
 
 Files dropped into the view buffer can add exact, session-scoped `Read`
 grants when the next sent prompt still mentions the same path. These
@@ -158,8 +165,7 @@ outcome, specifier, protected-path flag, resolver path, and rule bucket. It
 does not include raw Write/Edit content, arbitrary tool args, or extra raw
 Bash/Eval payloads. Prompt lifecycle events remain separate: queue
 enqueue/resolve/abort/coalesce events describe prompt handling without raw
-Bash commands or Eval expressions, and `RequestAccess`
-create/resolve/cache events describe access-root prompts.
+Bash commands or Eval expressions.
 
 ## Bash specifics
 

@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Tests the small user-interaction tool assembly boundary.  Focused Ask and
-;; RequestAccess behavior lives in their mirrored test modules.
+;; Ask behavior lives in its mirrored test module.
 
 ;;; Code:
 
@@ -43,21 +43,13 @@
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)
-  :doc "assembles the unchanged user-interaction tool surface"
+  :doc "assembles the user-interaction tool surface"
   (progn
     (mevedel-tool-ui--register)
-    (dolist (name '("Ask" "RequestAccess" "Agent" "StopAgent"
+    (dolist (name '("Ask" "Agent" "StopAgent"
                     "ToolSearch" "SendMessage"))
-      (should (mevedel-tool-get name))))
-
-  :doc "keeps RequestAccess.directory as a semantic path"
-  (progn
-    (mevedel-tool-ui--register)
-    (should
-     (eq 'path
-         (cadr (assq 'directory
-                     (mevedel-tool-args
-                      (mevedel-tool-get "RequestAccess"))))))))
+      (should (mevedel-tool-get name)))
+    (should-not (mevedel-tool-get "RequestAccess"))))
 
 
 ;;; Expand/collapse

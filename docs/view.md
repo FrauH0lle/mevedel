@@ -40,7 +40,7 @@ it does not maintain a parallel rendering implementation. The live agent data
 buffer keeps its existing parent-view binding, so opening an inspection view
 does not redirect parent status and interaction UI.
 
-Agent transcript views are observation-only. Permission, Ask, RequestAccess,
+Agent transcript views are observation-only. Permission, Ask,
 plan, and other actionable interactions remain exclusively in the parent
 view. A transcript header may report that an agent is blocked, but the
 transcript view never duplicates interaction controls or owns their callbacks.
@@ -134,7 +134,7 @@ interaction chrome around that transcript.
 |   Task status and aggregate running/blocked agent rows.       |
 +---------------------- interaction marker --------------------+
 | Interaction zone                                             |
-|   Permission prompts, plan approvals, RequestAccess, Ask,     |
+|   Permission prompts, plan approvals, Ask,                    |
 |   queued follow-ups, and preview controls.                   |
 +--------------------------------------------------------------+
 | Request progress row                                         |
@@ -218,12 +218,12 @@ properties are valid for view navigation, activation, collapse, and targeted
 refresh decisions, but they are UI cache only. Durable conversation state
 continues to live in the data buffer and session structures. The zone module
 owns managed region overlays. Remaining interaction overlays are opaque
-callback handles for permission, plan, Ask, RequestAccess, and preview flows;
+callback handles for permission, plan, Ask, and preview flows;
 they are not parallel renderers.
 
 `mevedel-interaction-prompt.el` owns the common lifecycle for those opaque
 handles: exactly-once settlement, request-local cancellation, buffer-kill
-cleanup, and standard prompt framing. Ask, RequestAccess, permission, plan,
+cleanup, and standard prompt framing. Ask, permission, plan,
 and preview code retain their domain-specific descriptors and outcomes.
 
 Current fragment namespaces:
@@ -235,7 +235,7 @@ Current fragment namespaces:
 - `status`: `tasks` and `agents` status-zone blocks. Task and aggregate-agent
   disclosure state is backed by fragment collapse state.
 - `interaction`: queued user controls plus a non-navigatable `:separator`
-  fragment. Ask, permission, plan, RequestAccess, preview, and queued-user-message
+  fragment. Ask, permission, plan, preview, and queued-user-message
   callers continue to use the descriptor registry.
 - `progress`: the foreground `request` progress row between the interaction
   zone and input prompt.

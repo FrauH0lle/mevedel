@@ -44,6 +44,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
@@ -748,6 +749,19 @@ Returns non-nil if the path is protected."
       (cl-loop for allowed in allowed-paths
                thereis (string= expanded (expand-file-name allowed))))))
 
+(defun mevedel-permission--resource-granted-p (path access grants)
+  "Return non-nil when GRANTS authorize ACCESS to exact PATH."
+  (when (and path (memq access '(read write)))
+    (let ((expanded (expand-file-name path)))
+      (cl-loop for grant in grants
+               for granted-access = (plist-get grant :access)
+               thereis
+               (and (stringp (plist-get grant :path))
+                    (string= expanded
+                             (expand-file-name (plist-get grant :path)))
+                    (or (eq granted-access 'write)
+                        (eq granted-access access)))))))
+
 
 ;;
 ;;; Mode decisions
@@ -865,7 +879,7 @@ PATH, PATTERN, DOMAIN, and NAME are the specifier values."
     (&key tool tool-name args session workspace request invocation buffer
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
-          persistent-rules warn-no-session-p)
+          persistent-rules resource-grants warn-no-session-p)
   "Return normalized permission invocation context.
 
 The context concentrates facts shared by the permission decision
@@ -874,7 +888,8 @@ chain, prompt queue, and Bash/Eval adapters.
 TOOL, TOOL-NAME, ARGS, SESSION, WORKSPACE, REQUEST, INVOCATION, BUFFER,
 PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
 EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
-PERSISTENT-RULES, and WARN-NO-SESSION-P provide the context facts."
+PERSISTENT-RULES, RESOURCE-GRANTS, and WARN-NO-SESSION-P provide the
+context facts."
   (setq tool-name (or tool-name (and tool (mevedel-tool-name tool))))
   (when (and tool args)
     (cl-flet ((extract (getter current)
@@ -915,6 +930,12 @@ PERSISTENT-RULES, and WARN-NO-SESSION-P provide the context facts."
         (or persistent-rules
             (and workspace
                  (mevedel-permission--load-persistent-rules workspace)))
+        resource-grants
+        (or resource-grants
+            (append (and session (mevedel-session-resource-grants session))
+                    (and workspace
+                         (mevedel-permission--load-persistent-resource-grants
+                          workspace))))
         mode (or mode (and session (mevedel-session-permission-mode session))))
   (when (and warn-no-session-p (not session))
     (display-warning
@@ -938,11 +959,17 @@ happen for a non-read-only tool."
                      path (or allowed-roots
                               (and workspace-root
                                    (list workspace-root)))))))
+         (resource-access (and path
+                               (if (and tool (mevedel-tool-read-only-p tool))
+                                   'read
+                                 'write)))
+         (resource-request-p
+          (and resource-access
+               (or workspace-boundary-p
+                   (mevedel-permission--path-protected-p path))))
          (rule-key (if workspace-boundary-p :path specifier-key))
          (rule-value (if workspace-boundary-p
-                         (concat (file-name-directory
-                                  (expand-file-name path))
-                                 "**")
+                         (expand-file-name path)
                        specifier-value))
          (buckets (mevedel-permission--collect-buckets
                    invocation-rules request-rules
@@ -965,6 +992,8 @@ happen for a non-read-only tool."
           :workspace-root workspace-root
           :allowed-roots allowed-roots
           :exact-allowed-paths exact-allowed-paths
+          :resource-access (and resource-request-p resource-access)
+          :resource-grants resource-grants
           :rule-tool (if workspace-boundary-p "*" tool-name)
           :rule-key rule-key
           :rule-value rule-value
@@ -1000,7 +1029,9 @@ happen for a non-read-only tool."
           :workspace-root (plist-get context :workspace-root)
           :allowed-roots (plist-get context :allowed-roots)
           :exact-allowed-paths
-          (plist-get context :exact-allowed-paths))))
+          (plist-get context :exact-allowed-paths)
+          :resource-access (plist-get context :resource-access)
+          :resource-grants (plist-get context :resource-grants))))
 
 (defun mevedel-permission--goal-read-only-phase-p (&optional session)
   "Return non-nil when the owning session's Goal phase is read-only."
@@ -1016,7 +1047,8 @@ happen for a non-read-only tool."
 (cl-defun mevedel-permission--preflight
     (tool-name &key tool-struct path pattern domain name content
                invocation-rules request-rules session-rules persistent-rules
-               mode session workspace-root allowed-roots exact-allowed-paths)
+               mode session workspace-root allowed-roots exact-allowed-paths
+               resource-access resource-grants)
   "Return normalized permission facts and any decision before the tool slot.
 
 This pure preflight owns specifier extraction, rule buckets, absolute
@@ -1028,8 +1060,8 @@ TOOL-NAME identifies the tool.  TOOL-STRUCT and CONTENT supply its policy
 and input.  PATH, PATTERN, DOMAIN, and NAME may supply pre-extracted
 specifiers.  INVOCATION-RULES, REQUEST-RULES, SESSION-RULES, and
 PERSISTENT-RULES are the ordered rule sources.  MODE selects the permission
-mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, and EXACT-ALLOWED-PATHS define the
-filesystem boundary."
+mode.  WORKSPACE-ROOT, ALLOWED-ROOTS, EXACT-ALLOWED-PATHS, and
+RESOURCE-GRANTS define the filesystem boundary."
   (setq mode (or mode mevedel-permission-mode))
   (when (and tool-struct content)
     (cl-flet ((extract (getter current)
@@ -1042,6 +1074,11 @@ filesystem boundary."
             name (extract #'mevedel-tool-get-name name))))
   (let* ((read-only-p
           (when tool-struct (mevedel-tool-read-only-p tool-struct)))
+         (resource-access (or resource-access
+                              (if read-only-p 'read 'write)))
+         (resource-granted-p
+          (mevedel-permission--resource-granted-p
+           path resource-access resource-grants))
          (buckets
           (mevedel-permission--collect-buckets
            invocation-rules request-rules session-rules persistent-rules))
@@ -1056,7 +1093,8 @@ filesystem boundary."
            ((and (not read-only-p)
                  (mevedel-permission--goal-read-only-phase-p session))
             (mevedel-permission--decision 'deny 'goal-phase))
-           ((mevedel-permission--path-protected-p path)
+           ((and (mevedel-permission--path-protected-p path)
+                 (not resource-granted-p))
             (mevedel-permission--decision
              (if (eq (mevedel-permission--mode-decision mode read-only-p)
                      'deny)
@@ -1076,6 +1114,8 @@ filesystem boundary."
           :allowed-roots (or allowed-roots
                              (and workspace-root (list workspace-root)))
           :exact-allowed-paths exact-allowed-paths
+          :resource-access resource-access
+          :resource-granted-p resource-granted-p
           :early-decision early-decision)))
 
 (defun mevedel-permission--sync-tool-decision (context)
@@ -1208,6 +1248,7 @@ function covers shared steps 5-9."
          (name (plist-get context :name))
          (allowed-roots (plist-get context :allowed-roots))
          (exact-allowed-paths (plist-get context :exact-allowed-paths))
+         (resource-granted-p (plist-get context :resource-granted-p))
          (mode (plist-get context :mode))
          (read-only-p (plist-get context :read-only-p)))
     (cond
@@ -1231,7 +1272,8 @@ function covers shared steps 5-9."
      ;; Step 7: allowed roots and exact paths implicit allow.
      ((or (mevedel-permission--path-in-allowed-roots-p path allowed-roots)
           (mevedel-permission--path-in-exact-allowed-paths-p
-           path exact-allowed-paths))
+           path exact-allowed-paths)
+          resource-granted-p)
       (mevedel-permission--decision 'allow 'allowed-root))
      ;; Step 8: path outside allowed roots with no covering rule.
      (path (mevedel-permission--decision 'ask 'workspace-boundary))
@@ -1244,6 +1286,30 @@ function covers shared steps 5-9."
 
 ;;
 ;;; Session rule storage
+
+(defun mevedel-permission--resource-grant (path access)
+  "Return normalized exact PATH ACCESS resource grant."
+  (unless (and (stringp path) (not (string-empty-p path)))
+    (error "Invalid resource path: %S" path))
+  (unless (memq access '(read write))
+    (error "Invalid resource access: %s" access))
+  (list :path (expand-file-name path) :access access))
+
+(defun mevedel-permission-add-session-resource-grant (session path access)
+  "Grant SESSION exact PATH access at READ or WRITE level."
+  (let* ((grant (mevedel-permission--resource-grant path access))
+         (grants (mevedel-session-resource-grants session)))
+    (unless (member grant grants)
+      (setf (mevedel-session-resource-grants session)
+            (append grants (list grant))))
+    grant))
+
+(defun mevedel-permission-remove-session-resource-grant
+    (session path access)
+  "Revoke SESSION's exact PATH ACCESS resource grant."
+  (let ((grant (mevedel-permission--resource-grant path access)))
+    (setf (mevedel-session-resource-grants session)
+          (delete grant (mevedel-session-resource-grants session)))))
 
 (defun mevedel-permission--build-rule (tool-name action spec-key spec-value)
   "Build a permission rule list from the given components.
@@ -1291,17 +1357,26 @@ is a deliberate contract, not an accident of the buffer-local plumbing."
   (file-name-concat (mevedel-workspace-state-dir workspace)
                      "permissions.el"))
 
-(defun mevedel-permission--read-rules-file (file)
-  "Read permission rules from FILE.
-
-Returns a list in `mevedel-permission-rules' format, or nil if FILE
-does not exist or is unreadable."
+(defun mevedel-permission--read-store-file (file)
+  "Read the permission store plist from FILE, or nil when invalid."
   (when (file-readable-p file)
     (condition-case nil
         (with-temp-buffer
           (insert-file-contents file)
-          (read (current-buffer)))
+          (let ((store (read (current-buffer))))
+            (and (proper-list-p store)
+                 (plist-member store :rules)
+                 (plist-member store :resource-grants)
+                 store)))
       (error nil))))
+
+(defun mevedel-permission--write-store-file (file store)
+  "Write permission STORE plist to FILE."
+  (make-directory (file-name-directory file) t)
+  (with-temp-file file
+    (insert ";; Mevedel persistent permissions\n")
+    (insert ";; Auto-generated, safe to edit\n\n")
+    (pp store (current-buffer))))
 
 (defun mevedel-permission--load-persistent-rules (workspace)
   "Load persistent permission rules for WORKSPACE.
@@ -1313,8 +1388,15 @@ first, project rules appended after so they take precedence.
 Returns a merged list in `mevedel-permission-rules' format."
   (let ((global-file (file-name-concat mevedel-user-dir "permissions.el"))
         (project-file (mevedel-permission--persistent-file workspace)))
-    (append (mevedel-permission--read-rules-file global-file)
-            (mevedel-permission--read-rules-file project-file))))
+    (append (plist-get (mevedel-permission--read-store-file global-file) :rules)
+            (plist-get (mevedel-permission--read-store-file project-file)
+                       :rules))))
+
+(defun mevedel-permission--load-persistent-resource-grants (workspace)
+  "Load exact resource grants persisted for WORKSPACE."
+  (plist-get (mevedel-permission--read-store-file
+              (mevedel-permission--persistent-file workspace))
+             :resource-grants))
 
 (cl-defun mevedel-permission--save-persistent-rule
     (workspace tool-name action &optional path &key spec-key spec-value)
@@ -1325,20 +1407,43 @@ to SPEC-KEY `:path'.  SPEC-KEY/SPEC-VALUE let callers store rules
 qualified by any specifier (`:path', `:pattern', `:domain', `:name').
 The file is created if it does not exist."
   (let* ((file (mevedel-permission--persistent-file workspace))
-         (existing (mevedel-permission--read-rules-file file))
+         (store (or (mevedel-permission--read-store-file file)
+                    (list :rules nil :resource-grants nil)))
+         (existing (plist-get store :rules))
          (key (or spec-key (and path :path)))
          (value (or spec-value path))
          (rule (mevedel-permission--build-rule tool-name action key value))
          (updated (if (member rule existing)
                       existing
-                    (append existing (list rule))))
-         (dir (file-name-directory file)))
-    (unless (file-directory-p dir)
-      (make-directory dir t))
-    (with-temp-file file
-      (insert ";; Mevedel persistent permission rules\n")
-      (insert ";; Auto-generated, safe to edit\n\n")
-      (pp updated (current-buffer)))))
+                    (append existing (list rule)))))
+    (mevedel-permission--write-store-file
+     file (plist-put store :rules updated))))
+
+(defun mevedel-permission--save-persistent-resource-grant
+    (workspace path access)
+  "Persist exact PATH ACCESS for WORKSPACE."
+  (let* ((file (mevedel-permission--persistent-file workspace))
+         (store (or (mevedel-permission--read-store-file file)
+                    (list :rules nil :resource-grants nil)))
+         (grant (mevedel-permission--resource-grant path access))
+         (grants (plist-get store :resource-grants)))
+    (unless (member grant grants)
+      (setq grants (append grants (list grant))))
+    (mevedel-permission--write-store-file
+     file (plist-put store :resource-grants grants))
+    grant))
+
+(defun mevedel-permission-remove-persistent-resource-grant
+    (workspace path access)
+  "Revoke WORKSPACE's exact PATH ACCESS resource grant."
+  (let* ((file (mevedel-permission--persistent-file workspace))
+         (store (mevedel-permission--read-store-file file))
+         (grant (mevedel-permission--resource-grant path access)))
+    (when store
+      (mevedel-permission--write-store-file
+       file
+       (plist-put store :resource-grants
+                  (delete grant (plist-get store :resource-grants)))))))
 
 
 ;;
@@ -1346,7 +1451,7 @@ The file is created if it does not exist."
 
 (cl-defun mevedel-permission--apply-prompt-result
     (result tool-name &optional session workspace path
-            &key spec-key spec-value)
+            &key spec-key spec-value resource-access)
   "Dispatch a permission prompt RESULT to the correct storage.
 
 RESULT is one of:
@@ -1365,6 +1470,14 @@ scoping by any other specifier (`:pattern', `:domain', `:name')."
                 (mevedel-permission--add-session-rule
                  session tool-name action path
                  :spec-key spec-key :spec-value spec-value)))
+            (session-resource-grant ()
+              (when (and session path resource-access)
+                (mevedel-permission-add-session-resource-grant
+                 session path resource-access)))
+            (persistent-resource-grant ()
+              (when (and workspace path resource-access)
+                (mevedel-permission--save-persistent-resource-grant
+                 workspace path resource-access)))
             (persistent-rule (action)
               (cond
                (workspace
@@ -1385,10 +1498,18 @@ scoping by any other specifier (`:pattern', `:domain', `:name')."
                  :warning)))))
     (pcase result
       ('allow-once 'allow)
-      ('allow-session (session-rule 'allow) 'allow)
+      ('allow-session
+       (if resource-access
+           (session-resource-grant)
+         (session-rule 'allow))
+       'allow)
       ('always-allow
-       (persistent-rule 'allow)
-       (session-rule 'allow)
+       (if resource-access
+           (progn
+             (persistent-resource-grant)
+             (session-resource-grant))
+         (persistent-rule 'allow)
+         (session-rule 'allow))
        'allow)
       ('deny-once 'deny)
       ('deny-session (session-rule 'deny) 'deny)
