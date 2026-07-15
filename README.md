@@ -658,7 +658,8 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 
 Precedence: specifier rules outrank generic; within a group `deny > ask >
 allow`. Protected paths (`mevedel-protected-paths`, default `.git/`, `~/.ssh/`,
-`~/.gnupg/`) always prompt regardless of mode.
+`~/.gnupg/`) require exact resource authority even when the permission mode
+would otherwise allow the operation.
 
 **Permission modes** (`mevedel-permission-mode`):
 
@@ -666,8 +667,8 @@ allow`. Protected paths (`mevedel-protected-paths`, default `.git/`, `~/.ssh/`,
   interactive approval.
 - `accept-edits` — same as `default`, but `Write`/`Edit` previews are
   auto-applied.
-- `trust-all` — skip most prompts, except protected paths, Eval, and Bash
-  commands that are unknown or require extra scrutiny.
+- `trust-all` — skip policy prompts except explicit hard policies; protected
+  and outside-root paths still require resource authority.
 
 When set inside a chat buffer, the mode is scoped to that session; set from any
 other buffer it updates the global default.
@@ -701,8 +702,8 @@ can override it per Bash call.
 
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or
-a custom function, and never overrides explicit deny rules, protected paths,
-Goal phase restrictions, or the user's decision.
+a custom function, and never overrides explicit deny rules, filesystem resource
+authority, Goal phase restrictions, or the user's decision.
 `mevedel-permission-guardian-timeout` caps how long the prompt waits for
 guidance.
 

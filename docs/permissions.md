@@ -9,33 +9,42 @@ flowchart TD
     C -- Yes --> Z[Deny]
     C -- No --> D{Goal planning or review<br/>and mutating tool?}
     D -- Yes --> Z
-    D -- No --> E{Protected path?}
-    E -- Yes --> X[Ask]
-    E -- No --> F[Tool-specific checker]
-    F --> G{Allow or ask rule?}
-    G -- Yes --> H[Bucket decision]
-    G -- No --> I{Permission mode denies?}
-    I -- Yes --> Z
-    I -- No --> J{Inside allowed roots?}
-    J -- Yes --> Y[Allow]
-    J -- No --> K{Outside roots?}
-    K -- Yes --> X[Ask]
-    K -- No --> L[Mode/default decision]
+    D -- No --> E{Command checker?}
+    E -- Yes --> F{Checker or rules<br/>authorize command?}
+    F -- Deny or ask --> Q[Command decision]
+    F -- Allow --> G{Path supplied?}
+    E -- No --> N{Protected path without<br/>an exact grant?}
+    N -- Yes --> X[Ask for resource authority]
+    N -- No --> H{Native rules, roots,<br/>and mode outcome?}
+    H -- Deny or ask --> Q
+    H -- Allow --> Y
+    G -- No --> Y[Allow]
+    G -- Yes --> I{Protected path without<br/>an exact grant?}
+    I -- Yes --> X[Ask for resource authority]
+    I -- No --> J{Allowed root, exact path,<br/>or exact resource grant?}
+    J -- Yes --> Y
+    J -- No --> X
 ```
 
-Single decision function `mevedel-check-permission`. Nine-step chain:
+Single decision function `mevedel-check-permission`. Decision chain:
 
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active Goal planning or review with a non-read-only tool → deny;
-   otherwise protected paths (`.git/`, `.ssh/`, `.gnupg/`) → ask
-4. Tool's own `check-permission` slot
+3. Active Goal planning or review with a non-read-only tool → deny
+4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. Permission mode decision
-7. Inside allowed roots → allow (implicit)
-8. Outside allowed roots with no covering rule → ask
-9. Permission mode/default decision
+7. For a path not directly covered by a native path rule, resolve an allowed
+   root, exact allowed path, or exact resource grant
+8. A protected or outside-root path without that authority → ask
+9. Permission mode/default decision when no earlier policy decides
+
+For a tool with a command checker, command authority and filesystem resource
+authority are layered: both must allow. A command rule cannot authorize its
+path, and a resource grant cannot authorize its command. Native `:path` rules
+remain direct tool authorization, but cannot bypass a protected path's exact
+resource grant.
 
 Hook integration sits around this chain:
 
@@ -59,10 +68,11 @@ missing-session fallback warnings, and the prompt rule shape used for
 outside-root approvals.
 
 The synchronous and asynchronous decision entry points then share one pure
-preflight. It normalizes the decision facts and resolves absolute deny rules
-and protected paths exactly once. Both paths use the same synchronous tool
-slot adapter and decision tail; only a tool that supplies an asynchronous
-permission callback introduces an asynchronous branch.
+preflight. It normalizes decision facts, resolves absolute deny rules, and
+records protected-path and resource-boundary facts exactly once. Both paths
+use the same synchronous tool slot adapter and decision tail; only a tool that
+supplies an asynchronous permission callback introduces an asynchronous
+branch.
 
 ## Bucket precedence
 
@@ -94,7 +104,8 @@ Rules live on `mevedel-permission-rules` with form
 | `:name`    | free-form name (glob)  | Agent (subagent_type)             |
 
 Precedence: specifier rules outrank generic; within a group
-`deny > ask > allow`; protected paths always prompt.
+`deny > ask > allow`. Protected paths prompt unless an exact resource grant
+with sufficient access already exists.
 
 Modes: `default` / `accept-edits` / `trust-all`. Slash-command
 aliases normalize `ask` to `default`, `edit` / `edits` to `accept-edits`,
@@ -107,8 +118,8 @@ workspace scope. `.mevedel/permissions.el` stores a plist containing both
 Default allowed roots are the workspace root, the system temporary directory,
 configured memory roots, and manually configured additional roots. A native
 filesystem operation outside those roots prompts for exact `read` or `write`
-authority. A session grant is stored on the session; an always grant is also
-stored in the workspace permission file. Write authority covers reading the
+authority. A session grant is stored on the session; an always grant is stored
+only in the workspace permission file. Write authority covers reading the
 same exact path, but read authority does not cover writes. These grants do not
 cover siblings or descendants, add workspace roots, or authorize Bash/Eval
 code. Revoking the grant restores the underlying workspace/protected-path
@@ -119,7 +130,7 @@ Files dropped into the view buffer can add exact, session-scoped `Read`
 grants when the next sent prompt still mentions the same path. These
 grants are in-memory only, do not grant the containing directory, do not
 apply to write tools, and are still lower precedence than explicit deny or
-ask rules and protected-path prompts.
+ask rules and protected-path resource checks.
 
 Local slash commands may own deterministic workflows outside the model tool
 pipeline. `/worktree status` and `/worktree create` run argv-safe local

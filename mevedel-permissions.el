@@ -3,10 +3,9 @@
 ;;; Commentary:
 
 ;; Unified permission decision function for all mevedel tools.  Replaces
-;; scattered per-tool permission checks with a single 9-step decision
-;; chain: extract context -> deny rules -> protected paths -> tool
-;; check-permission -> allow rules -> mode hard-deny -> allowed roots
-;; -> outside workspace -> mode/default ask.
+;; scattered per-tool permission checks with one decision chain: extract
+;; context -> absolute denies -> tool policy -> permission rules -> mode ->
+;; independent filesystem resource authority -> mode/default ask.
 
 ;;; Code:
 
@@ -210,10 +209,10 @@ Example:
 
 (defcustom mevedel-protected-paths
   '("**/.git/**" "~/.ssh/**" "~/.gnupg/**")
-  "Path patterns that always require confirmation.
+  "Path patterns that require exact resource authority.
 
-Even `trust-all' mode prompts for these paths.  Each entry is a glob
-pattern matched against the full expanded path."
+Even `trust-all' mode prompts when a matching path lacks an exact resource
+grant.  Each entry is a glob pattern matched against the full expanded path."
   :type '(repeat string)
   :group 'mevedel)
 
@@ -445,8 +444,9 @@ Controls the default permission behavior when no explicit rules match.
   `accept-edits' - Same permission semantics as `default', but inline
                    diff previews from Write/Edit/MkDir are auto-applied
                    without an interactive overlay.
-  `trust-all'    - Skip all prompts (except protected paths and
-                   explicit hard policies such as denies).
+  `trust-all'    - Skip policy prompts except explicit hard policies such
+                   as denies; protected and outside-root paths still need
+                   resource authority.
 
 Note: at the permission layer `default' and `accept-edits' behave the
 same.  The difference lives in `mevedel-preview-mode': under
@@ -754,13 +754,13 @@ Returns non-nil if the path is protected."
   (when (and path (memq access '(read write)))
     (let ((expanded (expand-file-name path)))
       (cl-loop for grant in grants
-               for granted-access = (plist-get grant :access)
+               when (proper-list-p grant)
                thereis
                (and (stringp (plist-get grant :path))
                     (string= expanded
                              (expand-file-name (plist-get grant :path)))
-                    (or (eq granted-access 'write)
-                        (eq granted-access access)))))))
+                    (or (eq (plist-get grant :access) 'write)
+                        (eq (plist-get grant :access) access)))))))
 
 
 ;;
@@ -1052,7 +1052,7 @@ happen for a non-read-only tool."
   "Return normalized permission facts and any decision before the tool slot.
 
 This pure preflight owns specifier extraction, rule buckets, absolute
-denials, protected paths, and allowed-root normalization.  The returned
+denials, protected-path facts, and allowed-root normalization.  The returned
 plist's `:early-decision' is nil when the tool-owned permission slot and
 the remaining decision chain still need to run.
 
@@ -1092,15 +1092,7 @@ RESOURCE-GRANTS define the filesystem boundary."
              'deny 'deny-rule :bucket deny-bucket))
            ((and (not read-only-p)
                  (mevedel-permission--goal-read-only-phase-p session))
-            (mevedel-permission--decision 'deny 'goal-phase))
-           ((and (mevedel-permission--path-protected-p path)
-                 (not resource-granted-p))
-            (mevedel-permission--decision
-             (if (eq (mevedel-permission--mode-decision mode read-only-p)
-                     'deny)
-                 'deny
-               'ask)
-             'protected-path)))))
+            (mevedel-permission--decision 'deny 'goal-phase)))))
     (list :tool-name tool-name
           :tool tool-struct
           :content content
@@ -1116,6 +1108,7 @@ RESOURCE-GRANTS define the filesystem boundary."
           :exact-allowed-paths exact-allowed-paths
           :resource-access resource-access
           :resource-granted-p resource-granted-p
+          :protected-path-p (mevedel-permission--path-protected-p path)
           :early-decision early-decision)))
 
 (defun mevedel-permission--sync-tool-decision (context)
@@ -1147,25 +1140,29 @@ ARGS are the inputs documented by `mevedel-permission--preflight'.
 
 Returns a plist describing an `allow', `deny', or `ask' decision.
 
-The 9-step decision chain:
+The decision chain:
   1. Extract specifier values via tool-struct getters when missing
-  2. Pass 1 -- absolute decisions across all buckets:
+  2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       read-only Goal phase + mutating tool -> deny;
-       protected path -> ask
-  3. (folded into pass 1)
-  4. Call tool check-permission if present -> use result or continue
-  5. Pass 2 -- allow/ask resolution innermost-first:
+       read-only Goal phase + mutating tool -> deny
+  3. Call the tool checker, when present, to decide command authority
+  4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.
-  6. Mode hard-deny -> deny
-  7. Allowed roots/exact paths -> implicit allow for paths inside
-  8. Outside allowed roots -> ask (workspace boundary)
-  9. Mode/default decision"
+  5. Apply mode hard-deny
+  6. For a path, independently require allowed-root, exact-path, or exact
+     resource-grant authority; otherwise ask
+  7. Apply the mode/default decision
+
+For tools with a checker, both command authority and resource authority must
+allow.  Neither can substitute for the other."
   (let* ((context (apply #'mevedel-permission--preflight tool-name args))
+         (tool (plist-get context :tool))
          (early-decision (plist-get context :early-decision)))
     (or early-decision
-        (mevedel-permission--sync-tool-decision context)
-        (mevedel-check-permission--tail-decision context))))
+        (if (and tool (mevedel-tool-check-permission tool))
+            (mevedel-permission--finish-tool-decision
+             context (mevedel-permission--sync-tool-decision context))
+          (mevedel-check-permission--tail-decision context)))))
 
 (defun mevedel-check-permission (tool-name &rest args)
   "Check permission for TOOL-NAME with ARGS.
@@ -1186,9 +1183,10 @@ Invokes CONT with permission decision metadata.  The original pipeline
 outcome is available through `mevedel-permission-decision-raw-outcome'.
 ARGS are the inputs documented by `mevedel-permission--preflight'.
 
-Steps 1-3 and 5-9 run synchronously just like `mevedel-check-permission'.
-Step 4 may run async when the tool defines `:check-permission-async'; the
-sync-slot adapter preserves the denial REASON captured from a
+Normalization, absolute policy, rules, modes, and resource authority run
+synchronously just like `mevedel-check-permission'.  The tool command-policy
+slot may run async when it defines `:check-permission-async'; the sync-slot
+adapter preserves the denial REASON captured from a
 `mevedel-permission-denied' signal so `(deny . REASON)' reaches CONT.
 
 Bucket-aware; see `mevedel-check-permission' for the keyword-arg
@@ -1200,8 +1198,8 @@ exact-match in-bounds path list."
          (finish
           (lambda (slot-decision)
             (funcall cont
-                     (or slot-decision
-                         (mevedel-check-permission--tail-decision context))))))
+                     (mevedel-permission--finish-tool-decision
+                      context slot-decision)))))
     (cond
      (early-decision (funcall cont early-decision))
      ((and tool (mevedel-tool-check-permission-async tool))
@@ -1222,9 +1220,11 @@ exact-match in-bounds path list."
                    ((equal tool-name "Eval") 'eval-policy)
                    (t 'tool-slot)))))))))
      (t
-      (funcall
-       finish
-       (mevedel-permission--sync-tool-decision context))))))
+      (if (and tool (mevedel-tool-check-permission tool))
+          (funcall finish
+                   (mevedel-permission--sync-tool-decision context))
+        (funcall cont
+                 (mevedel-check-permission--tail-decision context)))))))
 
 (defun mevedel-check-permission-async (tool-name cont &rest args)
   "Check TOOL-NAME permission with ARGS, then call CONT asynchronously."
@@ -1235,23 +1235,62 @@ exact-match in-bounds path list."
                     (mevedel-permission-decision-raw-outcome decision)))
          args))
 
+(defun mevedel-permission--resource-decision (context)
+  "Return CONTEXT's independent filesystem resource decision, or nil."
+  (when-let* ((path (plist-get context :path)))
+    (let ((granted-p (plist-get context :resource-granted-p)))
+      (cond
+       ((and (plist-get context :protected-path-p) granted-p)
+        (mevedel-permission--decision 'allow 'resource-grant))
+       ((plist-get context :protected-path-p)
+        (mevedel-permission--decision 'ask 'protected-path))
+       ((mevedel-permission--path-in-allowed-roots-p
+         path (plist-get context :allowed-roots))
+        (mevedel-permission--decision 'allow 'allowed-root))
+       ((mevedel-permission--path-in-exact-allowed-paths-p
+         path (plist-get context :exact-allowed-paths))
+        (mevedel-permission--decision 'allow 'exact-path))
+       (granted-p
+        (mevedel-permission--decision 'allow 'resource-grant))
+       (t
+        (mevedel-permission--decision 'ask 'workspace-boundary))))))
+
+(defun mevedel-permission--finish-tool-decision (context slot-decision)
+  "Combine CONTEXT's command SLOT-DECISION with resource authority."
+  (let* ((command-context
+          (plist-put (copy-sequence context) :skip-resource-boundary-p t))
+         (policy-decision
+          (or slot-decision
+              (mevedel-check-permission--tail-decision command-context)))
+         (policy-outcome
+          (mevedel-permission-decision-raw-outcome policy-decision)))
+    (if (eq policy-outcome 'allow)
+        (or (mevedel-permission--resource-decision context)
+            policy-decision)
+      policy-decision)))
+
 (defun mevedel-check-permission--tail-decision (context)
   "Return decision metadata for preflight CONTEXT's permission-chain tail.
 
-The preflight owns steps 1-3.  Callers own the tool slot at step 4; this
-function covers shared steps 5-9."
+The preflight owns normalization and absolute denials.  Callers own the
+tool-specific command-policy slot; this function covers the shared rule,
+mode, and native-resource tail."
   (let* ((tool-name (plist-get context :tool-name))
          (buckets (plist-get context :buckets))
          (path (plist-get context :path))
          (pattern (plist-get context :pattern))
          (domain (plist-get context :domain))
          (name (plist-get context :name))
-         (allowed-roots (plist-get context :allowed-roots))
-         (exact-allowed-paths (plist-get context :exact-allowed-paths))
-         (resource-granted-p (plist-get context :resource-granted-p))
+         (skip-resource-boundary-p
+          (plist-get context :skip-resource-boundary-p))
          (mode (plist-get context :mode))
          (read-only-p (plist-get context :read-only-p)))
     (cond
+     ;; Protected resources require exact grants even when a path rule allows.
+     ((and (not skip-resource-boundary-p)
+           (plist-get context :protected-path-p)
+           (not (plist-get context :resource-granted-p)))
+      (mevedel-permission--decision 'ask 'protected-path))
      ;; Step 5: pass 2 -- allow/ask innermost-first across buckets.
      ((when-let* ((action-bucket
                    (mevedel-permission--first-non-nil-action-with-bucket
@@ -1269,14 +1308,9 @@ function covers shared steps 5-9."
      ;; Step 6: mode hard-deny.
      ((eq (mevedel-permission--mode-decision mode read-only-p) 'deny)
       (mevedel-permission--decision 'deny 'mode))
-     ;; Step 7: allowed roots and exact paths implicit allow.
-     ((or (mevedel-permission--path-in-allowed-roots-p path allowed-roots)
-          (mevedel-permission--path-in-exact-allowed-paths-p
-           path exact-allowed-paths)
-          resource-granted-p)
-      (mevedel-permission--decision 'allow 'allowed-root))
-     ;; Step 8: path outside allowed roots with no covering rule.
-     (path (mevedel-permission--decision 'ask 'workspace-boundary))
+     ;; Steps 7-8: independent resource authority for native tools.
+     ((and (not skip-resource-boundary-p)
+           (mevedel-permission--resource-decision context)))
      ;; Step 9: mode/default decision.
      (t (let ((mode-result (mevedel-permission--mode-decision
                             mode read-only-p)))
@@ -1309,7 +1343,8 @@ function covers shared steps 5-9."
   "Revoke SESSION's exact PATH ACCESS resource grant."
   (let ((grant (mevedel-permission--resource-grant path access)))
     (setf (mevedel-session-resource-grants session)
-          (delete grant (mevedel-session-resource-grants session)))))
+          (cl-remove grant (mevedel-session-resource-grants session)
+                     :test #'equal))))
 
 (defun mevedel-permission--build-rule (tool-name action spec-key spec-value)
   "Build a permission rule list from the given components.
@@ -1394,9 +1429,15 @@ Returns a merged list in `mevedel-permission-rules' format."
 
 (defun mevedel-permission--load-persistent-resource-grants (workspace)
   "Load exact resource grants persisted for WORKSPACE."
-  (plist-get (mevedel-permission--read-store-file
-              (mevedel-permission--persistent-file workspace))
-             :resource-grants))
+  (cl-remove-if-not
+   (lambda (grant)
+     (and (proper-list-p grant)
+          (stringp (plist-get grant :path))
+          (file-name-absolute-p (plist-get grant :path))
+          (memq (plist-get grant :access) '(read write))))
+   (plist-get (mevedel-permission--read-store-file
+               (mevedel-permission--persistent-file workspace))
+              :resource-grants)))
 
 (cl-defun mevedel-permission--save-persistent-rule
     (workspace tool-name action &optional path &key spec-key spec-value)
@@ -1443,7 +1484,8 @@ The file is created if it does not exist."
       (mevedel-permission--write-store-file
        file
        (plist-put store :resource-grants
-                  (delete grant (plist-get store :resource-grants)))))))
+                  (cl-remove grant (plist-get store :resource-grants)
+                             :test #'equal))))))
 
 
 ;;
@@ -1456,15 +1498,16 @@ The file is created if it does not exist."
 
 RESULT is one of:
   `allow-once'    -- return `allow', no storage
-  `allow-session' -- add session allow rule, return `allow'
-  `always-allow'  -- save persistent allow rule, return `allow'
+  `allow-session' -- add a session rule or resource grant, return `allow'
+  `always-allow'  -- save a persistent rule or resource grant, return `allow'
   `deny-once'     -- return `deny', no storage
   `deny-session'  -- add session deny rule, return `deny'
 
 TOOL-NAME is the tool being permitted.  SESSION and WORKSPACE are used
-for rule storage.  Positional PATH scopes the rule to a file path (kept
-for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow
-scoping by any other specifier (`:pattern', `:domain', `:name')."
+for storage.  Positional PATH scopes the authority to a file path (kept
+for call sites that already pass it).  SPEC-KEY/SPEC-VALUE allow rule
+scoping by any other specifier (`:pattern', `:domain', `:name').
+RESOURCE-ACCESS stores exact path authority separately from rules."
   (cl-flet ((session-rule (action)
               (when session
                 (mevedel-permission--add-session-rule
@@ -1505,9 +1548,7 @@ scoping by any other specifier (`:pattern', `:domain', `:name')."
        'allow)
       ('always-allow
        (if resource-access
-           (progn
-             (persistent-resource-grant)
-             (session-resource-grant))
+           (persistent-resource-grant)
          (persistent-rule 'allow)
          (session-rule 'allow))
        'allow)

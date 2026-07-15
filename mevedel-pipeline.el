@@ -791,14 +791,13 @@ Reads session / workspace from CONTEXT (captured at
 `mevedel-pipeline-run-tool' entry) so that an async continuation
 firing from another buffer still sees the correct session state.
 
-Invokes `mevedel-check-permission-async' for the 9-step decision
-chain.  When the chain (or a tool slot) yields `ask', the step
+Invokes `mevedel-check-permission-async' for the shared decision chain.
+When the chain (or a tool slot) yields `ask', the step
 drives the generic async prompt and applies the result through
 `mevedel-permission--apply-prompt-result' so session / persistent
-rule storage is honored.  When a path is outside the workspace
-root and no explicit rule covers it, the stored rule is
-tool-agnostic (`*') and directory-scoped -- byte-for-byte the same
-shaping the sync path produced.
+rule and resource-grant storage is honored.  A missing filesystem
+boundary creates exact read or write authority without broadening an
+allowed root.
 
 Dispatches the final outcome through NEXT (allow-equivalent
 outcomes) or FAIL (all denial shapes, plus `aborted')."
@@ -900,7 +899,13 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
             (rule-tool (plist-get permission-context :rule-tool))
             (rule-key (plist-get permission-context :rule-key))
             (rule-value (plist-get permission-context :rule-value))
-            (decision-metadata decision))
+            (decision-metadata decision)
+            (resource-decision-p
+             (memq (plist-get decision-metadata :via)
+                   '(protected-path workspace-boundary)))
+            (resource-access
+             (and resource-decision-p
+                  (plist-get permission-context :resource-access))))
        (cl-labels
            ((enqueue-prompt
               (prompt-context)
@@ -912,10 +917,10 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
               ;; the same prompt-outcome vocabulary as before.
               ;;
               ;; Coalesce-time re-evaluation goes back through
-              ;; `mevedel-check-permission' which itself handles the
-              ;; protected-path / deny-precedence rules from the decision
-              ;; chain; the flag below is retained on the queue entry for
-              ;; renderers and tests that need the original entry shape.
+              ;; `mevedel-check-permission', which applies exact resource
+              ;; grants and protected-path precedence.  The flag below is
+              ;; retained for renderers and tests that need the original
+              ;; entry shape.
               (mevedel-permission--enqueue
                (list :kind 'generic
                      :tool-name tool-name
@@ -923,9 +928,8 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                      :specifier-key rule-key
                      :specifier-value rule-value
                      :protected-path
-                     (plist-get permission-context :protected-path)
-                     :resource-access
-                     (plist-get permission-context :resource-access)
+                     (eq (plist-get decision-metadata :via) 'protected-path)
+                     :resource-access resource-access
                      :include-always
                      (plist-get permission-context :include-always)
                      :workspace workspace
@@ -964,9 +968,7 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                                       (and (eq rule-key :path) rule-value)
                                       :spec-key rule-key
                                       :spec-value rule-value
-                                      :resource-access
-                                      (plist-get permission-context
-                                                 :resource-access)))
+                                      :resource-access resource-access))
                                     ((or 'allow 'deny 'aborted) prompt-outcome)
                                     (other other))))
                              (mevedel-pipeline--dispatch-permission-outcome
