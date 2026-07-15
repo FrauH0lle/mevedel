@@ -92,6 +92,14 @@ cat file"
              (mevedel-bash-analysis-analyze "echo $(rm ./file)")))
         (should (equal 'dangerous (plist-get analysis :class)))
         (should (member "rm ./file" (plist-get analysis :candidates))))))
+  :doc "nested candidate harvesting:
+`mevedel-bash-analysis-analyze' splits command chains inside substitutions"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (mevedel-bash-analysis-analyze
+            "echo \"$(pwd && rm file && echo x)\"")))
+      (should (member "rm file" (plist-get analysis :candidates)))))
   :doc "complex resource harvesting:
 `mevedel-bash-analysis-analyze' preserves literal protected-path candidates"
   (cl-letf (((symbol-function 'treesit-language-available-p)
@@ -101,6 +109,15 @@ cat file"
                     (mevedel-bash-analysis-analyze
                      "FOO=bar cat ~/.ssh/my\\ key >.git/config")
                     :resources))))
+  :doc "substitution resource harvesting:
+`mevedel-bash-analysis-analyze' preserves paths inside quoted substitutions"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should (member ".git/config"
+                    (plist-get
+                     (mevedel-bash-analysis-analyze
+                      "echo \"$(cat .git/config)\"")
+                     :resources))))
   :doc "tree-sitter source:
 `mevedel-bash-analysis-analyze' uses the configured Bash grammar when present"
   (progn

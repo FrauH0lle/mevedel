@@ -86,7 +86,6 @@
                   "mevedel-permissions" (path))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
-(defvar mevedel-bash-dangerous-commands)
 (defvar mevedel-permission-mode)
 (defvar mevedel-permission-rules)
 (defvar mevedel-protected-paths)

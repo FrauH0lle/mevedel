@@ -231,11 +231,36 @@
     (should
      (eq 'deny
          (mevedel-tools--check-bash-permission
-          "echo $(rm file)"
+         "echo $(rm file)"
           :permission-context
           '(:mode full-auto
             :buckets
             ((:persistent . (("Bash" :pattern "rm *" :action deny)))))))))
+  :doc "explicit deny in a nested chain:
+`mevedel-tools--check-bash-permission' checks substitution components"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission
+          "echo \"$(pwd && rm file && echo x)\""
+          :permission-context
+          '(:mode full-auto
+            :buckets
+            ((:persistent . (("Bash" :pattern "rm *" :action deny)))))))))
+  :doc "explicit deny normalizes executable paths and quoted assignments:
+\`mevedel-tools--check-bash-permission' cannot disguise a denied command"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil)
+        (context
+         '(:mode full-auto
+           :buckets
+           ((:persistent . (("Bash" :pattern "rm *" :action deny)))))))
+    (dolist (command '("/bin/rm file" "FOO='bar baz' rm file"))
+      (should
+       (eq 'deny
+           (mevedel-tools--check-bash-permission
+            command :permission-context context)))))
   :doc "full-auto:
 \`mevedel-tools--check-bash-permission' bypasses heuristic prompts"
   (let ((mevedel-permission-rules nil)
@@ -255,7 +280,16 @@
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission
-          "cat .git/config"
+         "cat .git/config"
+          :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "protected path inside substitution:
+`mevedel-tools--check-bash-permission' asks before nested protected resources"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '("**/.git/**")))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "echo \"$(cat .git/config)\""
           :permission-context '(:mode full-auto :buckets nil)))))
   :doc "complex protected path:
 \`mevedel-tools--check-bash-permission' keeps resource checks after direct allow"

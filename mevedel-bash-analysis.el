@@ -100,18 +100,20 @@ than this unconditional list.")
 This intentionally does not evaluate expansions.  Its purpose is to preserve
 protected-path checks even when unsupported syntax prevents argv extraction."
   (require 'shell)
-  (let ((words (condition-case nil
-                   (split-string-shell-command source)
-                 (error (split-string source "[[:space:]]+" t))))
-        resources)
-    (dolist (raw words)
-      (let ((word raw))
-        (setq word (replace-regexp-in-string
-                    "\\`[0-9]*\\(?:<<-?\\|<>\\|>>\\|>\\|<\\)" "" word))
-        (setq word (replace-regexp-in-string "\\`[('\\\"]+" "" word))
-        (setq word (replace-regexp-in-string "[)'\\\";|&]+\\'" "" word))
-        (when (mevedel-bash-analysis--path-like-p word)
-          (push word resources))))
+  (let (resources)
+    (dolist (fragment
+             (cons source (mevedel-bash-analysis--substitution-bodies source)))
+      (let ((words (condition-case nil
+                       (split-string-shell-command fragment)
+                     (error (split-string fragment "[[:space:]]+" t)))))
+        (dolist (raw words)
+          (let ((word raw))
+            (setq word (replace-regexp-in-string
+                        "\\`[0-9]*\\(?:<<-?\\|<>\\|>>\\|>\\|<\\)" "" word))
+            (setq word (replace-regexp-in-string "\\`[('\\\"]+" "" word))
+            (setq word (replace-regexp-in-string "[)'\\\";|&]+\\'" "" word))
+            (when (mevedel-bash-analysis--path-like-p word)
+              (push word resources))))))
     (delete-dups (nreverse resources))))
 
 (defun mevedel-bash-analysis--resources (commands source)
@@ -151,33 +153,47 @@ protected-path checks even when unsupported syntax prevents argv extraction."
           (push nested expanded)))
       (delete-dups (nreverse expanded)))))
 
+(defun mevedel-bash-analysis--candidate-from-argv (argv)
+  "Return a deny-policy candidate string from ARGV, or nil."
+  (when argv
+    (let ((normalized (copy-sequence argv)))
+      (setcar normalized (file-name-nondirectory (car normalized)))
+      (string-join normalized " "))))
+
 (defun mevedel-bash-analysis--candidate-command (fragment)
   "Return a normalized possible command from FRAGMENT, or nil."
+  (require 'shell)
   (let ((candidate (string-trim fragment)))
     (setq candidate (replace-regexp-in-string "\\`[({[:space:]]+" "" candidate))
     (setq candidate (replace-regexp-in-string "[)}[:space:]]+\\'" "" candidate))
-    (while (string-match
-            "\\`[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+"
-            candidate)
-      (setq candidate (substring candidate (match-end 0))))
-    (when (string-match
-           "\\`\\(?:then\\|do\\|else\\|elif\\)[[:space:]]+" candidate)
-      (setq candidate (substring candidate (match-end 0))))
-    (unless (string-empty-p candidate)
-      candidate)))
+    (let ((argv (condition-case nil
+                    (split-string-shell-command candidate)
+                  (error nil))))
+      (while (and argv
+                  (string-match-p
+                   "\\`[A-Za-z_][A-Za-z0-9_]*=" (car argv)))
+        (setq argv (cdr argv)))
+      (when (member (car argv) '("then" "do" "else" "elif"))
+        (setq argv (cdr argv)))
+      (mevedel-bash-analysis--candidate-from-argv argv))))
 
 (defun mevedel-bash-analysis--candidates (source segments commands)
   "Return best-effort command forms from SOURCE, SEGMENTS, and COMMANDS."
-  (let ((fragments (append segments
-                           (mevedel-bash-analysis--substitution-bodies source)))
-        candidates)
+  (let* ((bodies (mevedel-bash-analysis--substitution-bodies source))
+         (nested-segments
+          (cl-mapcan
+           (lambda (body)
+             (car (mevedel-bash-analysis--scan-segments body)))
+           bodies))
+         (fragments (append segments bodies nested-segments))
+         candidates)
     (dolist (fragment fragments)
       (when-let* ((candidate
                    (mevedel-bash-analysis--candidate-command fragment)))
         (push candidate candidates)))
     (dolist (argv commands)
-      (push (string-join argv " ") candidates))
-    (delete-dups (nreverse candidates))))
+      (push (mevedel-bash-analysis--candidate-from-argv argv) candidates))
+    (delete-dups (delq nil (nreverse candidates)))))
 
 (defun mevedel-bash-analysis--classify (commands complex-p source)
   "Classify COMMANDS and COMPLEX-P for SOURCE."
