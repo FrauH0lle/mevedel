@@ -13,6 +13,10 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `mevedel-bash-policy'
+(declare-function mevedel-bash-policy-read-only-p
+                  "mevedel-bash-policy" (argv))
+
 ;; `treesit'
 (declare-function treesit-language-available-p "treesit" (language &optional detail))
 (declare-function treesit-node-check "treesit" (node property))
@@ -22,10 +26,6 @@
 (declare-function treesit-node-type "treesit" (node))
 (declare-function treesit-parser-create "treesit" (language &optional buffer no-reuse tag))
 (declare-function treesit-parser-root-node "treesit" (parser))
-
-;; `mevedel-bash-policy'
-(declare-function mevedel-bash-policy-read-only-p
-                  "mevedel-bash-policy" (argv))
 
 
 ;;

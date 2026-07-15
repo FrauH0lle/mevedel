@@ -93,6 +93,8 @@ Data model
   mevedel-workspace.el        workspace detection and registry
   mevedel-models.el           model tier/provider resolution
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
+  mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
+  mevedel-bash-policy.el      argument-aware read-only command policies
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads
