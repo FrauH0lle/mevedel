@@ -449,6 +449,25 @@
        session "/tmp/secret" 'read)
       (mevedel-permission-queue--coalesce 'allow-session session))
     (should (equal '(allow-once allow-once) outcomes))
+    (should-not (mevedel-session-permission-queue session)))
+
+  :doc "filesystem sandbox siblings coalesce through exact path denies"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         outcomes)
+    (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
+               #'ignore))
+      (dotimes (_ 2)
+        (mevedel-permission--enqueue
+         (list :kind 'sandbox :tool-name "Bash"
+               :resource-path "/tmp/secret"
+               :resource-access 'read
+               :origin "main"
+               :callback (lambda (outcome) (push outcome outcomes)))))
+      (push '("Bash" :path "/tmp/secret" :action deny)
+            (mevedel-session-permission-rules session))
+      (mevedel-permission-queue--coalesce 'deny-session session))
+    (should (equal '(deny-once deny-once) outcomes))
     (should-not (mevedel-session-permission-queue session))))
 
 

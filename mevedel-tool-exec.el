@@ -351,12 +351,18 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
     (mevedel-permission--resource-granted-p
      (plist-get grant :path) (plist-get grant :access) grants)))
 
-(defun mevedel-tool-exec--filesystem-resource-denied-p
+(defun mevedel-tool-exec--filesystem-resource-rule-action
     (tool-name grant permission-context)
-  "Return non-nil when an explicit rule denies TOOL-NAME's GRANT."
-  (mevedel-permission--any-deny
-   (mevedel-tools--bash-buckets permission-context)
-   tool-name (plist-get grant :path) nil nil nil))
+  "Return the authoritative `deny' or `ask' rule for TOOL-NAME's GRANT."
+  (let ((buckets (mevedel-tools--bash-buckets permission-context))
+        (path (plist-get grant :path)))
+    (if (mevedel-permission--any-deny
+         buckets tool-name path nil nil nil)
+        'deny
+      (when (eq 'ask
+                (mevedel-permission--first-non-nil-action
+                 buckets tool-name path nil nil nil))
+        'ask))))
 
 (defun mevedel-tool-exec--check-filesystem-permissions-async
     (tool-name detail grants request command-outcome permission-context
@@ -367,6 +373,9 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
     (let* ((grant (car grants))
            (path (plist-get grant :path))
            (access (plist-get grant :access))
+           (rule-action
+            (mevedel-tool-exec--filesystem-resource-rule-action
+             tool-name grant permission-context))
            (session (plist-get permission-context :session))
            (workspace (or (plist-get permission-context :workspace)
                           (and session (mevedel-session-workspace session))))
@@ -382,12 +391,12 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
                tool-name detail (cdr grants) request command-outcome
                permission-context metadata-p cont))))
       (cond
-       ((mevedel-tool-exec--filesystem-resource-denied-p
-         tool-name grant permission-context)
+       ((eq rule-action 'deny)
         (funcall cont (mevedel-tool-exec--additional-denial
                        metadata-p 'sandbox-filesystem)))
-       ((mevedel-tool-exec--filesystem-resource-granted-p
-         grant permission-context)
+       ((and (not (eq rule-action 'ask))
+             (mevedel-tool-exec--filesystem-resource-granted-p
+              grant permission-context))
         (funcall continue))
        (t
         (apply

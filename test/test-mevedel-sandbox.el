@@ -420,6 +420,7 @@ exact read and write mounts follow protected masks without broadening siblings"
                  `(:file-system ((:path ,token :access read)
                                  (:path ,config :access write)))))
           (let ((command (plist-get prepared :command)))
+            (should (equal "-p" (nth 1 command)))
             (should
              (cl-loop for tail on command
                       thereis (equal (seq-take tail 3)
@@ -574,10 +575,14 @@ the named protected files reopen while parent and sibling restrictions remain"
              (sibling (file-name-concat credentials "sibling"))
              (token-copy (file-name-concat root "token-copy"))
              (sibling-copy (file-name-concat root "sibling-copy"))
+             (parent-list (file-name-concat root "parent-list"))
+             (bash-env (file-name-concat root "bash-env"))
+             (bash-env-marker (file-name-concat root "bash-env-ran"))
+             (directory-write (file-name-concat credentials "new-token"))
              (mevedel-protected-paths
               `(("**/.git/**" . read-only)
                 (,(concat credentials "/**") . inaccessible)))
-             prepared)
+             prepared directory-prepared)
         (unwind-protect
             (progn
               (make-directory dot-git)
@@ -586,6 +591,9 @@ the named protected files reopen while parent and sibling restrictions remain"
               (with-temp-file head (insert "old-head"))
               (with-temp-file token (insert "token-value"))
               (with-temp-file sibling (insert "sibling-value"))
+              (with-temp-file bash-env
+                (insert (format "printf leaked > %s\n"
+                                (shell-quote-argument bash-env-marker))))
               (let ((command
                      (list
                       "sh" "-c"
@@ -595,12 +603,16 @@ the named protected files reopen while parent and sibling restrictions remain"
                         "printf new-config > %s; "
                         "if value=$(cat %s 2>/dev/null); then "
                         "printf '%%s' \"$value\" > %s; fi; "
+                        "if value=$(ls %s 2>/dev/null); then "
+                        "printf '%%s' \"$value\" > %s; fi; "
                         "printf new-head > %s 2>/dev/null || true")
                        (shell-quote-argument token)
                        (shell-quote-argument token-copy)
                        (shell-quote-argument config)
                        (shell-quote-argument sibling)
                        (shell-quote-argument sibling-copy)
+                       (shell-quote-argument credentials)
+                       (shell-quote-argument parent-list)
                        (shell-quote-argument head)))))
                 (setq prepared
                       (mevedel-sandbox-prepare
@@ -610,9 +622,13 @@ the named protected files reopen while parent and sibling restrictions remain"
                           (:path ,config :access write)))))
                 (should
                  (zerop
-                  (apply #'call-process
-                         (car (plist-get prepared :command)) nil nil nil
-                         (cdr (plist-get prepared :command))))))
+                  (let ((process-environment
+                         (cons (concat "BASH_ENV=" bash-env)
+                               process-environment)))
+                    (apply #'call-process
+                           (car (plist-get prepared :command)) nil nil nil
+                           (cdr (plist-get prepared :command)))))))
+              (should-not (file-exists-p bash-env-marker))
               (should (equal "token-value"
                              (with-temp-buffer
                                (insert-file-contents token-copy)
@@ -622,10 +638,30 @@ the named protected files reopen while parent and sibling restrictions remain"
                                (insert-file-contents config)
                                (buffer-string))))
               (should-not (file-exists-p sibling-copy))
+              (should-not (file-exists-p parent-list))
               (should (equal "old-head"
                              (with-temp-buffer
                                (insert-file-contents head)
+                               (buffer-string))))
+              (setq directory-prepared
+                    (mevedel-sandbox-prepare
+                     (list "sh" "-c"
+                           (format "printf directory-write > %s"
+                                   (shell-quote-argument directory-write)))
+                     root (list root)
+                     `(:file-system
+                       ((:path ,credentials :access write)))))
+              (should
+               (zerop
+                (apply #'call-process
+                       (car (plist-get directory-prepared :command))
+                       nil nil nil
+                       (cdr (plist-get directory-prepared :command)))))
+              (should (equal "directory-write"
+                             (with-temp-buffer
+                               (insert-file-contents directory-write)
                                (buffer-string)))))
+          (mevedel-sandbox-cleanup directory-prepared)
           (mevedel-sandbox-cleanup prepared)
           (delete-directory root t)))))
   :doc "real protected paths:

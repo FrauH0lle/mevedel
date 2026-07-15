@@ -435,7 +435,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                (append open-forms
                        (list (format "shift %d" count) "exec \"$@\""))
                "; ")))
-        (append (list bash "-c" script "mevedel-sandbox-fds")
+        (append (list bash "-p" "-c" script "mevedel-sandbox-fds")
                 paths command)))))
 
 (defun mevedel-sandbox--open-granted-parent-traversal
@@ -458,6 +458,18 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                         grants))
              do (setcar (cdr tail) "0111"))
     updated))
+
+(defun mevedel-sandbox--protected-remounts (arguments permissions)
+  "Return protected remount ARGUMENTS not superseded by exact PERMISSIONS."
+  (cl-loop for (option path) on arguments by #'cddr
+           unless (cl-some
+                   (lambda (grant)
+                     (and (eq (plist-get grant :access) 'write)
+                          (string= (expand-file-name path)
+                                   (expand-file-name
+                                    (plist-get grant :path)))))
+                   (plist-get permissions :file-system))
+           append (list option path)))
 
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable additional-permissions)
@@ -512,7 +524,9 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
               (plist-get protected :arguments)
               additional-permissions)
              (plist-get filesystem-mounts :arguments)
-             (plist-get protected :post-arguments)
+             (mevedel-sandbox--protected-remounts
+              (plist-get protected :post-arguments)
+              additional-permissions)
              (list "--unshare-user"
                    "--unshare-pid")
              (unless network-access-p
