@@ -488,9 +488,19 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
         (mevedel-permission--bucket-decision
          buckets tool-name nil detail nil nil))))
 
+(defun mevedel-tool-exec--full-escalation-rule-decision
+    (tool-name detail buckets level)
+  "Return the full-escalation rule decision for TOOL-NAME and DETAIL.
+BUCKETS supplies ordinary and execution-level rules for LEVEL."
+  (if (mevedel-tool-exec--full-escalation-explicit-deny-p
+       tool-name detail buckets)
+      'deny
+    (mevedel-permission--execution-level-decision
+     buckets tool-name level detail)))
+
 (defun mevedel-tool-exec--full-escalation-denial
-    (metadata-p via &optional feedback)
-  "Return a full-escalation denial through VIA for METADATA-P."
+    (metadata-p &optional feedback)
+  "Return a full-escalation denial for METADATA-P and FEEDBACK."
   (mevedel-tool-exec--permission-decision-result
    metadata-p
    (if feedback
@@ -498,8 +508,38 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
              (format "Full execution escalation denied. Feedback: %s"
                      feedback))
      'deny)
-   via
+   'sandbox-full-escalation
    :sandbox-permissions 'require-escalated))
+
+(defun mevedel-tool-exec--apply-full-escalation-prompt-result
+    (outcome tool-name detail level session workspace metadata-p)
+  "Apply full-escalation prompt OUTCOME and return its permission result."
+  (pcase outcome
+    ('allow-once
+     (mevedel-tool-exec--permission-decision-result
+      metadata-p 'allow 'sandbox-full-escalation
+      :sandbox-permissions level))
+    ((or 'allow-session 'always-allow)
+     (mevedel-permission--apply-prompt-result
+      outcome tool-name session workspace nil
+      :spec-key :pattern :spec-value detail
+      :sandbox-permissions level)
+     (mevedel-tool-exec--permission-decision-result
+      metadata-p 'allow 'sandbox-full-escalation
+      :sandbox-permissions level))
+    ('deny-session
+     (mevedel-permission--apply-prompt-result
+      outcome tool-name session workspace nil
+      :spec-key :pattern :spec-value detail
+      :sandbox-permissions level)
+     (mevedel-tool-exec--full-escalation-denial metadata-p))
+    (`(feedback . ,text)
+     (mevedel-tool-exec--full-escalation-denial metadata-p text))
+    ('aborted
+     (mevedel-tool-exec--permission-decision-result
+      metadata-p 'aborted 'sandbox-full-escalation
+      :sandbox-permissions level))
+    (_ (mevedel-tool-exec--full-escalation-denial metadata-p))))
 
 (defun mevedel-tool-exec--check-full-escalation-async
     (tool-name detail input request cont)
@@ -512,24 +552,21 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
          (buckets (mevedel-tools--bash-buckets permission-context))
          (level (plist-get request :sandbox-permissions))
          (decision
-          (mevedel-permission--execution-level-decision
-           buckets tool-name level detail))
+          (mevedel-tool-exec--full-escalation-rule-decision
+           tool-name detail buckets level))
          (session (or (plist-get permission-context :session)
                       (and (boundp 'mevedel--session) mevedel--session)))
          (workspace (or (plist-get permission-context :workspace)
                         (and session (mevedel-session-workspace session)))))
     (cond
-     ((or (eq decision 'deny)
-          (mevedel-tool-exec--full-escalation-explicit-deny-p
-           tool-name detail buckets))
+     ((eq decision 'deny)
       (when metadata-p
         (mevedel-tool-exec--log-permission-decision
          tool-name 'deny 'sandbox-full-escalation
          :sandbox-permissions level
          :specifier-key :pattern :specifier-value detail))
       (funcall cont
-               (mevedel-tool-exec--full-escalation-denial
-                metadata-p 'sandbox-full-escalation)))
+               (mevedel-tool-exec--full-escalation-denial metadata-p)))
      (trust-literal-p
       (funcall
        cont
@@ -572,42 +609,10 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
         :origin (mevedel-tool-exec--current-origin)
         :callback
         (lambda (outcome)
-          (pcase outcome
-            ('allow-once
-             (funcall
-              cont
-              (mevedel-tool-exec--permission-decision-result
-               metadata-p 'allow 'sandbox-full-escalation
-               :sandbox-permissions level)))
-            ((or 'allow-session 'always-allow)
-             (mevedel-permission--apply-prompt-result
-              outcome tool-name session workspace nil
-              :spec-key :pattern :spec-value detail
-              :sandbox-permissions level)
-             (funcall
-              cont
-              (mevedel-tool-exec--permission-decision-result
-               metadata-p 'allow 'sandbox-full-escalation
-               :sandbox-permissions level)))
-            ('deny-session
-             (mevedel-permission--apply-prompt-result
-              outcome tool-name session workspace nil
-              :spec-key :pattern :spec-value detail
-              :sandbox-permissions level)
-             (funcall cont (mevedel-tool-exec--full-escalation-denial
-                            metadata-p 'sandbox-full-escalation)))
-            (`(feedback . ,text)
-             (funcall cont (mevedel-tool-exec--full-escalation-denial
-                            metadata-p 'sandbox-full-escalation text)))
-            ('aborted
-             (funcall
-              cont
-              (mevedel-tool-exec--permission-decision-result
-               metadata-p 'aborted 'sandbox-full-escalation
-               :sandbox-permissions level)))
-            (_
-             (funcall cont (mevedel-tool-exec--full-escalation-denial
-                            metadata-p 'sandbox-full-escalation))))))
+          (funcall
+           cont
+           (mevedel-tool-exec--apply-full-escalation-prompt-result
+            outcome tool-name detail level session workspace metadata-p))))
        (and session (list session)))))))
 
 (defun mevedel-tool-exec--separate-resource-authority (input request)
