@@ -301,7 +301,7 @@
     (unwind-protect
         (let ((prepared
                (mevedel-sandbox--confined-preparation
-                '("true") root (list root) "/test/bwrap")))
+                '("true") root (list root) "/test/bwrap" nil)))
           (should (eq (plist-get prepared :state) 'confined))
           (should (equal (car (plist-get prepared :command)) "/test/bwrap"))
           (should (string-prefix-p "MEVEDEL_SANDBOX_STARTED_"
@@ -352,6 +352,45 @@
       (should (string-match-p
                "test backend unavailable"
                (plist-get (plist-get prepared :facts) :reason)))))
+  :doc "additive network profile:
+`mevedel-sandbox-prepare' changes only network isolation"
+  (let* ((root (make-temp-file "mevedel-sandbox-network-" t))
+         (mevedel-sandbox-mode 'required)
+         (mevedel-sandbox--probe-cache
+          '(:available t :executable "/test/bwrap"))
+         (default
+          (mevedel-sandbox-prepare '("true") root (list root)))
+         (network
+          (mevedel-sandbox-prepare
+           '("true") root (list root) '(:network t))))
+    (unwind-protect
+        (let ((default-command (plist-get default :command))
+              (network-command (plist-get network :command)))
+          (should (member "--unshare-net" default-command))
+          (should-not (member "--unshare-net" network-command))
+          (let ((default-without-network
+                 (delete "--unshare-net" (copy-sequence default-command))))
+            (setcar (member (plist-get default :marker)
+                            default-without-network)
+                    "SANDBOX_MARKER")
+            (setcar (member (plist-get network :marker) network-command)
+                    "SANDBOX_MARKER")
+            (should (equal default-without-network network-command)))
+          (should (eq 'isolated
+                      (plist-get (plist-get default :facts) :network)))
+          (should (eq 'unrestricted
+                      (plist-get (plist-get network :facts) :network)))
+          (should (equal (plist-get (plist-get default :facts)
+                                    :writable-roots)
+                         (plist-get (plist-get network :facts)
+                                    :writable-roots)))
+          (should (= (plist-get (plist-get default :facts)
+                                :protected-paths)
+                     (plist-get (plist-get network :facts)
+                                :protected-paths))))
+      (mevedel-sandbox-cleanup default)
+      (mevedel-sandbox-cleanup network)
+      (delete-directory root t)))
   :doc "required backend:
 `mevedel-sandbox-prepare' refuses execution when confinement is unavailable"
   (let ((mevedel-sandbox-mode 'required)
@@ -435,6 +474,44 @@
             (kill-buffer output-buffer))
           (mevedel-sandbox-cleanup prepared)
           (delete-directory parent t)))))
+  :doc "real additive network:
+default confinement cannot reach a host listener but network escalation can"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (or (plist-get availability :reason)
+                      "Bubblewrap unavailable")))
+      (let* ((root (make-temp-file "mevedel-sandbox-network-real-" t))
+             (server (make-network-process
+                      :name "mevedel-sandbox-network-test"
+                      :server t :host "127.0.0.1" :service t :noquery t))
+             (port (process-contact server :service))
+             (command
+              (list "bash" "-c"
+                    (format "exec 3<>/dev/tcp/127.0.0.1/%d" port)))
+             default network)
+        (unwind-protect
+            (progn
+              (setq default
+                    (mevedel-sandbox-prepare command root (list root)))
+              (setq network
+                    (mevedel-sandbox-prepare
+                     command root (list root) '(:network t)))
+              (should-not
+               (zerop
+                (apply #'call-process
+                       (car (plist-get default :command)) nil nil nil
+                       (cdr (plist-get default :command)))))
+              (should
+               (zerop
+                (apply #'call-process
+                       (car (plist-get network :command)) nil nil nil
+                       (cdr (plist-get network :command))))))
+          (when (processp server) (delete-process server))
+          (mevedel-sandbox-cleanup default)
+          (mevedel-sandbox-cleanup network)
+          (delete-directory root t)))))
   :doc "real protected paths:
 `mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"
   (let ((mevedel-sandbox-mode 'required)

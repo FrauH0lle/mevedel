@@ -11,6 +11,8 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 # Instructions
 
 - Commands run from the session working directory by default
+- Commands run with filesystem and process confinement and without network by
+  default when the platform sandbox is available
 - Commands time out by default; use `timeout_seconds` for commands that need a
   longer positive timeout
 - Quote file paths with spaces using double quotes
@@ -19,6 +21,21 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 - For parallel commands, make multiple `Bash` calls in one message
 - Run tests, check your work or otherwise close the loop to verify changes you make
 - Do NOT use newlines to separate commands (newlines are ok in quoted strings)
+
+### Network escalation
+
+Start with the default sandbox. If an important command fails with a likely
+network or sandbox error, decide whether the operation is still needed. When it
+is, make a new Bash call with:
+
+- `sandbox_permissions="with_additional_permissions"`
+- `additional_permissions={"network":true}`
+- a concise, user-facing `justification`
+
+Request permission in the tool call itself; do not ask separately in prose.
+The new call is a distinct invocation and is never an automatic replay. Network
+access is added for that invocation while filesystem mounts, protected paths,
+and process confinement remain active.
 
 ### When to use `Bash`
 

@@ -11,9 +11,9 @@ combine with `progn` --- go expression by expression.
 - `live` (default): evaluate in the current Emacs process. This can see
   live buffers, variables, windows, advice, timers, and package state.
 - `batch`: evaluate in a child `emacs --batch -Q` process with the
-  current `load-path` and the session working directory. This protects
-  the interactive Emacs session from UI/global-state changes, but it is
-  not a security sandbox and still runs as the same OS user.
+  current `load-path` and the session working directory. On supported systems,
+  the child runs with filesystem and process confinement and without network
+  by default.
 
 `preserve_ui` applies to `mode=live`. It defaults to true and restores
 the current window configuration after evaluation. Set it to false only
@@ -28,6 +28,14 @@ without a printed representation show as `#<hash-notation>`.
 
 Expressions evaluate with `default-directory` set to the session working
 directory.
+
+If an important batch expression fails because it needs network access, make a
+new batch Eval call with
+`sandbox_permissions="with_additional_permissions"`,
+`additional_permissions={"network":true}`, and a concise user-facing
+`justification`. Request approval in the tool call rather than asking in prose.
+The retry is a distinct invocation; it retains filesystem, protected-path, and
+process confinement. Additional sandbox permissions do not apply to live Eval.
 
 Output from `print`, `prin1`, and `princ` is captured and returned as
 STDOUT. Use `print` for diagnostic output, not `message` (which goes
@@ -49,7 +57,8 @@ to `*Messages*` and is not captured).
 - File modifications -> use `Edit`
 - Shell operations -> use `Bash`
 - Test commands -> use `Bash`
-- Untrusted code -> neither live nor batch Eval is a security sandbox
+- Untrusted code -> live Eval is unrestricted code execution, and batch
+  confinement is not a substitute for trusting the expression
 
 ### Examples of good usage
 
