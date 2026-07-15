@@ -37,8 +37,14 @@
 
 ;; `mevedel-permissions'
 (declare-function mevedel-check-permission "mevedel-permissions" t t)
+(declare-function mevedel-permission--any-deny
+                  "mevedel-permissions"
+                  (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--checker-args
                   "mevedel-permissions" (context))
+(declare-function mevedel-permission--first-non-nil-action
+                  "mevedel-permissions"
+                  (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
 (declare-function mevedel-permission--resource-granted-p
@@ -249,7 +255,7 @@ final mapping)."
      origin count entry mode preserve-ui)))
 
 (defun mevedel-permission-queue--render-sandbox (entry)
-  "Render an additive sandbox permission ENTRY as a once-only prompt."
+  "Render an additive sandbox permission ENTRY."
   (require 'mevedel-permission-prompt)
   (unless (fboundp 'mevedel-permission--prompt-async-sandbox)
     (error "Additional permission UI unavailable"))
@@ -333,7 +339,7 @@ while deny rules remain final."
   "Re-evaluate ENTRY through the decision chain with current rules.
 Return one of `allow' / `deny' / `ask'.
 
-Dispatches on `:kind' (generic/bash/eval).
+Dispatches on `:kind' (generic/bash/eval/sandbox).
 
 Critical: `mevedel-check-permission' consumes session-rules,
 persistent-rules, mode, and workspace-root via keyword args; it
@@ -420,11 +426,21 @@ to it as well."
                      :workspace workspace
                      :path path)
                     :resource-access access))
-                  (grants (plist-get context :resource-grants)))
-             (if (mevedel-permission--resource-granted-p
-                  path access grants)
-                 'allow
-               'ask))
+                  (grants (plist-get context :resource-grants))
+                  (buckets (plist-get context :buckets))
+                  (tool-name (plist-get entry :tool-name))
+                  (rule-action
+                   (if (mevedel-permission--any-deny
+                        buckets tool-name path nil nil nil)
+                       'deny
+                     (mevedel-permission--first-non-nil-action
+                      buckets tool-name path nil nil nil))))
+             (cond
+              ((memq rule-action '(deny ask)) rule-action)
+              ((mevedel-permission--resource-granted-p
+                path access grants)
+               'allow)
+              (t 'ask)))
          'ask))
       ('eval 'ask)
       (_ 'ask))))

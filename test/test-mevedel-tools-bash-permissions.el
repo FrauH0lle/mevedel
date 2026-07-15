@@ -354,6 +354,42 @@ an exact session grant skips only the filesystem prompt"
           (should-not enqueued)
           (should (eq 'allow outcome)))
       (delete-directory root t)))
+  :doc "pregranted resource with explicit ask:
+an exact ask rule remains authoritative over the stored grant"
+  (let* ((root (make-temp-file "mevedel-bash-ask-grant-" t))
+         (path (file-name-concat root "secret"))
+         (workspace (mevedel-workspace--create :root root))
+         (grant `(:path ,path :access read))
+         (session (mevedel-session--create
+                   :name "resource" :workspace workspace
+                   :permission-mode 'full-auto
+                   :resource-grants (list grant)
+                   :permission-rules
+                   `(("Bash" :path ,path :action ask))))
+         (mevedel--session session)
+         (mevedel-permission-mode 'full-auto)
+         entry outcome)
+    (unwind-protect
+        (progn
+          (with-temp-file path (insert "secret"))
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (queued &optional _session)
+                       (setq entry queued)
+                       (funcall (plist-get queued :callback) 'deny-once))))
+            (mevedel-tool-exec--check-permission-async
+             nil
+             `(:command ,(format "cat %s" path)
+               :sandbox_permissions "with_additional_permissions"
+               :additional_permissions (:file_system (:read [,path]))
+               :justification "Read the protected file?"
+               :permission-context
+               (:mode full-auto :session ,session :workspace ,workspace
+                :session-rules (("Bash" :path ,path :action ask))
+                :resource-grants (,grant)))
+             (lambda (result) (setq outcome result))))
+          (should (eq 'sandbox (plist-get entry :kind)))
+          (should (eq 'deny outcome)))
+      (delete-directory root t)))
   :doc "resource deny:
 an explicit exact path deny prevents filesystem escalation"
   (let* ((root (make-temp-file "mevedel-bash-resource-deny-" t))
