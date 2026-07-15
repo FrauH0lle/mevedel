@@ -12,7 +12,6 @@
   (require 'mevedel-tool-registry))
 
 (require 'subr-x)
-(require 'mevedel-bash-analysis)
 (require 'mevedel-permission-log)
 
 ;; `cl-extra'
@@ -42,6 +41,7 @@
 ;; `mevedel-bash-analysis'
 (declare-function mevedel-bash-analysis-analyze
                   "mevedel-bash-analysis" (source))
+(defvar mevedel-bash-dangerous-commands)
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
@@ -156,16 +156,9 @@ that has unwound."
                          :via via)
                    props))))
 
-(defun mevedel-tool-exec--dangerous-command-p (command)
-  "Return non-nil if COMMAND includes a dangerous binary.
-The command names are checked against `mevedel-bash-dangerous-commands'.
-Used by the queue entry's `:dangerous' flag so the eventual Bash
-render-head can warn prominently."
-  (eq (plist-get (mevedel-tool-exec--analyze-bash command) :class)
-      'dangerous))
-
 (defun mevedel-tool-exec--analyze-bash (command)
   "Return normalized Bash analysis for COMMAND."
+  (require 'mevedel-bash-analysis)
   (mevedel-bash-analysis-analyze command))
 
 
@@ -362,22 +355,15 @@ avoids saving a brittle whole-chain string such as
         (and session (mevedel-session-permission-mode session))
         mevedel-permission-mode)))
 
-(defun mevedel-tool-exec--effective-trust-p (trust-literal-p &optional mode)
-  "Return non-nil when TRUST-LITERAL-P or MODE bypasses heuristics.
-Trusted skill literals and `full-auto' mode share this predicate for
-skipping Bash/Eval heuristic prompts.  Explicit deny rules and protected
-paths are checked separately before callers use this result."
-  (or trust-literal-p
-      (eq (or mode (mevedel-tool-exec--effective-permission-mode))
-          'full-auto)))
-
-(defun mevedel-tool-exec--bash-literal-path-tokens (command)
+(defun mevedel-tool-exec--bash-literal-path-tokens (command &optional analysis)
   "Return literal path resources identified in COMMAND.
-Dynamic expansions remain complex and are not evaluated."
-  (plist-get (mevedel-tool-exec--analyze-bash command) :resources))
+Dynamic expansions remain complex and are not evaluated.  Reuse ANALYSIS when
+the caller already analyzed COMMAND."
+  (plist-get (or analysis (mevedel-tool-exec--analyze-bash command))
+             :resources))
 
-(defun mevedel-tool-exec--bash-protected-path-p (command)
-  "Return non-nil if COMMAND has an obvious protected path token."
+(defun mevedel-tool-exec--bash-protected-path-p (command &optional analysis)
+  "Return non-nil if COMMAND has an obvious protected path in ANALYSIS."
   (cl-some
    (lambda (path)
      (or (mevedel-permission--path-protected-p path)
@@ -398,34 +384,52 @@ Dynamic expansions remain complex and are not evaluated."
                           "\\(?:/\\|\\'\\)")
                   path)))
           '("git" "ssh" "gnupg"))))
-   (mevedel-tool-exec--bash-literal-path-tokens command)))
+   (mevedel-tool-exec--bash-literal-path-tokens command analysis)))
 
-(defun mevedel-tool-exec--bash-deny-candidates (command)
+(defun mevedel-tool-exec--bash-deny-candidates (command &optional analysis)
   "Return Bash strings explicit deny rules should check for COMMAND.
 Includes the whole command, recognized command-chain segments, and extracted
 command names.  Dangerous-name harvesting remains independent, so unsupported
-syntax cannot hide a command in `mevedel-bash-dangerous-commands'."
-  (let ((analysis (mevedel-tool-exec--analyze-bash command)))
+syntax cannot hide a command in `mevedel-bash-dangerous-commands'.  Reuse
+ANALYSIS when supplied."
+  (let ((analysis (or analysis (mevedel-tool-exec--analyze-bash command))))
     (mevedel-tool-exec--dedupe-strings
      (append (list command)
-             (plist-get analysis :segments)
+             (plist-get analysis :candidates)
              (mevedel-tool-exec--bash-command-names analysis)))))
 
-(defun mevedel-tool-exec--bash-explicit-deny-p (buckets command)
-  "Return non-nil when an explicit Bash pattern deny covers COMMAND."
+(defun mevedel-tool-exec--bash-deny-match-p
+    (buckets candidates &optional pattern-only-p)
+  "Return non-nil when BUCKETS deny one of CANDIDATES.
+When PATTERN-ONLY-P is non-nil, ignore generic fallback rules."
   (cl-some
    (lambda (candidate)
      (cl-some
       (lambda (entry)
-        (eq (mevedel-permission--rules-action
-             (seq-filter
-              (lambda (rule)
-                (plist-member (cdr rule) :pattern))
-              (cdr entry))
-             "Bash" :pattern candidate)
-            'deny))
+        (let ((rules (if pattern-only-p
+                         (seq-filter
+                          (lambda (rule)
+                            (plist-member (cdr rule) :pattern))
+                          (cdr entry))
+                       (cdr entry))))
+          (eq (mevedel-permission--rules-action
+               rules "Bash" :pattern candidate)
+              'deny)))
       buckets))
-   (mevedel-tool-exec--bash-deny-candidates command)))
+   candidates))
+
+(defun mevedel-tool-exec--bash-explicit-deny-p
+    (buckets command &optional analysis)
+  "Return non-nil when an effective Bash deny covers COMMAND.
+Generic fallback denies are evaluated against the original command and its
+recognized top-level segments.  Harvested nested candidates use only pattern
+rules, so a generic fallback cannot defeat a specific allow for the containing
+command.  ANALYSIS is the normalized result for COMMAND when already known."
+  (let* ((analysis (or analysis (mevedel-tool-exec--analyze-bash command)))
+         (top-level (cons command (plist-get analysis :segments)))
+         (harvested (mevedel-tool-exec--bash-deny-candidates command analysis)))
+    (or (mevedel-tool-exec--bash-deny-match-p buckets top-level)
+        (mevedel-tool-exec--bash-deny-match-p buckets harvested t))))
 
 (defun mevedel-tools--bash-buckets (&optional permission-context)
   "Return Bash buckets for PERMISSION-CONTEXT, innermost-first.
@@ -514,10 +518,10 @@ authorize dangerous or complex syntax."
                     (mevedel-tool-exec--bash-bucket-match buckets segment))
                   segments))
          (segment-actions (mapcar #'car segment-matches)))
-    (when (mevedel-tool-exec--bash-explicit-deny-p buckets command)
+    (when (mevedel-tool-exec--bash-explicit-deny-p buckets command analysis)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
-    (when (mevedel-tool-exec--bash-protected-path-p command)
+    (when (mevedel-tool-exec--bash-protected-path-p command analysis)
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
     (cond

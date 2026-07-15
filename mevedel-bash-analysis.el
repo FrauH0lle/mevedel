@@ -9,10 +9,11 @@
 
 ;;; Code:
 
-(require 'subr-x)
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'subr-x))
 
+;; `treesit'
 (declare-function treesit-language-available-p "treesit" (language &optional detail))
 (declare-function treesit-node-check "treesit" (node property))
 (declare-function treesit-node-child "treesit" (node n &optional named))
@@ -55,8 +56,8 @@ than this unconditional list.")
   "Tree-sitter Bash node types accepted as plain command syntax.")
 
 (defconst mevedel-bash-analysis--control-words
-  '("case" "do" "done" "elif" "else" "esac" "fi" "for" "function" "if"
-    "in" "select" "then" "until" "while")
+  '("case" "coproc" "do" "done" "elif" "else" "esac" "fi" "for"
+    "function" "if" "in" "select" "then" "time" "until" "while")
   "Shell control-flow words rejected by the fallback parser.")
 
 
@@ -120,6 +121,60 @@ protected-path checks even when unsupported syntax prevents argv extraction."
      (append (nreverse resources)
              (mevedel-bash-analysis--source-resources source)))))
 
+(defun mevedel-bash-analysis--substitution-bodies (source)
+  "Return best-effort command substitution bodies found in SOURCE."
+  (let ((position 0)
+        bodies)
+    (while (string-match "\\$(" source position)
+      (let ((depth 1)
+            (index (match-end 0)))
+        (while (and (< index (length source)) (> depth 0))
+          (pcase (aref source index)
+            (?\( (setq depth (1+ depth)))
+            (?\) (setq depth (1- depth))))
+          (setq index (1+ index)))
+        (when (= depth 0)
+          (push (substring source (match-end 0) (1- index)) bodies))
+        (setq position index)))
+    (setq position 0)
+    (while (string-match "`\\([^`]*\\)`" source position)
+      (push (match-string 1 source) bodies)
+      (setq position (match-end 0)))
+    (let (expanded)
+      (dolist (body (nreverse bodies))
+        (push body expanded)
+        (dolist (nested (mevedel-bash-analysis--substitution-bodies body))
+          (push nested expanded)))
+      (delete-dups (nreverse expanded)))))
+
+(defun mevedel-bash-analysis--candidate-command (fragment)
+  "Return a normalized possible command from FRAGMENT, or nil."
+  (let ((candidate (string-trim fragment)))
+    (setq candidate (replace-regexp-in-string "\\`[({[:space:]]+" "" candidate))
+    (setq candidate (replace-regexp-in-string "[)}[:space:]]+\\'" "" candidate))
+    (while (string-match
+            "\\`[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]+[[:space:]]+"
+            candidate)
+      (setq candidate (substring candidate (match-end 0))))
+    (when (string-match
+           "\\`\\(?:then\\|do\\|else\\|elif\\)[[:space:]]+" candidate)
+      (setq candidate (substring candidate (match-end 0))))
+    (unless (string-empty-p candidate)
+      candidate)))
+
+(defun mevedel-bash-analysis--candidates (source segments commands)
+  "Return best-effort command forms from SOURCE, SEGMENTS, and COMMANDS."
+  (let ((fragments (append segments
+                           (mevedel-bash-analysis--substitution-bodies source)))
+        candidates)
+    (dolist (fragment fragments)
+      (when-let* ((candidate
+                   (mevedel-bash-analysis--candidate-command fragment)))
+        (push candidate candidates)))
+    (dolist (argv commands)
+      (push (string-join argv " ") candidates))
+    (delete-dups (nreverse candidates))))
+
 (defun mevedel-bash-analysis--classify (commands complex-p source)
   "Classify COMMANDS and COMPLEX-P for SOURCE."
   (cond
@@ -128,8 +183,10 @@ protected-path checks even when unsupported syntax prevents argv extraction."
    ((and commands
          (cl-every
           (lambda (argv)
-            (member (mevedel-bash-analysis--command-name argv)
-                    mevedel-bash-analysis--read-only-commands))
+            (let ((executable (car argv)))
+              (and (not (string-match-p "/" executable))
+                   (member executable
+                           mevedel-bash-analysis--read-only-commands))))
           commands))
     'read-only)
    (t 'unknown)))
@@ -141,6 +198,8 @@ protected-path checks even when unsupported syntax prevents argv extraction."
     (list :class class
           :commands commands
           :segments segments
+          :candidates (mevedel-bash-analysis--candidates
+                       source segments commands)
           :parser parser
           :resources (mevedel-bash-analysis--resources commands source)
           :reasons (or reasons
@@ -227,10 +286,11 @@ protected-path checks even when unsupported syntax prevents argv extraction."
 
 (defun mevedel-bash-analysis--argv (segments)
   "Return (COMMANDS REASONS) parsed from SEGMENTS."
+  (require 'shell)
   (let (commands reasons)
     (dolist (segment segments)
       (condition-case nil
-          (let ((argv (split-string-and-unquote segment)))
+          (let ((argv (split-string-shell-command segment)))
             (cond
              ((null argv)
               (push "A command is empty" reasons))
@@ -290,9 +350,13 @@ protected-path checks even when unsupported syntax prevents argv extraction."
   (require 'treesit)
   (with-temp-buffer
     (insert source)
-    (let* ((parser (treesit-parser-create 'bash))
+    (let* ((scan (mevedel-bash-analysis--scan-segments source))
+           (newline-p
+            (member "Newline command separation is unsupported" (cadr scan)))
+           (parser (treesit-parser-create 'bash))
            (root (treesit-parser-root-node parser))
-           (supported (mevedel-bash-analysis--treesit-supported-p root))
+           (supported (and (not newline-p)
+                           (mevedel-bash-analysis--treesit-supported-p root)))
            (texts (and supported
                        (mevedel-bash-analysis--treesit-command-texts root)))
            (parsed (mevedel-bash-analysis--argv texts))
@@ -315,6 +379,7 @@ protected-path checks even when unsupported syntax prevents argv extraction."
 The result contains `:class', `:commands', `:parser', `:resources', and
 `:reasons'.  Tree-sitter is selected only through normal Emacs grammar
 configuration; no grammar path is added here."
+  (require 'subr-x)
   (if (and (fboundp 'treesit-language-available-p)
            (treesit-language-available-p 'bash))
       (condition-case _err
