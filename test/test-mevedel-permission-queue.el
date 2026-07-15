@@ -249,7 +249,7 @@
   ,test
   (test)
 
-  :doc "allow-session coalesces queued generic siblings via session-rules"
+  :doc "allow-session coalesces queued path siblings via a resource grant"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
          (resolved-outcomes nil))
@@ -259,17 +259,19 @@
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo/bar.el"
+             :resource-access 'read
              :origin "main"
              :callback (lambda (o) (push (cons "Read1" o) resolved-outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo/bar.el"
+             :resource-access 'read
              :origin "main"
              :callback (lambda (o) (push (cons "Read2" o) resolved-outcomes))))
-      ;; User answers allow-session for the head.  Simulate the rule
-      ;; write by adding it to the session struct directly.
-      (push '("Read" :path "/foo/bar.el" :action allow)
-            (mevedel-session-permission-rules session))
+      ;; User answers allow-session for the head.  Simulate the exact
+      ;; resource grant written by the normal permission prompt.
+      (mevedel-permission-add-session-resource-grant
+       session "/foo/bar.el" 'read)
       ;; Coalesce should resolve the queued sibling as 'allow.
       (mevedel-permission-queue--coalesce 'allow-session session))
     ;; Read2 was coalesced; Read1 (the head) wasn't touched by
@@ -312,16 +314,18 @@
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo.el"
+             :resource-access 'read
              :origin "main"
              :callback (lambda (o) (push (cons "foo" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/bar.el"
+             :resource-access 'read
              :origin "main"
              :callback (lambda (o) (push (cons "bar" o) outcomes))))
-      ;; Rule covers /foo.el only.
-      (push '("Read" :path "/foo.el" :action allow)
-            (mevedel-session-permission-rules session))
+      ;; Resource authority covers /foo.el only.
+      (mevedel-permission-add-session-resource-grant
+       session "/foo.el" 'read)
       (mevedel-permission-queue--coalesce 'allow-session session))
     ;; /foo.el's queued sibling resolved; /bar.el stayed.
     (let ((q (mevedel-session-permission-queue session)))

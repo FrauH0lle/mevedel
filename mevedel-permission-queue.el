@@ -264,17 +264,15 @@ queue vocabulary."
     (_ resolved)))
 
 (defun mevedel-permission-queue--coalesce (_rule-outcome &optional session)
-  "Re-evaluate SESSION's queued entries against the new rule.
+  "Re-evaluate SESSION's queued entries against newly stored authority.
 Entries that resolve to a non-`ask' outcome via
 `mevedel-check-permission' fire their callbacks with that outcome
 translated for their kind and are removed from the queue.  Entries that
 still resolve to `ask' stay in place.
 
-The protected-path / deny-precedence nuance is handled inside
-`mevedel-check-permission' itself: protected paths short-circuit
-allow rules but not deny rules, so re-evaluation produces the
-correct coalesce semantics without an explicit flag on the
-entry."
+Protected-path and deny precedence is handled inside
+`mevedel-check-permission': a protected resource needs an exact grant,
+while deny rules remain final."
   (let ((q (mevedel-permission-queue--get session))
         (kept nil))
     (dolist (entry q)
@@ -348,6 +346,9 @@ to it as well."
                      :pattern (and (eq spec-key :pattern) spec-value)
                      :domain (and (eq spec-key :domain) spec-value)
                      :name (and (eq spec-key :name) spec-value))))
+               (when-let* ((access (plist-get entry :resource-access)))
+                 (setq context
+                       (plist-put context :resource-access access)))
                (apply #'mevedel-check-permission
                       tool-name
                       (mevedel-permission--checker-args context)))

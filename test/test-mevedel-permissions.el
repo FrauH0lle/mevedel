@@ -522,6 +522,19 @@
                  :workspace-root "/project"
                  :resource-grants '((:path "/etc/passwd" :access read)))
                 'allow)))
+  :doc "resource grant has distinct decision metadata"
+  (let* ((mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (mock-tool (mevedel-tool--create :name "Read" :read-only-p t))
+         (decision
+          (mevedel-check-permission-with-metadata
+           "Read" :tool-struct mock-tool
+           :path "/etc/passwd" :mode 'default
+           :workspace-root "/project"
+           :resource-grants '((:path "/etc/passwd" :access read)))))
+    (should (eq 'allow
+                (mevedel-permission-decision-raw-outcome decision)))
+    (should (eq 'resource-grant (plist-get decision :via))))
   :doc "read resource grant does not allow Write"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -557,6 +570,40 @@
     (should (eq (mevedel-check-permission
                  "Bash" :tool-struct mock-tool
                  :content '(:command "curl https://example.com")
+                 :path "/outside/file" :mode 'default
+                 :workspace-root "/project"
+                 :resource-grants '((:path "/outside/file" :access write)))
+                'ask)))
+  :doc "command-specific allow does not override missing resource authority"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool
+         (mevedel-tool--create
+          :name "Bash" :read-only-p nil
+          :check-permission (lambda (_tool _content) 'allow))))
+    (should (eq (mevedel-check-permission
+                 "Bash" :tool-struct mock-tool
+                 :content '(:command "cat /outside/file")
+                 :path "/outside/file" :mode 'default
+                 :workspace-root "/project")
+                'ask))
+    (should (eq (mevedel-check-permission
+                 "Bash" :tool-struct mock-tool
+                 :content '(:command "cat /outside/file")
+                 :path "/outside/file" :mode 'default
+                 :workspace-root "/project"
+                 :resource-grants '((:path "/outside/file" :access write)))
+                'allow)))
+  :doc "resource grant does not authorize a command slot that declines"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool
+         (mevedel-tool--create
+          :name "Bash" :read-only-p nil
+          :check-permission (lambda (_tool _content) nil))))
+    (should (eq (mevedel-check-permission
+                 "Bash" :tool-struct mock-tool
+                 :content '(:command "unknown")
                  :path "/outside/file" :mode 'default
                  :workspace-root "/project"
                  :resource-grants '((:path "/outside/file" :access write)))
@@ -832,7 +879,21 @@
                  "Read" :tool-struct tool :path path :mode 'default
                  :workspace-root "/repo"
                  :resource-grants
-                 (mevedel-session-resource-grants session))))))
+                 (mevedel-session-resource-grants session)))))
+  :doc "revocation does not mutate another session's shared list"
+  (let* ((first '(:path "/tmp/first" :access read))
+         (second '(:path "/tmp/second" :access read))
+         (shared (list first second))
+         (session (mevedel-session--create
+                   :name "child" :resource-grants shared))
+         (other (mevedel-session--create
+                 :name "parent" :resource-grants shared)))
+    (mevedel-permission-remove-session-resource-grant
+     session "/tmp/second" 'read)
+    (should (equal (list first)
+                   (mevedel-session-resource-grants session)))
+    (should (equal (list first second)
+                   (mevedel-session-resource-grants other)))))
 
 (mevedel-deftest mevedel-permission-remove-persistent-resource-grant ()
   ,test
@@ -848,11 +909,56 @@
         (progn
           (mevedel-permission--save-persistent-rule ws "Read" 'allow)
           (mevedel-permission--save-persistent-resource-grant ws path 'read)
+          (should (eq 'allow
+                      (mevedel-check-permission
+                       "Read"
+                       :tool-struct (mevedel-tool--create
+                                     :name "Read" :read-only-p t)
+                       :path path :mode 'default
+                       :workspace-root "/different"
+                       :resource-grants
+                       (mevedel-permission--load-persistent-resource-grants
+                        ws))))
           (mevedel-permission-remove-persistent-resource-grant ws path 'read)
           (should-not
            (mevedel-permission--load-persistent-resource-grants ws))
           (should (equal '(("Read" :action allow))
-                         (mevedel-permission--load-persistent-rules ws))))
+                         (mevedel-permission--load-persistent-rules ws)))
+          (should (eq 'ask
+                      (mevedel-check-permission
+                       "Read"
+                       :tool-struct (mevedel-tool--create
+                                     :name "Read" :read-only-p t)
+                       :path path :mode 'default
+                       :workspace-root "/different"
+                       :resource-grants
+                       (mevedel-permission--load-persistent-resource-grants
+                        ws)))))
+      (delete-directory tmp-dir t))))
+
+(mevedel-deftest mevedel-permission--load-persistent-resource-grants ()
+  ,test
+  (test)
+  :doc "drops malformed and relative grants from an editable store"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (file (mevedel-permission--persistent-file ws)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory file) t)
+          (with-temp-file file
+            (pp '(:rules nil
+                  :resource-grants
+                  ((:path "/tmp/read" :access read)
+                   (:path "relative" :access write)
+                   (:path "/tmp/execute" :access execute)
+                   malformed))
+                (current-buffer)))
+          (should (equal '((:path "/tmp/read" :access read))
+                         (mevedel-permission--load-persistent-resource-grants
+                          ws))))
       (delete-directory tmp-dir t))))
 
 
@@ -900,7 +1006,7 @@
           (should (= (length (mevedel-session-permission-rules session)) 1))
           (should (= (length (mevedel-permission--load-persistent-rules ws)) 1)))
       (delete-directory tmp-dir t)))
-  :doc "always-allow stores persistent and session resource authority"
+  :doc "always-allow stores persistent authority without a session duplicate"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (mevedel-user-dir (file-name-concat tmp-dir "global/"))
          (path (file-name-concat tmp-dir "outside.el"))
@@ -914,8 +1020,7 @@
                        'always-allow "Write" session ws path
                        :resource-access 'write)
                       'allow))
-          (should (equal (list (list :path path :access 'write))
-                         (mevedel-session-resource-grants session)))
+          (should-not (mevedel-session-resource-grants session))
           (should (equal (list (list :path path :access 'write))
                          (mevedel-permission--load-persistent-resource-grants
                           ws)))

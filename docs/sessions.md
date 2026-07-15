@@ -58,10 +58,10 @@ Layout:
 The data buffer is locked to `org-mode` so `gptel-org--save-state`
 can round-trip text-property bounds via `GPTEL_BOUNDS`. The sidecar
 holds session-wide state that doesn't live in the buffer text:
-permission rules, exact session resource grants, tasks, prompt-index (driving the rewind picker and
-latest resume preview), `:file-snapshots` (per-turn map of tracked files
-to backup names), workspace identity, `:working-directory`, fork lineage
-(`:forked-from-session-id` / `:forked-from-turn`), and
+permission rules, exact session resource grants, tasks, prompt-index (driving
+the rewind picker and latest resume preview), `:file-snapshots` (per-turn map
+of tracked files to backup names), workspace identity, `:working-directory`,
+fork lineage (`:forked-from-session-id` / `:forked-from-turn`), and
 `:agent-transcripts` metadata. It also records `:preset-name` and the resolved
 buffer-local mevedel variables in `:preset-settings`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
