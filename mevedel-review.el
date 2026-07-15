@@ -51,10 +51,6 @@
                   "mevedel-chat"
                   (session-name &optional create workspace working-directory))
 
-;; `mevedel-permissions'
-(declare-function mevedel-permission--parse-rule-strings
-                  "mevedel-permissions" (entries))
-
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
@@ -97,12 +93,6 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel-session--read-only-mode)
-
-;; `mevedel-tool-exec'
-(declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
-
-;; `mevedel-tool-registry'
-(declare-function mevedel-tool-get "mevedel-tool-registry" (name))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -185,18 +175,23 @@
   "Verify according to these instructions:\n\n%s\n\nInspect the target adversarially, run or recommend relevant checks when allowed, and finish with a final `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line."
   "Prompt format for custom verification instructions.")
 
-(defconst mevedel-review--allowed-tool-entries
-  '("Bash(git diff:*)"
-    "Bash(git status:*)"
-    "Bash(git log:*)"
-    "Bash(git show:*)"
-    "Bash(git merge-base:*)"
-    "Bash(git rev-parse:*)"
-    "Bash(git ls-files:*)"
-    "Bash(git cat-file:*)"
-    "Bash(GIT_PAGER=cat git diff:*)"
-    "Bash(head:*)")
+(defconst mevedel-review--allowed-bash-patterns
+  '("git diff:*"
+    "git status:*"
+    "git log:*"
+    "git show:*"
+    "git merge-base:*"
+    "git rev-parse:*"
+    "git ls-files:*"
+    "git cat-file:*"
+    "git --no-pager diff:*"
+    "head:*")
   "Skill-scoped permission grants for the reviewer's git inspection.")
+
+(defconst mevedel-review--allowed-tool-entries
+  (mapcar (lambda (pattern) (format "Bash(%s)" pattern))
+          mevedel-review--allowed-bash-patterns)
+  "Model-facing forms of `mevedel-review--allowed-bash-patterns'.")
 
 (defconst mevedel-review--bash-deny-rule
   '("Bash" :action deny)
@@ -834,16 +829,10 @@ the `<user_action>' block for parent-history continuity."
 ;;; Dispatch
 
 (defun mevedel-review--git-allow-rules ()
-  "Return validation skill-scoped git inspection allow rules, or nil."
-  (condition-case nil
-      (progn
-        (require 'mevedel-tool-exec)
-        (require 'mevedel-permissions)
-        (unless (mevedel-tool-get "Bash")
-          (mevedel-tool-exec--register))
-        (mevedel-permission--parse-rule-strings
-         mevedel-review--allowed-tool-entries))
-    (error nil)))
+  "Return validation skill-scoped git inspection allow rules."
+  (mapcar (lambda (pattern)
+            (list "Bash" :pattern pattern :action 'allow))
+          mevedel-review--allowed-bash-patterns))
 
 (defun mevedel-review--permission-rules ()
   "Return reviewer's skill-scoped permission rules, or nil."

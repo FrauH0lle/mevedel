@@ -44,324 +44,6 @@
   (plist-get envelope :result))
 
 
-;;
-;;; Quote Balancing Tests
-
-(mevedel-deftest mevedel-tools--quotes-balanced-p ()
-  ,test
-  (test)
-  :doc "balanced quotes:
-`mevedel-tools--quotes-balanced-p' accepts strings with no quotes"
-  (should (equal t (mevedel-tools--quotes-balanced-p "hello world")))
-  :doc "balanced quotes:
-`mevedel-tools--quotes-balanced-p' accepts balanced double quotes"
-  (should (equal t (mevedel-tools--quotes-balanced-p "\"hello\"")))
-  :doc "balanced quotes:
-`mevedel-tools--quotes-balanced-p' accepts balanced single quotes"
-  (should (equal t (mevedel-tools--quotes-balanced-p "'hello'")))
-  :doc "balanced quotes:
-`mevedel-tools--quotes-balanced-p' accepts nested different quote types"
-  (should (equal t (mevedel-tools--quotes-balanced-p "\"hello 'world'\"")))
-  :doc "balanced quotes:
-`mevedel-tools--quotes-balanced-p' accepts escaped quotes"
-  (should (equal t (mevedel-tools--quotes-balanced-p "\"a \\\"b\\\" c\"")))
-  :doc "unbalanced quotes:
-`mevedel-tools--quotes-balanced-p' rejects unclosed double quote"
-  (should (equal nil (mevedel-tools--quotes-balanced-p "\"hello")))
-  :doc "unbalanced quotes:
-`mevedel-tools--quotes-balanced-p' rejects unclosed single quote"
-  (should (equal nil (mevedel-tools--quotes-balanced-p "'hello")))
-  :doc "unbalanced quotes:
-`mevedel-tools--quotes-balanced-p' rejects mismatched quotes"
-  (should (equal nil (mevedel-tools--quotes-balanced-p "\"hello'"))))
-
-;;
-;;; Command Substitution Balance Tests
-
-(mevedel-deftest mevedel-tools--command-substitutions-balanced-p ()
-  ,test
-  (test)
-  :doc "balanced substitutions:
-`mevedel-tools--command-substitutions-balanced-p' accepts no substitutions"
-  (should (equal t (mevedel-tools--command-substitutions-balanced-p
-                    "echo hello")))
-  :doc "balanced substitutions:
-`mevedel-tools--command-substitutions-balanced-p' accepts simple substitution"
-  (should (equal t (mevedel-tools--command-substitutions-balanced-p
-                    "echo $(pwd)")))
-  :doc "balanced substitutions:
-`mevedel-tools--command-substitutions-balanced-p' accepts nested substitution"
-  (should (equal t (mevedel-tools--command-substitutions-balanced-p
-                    "echo $(echo $(pwd))")))
-  :doc "unbalanced substitutions:
-`mevedel-tools--command-substitutions-balanced-p' rejects unmatched substitution"
-  (should (equal nil (mevedel-tools--command-substitutions-balanced-p
-                      "echo $("))))
-
-;;
-;;; Complex Syntax Detection Tests
-
-(mevedel-deftest mevedel-tools--contains-complex-syntax-p ()
-  ,test
-  (test)
-  :doc "simple commands:
-`mevedel-tools--contains-complex-syntax-p' allows simple commands"
-  (should (equal nil (mevedel-tools--contains-complex-syntax-p "echo hello")))
-  :doc "simple commands:
-`mevedel-tools--contains-complex-syntax-p' allows commands with arguments"
-  (should (equal nil (mevedel-tools--contains-complex-syntax-p "ls -la /tmp")))
-  :doc "simple commands:
-`mevedel-tools--contains-complex-syntax-p' allows command chains"
-  (should (equal nil (mevedel-tools--contains-complex-syntax-p "echo a && echo b")))
-  :doc "simple commands:
-`mevedel-tools--contains-complex-syntax-p' allows pipes"
-  (should (equal nil (mevedel-tools--contains-complex-syntax-p "cat file | grep pattern")))
-  :doc "simple commands:
-`mevedel-tools--contains-complex-syntax-p' allows command substitution (not complex)"
-  (should (equal nil (mevedel-tools--contains-complex-syntax-p "echo $(pwd)")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects variable expansion"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "echo $VAR")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects braced variable expansion"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "echo ${VAR}")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects eval command"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "eval 'dangerous'")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects exec command"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "exec rm -rf /")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects here documents"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "cat << EOF")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects brace expansion"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "echo {a,b,c}")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects unmatched command substitution"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "echo $(")))
-  :doc "complex syntax detection:
-`mevedel-tools--contains-complex-syntax-p' detects unbalanced quotes"
-  (should (equal t (mevedel-tools--contains-complex-syntax-p "echo \"hello"))))
-
-;;
-;;; Command Chain Splitting Tests
-
-(mevedel-deftest mevedel-tools--split-command-chain ()
-  ,test
-  (test)
-  :doc "simple commands:
-`mevedel-tools--split-command-chain' returns single command as-is"
-  (should (equal '("echo hello")
-                 (mevedel-tools--split-command-chain "echo hello")))
-  :doc "simple commands:
-`mevedel-tools--split-command-chain' handles empty string"
-  (should (equal '()
-                 (mevedel-tools--split-command-chain "")))
-  :doc "command chains:
-`mevedel-tools--split-command-chain' splits on &&"
-  (should (equal '("cmd1" "cmd2")
-                 (mevedel-tools--split-command-chain "cmd1 && cmd2")))
-  :doc "command chains:
-`mevedel-tools--split-command-chain' splits on ||"
-  (should (equal '("cmd1" "cmd2")
-                 (mevedel-tools--split-command-chain "cmd1 || cmd2")))
-  :doc "command chains:
-`mevedel-tools--split-command-chain' splits on semicolon"
-  (should (equal '("cmd1" "cmd2")
-                 (mevedel-tools--split-command-chain "cmd1 ; cmd2")))
-  :doc "command chains:
-`mevedel-tools--split-command-chain' splits on pipe"
-  (should (equal '("cmd1" "cmd2")
-                 (mevedel-tools--split-command-chain "cmd1 | cmd2")))
-  :doc "command chains:
-`mevedel-tools--split-command-chain' splits on newline"
-  (should (equal '("cmd1" "cmd2")
-                 (mevedel-tools--split-command-chain "cmd1\ncmd2")))
-  :doc "command chains:
-`mevedel-tools--split-command-chain' handles multiple separators"
-  (should (equal '("a" "b" "c" "d" "e")
-                 (mevedel-tools--split-command-chain "a && b || c ; d | e")))
-  :doc "quote handling:
-`mevedel-tools--split-command-chain' does not split inside double quotes"
-  (should (equal '("echo \"a && b\"")
-                 (mevedel-tools--split-command-chain "echo \"a && b\"")))
-  :doc "quote handling:
-`mevedel-tools--split-command-chain' does not split inside single quotes"
-  (should (equal '("echo 'a || b'")
-                 (mevedel-tools--split-command-chain "echo 'a || b'")))
-  :doc "quote handling:
-`mevedel-tools--split-command-chain' handles quotes with separators outside"
-  (should (equal '("echo \"hello\"" "ls")
-                 (mevedel-tools--split-command-chain "echo \"hello\" && ls")))
-  :doc "command substitutions:
-`mevedel-tools--split-command-chain' does not split inside $()"
-  (should (equal '("echo $(git rev-parse || true)" "pwd")
-                 (mevedel-tools--split-command-chain
-                  "echo $(git rev-parse || true) && pwd"))))
-
-;;
-;;; Substitution Extraction Tests
-
-(mevedel-deftest mevedel-tools--extract-substitutions ()
-  ,test
-  (test)
-  :doc "$() substitutions:
-`mevedel-tools--extract-substitutions' extracts simple substitution"
-  (should (equal '("pwd")
-                 (mevedel-tools--extract-substitutions "echo $(pwd)")))
-  :doc "$() substitutions:
-`mevedel-tools--extract-substitutions' extracts multiple substitutions"
-  (should (equal '("date" "pwd")
-                 (mevedel-tools--extract-substitutions "echo $(date) $(pwd)")))
-  :doc "$() substitutions:
-`mevedel-tools--extract-substitutions' extracts nested substitutions"
-  (should (equal '("echo $(pwd)")
-                 (mevedel-tools--extract-substitutions "echo $(echo $(pwd))")))
-  :doc "$() substitutions:
-`mevedel-tools--extract-substitutions' handles empty command string"
-  (should (equal '()
-                 (mevedel-tools--extract-substitutions "echo hello")))
-  :doc "$() substitutions:
-`mevedel-tools--extract-substitutions' ignores unmatched substitution"
-  (should (equal '()
-                 (mevedel-tools--extract-substitutions "echo $(")))
-  :doc "backtick substitutions:
-`mevedel-tools--extract-substitutions' extracts backtick substitution"
-  (should (equal '("date")
-                 (mevedel-tools--extract-substitutions "echo `date`")))
-  :doc "backtick substitutions:
-`mevedel-tools--extract-substitutions' extracts multiple backtick substitutions"
-  (should (equal '("date" "pwd")
-                 (mevedel-tools--extract-substitutions "echo `date` `pwd`"))))
-
-;;
-;;; Command Name Extraction Tests
-
-(mevedel-deftest mevedel-tools--extract-command-name ()
-  ,test
-  (test)
-  :doc "simple commands:
-`mevedel-tools--extract-command-name' extracts simple command"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "ls")))
-  :doc "simple commands:
-`mevedel-tools--extract-command-name' extracts command with arguments"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "ls -la /tmp")))
-  :doc "simple commands:
-`mevedel-tools--extract-command-name' handles quoted arguments"
-  (should (equal "echo"
-                 (mevedel-tools--extract-command-name "echo \"hello world\"")))
-  :doc "command prefixes:
-`mevedel-tools--extract-command-name' extracts command after sudo"
-  (should (equal "rm"
-                 (mevedel-tools--extract-command-name "sudo rm -rf /")))
-  :doc "command prefixes:
-`mevedel-tools--extract-command-name' extracts command after env with assignments"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "env VAR=val ls")))
-  :doc "command prefixes:
-`mevedel-tools--extract-command-name' extracts command after nice"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "nice -n 10 ls")))
-  :doc "command prefixes:
-`mevedel-tools--extract-command-name' extracts command after timeout"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "timeout 5 ls")))
-  :doc "paths:
-`mevedel-tools--extract-command-name' extracts basename from absolute path"
-  (should (equal "bash"
-                 (mevedel-tools--extract-command-name "/bin/bash")))
-  :doc "paths:
-`mevedel-tools--extract-command-name' extracts basename from relative path"
-  (should (equal "script.sh"
-                 (mevedel-tools--extract-command-name "./script.sh")))
-  :doc "variable assignments:
-`mevedel-tools--extract-command-name' skips variable assignments"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "VAR=value ls")))
-  :doc "variable assignments:
-`mevedel-tools--extract-command-name' skips multiple variable assignments"
-  (should (equal "ls"
-                 (mevedel-tools--extract-command-name "A=1 B=2 ls"))))
-
-;;
-;;; Full Command Extraction Tests
-
-(mevedel-deftest mevedel-tools--extract-commands ()
-  ,test
-  (test)
-  :doc "simple commands:
-`mevedel-tools--extract-commands' extracts single command"
-  (let ((result (mevedel-tools--extract-commands "echo hello")))
-    (should (equal '("echo") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "simple commands:
-`mevedel-tools--extract-commands' extracts command with path"
-  (let ((result (mevedel-tools--extract-commands "/bin/ls -la")))
-    (should (equal '("ls") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "command chains:
-`mevedel-tools--extract-commands' extracts from &&"
-  (let ((result (mevedel-tools--extract-commands "echo a && ls")))
-    (should (equal '("echo" "ls") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "command chains:
-`mevedel-tools--extract-commands' extracts from pipes"
-  (let ((result (mevedel-tools--extract-commands "cat file | grep pattern | wc -l")))
-    (should (equal '("cat" "grep" "wc") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "command chains:
-`mevedel-tools--extract-commands' extracts from semicolons"
-  (let ((result (mevedel-tools--extract-commands "echo a ; ls ; pwd")))
-    (should (equal '("echo" "ls" "pwd") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "command substitutions:
-`mevedel-tools--extract-commands' extracts from simple substitution"
-  (let ((result (mevedel-tools--extract-commands "echo $(pwd)")))
-    (should (equal '("echo" "pwd") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "command substitutions:
-`mevedel-tools--extract-commands' extracts from nested substitutions"
-  (let ((result (mevedel-tools--extract-commands "echo $(echo $(pwd))")))
-    (should (equal '("echo" "echo" "pwd") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "command substitutions:
-`mevedel-tools--extract-commands' extracts from backticks"
-  (let ((result (mevedel-tools--extract-commands "echo `date`")))
-    (should (equal '("echo" "date") (car result)))
-    (should (equal nil (cdr result))))
-  :doc "dangerous command extraction:
-`mevedel-tools--extract-commands' detects sudo in chains"
-  (let ((result (mevedel-tools--extract-commands "echo hello && sudo rm -rf /")))
-    ;; Extracts both sudo and the command after it for better security
-    (should (equal '("echo" "sudo" "rm") (car result))))
-  :doc "dangerous command extraction:
-`mevedel-tools--extract-commands' detects commands in substitutions"
-  (let ((result (mevedel-tools--extract-commands "echo $(sudo rm -rf /)")))
-    ;; Extracts echo, then recursively extracts sudo and rm from the substitution
-    (should (equal '("echo" "sudo" "rm") (car result))))
-  :doc "dangerous command extraction:
-`mevedel-tools--extract-commands' detects chains inside substitutions"
-  (let ((result (mevedel-tools--extract-commands "echo $(rm file && true)")))
-    (should (equal '("echo" "rm" "true") (car result))))
-  :doc "complex syntax handling:
-`mevedel-tools--extract-commands' marks variable expansion as unparseable"
-  (let ((result (mevedel-tools--extract-commands "echo $VAR")))
-    (should (equal t (cdr result))))
-  :doc "complex syntax handling:
-`mevedel-tools--extract-commands' marks unmatched substitutions as unparseable"
-  (let ((result (mevedel-tools--extract-commands "echo $(")))
-    (should (equal t (cdr result))))
-  :doc "complex syntax handling:
-`mevedel-tools--extract-commands' marks eval as unparseable"
-  (let ((result (mevedel-tools--extract-commands "eval 'dangerous'")))
-    (should (equal t (cdr result))))
-  :doc "complex syntax handling:
-`mevedel-tools--extract-commands' marks unbalanced quotes as unparseable"
-  (let ((result (mevedel-tools--extract-commands "echo \"hello")))
-    (should (equal t (cdr result)))))
 
 
 (mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
@@ -433,366 +115,139 @@
 ;;
 ;;; Permission Checking Integration Tests
 
-(mevedel-deftest mevedel-tools--check-bash-permission
-  (:vars (original-rules original-dangerous original-fail-safe)
-   :before-each
-   ;; Save original permissions
-   (progn
-     (setq original-rules mevedel-permission-rules)
-     (setq original-dangerous mevedel-bash-dangerous-commands)
-     (setq original-fail-safe mevedel-bash-fail-safe-on-complex-syntax))
-   :after-each
-   ;; Restore original permissions
-   (progn
-     (setq mevedel-permission-rules original-rules)
-     (setq mevedel-bash-dangerous-commands original-dangerous)
-     (setq mevedel-bash-fail-safe-on-complex-syntax original-fail-safe)))
+(mevedel-deftest mevedel-tools--check-bash-permission ()
   ,test
   (test)
-  :doc "allow patterns:
-`mevedel-tools--check-bash-permission' allows commands matching allow patterns"
-  ;; Specifier-carrying rules override unqualified generic rules
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "echo*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello"))))
-  :doc "allow patterns:
-`mevedel-tools--check-bash-permission' allows all commands in chain if all match"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "echo*" :action allow)
-            ("Bash" :pattern "ls*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello && ls -la"))))
-  :doc "allow patterns:
-`mevedel-tools--check-bash-permission' allows compound commands with arguments (git status)"
-  ;; Matches full command string "git status" against "git status*"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "git status*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "git status"))))
-  :doc "allow patterns:
-`mevedel-tools--check-bash-permission' allows compound commands with additional arguments (git log --oneline)"
-  ;; Matches full command string "git log --oneline" against "git log*"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "git log*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "git log --oneline --graph"))))
-  :doc "allow prefix patterns:
-`mevedel-tools--check-bash-permission' treats PREFIX:* as a word-boundary prefix"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "git log:*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "git log")))
-    (should (equal 'allow (mevedel-tools--check-bash-permission "git log --oneline")))
-    (should (equal 'deny (mevedel-tools--check-bash-permission "git lollipop"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' detects && operator and checks all commands"
-  ;; With &&, should check both extracted commands (echo and rm)
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello && rm file"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' detects || operator and checks all commands"
-  ;; With ||, should check both extracted commands
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'deny (mevedel-tools--check-bash-permission "ls || rm file"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' detects | (pipe) operator and checks all commands"
-  ;; With pipe, should check both extracted commands
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'deny (mevedel-tools--check-bash-permission "cat file | rm file"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' detects ; (semicolon) operator and checks all commands"
-  ;; With semicolon, should check both extracted commands
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello ; rm file"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' detects newline operator and checks all commands"
-  ;; With newline, should check both extracted commands
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello\nrm file"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' handles operators inside substitutions"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission
-                    "echo $(git rev-parse --show-toplevel 2>/dev/null || pwd) && git status"))))
-  :doc "operator detection:
-`mevedel-tools--check-bash-permission' treats commands without operators as specific match"
-  ;; Without operators, specific pattern should take precedence
-  ;; "echo*" matches, so we trust it (don't check extracted "echo")
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "echo*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello world"))))
-  :doc "deny patterns:
-`mevedel-tools--check-bash-permission' denies commands matching deny patterns"
-  ;; Later entries override earlier - put specific patterns LAST
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (should (equal 'deny (mevedel-tools--check-bash-permission "rm -rf /"))))
-  :doc "deny patterns:
-`mevedel-tools--check-bash-permission' denies chain if any command matches deny pattern"
-  ;; Later entries override earlier - put specific patterns LAST
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action deny)))
-    (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello && rm file"))))
-  :doc "dangerous command blocklist:
-`mevedel-tools--check-bash-permission' asks for dangerous commands even if pattern allows"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '("rm" "sudo"))
-    (should (equal 'ask (mevedel-tools--check-bash-permission "rm file"))))
-  :doc "dangerous command blocklist:
-`mevedel-tools--check-bash-permission' detects dangerous commands in chains"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '("sudo"))
-    (should (equal 'ask (mevedel-tools--check-bash-permission "echo hello && sudo ls"))))
-  :doc "dangerous command blocklist:
-`mevedel-tools--check-bash-permission' detects dangerous commands after sudo"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '("rm"))
-    (should (equal 'ask (mevedel-tools--check-bash-permission "sudo rm -rf /"))))
-  :doc "complex syntax handling:
-`mevedel-tools--check-bash-permission' asks for complex syntax when fail-safe is enabled"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
-    (setq mevedel-bash-fail-safe-on-complex-syntax t)
-    (should (equal 'ask (mevedel-tools--check-bash-permission "echo $VAR"))))
-  :doc "complex syntax handling:
-`mevedel-tools--check-bash-permission' attempts parsing when fail-safe is disabled"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (setq mevedel-bash-fail-safe-on-complex-syntax nil)
-    (should (equal 'allow (mevedel-tools--check-bash-permission "echo $VAR"))))
-  :doc "precedence rules:
-`mevedel-tools--check-bash-permission': deny takes precedence over ask"
-  ;; Later entries override - put specific patterns LAST
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "echo*" :action ask)
-            ("Bash" :pattern "rm*" :action deny)))
-    (should (equal 'deny (mevedel-tools--check-bash-permission "echo hello && rm file"))))
-  :doc "precedence rules:
-`mevedel-tools--check-bash-permission': ask takes precedence over allow"
-  ;; Later entries override - put specific patterns LAST
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)
-            ("Bash" :pattern "rm*" :action ask)))
-    (should (equal 'ask (mevedel-tools--check-bash-permission "ls && rm file"))))
-  :doc "precedence rules:
-`mevedel-tools--check-bash-permission': specifier-carrying rules override unqualified rules"
-  ;; Unqualified deny is overridden by the pattern-specifier allow
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "echo*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow (mevedel-tools--check-bash-permission "echo hello"))))
-  :doc "no-rules default:
-`mevedel-tools--check-bash-permission' returns ask when no rules match"
-  (progn
-    (setq mevedel-permission-rules nil)
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'ask (mevedel-tools--check-bash-permission "somecmd foo"))))
-  :doc "explicit context:
-`mevedel-tools--check-bash-permission' reads rules from explicit context"
-  (let* ((session (mevedel-session--create
-                   :name "test"
-                   :permission-rules
-                   '(("Bash" :pattern "customcmd*" :action allow))))
-         (context (mevedel-permission--invocation-context
-                   :tool-name "Bash"
-                   :pattern "customcmd run"
-                   :session session))
-         (mevedel-permission-rules nil)
-         (mevedel-bash-dangerous-commands nil))
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission
-                    "customcmd run" :permission-context context))))
+  :doc "read-only policy:
+\`mevedel-tools--check-bash-permission' allows recognized inspection"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'allow (mevedel-tools--check-bash-permission "pwd && cat file"))))
+  :doc "unknown policy:
+\`mevedel-tools--check-bash-permission' asks for unknown commands"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'ask (mevedel-tools--check-bash-permission "make test"))))
+  :doc "dangerous policy:
+\`mevedel-tools--check-bash-permission' asks for dangerous commands"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should (eq 'ask (mevedel-tools--check-bash-permission "rm file"))))
+  :doc "complex policy:
+\`mevedel-tools--check-bash-permission' asks for complex syntax"
+  (let ((mevedel-permission-rules nil))
+    (should (eq 'ask (mevedel-tools--check-bash-permission "FOO=bar make test"))))
+  :doc "session authority:
+\`mevedel-tools--check-bash-permission' honors a direct dangerous allow"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "rm file"
+          :permission-context
+          '(:mode ask
+            :buckets ((:session . (("Bash" :pattern "rm *" :action allow)))))))))
+  :doc "persistent authority:
+\`mevedel-tools--check-bash-permission' honors a direct complex allow"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "FOO=bar make test"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:persistent .
+              (("Bash" :pattern "FOO=bar make test" :action allow)))))))))
+  :doc "global authority:
+\`mevedel-tools--check-bash-permission' treats configured global rules as direct"
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "echo $HOME" :action allow))))
+    (should (eq 'allow
+                (mevedel-tools--check-bash-permission "echo $HOME"))))
+  :doc "delegated dangerous rule:
+\`mevedel-tools--check-bash-permission' ignores invocation authority for danger"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "rm file"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:invocation . (("Bash" :pattern "rm *" :action allow)))))))))
+  :doc "delegated complex rule:
+\`mevedel-tools--check-bash-permission' ignores request authority for complexity"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "FOO=bar make test"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:request .
+              (("Bash" :pattern "FOO=bar make test" :action allow)))))))))
+  :doc "delegated unknown rule:
+\`mevedel-tools--check-bash-permission' permits ordinary delegated commands"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "make test"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:request . (("Bash" :pattern "make test" :action allow)))))))))
+  :doc "explicit deny:
+\`mevedel-tools--check-bash-permission' keeps deny final"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission
+          "rm file"
+          :permission-context
+          '(:mode full-auto
+            :buckets
+            ((:session . (("Bash" :pattern "rm *" :action allow)))
+             (:persistent . (("Bash" :pattern "rm *" :action deny)))))))))
   :doc "full-auto:
-`mevedel-tools--check-bash-permission' allows unknown commands"
-  (let ((mevedel-permission-mode 'full-auto))
-    (setq mevedel-permission-rules nil)
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission "somecmd foo"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' allows dangerous and complex commands"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-bash-fail-safe-on-complex-syntax t))
-    (setq mevedel-permission-rules nil)
-    (setq mevedel-bash-dangerous-commands '("rm"))
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission "rm /tmp/foo")))
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission "echo $VAR"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' preserves explicit deny"
-  (let ((mevedel-permission-mode 'full-auto))
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "rm *" :action deny)))
-    (should (equal 'deny
-                   (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' preserves extracted command-name deny"
-  (let ((mevedel-permission-mode 'full-auto))
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "rm" :action deny)))
-    (should (equal 'deny
-                   (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' asks for literal protected paths"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-protected-paths '("**/.git/**" "~/.ssh/**" "~/.gnupg/**")))
-    (setq mevedel-permission-rules nil)
-    (should (equal 'ask
-                   (mevedel-tools--check-bash-permission
-                    "cat .git/config")))
-    (should (equal 'ask
-                   (mevedel-tools--check-bash-permission
-                    "ls ~/.ssh"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' asks for exact protected files in substitutions"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-protected-paths '("**/.env")))
-    (setq mevedel-permission-rules nil)
-    (should (equal 'ask
-                   (mevedel-tools--check-bash-permission
-                    "echo $(cat .env)")))
-    (should (equal 'ask
-                   (mevedel-tools--check-bash-permission
-                    "echo `cat .env`"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' asks for custom protected dot directories"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-protected-paths '("**/.aws/**")))
-    (setq mevedel-permission-rules nil)
-    (should (equal 'ask
-                   (mevedel-tools--check-bash-permission
-                    "cat .aws/credentials"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' asks for protected relative paths"
-  (let* ((root (make-temp-file "mevedel-protected-relative-" t))
-         (default-directory (file-name-as-directory root))
-         (mevedel-permission-mode 'full-auto)
-         (mevedel-protected-paths
-          (list (file-name-concat root "secrets" "**"))))
-    (unwind-protect
-        (progn
-          (setq mevedel-permission-rules nil)
-          (should (equal 'ask
-                         (mevedel-tools--check-bash-permission
-                          "cat secrets/key"))))
-      (delete-directory root t)))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' preserves deny before protected path ask"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-protected-paths '("~/.ssh/**")))
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "cat *" :action deny)))
-    (should (equal 'deny
-                   (mevedel-tools--check-bash-permission
-                    "cat ~/.ssh/config"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' preserves deny patterns inside substitutions"
-  (let ((mevedel-permission-mode 'full-auto))
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "rm *" :action deny)))
-    (should (equal 'deny
-                   (mevedel-tools--check-bash-permission
-                    "echo $(rm /tmp/foo)"))))
-  :doc "full-auto:
-`mevedel-tools--check-bash-permission' asks for protected redirection targets"
-  (let ((mevedel-permission-mode 'full-auto)
-        (mevedel-protected-paths '("/tmp/protected/**")))
-    (setq mevedel-permission-rules nil)
-    (should (equal 'ask
-                   (mevedel-tools--check-bash-permission
-                    "echo x >/tmp/protected/file"))))
-  :doc "compound commands:
-`mevedel-tools--check-bash-permission' accepts reusable segment patterns"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "git log *" :action allow)
-            ("Bash" :pattern "pwd" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission
-                    "pwd && git log --oneline"))))
-  :doc "compound commands:
-`mevedel-tools--check-bash-permission' lets specific segment grants override generic deny"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :action deny)
-            ("Bash" :pattern "git log:*" :action allow)
-            ("Bash" :pattern "git show:*" :action allow)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'allow
-                   (mevedel-tools--check-bash-permission
-                    "git log --oneline && git show --stat HEAD"))))
-  :doc "command substitutions:
-`mevedel-tools--check-bash-permission' checks nested commands inside an allowed segment"
-  (progn
-    (setq mevedel-permission-rules
-          '(("Bash" :pattern "echo:*" :action allow)
-            ("Bash" :pattern "rm:*" :action deny)))
-    (setq mevedel-bash-dangerous-commands '())
-    (should (equal 'deny
-                   (mevedel-tools--check-bash-permission
-                    "echo $(rm file)")))))
-
-
-;;
-;;; Guardian guidance
+\`mevedel-tools--check-bash-permission' bypasses heuristic prompts"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "rm file" :permission-context '(:mode full-auto :buckets nil))))
+    (should
+     (eq 'allow
+         (mevedel-tools--check-bash-permission
+          "echo $HOME" :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "protected path:
+\`mevedel-tools--check-bash-permission' asks before protected resources"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '("**/.git/**")))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "cat .git/config"
+          :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "complex protected path:
+\`mevedel-tools--check-bash-permission' keeps resource checks after direct allow"
+  (let ((mevedel-permission-rules
+         '(("Bash" :pattern "FOO=bar cat ~/.ssh/key" :action allow)))
+        (mevedel-protected-paths '("**/.ssh/**"))
+        (context
+         '(:mode ask
+           :buckets
+           ((:defcustom .
+             (("Bash" :pattern "FOO=bar cat ~/.ssh/key" :action allow)))))))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "FOO=bar cat ~/.ssh/key"
+          :permission-context context)))))
 
 (mevedel-deftest mevedel-tool-exec--bash-guardian-normalize ()
   ,test
@@ -916,7 +371,6 @@
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "echo*" :action allow)))
         (mevedel-bash-dangerous-commands nil)
-        (mevedel-bash-fail-safe-on-complex-syntax t)
         outcome)
     (mevedel-tool-exec--check-permission-async
      nil '(:command "echo hello") (lambda (r) (setq outcome r)))
@@ -1051,8 +505,7 @@
   ;; Bash prompts through the queue's 5-button overlay instead of the
   ;; direct prompt primitive.  Mock the queued entry point and
   ;; exercise the allow-once outcome.
-  (let ((mevedel-permission-rules
-         '(("Bash" :pattern "*" :action allow)))
+  (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -1062,8 +515,7 @@
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow)))
   :doc "prompts user and returns deny when pattern says ask and user denies"
-  (let ((mevedel-permission-rules
-         '(("Bash" :pattern "*" :action allow)))
+  (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -1073,8 +525,7 @@
        nil '(:command "sudo ls") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny)))
   :doc "adds advisory guardian guidance to queued Bash prompts"
-  (let ((mevedel-permission-rules
-         '(("Bash" :pattern "*" :action allow)))
+  (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         (mevedel-permission-guardian
          (lambda (_command _context callback)
@@ -1100,8 +551,7 @@
     (should (eq outcome 'deny))
     (should (null (plist-get captured :guardian))))
   :doc "shows pending guardian guidance until a nil result marks it unavailable"
-  (let ((mevedel-permission-rules
-         '(("Bash" :pattern "*" :action allow)))
+  (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         callback
         captured
@@ -1125,8 +575,7 @@
       (should (eq 'unavailable
                   (cadr (plist-get captured :guardian-cell))))))
   :doc "enqueues prompts before guardian guidance completes"
-  (let ((mevedel-permission-rules
-         '(("Bash" :pattern "*" :action allow)))
+  (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         callbacks
         enqueued
@@ -1161,8 +610,7 @@
          (session (mevedel-session-create "main" workspace))
          (data-buffer (generate-new-buffer " *mevedel-guardian-data*"))
          (source-buffer (generate-new-buffer " *mevedel-guardian-source*"))
-         (mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
+         (mevedel-permission-rules nil)
          (mevedel-bash-dangerous-commands '("sudo"))
          guardian-callback
          enqueue-session
@@ -1215,8 +663,7 @@
                      'test root root "test"))
          (session (mevedel-session-create "main" workspace))
          (source-buffer (generate-new-buffer " *mevedel-guardian-cancel*"))
-         (mevedel-permission-rules
-          '(("Bash" :pattern "*" :action allow)))
+         (mevedel-permission-rules nil)
          (mevedel-bash-dangerous-commands '("sudo"))
          guardian-callback
          captured
@@ -1254,8 +701,7 @@
   ;; Feedback is part of the authoritative queued prompt vocabulary.
   ;; Mock the queue entry point and deliver it directly to the
   ;; adapter's callback.
-  (let ((mevedel-permission-rules
-         '(("Bash" :pattern "*" :action allow)))
+  (let ((mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("sudo"))
         outcome)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)

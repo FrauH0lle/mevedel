@@ -606,7 +606,7 @@ inserted as-is rather than parsed as review JSON.
 Both commands receive Git inspection grants for read-only commands (`git diff`,
 `git status`, `git log`, `git show`, `git merge-base`, `git rev-parse`,
 `git ls-files`, `git cat-file`), plus `head` for bounded object inspection and
-the explicit `GIT_PAGER=cat git diff ...` form. Review adds a local deny rule for
+the explicit `git --no-pager diff ...` form. Review adds a local deny rule for
 other Bash commands; verify leaves validation commands to the normal permission
 policy.
 
@@ -691,13 +691,16 @@ other buffer it updates the global default.
 Use space-boundary patterns (`"ls"` + `"ls *"`) rather than unbounded globs
 like `"ls*"` to avoid accidentally matching unrelated commands such as `lsof`.
 
-**Dangerous commands** (`mevedel-bash-dangerous-commands`): commands that
-downgrade Bash allows to confirmation prompts (e.g., `rm`, `sudo`, `dd`,
-`chmod`, `curl`). Explicit deny rules still deny immediately.
+**Bash analysis**: mevedel classifies each request as `read-only`, `dangerous`,
+`complex`, or `unknown`.  It uses the Bash Tree-sitter grammar when available
+through normal Emacs configuration and otherwise uses a conservative scanner.
+Dynamic shell syntax always classifies as complex.  Direct user-authored
+session, persistent, and global patterns may deliberately authorize dangerous
+or complex forms; rules delegated by a skill or request may not.  Explicit
+denies remain final.
 
-**Fail-safe mode** (`mevedel-bash-fail-safe-on-complex-syntax`): when enabled
-(the default), commands with unparseable syntax (variable expansion, `eval`,
-here-docs, brace expansion) automatically escalate to `ask`.
+**Dangerous commands** (`mevedel-bash-dangerous-commands`): command names that
+contribute the `dangerous` class (e.g., `rm`, `sudo`, `dd`, `chmod`, `curl`).
 
 **Bash timeout** (`mevedel-bash-timeout`): maximum seconds a Bash command may
 run before mevedel terminates it. Defaults to 120 seconds; `timeout_seconds`
@@ -912,8 +915,7 @@ Useful commands:
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-permission-mode`                  | Default permission mode (`ask` / `auto` / `full-auto`).                   |
 | `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
-| `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
-| `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |
+| `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
 | `mevedel-bash-timeout`                     | Seconds before a Bash command is terminated; nil disables timeouts.      |
 | `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |
 | `mevedel-permission-guardian-timeout`      | Seconds to wait for Bash guardian guidance before showing the prompt.    |

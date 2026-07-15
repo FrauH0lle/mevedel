@@ -12,6 +12,7 @@
   (require 'mevedel-tool-registry))
 
 (require 'subr-x)
+(require 'mevedel-bash-analysis)
 (require 'mevedel-permission-log)
 
 ;; `cl-extra'
@@ -37,6 +38,10 @@
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
+
+;; `mevedel-bash-analysis'
+(declare-function mevedel-bash-analysis-analyze
+                  "mevedel-bash-analysis" (source))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
@@ -68,6 +73,9 @@
                   (invocation-rules request-rules
                                     session-rules persistent-rules))
 (declare-function mevedel-permission--first-non-nil-action
+                  "mevedel-permissions"
+                  (buckets tool-name path pattern domain name))
+(declare-function mevedel-permission--first-non-nil-action-with-bucket
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--load-persistent-rules "mevedel-permissions"
@@ -153,44 +161,16 @@ that has unwound."
 The command names are checked against `mevedel-bash-dangerous-commands'.
 Used by the queue entry's `:dangerous' flag so the eventual Bash
 render-head can warn prominently."
-  (when-let* ((extraction (mevedel-tools--extract-commands command))
-              (commands (car extraction)))
-    (cl-some (lambda (cmd) (member cmd mevedel-bash-dangerous-commands))
-             commands)))
+  (eq (plist-get (mevedel-tool-exec--analyze-bash command) :class)
+      'dangerous))
+
+(defun mevedel-tool-exec--analyze-bash (command)
+  "Return normalized Bash analysis for COMMAND."
+  (mevedel-bash-analysis-analyze command))
 
 
 ;;
 ;;; Command Execution
-
-(defcustom mevedel-bash-dangerous-commands
-  '("rm" "sudo" "dd" "mkfs" "fdisk" "parted"
-    "chmod" "chown" "chgrp" "chattr"
-    "kill" "pkill" "killall"
-    "curl" "wget" "nc" "ncat" "telnet"
-    "ssh" "scp" "rsync" "sftp"
-    "iptables" "systemctl" "service"
-    "reboot" "shutdown" "poweroff" "halt")
-  "Commands that always require explicit confirmation.
-Even if a rule in `mevedel-permission-rules' would allow these
-commands, they will still trigger a confirmation prompt due to their
-potential for system modification, data loss, or external network
-access."
-  :type '(repeat string)
-  :group 'mevedel)
-
-(defcustom mevedel-bash-fail-safe-on-complex-syntax t
-  "When non-nil, always ask for permission when complex syntax is detected.
-Complex syntax includes: variable expansion ($VAR, ${VAR}), eval, exec,
-nested quotes, here-documents, and other constructs that cannot be
-reliably parsed.
-
-When nil, the system will attempt to extract commands from complex
-syntax, which may miss dangerous commands hidden in variable expansions
-or other dynamic constructs.
-
-Recommended value: t (fail-safe behavior)."
-  :type 'boolean
-  :group 'mevedel)
 
 (defcustom mevedel-bash-timeout 120
   "Maximum seconds a Bash command may run before it is terminated.
@@ -248,307 +228,6 @@ phases, protected-path policy, and the user's decision remain authoritative."
     "doas" "pkexec" "su")
   "Shells and wrappers that must not be generalized to prefix rules.")
 
-(defun mevedel-tools--quotes-balanced-p (str)
-  "Return t if quotes in STR are properly balanced, nil otherwise.
-Handles single quotes, double quotes, and backslash escaping."
-  (let ((in-single nil)
-        (in-double nil)
-        (escaped nil)
-        (i 0)
-        (len (length str)))
-    (catch 'unbalanced
-      (while (< i len)
-        (let ((c (aref str i)))
-          (cond
-           ;; Handle escape sequences
-           (escaped
-            (setq escaped nil))
-
-           ;; Backslash starts escape
-           ((eq c ?\\)
-            (setq escaped t))
-
-           ;; Single quote toggle (only outside double quotes)
-           ((and (eq c ?') (not in-double))
-            (setq in-single (not in-single)))
-
-           ;; Double quote toggle (only outside single quotes)
-           ((and (eq c ?\") (not in-single))
-            (setq in-double (not in-double))))
-          (setq i (1+ i))))
-
-      ;; Quotes are balanced if we're not currently inside any quotes
-      ;; and not in an escaped state
-      (and (not in-single) (not in-double) (not escaped)))))
-
-(defun mevedel-tools--command-substitutions-balanced-p (str)
-  "Return t when every `$(' in STR has a matching `)'."
-  (let ((pos 0)
-        (balanced t))
-    (while (and balanced (string-match "\\$(" str pos))
-      (let ((depth 1)
-            (i (match-end 0)))
-        (while (and (< i (length str)) (> depth 0))
-          (let ((c (aref str i)))
-            (cond
-             ((eq c ?\() (setq depth (1+ depth)))
-             ((eq c ?\)) (setq depth (1- depth))))
-            (setq i (1+ i))))
-        (if (= depth 0)
-            (setq pos i)
-          (setq balanced nil))))
-    balanced))
-
-(defun mevedel-tools--contains-complex-syntax-p (str)
-  "Return t if STR's syntax is too complex to parse safely, nil otherwise.
-
-Complex syntax includes:
-- Variable expansion: $VAR, ${VAR}
-- Eval or exec commands
-- Here documents
-- Brace expansion
-- Unmatched command substitutions
-- Unbalanced quotes"
-  (or
-   ;; Variable expansion (but not command substitution which we handle)
-   (and (string-match-p "\\$[{A-Za-z_]" str) t)
-
-   ;; Eval or exec
-   (and (string-match-p "\\b\\(eval\\|exec\\)\\b" str) t)
-
-   ;; Here documents
-   (and (string-match-p "<<-?\\s-*['\"]?\\w" str) t)
-
-   ;; Brace expansion that could hide commands
-   (and (string-match-p "{[^}]*,[^}]*}" str) t)
-
-   ;; Unmatched command substitution
-   (not (mevedel-tools--command-substitutions-balanced-p str))
-
-   ;; Unmatched quotes
-   (not (mevedel-tools--quotes-balanced-p str))))
-
-(defun mevedel-tools--split-command-chain (str)
-  "Split STR on command separators, respecting quotes and `$()'.
-Handles: && || ; | and newlines.
-Returns list of command segments."
-  (let ((result '())
-        (current "")
-        (in-single nil)
-        (in-double nil)
-        (escaped nil)
-        (subst-depth 0)
-        (i 0)
-        (len (length str)))
-    (while (< i len)
-      (let ((c (aref str i))
-            (next (when (< (1+ i) len) (aref str (1+ i)))))
-        (cond
-         ;; Handle escape sequences
-         (escaped
-          (setq current (concat current (char-to-string c)))
-          (setq escaped nil))
-
-         ;; Backslash starts escape
-         ((eq c ?\\)
-          (setq current (concat current (char-to-string c)))
-          (setq escaped t))
-
-         ;; Command substitution starts outside single quotes.
-         ((and (eq c ?$) (eq next ?\() (not in-single))
-          (setq current (concat current "$("))
-          (setq subst-depth (1+ subst-depth))
-          (setq i (1+ i)))
-
-         ;; Single quote toggle (only outside double quotes)
-         ((and (eq c ?') (not in-double))
-          (setq current (concat current (char-to-string c)))
-          (setq in-single (not in-single)))
-
-         ;; Double quote toggle (only outside single quotes)
-         ((and (eq c ?\") (not in-single))
-          (setq current (concat current (char-to-string c)))
-          (setq in-double (not in-double)))
-
-         ;; Keep separators inside command substitutions with the segment.
-         ((and (> subst-depth 0) (not in-single) (eq c ?\())
-          (setq current (concat current (char-to-string c)))
-          (setq subst-depth (1+ subst-depth)))
-
-         ((and (> subst-depth 0) (not in-single) (eq c ?\)))
-          (setq current (concat current (char-to-string c)))
-          (setq subst-depth (1- subst-depth)))
-
-         ;; Handle separators outside quotes
-         ((and (= subst-depth 0) (not in-single) (not in-double))
-          (cond
-           ;; && separator
-           ((and (eq c ?&) (eq next ?&))
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current "")
-            (setq i (1+ i))) ; skip next &
-
-           ;; || separator
-           ((and (eq c ?|) (eq next ?|))
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current "")
-            (setq i (1+ i))) ; skip next |
-
-           ;; Single | (pipe)
-           ((and (eq c ?|) (not (eq next ?|)))
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current ""))
-
-           ;; ; separator
-           ((eq c ?\;)
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current ""))
-
-           ;; Newline separator
-           ((eq c ?\n)
-            (when (> (length (string-trim current)) 0)
-              (push (string-trim current) result))
-            (setq current ""))
-
-           ;; Regular character
-           (t (setq current (concat current (char-to-string c))))))
-
-         ;; Inside quotes - accumulate
-         (t (setq current (concat current (char-to-string c)))))
-        (setq i (1+ i))))
-
-    ;; Add final segment
-    (when (> (length (string-trim current)) 0)
-      (push (string-trim current) result))
-
-    (nreverse result)))
-
-(defun mevedel-tools--extract-substitutions (str)
-  "Extract command substitutions from STR: $(...) and `...`.
-Returns list of substitution contents.
-Handles nested $(...)."
-  (let ((result '()))
-    ;; Extract $(...)
-    (let ((pos 0))
-      (while (string-match "\\$(" str pos)
-        (let ((start (match-end 0))
-              (depth 1)
-              (i (match-end 0)))
-          (while (and (< i (length str)) (> depth 0))
-            (let ((c (aref str i)))
-              (cond
-               ((eq c ?\() (setq depth (1+ depth)))
-               ((eq c ?\)) (setq depth (1- depth))))
-              (setq i (1+ i))))
-          (if (= depth 0)
-              (progn
-                (push (substring str start (1- i)) result)
-                (setq pos i))
-            (setq pos i)))))
-
-    ;; Extract `...` (backticks)
-    (let ((pos 0))
-      (while (string-match "`\\([^`]*\\)`" str pos)
-        (push (match-string 1 str) result)
-        (setq pos (match-end 0))))
-
-    (nreverse result)))
-
-(defun mevedel-tools--extract-command-name (segment)
-  "Extract the command name from SEGMENT.
-Handles prefixes like sudo, env, and paths like /bin/cmd.
-Returns command name string or nil."
-  (when (and segment (> (length segment) 0))
-    (condition-case nil
-        (let* ((words (split-string-and-unquote segment))
-               ;; Skip variable assignments (VAR=value)
-               (words (seq-drop-while
-                       (lambda (w)
-                         (string-match-p "^[A-Za-z_][A-Za-z0-9_]*=" w))
-                       words))
-               (first-word (car words)))
-          (when first-word
-            (cond
-             ;; sudo, doas, su - return the actual command after the prefix
-             ((member first-word '("sudo" "doas" "su"))
-              (or (cadr words) first-word))
-
-             ;; nice with optional -n flag
-             ((string-equal first-word "nice")
-              (let ((rest (cdr words)))
-                (or (if (and rest (string-equal (car rest) "-n"))
-                        (nth 3 words)  ; skip nice, -n, and value (4th element)
-                      (cadr words))    ; just skip nice (2nd element)
-                    "nice")))
-
-             ;; timeout - skip timeout and its duration argument
-             ((string-equal first-word "timeout")
-              (or (caddr words) "timeout"))  ; skip timeout and duration
-
-             ;; nohup, time - next word is the actual command
-             ((member first-word '("nohup" "time"))
-              (or (cadr words) first-word))
-
-             ;; env with args - find first non-assignment
-             ((string-equal first-word "env")
-              (or (car (seq-drop-while
-                        (lambda (w) (string-match-p "=" w))
-                        (cdr words)))
-                  "env"))
-
-             ;; Absolute/relative path - extract basename
-             ((string-match-p "/" first-word)
-              (file-name-nondirectory first-word))
-
-             ;; Regular command
-             (t first-word))))
-      (error nil))))
-
-(defun mevedel-tools--extract-commands (command-string)
-  "Extract all command names from COMMAND-STRING.
-Returns (COMMANDS . UNPARSEABLE) where:
-- COMMANDS is a list of extracted command names
-- UNPARSEABLE is t if complex syntax was detected, nil otherwise."
-  (let ((commands '())
-        (unparseable nil))
-
-    ;; Check for complex syntax and mark it, but continue extraction
-    ;; The check-bash-permission function will decide what to do based on fail-safe setting
-    (when (mevedel-tools--contains-complex-syntax-p command-string)
-      (setq unparseable t))
-
-    ;; Split on command separators
-    (dolist (segment (mevedel-tools--split-command-chain command-string))
-      (let ((segment-commands '())
-            (words (condition-case nil
-                       (split-string-and-unquote segment)
-                     (error nil))))
-
-        ;; Build commands in correct order: sudo (if present), main cmd, substitutions
-
-        ;; 1. Check if segment starts with sudo/doas/su - add the prefix
-        (when (and words (member (car words) '("sudo" "doas" "su")))
-          (setq segment-commands (append segment-commands (list (car words)))))
-
-        ;; 2. Extract and add the main command name
-        (when-let ((cmd (mevedel-tools--extract-command-name segment)))
-          (setq segment-commands (append segment-commands (list cmd))))
-
-        ;; 3. Extract and recursively process command substitutions
-        (dolist (subst (mevedel-tools--extract-substitutions segment))
-          (let ((sub-result (mevedel-tools--extract-commands subst)))
-            (setq segment-commands (append segment-commands (car sub-result)))
-            (when (cdr sub-result)
-              (setq unparseable t))))
-
-        ;; Add all segment commands to main commands list
-        (setq commands (append commands segment-commands))))
-
-    (cons commands unparseable)))
 
 (defun mevedel-tool-exec--dedupe-strings (strings)
   "Return STRINGS without duplicates, preserving first occurrence order."
@@ -577,8 +256,14 @@ Returns (COMMANDS . UNPARSEABLE) where:
 (defun mevedel-tool-exec--bash-decision-specifier-value (command)
   "Return sanitized Bash specifier metadata for COMMAND."
   (or (mevedel-tool-exec--bash-commands-summary
-       (car (mevedel-tools--extract-commands command)))
+       (mevedel-tool-exec--bash-command-names
+        (mevedel-tool-exec--analyze-bash command)))
       "unparseable shell command"))
+
+(defun mevedel-tool-exec--bash-command-names (analysis)
+  "Return executable names from normalized Bash ANALYSIS."
+  (mapcar (lambda (argv) (file-name-nondirectory (car argv)))
+          (plist-get analysis :commands)))
 
 (defun mevedel-tool-exec--bash-segment-words (segment)
   "Return shell words parsed from SEGMENT, or nil when parsing fails."
@@ -666,7 +351,7 @@ avoids saving a brittle whole-chain string such as
 `git log:*'."
   (mevedel-tool-exec--dedupe-strings
    (mapcar #'mevedel-tool-exec--bash-allow-pattern-for-segment
-           (mevedel-tools--split-command-chain command))))
+           (plist-get (mevedel-tool-exec--analyze-bash command) :segments))))
 
 (defun mevedel-tool-exec--effective-permission-mode
     (&optional permission-context)
@@ -686,54 +371,10 @@ paths are checked separately before callers use this result."
       (eq (or mode (mevedel-tool-exec--effective-permission-mode))
           'full-auto)))
 
-(defun mevedel-tool-exec--bash-path-word (word)
-  "Return the literal path part of shell WORD, or nil.
-Handles common redirection spellings such as `>/tmp/file',
-`2>>log', and `< ~/.ssh/config' after shell word splitting.  File
-descriptor duplication forms like `2>&1' are ignored."
-  (when (stringp word)
-    (let ((path word))
-      (when (string-match
-             "\\`[0-9]*\\(?:<<-?\\|<>\\|>>\\|>\\|<\\)\\(.+\\)\\'"
-             path)
-        (setq path (match-string 1 path)))
-      (unless (or (string-empty-p path)
-                  (string-prefix-p "&" path))
-        path))))
-
 (defun mevedel-tool-exec--bash-literal-path-tokens (command)
-  "Return literal shell words from COMMAND that look path-like.
-The scan is intentionally shallow: it catches obvious tokens such as
-`.git/config', `secrets/key', and `/home/me/.gnupg' without trying to
-evaluate variables or globs.  Command substitution bodies are scanned
-recursively as literal text."
-  (let (seen paths)
-    (cl-labels
-        ((add-path (path)
-           (when (and (stringp path)
-                      (not (member path seen)))
-             (push path seen)
-             (push path paths)))
-         (path-like-p (path)
-           (and (not (string-prefix-p "-" path))
-                (or (string-prefix-p "~/" path)
-                    (string-prefix-p "/" path)
-                    (string-prefix-p "./" path)
-                    (string-prefix-p "../" path)
-                    (string-match-p "/" path)
-                    (string-match-p "\\(?:\\`\\|/\\)\\.[^/]+\\(?:/\\|\\'\\)"
-                                    path))))
-         (scan (value)
-           (dolist (segment (mevedel-tools--split-command-chain value))
-             (dolist (word (or (mevedel-tool-exec--bash-segment-words segment)
-                               nil))
-               (when-let* ((path (mevedel-tool-exec--bash-path-word word)))
-                 (when (path-like-p path)
-                   (add-path path))))
-             (dolist (subst (mevedel-tools--extract-substitutions segment))
-               (scan subst)))))
-      (scan command))
-    (nreverse paths)))
+  "Return literal path resources identified in COMMAND.
+Dynamic expansions remain complex and are not evaluated."
+  (plist-get (mevedel-tool-exec--analyze-bash command) :resources))
 
 (defun mevedel-tool-exec--bash-protected-path-p (command)
   "Return non-nil if COMMAND has an obvious protected path token."
@@ -761,48 +402,19 @@ recursively as literal text."
 
 (defun mevedel-tool-exec--bash-deny-candidates (command)
   "Return Bash strings explicit deny rules should check for COMMAND.
-Includes the whole command, top-level command-chain segments, and
-command substitutions recursively.  This preserves argument-sensitive
-deny patterns such as `rm *' inside `$(...)' without making a generic
-deny on bare extracted command names override an explicit allow for the
-full command."
-  (let (seen result)
-    (cl-labels
-        ((add (value)
-           (when (and (stringp value)
-                      (not (string-empty-p (string-trim value)))
-                      (not (member value seen)))
-             (push value seen)
-             (push value result)))
-         (walk (value)
-           (add value)
-           (dolist (segment (mevedel-tools--split-command-chain value))
-             (add segment)
-             (dolist (subst (mevedel-tools--extract-substitutions segment))
-               (walk subst)))))
-      (walk command))
-    (nreverse result)))
+Includes the whole command, recognized command-chain segments, and extracted
+command names.  Dangerous-name harvesting remains independent, so unsupported
+syntax cannot hide a command in `mevedel-bash-dangerous-commands'."
+  (let ((analysis (mevedel-tool-exec--analyze-bash command)))
+    (mevedel-tool-exec--dedupe-strings
+     (append (list command)
+             (plist-get analysis :segments)
+             (mevedel-tool-exec--bash-command-names analysis)))))
 
 (defun mevedel-tool-exec--bash-explicit-deny-p (buckets command)
-  "Return non-nil when any explicit Bash deny in BUCKETS covers COMMAND."
-  (or
-   (cl-some
-    (lambda (candidate)
-      (mevedel-permission--any-deny
-       buckets "Bash" nil candidate nil nil))
-    (mevedel-tool-exec--bash-deny-candidates command))
-   (mevedel-tool-exec--bash-extracted-command-deny-p buckets command)))
-
-(defun mevedel-tool-exec--bash-extracted-command-deny-p (buckets command)
-  "Return non-nil if BUCKETS deny an extracted command from COMMAND.
-
-This preserves hard denies such as `(\"Bash\" :pattern \"rm\" :action
-deny)' for `rm /tmp/foo' and `echo $(rm /tmp/foo)' in `full-auto'
-mode.  Only specifier-carrying `:pattern' rules are considered here, so
-a generic unqualified Bash deny does not override a more specific allow
-for the full command."
+  "Return non-nil when an explicit Bash pattern deny covers COMMAND."
   (cl-some
-   (lambda (cmd)
+   (lambda (candidate)
      (cl-some
       (lambda (entry)
         (eq (mevedel-permission--rules-action
@@ -810,10 +422,10 @@ for the full command."
               (lambda (rule)
                 (plist-member (cdr rule) :pattern))
               (cdr entry))
-             "Bash" :pattern cmd)
+             "Bash" :pattern candidate)
             'deny))
       buckets))
-   (car (mevedel-tools--extract-commands command))))
+   (mevedel-tool-exec--bash-deny-candidates command)))
 
 (defun mevedel-tools--bash-buckets (&optional permission-context)
   "Return Bash buckets for PERMISSION-CONTEXT, innermost-first.
@@ -847,24 +459,19 @@ the Bash tool path because Bash had its own flattened resolver."
         (mevedel-permission--collect-buckets
          invocation-rules request-rules session-rules persistent))))
 
-(defun mevedel-tools--bash-bucket-action (buckets command)
-  "Two-pass bucket resolution for COMMAND against BUCKETS.
+(defun mevedel-tool-exec--bash-bucket-match (buckets command)
+  "Return the first non-deny (ACTION . BUCKET) matching COMMAND in BUCKETS."
+  (mevedel-permission--first-non-nil-action-with-bucket
+   buckets "Bash" nil command nil nil))
 
-Pass 1 (deny absolute): if any bucket yields `deny', returns
-`deny'.  Pass 2 (allow/ask innermost-first): walks buckets and
-returns the first non-nil bucket action.  Returns nil when no
-bucket matches the command pattern.
+(defun mevedel-tool-exec--bash-direct-match (buckets command)
+  "Return direct user authority matching COMMAND in BUCKETS."
+  (mevedel-tool-exec--bash-bucket-match
+   (seq-filter
+    (lambda (entry) (memq (car entry) '(:session :persistent :defcustom)))
+    buckets)
+   command))
 
-Mirrors `mevedel-check-permission' for the Bash tool's per-
-command precedence so skill rules win over session rules in
-allow/ask resolution but session denies still win over skill
-allows."
-  (cond
-   ((mevedel-permission--any-deny buckets "Bash" nil command nil nil)
-   'deny)
-   (t
-    (mevedel-permission--first-non-nil-action
-     buckets "Bash" nil command nil nil))))
 
 (cl-defun mevedel-tools--check-bash-permission
     (command &key trust-literal-p ignore-effective-trust-p
@@ -875,21 +482,12 @@ Rules come from invocation, request, session, persistent, and
 defcustom buckets (in that innermost-first order) and are
 matched via `:pattern'.
 
-Default behavior: the fail-safe and dangerous-command checks take
-precedence -- unparseable syntax and dangerous-blocklisted commands
-downgrade to `ask'.  Otherwise the full command is tested first, then
-each extracted sub-command for defence in depth.  Within the results,
-`deny' wins over `ask' which wins over `allow'.  If nothing matches,
-`ask' is returned unless the effective permission mode is `full-auto'.
-
-When TRUST-LITERAL-P is non-nil (skill body shell expansion
-path), the dangerous-commands blocklist and the fail-safe-
-complex-syntax check are SKIPPED.  Skill body shell expansions
-using `!`...`' and ` ```! ` blocks set this flag so author-written
-literal commands are not treated as LLM-generated invocations.
-Explicit deny rules and protected-path guards still apply --
-the flag only relaxes the heuristic overlays that exist to
-catch hallucinated shell from the model.
+Normalized Bash analysis supplies read-only, dangerous, complex, or unknown
+classification.  Read-only commands run without a matching rule.  Unknown
+commands need matching authority.  Dangerous and complex commands require
+direct user authority rather than invocation- or request-delegated rules.
+TRUST-LITERAL-P identifies a delegated skill-body call and grants no extra
+authority over dangerous or complex syntax.
 
 In `full-auto' mode, explicit deny rules and protected path tokens still
 win, then unknown, dangerous, and complex Bash invocations are allowed.
@@ -897,93 +495,48 @@ When IGNORE-EFFECTIVE-TRUST-P is non-nil, `full-auto' is ignored; this
 is used by the guardian to decide whether a command would have been
 suspicious under the normal classifier.
 
-Bucket-aware: the skill buckets are consulted on the same
-innermost-first order as the main permission resolver, so a
-skill's `allowed-tools: [Bash(gh *)]' grants `gh' calls
-without requiring a session-level rule."
-  (let* ((extraction (mevedel-tools--extract-commands command))
-         (commands (car extraction))
-         (unparseable (cdr extraction))
+Bucket-aware: delegated invocation and request rules may authorize ordinary
+unknown commands, but only session, persistent, and global user rules may
+authorize dangerous or complex syntax."
+  (ignore trust-literal-p)
+  (let* ((analysis (mevedel-tool-exec--analyze-bash command))
+         (class (plist-get analysis :class))
+         (segments (plist-get analysis :segments))
          (buckets (mevedel-tools--bash-buckets permission-context))
          (mode (mevedel-tool-exec--effective-permission-mode
                 permission-context))
-         (effective-trust-p
-          (and (not ignore-effective-trust-p)
-               (mevedel-tool-exec--effective-trust-p trust-literal-p mode)))
-         (full-auto-p (and effective-trust-p (eq mode 'full-auto))))
+         (full-auto-p (and (not ignore-effective-trust-p)
+                           (eq mode 'full-auto)))
+         (full-match (mevedel-tool-exec--bash-bucket-match buckets command))
+         (direct-match (mevedel-tool-exec--bash-direct-match buckets command))
+         (segment-matches
+          (mapcar (lambda (segment)
+                    (mevedel-tool-exec--bash-bucket-match buckets segment))
+                  segments))
+         (segment-actions (mapcar #'car segment-matches)))
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
     (when (mevedel-tool-exec--bash-protected-path-p command)
       (cl-return-from mevedel-tools--check-bash-permission 'ask))
 
-    (when (and unparseable
-               mevedel-bash-fail-safe-on-complex-syntax
-               (not effective-trust-p))
-      (cl-return-from mevedel-tools--check-bash-permission
-        'ask))
-
-    (let* ((commands (or commands '()))
-           (has-operators (string-match-p "&&\\|||\\||\\|;\\|\n" command))
-           (segments (mevedel-tools--split-command-chain command))
-           (has-nested-commands (> (length commands) (length segments)))
-           (full-action (mevedel-tools--bash-bucket-action
-                         buckets command))
-           (dangerous-p (and (not trust-literal-p)
-                             (not effective-trust-p)
-                             (seq-some
-                              (lambda (cmd)
-                                (member cmd mevedel-bash-dangerous-commands))
-                              commands))))
-
-      (when (and full-auto-p
-                 (not (eq full-action 'deny)))
-        (cl-return-from mevedel-tools--check-bash-permission 'allow))
-
-      (when (null commands)
-        (cl-return-from mevedel-tools--check-bash-permission 'ask))
-
-      (let ((decision
-             (cond
-              ;; Full command matched and no operators: trust an explicit
-              ;; deny/ask even if dangerous; only an allow is downgraded by
-              ;; the blocklist.
-              ((and full-action (not has-operators) (not has-nested-commands))
-               (cond
-                ((memq full-action '(deny ask)) full-action)
-                (dangerous-p 'ask)
-                (t full-action)))
-              (t
-               ;; Check each extracted sub-command for defence in depth.
-               ;; Explicit deny wins over the dangerous blocklist; otherwise
-               ;; dangerous downgrades allow/nil to ask.
-               (let ((actions (if full-action (list full-action) nil)))
-                 (dolist (segment segments)
-                   (let* ((segment-action
-                          (mevedel-tools--bash-bucket-action buckets segment))
-                          (segment-commands
-                           (car (mevedel-tools--extract-commands segment)))
-                          (commands-to-check
-                           (if segment-action
-                               (cdr segment-commands)
-                             segment-commands))
-                          (command-actions
-                           (mapcar
-                            (lambda (cmd)
-                              (mevedel-tools--bash-bucket-action
-                               buckets cmd))
-                            commands-to-check)))
-                     (when segment-action
-                       (push segment-action actions))
-                     (dolist (action command-actions)
-                       (push action actions))))
-                 (cond
-                  ((memq 'deny actions) 'deny)
-                  (dangerous-p 'ask)
-                  ((memq nil actions) 'ask)
-                  ((memq 'ask actions) 'ask)
-                  (t 'allow)))))))
-        decision))))
+    (cond
+     ((eq (car full-match) 'ask) 'ask)
+     ((memq 'deny segment-actions) 'deny)
+     ((and (memq class '(dangerous complex))
+           (eq (car direct-match) 'allow))
+      'allow)
+     ((memq class '(dangerous complex))
+      (if full-auto-p 'allow 'ask))
+     ((and segments (cl-every (lambda (action) (eq action 'allow))
+                              segment-actions))
+      'allow)
+     ((eq class 'read-only)
+      (if (memq 'ask segment-actions) 'ask 'allow))
+     ((eq (car full-match) 'allow) 'allow)
+     ((eq (car full-match) 'deny) 'deny)
+     (full-auto-p 'allow)
+     (t 'ask))))
 
 
 ;;
@@ -1181,13 +734,16 @@ suspicious Bash."
 
 (defun mevedel-tool-exec--bash-guardian-context (command)
   "Return guardian context plist for COMMAND."
-  (let* ((extraction (mevedel-tools--extract-commands command))
-         (commands (car extraction))
-         (unparseable (cdr extraction)))
-    (list :dangerous (mevedel-tool-exec--dangerous-command-p command)
+  (let* ((analysis (mevedel-tool-exec--analyze-bash command))
+         (commands (mevedel-tool-exec--bash-command-names analysis)))
+    (list :class (plist-get analysis :class)
+          :dangerous (eq (plist-get analysis :class) 'dangerous)
           :commands commands
           :commands-summary (mevedel-tool-exec--bash-commands-summary commands)
-          :unparseable unparseable
+          :parser (plist-get analysis :parser)
+          :reasons (plist-get analysis :reasons)
+          :resources (plist-get analysis :resources)
+          :unparseable (eq (plist-get analysis :class) 'complex)
           :allow-patterns (mevedel-tool-exec--bash-allow-patterns command))))
 
 (defun mevedel-tool-exec--bash-deny-only-guardian-async
@@ -1484,28 +1040,32 @@ parity with the sync slot."
                  (workspace (or (plist-get permission-context :workspace)
                                 (and session
                                      (mevedel-session-workspace session))))
-                 (extraction (mevedel-tools--extract-commands command))
-                 (commands (car extraction))
+                 (analysis (mevedel-tool-exec--analyze-bash command))
+                 (command-class (plist-get analysis :class))
+                 (commands (mevedel-tool-exec--bash-command-names analysis))
                  (commands-summary
                   (mevedel-tool-exec--bash-commands-summary commands))
-                 (unparseable (cdr extraction))
+                 (unparseable (eq command-class 'complex))
                  (allow-patterns
                   (mevedel-tool-exec--bash-allow-patterns command))
-                 (dangerous
-                  (mevedel-tool-exec--dangerous-command-p command))
+                 (dangerous (eq command-class 'dangerous))
+                 (rule-creating-p
+                  (not (memq command-class '(dangerous complex))))
                  (guardian-cell
                   (list nil (and mevedel-permission-guardian 'pending)))
                  (entry
                   (list :kind 'bash
                         :command command
-                        :dangerous dangerous
+                        :analysis analysis
+                        :command-class command-class
                         :commands commands
                         :commands-summary commands-summary
                         :unparseable unparseable
                         :allow-patterns allow-patterns
                         :guardian-cell guardian-cell
                         :workspace workspace
-                        :include-always (not (null workspace))
+                        :include-always (and rule-creating-p
+                                             (not (null workspace)))
                         :origin (mevedel-tool-exec--current-origin)
                         :callback
                         (lambda (outcome)

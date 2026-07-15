@@ -287,9 +287,12 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                  'font-lock-face 'font-lock-comment-face)))))
 
 (defun mevedel-permission--prompt-async-bash
-    (command dangerous include-always origin cont &optional count entry)
+    (command command-class include-always origin cont &optional count entry)
   "Display a Bash permission prompt and call CONT with its outcome."
-  (let* ((commands (and entry (plist-get entry :commands)))
+  (let* ((dangerous (eq command-class 'dangerous))
+         (rule-creating-disabled-p
+          (memq command-class '(dangerous complex)))
+         (commands (and entry (plist-get entry :commands)))
          (commands-summary
           (and entry
                (or (plist-get entry :commands-summary)
@@ -326,7 +329,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
               (propertize commands-summary
                           'font-lock-face 'font-lock-constant-face)
               "\n"))
-           (when (and allow-patterns (not dangerous))
+           (when (and allow-patterns (not rule-creating-disabled-p))
              (concat
               (propertize "Session/always allow will add: "
                           'font-lock-face 'font-lock-escape-face)
@@ -345,12 +348,17 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
                "Session/permanent allow is disabled for dangerous Bash commands.\n"
                'font-lock-face 'font-lock-comment-face)))
            (when unparseable
-             (propertize
-              "Warning: Command contains complex syntax that could not be fully parsed.\n"
-              'font-lock-face 'warning))
+             (concat
+              (propertize
+               "Warning: Command contains unsupported or dynamic shell syntax.\n"
+               'font-lock-face 'warning)
+              (propertize
+               "Session/permanent allow is disabled for complex Bash commands.\n"
+               'font-lock-face 'font-lock-comment-face)))
            "\n")))
     (mevedel-permission--prompt-async-with-content
-     content (and include-always (not dangerous)) cont count entry dangerous)))
+     content (and include-always (not rule-creating-disabled-p))
+     cont count entry rule-creating-disabled-p)))
 
 (defun mevedel-permission--prompt-async-eval
     (content cont &optional count entry)
