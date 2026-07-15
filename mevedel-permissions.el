@@ -80,7 +80,9 @@
   nil
   "Permission rules for tools.
 
-Each entry is a list: (TOOL-NAME &key SPECIFIER VALUE :action ACTION)
+Each entry is a list:
+  (TOOL-NAME &key SPECIFIER VALUE :sandbox-permissions LEVEL
+                   :action ACTION)
 
 TOOL-NAME is a string matching a tool name (e.g., \"Read\", \"Edit\"),
 or \"*\" to match all tools.
@@ -91,14 +93,21 @@ rule matches against.  At most one specifier is allowed per rule:
   :path    GLOB  - filesystem path (supports *, **, ?, ~)
                    Used by Read, Edit, Write, Glob, Grep, MkDir, Bash
                    when it resolves a bare path.
-  :pattern GLOB  - command string (supports *, plus Bash-style PREFIX:*)
-                   Used by Bash (e.g., \"ls *\", \"git log:*\").
+  :pattern GLOB  - command or expression string (supports *, plus
+                   Bash-style PREFIX:*).  Used by Bash and by qualified
+                   full-escalation Eval rules.
   :domain  GLOB  - host name (supports *)
                    Used by WebFetch, WebSearch, YouTube.
   :name    GLOB  - match name (supports *)
                    Used by Agent (subagent_type).
 
 Rules without a specifier match the tool regardless of context.
+
+The optional :sandbox-permissions qualifier currently accepts
+`require-escalated'.  Such rules participate only in full execution
+escalation decisions; they do not grant ordinary tool permission.  A
+qualified `allow' deliberately authorizes matching code to run directly
+as the Emacs user, without filesystem, network, or process confinement.
 
 ACTION is one of: `allow', `deny', or `ask'.
 
@@ -113,6 +122,10 @@ Example:
    (\"Bash\" :pattern \"ls *\" :action allow)
    (\"Bash\" :pattern \"git log:*\" :action allow)
    (\"Bash\" :pattern \"rm *\" :action deny)
+   (\"Bash\" :pattern \"curl https://example.com/*\"
+           :sandbox-permissions require-escalated :action allow)
+   (\"Eval\" :pattern \"(my-trusted-batch-job*)\"
+           :sandbox-permissions require-escalated :action allow)
    (\"WebFetch\" :domain \"*.example.com\" :action allow)
    (\"Agent\" :name \"explorer\" :action allow))"
   :type '(repeat sexp)
