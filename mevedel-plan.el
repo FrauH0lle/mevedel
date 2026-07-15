@@ -266,7 +266,7 @@ CONTEXT is `full' or `focused', CURRENT-ARTIFACT is returned by
 mode.  GOAL-CONTEXT is the authoritative persisted lifecycle fragment."
   (unless (memq context '(full focused))
     (error "Unknown implementation context: %s" context))
-  (unless (memq permission-mode '(default accept-edits trust-all))
+  (unless (memq permission-mode '(ask auto full-auto))
     (error "Unknown implementation permission mode: %s" permission-mode))
   (unless (and (stringp goal-context) (not (string-blank-p goal-context)))
     (error "Implementation requires Goal context"))

@@ -171,7 +171,7 @@
          (workspace (mevedel-workspace-get-or-create
                      'project (format "status-%s" root) root "mevedel"))
          (session (mevedel-session-create "main" workspace)))
-    (setf (mevedel-session-permission-mode session) 'default)
+    (setf (mevedel-session-permission-mode session) 'ask)
     (unwind-protect
         (mevedel-view-test--with-buffers
           (with-current-buffer data-buf

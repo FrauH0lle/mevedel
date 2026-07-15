@@ -1791,23 +1791,23 @@
     (should (string-prefix-p "Write: " (plist-get plist :header))))
 
   :doc "default permission mode: summary starts collapsed (user already saw the preview)"
-  (let* ((mevedel-permission-mode 'default)
+  (let* ((mevedel-permission-mode 'ask)
          (data '(:kind diff :patch "@@ @@\n+a\n"
                  :path "/tmp/x" :rel-path "x"))
          (plist (mevedel-tool-fs--render-diff-summary
                  "Edit" nil "ok" data)))
     (should (eq t (plist-get plist :initially-collapsed-p))))
 
-  :doc "accept-edits: summary starts collapsed"
-  (let* ((mevedel-permission-mode 'accept-edits)
+  :doc "auto: summary starts collapsed"
+  (let* ((mevedel-permission-mode 'auto)
          (data '(:kind diff :patch "@@ @@\n+a\n"
                  :path "/tmp/x" :rel-path "x"))
          (plist (mevedel-tool-fs--render-diff-summary
                  "Edit" nil "ok" data)))
     (should (eq t (plist-get plist :initially-collapsed-p))))
 
-  :doc "trust-all: summary starts collapsed"
-  (let* ((mevedel-permission-mode 'trust-all)
+  :doc "full-auto: summary starts collapsed"
+  (let* ((mevedel-permission-mode 'full-auto)
          (data '(:kind diff :patch "@@ @@\n+a\n"
                  :path "/tmp/x" :rel-path "x"))
          (plist (mevedel-tool-fs--render-diff-summary

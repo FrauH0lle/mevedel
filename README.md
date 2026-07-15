@@ -46,7 +46,7 @@ Key features:
 - Interactive inline diff previews with approve/reject/edit workflow directly in
   the chat view.
 - Unified permission system covering Bash, file paths, web domains, and
-  sub-agent dispatch, with `default` / `accept-edits` / `trust-all` modes.
+  sub-agent dispatch, with `ask` / `auto` / `full-auto` modes.
 - Project and user hooks for prompt, permission, tool, compaction, turn, and
   sub-agent lifecycle automation.
 - Conversation compaction that rotates segments rather than mutating the live
@@ -574,7 +574,7 @@ continuation, recovery, execution-home, and model-routing contract.
 plans, waits for approval, implements, and reviews until the complete objective
 is done or blocked. `/goal auto <objective>` sends each plan through a tool-free
 guardian and continues when it approves. Automatic Goals never change tool
-permissions; fully unattended mutation still requires selecting `trust-all`.
+permissions; fully unattended mutation still requires selecting `full-auto`.
 
 Bare `/goal` opens the Goal cockpit for status and lifecycle actions, including
 starting a Goal when none exists. Use `/goal pause`, `/goal resume [context]`,
@@ -621,8 +621,8 @@ the readable agent summary.
 When the LLM proposes file edits via the `Write` or `Edit` tools, a diff preview
 is shown for user approval before any changes are applied. Small diffs are shown
 inline in the chat view; larger diffs open in a separate preview buffer
-(controlled by `mevedel-inline-preview-threshold`). Under `accept-edits` and
-`trust-all` permission modes the diff is auto-applied and a summary entry is
+(controlled by `mevedel-inline-preview-threshold`). Under `auto` and
+`full-auto` permission modes the diff is auto-applied and a summary entry is
 still added to the view. `MkDir` goes through the permission system, but creates
 directories directly rather than showing a diff preview.
 
@@ -634,7 +634,7 @@ Per-overlay keybindings:
 | `C-c C-k` / `r` / `q`   | Reject the diff                                       |
 | `C-c C-e` / `e`         | Edit the diff via ediff before apply                  |
 | `C-c C-f` / `f`         | Provide feedback and reject                           |
-| `S`                     | Approve all pending and switch to `accept-edits` mode |
+| `S`                     | Approve all pending and switch to `auto` mode          |
 | `TAB`                   | Collapse / expand the preview overlay                 |
 
 Buffer-wide commands live under the `C-c p` prefix: `n`/`p` navigate, `a`
@@ -663,12 +663,15 @@ would otherwise allow the operation.
 
 **Permission modes** (`mevedel-permission-mode`):
 
-- `default` — prompt for non-read-only tools; inline diff previews require
-  interactive approval.
-- `accept-edits` — same as `default`, but `Write`/`Edit` previews are
-  auto-applied.
-- `trust-all` — skip policy prompts except explicit hard policies; protected
+- `ask` — allow recognized inspection and prompt for edits and uncertain Bash
+  or Eval execution.
+- `auto` — apply native edits inside allowed roots automatically, while Bash
+  and Eval still use their normal checks.
+- `full-auto` — skip policy prompts except explicit hard policies; protected
   and outside-root paths still require resource authority.
+
+Configuration and persisted sessions use only these three values. `/mode
+edit` is an interactive alias for `auto`.
 
 When set inside a chat buffer, the mode is scoped to that session; set from any
 other buffer it updates the global default.
@@ -907,7 +910,7 @@ Useful commands:
 | `mevedel-inline-preview-threshold`         | Ratio of chat buffer height to use for inline preview threshold.         |
 | `mevedel-deferred-tool-ttl`                | Turns a ToolSearch-loaded deferred tool stays active after last use.     |
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
-| `mevedel-permission-mode`                  | Default permission mode (`default` / `accept-edits` / `trust-all`).       |
+| `mevedel-permission-mode`                  | Default permission mode (`ask` / `auto` / `full-auto`).                   |
 | `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
 | `mevedel-bash-dangerous-commands`          | Commands that always require explicit confirmation.                      |
 | `mevedel-bash-fail-safe-on-complex-syntax` | When non-nil, always ask for permission when complex syntax is detected. |

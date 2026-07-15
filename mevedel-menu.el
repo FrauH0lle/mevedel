@@ -458,18 +458,19 @@
             (if current (mevedel-menu--value "current" 'warning) "")
             detail)))
 
-(defun mevedel-menu--mode-default-description ()
-  "Return the default mode row description."
-  (mevedel-menu--mode-choice-description 'default "ask before write tools"))
-
-(defun mevedel-menu--mode-accept-edits-description ()
-  "Return the accept-edits mode row description."
+(defun mevedel-menu--mode-ask-description ()
+  "Return the ask mode row description."
   (mevedel-menu--mode-choice-description
-   'accept-edits "auto-apply edit previews"))
+   'ask "prompt for edits and uncertain execution"))
 
-(defun mevedel-menu--mode-trust-all-description ()
-  "Return the trust-all mode row description."
-  (mevedel-menu--mode-choice-description 'trust-all "auto-allow tools"))
+(defun mevedel-menu--mode-auto-description ()
+  "Return the auto mode row description."
+  (mevedel-menu--mode-choice-description
+   'auto "auto-apply edit previews"))
+
+(defun mevedel-menu--mode-full-auto-description ()
+  "Return the full-auto mode row description."
+  (mevedel-menu--mode-choice-description 'full-auto "auto-allow tools"))
 
 
 ;;
@@ -765,9 +766,9 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/compact, /review, /verify, /auto, /clear, /init ..., /tokens"
      ""
      "Modes"
-     "default / ask       Ask before write tools."
-     "accept-edits        Auto-apply edit previews."
-     "trust-all / auto    Auto-allow tools."
+     "ask       Prompt for edits and uncertain execution."
+     "auto      Auto-apply native edits; check Bash and Eval."
+     "full-auto Skip heuristic Bash and Eval prompts."
      ""
      "View and data buffers"
      "The view buffer owns the composer, compact transcript, and status strip."
@@ -875,12 +876,12 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   [:description mevedel-menu--header
    ["Mode"
     :pad-keys t
-    ("d" mevedel-menu--mode-default-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'default)))
-    ("e" mevedel-menu--mode-accept-edits-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'accept-edits)))
-    ("a" mevedel-menu--mode-trust-all-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'trust-all)))]
+    ("k" mevedel-menu--mode-ask-description
+     (lambda () (interactive) (mevedel-menu--set-mode 'ask)))
+    ("a" mevedel-menu--mode-auto-description
+     (lambda () (interactive) (mevedel-menu--set-mode 'auto)))
+    ("f" mevedel-menu--mode-full-auto-description
+     (lambda () (interactive) (mevedel-menu--set-mode 'full-auto)))]
    ["Navigation"
     :pad-keys t
     ("b" "Back" mevedel-menu)]]

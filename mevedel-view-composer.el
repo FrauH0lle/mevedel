@@ -331,20 +331,20 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
   (list
    (mevedel-permission-mode-label mode)
    (pcase mode
-     ('accept-edits 'mevedel-view-permission-mode-accept-edits)
-     ('trust-all 'mevedel-view-permission-mode-trust-all)
-     (_ 'mevedel-view-permission-mode-default))))
+     ('auto 'mevedel-view-permission-mode-auto)
+     ('full-auto 'mevedel-view-permission-mode-full-auto)
+     (_ 'mevedel-view-permission-mode-ask))))
 
 (defconst mevedel-view--permission-mode-cycle
-  '(default accept-edits trust-all)
+  '(ask auto full-auto)
   "Permission modes cycled by `mevedel-view-cycle-permission-mode'.")
 
 (defun mevedel-view--next-permission-mode (&optional mode)
   "Return the permission mode after MODE in the view cycle.
-Nil and unknown modes are treated as `default'."
+Nil and unknown modes are treated as `ask'."
   (let* ((current (if (memq mode mevedel-view--permission-mode-cycle)
                       mode
-                    'default))
+                    'ask))
          (tail (cdr (memq current mevedel-view--permission-mode-cycle))))
     (or (car tail)
         (car mevedel-view--permission-mode-cycle))))
@@ -354,15 +354,13 @@ Nil and unknown modes are treated as `default'."
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
-    (if (eq mode 'default)
+    (if (eq mode 'ask)
         (propertize (concat "\n" mevedel-view--input-prompt)
                     'font-lock-face 'mevedel-view-input-prompt)
       (pcase-let* ((`(,label ,face)
                     (mevedel-view--permission-mode-display mode))
-                   (text (format "\n[%s]%s%s"
-                                 label
-                                 (make-string (max 1 (- 6 (length label))) ?\s)
-                                 mevedel-view--input-prompt))
+                   (text (format "\n[%s] %s"
+                                 label mevedel-view--input-prompt))
                    (label-start 2)
                    (label-end (+ label-start (length label))))
         (add-text-properties
@@ -932,7 +930,7 @@ follows `mevedel-view--input-marker'."
     (unless (and data-buf session)
       (user-error "No mevedel session for permission mode cycling"))
     (let* ((current (or (mevedel-session-permission-mode session)
-                        'default))
+                        'ask))
            (next (mevedel-view--next-permission-mode current)))
       (require 'mevedel-permissions)
       (with-current-buffer data-buf

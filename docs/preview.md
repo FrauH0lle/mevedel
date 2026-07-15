@@ -3,8 +3,8 @@
 Entry point: `mevedel-preview-mode-add-preview` (keyword API). Dispatches
 on `mevedel-preview-mode--effective-mode`:
 
-- `default` → interactive inline overlay
-- `accept-edits` / `trust-all` → `--auto-apply` (runs `apply-fn`
+- `ask` → interactive inline overlay
+- `auto` / `full-auto` → `--auto-apply` (runs `apply-fn`
   immediately, still produces a persistent diff summary in the view)
 
 `mevedel-preview-mode` is a buffer-local minor mode with a lighter
@@ -14,7 +14,7 @@ on `mevedel-preview-mode--effective-mode`:
 trust-rest (`S`), toggle (`TAB`).
 
 `S` approves all pending overlays and escalates permission mode to
-`accept-edits` (not `trust-all` — shell commands still prompt). Registering
+`auto` (not `full-auto` — shell commands still prompt). Registering
 a preview leaves point where it was instead of auto-focusing the preview, and
 adds a canceller to the active request's `cancellers` list, so `mevedel-abort`
 tears everything down cleanly.
@@ -28,8 +28,8 @@ callback-overlay placement, and redraw.
 flowchart TD
     A[Edit or Write handler returns patch] --> B[Register preview]
     B --> C{Permission mode}
-    C -- default --> D[Show inline overlay]
-    C -- accept-edits or trust-all --> E[Auto-apply patch]
+    C -- ask --> D[Show inline overlay]
+    C -- auto or full-auto --> E[Auto-apply patch]
     D --> F{User action}
     F -- Approve --> G[Apply patch]
     F -- Reject --> H[Remove overlay]

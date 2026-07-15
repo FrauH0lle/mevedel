@@ -55,7 +55,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (setf (mevedel-session-working-directory session)
           (file-name-as-directory
            (file-name-concat root "packages" "api")))
-    (setf (mevedel-session-permission-mode session) 'default)
+    (setf (mevedel-session-permission-mode session) 'ask)
     (setf (mevedel-session-permission-rules session)
           '(("Read"  :path "/tmp/foo/**" :action allow)
             ("Bash"  :pattern "git log*" :action allow)
@@ -118,7 +118,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :latest-user-message nil
                :forked-from-session-id nil
                :forked-from-turn nil
-               :permission-mode 'default
+               :permission-mode 'ask
                :permission-rules nil
                :resource-grants nil
                :preset-name nil
@@ -426,7 +426,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal (file-name-as-directory
                           (file-name-concat root "packages" "api"))
                          (plist-get plist :working-directory)))
-          (should (equal 'default (plist-get plist :permission-mode)))
+          (should (equal 'ask (plist-get plist :permission-mode)))
           (should (eq 'test-preset (plist-get plist :preset-name)))
           (should (equal '((mevedel-model-tiers
                             (strong :provider "Test:test-model" :effort high))
@@ -466,6 +466,31 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (null (plist-get plist :forked-from-session-id)))
           (should (null (plist-get plist :forked-from-turn))))
       (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "materializes the canonical global mode when the session inherits it"
+  (let ((root (make-temp-file "mevedel-test-proj-" t))
+        (saved-mode (default-toplevel-value 'mevedel-permission-mode)))
+    (unwind-protect
+        (let ((session
+               (test-mevedel-session-persistence--make-session root)))
+          (setf (mevedel-session-permission-mode session) nil)
+          (set-default-toplevel-value 'mevedel-permission-mode 'auto)
+          (should (eq 'auto
+                      (plist-get
+                       (mevedel-session-persistence-serialize session)
+                       :permission-mode))))
+      (set-default-toplevel-value 'mevedel-permission-mode saved-mode)
+      (when (file-directory-p root)
+        (delete-directory root t))))
+  :doc "refuses to persist retired permission modes"
+  (let ((root (make-temp-file "mevedel-test-proj-" t)))
+    (unwind-protect
+        (let ((session
+               (test-mevedel-session-persistence--make-session root)))
+          (setf (mevedel-session-permission-mode session) 'default)
+          (should-error (mevedel-session-persistence-serialize session)
+                        :type 'error))
+      (when (file-directory-p root)
         (delete-directory root t)))))
 
 (mevedel-deftest mevedel-session-persistence--validate-current-sidecar ()
@@ -488,6 +513,17 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should-error
      (mevedel-session-persistence--validate-current-sidecar plist)
      :type 'error))
+  :doc "accepts only canonical persisted permission modes"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (dolist (mode '(ask auto full-auto))
+      (should (eq plist
+                  (mevedel-session-persistence--validate-current-sidecar
+                   (plist-put plist :permission-mode mode)))))
+    (dolist (mode '(default accept-edits trust-all edit))
+      (should-error
+       (mevedel-session-persistence--validate-current-sidecar
+        (plist-put plist :permission-mode mode))
+       :type 'error)))
   :doc "rejects prompt entries without current turn coordinates"
   (let ((plist
          (test-mevedel-session-persistence--complete-sidecar
@@ -522,7 +558,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                          (mevedel-session-working-directory session)))
           (should (equal "main-2026-04-23T14-30-a9f2"
                          (mevedel-session-session-id session)))
-          (should (eq 'default (mevedel-session-permission-mode session)))
+          (should (eq 'ask (mevedel-session-permission-mode session)))
           (should (eq 'test-preset (mevedel-session-preset-name session)))
           (should (equal '((mevedel-model-tiers
                             (strong :provider "Test:test-model" :effort high))

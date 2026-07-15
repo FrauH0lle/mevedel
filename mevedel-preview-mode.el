@@ -221,12 +221,12 @@ remains usable in tests and minimal chat buffers."
 (defun mevedel-preview-mode--effective-mode ()
   "Return the effective permission mode for the current buffer.
 Prefers the session's `permission-mode' slot; falls back to the
-buffer-local or global `mevedel-permission-mode', then to `default'."
+buffer-local or global `mevedel-permission-mode', then to `ask'."
   (or (and (boundp 'mevedel--session)
            mevedel--session
            (mevedel-session-permission-mode mevedel--session))
       (and (boundp 'mevedel-permission-mode) mevedel-permission-mode)
-      'default))
+      'ask))
 
 (cl-defun mevedel-preview-mode-add-preview (&key temp-file path callback
                                                  apply-fn tool-name
@@ -255,8 +255,8 @@ the current contents of PATH; callers do not pre-compute it.  This is
 the single public entry point for tool handlers that need user
 confirmation of a file change.
 
-Behavior depends on the effective permission mode: under `accept-edits'
-or `trust-all' the change is applied immediately without an interactive
+Behavior depends on the effective permission mode: under `auto'
+or `full-auto' the change is applied immediately without an interactive
 overlay (see `mevedel-preview-mode--auto-apply').  Otherwise an inline
 preview is shown and `mevedel-preview-mode' is activated in the current
 chat buffer."
@@ -269,7 +269,7 @@ chat buffer."
   (unless (buffer-local-value 'mevedel--workspace (current-buffer))
     (error "`mevedel-preview-mode-add-preview' must be called from chat buffer context"))
   (pcase (mevedel-preview-mode--effective-mode)
-    ((or 'accept-edits 'trust-all)
+    ((or 'auto 'full-auto)
      (mevedel-preview-mode--auto-apply
       temp-file path callback apply-fn tool-name))
     (_
@@ -738,7 +738,7 @@ invoke `mevedel-abort'."
     (mevedel-preview-mode--approve-overlay ov)))
 
 (defun mevedel-preview-mode-approve-and-trust ()
-  "Approve every pending preview in this buffer and flip mode to `accept-edits'.
+  "Approve every pending preview in this buffer and flip mode to `auto'.
 Drains the pending list by running `--approve-overlay' on each overlay
 \(which applies its change, fires its callback, and cleans up), then sets
 the buffer-local `mevedel-permission-mode' on the associated data buffer
@@ -759,9 +759,9 @@ prompt -- the intent is scoped to edits, not blanket trust."
         (if mevedel--session
             (progn
               (require 'mevedel-permissions)
-              (mevedel-permission-mode-transition 'accept-edits))
-          (setq-local mevedel-permission-mode 'accept-edits))))
-    (message "accept-edits on. Applied %d pending edit%s. Shell commands still prompt."
+              (mevedel-permission-mode-transition 'auto))
+          (setq-local mevedel-permission-mode 'auto))))
+    (message "auto on. Applied %d pending edit%s. Shell commands still prompt."
              count (if (= count 1) "" "s"))))
 
 (defun mevedel-preview-mode-reject ()

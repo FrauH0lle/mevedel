@@ -80,14 +80,14 @@
   (test)
   :doc "includes session allow by default"
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
-             (lambda () 'default)))
+             (lambda () 'ask)))
     (should (string-match-p
              "allow-session"
              (mevedel-permission--prompt-body "Body\n" nil))))
 
   :doc "suppresses session allow without suppressing session deny"
   (cl-letf (((symbol-function 'gptel-agent--block-bg)
-             (lambda () 'default)))
+             (lambda () 'ask)))
     (let ((body (mevedel-permission--prompt-body "Body\n" nil t)))
       (should-not (string-match-p "allow-session" body))
       (should (string-match-p "deny-session" body)))))
@@ -102,7 +102,7 @@
           captured-body
           captured-keymap)
       (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                 (lambda () 'default))
+                 (lambda () 'ask))
                 ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda (&optional _buffer) target))
                 ((symbol-function 'mevedel-view--interaction-target-buffer)
@@ -133,7 +133,7 @@
           captured-body
           captured-keymap)
       (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                 (lambda () 'default))
+                 (lambda () 'ask))
                 ((symbol-function 'mevedel--prompt--data-buffer)
                  (lambda (&optional _buffer) target))
                 ((symbol-function 'mevedel-view--interaction-target-buffer)

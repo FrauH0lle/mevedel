@@ -423,7 +423,7 @@ Queued messages
 
 Working... · 2m 14s · 1 agent blocked · 1 agent running
 
-[edits] > I am drafting a follow-up while the request runs.
+[auto] > I am drafting a follow-up while the request runs.
 ```
 
 ## Input History

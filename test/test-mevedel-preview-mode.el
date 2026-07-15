@@ -248,7 +248,7 @@ cleanup."
           (insert "draft")
           (goto-char (point-min))
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
-                     (lambda () 'default)))
+                     (lambda () 'ask)))
             (let ((ov (mevedel-preview-mode--create-overlay
                        "-old\n+new\n" temp target #'ignore
                        (current-buffer) nil root "target.txt")))
@@ -601,19 +601,19 @@ cleanup."
   :doc "session slot wins over buffer-local variable"
   (with-temp-buffer
     (setq-local mevedel--session
-                (mevedel-session--create :permission-mode 'accept-edits))
-    (setq-local mevedel-permission-mode 'default)
-    (should (eq 'accept-edits (mevedel-preview-mode--effective-mode))))
+                (mevedel-session--create :permission-mode 'auto))
+    (setq-local mevedel-permission-mode 'ask)
+    (should (eq 'auto (mevedel-preview-mode--effective-mode))))
   :doc "buffer-local variable used when session has no mode"
   (with-temp-buffer
     (setq-local mevedel--session nil)
-    (setq-local mevedel-permission-mode 'trust-all)
-    (should (eq 'trust-all (mevedel-preview-mode--effective-mode))))
-  :doc "falls back to 'default when neither is set"
+    (setq-local mevedel-permission-mode 'full-auto)
+    (should (eq 'full-auto (mevedel-preview-mode--effective-mode))))
+  :doc "falls back to 'ask when neither is set"
   (with-temp-buffer
     (setq-local mevedel--session nil)
     (setq-local mevedel-permission-mode nil)
-    (should (eq 'default (mevedel-preview-mode--effective-mode)))))
+    (should (eq 'ask (mevedel-preview-mode--effective-mode)))))
 
 
 ;;
@@ -698,7 +698,7 @@ cleanup."
         results)
     (unwind-protect
         (let* ((cb (lambda (r) (push r results)))
-               (session (mevedel-session--create :permission-mode 'default))
+               (session (mevedel-session--create :permission-mode 'ask))
                (a (mevedel-preview-test--make-overlay
                    chat
                    `((mevedel--real-path . "/tmp/a.txt")
@@ -714,19 +714,19 @@ cleanup."
           (with-current-buffer chat
             (setq-local mevedel--session session)
             (setq-local mevedel--view-buffer view)
-            (setq-local mevedel-permission-mode 'default)
+            (setq-local mevedel-permission-mode 'ask)
             (with-current-buffer view
               (setq-local mevedel--data-buffer chat)
-              (setq-local mevedel-permission-mode 'default))
+              (setq-local mevedel-permission-mode 'ask))
             (mevedel-preview-mode--register a)
             (mevedel-preview-mode--register b)
             (mevedel-preview-mode-approve-and-trust))
           (should (= 2 (length results)))
-          (should (eq 'accept-edits
+          (should (eq 'auto
                       (mevedel-session-permission-mode session)))
-          (should (eq 'accept-edits
+          (should (eq 'auto
                       (buffer-local-value 'mevedel-permission-mode chat)))
-          (should (eq 'accept-edits
+          (should (eq 'auto
                       (buffer-local-value 'mevedel-permission-mode view)))
           (should-not (buffer-local-value 'mevedel-preview-mode--pending chat)))
       (when (buffer-live-p chat) (kill-buffer chat))
@@ -735,13 +735,13 @@ cleanup."
   :doc "with no pending overlays: no error, no mode flip"
   (with-temp-buffer
     (setq-local mevedel--session
-                (mevedel-session--create :permission-mode 'default))
-    (setq-local mevedel-permission-mode 'default)
+                (mevedel-session--create :permission-mode 'ask))
+    (setq-local mevedel-permission-mode 'ask)
     (mevedel-preview-mode-approve-and-trust)
     ;; Mode stays unchanged because data-buffer is not derivable.
-    (should (eq 'default
+    (should (eq 'ask
                 (mevedel-session-permission-mode mevedel--session)))
-    (should (eq 'default mevedel-permission-mode))))
+    (should (eq 'ask mevedel-permission-mode))))
 
 (provide 'test-mevedel-preview-mode)
 ;;; test-mevedel-preview-mode.el ends here

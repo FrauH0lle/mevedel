@@ -47,7 +47,7 @@ review findings into a new planning cycle. Every accepted plan is copied from
   artifacts, worktrees, and filesystem changes.
 
 Automatic approval does not grant tool permission. Fully unattended mutation
-also requires the user to select `trust-all`; explicit denies, protected paths,
+also requires the user to select `full-auto`; explicit denies, protected paths,
 and the permission guardian remain authoritative.
 
 A policy change never cancels an in-flight request. It applies at the next

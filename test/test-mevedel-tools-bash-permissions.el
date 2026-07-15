@@ -658,16 +658,16 @@
     (should (equal 'allow
                    (mevedel-tools--check-bash-permission
                     "customcmd run" :permission-context context))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' allows unknown commands"
-  (let ((mevedel-permission-mode 'trust-all))
+  (let ((mevedel-permission-mode 'full-auto))
     (setq mevedel-permission-rules nil)
     (setq mevedel-bash-dangerous-commands '())
     (should (equal 'allow
                    (mevedel-tools--check-bash-permission "somecmd foo"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' allows dangerous and complex commands"
-  (let ((mevedel-permission-mode 'trust-all)
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-bash-fail-safe-on-complex-syntax t))
     (setq mevedel-permission-rules nil)
     (setq mevedel-bash-dangerous-commands '("rm"))
@@ -675,23 +675,23 @@
                    (mevedel-tools--check-bash-permission "rm /tmp/foo")))
     (should (equal 'allow
                    (mevedel-tools--check-bash-permission "echo $VAR"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' preserves explicit deny"
-  (let ((mevedel-permission-mode 'trust-all))
+  (let ((mevedel-permission-mode 'full-auto))
     (setq mevedel-permission-rules
           '(("Bash" :pattern "rm *" :action deny)))
     (should (equal 'deny
                    (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' preserves extracted command-name deny"
-  (let ((mevedel-permission-mode 'trust-all))
+  (let ((mevedel-permission-mode 'full-auto))
     (setq mevedel-permission-rules
           '(("Bash" :pattern "rm" :action deny)))
     (should (equal 'deny
                    (mevedel-tools--check-bash-permission "rm /tmp/foo"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' asks for literal protected paths"
-  (let ((mevedel-permission-mode 'trust-all)
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-protected-paths '("**/.git/**" "~/.ssh/**" "~/.gnupg/**")))
     (setq mevedel-permission-rules nil)
     (should (equal 'ask
@@ -700,9 +700,9 @@
     (should (equal 'ask
                    (mevedel-tools--check-bash-permission
                     "ls ~/.ssh"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' asks for exact protected files in substitutions"
-  (let ((mevedel-permission-mode 'trust-all)
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-protected-paths '("**/.env")))
     (setq mevedel-permission-rules nil)
     (should (equal 'ask
@@ -711,19 +711,19 @@
     (should (equal 'ask
                    (mevedel-tools--check-bash-permission
                     "echo `cat .env`"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' asks for custom protected dot directories"
-  (let ((mevedel-permission-mode 'trust-all)
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-protected-paths '("**/.aws/**")))
     (setq mevedel-permission-rules nil)
     (should (equal 'ask
                    (mevedel-tools--check-bash-permission
                     "cat .aws/credentials"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' asks for protected relative paths"
   (let* ((root (make-temp-file "mevedel-protected-relative-" t))
          (default-directory (file-name-as-directory root))
-         (mevedel-permission-mode 'trust-all)
+         (mevedel-permission-mode 'full-auto)
          (mevedel-protected-paths
           (list (file-name-concat root "secrets" "**"))))
     (unwind-protect
@@ -733,26 +733,26 @@
                          (mevedel-tools--check-bash-permission
                           "cat secrets/key"))))
       (delete-directory root t)))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' preserves deny before protected path ask"
-  (let ((mevedel-permission-mode 'trust-all)
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-protected-paths '("~/.ssh/**")))
     (setq mevedel-permission-rules
           '(("Bash" :pattern "cat *" :action deny)))
     (should (equal 'deny
                    (mevedel-tools--check-bash-permission
                     "cat ~/.ssh/config"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' preserves deny patterns inside substitutions"
-  (let ((mevedel-permission-mode 'trust-all))
+  (let ((mevedel-permission-mode 'full-auto))
     (setq mevedel-permission-rules
           '(("Bash" :pattern "rm *" :action deny)))
     (should (equal 'deny
                    (mevedel-tools--check-bash-permission
                     "echo $(rm /tmp/foo)"))))
-  :doc "trust-all:
+  :doc "full-auto:
 `mevedel-tools--check-bash-permission' asks for protected redirection targets"
-  (let ((mevedel-permission-mode 'trust-all)
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-protected-paths '("/tmp/protected/**")))
     (setq mevedel-permission-rules nil)
     (should (equal 'ask
@@ -939,7 +939,7 @@
                (make-temp-file "mevedel-bash-log-" t)))
          (session (mevedel-session--create
                    :name "main" :save-path dir
-                   :permission-mode 'default))
+                   :permission-mode 'ask))
          (mevedel-permission-rules
           '(("Bash" :pattern "git log:*" :action allow)))
          (mevedel-bash-dangerous-commands nil)
@@ -974,8 +974,8 @@
     (mevedel-tool-exec--check-permission-async
      nil '(:command "echo hello") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
-  :doc "trust-all allows dangerous Bash without enqueueing"
-  (let ((mevedel-permission-mode 'trust-all)
+  :doc "full-auto allows dangerous Bash without enqueueing"
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("rm"))
         enqueued
@@ -987,8 +987,8 @@
        nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
     (should-not enqueued))
-  :doc "trust-all deny-only guardian can block suspicious Bash"
-  (let ((mevedel-permission-mode 'trust-all)
+  :doc "full-auto deny-only guardian can block suspicious Bash"
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("rm"))
         (mevedel-permission-guardian
@@ -1006,8 +1006,8 @@
        nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny))
     (should-not enqueued))
-  :doc "trust-all deny-only guardian timeout or invalid output allows"
-  (let ((mevedel-permission-mode 'trust-all)
+  :doc "full-auto deny-only guardian timeout or invalid output allows"
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("rm"))
         (mevedel-permission-guardian
@@ -1017,8 +1017,8 @@
     (mevedel-tool-exec--check-permission-async
      nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
-  :doc "trust-all deny-only guardian function timeout allows"
-  (let ((mevedel-permission-mode 'trust-all)
+  :doc "full-auto deny-only guardian function timeout allows"
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         (mevedel-bash-dangerous-commands '("rm"))
         (mevedel-permission-guardian-timeout 0.01)
@@ -1610,7 +1610,7 @@
                (make-temp-file "mevedel-eval-log-" t)))
          (session (mevedel-session--create
                    :name "main" :save-path dir
-                   :permission-mode 'trust-all))
+                   :permission-mode 'full-auto))
          (mevedel-permission-rules nil)
          (mevedel-permission-log-enabled t)
          outcome)
@@ -1695,8 +1695,8 @@
     (should (eq outcome 'allow))
     (should-not enqueued))
 
-  :doc "trust-all Eval bypasses prompt without active allow"
-  (let ((mevedel-permission-mode 'trust-all)
+  :doc "full-auto Eval bypasses prompt without active allow"
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)
         outcome enqueued)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
@@ -1710,18 +1710,18 @@
 
   :doc "explicit context Eval uses context mode without ambient session"
   (let* ((session (mevedel-session--create
-                   :name "test" :permission-mode 'trust-all))
+                   :name "test" :permission-mode 'full-auto))
          (context (mevedel-permission--invocation-context
                    :tool-name "Eval"
                    :session session))
-         (mevedel-permission-mode 'default)
+         (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil))
     (should (eq 'allow
                 (mevedel-tools--check-eval-permission
                  :permission-context context))))
 
-  :doc "explicit Eval deny beats trust-all"
-  (let ((mevedel-permission-mode 'trust-all)
+  :doc "explicit Eval deny beats full-auto"
+  (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules '(("Eval" :action deny)))
         outcome enqueued)
     (cl-letf (((symbol-function 'mevedel-permission--enqueue)

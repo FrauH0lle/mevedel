@@ -1724,7 +1724,7 @@ response folding along with a dangerous best-guess preview path)."
            (session (mevedel-session--create
                      :name "test"
                      :workspace nil
-                     :permission-mode 'default
+                     :permission-mode 'ask
                      :plan-metadata
                      (list :presented-plan-hashes
                            (list (mevedel-plan-hash old-plan))))))

@@ -906,14 +906,14 @@
 (mevedel-deftest mevedel-pipeline--step-permission ()
 		 ,test
 		 (test)
-		 :doc "allows read-only tool in default mode"
+		 :doc "allows read-only tool in ask mode"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Read"
 			       :read-only-p t))
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
@@ -925,7 +925,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules '(("Edit" :action deny)))
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			fail-reason)
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
@@ -937,29 +937,29 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules '(("Edit" :action allow)))
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
-		 :doc "allows in trust-all mode"
+		 :doc "allows in full-auto mode"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Edit"
 			       :read-only-p nil))
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'trust-all)
+			(mevedel-permission-mode 'full-auto)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
-		 :doc "trust-all allow writes permission-decision diagnostic"
+		 :doc "full-auto allow writes permission-decision diagnostic"
 		 (let* ((dir (file-name-as-directory
 			      (make-temp-file "mevedel-permission-log-" t)))
 			(session (mevedel-session--create
 				  :name "test" :save-path dir
-				  :permission-mode 'trust-all))
+				  :permission-mode 'full-auto))
 			(tool (mevedel-tool--create
 			       :name "Edit" :read-only-p nil))
 			(ctx (list :tool tool :args nil :session session))
@@ -974,7 +974,7 @@
 			   (should (eq 'permission-decision
 				       (plist-get entry :event)))
 			   (should (equal "Edit" (plist-get entry :tool-name)))
-			   (should (eq 'trust-all (plist-get entry :mode)))
+			   (should (eq 'full-auto (plist-get entry :mode)))
 			   (should (eq 'allow (plist-get entry :outcome)))
 			   (should (eq 'mode (plist-get entry :via)))))
 		     (delete-directory dir t)))
@@ -989,7 +989,7 @@
 			(ctx (list :tool tool :args nil :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			(mevedel-permission-log-enabled t))
 		   (unwind-protect
 		       (progn
@@ -1017,7 +1017,7 @@
 				   :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths (list path))
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			(mevedel-permission-log-enabled t))
 		   (unwind-protect
 		       (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
@@ -1039,7 +1039,7 @@
 			       :name "Edit"
 			       :read-only-p nil))
 			(session (mevedel-session--create
-			          :name "goal" :permission-mode 'trust-all))
+			          :name "goal" :permission-mode 'full-auto))
 			(ctx (list :tool tool :args nil :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
@@ -1058,7 +1058,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
@@ -1073,7 +1073,7 @@
 			(ctx (list :tool tool :args nil :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
@@ -1085,7 +1085,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules '(("Edit" :action deny)))
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			(mevedel--session (mevedel-session--create
 					   :name "phantom"
 					   :permission-rules '(("Edit" :action allow))))
@@ -1105,7 +1105,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			fail-reason)
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
@@ -1119,7 +1119,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
@@ -1134,7 +1134,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			fail-reason)
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
@@ -1149,7 +1149,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			fail-reason)
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
@@ -1163,7 +1163,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			fail-reason)
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
@@ -1177,9 +1177,9 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
-		   ;; Read-only + default mode → step 8 returns 'allow.
+		   ;; Read-only + ask mode -> step 8 returns 'allow.
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
@@ -1237,7 +1237,7 @@
 				   :workspace ws))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called enqueued)
 		   (with-temp-file path (insert "dropped\n"))
 		   (mevedel-session-activate-dropped-file-grants session (list path))
@@ -1273,7 +1273,7 @@
 				   :session session :workspace ws))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			captured-entry called)
 		   (with-temp-file path (insert "outside\n"))
 		   (unwind-protect
@@ -1327,7 +1327,7 @@
 				   :workspace ws))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called captured-entry)
 		   (make-directory descendant-dir)
 		   (with-temp-file descendant (insert "secret\n"))
@@ -1369,7 +1369,7 @@
 				   :workspace ws))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called captured-entry)
 		   (with-temp-file path (insert "dropped\n"))
 		   (mevedel-session-activate-dropped-file-grants session (list path))
@@ -1431,7 +1431,7 @@
 			(ctx (list :tool tool :args nil :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			next-called fail-reason)
 		   (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
 			      (lambda (_t _p _a _origin cont &optional _count _entry)
@@ -1453,7 +1453,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules '(("Edit" :action ask)))
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			fail-reason
 			next-called)
 		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
@@ -1503,7 +1503,7 @@
 				   :session sub-agent-session-alias))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
+			(mevedel-permission-mode 'ask)
 			called)
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
@@ -1521,15 +1521,15 @@
 		 (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
 			(parent-session
 			 (mevedel-session--create
-			  :name "parent" :permission-mode 'default))
+			  :name "parent" :permission-mode 'ask))
 			(sub-agent-alias parent-session)
 			(ctx (list :tool tool :args nil :session sub-agent-alias))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default))
+			(mevedel-permission-mode 'ask))
 		   ;; Parent enters Goal planning mid-conversation; the sub-agent's
 		   ;; next pipeline entry must observe the read-only phase.
-		   (setf (mevedel-session-permission-mode parent-session) 'trust-all
+		   (setf (mevedel-session-permission-mode parent-session) 'full-auto
 			 (mevedel-session-goal parent-session)
 			 (mevedel-goal--create
 			  :objective "test" :status 'active :phase 'planning))
@@ -1543,7 +1543,7 @@
 			(ctx (list :tool tool :args nil))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'trust-all)
+			(mevedel-permission-mode 'full-auto)
 			(warned nil))
 		   (cl-letf (((symbol-function 'display-warning)
 			      (lambda (kind msg &rest _)
@@ -1560,7 +1560,7 @@
 			(ctx (list :tool tool :args nil :session session))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'trust-all)
+			(mevedel-permission-mode 'full-auto)
 			(warned nil))
 		   (cl-letf (((symbol-function 'display-warning)
 			      (lambda (kind msg &rest _)
@@ -1801,7 +1801,7 @@
 			(session
 			 (mevedel-session--create
 			  :name "path-repair"
-			  :permission-mode 'default
+			  :permission-mode 'ask
 			  :resource-grants
 			  (list (list :path expected :access 'write))))
 			(mevedel--session session)
@@ -2119,7 +2119,7 @@
 		 (progn
 		   (let ((mevedel-permission-rules '(("TestEcho" :action allow)))
 			 (mevedel-protected-paths nil)
-			 (mevedel-permission-mode 'default)
+			 (mevedel-permission-mode 'ask)
 			 result)
 		     (mevedel-define-tool
 		      :name "TestEcho"
@@ -2141,7 +2141,7 @@
 		 (progn
 		   (let ((mevedel-permission-rules '(("TestStrict" :action allow)))
 			 (mevedel-protected-paths nil)
-			 (mevedel-permission-mode 'default)
+			 (mevedel-permission-mode 'ask)
 			 result)
 		     (mevedel-define-tool
 		      :name "TestStrict"
