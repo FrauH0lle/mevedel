@@ -23,6 +23,10 @@
 (declare-function treesit-parser-create "treesit" (language &optional buffer no-reuse tag))
 (declare-function treesit-parser-root-node "treesit" (parser))
 
+;; `mevedel-bash-policy'
+(declare-function mevedel-bash-policy-read-only-p
+                  "mevedel-bash-policy" (argv))
+
 
 ;;
 ;;; Customization
@@ -40,14 +44,6 @@ This classification is advisory input to permission policy.  Explicit direct
 user authority may still permit a matching command."
   :type '(repeat string)
   :group 'mevedel)
-
-(defconst mevedel-bash-analysis--read-only-commands
-  '("cat" "cd" "cut" "echo" "expr" "false" "grep" "head" "id" "ls"
-    "nl" "paste" "pwd" "rev" "seq" "stat" "tail" "tr" "true" "uname"
-    "uniq" "wc" "which" "whoami")
-  "Commands whose ordinary argument handling is read-only.
-Commands with effectful options belong in argument-specific policies rather
-than this unconditional list.")
 
 (defconst mevedel-bash-analysis--allowed-node-types
   '("program" "list" "pipeline" "command" "command_name" "word"
@@ -286,13 +282,9 @@ quotes or escaped with a backslash do not close the substitution."
    ((mevedel-bash-analysis--dangerous-p commands source) 'dangerous)
    (complex-p 'complex)
    ((and commands
-         (cl-every
-          (lambda (argv)
-            (let ((executable (car argv)))
-              (and (not (string-match-p "/" executable))
-                   (member executable
-                           mevedel-bash-analysis--read-only-commands))))
-          commands))
+         (progn
+           (require 'mevedel-bash-policy)
+           (cl-every #'mevedel-bash-policy-read-only-p commands)))
     'read-only)
    (t 'unknown)))
 

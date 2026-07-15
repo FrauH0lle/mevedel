@@ -697,7 +697,9 @@ through normal Emacs configuration and otherwise uses a conservative scanner.
 Dynamic shell syntax always classifies as complex.  Direct user-authored
 session, persistent, and global patterns may deliberately authorize dangerous
 or complex forms; rules delegated by a skill or request may not.  Explicit
-denies remain final.
+denies remain final.  Argument-aware policies recognize narrow read-only forms
+of Git, find, ripgrep, base64, sed, and awk; output options, mutation, and
+helper execution remain unknown and therefore prompt outside `full-auto`.
 
 **Dangerous commands** (`mevedel-bash-dangerous-commands`): command names that
 contribute the `dangerous` class (e.g., `rm`, `sudo`, `dd`, `chmod`, `curl`).
