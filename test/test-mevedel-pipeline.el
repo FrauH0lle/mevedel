@@ -1193,9 +1193,11 @@
 			     :type 'project :id "root" :root root
 			     :name "root" :file-cache nil))
 			(session (mevedel-session--create
-				  :name "test" :workspace ws))
+				  :name "test" :workspace ws
+				  :permission-mode 'auto))
 			(tool (mevedel-tool--create
 			       :name "Write"
+			       :groups '(edit)
 			       :read-only-p nil
 			       :get-path (lambda (args) (plist-get args :file_path))))
 			(ctx (list :tool tool
@@ -1216,6 +1218,85 @@
 			 (should-not enqueued))
 		     (delete-directory root t)
 		     (delete-directory extra t)))
+		 :doc "ask prompts for native edits even inside allowed roots"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-pipeline-ask-edit-" t)))
+			(path (file-name-concat root "file.txt"))
+			(ws (mevedel-workspace--create
+			     :type 'project :id "ask-edit" :root root
+			     :name "ask-edit" :file-cache nil))
+			(session (mevedel-session--create
+				  :name "test" :workspace ws
+				  :permission-mode 'ask))
+			(tool (mevedel-tool--create
+			       :name "Edit" :groups '(edit)
+			       :get-path (lambda (args)
+				   (plist-get args :file_path))))
+			(ctx (list :tool tool :args (list :file_path path)
+				   :session session :workspace ws))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			called enqueued)
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+				  (lambda (&optional _buffer) (list root)))
+				 ((symbol-function 'mevedel-permission--enqueue)
+				  (lambda (&rest _args) (setq enqueued t))))
+			 (mevedel-pipeline--step-permission
+			  ctx (lambda (_c) (setq called t)) #'ignore)
+			 (should-not called)
+			 (should enqueued))
+		     (delete-directory root t)))
+		 :doc "auto advances native edit tools inside allowed roots"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-pipeline-auto-edit-" t)))
+			(ws (mevedel-workspace--create
+			     :type 'project :id "auto-edit" :root root
+			     :name "auto-edit" :file-cache nil))
+			(session (mevedel-session--create
+				  :name "test" :workspace ws
+				  :permission-mode 'auto))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil))
+		   (unwind-protect
+		       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+				  (lambda (&optional _buffer) (list root))))
+			 (dolist (spec '(("Edit" :file_path)
+					("Write" :file_path)
+					("MkDir" :path)))
+			   (let* ((name (car spec))
+				  (key (cadr spec))
+				  (path (file-name-concat root (downcase name)))
+				  (tool (mevedel-tool--create
+					 :name name :groups '(edit)
+					 :get-path (lambda (args)
+						     (plist-get args key))))
+				  (ctx (list :tool tool :args (list key path)
+					     :session session :workspace ws))
+				  called enqueued)
+			     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+					(lambda (&rest _args) (setq enqueued t))))
+			       (mevedel-pipeline--step-permission
+				ctx (lambda (_c) (setq called t)) #'ignore))
+			     (should called)
+			     (should-not enqueued))))
+		     (delete-directory root t)))
+		 :doc "auto keeps Bash and Eval behind their permission checks"
+		 (dolist (name '("Bash" "Eval"))
+		   (let* ((session (mevedel-session--create
+				    :name "test" :permission-mode 'auto))
+			  (tool (mevedel-tool--create
+				 :name name :groups '(eval)))
+			  (ctx (list :tool tool :args nil :session session))
+			  (mevedel-permission-rules nil)
+			  (mevedel-protected-paths nil)
+			  called enqueued)
+		     (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+				(lambda (&rest _args) (setq enqueued t))))
+		       (mevedel-pipeline--step-permission
+			ctx (lambda (_c) (setq called t)) #'ignore))
+		     (should-not called)
+		     (should enqueued)))
 		 :doc "session-scoped dropped-file grant allows exact Read outside workspace"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-pipeline-root-" t)))

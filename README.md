@@ -506,8 +506,8 @@ background), `SendMessage` (post a message to another agent's mailbox),
 schemas on demand)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
-evaluation, always confirmed; supports `live` and `batch` modes, with optional
-UI preservation for live evaluation)
+evaluation, confirmed in `ask` and `auto`, automatic in `full-auto`; supports
+`live` and `batch` modes, with optional UI preservation for live evaluation)
 
 **Web:** `WebSearch`, `WebFetch`, `YouTube` (via
 [gptel-agent](https://github.com/karthink/gptel-agent))

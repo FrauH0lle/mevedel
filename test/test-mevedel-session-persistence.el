@@ -5240,6 +5240,7 @@ The result is a plist whose :tempdir owns every created file."
   :doc "a modifying tool routed through the pipeline lands a backup in file-history"
   (cl-destructuring-bind (session . tempdir)
       (test-mevedel-session-persistence--make-materialized-session)
+    (setf (mevedel-session-permission-mode session) 'auto)
     (unwind-protect
         (let* ((data-buf (get-buffer "*test-data-buf*"))
                (tracked  (file-name-concat tempdir "tracked.el"))
@@ -5252,6 +5253,7 @@ The result is a plist whose :tempdir owns every created file."
                ;; file to simulate what a real Edit / Write would do.
                (tool (mevedel-tool--create
                       :name "WriteMock"
+                      :groups '(edit)
                       :handler (lambda (args)
                                  (let ((p (plist-get args :path))
                                        (c (plist-get args :content)))
