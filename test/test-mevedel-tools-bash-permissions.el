@@ -1531,25 +1531,66 @@
         (when (and child-pid (process-attributes child-pid))
           (ignore-errors (signal-process child-pid 'KILL)))
         (delete-directory root t))))
-  :doc "drains output written after TERM before forced KILL settles"
+  :doc "drains a surviving descendant after the leader exits on TERM"
   (if (or (eq system-type 'windows-nt)
           (not (executable-find "setsid")))
       (ert-skip "Process-group test requires setsid")
-    (let ((mevedel-tool-exec--child-kill-delay 0.2)
-          result done)
-      (mevedel-tool-exec--start-child-process
-       "mevedel-test-drain"
-       (list "bash" "-c"
-             "trap 'printf before-kill; trap \"\" TERM' TERM; while :; do sleep 1; done")
-       default-directory 1
-       (lambda (child-result)
-         (setq result child-result
-               done t)))
-      (with-timeout (5 (error "Timed out"))
-        (while (not done)
-          (accept-process-output nil 0.05)))
-      (should (plist-get result :timed-out-p))
-      (should (string-match-p "before-kill" (plist-get result :output))))))
+    (let* ((root (make-temp-file "mevedel-child-drain-" t))
+           (child-script (file-name-concat root "child.sh"))
+           (ready-file (file-name-concat root "ready"))
+           (pid-file (file-name-concat root "child.pid"))
+           (command
+            (format
+             (concat
+              "leader=$$; bash %s $leader %s %s & "
+              "while [ ! -f %s ]; do :; done; "
+              "trap 'exit 0' TERM; while :; do :; done")
+             (shell-quote-argument child-script)
+             (shell-quote-argument ready-file)
+             (shell-quote-argument pid-file)
+             (shell-quote-argument ready-file)))
+           (mevedel-tool-exec--child-kill-delay 1)
+           result child-pid done)
+      (unwind-protect
+          (progn
+            (with-temp-file child-script
+              (insert
+               (concat
+                "leader=$1\nready=$2\npid_file=$3\n"
+                "trap '' HUP\n"
+                "on_term() {\n"
+                "  trap '' TERM\n"
+                "  while kill -0 \"$leader\" 2>/dev/null; do :; done\n"
+                "  printf descendant-after-term\n"
+                "  while :; do :; done\n"
+                "}\n"
+                "trap on_term TERM\n"
+                "printf '%s' \"$$\" > \"$pid_file\"\n"
+                "printf ready > \"$ready\"\n"
+                "while :; do :; done\n")))
+            (mevedel-tool-exec--start-child-process
+             "mevedel-test-drain"
+             (list "bash" "-c" command)
+             default-directory 1
+             (lambda (child-result)
+               (setq result child-result
+                     done t)))
+            (with-timeout (5 (error "Timed out"))
+              (while (not done)
+                (accept-process-output nil 0.05)))
+            (should (plist-get result :timed-out-p))
+            (should (string-match-p "descendant-after-term"
+                                    (plist-get result :output)))
+            (setq child-pid
+                  (string-to-number
+                   (string-trim
+                    (with-temp-buffer
+                      (insert-file-contents pid-file)
+                      (buffer-string)))))
+            (should-not (process-attributes child-pid)))
+        (when (and child-pid (process-attributes child-pid))
+          (ignore-errors (signal-process child-pid 'KILL)))
+        (delete-directory root t)))))
 
 
 
