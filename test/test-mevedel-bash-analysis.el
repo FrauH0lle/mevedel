@@ -72,6 +72,7 @@
                       "echo `pwd`"
                       "echo $HOME"
                       "FOO=bar make test"
+                      "FOO+=bar make test"
                       "(pwd)"
                       "pwd
 cat file"
@@ -99,6 +100,23 @@ cat file"
     (let ((analysis
            (mevedel-bash-analysis-analyze
             "echo \"$(pwd && rm file && echo x)\"")))
+      (should (member "rm file" (plist-get analysis :candidates)))))
+  :doc "quoted parentheses in substitutions:
+`mevedel-bash-analysis-analyze' does not truncate nested command facts"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (mevedel-bash-analysis-analyze
+            "echo \"$(printf ')' && rm file && cat .git/config)\"")))
+      (should (member "rm file" (plist-get analysis :candidates)))
+      (should (member ".git/config" (plist-get analysis :resources)))))
+  :doc "nested substitution parsing:
+`mevedel-bash-analysis-analyze' preserves recursively quoted substitutions"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis
+           (mevedel-bash-analysis-analyze
+            "echo \"$(printf ')' && echo \"$(rm file)\")\"")))
       (should (member "rm file" (plist-get analysis :candidates)))))
   :doc "complex resource harvesting:
 `mevedel-bash-analysis-analyze' preserves literal protected-path candidates"

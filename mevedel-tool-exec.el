@@ -516,7 +516,17 @@ authorize dangerous or complex syntax."
           (mapcar (lambda (segment)
                     (mevedel-tool-exec--bash-bucket-match buckets segment))
                   segments))
-         (segment-actions (mapcar #'car segment-matches)))
+         (segment-actions (mapcar #'car segment-matches))
+         (direct-segment-actions
+          (mapcar
+           (lambda (segment)
+             (car (mevedel-tool-exec--bash-direct-match buckets segment)))
+           segments))
+         (segment-classes
+          (mapcar
+           (lambda (segment)
+             (plist-get (mevedel-tool-exec--analyze-bash segment) :class))
+           segments)))
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command analysis)
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
@@ -528,6 +538,13 @@ authorize dangerous or complex syntax."
      ((memq 'deny segment-actions) 'deny)
      ((and (memq class '(dangerous complex))
            (eq (car direct-match) 'allow))
+      'allow)
+     ((and (eq class 'dangerous)
+           segments
+           (cl-loop for action in direct-segment-actions
+                    for segment-class in segment-classes
+                    always (or (eq action 'allow)
+                               (eq segment-class 'read-only))))
       'allow)
      ((memq class '(dangerous complex))
       (if full-auto-p 'allow 'ask))

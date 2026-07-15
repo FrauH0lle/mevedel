@@ -127,21 +127,67 @@ protected-path checks even when unsupported syntax prevents argv extraction."
      (append (nreverse resources)
              (mevedel-bash-analysis--source-resources source)))))
 
+(defun mevedel-bash-analysis--assignment-word-p (word)
+  "Return non-nil when WORD begins with a Bash assignment name."
+  (and word
+       (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*\\+?=" word)))
+
+(defun mevedel-bash-analysis--substitution-end (source start)
+  "Return the end index of command substitution in SOURCE after START.
+START points immediately after the opening `$(' token.  Parentheses inside
+quotes or escaped with a backslash do not close the substitution."
+  (let ((depth 1)
+        (index start)
+        quote
+        escaped)
+    (while (and (< index (length source)) (> depth 0))
+      (let ((char (aref source index))
+            (next (and (< (1+ index) (length source))
+                       (aref source (1+ index)))))
+        (cond
+         (escaped
+          (setq escaped nil))
+         ((and (eq char ?\\) (not (eq quote ?')))
+          (setq escaped t))
+         ((eq quote ?')
+          (when (eq char ?')
+            (setq quote nil)))
+         ((eq quote ?`)
+          (when (eq char ?`)
+            (setq quote nil)))
+         ((eq quote ?\")
+          (cond
+           ((eq char ?\")
+            (setq quote nil))
+           ((and (eq char ?$) (eq next ?\())
+            (when-let* ((nested-end
+                         (mevedel-bash-analysis--substitution-end
+                          source (+ index 2))))
+              (setq index (1- nested-end))))))
+         ((and (eq char ?$) (eq next ?\())
+          (when-let* ((nested-end
+                       (mevedel-bash-analysis--substitution-end
+                        source (+ index 2))))
+            (setq index (1- nested-end))))
+         ((memq char '(?' ?\" ?`))
+          (setq quote char))
+         ((eq char ?\()
+          (setq depth (1+ depth)))
+         ((eq char ?\))
+          (setq depth (1- depth)))))
+      (setq index (1+ index)))
+    (and (= depth 0) index)))
+
 (defun mevedel-bash-analysis--substitution-bodies (source)
   "Return best-effort command substitution bodies found in SOURCE."
   (let ((position 0)
         bodies)
     (while (string-match "\\$(" source position)
-      (let ((depth 1)
-            (index (match-end 0)))
-        (while (and (< index (length source)) (> depth 0))
-          (pcase (aref source index)
-            (?\( (setq depth (1+ depth)))
-            (?\) (setq depth (1- depth))))
-          (setq index (1+ index)))
-        (when (= depth 0)
-          (push (substring source (match-end 0) (1- index)) bodies))
-        (setq position index)))
+      (let* ((start (match-end 0))
+             (end (mevedel-bash-analysis--substitution-end source start)))
+        (when end
+          (push (substring source start (1- end)) bodies))
+        (setq position (or end (length source)))))
     (setq position 0)
     (while (string-match "`\\([^`]*\\)`" source position)
       (push (match-string 1 source) bodies)
@@ -170,8 +216,7 @@ protected-path checks even when unsupported syntax prevents argv extraction."
                     (split-string-shell-command candidate)
                   (error nil))))
       (while (and argv
-                  (string-match-p
-                   "\\`[A-Za-z_][A-Za-z0-9_]*=" (car argv)))
+                  (mevedel-bash-analysis--assignment-word-p (car argv)))
         (setq argv (cdr argv)))
       (when (member (car argv) '("then" "do" "else" "elif"))
         (setq argv (cdr argv)))
@@ -314,7 +359,7 @@ protected-path checks even when unsupported syntax prevents argv extraction."
             (cond
              ((null argv)
               (push "A command is empty" reasons))
-             ((string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*=" (car argv))
+             ((mevedel-bash-analysis--assignment-word-p (car argv))
               (push "Environment assignments are unsupported" reasons))
              ((member (car argv) mevedel-bash-analysis--control-words)
               (push "Shell control flow is unsupported" reasons))
