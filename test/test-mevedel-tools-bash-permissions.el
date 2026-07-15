@@ -199,6 +199,18 @@
           '(:mode ask
             :buckets
             ((:request . (("Bash" :pattern "make test" :action allow)))))))))
+  :doc "generic deny across buckets:
+\`mevedel-tools--check-bash-permission' keeps an outer user deny final"
+  (let ((mevedel-permission-rules nil))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission
+          "make test"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:request . (("Bash" :pattern "make test" :action allow)))
+             (:defcustom . (("Bash" :action deny)))))))))
   :doc "explicit deny:
 \`mevedel-tools--check-bash-permission' keeps deny final"
   (let ((mevedel-permission-rules nil)
@@ -212,6 +224,18 @@
             :buckets
             ((:session . (("Bash" :pattern "rm *" :action allow)))
              (:persistent . (("Bash" :pattern "rm *" :action deny)))))))))
+  :doc "explicit deny in complex syntax:
+\`mevedel-tools--check-bash-permission' checks harvested command components"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands nil))
+    (should
+     (eq 'deny
+         (mevedel-tools--check-bash-permission
+          "echo $(rm file)"
+          :permission-context
+          '(:mode full-auto
+            :buckets
+            ((:persistent . (("Bash" :pattern "rm *" :action deny)))))))))
   :doc "full-auto:
 \`mevedel-tools--check-bash-permission' bypasses heuristic prompts"
   (let ((mevedel-permission-rules nil)
