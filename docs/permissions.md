@@ -113,6 +113,10 @@ Precedence: specifier rules outrank generic; within a group
 `deny > ask > allow`. Protected paths prompt unless an exact resource grant
 with sufficient access already exists.
 
+`mevedel-protected-paths` is an alist from glob to `read-only` or
+`inaccessible`. The default `.git` glob is read-only; the default SSH and GnuPG
+credential globs are inaccessible. String-only entries are invalid by design.
+
 The three canonical modes are `ask`, `auto`, and `full-auto`:
 
 - `ask` allows recognized inspection and prompts for edits and uncertain
@@ -241,6 +245,15 @@ active sandbox facts for the model and audit trail.
 Trusted skill substitutions keep those facts out of the substituted literal;
 an unrestricted substitution instead emits a user-visible warning while the
 active facts remain recorded.
+
+Protected restrictions are layered after writable roots. Existing glob matches
+and canonical targets become concrete mounts; `.git` pointer files also protect
+their Git directory target. Read-only paths remain visible but immutable, while
+inaccessible directories are replaced by empty read-only mounts. Determinable
+missing directory roots receive identity-checked temporary mount targets that
+are removed after settlement. A protected path crossing a symlink that the
+child could rewrite fails closed instead of relying on a racy canonical-path
+snapshot.
 
 ### Bash guardian guidance
 

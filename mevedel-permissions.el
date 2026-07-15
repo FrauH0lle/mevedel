@@ -119,12 +119,18 @@ Example:
   :group 'mevedel)
 
 (defcustom mevedel-protected-paths
-  '("**/.git/**" "~/.ssh/**" "~/.gnupg/**")
-  "Path patterns that require exact resource authority.
+  '(("**/.git/**" . read-only)
+    ("~/.ssh/**" . inaccessible)
+    ("~/.gnupg/**" . inaccessible))
+  "Protected path globs and their child-confinement access modes.
 
 Even `full-auto' mode prompts when a matching path lacks an exact resource
-grant.  Each entry is a glob pattern matched against the full expanded path."
-  :type '(repeat string)
+grant.  `read-only' keeps matched content visible but immutable;
+`inaccessible' hides it.  This alist is also compiled into the Bubblewrap
+  profile for Bash and batch Eval."
+  :type '(alist :key-type string
+                :value-type
+                (choice (const inaccessible) (const read-only)))
   :group 'mevedel)
 
 (defun mevedel-permission--current-data-buffer ()
@@ -631,13 +637,23 @@ unqualified rules.  Within each group, deny > ask > allow.  Return
 ;;
 ;;; Protected paths
 
+(defun mevedel-permission-protected-path-policy ()
+  "Return validated entries from `mevedel-protected-paths'."
+  (dolist (entry mevedel-protected-paths)
+    (unless (and (consp entry)
+                 (stringp (car entry))
+                 (memq (cdr entry) '(read-only inaccessible)))
+      (error "Invalid protected path entry: %S" entry)))
+  mevedel-protected-paths)
+
 (defun mevedel-permission--path-protected-p (path)
   "Check if PATH matches any pattern in `mevedel-protected-paths'.
 
 Returns non-nil if the path is protected."
   (when path
     (let ((expanded (expand-file-name path)))
-      (cl-loop for pattern in mevedel-protected-paths
+      (cl-loop for (pattern . _mode) in
+               (mevedel-permission-protected-path-policy)
                thereis
                (mevedel-permission--match-path-pattern expanded pattern)))))
 

@@ -84,12 +84,12 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
+(declare-function mevedel-permission-protected-path-policy
+                  "mevedel-permissions" ())
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
 (defvar mevedel-permission-mode)
 (defvar mevedel-permission-rules)
-(defvar mevedel-protected-paths)
-
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
                   "mevedel-sandbox" (child-result))
@@ -97,6 +97,7 @@
                   "mevedel-sandbox" (preparation child-result))
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox" (command workdir writable-roots))
+(declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
@@ -392,7 +393,8 @@ the caller already analyzed COMMAND."
                              (concat "\\." (regexp-quote name)
                                      "\\(?:/\\|\\'\\)")
                              pattern))
-                          mevedel-protected-paths)
+                          (mapcar #'car
+                                  (mevedel-permission-protected-path-policy)))
                  (string-match-p
                   (concat "\\(?:\\`\\|/\\)\\." (regexp-quote name)
                           "\\(?:/\\|\\'\\)")
@@ -1509,6 +1511,7 @@ may retry COMMAND directly; a started command is never replayed."
               (let ((facts
                      (mevedel-sandbox--record-launch-failure
                       child-result)))
+                (mevedel-sandbox-cleanup preparation)
                 (mevedel-tool-exec--start-child-process
                  name (plist-get preparation :original-command)
                  workdir timeout
@@ -1526,6 +1529,7 @@ may retry COMMAND directly; a started command is never replayed."
                   (clean-result
                    (mevedel-sandbox-strip-marker
                     preparation child-result)))
+              (mevedel-sandbox-cleanup preparation)
               (funcall
                callback
                (mevedel-tool-exec--child-with-sandbox-facts

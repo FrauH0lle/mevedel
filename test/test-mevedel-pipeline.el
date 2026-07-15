@@ -1016,7 +1016,8 @@
 				   :args (list :file_path path)
 				   :session session))
 			(mevedel-permission-rules nil)
-			(mevedel-protected-paths (list path))
+			(mevedel-protected-paths
+			 (list (cons path 'inaccessible)))
 			(mevedel-permission-mode 'ask)
 			(mevedel-permission-log-enabled t))
 		   (unwind-protect

@@ -196,18 +196,35 @@
   ,test
   (test)
   :doc "git directory is protected"
-  (let ((mevedel-protected-paths '("**/.git/**")))
+  (let ((mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should (mevedel-permission--path-protected-p "/repo/.git/config")))
   :doc "ssh directory is protected"
-  (let ((mevedel-protected-paths '("~/.ssh/*")))
+  (let ((mevedel-protected-paths '(("~/.ssh/*" . inaccessible))))
     (should (mevedel-permission--path-protected-p
              (expand-file-name "~/.ssh/id_rsa"))))
   :doc "normal path is not protected"
-  (let ((mevedel-protected-paths '("**/.git/**" "~/.ssh/*")))
+  (let ((mevedel-protected-paths
+         '(("**/.git/**" . read-only) ("~/.ssh/*" . inaccessible))))
     (should-not (mevedel-permission--path-protected-p "/home/user/projects/foo.el")))
   :doc "nil path is not protected"
-  (let ((mevedel-protected-paths '("**/.git/**")))
+  (let ((mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should-not (mevedel-permission--path-protected-p nil))))
+
+(mevedel-deftest mevedel-permission-protected-path-policy ()
+  ,test
+  (test)
+  :doc "valid protected path modes are returned unchanged"
+  (let ((mevedel-protected-paths
+         '(("**/.git/**" . read-only)
+           ("~/.ssh/**" . inaccessible))))
+    (should (eq (mevedel-permission-protected-path-policy)
+                mevedel-protected-paths)))
+  :doc "the superseded string-only shape is rejected"
+  (let ((mevedel-protected-paths '("**/.git/**")))
+    (should-error (mevedel-permission-protected-path-policy) :type 'error))
+  :doc "unknown protected path modes are rejected"
+  (let ((mevedel-protected-paths '(("**/.git/**" . writable))))
+    (should-error (mevedel-permission-protected-path-policy) :type 'error)))
 
 
 ;;
@@ -309,7 +326,7 @@
   (test-mevedel-permissions--with-goal-phase 'planning
     (let ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
           (mevedel-permission-rules nil)
-          (mevedel-protected-paths '("**/.git/**")))
+          (mevedel-protected-paths '(("**/.git/**" . read-only))))
       (let* ((context
               (mevedel-permission--preflight
                "Edit" :tool-struct tool :path "/repo/.git/config"
@@ -352,7 +369,7 @@
              :request-rules (("Edit" :action ask)) :mode auto)
             ("Custom" :tool-struct ,deny-tool :mode full-auto))))
     (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths '("**/.git/**")))
+          (mevedel-protected-paths '(("**/.git/**" . read-only))))
       (dolist (case cases)
         (let* ((tool-name (car case))
                (args (cdr case))
@@ -381,7 +398,7 @@
              (funcall cont 'allow))))
          decision)
     (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths '("**/.git/**")))
+          (mevedel-protected-paths '(("**/.git/**" . read-only))))
       (cl-letf (((symbol-function 'mevedel-permission--first-deny-bucket)
                  (lambda (&rest args)
                    (cl-incf deny-checks)
@@ -409,7 +426,7 @@
     (should (eq (mevedel-check-permission "Edit" :mode 'full-auto) 'deny)))
   :doc "protected path forces ask even in full-auto"
   (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**")))
+        (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should (eq (mevedel-check-permission "Edit"
                   :path "/repo/.git/config"
                   :mode 'full-auto)
@@ -417,7 +434,7 @@
   :doc "read-only Goal phase denies non-read-only protected paths"
   (test-mevedel-permissions--with-goal-phase 'reviewing
     (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths '("**/.git/**"))
+          (mevedel-protected-paths '(("**/.git/**" . read-only)))
           (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
       (should (eq (mevedel-check-permission "Edit"
                     :tool-struct mock-tool
@@ -427,7 +444,7 @@
   :doc "read-only Goal phase keeps read-only protected paths as ask"
   (test-mevedel-permissions--with-goal-phase 'planning
     (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths '("**/.git/**"))
+          (mevedel-protected-paths '(("**/.git/**" . read-only)))
           (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
       (should (eq (mevedel-check-permission "Read"
                     :tool-struct mock-tool
@@ -511,7 +528,7 @@
     (should (eq (mevedel-check-permission "UnknownTool" :mode 'ask) 'ask)))
   :doc "get-path extracts path from content"
   (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**"))
+        (mevedel-protected-paths '(("**/.git/**" . read-only)))
         (mock-tool (mevedel-tool--create
                     :name "Edit"
                     :get-path (lambda (input) (plist-get input :file_path))
@@ -899,7 +916,7 @@
          (session (mevedel-session--create :name "test"))
          (tool (mevedel-tool--create :name "Read" :read-only-p t))
          (mevedel-permission-rules nil)
-         (mevedel-protected-paths '("**/.git/**")))
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (mevedel-permission-add-session-resource-grant session path 'read)
     (should (eq 'allow
                 (mevedel-check-permission
