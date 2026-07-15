@@ -1721,7 +1721,7 @@ Use `setsid' when available so timeout signals can reach descendants."
         (list
          :command
          (append
-          (list setsid "--fork" "--wait"
+          (list setsid "-f" "-w"
                 "sh" "-c"
                 "printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\""
                 "mevedel-child" group-file)
@@ -1754,22 +1754,6 @@ has already exited."
          (ignore-errors
            (signal-process process signal)))))))
 
-(defun mevedel-tool-exec--terminate-child-process
-    (process process-group-p &optional pid)
-  "Terminate PROCESS and its children when PROCESS-GROUP-P is non-nil."
-  (when (process-live-p process)
-    (mevedel-tool-exec--signal-child-process
-     process process-group-p 'TERM pid)))
-
-(defun mevedel-tool-exec--kill-child-process
-    (process process-group-p &optional pid)
-  "Force-kill PROCESS and its children when PROCESS-GROUP-P is non-nil.
-PID preserves the process group id after PROCESS exits."
-  (when (or (and process-group-p (integerp pid) (> pid 0))
-            (process-live-p process))
-    (mevedel-tool-exec--signal-child-process
-     process process-group-p 'KILL pid)))
-
 (defun mevedel-tool-exec--start-child-process
     (name command workdir timeout callback)
   "Start COMMAND as NAME in WORKDIR and call CALLBACK when it settles.
@@ -1777,10 +1761,8 @@ PID preserves the process group id after PROCESS exits."
 CALLBACK receives a plist with :exit-code, :output, :timed-out-p,
 and optional :error.  TIMEOUT is nil or a positive number of seconds.
 On systems with `setsid', timeout signals cover the whole process group."
-  (let* ((output-buffer (generate-new-buffer (format " *%s*" name)))
-         (spawn (mevedel-tool-exec--child-spawn-command command))
-         (group-file (plist-get spawn :group-file))
-         timer force-timer timed-out finished exit-code process)
+  (let (output-buffer spawn group-file timer force-timer settle-timer
+                      timed-out finished exit-code process)
     (cl-labels
         ((process-output ()
            (if (buffer-live-p output-buffer)
@@ -1804,6 +1786,8 @@ On systems with `setsid', timeout signals cover the whole process group."
                (cancel-timer timer))
              (when (timerp force-timer)
                (cancel-timer force-timer))
+             (when (timerp settle-timer)
+               (cancel-timer settle-timer))
              (let ((output (process-output)))
                (cleanup)
                (funcall callback
@@ -1818,13 +1802,25 @@ On systems with `setsid', timeout signals cover the whole process group."
              ;; when its leader exits promptly after TERM.
              (unless (and timed-out (timerp force-timer))
                (finish exit-code))))
+         (settle-after-kill ()
+           (unless finished
+             (finish (or exit-code -1))))
          (force-kill ()
            (unless finished
              (let ((group-id
                     (mevedel-tool-exec--child-group-id group-file)))
-               (mevedel-tool-exec--kill-child-process
-                process (and group-id t) group-id)
-               (finish (or exit-code -1)))))
+               ;; Give the sentinel a bounded chance to drain the pipe after
+               ;; KILL before falling back to explicit settlement.
+               (setq force-timer nil
+                     settle-timer
+                     (run-at-time mevedel-tool-exec--child-kill-delay
+                                  nil #'settle-after-kill))
+               (mevedel-tool-exec--signal-child-process
+                process (and group-id t) 'KILL group-id)
+               ;; The sentinel may already have observed EOF after TERM.  In
+               ;; that case there is no pipe left to drain after KILL.
+               (when (and (not finished) (not (process-live-p process)))
+                 (finish (or exit-code -1))))))
          (time-out ()
            (unless finished
              (if (not (process-live-p process))
@@ -1832,13 +1828,17 @@ On systems with `setsid', timeout signals cover the whole process group."
                (let ((group-id
                       (mevedel-tool-exec--child-group-id group-file)))
                  (setq timed-out t)
-                 (mevedel-tool-exec--terminate-child-process
-                  process (and group-id t) group-id)
+                 (mevedel-tool-exec--signal-child-process
+                  process (and group-id t) 'TERM group-id)
                  (setq force-timer
                        (run-at-time mevedel-tool-exec--child-kill-delay
                                     nil #'force-kill)))))))
       (condition-case err
           (progn
+            (setq output-buffer
+                  (generate-new-buffer (format " *%s*" name)))
+            (setq spawn (mevedel-tool-exec--child-spawn-command command)
+                  group-file (plist-get spawn :group-file))
             (setq process
                   (let ((default-directory workdir))
                     (with-current-buffer output-buffer
