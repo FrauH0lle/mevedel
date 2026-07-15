@@ -327,11 +327,14 @@ available.
 
 ## Bash execution timeout
 
-Bash commands are terminated after `mevedel-bash-timeout` seconds by
-default (120 seconds). A Bash call may pass `timeout_seconds` to request
-a longer or shorter positive timeout for that invocation. When a command
-times out, mevedel terminates the shell process group where supported and
-returns the partial combined stdout/stderr with a timeout notice.
+Bash source runs through `bash -lc`, so login-shell initialization contributes
+to the same output and timeout as the requested command. Commands are
+terminated after `mevedel-bash-timeout` seconds by default (120 seconds). A
+Bash call may pass `timeout_seconds` to request a longer or shorter positive
+timeout for that invocation. On systems with `setsid`, mevedel creates a
+dedicated process group and sends TERM followed by KILL to the whole group;
+otherwise it terminates the direct child. The result includes partial combined
+stdout/stderr and a timeout notice.
 
 ## Eval execution scope
 
@@ -341,6 +344,7 @@ restores the selected frame's window configuration by default, preventing
 accidental calls like `delete-other-windows` from surprising the user;
 `preserve_ui: false` opts out for deliberate UI manipulation.  `batch`
 runs a child `emacs --batch -Q` process with the current `load-path` and
-the session working directory.  Batch mode isolates the interactive
-Emacs session from UI/global-state changes, but it is not an OS security
-sandbox.
+the session working directory. Bash and batch Eval share child-process output,
+cleanup, and process-group handling; live Eval does not use that child seam.
+Batch mode isolates the interactive Emacs session from UI/global-state changes,
+but it is not yet an OS security sandbox.
