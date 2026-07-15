@@ -121,8 +121,10 @@
   :doc "protected glob expansion:
 `mevedel-sandbox--protected-candidates' finds concrete and missing roots"
   (let* ((root (make-temp-file "mevedel-sandbox-candidates-" t))
+         (secondary (make-temp-file "mevedel-sandbox-secondary-" t))
          (nested (file-name-concat root "nested"))
          (dot-git (file-name-concat nested ".git"))
+         (secondary-dot-git (file-name-concat secondary "nested" ".git"))
          (credentials (file-name-concat root "credentials"))
          (missing (file-name-concat root "missing"))
          (mevedel-protected-paths
@@ -132,10 +134,15 @@
     (unwind-protect
         (progn
           (make-directory dot-git t)
+          (make-directory secondary-dot-git t)
           (make-directory credentials)
           (let ((candidates
-                 (mevedel-sandbox--protected-candidates root (list root))))
+                 (mevedel-sandbox--protected-candidates
+                  root (list root secondary))))
             (should (cl-find dot-git candidates
+                             :key (lambda (item) (plist-get item :path))
+                             :test #'string-equal))
+            (should (cl-find secondary-dot-git candidates
                              :key (lambda (item) (plist-get item :path))
                              :test #'string-equal))
             (should (eq (plist-get
@@ -147,7 +154,8 @@
             (should (cl-find missing candidates
                              :key (lambda (item) (plist-get item :path))
                              :test #'string-equal))))
-      (delete-directory root t))))
+      (delete-directory root t)
+      (delete-directory secondary t))))
 
 (mevedel-deftest mevedel-sandbox-cleanup ()
   ,test
