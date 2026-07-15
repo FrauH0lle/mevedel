@@ -330,6 +330,15 @@
          (mevedel-tools--check-bash-permission
          "cat .git/config"
           :permission-context '(:mode full-auto :buckets nil)))))
+  :doc "continued protected path:
+\`mevedel-tools--check-bash-permission' checks Bash line continuations"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths '("~/.ssh/**")))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          (concat "cat ~/.ss\\" "\n" "h/id_rsa")
+          :permission-context '(:mode full-auto :buckets nil)))))
   :doc "protected path inside substitution:
 `mevedel-tools--check-bash-permission' asks before nested protected resources"
   (let ((mevedel-permission-rules nil)
