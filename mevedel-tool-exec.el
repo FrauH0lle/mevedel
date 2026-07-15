@@ -1816,11 +1816,7 @@ On systems with `setsid', timeout signals cover the whole process group."
                      (run-at-time mevedel-tool-exec--child-kill-delay
                                   nil #'settle-after-kill))
                (mevedel-tool-exec--signal-child-process
-                process (and group-id t) 'KILL group-id)
-               ;; The sentinel may already have observed EOF after TERM.  In
-               ;; that case there is no pipe left to drain after KILL.
-               (when (and (not finished) (not (process-live-p process)))
-                 (finish (or exit-code -1))))))
+                process (and group-id t) 'KILL group-id))))
          (time-out ()
            (unless finished
              (if (not (process-live-p process))
