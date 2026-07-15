@@ -164,11 +164,12 @@ chain.
 
 Permission prompts are queued on the session, not displayed as
 independent blocking overlays. `mevedel-permission-queue.el` owns a
-heterogeneous FIFO with three entry kinds:
+heterogeneous FIFO with four entry kinds:
 
 - `generic` for pipeline permission asks
 - `bash` for Bash command confirmation
 - `eval` for Eval expression confirmation
+- `sandbox` for once-only additive execution-authority confirmation
 
 Only the head is visible in the view interaction zone. The permission UI
 registers that head with `mevedel-view-interaction.el`, which owns ordering,
@@ -230,8 +231,11 @@ permission mode, consult `mevedel-sandbox-mode`. On Linux, `auto` resolves
 user, process, and network namespaces. A successful profile mounts `/`
 read-only, rebinds the workspace, temporary directory, memory roots, manually
 configured roots, and session working directory writable, installs a fresh
-`/proc`, changes to the canonical working directory, and isolates the network.
-The namespace and mount boundary is inherited by descendants.
+`/proc`, and changes to the canonical working directory. The default profile
+also isolates the network. A justified additive network request prompts in
+`ask` and `auto`, proceeds automatically in `full-auto` after command
+authorization, and changes only network isolation for that invocation. The
+namespace and mount boundary is inherited by descendants.
 
 `auto` executes directly when the initial probe is unavailable. For the narrow
 race where a later Bubblewrap launch fails, a marker emitted immediately before

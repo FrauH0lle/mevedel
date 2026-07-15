@@ -177,7 +177,7 @@ additive child permissions are available only to batch Eval"
       :justification "Fetch package metadata?")
     'eval 'live)))
 
-(mevedel-deftest mevedel-tool-exec--additional-network-permission ()
+(mevedel-deftest mevedel-tool-exec--check-additional-permission-async ()
   ,test
   (test)
   :doc "ask Bash:
@@ -1773,7 +1773,7 @@ both Eval and network authority proceed without prompts"
 ;;
 ;;; Eval handler
 
-(mevedel-deftest mevedel-tool-exec--register/bash-sandbox-schema ()
+(mevedel-deftest mevedel-tool-exec--register ()
   ,test
   (test)
   :doc "registers the shared execution escalation vocabulary for Bash"
@@ -1800,11 +1800,7 @@ both Eval and network authority proceed without prompts"
                                          :network)
                               :type)))
     (should (equal "string" (plist-get justification :type)))
-    (should (plist-get justification :optional))))
-
-(mevedel-deftest mevedel-tool-exec--register/eval-schema ()
-  ,test
-  (test)
+    (should (plist-get justification :optional)))
   :doc "registers Eval mode and preserve_ui optional arguments"
   (mevedel-tool-exec--register)
   (let* ((tool (mevedel-tool-get "Eval"))
