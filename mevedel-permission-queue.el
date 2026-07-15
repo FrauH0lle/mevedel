@@ -42,9 +42,6 @@
                   (buckets tool-name path pattern domain name))
 (declare-function mevedel-permission--checker-args
                   "mevedel-permissions" (context))
-(declare-function mevedel-permission--execution-level-decision
-                  "mevedel-permissions"
-                  (buckets tool-name level pattern))
 (declare-function mevedel-permission--invocation-context
                   "mevedel-permissions" (&rest args))
 (declare-function mevedel-permission--resource-granted-p
@@ -58,8 +55,8 @@
 (declare-function mevedel--prompt-user-for-eval "mevedel-tool-exec"
                   (expression callback &optional origin count entry
                               mode preserve-ui))
-(declare-function mevedel-tool-exec--bash-explicit-deny-p
-                  "mevedel-tool-exec" (buckets command &optional analysis))
+(declare-function mevedel-tool-exec--full-escalation-rule-decision
+                  "mevedel-tool-exec" (tool-name detail buckets level))
 (declare-function mevedel-tools--check-bash-permission "mevedel-tool-exec"
                   (command &rest args))
 
@@ -428,18 +425,11 @@ to it as well."
                     :workspace workspace
                     :pattern detail))
                   (buckets (plist-get context :buckets))
-                  (ordinary-deny-p
-                   (if (equal tool-name "Bash")
-                       (mevedel-tool-exec--bash-explicit-deny-p
-                        buckets detail)
-                     (eq 'deny
-                         (mevedel-permission--bucket-decision
-                          buckets tool-name nil detail nil nil))))
                   (level-action
-                   (mevedel-permission--execution-level-decision
-                    buckets tool-name 'require-escalated detail)))
+                   (mevedel-tool-exec--full-escalation-rule-decision
+                    tool-name detail buckets 'require-escalated)))
              (cond
-              ((or ordinary-deny-p (eq level-action 'deny)) 'deny)
+              ((eq level-action 'deny) 'deny)
               ((eq level-action 'allow) 'allow)
               (t 'ask)))
          (if-let* ((path (plist-get entry :resource-path))
