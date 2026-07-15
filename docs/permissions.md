@@ -264,9 +264,16 @@ prompts in every permission mode, including `full-auto`, unless a matching
 direct user-authored `:sandbox-permissions require-escalated` rule already
 exists. The prompt and diagnostics explicitly identify that filesystem,
 network, and process confinement will all be disabled. Once approved, the child
-runs directly as the user and reports `sandbox: escalated`; delegated workflows
-cannot request this authority interactively or create reusable escalation
-rules.
+runs directly as the user and reports `sandbox: escalated`. Delegated rules
+cannot grant this authority, and non-interactive trusted skill expansion cannot
+request it or create reusable escalation rules. An ordinary sub-agent may still
+place the same user-visible request in the shared permission queue.
+
+Interactive full-escalation prompts offer reusable allow only for Bash input
+that is neither dangerous nor complex and contains no glob metacharacters.
+Dangerous/complex Bash and arbitrary Eval remain once-only at the prompt;
+experts may still author an exact, scoped, or deliberately broad qualified rule
+directly. Reusable deny remains available because it can only reduce authority.
 
 `auto` executes directly when the initial probe is unavailable. For the narrow
 race where a later Bubblewrap launch fails, a marker emitted immediately before

@@ -220,6 +220,22 @@
                content)))
     (should (eq t (nth 1 captured)))
     (should-not (nth 5 captured))
+    (should-not (nth 6 captured)))
+
+  :doc "suppresses reusable allow choices for unsafe full escalation"
+  (let (captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-sandbox
+       "Bash" "rm -rf /" "Run outside confinement?"
+       "main" #'ignore 1
+       '(:kind sandbox
+         :sandbox-permissions require-escalated
+         :include-always nil)))
+    (should (string-match-p "Reusable allow is disabled" (nth 0 captured)))
+    (should-not (nth 1 captured))
+    (should (eq t (nth 5 captured)))
     (should-not (nth 6 captured))))
 
 (mevedel-deftest mevedel-permission--format-bash-guardian

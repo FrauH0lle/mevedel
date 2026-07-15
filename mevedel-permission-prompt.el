@@ -376,6 +376,8 @@ ENTRY follow the shared permission prompt contract."
          (filesystem-p (and path access))
          (full-p (eq (plist-get entry :sandbox-permissions)
                      'require-escalated))
+         (full-rule-disabled-p
+          (and full-p (not (plist-get entry :include-always))))
          (content
          (concat
           (propertize
@@ -427,12 +429,18 @@ ENTRY follow the shared permission prompt contract."
              (concat
               "Network access is the only requested change. The selected "
               "filesystem and process profile remains unchanged.\n")))
-           'font-lock-face 'font-lock-comment-face))))
+           'font-lock-face 'font-lock-comment-face)
+          (when full-rule-disabled-p
+            (propertize
+             (concat
+              "Reusable allow is disabled for this request. Author a "
+              "qualified rule deliberately if recurring authority is needed.\n")
+             'font-lock-face 'font-lock-comment-face)))))
     (mevedel-permission--prompt-async-with-content
      content
      (and (or filesystem-p full-p) (plist-get entry :include-always))
      cont count entry
-     (not (or filesystem-p full-p))
+     (or (not (or filesystem-p full-p)) full-rule-disabled-p)
      (not (or filesystem-p full-p)))))
 
 (provide 'mevedel-permission-prompt)
