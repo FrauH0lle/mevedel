@@ -132,6 +132,40 @@ protected-path checks even when unsupported syntax prevents argv extraction."
   (and word
        (string-match-p "\\`[A-Za-z_][A-Za-z0-9_]*\\+?=" word)))
 
+(defun mevedel-bash-analysis--normalize-line-continuations (source)
+  "Remove Bash line continuations from SOURCE outside single quotes."
+  (let ((index 0)
+        quote
+        escaped
+        output)
+    (while (< index (length source))
+      (let ((char (aref source index))
+            (next (and (< (1+ index) (length source))
+                       (aref source (1+ index)))))
+        (cond
+         ((eq quote ?')
+          (push char output)
+          (when (eq char ?')
+            (setq quote nil)))
+         (escaped
+          (push char output)
+          (setq escaped nil))
+         ((and (eq char ?\\) (eq next ?\n))
+          (setq index (1+ index)))
+         ((eq char ?\\)
+          (push char output)
+          (setq escaped t))
+         ((eq quote ?\")
+          (push char output)
+          (when (eq char ?\")
+            (setq quote nil)))
+         (t
+          (push char output)
+          (when (memq char '(?' ?\"))
+            (setq quote char)))))
+      (setq index (1+ index)))
+    (apply #'string (nreverse output))))
+
 (defun mevedel-bash-analysis--substitution-end (source start)
   "Return the end index of command substitution in SOURCE after START.
 START points immediately after the opening `$(' token.  Parentheses inside
@@ -451,9 +485,7 @@ The result contains `:class', `:commands', `:parser', `:resources', and
 `:reasons'.  Tree-sitter is selected only through normal Emacs grammar
   configuration; no grammar path is added here."
   (require 'subr-x)
-  (setq source
-        (replace-regexp-in-string
-         (concat (regexp-quote "\\") "\n") "" source t t))
+  (setq source (mevedel-bash-analysis--normalize-line-continuations source))
   (if (and (fboundp 'treesit-language-available-p)
            (treesit-language-available-p 'bash))
       (condition-case _err
