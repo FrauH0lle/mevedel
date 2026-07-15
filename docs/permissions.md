@@ -202,6 +202,12 @@ normally configured Bash Tree-sitter grammar when available and a conservative
 scanner otherwise.  Redirections, substitutions, expansions, assignments,
 subshells, here-documents, control flow, parse errors, and unsupported operators
 are complex.  A dangerous component takes precedence in a compound request.
+Read-only classification uses argument-aware built-in policies.  Git status,
+log, diff, show, and query-only branch forms are recognized only without
+output, configuration, pager, helper-execution, or mutation options.  Find,
+ripgrep, base64, sed, and awk likewise reject deletion, helper execution,
+output-file options, and unrecognized programs.  Safe forms need no broad
+default allow patterns; variants outside these narrow policies remain unknown.
 Bash does not use the
 pipeline's generic permission prompt or `PermissionRequest` hook path;
 when it needs a decision it enqueues a Bash-specific permission entry.

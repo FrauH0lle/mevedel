@@ -122,6 +122,42 @@
 \`mevedel-tools--check-bash-permission' allows recognized inspection"
   (let ((mevedel-permission-rules nil))
     (should (eq 'allow (mevedel-tools--check-bash-permission "pwd && cat file"))))
+  :doc "argument-aware read-only policies:
+\`mevedel-tools--check-bash-permission' allows safe inspection variants"
+  (let ((mevedel-permission-rules nil))
+    (dolist (command
+             '("git status"
+               "git --no-pager log -1"
+               "git diff -p"
+               "git show HEAD"
+               "git branch"
+               "git branch --show-current"
+               "find . -name '*.el'"
+               "rg TODO src"
+               "base64 file"
+               "sed -n 1,5p file"
+               "awk '{print $1}' file"))
+      (should (eq 'allow
+                  (mevedel-tools--check-bash-permission command)))))
+  :doc "argument-aware unsafe policies:
+\`mevedel-tools--check-bash-permission' asks for effectful command variants"
+  (let ((mevedel-permission-rules nil))
+    (dolist (command
+             '("git diff --output=file"
+               "git -c core.pager=cat log"
+               "git --paginate log"
+               "git branch new-name"
+               "git branch -d old"
+               "find . -delete"
+               "find . -exec printf {} \\;"
+               "rg --pre helper TODO"
+               "rg --search-zip TODO"
+               "base64 -o output file"
+               "sed -n 1,5d file"
+               "awk '{system(\"id\")}' file"
+               "awk '{print $1 > \"out\"}' file"))
+      (should (eq 'ask
+                  (mevedel-tools--check-bash-permission command)))))
   :doc "unknown policy:
 \`mevedel-tools--check-bash-permission' asks for unknown commands"
   (let ((mevedel-permission-rules nil))
@@ -853,10 +889,10 @@
                      (funcall (plist-get entry :callback)
                               'allow-session))))
           (mevedel-tool-exec--check-permission-async
-           nil '(:command "git log --oneline")
+           nil '(:command "git describe --tags")
            (lambda (r) (setq outcome r)))
           (should (eq outcome 'allow))
-          (should (member '("Bash" :pattern "git log:*" :action allow)
+          (should (member '("Bash" :pattern "git describe:*" :action allow)
                           (mevedel-session-permission-rules session))))
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
