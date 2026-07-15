@@ -65,6 +65,16 @@
                      (plist-get analysis :commands)))
       (should (equal '("~/.ssh/id_rsa")
                      (plist-get analysis :resources)))))
+  :doc "quoted line continuation:
+`mevedel-bash-analysis-analyze' preserves backslash-newline in single quotes"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should
+     (equal `(("echo" ,(concat "a\\" "\n" "b")))
+            (plist-get
+             (mevedel-bash-analysis-analyze
+              (concat "echo 'a\\" "\n" "b'"))
+             :commands))))
   :doc "dangerous precedence:
 `mevedel-bash-analysis-analyze' lets a dangerous compound component win"
   (cl-letf (((symbol-function 'treesit-language-available-p)
