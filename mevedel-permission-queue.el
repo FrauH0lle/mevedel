@@ -102,7 +102,7 @@ SESSION defaults to the current session."
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
     (dolist (key '(:kind :tool-name :specifier-key :specifier-value
-                   :protected-path :origin :dangerous :mode
+                   :protected-path :resource-access :origin :dangerous :mode
                    :commands-summary))
       (when (plist-member entry key)
         (setq base (plist-put base key (plist-get entry key)))))
@@ -135,6 +135,7 @@ ENTRY plist keys:
   :specifier-key         -- `:path' / `:pattern' / `:domain' / `:name'
   :specifier-value       -- display path / pattern / domain
   :protected-path        -- non-nil when the original path is protected
+  :resource-access       -- `read' / `write' for exact filesystem grants
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
   :origin                -- \"main\" or canonical agent-id (leaf)

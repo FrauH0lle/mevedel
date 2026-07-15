@@ -512,6 +512,55 @@
                   :mode 'default
                   :workspace-root "/project")
                 'ask)))
+  :doc "exact read resource grant allows Read outside workspace"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
+    (should (eq (mevedel-check-permission
+                 "Read" :tool-struct mock-tool
+                 :path "/etc/passwd" :mode 'default
+                 :workspace-root "/project"
+                 :resource-grants '((:path "/etc/passwd" :access read)))
+                'allow)))
+  :doc "read resource grant does not allow Write"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Write" :read-only-p nil)))
+    (should (eq (mevedel-check-permission
+                 "Write" :tool-struct mock-tool
+                 :path "/etc/passwd" :mode 'default
+                 :workspace-root "/project"
+                 :resource-grants '((:path "/etc/passwd" :access read)))
+                'ask)))
+  :doc "exact write resource grant allows Write without covering siblings"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool (mevedel-tool--create :name "Write" :read-only-p nil))
+        (grants '((:path "/outside/target.el" :access write))))
+    (should (eq (mevedel-check-permission
+                 "Write" :tool-struct mock-tool
+                 :path "/outside/target.el" :mode 'default
+                 :workspace-root "/project" :resource-grants grants)
+                'allow))
+    (should (eq (mevedel-check-permission
+                 "Write" :tool-struct mock-tool
+                 :path "/outside/sibling.el" :mode 'default
+                 :workspace-root "/project" :resource-grants grants)
+                'ask)))
+  :doc "resource grant does not override a command-specific ask"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-protected-paths nil)
+        (mock-tool
+         (mevedel-tool--create
+          :name "Bash" :read-only-p nil
+          :check-permission (lambda (_tool _content) 'ask))))
+    (should (eq (mevedel-check-permission
+                 "Bash" :tool-struct mock-tool
+                 :content '(:command "curl https://example.com")
+                 :path "/outside/file" :mode 'default
+                 :workspace-root "/project"
+                 :resource-grants '((:path "/outside/file" :access write)))
+                'ask)))
   :doc "explicit allow rule overrides workspace boundary"
   (let ((mevedel-permission-rules '(("Read" :path "/etc/*" :action allow)))
         (mevedel-protected-paths nil)
@@ -699,8 +748,9 @@
           ;; Write global rules
           (make-directory global-dir t)
           (with-temp-file (file-name-concat global-dir "permissions.el")
-            (pp '(("Read" :action allow)
-                  ("*" :path "/tmp/*" :action allow))
+            (pp '(:rules (("Read" :action allow)
+                          ("*" :path "/tmp/*" :action allow))
+                  :resource-grants nil)
                 (current-buffer)))
           ;; Write project rules
           (mevedel-permission--save-persistent-rule ws "Edit" 'allow "~/proj/*")
@@ -759,6 +809,52 @@
                               :action allow))))))
       (delete-directory tmp-dir t))))
 
+(mevedel-deftest mevedel-permission-remove-session-resource-grant ()
+  ,test
+  (test)
+  :doc "revocation restores the underlying protected-path decision"
+  (let* ((path "/repo/.git/config")
+         (session (mevedel-session--create :name "test"))
+         (tool (mevedel-tool--create :name "Read" :read-only-p t))
+         (mevedel-permission-rules nil)
+         (mevedel-protected-paths '("**/.git/**")))
+    (mevedel-permission-add-session-resource-grant session path 'read)
+    (should (eq 'allow
+                (mevedel-check-permission
+                 "Read" :tool-struct tool :path path :mode 'default
+                 :workspace-root "/repo"
+                 :resource-grants
+                 (mevedel-session-resource-grants session))))
+    (mevedel-permission-remove-session-resource-grant session path 'read)
+    (should-not (mevedel-session-resource-grants session))
+    (should (eq 'ask
+                (mevedel-check-permission
+                 "Read" :tool-struct tool :path path :mode 'default
+                 :workspace-root "/repo"
+                 :resource-grants
+                 (mevedel-session-resource-grants session))))))
+
+(mevedel-deftest mevedel-permission-remove-persistent-resource-grant ()
+  ,test
+  (test)
+  :doc "revokes one persistent grant without changing command rules"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (path (file-name-concat tmp-dir "outside.el"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil)))
+    (unwind-protect
+        (progn
+          (mevedel-permission--save-persistent-rule ws "Read" 'allow)
+          (mevedel-permission--save-persistent-resource-grant ws path 'read)
+          (mevedel-permission-remove-persistent-resource-grant ws path 'read)
+          (should-not
+           (mevedel-permission--load-persistent-resource-grants ws))
+          (should (equal '(("Read" :action allow))
+                         (mevedel-permission--load-persistent-rules ws))))
+      (delete-directory tmp-dir t))))
+
 
 ;;
 ;;; Prompt result dispatch
@@ -778,6 +874,16 @@
                  'allow-session "Edit" session)
                 'allow))
     (should (= (length (mevedel-session-permission-rules session)) 1)))
+  :doc "allow-session stores exact resource authority separately from rules"
+  (let* ((session (mevedel-session--create :name "test"))
+         (path (expand-file-name "/outside/file.el")))
+    (should (eq (mevedel-permission--apply-prompt-result
+                 'allow-session "Read" session nil path
+                 :resource-access 'read)
+                'allow))
+    (should (equal (list (list :path path :access 'read))
+                   (mevedel-session-resource-grants session)))
+    (should-not (mevedel-session-permission-rules session)))
   :doc "always-allow stores persistent and session rules"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (mevedel-user-dir (file-name-concat tmp-dir "global/"))
@@ -793,6 +899,27 @@
                       'allow))
           (should (= (length (mevedel-session-permission-rules session)) 1))
           (should (= (length (mevedel-permission--load-persistent-rules ws)) 1)))
+      (delete-directory tmp-dir t)))
+  :doc "always-allow stores persistent and session resource authority"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (mevedel-user-dir (file-name-concat tmp-dir "global/"))
+         (path (file-name-concat tmp-dir "outside.el"))
+         (ws (mevedel-workspace--create
+              :type 'project :id "test" :root tmp-dir
+              :name "test" :file-cache nil))
+         (session (mevedel-session--create :name "test")))
+    (unwind-protect
+        (progn
+          (should (eq (mevedel-permission--apply-prompt-result
+                       'always-allow "Write" session ws path
+                       :resource-access 'write)
+                      'allow))
+          (should (equal (list (list :path path :access 'write))
+                         (mevedel-session-resource-grants session)))
+          (should (equal (list (list :path path :access 'write))
+                         (mevedel-permission--load-persistent-resource-grants
+                          ws)))
+          (should-not (mevedel-session-permission-rules session)))
       (delete-directory tmp-dir t)))
   :doc "deny-once returns deny without storage"
   (let ((session (mevedel-session--create :name "test")))
@@ -1207,8 +1334,8 @@ must restore the prior value to avoid cross-test pollution."
             (should (equal path (plist-get context :specifier-value)))
             (should (equal "*" (plist-get context :rule-tool)))
             (should (eq :path (plist-get context :rule-key)))
-            (should (equal (file-name-concat outside "**")
-                           (plist-get context :rule-value)))
+            (should (equal path (plist-get context :rule-value)))
+            (should (eq 'read (plist-get context :resource-access)))
             (should (plist-get context :include-always))))
       (delete-directory root t)
       (delete-directory outside t)))

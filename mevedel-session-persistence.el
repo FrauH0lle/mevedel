@@ -24,6 +24,7 @@
 ;;    :forked-from-session-id nil :forked-from-turn nil
 ;;    :permission-mode default
 ;;    :permission-rules ((TOOL-NAME ...) ...)
+;;    :resource-grants ((:path "/abs/path" :access read) ...)
 ;;    :additional-roots (("name" . "/abs/path") ...)
 ;;    :prompt-index ((SEGMENT-N . ((:turn N :pos POS :preview STR :timestamp STR) ...)) ...)
 ;;    :file-snapshots ((TURN-N . ((PATH . (:backup-name STR :version INT
@@ -83,6 +84,7 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-log-pending
                   "mevedel-structs" (cl-x) t)
@@ -260,7 +262,8 @@ add more, and we don't want to act on actions we don't understand).")
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
-    :permission-mode :permission-rules :preset-name :preset-settings
+    :permission-mode :permission-rules :resource-grants
+    :preset-name :preset-settings
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
     :prompt-index :file-snapshots :agent-transcripts :plan-metadata :goal
@@ -311,6 +314,17 @@ A rule is `(TOOL-NAME &rest PLIST)' with `:action SYMBOL'."
                            :action)
                 mevedel-session-persistence--allowed-permission-actions)))
    rules))
+
+(defun mevedel-session-persistence--filter-resource-grants (grants)
+  "Keep well-formed exact resource GRANTS.
+A grant is `(:path ABSOLUTE-PATH :access read-or-write)'."
+  (cl-remove-if-not
+   (lambda (grant)
+     (and (proper-list-p grant)
+          (stringp (plist-get grant :path))
+          (file-name-absolute-p (plist-get grant :path))
+          (memq (plist-get grant :access) '(read write))))
+   grants))
 
 
 ;;
@@ -583,6 +597,7 @@ The resulting plist is round-trippable via
    :forked-from-turn       (mevedel-session-forked-from-turn session)
    :permission-mode        (mevedel-session-permission-mode session)
    :permission-rules       (mevedel-session-permission-rules session)
+   :resource-grants        (mevedel-session-resource-grants session)
    :preset-name            (mevedel-session-preset-name session)
    :preset-settings        (mevedel-session-preset-settings session)
    :last-observed-date     (mevedel-session-last-observed-date session)
@@ -660,6 +675,9 @@ unknown actions are dropped via the hygiene filter."
                             (plist-get plist :tasks)))
          (rules     (mevedel-session-persistence--filter-permission-rules
                      (plist-get plist :permission-rules)))
+         (resource-grants
+          (mevedel-session-persistence--filter-resource-grants
+           (plist-get plist :resource-grants)))
          (prompt-index (plist-get plist :prompt-index))
          (latest-user-message (plist-get plist :latest-user-message))
          (session   (mevedel-session--create
@@ -670,6 +688,7 @@ unknown actions are dropped via the hygiene filter."
                      :mentions-shown   (make-hash-table :test #'equal)
                      :tasks            tasks
                      :permission-rules rules
+                     :resource-grants  resource-grants
                      :permission-mode  (plist-get plist :permission-mode)
                      :preset-name      (plist-get plist :preset-name)
                      :preset-settings  (copy-tree

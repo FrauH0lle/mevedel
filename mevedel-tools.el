@@ -25,7 +25,6 @@
 (require 'mevedel-agent-runtime)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
-(require 'mevedel-tool-access)
 (require 'mevedel-tool-ask)
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)

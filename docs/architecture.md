@@ -24,7 +24,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   `.mevedel/` is derived by
   `mevedel-workspace-state-dir`, not stored as a slot.
 - **`mevedel-session`**: per-chat state: workspace, working
-  directory, tasks, touched-files, permission rules/mode, reminders,
+  directory, tasks, touched-files, permission rules/mode, exact resource grants,
+  reminders,
   deferred tool state, mailbox messages, background agents, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission

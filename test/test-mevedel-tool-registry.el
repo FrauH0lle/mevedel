@@ -103,11 +103,11 @@
                                  (mevedel-tool-all))
                          #'string<))))
 
-  :doc "Ask and RequestAccess each lazily register only their direct owner"
-  (dolist (name '("Ask" "RequestAccess"))
+  :doc "Ask lazily registers only its direct owner"
+  (progn
     (mevedel-tool-clear-registry)
-    (should (equal name (mevedel-tool-name (mevedel-tool-ensure name))))
-    (should (equal (list name)
+    (should (equal "Ask" (mevedel-tool-name (mevedel-tool-ensure "Ask"))))
+    (should (equal '("Ask")
                    (mapcar #'mevedel-tool-name (mevedel-tool-all)))))
 
   :doc "returns nil without registering anything for an unknown name"

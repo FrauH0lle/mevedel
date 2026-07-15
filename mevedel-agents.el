@@ -456,7 +456,7 @@ needed, web research.  Caller specifies the thoroughness level
 (quick/moderate/thorough) in the prompt.  Returns a structured report -- never
 modifies files."
   :tools (read (:tool "Bash")
-          (:tool "Ask") (:tool "RequestAccess")
+          (:tool "Ask")
           (:tool "Skill") (:tool "ListSkills")
           (:tool "ToolSearch")
           (:tool "TaskCreate") (:tool "TaskUpdate")
@@ -478,7 +478,7 @@ all code changes to worker agents and verifies results before reporting."
   ;; to dispatched workers. Removing the tools removes the temptation. TaskGet
   ;; is included alongside Create/Update/List so the coordinator can inspect a
   ;; single task's state without a TaskList round-trip.
-  :tools ((:tool "Ask") (:tool "RequestAccess")
+  :tools ((:tool "Ask")
           (:tool "Agent") (:tool "StopAgent") (:tool "SendMessage")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
@@ -496,7 +496,7 @@ tries to break implementations through edge cases, tests, and code \
 review.  Cannot edit, write, or create files."
     :tools (read code
             (:tool "Bash") (:tool "Eval")
-            (:tool "Ask") (:tool "RequestAccess")
+            (:tool "Ask")
             (:tool "ToolSearch")
             (:deferred elisp))
     :prompt-file "agents/verifier.md"

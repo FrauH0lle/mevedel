@@ -1063,39 +1063,6 @@
 		   (mevedel-pipeline--step-permission
 		    ctx (lambda (_c) (setq called t)) #'ignore)
 		   (should called))
-		 :doc "tool check-permission allow bypasses outside-workspace generic prompt"
-		 (let* ((root (file-name-as-directory
-			       (make-temp-file "mevedel-pipeline-root-" t)))
-			(outside (file-name-as-directory
-				  (make-temp-file "mevedel-pipeline-outside-" t)))
-			(ws (mevedel-workspace--create
-			     :type 'project :id "root" :root root
-			     :name "root" :file-cache nil))
-			(session (mevedel-session--create
-				  :name "test" :workspace ws))
-			(tool (mevedel-tool--create
-			       :name "RequestAccess"
-			       :check-permission (lambda (_ts _input) 'allow)
-			       :get-path (lambda (args) (plist-get args :directory))
-			       :read-only-p t))
-			(ctx (list :tool tool
-				   :args (list :directory outside)
-				   :session session
-				   :workspace ws))
-			(mevedel-permission-rules nil)
-			(mevedel-protected-paths nil)
-			(mevedel-permission-mode 'default)
-			called
-			enqueued)
-		   (unwind-protect
-		       (cl-letf (((symbol-function 'mevedel-permission--enqueue)
-				  (lambda (&rest _) (setq enqueued t))))
-			 (mevedel-pipeline--step-permission
-			  ctx (lambda (_c) (setq called t)) #'ignore)
-			 (should called)
-			 (should-not enqueued))
-		     (delete-directory root t)
-		     (delete-directory outside t)))
 		 :doc "reads session rules from context, not buffer-local"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Edit"
@@ -1283,10 +1250,61 @@
 			  ctx (lambda (_c) (setq called t)) #'ignore)
 			 (should called)
 			 (should-not enqueued))
-		     (delete-file path)
-		     (delete-directory outside t)
-		     (delete-directory root t)))
-		 :doc "session-scoped dropped-file grant does not allow descendant Read"
+			     (delete-file path)
+			     (delete-directory outside t)
+			     (delete-directory root t)))
+			 :doc "outside Read approval records exact session resource authority"
+			 (let* ((root (file-name-as-directory
+				       (make-temp-file "mevedel-pipeline-root-" t)))
+				(outside (file-name-as-directory
+					  (make-temp-file "mevedel-pipeline-outside-" t)))
+				(path (file-name-concat outside "file.txt"))
+				(ws (mevedel-workspace--create
+				     :type 'project :id "root" :root root
+				     :name "root" :file-cache nil))
+				(session (mevedel-session--create
+					  :name "test" :workspace ws))
+				(tool (mevedel-tool--create
+				       :name "Read" :read-only-p t
+				       :get-path (lambda (args)
+						   (plist-get args :file_path))))
+				(ctx (list :tool tool
+					   :args (list :file_path path)
+					   :session session :workspace ws))
+				(mevedel-permission-rules nil)
+				(mevedel-protected-paths nil)
+				(mevedel-permission-mode 'default)
+				captured-entry called)
+			   (with-temp-file path (insert "outside\n"))
+			   (unwind-protect
+			       (cl-letf (((symbol-function 'mevedel--all-allowed-roots)
+					  (lambda (&optional _buffer) (list root)))
+					 ((symbol-function 'mevedel-permission--enqueue)
+					  (lambda (entry &optional _session)
+					    (setq captured-entry entry))))
+				 (mevedel-pipeline--step-permission
+				  ctx (lambda (_c) (setq called t)) #'ignore)
+				 (should-not called)
+				 (should (eq 'read
+					     (plist-get captured-entry :resource-access)))
+				 (should (equal path
+						(plist-get captured-entry :specifier-value)))
+				 (funcall (plist-get captured-entry :callback)
+					  'allow-session)
+				 (should called)
+				 (should (equal (list (list :path path :access 'read))
+						(mevedel-session-resource-grants session)))
+				 (should-not (mevedel-session-permission-rules session))
+				 (setq called nil
+				       captured-entry nil)
+				 (mevedel-pipeline--step-permission
+				  ctx (lambda (_c) (setq called t)) #'ignore)
+				 (should called)
+				 (should-not captured-entry))
+			     (delete-file path)
+			     (delete-directory outside t)
+			     (delete-directory root t)))
+			 :doc "session-scoped dropped-file grant does not allow descendant Read"
 		 (let* ((root (file-name-as-directory
 			       (make-temp-file "mevedel-pipeline-root-" t)))
 			(outside (file-name-as-directory

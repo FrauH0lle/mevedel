@@ -190,11 +190,12 @@ If you want to customize the dispatch keybind such that it uses a key only in
 ### Workspaces
 
 mevedel assigns buffers to a project workspace which is used to determine in
-which folders the LLM is allowed to operate. When the LLM needs access to a
-directory outside the workspace root, it uses the `RequestAccess` tool which
-prompts the user for confirmation. The default allowed roots are the workspace
-root, Emacs' temporary directory, configured memory roots, the configured plans
-directory, and any roots granted for the session.
+which folders the LLM is allowed to operate. A native file tool targeting an
+exact path outside those roots prompts for read or write access. The user can
+grant that invocation only, the current session, or the workspace persistently;
+the grant does not add a workspace root or authorize Bash/Eval code. The default
+allowed roots are the workspace root, Emacs' temporary directory, configured
+memory roots, the configured plans directory, and manually configured roots.
 
 | Command                       | Command Description                                                |
 |-------------------------------|--------------------------------------------------------------------|
@@ -492,7 +493,7 @@ accept native media, and can render selected PDF pages through Poppler.
 **Code exploration:** `XrefReferences`, `XrefDefinitions`, `Imenu`, `Treesitter`
 
 **User interaction:** `Ask` (ask the user a question with optional file/line
-navigation), `RequestAccess` (request directory access outside workspace root)
+navigation)
 
 **Tasks:** `TaskCreate`, `TaskUpdate`, `TaskNote`, `TaskList`, `TaskGet` (a
 structured task list with statuses, dependencies, owner status notes, and an

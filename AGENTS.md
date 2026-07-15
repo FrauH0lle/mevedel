@@ -149,7 +149,6 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-tool-web.el         WebSearch, WebFetch, YouTube
   mevedel-interaction-prompt.el  shared interaction overlay lifecycle
   mevedel-permission-prompt.el   generic, Bash, and Eval permission prompt UI
-  mevedel-tool-access.el      RequestAccess prompt, dedup, handler, renderer
   mevedel-tool-ask.el         Ask questionnaire, handler, renderer
   mevedel-tool-ui.el          Agent/StopAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay

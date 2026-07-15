@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Append-only, per-session diagnostics for permission prompts and
-;; RequestAccess overlays.  This log is intentionally separate from
+;; permission-prompt overlays.  This log is intentionally separate from
 ;; session state: it exists for postmortems when a transient prompt or
 ;; queue entry disappears before a model-visible tool result is saved.
 

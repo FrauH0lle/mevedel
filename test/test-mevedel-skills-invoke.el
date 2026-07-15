@@ -2846,7 +2846,7 @@ spanning lines")))
                  :context 'fork
                  :agent "coordinator"))
          save-called status-called stop-called
-         access-cleared baseline-recorded permission-restored
+         baseline-recorded permission-restored
          queue-drain-scheduled mailbox-cleared post-hook-called)
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
@@ -2861,8 +2861,6 @@ spanning lines")))
                    (lambda (s b)
                      (setq save-called (list s b))
                      "saved"))
-                  ((symbol-function 'mevedel--clear-pending-access-requests)
-                   (lambda () (setq access-cleared t)))
                   ((symbol-function 'mevedel--compact-record-token-baseline)
                    (lambda (_fsm) (setq baseline-recorded t)))
                   ((symbol-function 'mevedel--run-turn-terminal-hook)
@@ -2900,7 +2898,6 @@ spanning lines")))
             (should (= 1 (mevedel-session-turn-count session)))
             (should (equal (list session (current-buffer)) save-called))
             (should (equal '(Stop completed t) stop-called))
-            (should access-cleared)
             (should baseline-recorded)
             (should permission-restored)
             (should queue-drain-scheduled)
