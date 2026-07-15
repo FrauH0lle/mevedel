@@ -362,7 +362,7 @@
   :doc "protected path:
 \`mevedel-tools--check-bash-permission' asks before protected resources"
   (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**")))
+        (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission
@@ -371,7 +371,7 @@
   :doc "continued protected path:
 \`mevedel-tools--check-bash-permission' checks Bash line continuations"
   (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("~/.ssh/**")))
+        (mevedel-protected-paths '(("~/.ssh/**" . inaccessible))))
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission
@@ -380,7 +380,7 @@
   :doc "protected path inside substitution:
 `mevedel-tools--check-bash-permission' asks before nested protected resources"
   (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**")))
+        (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission
@@ -389,7 +389,7 @@
   :doc "protected path after a quoted parenthesis:
 \`mevedel-tools--check-bash-permission' fully scans nested protected resources"
   (let ((mevedel-permission-rules nil)
-        (mevedel-protected-paths '("**/.git/**")))
+        (mevedel-protected-paths '(("**/.git/**" . read-only))))
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission
@@ -399,7 +399,7 @@
 \`mevedel-tools--check-bash-permission' keeps resource checks after direct allow"
   (let ((mevedel-permission-rules
          '(("Bash" :pattern "FOO=bar cat ~/.ssh/key" :action allow)))
-        (mevedel-protected-paths '("**/.ssh/**"))
+        (mevedel-protected-paths '(("**/.ssh/**" . inaccessible)))
         (context
          '(:mode ask
            :buckets

@@ -14,6 +14,13 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission--match-path-pattern
+                  "mevedel-permissions" (path pattern))
+(declare-function mevedel-permission-protected-path-policy
+                  "mevedel-permissions" ())
+(defvar mevedel-protected-paths)
+
 
 ;;
 ;;; Configuration and state
@@ -112,6 +119,267 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                (file-truename (expand-file-name root)))))
           roots))))
 
+(defun mevedel-sandbox--first-missing-path (path)
+  "Return the first nonexistent component of absolute PATH, or nil."
+  (let ((current "/") missing)
+    (dolist (component (split-string (expand-file-name path) "/" t))
+      (unless missing
+        (setq current (file-name-concat current component))
+        (unless (file-exists-p current)
+          (setq missing current))))
+    missing))
+
+(defun mevedel-sandbox--writable-symlink-component (path writable-roots)
+  "Return the first symlink crossing in PATH under WRITABLE-ROOTS."
+  (require 'cl-lib)
+  (let ((current "/") found)
+    (dolist (component (split-string (expand-file-name path) "/" t))
+      (unless found
+        (setq current (file-name-concat current component))
+        (when (and (file-symlink-p current)
+                   (cl-some
+                    (lambda (root)
+                      (let ((root (file-name-as-directory
+                                   (expand-file-name root))))
+                        (or (string-equal (directory-file-name root) current)
+                            (string-prefix-p root current))))
+                    writable-roots))
+          (setq found current))))
+    found))
+
+(defun mevedel-sandbox--git-pointer-target (path)
+  "Return PATH's expanded Git directory pointer target, or nil."
+  (when (and (string-equal (file-name-nondirectory path) ".git")
+             (file-regular-p path))
+    (with-temp-buffer
+      (insert-file-contents path nil 0 4096)
+      (goto-char (point-min))
+      (when (looking-at "gitdir:[[:space:]]*\\(.+\\)$")
+        (expand-file-name (string-trim (match-string 1))
+                          (file-name-directory path))))))
+
+(defun mevedel-sandbox--protected-candidates (workdir writable-roots)
+  "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS."
+  (require 'cl-lib)
+  (require 'mevedel-permissions)
+  (let ((canonical-workdir (file-name-as-directory (file-truename workdir)))
+        (temporary-root
+         (file-name-as-directory (file-truename temporary-file-directory)))
+        candidates)
+    (cl-labels
+        ((add-candidate
+          (path mode directory-p)
+          (let* ((path (directory-file-name (expand-file-name path)))
+                 (existing
+                  (cl-find path candidates
+                           :key (lambda (item) (plist-get item :path))
+                           :test #'string-equal)))
+            (if existing
+                (progn
+                  (when (eq mode 'inaccessible)
+                    (plist-put existing :mode mode))
+                  (when directory-p
+                    (plist-put existing :directory-p t)))
+              (push (list :path path :mode mode :directory-p directory-p)
+                    candidates))))
+         (glob-p (pattern)
+           (cl-some (lambda (char) (memq char '(?* ?? ?\[)))
+                    (string-to-list pattern)))
+         (search-tree
+          (root pattern mode directory-p)
+          (when (file-directory-p root)
+            (dolist (path
+                     (cons root
+                           (directory-files-recursively
+                            root "." t nil nil)))
+              (when (mevedel-permission--match-path-pattern path pattern)
+                (add-candidate path mode directory-p))))))
+      (dolist (entry (mevedel-permission-protected-path-policy))
+        (let* ((pattern (car entry))
+               (mode (cdr entry))
+               (directory-p (string-suffix-p "/**" pattern))
+               (root-pattern (if directory-p (substring pattern 0 -3) pattern))
+               (absolute-pattern
+                (and (or (string-prefix-p "~" root-pattern)
+                         (file-name-absolute-p root-pattern))
+                     (expand-file-name root-pattern))))
+          (cond
+           ((not (glob-p root-pattern))
+            (add-candidate (or absolute-pattern
+                               (expand-file-name root-pattern workdir))
+                           mode directory-p))
+           (t
+            (let* ((specific-work-root-p
+                    (cl-some
+                     (lambda (root)
+                       (let ((root (file-name-as-directory
+                                    (file-truename root))))
+                         (and (not (string-equal root temporary-root))
+                              (string-prefix-p root canonical-workdir))))
+                     writable-roots))
+                   (search-roots
+                    (cl-remove-if
+                     (lambda (root)
+                       (and specific-work-root-p
+                            (string-equal
+                             (file-name-as-directory (file-truename root))
+                             temporary-root)))
+                     writable-roots)))
+              (when absolute-pattern
+                (let* ((index
+                        (cl-position-if
+                         (lambda (char) (memq char '(?* ?? ?\[)))
+                         absolute-pattern))
+                       (prefix (substring absolute-pattern 0 index))
+                       (root (if (string-suffix-p "/" prefix)
+                                 (directory-file-name prefix)
+                               (file-name-directory prefix))))
+                  (when (and root (not (string-equal root "/")))
+                    (push root search-roots))))
+              (dolist (root (delete-dups search-roots))
+                (search-tree root root-pattern mode directory-p))
+              (when (and directory-p
+                         (string-prefix-p "**/" root-pattern)
+                         (not (glob-p (substring root-pattern 3))))
+                (let ((suffix (substring root-pattern 3)))
+                  (dolist (root search-roots)
+                    (add-candidate (file-name-concat root suffix)
+                                   mode t)))))))))
+      (nreverse candidates))))
+
+(defun mevedel-sandbox-cleanup (preparation)
+  "Remove unchanged synthetic mount targets owned by PREPARATION."
+  (dolist (target (reverse (plist-get preparation :cleanup-paths)))
+    (let* ((path (plist-get target :path))
+           (attributes (and (file-exists-p path)
+                            (file-attributes path 'string)))
+           (inode (and attributes
+                       (file-attribute-inode-number attributes))))
+      (when (and (equal inode (plist-get target :inode))
+                 (file-directory-p path))
+        (condition-case err
+            (progn
+              (set-file-modes path #o700)
+              (when (null (directory-files
+                           path nil directory-files-no-dot-files-regexp))
+                (delete-directory path)))
+          (error
+           (display-warning
+            'mevedel
+            (format "Could not remove sandbox mount target %s: %s"
+                    path (error-message-string err))
+            :warning)))))))
+
+(defun mevedel-sandbox--protected-restrictions (workdir writable-roots)
+  "Compile protected restrictions for WORKDIR and WRITABLE-ROOTS."
+  (require 'cl-lib)
+  (let (restrictions cleanup-paths)
+    (condition-case err
+        (progn
+          (dolist (candidate
+                   (mevedel-sandbox--protected-candidates
+                    workdir writable-roots))
+            (let* ((path (plist-get candidate :path))
+                   (mode (plist-get candidate :mode))
+                   (directory-p (plist-get candidate :directory-p))
+                   (symlink
+                    (mevedel-sandbox--writable-symlink-component
+                     path writable-roots)))
+              (when symlink
+                (signal
+                 'mevedel-sandbox-policy-error
+                 (list
+                  (format
+                   "Cannot enforce protected path %s across writable symlink %s"
+                   path symlink))))
+              (unless (file-exists-p path)
+                (when (and directory-p
+                           (cl-some
+                            (lambda (root)
+                              (let* ((expanded-root (expand-file-name root))
+                                     (root-directory
+                                      (file-name-as-directory expanded-root)))
+                                (or (string-equal
+                                     (directory-file-name expanded-root)
+                                     path)
+                                    (string-prefix-p root-directory path))))
+                            writable-roots))
+                  (setq path (or (mevedel-sandbox--first-missing-path path)
+                                 path))
+                  (make-directory path)
+                  (set-file-modes path #o700)
+                  (let ((attributes (file-attributes path 'string)))
+                    (push (list :path path
+                                :inode
+                                (file-attribute-inode-number attributes))
+                          cleanup-paths))))
+              (when (file-exists-p path)
+                (push (list :path path
+                            :mode mode
+                            :directory-p (file-directory-p path))
+                      restrictions)
+                (let ((target (mevedel-sandbox--git-pointer-target path)))
+                  (when (and target (file-exists-p target))
+                    (push (list :path target
+                                :mode mode
+                                :directory-p (file-directory-p target))
+                          restrictions)))
+                (let ((canonical (file-truename path)))
+                  (unless (string-equal canonical path)
+                    (push (list :path canonical
+                                :mode mode
+                                :directory-p (file-directory-p canonical))
+                          restrictions))))))
+          (let (arguments resolved)
+            (dolist (restriction restrictions)
+              (let* ((path (plist-get restriction :path))
+                     (existing (assoc path resolved)))
+                (when-let ((symlink
+                            (mevedel-sandbox--writable-symlink-component
+                             path writable-roots)))
+                  (signal
+                   'mevedel-sandbox-policy-error
+                   (list
+                    (format
+                     "Cannot enforce protected path %s across writable symlink %s"
+                     path symlink))))
+                (if existing
+                    (when (eq (plist-get restriction :mode) 'inaccessible)
+                      (setcdr existing restriction))
+                  (push (cons path restriction) resolved))))
+            (setq resolved
+                  (sort resolved
+                        (lambda (left right)
+                          (< (length (split-string (car left) "/" t))
+                             (length (split-string (car right) "/" t))))))
+            (dolist (entry resolved)
+              (let* ((restriction (cdr entry))
+                     (path (plist-get restriction :path))
+                     (mode (plist-get restriction :mode))
+                     (directory-p (plist-get restriction :directory-p)))
+                (setq arguments
+                      (append
+                       arguments
+                       (pcase mode
+                         ('read-only
+                          (list "--ro-bind" path path))
+                         ('inaccessible
+                          (if directory-p
+                              (list "--perms" "000" "--tmpfs" path
+                                    "--remount-ro" path)
+                            (list "--ro-bind" "/dev/null" path
+                                  "--chmod" "000" path))))))))
+            (list :arguments arguments
+                  :cleanup-paths (nreverse cleanup-paths)
+                  :count (length resolved))))
+      (error
+       (mevedel-sandbox-cleanup (list :cleanup-paths cleanup-paths))
+       (if (eq (car err) 'mevedel-sandbox-policy-error)
+           (signal (car err) (cdr err))
+         (signal 'mevedel-sandbox-policy-error
+                 (list (format "Could not compile protected paths: %s"
+                               (error-message-string err)))))))))
+
 (defun mevedel-sandbox--unrestricted-facts (sandbox reason)
   "Return direct-execution facts for SANDBOX and REASON."
   (list :sandbox sandbox
@@ -128,6 +396,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE."
+  (require 'cl-lib)
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
@@ -144,10 +413,14 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                (format "Sandbox working directory is outside writable roots: %s"
                        canonical-workdir))))
     (let* ((marker (make-temp-name "MEVEDEL_SANDBOX_STARTED_"))
+           (protected
+            (mevedel-sandbox--protected-restrictions
+             canonical-workdir roots))
            (facts (list :sandbox 'bubblewrap
                         :filesystem 'workspace-write
                         :network 'isolated
-                        :writable-roots roots))
+                        :writable-roots roots
+                        :protected-paths (plist-get protected :count)))
            (arguments
             (append
              (list "--new-session"
@@ -157,6 +430,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
              (cl-mapcan
               (lambda (root) (list "--bind" root root))
               roots)
+             (plist-get protected :arguments)
              (list "--unshare-user"
                    "--unshare-pid"
                    "--unshare-net"
@@ -171,6 +445,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
             :command (cons executable arguments)
             :original-command command
             :marker marker
+            :cleanup-paths (plist-get protected :cleanup-paths)
             :facts facts))))
 
 

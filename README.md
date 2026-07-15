@@ -657,9 +657,10 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 | `:name`    | free-form name (glob)  | `Agent` (subagent_type)            |
 
 Precedence: specifier rules outrank generic; within a group `deny > ask >
-allow`. Protected paths (`mevedel-protected-paths`, default `.git/`, `~/.ssh/`,
-`~/.gnupg/`) require exact resource authority even when the permission mode
-would otherwise allow the operation.
+allow`. `mevedel-protected-paths` maps globs to `read-only` or `inaccessible`.
+The defaults keep `.git/` readable but immutable and hide `~/.ssh/` and
+`~/.gnupg/`; exact resource authority is still required even when the
+permission mode would otherwise allow an operation.
 
 **Permission modes** (`mevedel-permission-mode`):
 
@@ -718,7 +719,12 @@ network namespaces. `auto` falls back to direct execution only when the
 requested process has not started and reports unrestricted filesystem and
 network access; `required` refuses instead; `off` runs directly with the same
 unrestricted disclosure. Every child result includes the active confinement
-facts.
+facts. Protected glob matches are resolved to concrete paths after writable
+roots are mounted: read-only paths are rebound immutable, inaccessible paths
+are hidden, Git directory pointer targets follow `.git`, and writable symlink
+ambiguity refuses execution. Custom entries use the same alist shape, for
+example `(("~/public-metadata/**" . read-only)
+          ("~/.credentials/**" . inaccessible))`.
 
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or
@@ -928,7 +934,7 @@ Useful commands:
 | `mevedel-permission-rules`                 | Unified permission rules (path / pattern / domain / name specifiers).    |
 | `mevedel-permission-mode`                  | Default permission mode (`ask` / `auto` / `full-auto`).                   |
 | `mevedel-sandbox-mode`                     | Child confinement (`auto` / `required` / `off`).                          |
-| `mevedel-protected-paths`                  | Path globs that always require confirmation.                             |
+| `mevedel-protected-paths`                  | Protected path globs mapped to `read-only` or `inaccessible`.             |
 | `mevedel-bash-dangerous-commands`          | Command names classified as dangerous by Bash analysis.                  |
 | `mevedel-bash-timeout`                     | Seconds before a Bash command is terminated; nil disables timeouts.      |
 | `mevedel-permission-guardian`              | Add advisory Bash risk guidance to permission prompts.                   |

@@ -61,6 +61,193 @@
                 (list (file-name-as-directory (file-truename root)))))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-sandbox--first-missing-path ()
+  ,test
+  (test)
+  :doc "first missing component:
+`mevedel-sandbox--first-missing-path' returns the narrow mount target"
+  (let ((root (make-temp-file "mevedel-sandbox-missing-" t)))
+    (unwind-protect
+        (should
+         (equal (mevedel-sandbox--first-missing-path
+                 (file-name-concat root "absent" "child"))
+                (file-name-concat root "absent")))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--writable-symlink-component ()
+  ,test
+  (test)
+  :doc "writable symlink crossing:
+`mevedel-sandbox--writable-symlink-component' identifies mutable indirection"
+  (let* ((root (make-temp-file "mevedel-sandbox-symlink-" t))
+         (outside (make-temp-file "mevedel-sandbox-symlink-target-" t))
+         (link (file-name-concat root "link")))
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside link)
+          (should
+           (equal (mevedel-sandbox--writable-symlink-component
+                   (file-name-concat link "secret") (list root))
+                  link))
+          (should-not
+           (mevedel-sandbox--writable-symlink-component
+            (file-name-concat link "secret") (list outside))))
+      (delete-directory root t)
+      (delete-directory outside t))))
+
+(mevedel-deftest mevedel-sandbox--git-pointer-target ()
+  ,test
+  (test)
+  :doc "Git directory pointer:
+`mevedel-sandbox--git-pointer-target' resolves a relative worktree target"
+  (let* ((root (make-temp-file "mevedel-sandbox-gitdir-" t))
+         (checkout (file-name-concat root "checkout"))
+         (metadata (file-name-concat root "metadata"))
+         (pointer (file-name-concat checkout ".git")))
+    (unwind-protect
+        (progn
+          (make-directory checkout)
+          (make-directory metadata)
+          (with-temp-file pointer
+            (insert "gitdir: ../metadata\n"))
+          (should
+           (equal (mevedel-sandbox--git-pointer-target pointer)
+                  metadata)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--protected-candidates ()
+  ,test
+  (test)
+  :doc "protected glob expansion:
+`mevedel-sandbox--protected-candidates' finds concrete and missing roots"
+  (let* ((root (make-temp-file "mevedel-sandbox-candidates-" t))
+         (nested (file-name-concat root "nested"))
+         (dot-git (file-name-concat nested ".git"))
+         (credentials (file-name-concat root "credentials"))
+         (missing (file-name-concat root "missing"))
+         (mevedel-protected-paths
+          `(("**/.git/**" . read-only)
+            (,(concat credentials "/**") . inaccessible)
+            (,(concat missing "/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (make-directory dot-git t)
+          (make-directory credentials)
+          (let ((candidates
+                 (mevedel-sandbox--protected-candidates root (list root))))
+            (should (cl-find dot-git candidates
+                             :key (lambda (item) (plist-get item :path))
+                             :test #'string-equal))
+            (should (eq (plist-get
+                         (cl-find credentials candidates
+                                  :key (lambda (item) (plist-get item :path))
+                                  :test #'string-equal)
+                         :mode)
+                        'inaccessible))
+            (should (cl-find missing candidates
+                             :key (lambda (item) (plist-get item :path))
+                             :test #'string-equal))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox-cleanup ()
+  ,test
+  (test)
+  :doc "owned mount target cleanup:
+`mevedel-sandbox-cleanup' removes an unchanged empty synthetic directory"
+  (let* ((root (make-temp-file "mevedel-sandbox-cleanup-" t))
+         (path (file-name-concat root "synthetic")))
+    (unwind-protect
+        (progn
+          (make-directory path)
+          (let ((inode (file-attribute-inode-number
+                        (file-attributes path 'string))))
+            (mevedel-sandbox-cleanup
+             (list :cleanup-paths (list (list :path path :inode inode)))))
+          (should-not (file-exists-p path)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-sandbox--protected-restrictions ()
+  ,test
+  (test)
+  :doc "mount layering:
+`mevedel-sandbox--protected-restrictions' masks after writable roots"
+  (let* ((root (make-temp-file "mevedel-sandbox-restrictions-" t))
+         (dot-git (file-name-concat root ".git"))
+         (credentials (file-name-concat root "credentials"))
+         (missing (file-name-concat root "missing"))
+         (mevedel-protected-paths
+          `((,(concat dot-git "/**") . read-only)
+            (,(concat credentials "/**") . inaccessible)
+            (,(concat missing "/**") . inaccessible)))
+         restrictions)
+    (unwind-protect
+        (progn
+          (make-directory dot-git)
+          (make-directory credentials)
+          (setq restrictions
+                (mevedel-sandbox--protected-restrictions root (list root)))
+          (let ((arguments (plist-get restrictions :arguments)))
+            (should (member dot-git arguments))
+            (should (member "--ro-bind" arguments))
+            (should (member credentials arguments))
+            (should (member "--tmpfs" arguments))
+            (should (member missing arguments)))
+          (should (file-directory-p missing))
+          (mevedel-sandbox-cleanup restrictions)
+          (should-not (file-exists-p missing)))
+      (mevedel-sandbox-cleanup restrictions)
+      (delete-directory root t)))
+  :doc "Git pointer target:
+`mevedel-sandbox--protected-restrictions' protects worktree metadata targets"
+  (let* ((root (make-temp-file "mevedel-sandbox-pointer-root-" t))
+         (metadata (make-temp-file "mevedel-sandbox-pointer-meta-" t))
+         (pointer (file-name-concat root ".git"))
+         (mevedel-protected-paths '(("**/.git/**" . read-only))))
+    (unwind-protect
+        (progn
+          (with-temp-file pointer
+            (insert (format "gitdir: %s\n" metadata)))
+          (let* ((restrictions
+                  (mevedel-sandbox--protected-restrictions root (list root)))
+                 (arguments (plist-get restrictions :arguments)))
+            (should (member pointer arguments))
+            (should (member metadata arguments))))
+      (delete-directory root t)
+      (delete-directory metadata t)))
+  :doc "writable symlink ambiguity:
+`mevedel-sandbox--protected-restrictions' refuses a mutable symlink crossing"
+  (let* ((root (make-temp-file "mevedel-sandbox-restriction-link-" t))
+         (outside (make-temp-file "mevedel-sandbox-restriction-out-" t))
+         (link (file-name-concat root "link"))
+         (mevedel-protected-paths
+          `((,(concat link "/secret/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside link)
+          (should-error
+           (mevedel-sandbox--protected-restrictions root (list root))
+           :type 'mevedel-sandbox-policy-error))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "root sibling containment:
+`mevedel-sandbox--protected-restrictions' does not mutate a lexical prefix"
+  (let* ((parent (make-temp-file "mevedel-sandbox-prefix-" t))
+         (root (file-name-concat parent "work"))
+         (sibling (file-name-concat parent "work-other"))
+         (protected (file-name-concat sibling "missing"))
+         (mevedel-protected-paths
+          `((,(concat protected "/**") . inaccessible))))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (make-directory sibling)
+          (let ((restrictions
+                 (mevedel-sandbox--protected-restrictions root (list root))))
+            (should-not (file-exists-p protected))
+            (should-not (member protected
+                                (plist-get restrictions :arguments)))))
+      (delete-directory parent t))))
+
 (mevedel-deftest mevedel-sandbox--unrestricted-facts ()
   ,test
   (test)
@@ -227,7 +414,78 @@
                                 (split-string (buffer-string) "\n" nil)))))
           (when (buffer-live-p output-buffer)
             (kill-buffer output-buffer))
-          (delete-directory parent t))))))
+          (mevedel-sandbox-cleanup prepared)
+          (delete-directory parent t)))))
+  :doc "real protected paths:
+`mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (or (plist-get availability :reason)
+                      "Bubblewrap unavailable")))
+      (let* ((root (make-temp-file "mevedel-sandbox-protected-real-" t))
+             (dot-git (file-name-concat root ".git"))
+             (head (file-name-concat dot-git "HEAD"))
+             (credentials (file-name-concat root "credentials"))
+             (secret (file-name-concat credentials "token"))
+             (missing (file-name-concat root "missing"))
+             (read-result (file-name-concat root "git-head"))
+             (leak-result (file-name-concat root "leaked"))
+             (mevedel-protected-paths
+              `((,(concat dot-git "/**") . read-only)
+                (,(concat credentials "/**") . inaccessible)
+                (,(concat missing "/**") . inaccessible)))
+             prepared output-buffer)
+        (unwind-protect
+            (progn
+              (make-directory dot-git)
+              (make-directory credentials)
+              (with-temp-file head (insert "ref: refs/heads/main\n"))
+              (with-temp-file secret (insert "do-not-leak\n"))
+              (let* ((descendant
+                      (format
+                       (concat "cat %s > %s; "
+                               "printf mutate > %s 2>/dev/null || true; "
+                               "if value=$(cat %s 2>/dev/null); then "
+                               "printf '%%s' \"$value\" > %s; fi; "
+                               "mkdir %s 2>/dev/null || true")
+                       (shell-quote-argument head)
+                       (shell-quote-argument read-result)
+                       (shell-quote-argument head)
+                       (shell-quote-argument secret)
+                       (shell-quote-argument leak-result)
+                       (shell-quote-argument missing)))
+                     (command (list "sh" "-c"
+                                    (format "sh -c %s"
+                                            (shell-quote-argument descendant)))))
+                (setq prepared
+                      (mevedel-sandbox-prepare command root (list root))))
+              (setq output-buffer
+                    (generate-new-buffer " *mevedel-protected-bwrap-test*"))
+              (should
+               (zerop
+                (apply #'call-process
+                       (car (plist-get prepared :command)) nil output-buffer nil
+                       (cdr (plist-get prepared :command)))))
+              (should
+               (equal
+                (with-temp-buffer
+                  (insert-file-contents read-result)
+                  (buffer-string))
+                "ref: refs/heads/main\n"))
+              (should
+               (equal
+                (with-temp-buffer
+                  (insert-file-contents head)
+                  (buffer-string))
+                "ref: refs/heads/main\n"))
+              (should-not (file-exists-p leak-result)))
+          (when (buffer-live-p output-buffer)
+            (kill-buffer output-buffer))
+          (mevedel-sandbox-cleanup prepared)
+          (should-not (file-exists-p missing))
+          (delete-directory root t))))))
 
 (mevedel-deftest mevedel-sandbox-launch-failed-p ()
   ,test

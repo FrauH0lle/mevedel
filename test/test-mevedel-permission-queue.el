@@ -353,7 +353,7 @@
   :doc "protected paths do not coalesce allow rules but do coalesce deny rules"
   (let* ((session (test-pq--make-session))
          (mevedel--session session)
-         (mevedel-protected-paths '("**/.git/**"))
+         (mevedel-protected-paths '(("**/.git/**" . read-only)))
          (path "/repo/.git/config")
          (outcomes nil))
     (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
