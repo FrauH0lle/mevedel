@@ -128,8 +128,12 @@
     (and (<= 2 (length argv))
          program
          (not (string-prefix-p "-" program))
+         (not (cl-some
+               (lambda (argument)
+                 (string-prefix-p "-" argument))
+               (cddr argv)))
          (not (string-match-p
-               "\\(?:@include\\|@load\\|\\_<\\(?:close\\|getline\\|system\\)\\_>\\|[>|]\\)"
+               "\\(?:@[[:space:]]*[[:alpha:]_]\\|\\_<\\(?:close\\|getline\\|system\\)\\_>\\|[>|]\\)"
                program)))))
 
 

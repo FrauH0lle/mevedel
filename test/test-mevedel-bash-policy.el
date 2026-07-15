@@ -45,6 +45,7 @@
              ("base64" "-o" "output" "file")
              ("sed" "-n" "1,5d" "file")
              ("awk" "{system(\"id\")}" "file")
+             ("awk" "BEGIN { f = \"sys\" \"tem\"; @f(\"id\") }")
              ("awk" "{print $1 > \"out\"}" "file")))
     (should-not (mevedel-bash-policy-read-only-p argv))))
 

@@ -155,6 +155,7 @@
                "base64 -o output file"
                "sed -n 1,5d file"
                "awk '{system(\"id\")}' file"
+               "awk 'BEGIN { f = \"sys\" \"tem\"; @f(\"id\") }'"
                "awk '{print $1 > \"out\"}' file"))
       (should (eq 'ask
                   (mevedel-tools--check-bash-permission command)))))
