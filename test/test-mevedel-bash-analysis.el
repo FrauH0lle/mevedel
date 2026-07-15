@@ -96,10 +96,10 @@ cat file"
 `mevedel-bash-analysis-analyze' preserves literal protected-path candidates"
   (cl-letf (((symbol-function 'treesit-language-available-p)
              (lambda (_language) nil)))
-    (should (equal '("~/.ssh/key" ".git/config")
+    (should (equal '("~/.ssh/my key" ".git/config")
                    (plist-get
                     (mevedel-bash-analysis-analyze
-                     "FOO=bar cat ~/.ssh/key >.git/config")
+                     "FOO=bar cat ~/.ssh/my\\ key >.git/config")
                     :resources))))
   :doc "tree-sitter source:
 `mevedel-bash-analysis-analyze' uses the configured Bash grammar when present"
