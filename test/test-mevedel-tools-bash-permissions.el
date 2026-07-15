@@ -157,6 +157,19 @@
           :permission-context
           '(:mode ask
             :buckets ((:session . (("Bash" :pattern "rm *" :action allow)))))))))
+  :doc "segment ask authority:
+\`mevedel-tools--check-bash-permission' keeps an effective segment ask final"
+  (let ((mevedel-permission-rules nil)
+        (mevedel-bash-dangerous-commands '("rm")))
+    (should
+     (eq 'ask
+         (mevedel-tools--check-bash-permission
+          "pwd && cat file && rm file"
+          :permission-context
+          '(:mode ask
+            :buckets
+            ((:session . (("Bash" :pattern "rm *" :action allow)
+                          ("Bash" :pattern "cat *" :action ask)))))))))
   :doc "persistent authority:
 \`mevedel-tools--check-bash-permission' honors a direct complex allow"
   (let ((mevedel-permission-rules nil))
@@ -333,7 +346,7 @@
     (should
      (eq 'ask
          (mevedel-tools--check-bash-permission
-          "echo \"$(printf ')' && cat .git/config)\""
+          "echo \"$(printf ')' && cat .git/config && echo x)\""
           :permission-context '(:mode full-auto :buckets nil)))))
   :doc "complex protected path:
 \`mevedel-tools--check-bash-permission' keeps resource checks after direct allow"

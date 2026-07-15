@@ -536,6 +536,7 @@ authorize dangerous or complex syntax."
     (cond
      ((eq (car full-match) 'ask) 'ask)
      ((memq 'deny segment-actions) 'deny)
+     ((memq 'ask segment-actions) 'ask)
      ((and (memq class '(dangerous complex))
            (eq (car direct-match) 'allow))
       'allow)
