@@ -84,20 +84,21 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
-(declare-function mevedel-permission-protected-path-policy
-                  "mevedel-permissions" ())
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
                   (rules tool-name &rest keys))
+(declare-function mevedel-permission-protected-path-policy
+                  "mevedel-permissions" ())
 (defvar mevedel-permission-mode)
 (defvar mevedel-permission-rules)
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
                   "mevedel-sandbox" (child-result))
+(declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
 (declare-function mevedel-sandbox-launch-failed-p
                   "mevedel-sandbox" (preparation child-result))
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox" (command workdir writable-roots))
-(declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
