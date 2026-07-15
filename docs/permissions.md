@@ -179,7 +179,7 @@ queued siblings by re-running the decision chain. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
 prompts are aborted on request/session teardown.
 
-`mevedel-permission-prompt.el` is the focused UI owner for all three entry
+`mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian
 and dangerous-command presentation, and Eval presentation. The queue retains
 ordering and outcome semantics; the shared interaction primitive retains

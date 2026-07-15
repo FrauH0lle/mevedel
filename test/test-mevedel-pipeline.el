@@ -9,6 +9,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
 (require 'mevedel-permissions)
+(require 'mevedel-tool-exec)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
 (require 'mevedel-session-persistence)
@@ -1948,6 +1949,79 @@
 		   (mevedel-pipeline-run-tool
 		    tool (lambda (r) (setq result r)) '(:msg "async hello"))
 		   (should (equal result "async hello")))
+		 :doc "network escalation is a separate audited retry without hidden replay"
+		 (let* ((root (make-temp-file "mevedel-network-retry-" t))
+			(workspace (mevedel-workspace--create :root root))
+			(session (mevedel-session--create
+				  :name "network-retry"
+				  :workspace workspace
+				  :save-path root
+				  :permission-mode 'full-auto))
+			(mevedel--session session)
+			(mevedel-permission-log-enabled t)
+			(mevedel-permission-rules nil)
+			launches first-result second-result)
+		   (mevedel-tool-exec--register)
+		   (unwind-protect
+		       (let ((tool (mevedel-tool-get "Bash")))
+			 (cl-letf
+			     (((symbol-function
+				'mevedel-tool-exec--start-sandboxed-child-process)
+			       (lambda (_name _command _workdir _roots _timeout callback
+					&optional additional-permissions)
+				 (push additional-permissions launches)
+				 (funcall
+				  callback
+				  (if additional-permissions
+				      '(:exit-code 0 :output "downloaded"
+					:timed-out-p nil
+					:sandbox-facts
+					(:sandbox bubblewrap
+					 :filesystem workspace-write
+					 :network unrestricted))
+				    '(:exit-code 7 :output "network denied"
+				      :timed-out-p nil
+				      :sandbox-facts
+				      (:sandbox bubblewrap
+				       :filesystem workspace-write
+				       :network isolated)))))))
+			   (mevedel-pipeline-run-tool
+			    tool (lambda (result) (setq first-result result))
+			    '(:command "pwd"))
+			   (should (= 1 (length launches)))
+			   (should (string-match-p "network denied" first-result))
+			   (should (string-match-p "network: isolated" first-result))
+			   (mevedel-pipeline-run-tool
+			    tool (lambda (result) (setq second-result result))
+			    '(:command "pwd"
+			      :sandbox_permissions "with_additional_permissions"
+			      :additional_permissions (:network t)
+			      :justification "Reach the requested service?"))
+			   (should (= 2 (length launches)))
+			   (should (equal '((:network t) nil) launches))
+			   (should (string-match-p "downloaded" second-result))
+			   (should (string-match-p "network: unrestricted"
+					   second-result)))
+			 (let* ((entries
+				 (test-mevedel-pipeline--read-permission-log session))
+				(classifier-entries
+				 (seq-filter
+				  (lambda (entry)
+				    (eq 'bash-classifier (plist-get entry :via)))
+				  entries))
+				(network-entry
+				 (seq-find
+				  (lambda (entry)
+				    (eq 'sandbox-network (plist-get entry :via)))
+				  entries)))
+			   (should (= 2 (length classifier-entries)))
+			   (should (eq 'allow (plist-get network-entry :outcome)))
+			   (should
+			    (equal '(:network t)
+				   (plist-get network-entry
+					      :additional-permissions)))))
+		     (mevedel-tool-clear-registry)
+		     (delete-directory root t)))
 		 :doc "tool handlers default to the workspace root"
 		 (let* ((root (make-temp-file "mevedel-tool-root-" t))
 			(other (make-temp-file "mevedel-tool-other-" t))

@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 
-;; Tests generic, Bash, and Eval permission prompt rendering and controls.
+;; Tests generic, Bash, Eval, and execution-authority prompt rendering.
 
 ;;; Code:
 
@@ -10,6 +10,7 @@
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-view)
+(require 'mevedel-view-interaction)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -154,6 +155,29 @@
       (should-not (lookup-key captured-keymap "s"))
       (should-not (lookup-key captured-keymap "A"))
       (should-not (lookup-key captured-keymap "D")))))
+
+(mevedel-deftest mevedel-permission--prompt-async-sandbox
+  (:doc "renders a once-only additive network request")
+  ,test
+  (test)
+  (let (captured)
+    (cl-letf (((symbol-function
+                'mevedel-permission--prompt-async-with-content)
+               (lambda (&rest args) (setq captured args))))
+      (mevedel-permission--prompt-async-sandbox
+       "Bash" "curl https://example.test" "Download the page?"
+       "main" #'ignore 2 '(:kind sandbox)))
+    (let ((content (nth 0 captured)))
+      (should (string-match-p "Additional Network Permission Request"
+                              content))
+      (should (string-match-p "Download the page?" content))
+      (should (string-match-p "only requested change" content))
+      (should (string-match-p "profile remains unchanged" content)))
+    (should-not (nth 1 captured))
+    (should (= 2 (nth 3 captured)))
+    (should (equal '(:kind sandbox) (nth 4 captured)))
+    (should (eq t (nth 5 captured)))
+    (should (eq t (nth 6 captured)))))
 
 (mevedel-deftest mevedel-permission--format-bash-guardian
   ()
