@@ -76,6 +76,8 @@
 (declare-function mevedel-permission--execution-level-decision
                   "mevedel-permissions"
                   (buckets tool-name level pattern))
+(declare-function mevedel-permission--execution-level-buckets
+                  "mevedel-permissions" (buckets level))
 (declare-function mevedel-permission--first-non-nil-action-with-bucket
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
@@ -492,11 +494,23 @@ INPUT supplies permission context and delegated trust.  Call CONT once."
     (tool-name detail buckets level)
   "Return the full-escalation rule decision for TOOL-NAME and DETAIL.
 BUCKETS supplies ordinary and execution-level rules for LEVEL."
-  (if (mevedel-tool-exec--full-escalation-explicit-deny-p
-       tool-name detail buckets)
+  (if (or (mevedel-tool-exec--full-escalation-explicit-deny-p
+           tool-name detail buckets)
+          (and (equal tool-name "Bash")
+               (mevedel-tool-exec--bash-explicit-deny-p
+                (mevedel-permission--execution-level-buckets buckets level)
+                detail)))
       'deny
     (mevedel-permission--execution-level-decision
      buckets tool-name level detail)))
+
+(defun mevedel-tool-exec--full-escalation-reusable-rule-p
+    (tool-name detail)
+  "Return non-nil when a prompt may offer reusable authority for DETAIL."
+  (and (equal tool-name "Bash")
+       (not (memq (plist-get (mevedel-tool-exec--analyze-bash detail) :class)
+                  '(dangerous complex)))
+       (not (string-match-p "\\(?:\\*\\|\\?\\|\\[\\)" detail))))
 
 (defun mevedel-tool-exec--full-escalation-denial
     (metadata-p &optional feedback)
@@ -604,7 +618,9 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
         :justification (plist-get request :justification)
         :specifier-key :pattern
         :specifier-value detail
-        :include-always t
+        :include-always
+        (mevedel-tool-exec--full-escalation-reusable-rule-p
+         tool-name detail)
         :workspace workspace
         :origin (mevedel-tool-exec--current-origin)
         :callback
@@ -2268,7 +2284,7 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
 (defun mevedel-tool-exec--eval-batch
     (callback expression result-format additional-permissions
               &optional sandbox-permissions)
-  "Evaluate EXPRESSION in a confined child and call CALLBACK.
+  "Evaluate EXPRESSION in a child process and call CALLBACK.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (let* ((workdir (mevedel-tool-exec--default-directory))

@@ -793,18 +793,21 @@ PATH, PATTERN, DOMAIN, and NAME are the specifier values."
                   unless (eq key :sandbox-permissions)
                   append (list key value)))))
 
+(defun mevedel-permission--execution-level-buckets (buckets level)
+  "Return BUCKETS containing only rules qualified for execution LEVEL."
+  (mapcar
+   (lambda (entry)
+     (cons (car entry)
+           (mevedel-permission--execution-level-rules (cdr entry) level)))
+   buckets))
+
 (defun mevedel-permission--execution-level-decision
     (buckets tool-name level pattern)
   "Resolve direct user authority for TOOL-NAME, LEVEL, and PATTERN.
 Qualified denies in any bucket remain final.  Only session, persistent, and
 defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
   (let ((qualified
-         (mapcar
-          (lambda (entry)
-            (cons (car entry)
-                  (mevedel-permission--execution-level-rules
-                   (cdr entry) level)))
-          buckets)))
+         (mevedel-permission--execution-level-buckets buckets level)))
     (if (cl-some
          (lambda (entry)
            (eq 'deny

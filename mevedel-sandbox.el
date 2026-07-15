@@ -572,46 +572,46 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
         (mevedel-sandbox--direct-preparation
          command 'escalated "Full execution escalation approved"))
     (pcase mevedel-sandbox-mode
-    ('off
-     (mevedel-sandbox--direct-preparation
-      command 'off "Confinement disabled by mevedel-sandbox-mode"))
-    ((or 'auto 'required)
-     (let ((availability (mevedel-sandbox-probe)))
-       (if (plist-get availability :available)
-           (condition-case err
-               (let ((preparation
-                      (mevedel-sandbox--confined-preparation
-                       command workdir writable-roots
-                       (plist-get availability :executable)
-                       additional-permissions)))
-                 (plist-put preparation :fallback-p
-                            (eq mevedel-sandbox-mode 'auto)))
-             (mevedel-sandbox-policy-error
-              (let* ((reason (error-message-string err))
-                     (facts
-                      (mevedel-sandbox--unrestricted-facts
-                       'refused reason)))
-                (setq mevedel-sandbox--last-facts facts)
-                (list :state 'refused :error reason :facts facts)))
-             (error
-              (let ((reason (error-message-string err)))
-                (if (eq mevedel-sandbox-mode 'required)
-                    (let ((facts
-                           (mevedel-sandbox--unrestricted-facts
-                            'unavailable reason)))
-                      (setq mevedel-sandbox--last-facts facts)
-                      (list :state 'refused :error reason :facts facts))
-                  (mevedel-sandbox--direct-preparation
-                   command 'unavailable reason)))))
-         (let ((reason (plist-get availability :reason)))
-           (if (eq mevedel-sandbox-mode 'required)
-               (let ((facts
-                      (mevedel-sandbox--unrestricted-facts
-                       'unavailable reason)))
-                 (setq mevedel-sandbox--last-facts facts)
-                 (list :state 'refused :error reason :facts facts))
-             (mevedel-sandbox--direct-preparation
-              command 'unavailable reason))))))
+      ('off
+       (mevedel-sandbox--direct-preparation
+        command 'off "Confinement disabled by mevedel-sandbox-mode"))
+      ((or 'auto 'required)
+       (let ((availability (mevedel-sandbox-probe)))
+         (if (plist-get availability :available)
+             (condition-case err
+                 (let ((preparation
+                        (mevedel-sandbox--confined-preparation
+                         command workdir writable-roots
+                         (plist-get availability :executable)
+                         additional-permissions)))
+                   (plist-put preparation :fallback-p
+                              (eq mevedel-sandbox-mode 'auto)))
+               (mevedel-sandbox-policy-error
+                (let* ((reason (error-message-string err))
+                       (facts
+                        (mevedel-sandbox--unrestricted-facts
+                         'refused reason)))
+                  (setq mevedel-sandbox--last-facts facts)
+                  (list :state 'refused :error reason :facts facts)))
+               (error
+                (let ((reason (error-message-string err)))
+                  (if (eq mevedel-sandbox-mode 'required)
+                      (let ((facts
+                             (mevedel-sandbox--unrestricted-facts
+                              'unavailable reason)))
+                        (setq mevedel-sandbox--last-facts facts)
+                        (list :state 'refused :error reason :facts facts))
+                    (mevedel-sandbox--direct-preparation
+                     command 'unavailable reason)))))
+           (let ((reason (plist-get availability :reason)))
+             (if (eq mevedel-sandbox-mode 'required)
+                 (let ((facts
+                        (mevedel-sandbox--unrestricted-facts
+                         'unavailable reason)))
+                   (setq mevedel-sandbox--last-facts facts)
+                   (list :state 'refused :error reason :facts facts))
+               (mevedel-sandbox--direct-preparation
+                command 'unavailable reason))))))
       (_ (error "Unknown sandbox mode: %s" mevedel-sandbox-mode)))))
 
 (defun mevedel-sandbox-launch-failed-p (preparation child-result)

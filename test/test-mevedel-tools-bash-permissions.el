@@ -604,6 +604,42 @@ an explicit command deny prevents escalation without prompting"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'deny outcome)))
+  :doc "qualified compound deny remains final:
+a denied segment cannot hide behind a broad full-escalation allow"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules
+         '(("Bash" :sandbox-permissions require-escalated :action allow)
+           ("Bash" :pattern "rm *"
+                   :sandbox-permissions require-escalated :action deny)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "pwd && rm -rf /"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'deny outcome)))
+  :doc "qualified nested deny remains final:
+a harvested command substitution cannot hide behind a broad allow"
+  (let ((mevedel-permission-mode 'full-auto)
+        (mevedel-permission-rules
+         '(("Bash" :sandbox-permissions require-escalated :action allow)
+           ("Bash" :pattern "rm *"
+                   :sandbox-permissions require-escalated :action deny)))
+        enqueued outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq enqueued t))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "echo $(rm -rf /)"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not enqueued)
+    (should (eq 'deny outcome)))
   :doc "session approval:
 the prompt stores an exact execution-level-qualified pattern rule"
   (let* ((session (mevedel-session--create :name "full-escalation"))
@@ -647,6 +683,56 @@ trust-literal execution cannot use even a matching direct escalation rule"
        (lambda (result) (setq outcome result))))
     (should-not enqueued)
     (should (eq 'deny (car outcome))))
+  :doc "reusable escalation rules:
+prompts never propose rules for dangerous, complex, Eval, or glob-bearing input"
+  (should (mevedel-tool-exec--full-escalation-reusable-rule-p "Bash" "pwd"))
+  (should-not
+   (mevedel-tool-exec--full-escalation-reusable-rule-p
+    "Bash" "rm -rf /"))
+  (should-not
+   (mevedel-tool-exec--full-escalation-reusable-rule-p
+    "Bash" "echo $(pwd)"))
+  (should-not
+   (mevedel-tool-exec--full-escalation-reusable-rule-p
+    "Bash" "printf '%s' '*.tmp'"))
+  (should-not
+   (mevedel-tool-exec--full-escalation-reusable-rule-p
+    "Eval" "(+ 1 2)"))
+  :doc "dangerous escalation prompt:
+full escalation offers only once approval and reusable denial"
+  (let ((mevedel-permission-mode 'ask)
+        (mevedel-permission-rules nil)
+        entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (setq entry queued)
+                 (funcall (plist-get queued :callback) 'deny-once))))
+      (mevedel-tool-exec--check-permission-async
+       nil
+       '(:command "rm -rf /"
+         :sandbox_permissions "require_escalated"
+         :justification "Run without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not (plist-get entry :include-always))
+    (should (eq 'deny outcome)))
+  :doc "Eval escalation prompt:
+arbitrary Eval does not offer reusable full-escalation authority"
+  (let ((mevedel-permission-mode 'ask)
+        (mevedel-permission-rules nil)
+        entry outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (queued &optional _session)
+                 (setq entry queued)
+                 (funcall (plist-get queued :callback) 'deny-once))))
+      (mevedel-tool-exec--eval-check-permission-async
+       nil
+       '(:expression "(delete-file \"important\")"
+         :mode "batch"
+         :sandbox_permissions "require_escalated"
+         :justification "Run batch Eval without confinement?")
+       (lambda (result) (setq outcome result))))
+    (should-not (plist-get entry :include-always))
+    (should (eq 'deny outcome)))
   :doc "batch Eval direct allow:
 a broad qualified Eval rule authorizes unconfined batch execution"
   (let ((mevedel-permission-mode 'ask)
