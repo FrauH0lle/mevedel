@@ -162,10 +162,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
   "Return concrete protected-path candidates for WORKDIR and WRITABLE-ROOTS."
   (require 'cl-lib)
   (require 'mevedel-permissions)
-  (let ((canonical-workdir (file-name-as-directory (file-truename workdir)))
-        (temporary-root
-         (file-name-as-directory (file-truename temporary-file-directory)))
-        candidates)
+  (let (candidates)
     (cl-labels
         ((add-candidate
           (path mode directory-p)
@@ -209,22 +206,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                                (expand-file-name root-pattern workdir))
                            mode directory-p))
            (t
-            (let* ((specific-work-root-p
-                    (cl-some
-                     (lambda (root)
-                       (let ((root (file-name-as-directory
-                                    (file-truename root))))
-                         (and (not (string-equal root temporary-root))
-                              (string-prefix-p root canonical-workdir))))
-                     writable-roots))
-                   (search-roots
-                    (cl-remove-if
-                     (lambda (root)
-                       (and specific-work-root-p
-                            (string-equal
-                             (file-name-as-directory (file-truename root))
-                             temporary-root)))
-                     writable-roots)))
+            (let ((search-roots (copy-sequence writable-roots)))
               (when absolute-pattern
                 (let* ((index
                         (cl-position-if
