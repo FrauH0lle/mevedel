@@ -148,6 +148,13 @@
             (should (cl-find secondary-dot-git candidates
                              :key (lambda (item) (plist-get item :path))
                              :test #'string-equal))
+            (should
+             (eq (plist-get
+                  (cl-find unreadable candidates
+                           :key (lambda (item) (plist-get item :path))
+                           :test #'string-equal)
+                  :mode)
+                 'inaccessible))
             (should (eq (plist-get
                          (cl-find credentials candidates
                                   :key (lambda (item) (plist-get item :path))
@@ -442,10 +449,12 @@
              (credentials (file-name-concat root "credentials"))
              (secret (file-name-concat credentials "token"))
              (missing (file-name-concat root "missing"))
+             (blocked (file-name-concat root "blocked"))
+             (blocked-head (file-name-concat blocked ".git" "HEAD"))
              (read-result (file-name-concat root "git-head"))
              (leak-result (file-name-concat root "leaked"))
              (mevedel-protected-paths
-              `((,(concat dot-git "/**") . read-only)
+              `(("**/.git/**" . read-only)
                 (,(concat credentials "/**") . inaccessible)
                 (,(concat missing "/**") . inaccessible)))
              prepared output-buffer)
@@ -453,21 +462,29 @@
             (progn
               (make-directory dot-git)
               (make-directory credentials)
+              (make-directory (file-name-directory blocked-head) t)
               (with-temp-file head (insert "ref: refs/heads/main\n"))
+              (with-temp-file blocked-head
+                (insert "ref: refs/heads/blocked\n"))
               (with-temp-file secret (insert "do-not-leak\n"))
+              (set-file-modes blocked #o000)
               (let* ((descendant
                       (format
                        (concat "cat %s > %s; "
                                "printf mutate > %s 2>/dev/null || true; "
                                "if value=$(cat %s 2>/dev/null); then "
                                "printf '%%s' \"$value\" > %s; fi; "
-                               "mkdir %s 2>/dev/null || true")
+                               "mkdir %s 2>/dev/null || true; "
+                               "chmod 700 %s 2>/dev/null || true; "
+                               "printf escaped > %s 2>/dev/null || true")
                        (shell-quote-argument head)
                        (shell-quote-argument read-result)
                        (shell-quote-argument head)
                        (shell-quote-argument secret)
                        (shell-quote-argument leak-result)
-                       (shell-quote-argument missing)))
+                       (shell-quote-argument missing)
+                       (shell-quote-argument blocked)
+                       (shell-quote-argument blocked-head)))
                      (command (list "sh" "-c"
                                     (format "sh -c %s"
                                             (shell-quote-argument descendant)))))
@@ -496,6 +513,13 @@
           (when (buffer-live-p output-buffer)
             (kill-buffer output-buffer))
           (mevedel-sandbox-cleanup prepared)
+          (set-file-modes blocked #o700)
+          (should
+           (equal
+            (with-temp-buffer
+              (insert-file-contents blocked-head)
+              (buffer-string))
+            "ref: refs/heads/blocked\n"))
           (should-not (file-exists-p missing))
           (delete-directory root t))))))
 
