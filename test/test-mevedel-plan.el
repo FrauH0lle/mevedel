@@ -30,7 +30,13 @@
             "<proposed_plan>\nfirst\n</proposed_plan>\n<proposed_plan>\nsecond\n</proposed_plan>")))
   (should-not
    (mevedel-plan-extract-proposed
-    "text <proposed_plan>\nnot a plan\n</proposed_plan>")))
+    "text <proposed_plan>\nnot a plan\n</proposed_plan>"))
+  :doc "accepts a concise authoritative reference without template headings"
+  (should
+   (equal
+    "Implement ticket 2 in .scratch/feature/tickets.md."
+    (mevedel-plan-extract-proposed
+     "<proposed_plan>\nImplement ticket 2 in .scratch/feature/tickets.md.\n</proposed_plan>"))))
 
 (mevedel-deftest mevedel-plan-strip-proposed
   (:doc "removes complete and streaming proposed-plan blocks")

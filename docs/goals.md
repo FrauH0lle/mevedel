@@ -1,9 +1,66 @@
 # Goals
 
 The Goal workflow is mevedel's single controller for planned work. A Goal is a
-session-owned completion contract: it keeps one objective authoritative while
-the model plans, implements, and reviews as many cycles as the evidence
-requires.
+session-owned completion contract: it keeps one objective and its achievement
+criteria authoritative while the model plans, implements, and reviews as many
+cycles as the evidence requires.
+
+Goal work follows this authority order:
+
+1. Goal objective and stated achievement criteria
+2. Authoritative referenced PRDs, specifications, and tickets
+3. The accepted plan as an implementation approach
+
+The plan does not replace the completion contract. Planning emphasizes desired
+behavior, achievement evidence, material risks, and important choices over
+routine implementation mechanics. Implementation may reasonably diverge from
+plan details when necessary, but not from the Goal, achievement criteria, or
+authoritative referenced requirements.
+
+Achievement criteria remain part of the Goal's free-form objective rather than
+a separate persisted field. Plans make those criteria explicit as observable
+evidence without inventing materially new requirements. Any uncertain inferred
+criteria belong under plan assumptions so approval can revise or escalate them.
+
+Planning, automatic revision, and user-requested plan feedback use this
+outcome-first guidance:
+
+```text
+<proposed_plan>
+# Concrete Plan Title
+
+## Goal
+- State the desired outcome and important non-goals.
+
+## Achievement Criteria
+- List observable conditions that prove the Goal is achieved.
+- Reference authoritative PRDs, specifications, or tickets when they provide
+  the criteria.
+
+## Approach
+- Describe the intended method by subsystem or behavior.
+- Include implementation details only when needed to resolve ambiguity,
+  material risk, public interfaces, data shape, or architecture.
+
+## Regression Coverage
+- List user-visible flows, edge cases, failure scenarios, and intentionally
+  unchanged behavior that tests should cover.
+
+## Validation
+- List exact focused test/build commands and other evidence to collect.
+
+## Assumptions
+- Record defaults, constraints, compatibility expectations, and unresolved
+  inferences.
+</proposed_plan>
+```
+
+The template is prompt guidance, not a parser-enforced schema. Plan parsing
+continues to require only one exact line-oriented `<proposed_plan>` block.
+Ordinary plans should use the full structure, but genuinely inapplicable
+sections may be omitted. Concise plans delegating substance to a clear
+authoritative PRD, specification, or ticket may use only the relevant sections
+or no headings at all.
 
 ## Lifecycle
 
@@ -26,9 +83,13 @@ Planning and review are inspection phases: native edit tools are structurally
 denied, while Bash and Eval remain available through normal permission policy
 for inspection, tests, and builds. They are not OS-enforced read-only
 environments. The implementer cannot complete a Goal; only a structured review
-verdict can do that. A `continue` verdict carries review findings into a new
-planning cycle. Every accepted plan is copied from `current-plan.md` to an
-immutable cycle artifact before implementation.
+verdict can do that. Completion review requires evidence that the Goal and
+achievement criteria are satisfied; performing every plan step is insufficient
+when the desired outcome remains unmet. Conversely, reasonable implementation
+divergence does not prevent completion when the authoritative outcomes are
+proven. A `continue` verdict carries review findings into a new planning cycle.
+Every accepted plan is copied from `current-plan.md` to an immutable cycle
+artifact before implementation.
 Goal phase changes do not weaken or strengthen child confinement: Bash and
 batch Eval continue to use the selected sandbox boundary, which remains visible
 in the main view's status zone.

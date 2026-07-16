@@ -412,6 +412,16 @@
           (should (string-match-p "Planning context" sent))
           (should (string-match-p "Goal ID: g1" sent))
           (should (string-match-p "Implementation instructions" sent))
+          (should
+           (string-match-p
+            "Goal objective and achievement criteria are authoritative"
+            sent))
+          (should
+           (string-match-p "authoritative referenced requirements" sent))
+          (should
+           (string-match-p "accepted plan is an implementation approach" sent))
+          (should
+           (string-match-p "Reasonable divergence from plan details" sent))
           (should (string-match-p "# Plan" sent)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (when (file-exists-p plan-file) (delete-file plan-file))))
