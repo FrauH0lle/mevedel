@@ -556,9 +556,14 @@ the hook runner."
       (mevedel-hooks-run-event
        event event-plist callback session workspace request invocation))))
 
-(defun mevedel-pipeline--permission-origin (context)
-  "Return the diagnostic origin for permission CONTEXT."
-  (or (plist-get context :origin)
+(defun mevedel-pipeline--permission-origin (context &optional explicit-origin)
+  "Return the diagnostic origin for permission CONTEXT.
+EXPLICIT-ORIGIN takes precedence when non-nil."
+  (or explicit-origin
+      (plist-get context :origin)
+      (and-let* ((request (plist-get context :request))
+                 ((mevedel-request-p request)))
+        (mevedel-request-origin request))
       (and-let* ((inv (plist-get context :invocation))
                  ((fboundp 'mevedel-agent-invocation-p))
                  ((mevedel-agent-invocation-p inv)))
@@ -937,12 +942,8 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                      ;; Resolve the leaf agent's canonical id by looking
                      ;; up the invocation captured at dispatch time;
                      ;; falls back to "main" for main-thread dispatches.
-                     (or (plist-get prompt-context :origin)
-                         (and-let* ((inv (plist-get context :invocation))
-                                    ((fboundp 'mevedel-agent-invocation-p))
-                                    ((mevedel-agent-invocation-p inv)))
-                           (mevedel-agent-invocation-agent-id inv))
-                         "main")
+                     (mevedel-pipeline--permission-origin
+                      context (plist-get prompt-context :origin))
                      :callback
                      (lambda (prompt-outcome)
                        ;; This callback fires after the runner's outer

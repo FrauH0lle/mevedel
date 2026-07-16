@@ -88,8 +88,9 @@ achievement criteria are satisfied; performing every plan step is insufficient
 when the desired outcome remains unmet. Conversely, reasonable implementation
 divergence does not prevent completion when the authoritative outcomes are
 proven. A `continue` verdict carries review findings into a new planning cycle.
-Every accepted plan is copied from `current-plan.md` to an immutable cycle
-artifact before implementation.
+Every accepted plan is copied from the candidate named by session plan metadata
+to an immutable cycle artifact before implementation. The initial candidate is
+`current-plan.md`; automatic replacements use revision-specific artifacts.
 Goal phase changes do not weaken or strengthen child confinement: Bash and
 batch Eval continue to use the selected sandbox boundary, which remains visible
 in the main view's status zone.
@@ -99,8 +100,9 @@ in the main view's status zone.
 - `/goal <objective>` starts a supervised Goal. Each plan waits for user
   approval.
 - `/goal auto <objective>` starts an automatic Goal. Each plan first goes to a
-  tool-free Goal guardian; anything other than a valid approval escalates to
-  the ordinary user approval prompt.
+  tool-free Goal guardian. It may approve, request a bounded automatic
+  revision, or escalate a genuine user decision to the ordinary approval
+  prompt.
 - `/goal approval` reports the active Goal's approval policy.
 - `/goal approval automatic` and `/goal approval supervised` change that
   policy without restarting the Goal. The Goal cockpit provides the same
@@ -115,17 +117,28 @@ in the main view's status zone.
 
 Automatic approval does not grant tool permission. Fully unattended mutation
 also requires the user to select `full-auto`; explicit denies, protected paths,
-and the permission guardian remain authoritative.
+and the permission guardian remain authoritative. Goal approval policy and
+permission mode are orthogonal: `full-auto` cannot approve a plan or bypass a
+Goal guardian `ask`, while automatic Goal approval cannot authorize
+implementation tool calls. A Goal guardian `ask` always stops automatic
+lifecycle progression and presents the plan to the user.
 
 A policy change never cancels an in-flight request. It applies at the next
 unresolved plan-approval boundary. Switching to automatic dismisses an open
 ordinary approval prompt and consults the Goal guardian; a recorded verdict is
-reused only when its plan hash matches the persisted proposal. An `ask` verdict
-still requires the user, while a matching `approve` verdict may continue.
-Switching to supervised while the guardian is running lets that read-only
-request settle, records its audit, and presents the plan to the user. Paused or
-blocked Goals remember the new policy without resuming; complete Goals reject
-the change.
+reused only when its plan hash matches the persisted proposal. An `approve`
+verdict may continue, `revise` returns concrete feedback to the planner, and
+`ask` requires the user.
+Switching to supervised while a guardian review or automatic planner revision
+is running lets that read-only request settle and records its result, but
+dispatches no further revision or implementation. The latest valid plan is
+presented to the user. Paused or blocked Goals remember the new policy without
+resuming; complete Goals reject the change.
+
+User input during an automatic planner revision or guardian re-review follows
+the same rule: the in-flight read-only request may settle, but automatic
+continuation stops and the latest valid plan is presented. Queued user input
+must be resolved before implementation.
 
 ## Dispatch and model policy
 
@@ -142,6 +155,87 @@ policy, cycle and artifact pointers, latest review, budget, and execution home.
 Phase-specific instructions are layered over that common contract. Reminders
 and compacted prose can orient the model, but neither can mutate or reconstruct
 Goal state.
+
+The Goal guardian is an isolated guardian request rather than an ordinary Goal
+phase prompt. Its dedicated system message contains the trusted review policy;
+its separate user message contains deterministic Goal context and the proposed
+plan as untrusted evidence. It receives no coding-assistant prompt, transcript,
+tools, memories, skills, workspace instructions, referenced document contents,
+or planning reasoning. Clear references to existing PRDs or tickets are trusted
+without tool-based inspection after mevedel verifies that the path exists.
+
+The guardian returns `approve`, `revise`, or `ask`. Approval begins
+implementation under the existing permission system. Revision returns
+planner-correctable feedback. Asking is reserved for decisions requiring user
+judgment or user-only information and presents the unchanged plan in the
+ordinary approval prompt. Goal outcomes and achievement criteria outrank plan
+mechanics, so concise plans and authoritative references are acceptable. The
+guardian treats all supplied Goal and plan text as evidence, never instructions.
+
+Guardian evidence includes the review position and remaining automatic revision
+allowance. When none remain, the final review permits only `approve` or `ask`;
+the guardian must not approve a flawed plan to avoid escalation. The dedicated
+runtime prompt lives at `prompts/goals/goal-guardian-system.md`; the maintained
+[guardian prompt contract](guardian-prompts.md) owns the exact trusted wording,
+response format, and adversarial examples. The permission and Goal guardians
+intentionally share no base prompt abstraction.
+
+One plan-approval boundary permits at most two automatic plan revision rounds.
+Each round sends the guardian's feedback to the planner and reviews the
+replacement plan again. After the second replacement, one final guardian review
+permits only `approve` or `ask`: approval begins implementation, while `ask`
+escalates the latest revised plan and latest guardian feedback to the ordinary
+user approval prompt, identified as `Automatic plan revision limit reached
+(2/2)`. Revised plans use the existing normalized plan hash comparison;
+surrounding whitespace and canonical line-ending differences do not count as a
+change, while no semantic comparison is attempted. A matching hash escalates
+immediately with `Planner returned the same plan after guardian feedback`.
+Guardian or planner timeout, request failure, or malformed output also
+escalates immediately. The revision count is durable and scoped to the current
+Goal cycle; token budgets and continuation deduplication remain secondary
+guards rather than substitutes for the fixed ceiling.
+
+Each revision round is recorded in the current Goal cycle with its revision
+number, input plan hash, guardian verdict/reason/feedback, replacement plan
+hash, planner and guardian provider/effort, request settlement state, and
+timestamps. Full plan bodies remain in the existing current and cycle plan
+artifacts rather than being duplicated in session state. Planner revisions and
+their guardian re-reviews consume the Goal token budget like every other Goal
+workload. If the budget is exhausted before either request can start, the
+latest plan escalates to the user instead of exceeding the budget or remaining
+invisibly paused.
+
+Recovery never automatically replays an interrupted revision request. If a
+valid replacement plan reached durable storage, resume at guardian review of
+that plan; otherwise present the previous valid plan with an interruption
+reason. The durable revision count is preserved and never reset by interruption
+or resume.
+
+A parsed, normalized replacement plan with a different plan hash is written to
+`cycle-NNN-revision-NNN-plan.md` before guardian re-review, and session plan
+metadata makes that revision artifact the latest durable candidate. It is
+copied to the immutable accepted cycle artifact only after approval and before
+implementation.
+
+Automatic revision exposes only concise lifecycle status such as `revising
+plan 1/2` and `guardian reviewing revision 1/2`. Guardian feedback and planner
+revision turns are not inserted into the main conversation; they remain in
+Goal audit metadata and plan artifacts, and become visible in the ordinary
+approval prompt when escalation occurs or through Goal inspection surfaces.
+
+An automatic revision is a fresh planning workload receiving only the
+deterministic Goal context, current proposed plan, guardian's exact feedback,
+current revision number, and remaining revision allowance. It must address the
+feedback together and return one complete replacement plan rather than a
+point-by-point reply. The revision request does not expand the conversation
+transcript or create a dialogue with the guardian. Revision uses the normal
+`planning` model workload and its inspection capabilities: native edit tools
+remain denied, while read tools, Bash, and Eval follow the ordinary
+planning-phase permission policy. No separate revision workload is introduced;
+the provider and effort used are recorded for each round. If the planner fails
+before returning a valid replacement, the previous valid plan is presented
+with the guardian feedback, concise failure reason, and completed revision
+count. Partial or malformed planner output never becomes the candidate plan.
 
 ## Continuation and recovery
 
