@@ -356,4 +356,6 @@ The main view keeps the child sandbox, filesystem, and network boundary visible
 in its status zone. It shows the selected default while idle, switches to the
 actual additive, escalated, or fallback boundary for the lifetime of a Bash or
 batch-Eval child, and returns to the default on settlement. Each result also
-records the boundary that applied to its invocation.
+records the boundary that applied to its invocation. Additive filesystem state
+includes read and write grant counts; concurrent children are summarized
+without hiding their least-confined active dimensions.
