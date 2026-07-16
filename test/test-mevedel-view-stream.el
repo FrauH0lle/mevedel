@@ -2642,6 +2642,46 @@
         (should (string-match-p "Read.*test\\.el" text))
         (should (string-match-p "Here is the file" text)))))
 
+  :doc "permission retry keeps consecutive Bash handles distinct"
+  (mevedel-view-stream-test--with-buffers
+    (mevedel-view-stream-test--insert-data
+     data-buf
+     "#+begin_tool (Bash :command \"rg TODO ..\")\n"
+     nil)
+    (mevedel-view-stream-test--insert-data
+     data-buf
+     (concat "(:name \"Bash\" :args (:command \"rg TODO ..\"))\n\n"
+             "Error: Filesystem authority required\n")
+     '(tool . "call-1"))
+    (mevedel-view-stream-test--insert-data data-buf "#+end_tool\n" nil)
+    (mevedel-view-stream-test--insert-data
+     data-buf
+     "#+begin_tool (Bash :command \"pwd\")\n"
+     nil)
+    (mevedel-view-stream-test--insert-data
+     data-buf
+     "(:name \"Bash\" :args (:command \"pwd\"))\n\nsuccess output\n"
+     '(tool . "call-2"))
+    (mevedel-view-stream-test--insert-data data-buf "#+end_tool\n" nil)
+    (mevedel-view-stream-test--insert-data data-buf "Done.\n" 'response)
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (= 2 (mevedel-view-stream-test--count-substring
+                      "Bash:" text))))
+      (goto-char (point-min))
+      (search-forward "Bash: pwd")
+      (goto-char (match-beginning 0))
+      (mevedel-view-toggle-section)
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (string-match-p "success output" text))
+        (should-not (string-match-p "Filesystem authority required" text))
+        (should-not (string-match-p "#\\+begin_tool\\|#\\+end_tool"
+                                    text)))))
+
   :doc "restored stale tool bounds render and expand without garbled fragments"
   (mevedel-view-stream-test--with-buffers
     (mevedel-tool-register

@@ -87,6 +87,8 @@
                   "mevedel-permissions" (outcome))
 (declare-function mevedel-permission--path-protected-p
                   "mevedel-permissions" (path))
+(declare-function mevedel-permission--path-in-allowed-roots-p
+                  "mevedel-permissions" (path roots))
 (declare-function mevedel-permission--resource-granted-p
                   "mevedel-permissions" (path access grants))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
@@ -217,7 +219,7 @@ that has unwound."
      paths)))
 
 (defun mevedel-tool-exec--normalize-additional-permissions (additional)
-  "Return validated ADDITIONAL network and exact filesystem permissions."
+  "Return validated ADDITIONAL permissions, or nil when none are requested."
   (mevedel-tool-exec--validate-additional-plist
    additional '(:network :file_system) "Additional permissions")
   (let ((network (plist-get additional :network))
@@ -246,8 +248,6 @@ that has unwound."
       (setq profile (plist-put profile :network t)))
     (when grants
       (setq profile (plist-put profile :file-system grants)))
-    (unless profile
-      (error "Additional permissions must contain a non-empty capability"))
     profile))
 
 (defun mevedel-tool-exec--sandbox-request
@@ -266,12 +266,15 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
            ((equal raw-level "require_escalated") 'escalated)
            (t (error "Unknown sandbox permission level: %s" raw-level))))
          (additional (plist-get args :additional_permissions))
+         (normalized-additional
+          (and additional
+               (not (eq additional :json-false))
+               (mevedel-tool-exec--normalize-additional-permissions
+                additional)))
          (justification (plist-get args :justification)))
     (pcase level
       ('use-default
-       (when (or (and additional (not (eq additional :json-false)))
-                 (and (stringp justification)
-                      (not (string-empty-p (string-trim justification)))))
+       (when normalized-additional
          (error "Default sandbox execution cannot include escalation arguments"))
        '(:level use-default :additional-permissions nil))
       ('additive
@@ -282,13 +285,15 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
          (error "Additional permissions are available only to batch Eval"))
        (list :level 'additive
              :additional-permissions
-             (mevedel-tool-exec--normalize-additional-permissions additional)
+             (or normalized-additional
+                 (error
+                  "Additional permissions must contain a non-empty capability"))
              :justification (string-trim justification)))
       ('escalated
        (unless (and (stringp justification)
                     (not (string-empty-p (string-trim justification))))
          (error "Full sandbox escalation requires a justification"))
-       (when (and additional (not (eq additional :json-false)))
+       (when normalized-additional
          (error "Full sandbox escalation cannot include additional permissions"))
        (when (and (eq tool 'eval) (not (eq eval-mode 'batch)))
          (error "Full sandbox escalation is available only to batch Eval"))
@@ -650,6 +655,31 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
   "Return normalized Bash analysis for COMMAND."
   (require 'mevedel-bash-analysis)
   (mevedel-bash-analysis-analyze command))
+
+(defun mevedel-tool-exec--bash-missing-resource-paths
+    (command permission-context request)
+  "Return COMMAND resources lacking authority under PERMISSION-CONTEXT.
+REQUEST may supply exact additive filesystem grants for this invocation."
+  (let* ((base (mevedel-tool-exec--default-directory))
+         (roots (or (plist-get permission-context :allowed-roots)
+                    (and-let* ((root (plist-get permission-context
+                                                :workspace-root)))
+                      (list root))
+                    (list base temporary-file-directory)))
+         (grants
+          (append
+           (plist-get permission-context :resource-grants)
+           (plist-get (plist-get request :additional-permissions)
+                      :file-system)))
+         missing)
+    (dolist (resource
+             (plist-get (mevedel-tool-exec--analyze-bash command) :resources))
+      (let ((path (expand-file-name resource base)))
+        (unless (or (mevedel-permission--path-in-allowed-roots-p path roots)
+                    (mevedel-permission--resource-granted-p
+                     path 'read grants))
+          (push path missing))))
+    (delete-dups (nreverse missing))))
 
 
 ;;
@@ -1764,17 +1794,45 @@ parity with the sync slot."
 TOOL-STRUCT and CONT follow the async permission slot contract."
   (condition-case err
       (let* ((request (mevedel-tool-exec--sandbox-request input 'bash))
+             (missing-resources
+              (unless (eq (plist-get request :level) 'escalated)
+                (mevedel-tool-exec--bash-missing-resource-paths
+                 (plist-get input :command)
+                 (plist-get input :permission-context)
+                 request)))
              (command-input
               (mevedel-tool-exec--command-permission-input
                input request)))
-        (if (eq (plist-get request :level) 'escalated)
-            (mevedel-tool-exec--check-full-escalation-async
-             "Bash" (plist-get input :command) input request cont)
+        (cond
+         ((eq (plist-get request :level) 'escalated)
+          (mevedel-tool-exec--check-full-escalation-async
+           "Bash" (plist-get input :command) input request cont))
+         (t
           (mevedel-tool-exec--check-command-permission-async
            tool-struct command-input
            (lambda (outcome)
-             (mevedel-tool-exec--check-additional-permission-async
-              "Bash" (plist-get input :command) input request outcome cont)))))
+             (cond
+              ((not (mevedel-tool-exec--permission-allow-p outcome))
+               (funcall cont outcome))
+              (missing-resources
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 (plist-get input :permission-decision-metadata)
+                 (cons
+                  'deny
+                  (format
+                   (concat
+                    "Filesystem authority required for Bash resource: %s. "
+                    "Retry with sandbox_permissions=\"with_additional_permissions\" "
+                    "and additional_permissions.file_system.read containing "
+                    "the exact absolute path.")
+                   (mapconcat #'identity missing-resources ", ")))
+                 'workspace-boundary)))
+              (t
+               (mevedel-tool-exec--check-additional-permission-async
+                "Bash" (plist-get input :command) input request outcome
+                cont))))))))
     (error
      (funcall
       cont

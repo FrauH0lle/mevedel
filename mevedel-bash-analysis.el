@@ -85,7 +85,8 @@ user authority may still permit a matching command."
   "Return non-nil when WORD is a literal path-like shell token."
   (and (not (string-prefix-p "-" word))
        (not (string-match-p "[$*?`{}]\\|\\[\\|\\]" word))
-       (or (string-prefix-p "/" word)
+       (or (member word '("." ".."))
+           (string-prefix-p "/" word)
            (string-prefix-p "./" word)
            (string-prefix-p "../" word)
            (string-prefix-p "~/" word)
