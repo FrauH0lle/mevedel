@@ -46,6 +46,10 @@ feedback was materially addressed. You may identify newly noticed material
 problems. Do not approve a flawed plan merely because the automatic revision
 limit is near.
 
+When the evidence says that zero automatic revisions remain, this is the final
+binary review. Return only `approve` or `ask`; never return `revise`. Use `ask`
+with the unresolved feedback when the plan still has a correctable problem.
+
 For revise feedback, state required outcomes. Suggest a method only when it is
 clearly safer or simpler. Do not dictate routine code structure or produce a
 replacement plan.
