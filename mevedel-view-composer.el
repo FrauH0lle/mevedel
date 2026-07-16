@@ -36,7 +36,7 @@
 (defvar mevedel--pending-model-input)
 
 ;; `mevedel-goal'
-(declare-function mevedel-goal-guardian-pending-p
+(declare-function mevedel-goal-approval-request-pending-p
                   "mevedel-goal" (&optional session))
 (declare-function mevedel-goal-start
                   "mevedel-goal"
@@ -1028,8 +1028,8 @@ means a failed attempt leaves the exact source attached for a retry."
   "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
     (or (mevedel-session-plan-queue sess)
-        (and (fboundp 'mevedel-goal-guardian-pending-p)
-             (mevedel-goal-guardian-pending-p sess)))))
+        (and (fboundp 'mevedel-goal-approval-request-pending-p)
+             (mevedel-goal-approval-request-pending-p sess)))))
 
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
@@ -1482,8 +1482,8 @@ fork."
       (if (or (buffer-local-value 'mevedel--current-request
                                   mevedel--data-buffer)
               (with-current-buffer mevedel--data-buffer
-                (and (fboundp 'mevedel-goal-guardian-pending-p)
-                     (mevedel-goal-guardian-pending-p
+                (and (fboundp 'mevedel-goal-approval-request-pending-p)
+                     (mevedel-goal-approval-request-pending-p
                       (and (bound-and-true-p mevedel--session)
                            mevedel--session)))))
           (if (and slash-parsed

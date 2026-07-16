@@ -28,11 +28,11 @@
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-goal'
+(declare-function mevedel-goal-approval-status
+                  "mevedel-goal" (&optional session))
+(declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
 (declare-function mevedel-plan-queue-abort-all
                   "mevedel-goal" (&optional session))
-
-;; `mevedel-goal'
-(declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -753,11 +753,16 @@ Kills the associated view buffer."
                     model-label))
            (goal (and session (mevedel-session-goal session)))
            (goal-phase (and goal (mevedel-goal-phase goal)))
-           (goal-workload (pcase goal-phase
-                            ('implementing 'implementation)
-                            ('reviewing 'review)
-                            ('awaiting-approval 'goal-guardian)
-                            (_ goal-phase)))
+           (approval-status
+            (and goal
+                 (mevedel-goal-approval-status session)))
+           (goal-workload
+            (or (plist-get approval-status :workload)
+                (pcase goal-phase
+                  ('implementing 'implementation)
+                  ('reviewing 'review)
+                  ('awaiting-approval 'goal-guardian)
+                  (_ goal-phase))))
            (cycle-record (and goal (mevedel-goal-cycle-record goal)))
            (actual (and goal-workload
                         (alist-get goal-workload
@@ -766,6 +771,13 @@ Kills the associated view buffer."
             (cond
              ((and goal (eq (mevedel-goal-status goal) 'complete))
               (format "complete · %s" model))
+             ((and approval-status actual)
+              (format "%s · %s/%s"
+                      (plist-get approval-status :label)
+                      (plist-get actual :provider)
+                      (or (plist-get actual :effort) "default")))
+             (approval-status
+              (format "%s · %s" (plist-get approval-status :label) model))
              (actual
               (format "%s · %s/%s"
                       goal-phase (plist-get actual :provider)
