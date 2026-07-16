@@ -292,6 +292,54 @@
       (should (eq (plist-get prepared :facts)
                   mevedel-sandbox--last-facts)))))
 
+(mevedel-deftest mevedel-sandbox-pending-facts ()
+  ,test
+  (test)
+  :doc "reports the selected confined boundary without mutating launch state"
+  (let ((mevedel-sandbox-mode 'auto)
+        (mevedel-sandbox--last-facts '(:sentinel t)))
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda () '(:available t :executable "/test/bwrap"))))
+      (should
+       (equal
+        '(:sandbox bubblewrap :filesystem workspace-write :network isolated)
+        (mevedel-sandbox-pending-facts)))
+      (should (equal '(:sentinel t) mevedel-sandbox--last-facts))))
+  :doc "reflects requested additive network authority"
+  (let ((mevedel-sandbox-mode 'required))
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda () '(:available t :executable "/test/bwrap"))))
+      (should
+       (eq 'unrestricted
+           (plist-get
+            (mevedel-sandbox-pending-facts '(:network t))
+            :network)))))
+  :doc "reports automatic unrestricted fallback when the backend is unavailable"
+  (let ((mevedel-sandbox-mode 'auto))
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda () '(:available nil :reason "probe failed"))))
+      (should
+       (equal
+        '(:sandbox unavailable :filesystem unrestricted
+          :network unrestricted :reason "probe failed")
+        (mevedel-sandbox-pending-facts)))))
+  :doc "reports required-mode refusal instead of an unrestricted execution"
+  (let ((mevedel-sandbox-mode 'required))
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda () '(:available nil :reason "probe failed"))))
+      (should
+       (equal
+        '(:sandbox refused :filesystem unavailable
+          :network unavailable :reason "probe failed")
+        (mevedel-sandbox-pending-facts)))))
+  :doc "reports explicit full escalation as unrestricted"
+  (let ((mevedel-sandbox-mode 'required))
+    (should
+     (equal
+      '(:sandbox escalated :filesystem unrestricted :network unrestricted
+        :reason "Full execution escalation requested")
+      (mevedel-sandbox-pending-facts nil 'require-escalated)))))
+
 (mevedel-deftest mevedel-sandbox--confined-preparation ()
   ,test
   (test)

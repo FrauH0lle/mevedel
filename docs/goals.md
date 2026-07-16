@@ -22,10 +22,13 @@ The lifecycle status is deliberately smaller than the phase state:
 - `blocked` means progress depends on user input or an external change.
 - `complete` means review found evidence that the whole objective is done.
 
-Planning and review are always read-only. The implementer cannot complete a
-Goal; only a structured review verdict can do that. A `continue` verdict carries
-review findings into a new planning cycle. Every accepted plan is copied from
-`current-plan.md` to an immutable cycle artifact before implementation.
+Planning and review are inspection phases: native edit tools are structurally
+denied, while Bash and Eval remain available through normal permission policy
+for inspection, tests, and builds. They are not OS-enforced read-only
+environments. The implementer cannot complete a Goal; only a structured review
+verdict can do that. A `continue` verdict carries review findings into a new
+planning cycle. Every accepted plan is copied from `current-plan.md` to an
+immutable cycle artifact before implementation.
 
 ## Commands and approval policy
 

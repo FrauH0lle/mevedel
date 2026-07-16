@@ -328,7 +328,8 @@
 
   :doc "read-only Goal phase denies mutation before protected-path prompting"
   (test-mevedel-permissions--with-goal-phase 'planning
-    (let ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+    (let ((tool (mevedel-tool--create
+                 :name "Edit" :read-only-p nil :groups '(edit)))
           (mevedel-permission-rules nil)
           (mevedel-protected-paths '(("**/.git/**" . read-only))))
       (let* ((context
@@ -439,7 +440,8 @@
   (test-mevedel-permissions--with-goal-phase 'reviewing
     (let ((mevedel-permission-rules nil)
           (mevedel-protected-paths '(("**/.git/**" . read-only)))
-          (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+          (mock-tool (mevedel-tool--create
+                      :name "Edit" :read-only-p nil :groups '(edit))))
       (should (eq (mevedel-check-permission "Edit"
                     :tool-struct mock-tool
                     :path "/repo/.git/config"
@@ -504,7 +506,8 @@
   (test-mevedel-permissions--with-goal-phase 'planning
     (let ((mevedel-permission-rules nil)
           (mevedel-protected-paths nil)
-          (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+          (mock-tool (mevedel-tool--create
+                      :name "Edit" :read-only-p nil :groups '(edit))))
       (should (eq (mevedel-check-permission "Edit"
                     :tool-struct mock-tool
                     :mode 'full-auto)
@@ -1802,11 +1805,12 @@ must restore the prior value to avoid cross-test pollution."
                  :session-rules
                  '(("Bash" :pattern "rm *" :action ask))))))
 
-  :doc "Goal planning denies mutation despite explicit allow buckets"
+  :doc "Goal planning routes Bash through normal policy despite mutation capability"
   (test-mevedel-permissions--with-goal-phase 'planning
     (let ((mevedel-permission-rules nil)
-          (bash (mevedel-tool--create :name "Bash" :read-only-p nil)))
-      (should (eq 'deny
+          (bash (mevedel-tool--create
+                 :name "Bash" :read-only-p nil :groups '(eval))))
+      (should (eq 'allow
                   (mevedel-check-permission
                    "Bash"
                    :tool-struct bash
@@ -1858,7 +1862,8 @@ must restore the prior value to avoid cross-test pollution."
          (child (file-name-concat root "file.el"))
          (mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
-         (mock-tool (mevedel-tool--create :name "Edit" :read-only-p nil)))
+         (mock-tool (mevedel-tool--create
+                     :name "Edit" :read-only-p nil :groups '(edit))))
     (unwind-protect
         (test-mevedel-permissions--with-goal-phase 'reviewing
           (should (eq 'deny
