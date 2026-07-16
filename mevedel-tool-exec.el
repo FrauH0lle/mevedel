@@ -25,6 +25,7 @@
 (defvar gptel-backend)
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
+(defvar gptel-stream)
 (defvar gptel-tools)
 (defvar gptel-use-context)
 (defvar gptel-use-tools)
@@ -78,6 +79,9 @@
 (declare-function mevedel-permission--execution-level-decision
                   "mevedel-permissions"
                   (buckets tool-name level pattern))
+(declare-function mevedel-permission--find-rules
+                  "mevedel-permissions"
+                  (rules tool-name &rest keys))
 (declare-function mevedel-permission--first-non-nil-action-with-bucket
                   "mevedel-permissions"
                   (buckets tool-name path pattern domain name))
@@ -708,7 +712,7 @@ normalized analysis and pending confinement facts, and CALLBACK accepts
 either nil or a plist:
 
   (:risk low|medium|high|critical
-   :recommendation allow-once|ask|deny
+   :recommendation proceed|ask|deny
    :reason \"short explanation\")
 
 The result never grants authority or changes deterministic Bash analysis.
@@ -1116,7 +1120,7 @@ authorize dangerous or complex syntax."
                   '(low medium high critical)))
            (recommendation (mevedel-tool-exec--bash-guardian-symbol
                             (plist-get guidance :recommendation)
-                            '(allow-once ask deny)))
+                            '(proceed ask deny)))
            (reason (plist-get guidance :reason)))
       (when (and risk recommendation (stringp reason)
                  (not (string-empty-p (string-trim reason))))
@@ -1178,8 +1182,14 @@ authorize dangerous or complex syntax."
                                     (and-let* ((commands (plist-get context :commands)))
                                       (string-join commands ", ")))))
             (format "Detected commands: %s" commands))
-          (when-let* ((patterns (plist-get context :allow-patterns)))
-            (format "Suggested allow patterns: %s"
+          (when-let* ((level (plist-get context :sandbox-permissions)))
+            (format "Requested sandbox permissions: %s" level))
+          (when-let* ((additional
+                       (plist-get context :additional-permissions)))
+            (format "Requested additional permissions: %S" additional))
+          (when-let* ((patterns
+                       (plist-get context :matching-allow-patterns)))
+            (format "Matching explicit allow patterns: %s"
                     (string-join patterns ", ")))
           (when-let* ((facts (plist-get context :sandbox-facts)))
             (require 'mevedel-sandbox)
@@ -1194,6 +1204,7 @@ guidance or nil."
   (if (not (require 'gptel nil t))
       (funcall callback nil)
     (let ((done nil)
+          chunks
           timer)
       (cl-labels
           ((finish (guidance)
@@ -1215,24 +1226,37 @@ guidance or nil."
                    (gptel-use-tools nil)
                    (gptel-tools nil)
                    (gptel-use-context nil)
-                   (prompt
+                   (system-prompt
                     (progn
                       (require 'mevedel-system)
                       (mevedel-system-render-prompt-file
-                       "prompts/permissions/bash-guardian.md"
-                       `(("COMMAND" . ,command)
-                         ("CONTEXT" . ,(mevedel-tool-exec--bash-guardian-context-string
-                                         context))))))
+                       "prompts/permissions/bash-guardian-system.md")))
+                   (prompt
+                    (format
+                     "Bash source:\n```bash\n%s\n```\n\nDeterministic analysis and confinement evidence:\n```text\n%s\n```"
+                     command
+                     (mevedel-tool-exec--bash-guardian-context-string
+                      context)))
                    (request-fn
                     (lambda ()
                       (gptel-request
                         prompt
                         :buffer (current-buffer)
-                        :stream nil
+                        :stream gptel-stream
+                        :system system-prompt
                         :transforms nil
                         :callback
-                        (lambda (response _info)
+                        (lambda (response info)
                           (cond
+                           ((and (consp response)
+                                 (eq (car response) 'reasoning)))
+                           ((and (plist-get info :stream)
+                                 (stringp response))
+                            (push response chunks))
+                           ((eq response t)
+                            (finish
+                             (mevedel-tool-exec--bash-guardian-parse
+                              (apply #'concat (nreverse chunks)))))
                            ((stringp response)
                             (finish
                              (mevedel-tool-exec--bash-guardian-parse response)))
@@ -1298,11 +1322,32 @@ suspicious Bash."
   "Return guardian context for COMMAND and PERMISSION-CONTEXT."
   (let* ((analysis (mevedel-tool-exec--analyze-bash command))
          (commands (mevedel-tool-exec--bash-command-names analysis))
+         (buckets (mevedel-tools--bash-buckets permission-context))
          (request (plist-get permission-context :sandbox-request))
          (additional-permissions
           (plist-get request :additional-permissions))
          (sandbox-permissions
-          (plist-get request :sandbox-permissions)))
+          (plist-get request :sandbox-permissions))
+         (rule-buckets
+          (if sandbox-permissions
+              (append
+               buckets
+               (mevedel-permission--execution-level-buckets
+                buckets sandbox-permissions))
+            buckets))
+         (matching-allow-patterns
+          (mevedel-tool-exec--dedupe-strings
+           (cl-loop
+            for (_bucket . rules) in rule-buckets
+            append
+            (cl-loop
+             for rule in
+             (mevedel-permission--find-rules
+              rules "Bash" :pattern command)
+             for pattern = (plist-get (cdr rule) :pattern)
+             when (and pattern
+                       (eq (plist-get (cdr rule) :action) 'allow))
+             collect pattern)))))
     (require 'mevedel-sandbox)
     (list :analysis analysis
           :class (plist-get analysis :class)
@@ -1314,6 +1359,9 @@ suspicious Bash."
           :resources (plist-get analysis :resources)
           :unparseable (eq (plist-get analysis :class) 'complex)
           :allow-patterns (mevedel-tool-exec--bash-allow-patterns command)
+          :matching-allow-patterns matching-allow-patterns
+          :additional-permissions additional-permissions
+          :sandbox-permissions sandbox-permissions
           :sandbox-facts
           (mevedel-sandbox-pending-facts
            additional-permissions sandbox-permissions))))
