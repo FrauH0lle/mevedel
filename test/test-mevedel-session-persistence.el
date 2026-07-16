@@ -595,6 +595,79 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (should (equal "test-id" (mevedel-workspace-id workspace)))))
       (when (file-directory-p root)
         (delete-directory root t))))
+  :doc "preserves automatic revision metadata and compact cycle audit evidence"
+  (let* ((input-hash (secure-hash 'sha256 "# Original"))
+         (replacement-hash (secure-hash 'sha256 "# Revised"))
+         (plan-metadata
+          `(:path "goals/g1/current-plan.md"
+            :hash ,replacement-hash
+            :status presented
+            :revision-count 1
+            :revision-pending nil
+            :guardian-pending t))
+         (goal
+          `(:id "g1" :objective "Ship" :status active
+            :phase awaiting-approval :approval-policy automatic
+            :owner-session "test-session"
+            :execution-home (:kind current :directory "/tmp/"
+                             :session-id "test-session" :locked t)
+            :implementation-context full
+            :cycle 1
+            :cycles
+            ((:cycle 1
+              :plan-revisions
+              ((:revision 1
+                :input-plan-hash ,input-hash
+                :replacement-plan-hash ,replacement-hash
+                :verdict revise
+                :reason "Add recovery coverage"
+                :feedback ("Cover restart")
+                :guardian-provider "guardian"
+                :guardian-effort high
+                :planner-provider "planner"
+                :planner-effort medium
+                :settlement-state settled
+                :started-at "2026-01-01T00:00:00Z"
+                :settled-at "2026-01-01T00:01:00Z"))))
+            :token-budget nil :token-usage 0
+            :continuation-key nil))
+         (result
+          (mevedel-session-persistence-deserialize
+           (test-mevedel-session-persistence--complete-sidecar
+            (list :plan-metadata plan-metadata :goal goal))))
+         (session (plist-get result :session))
+         (restored-goal (mevedel-session-goal session)))
+    (should (equal plan-metadata
+                   (mevedel-session-plan-metadata session)))
+    (should
+     (equal (plist-get (car (mevedel-goal-cycles restored-goal))
+                       :plan-revisions)
+            (plist-get (car (plist-get goal :cycles))
+                       :plan-revisions))))
+  :doc "round-tripped revision state does not share mutable records"
+  (let* ((records
+          '((:cycle 1 :plan-revisions
+             ((:revision 1 :settlement-state started)))))
+         (goal
+          (mevedel-session-persistence--goal-from-plist
+           `(:id "g1" :objective "Ship" :status active
+             :phase awaiting-approval :approval-policy automatic
+             :owner-session "test-session"
+             :execution-home (:kind current :directory "/tmp/"
+                              :session-id "test-session" :locked t)
+             :implementation-context full
+             :cycle 1 :cycles ,records
+             :token-budget nil :token-usage 0
+             :continuation-key nil))))
+    (setf (plist-get
+           (car (plist-get (car (mevedel-goal-cycles goal))
+                           :plan-revisions))
+           :settlement-state)
+          'failed)
+    (should
+     (eq 'started
+         (plist-get (car (plist-get (car records) :plan-revisions))
+                    :settlement-state))))
   :doc "persists and restores a blocked Goal reason through an on-disk sidecar"
   (let ((root (make-temp-file "mevedel-goal-sidecar-" t))
         (path (make-temp-file "mevedel-goal-sidecar-" nil ".el")))

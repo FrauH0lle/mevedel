@@ -41,6 +41,45 @@
           (mevedel-goal-implementation-context goal) 'full)
     goal))
 
+(defun test-mevedel-goal--revision-recovery-fixture
+    (plan records &rest options)
+  "Create a canonical recovery fixture for PLAN and revision RECORDS.
+OPTIONS accepts `:relative-path', `:revision', `:revision-count',
+`:revision-pending', `:guardian-pending', and `:checkpoint'.  Return root,
+session, and Goal."
+  (let* ((root (make-temp-file "mevedel-goal-revision-recovery-" t))
+         (goal
+          (mevedel-goal--create
+           :id "g1" :objective "Ship" :status 'paused
+           :phase 'awaiting-approval :approval-policy 'automatic
+           :cycle 1
+           :cycles `((:cycle 1 :plan-revisions ,records))
+           :checkpoint
+           (or (plist-get options :checkpoint)
+               '(:phase guardian :dispatch-state settled))))
+         (session
+          (mevedel-session-create
+           "main" (test-mevedel-goal--workspace root))))
+    (setq-local mevedel--session session)
+    (test-mevedel-goal--own goal session root)
+    (setf (mevedel-session-goal session) goal)
+    (mevedel-plan-write-current
+     plan session (current-buffer)
+     (or (plist-get options :relative-path)
+         (when-let* ((revision (plist-get options :revision)))
+           (mevedel-goal--revision-plan-relative-path goal revision))
+         (mevedel-goal--current-plan-relative-path goal)))
+    (mevedel-goal--plan-metadata-put
+     session :revision-count
+     (or (plist-get options :revision-count) 0))
+    (mevedel-goal--plan-metadata-put
+     session :revision-pending
+     (plist-get options :revision-pending))
+    (mevedel-goal--plan-metadata-put
+     session :guardian-pending
+     (plist-get options :guardian-pending))
+    (list :root root :session session :goal goal)))
+
 (defun test-mevedel-goal--fsm (buffer phase)
   "Return a minimal FSM for BUFFER and Goal PHASE."
   (let ((attempt-id
@@ -323,6 +362,90 @@ Each binding is (NAME KEYS)."
   (should (equal "goals/goal-42/current-plan.md"
                  (mevedel-goal--current-plan-relative-path
                   (mevedel-goal--create :id "goal-42")))))
+
+(mevedel-deftest mevedel-goal--revision-plan-relative-path ()
+  ,test
+  (test)
+  :doc "keeps revision candidates distinct until approval"
+  (should
+   (equal "goals/goal-42/cycle-007-revision-002-plan.md"
+          (mevedel-goal--revision-plan-relative-path
+           (mevedel-goal--create :id "goal-42" :cycle 7) 2))))
+
+(mevedel-deftest mevedel-goal--plan-revision-recovery-action ()
+  ,test
+  (test)
+  :doc "classifies only durable automatic revision boundaries"
+  (let* ((hash "replacement")
+         (settled
+          `(:revision 1 :input-plan-hash "input"
+            :replacement-plan-hash ,hash
+            :verdict revise :reason "Fix recovery"
+            :feedback ("Add restart coverage")
+            :guardian-provider "guardian" :guardian-effort high
+            :planner-provider "planner" :planner-effort medium
+            :settlement-state settled
+            :started-at "2026-01-01T00:00:00Z"
+            :settled-at "2026-01-01T00:01:00Z")))
+    (dolist
+        (case
+         `(((:revision-pending t) nil ,hash nil present-previous)
+           ((:hash ,hash) ,settled ,hash nil review-replacement)
+           ((:hash ,hash) ,settled ,hash (:verdict approve) nil)
+           ((:hash input)
+            (:revision 1 :input-plan-hash input
+             :settlement-state started)
+            input nil present-previous)
+           ((:hash input)
+            (:revision 1 :input-plan-hash input
+             :settlement-state failed)
+            input nil present-previous)
+           ((:hash other)
+            (:revision 1 :input-plan-hash "input"
+             :replacement-plan-hash ,hash :settlement-state settled)
+            ,hash nil nil)))
+      (pcase-let ((`(,metadata ,record ,plan-hash ,audit ,expected)
+                   case))
+        (should
+         (eq expected
+             (mevedel-goal--plan-revision-recovery-action
+              metadata record plan-hash audit)))))
+    (let ((nil-effort (copy-sequence settled)))
+      (setq nil-effort (plist-put nil-effort :guardian-effort nil))
+      (setq nil-effort (plist-put nil-effort :planner-effort nil))
+      (should
+       (eq 'review-replacement
+           (mevedel-goal--plan-revision-recovery-action
+            `(:hash ,hash) nil-effort hash nil))))))
+
+(mevedel-deftest mevedel-goal--complete-plan-revision-record-p ()
+  ,test
+  (test)
+  :doc "requires every promised field before recovery trusts settlement"
+  (let ((record
+         '(:revision 1
+           :input-plan-hash "input"
+           :replacement-plan-hash "replacement"
+           :verdict revise
+           :reason "Fix recovery"
+           :feedback ("Add restart coverage")
+           :guardian-provider "guardian"
+           :guardian-effort high
+           :planner-provider "planner"
+           :planner-effort medium
+           :settlement-state settled
+           :started-at "2026-01-01T00:00:00Z"
+           :settled-at "2026-01-01T00:01:00Z")))
+    (should (mevedel-goal--complete-plan-revision-record-p record))
+    (dolist (key '(:input-plan-hash :verdict :feedback
+                   :guardian-provider :guardian-effort
+                   :planner-provider :planner-effort :settled-at))
+      (let ((incomplete
+             (cl-loop for (record-key value) on record by #'cddr
+                      unless (eq record-key key)
+                      append (list record-key value))))
+        (should-not
+         (mevedel-goal--complete-plan-revision-record-p incomplete))))))
 
 (mevedel-deftest mevedel-goal--cycle-plan-relative-path ()
   ,test
@@ -1008,6 +1131,161 @@ Each binding is (NAME KEYS)."
             (should (= 1 (length (mevedel-session-plan-queue session))))
             (should (eq 'active (mevedel-goal-status goal)))))
       (delete-directory root t)))
+  :doc "presents the previous plan when a planner revision was interrupted"
+  (let* ((input "# Original")
+         (input-hash (mevedel-plan-hash input))
+         (records
+          `((:revision 1
+             :input-plan-hash ,input-hash
+             :verdict revise
+             :reason "Recovery coverage is missing"
+             :feedback ("Add restart coverage")
+             :settlement-state started
+             :started-at "2026-01-01T00:00:00Z")))
+         presented root)
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((fixture
+                  (test-mevedel-goal--revision-recovery-fixture
+                   input records))
+                 (session (plist-get fixture :session))
+                 (goal (plist-get fixture :goal))
+                 (partial-path
+                 (file-name-concat
+                  (mevedel-session-save-path session)
+                  (mevedel-goal--revision-plan-relative-path goal 1))))
+            (setq root (plist-get fixture :root))
+            (make-directory (file-name-directory partial-path) t)
+            (write-region "# Partial replacement" nil partial-path
+                          nil 'silent)
+            (cl-letf
+                (((symbol-function 'mevedel-goal--guard-current-plan)
+                  (lambda (&rest _) (error "Must not re-review")))
+                 ((symbol-function 'mevedel-goal-present-plan)
+                  (lambda (plan _buffer reason)
+                    (setq presented (list plan reason)))))
+              (mevedel-goal-resume))
+            (should (equal input (car presented)))
+            (should (string-match-p "Add restart coverage"
+                                    (cadr presented)))
+            (should (string-match-p "interrupted before"
+                                    (cadr presented)))
+            (should-not
+             (plist-get (mevedel-session-plan-metadata session)
+                        :revision-pending))
+            (should (= 0
+                       (plist-get (mevedel-session-plan-metadata session)
+                                  :revision-count)))
+            (should
+             (eq 'failed
+                 (plist-get
+                  (car
+                   (plist-get (mevedel-goal-cycle-record goal)
+                              :plan-revisions))
+                  :settlement-state)))))
+      (when root (delete-directory root t))))
+  :doc "re-reviews a replacement that reached durable storage before interruption"
+  (let* ((input "# Original")
+         (replacement "# Revised")
+         (input-hash (mevedel-plan-hash input))
+         (replacement-hash (mevedel-plan-hash replacement))
+         (records
+          `((:revision 1
+             :input-plan-hash ,input-hash
+             :verdict revise
+             :reason "Recovery coverage is missing"
+             :feedback ("Add restart coverage")
+             :replacement-plan-hash ,replacement-hash
+             :guardian-provider "guardian"
+             :guardian-effort high
+             :planner-provider "planner"
+             :planner-effort medium
+             :settlement-state settled
+             :started-at "2026-01-01T00:00:00Z"
+             :settled-at "2026-01-01T00:01:00Z")))
+         guarded root)
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((fixture
+                  (test-mevedel-goal--revision-recovery-fixture
+                   replacement records
+                   :revision 1))
+                 (session (plist-get fixture :session))
+                 (goal (plist-get fixture :goal)))
+            (setq root (plist-get fixture :root))
+            (cl-letf
+                (((symbol-function 'mevedel-goal--guard-current-plan)
+                  (lambda (_goal _buffer)
+                    (setq guarded
+                          (mevedel-plan-current-body session))))
+                 ((symbol-function 'mevedel-goal-present-plan)
+                  (lambda (&rest _) (error "Must not present"))))
+              (mevedel-goal-resume))
+            (should (equal replacement guarded))
+            (should (= 1
+                       (plist-get (mevedel-session-plan-metadata session)
+                                  :revision-count)))
+            (let ((record
+                   (car
+                    (plist-get (mevedel-goal-cycle-record goal)
+                               :plan-revisions))))
+              (should (eq 'settled
+                          (plist-get record :settlement-state)))
+              (should (equal replacement-hash
+                             (plist-get record :replacement-plan-hash)))
+              (should (equal "planner"
+                             (plist-get record :planner-provider)))
+              (should (eq 'medium
+                          (plist-get record :planner-effort)))
+              (should (equal "2026-01-01T00:01:00Z"
+                             (plist-get record :settled-at))))))
+      (when root (delete-directory root t))))
+  :doc "restarts only the final guardian review with the revision ceiling intact"
+  (let* ((replacement "# Revised 2")
+         (replacement-hash (mevedel-plan-hash replacement))
+         (records
+          `((:revision 1 :replacement-plan-hash "revision-1"
+             :settlement-state settled)
+            (:revision 2
+             :input-plan-hash "revision-1"
+             :replacement-plan-hash ,replacement-hash
+             :verdict revise
+             :reason "Final recovery check"
+             :feedback ("Review the final candidate")
+             :guardian-provider "guardian-2"
+             :guardian-effort high
+             :planner-provider "planner-2"
+             :planner-effort medium
+             :settlement-state settled
+             :started-at "2026-01-01T00:02:00Z"
+             :settled-at "2026-01-01T00:03:00Z")))
+         (guard-count 0)
+         root)
+    (unwind-protect
+        (with-temp-buffer
+          (let* ((fixture
+                  (test-mevedel-goal--revision-recovery-fixture
+                   replacement records
+                   :revision-count 2
+                   :guardian-pending t
+                   :checkpoint
+                   '(:phase guardian :dispatch-state started)))
+                 (session (plist-get fixture :session)))
+            (setq root (plist-get fixture :root))
+            (let ((mevedel-goal-planner-revision-function
+                   (lambda (&rest _)
+                     (error "Must not start a third revision"))))
+              (cl-letf
+                  (((symbol-function 'mevedel-goal--guard-current-plan)
+                    (lambda (&rest _) (cl-incf guard-count)))
+                   ((symbol-function 'mevedel-goal-present-plan)
+                    (lambda (&rest _) (error "Must not present"))))
+                (mevedel-goal-resume)))
+            (should (= 1 guard-count))
+            (should (= 2
+                       (plist-get (mevedel-session-plan-metadata session)
+                                  :revision-count)))))
+      (when root (delete-directory root t))))
   :doc "blocked resume replans with the blocker and new input"
   (let* ((root (make-temp-file "mevedel-goal-resume-blocked-" t))
          (goal (mevedel-goal--create
