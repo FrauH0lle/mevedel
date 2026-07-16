@@ -13,6 +13,8 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 - Commands run from the session working directory by default
 - Commands run with filesystem and process confinement and without network by
   default when the platform sandbox is available
+- Permission fields apply only to their invocation. Start each new command with
+  the default sandbox; never copy an earlier call's additional permissions
 - Commands time out by default; use `timeout_seconds` for commands that need a
   longer positive timeout
 - Quote file paths with spaces using double quotes

@@ -123,6 +123,17 @@
 `mevedel-tool-exec--sandbox-request' normalizes omitted authority"
   (should (equal '(:level use-default :additional-permissions nil)
                  (mevedel-tool-exec--sandbox-request nil 'bash)))
+  :doc "provider-shaped default request:
+empty optional capabilities and an unused justification do not request authority"
+  (should
+   (equal
+    '(:level use-default :additional-permissions nil)
+    (mevedel-tool-exec--sandbox-request
+     '(:sandbox_permissions "use_default"
+       :additional_permissions
+       (:network :json-false :file_system (:read [] :write []))
+       :justification "Run the requested read-only workspace inspection.")
+     'bash)))
   :doc "network request:
 `mevedel-tool-exec--sandbox-request' accepts a justified non-empty profile"
   (should
@@ -220,6 +231,19 @@ full authority requires a justification and no additive profile"
            '(:sandbox_permissions "require_escalated"
              :justification "  Run without confinement?  ")
            'bash)))
+  :doc "provider-shaped full escalation:
+an empty optional capability object does not conflict with full authority"
+  (should
+   (eq
+    'escalated
+    (plist-get
+     (mevedel-tool-exec--sandbox-request
+      '(:sandbox_permissions "require_escalated"
+        :additional_permissions
+        (:network :json-false :file_system (:read [] :write []))
+        :justification "Run without confinement?")
+      'bash)
+     :level)))
   :doc "full batch Eval escalation:
 batch Eval may request full authority"
   (should
@@ -1245,6 +1269,33 @@ the decision log identifies complete confinement bypass authority"
 ;;
 ;;; Permission adapter
 
+(mevedel-deftest mevedel-tool-exec--bash-missing-resource-paths ()
+  ,test
+  (test)
+  :doc "requires exact authority only for resources outside allowed roots"
+  (let* ((parent (make-temp-file "mevedel-bash-resource-paths-" t))
+         (root (file-name-concat parent "workspace"))
+         (default-directory (file-name-as-directory root))
+         (context `(:allowed-roots (,root) :resource-grants nil))
+         (parent-path (directory-file-name parent)))
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (should-not
+           (mevedel-tool-exec--bash-missing-resource-paths
+            "rg TODO ." context '(:level use-default)))
+          (should
+           (equal (list parent-path)
+                  (mevedel-tool-exec--bash-missing-resource-paths
+                   "rg TODO .." context '(:level use-default))))
+          (should-not
+           (mevedel-tool-exec--bash-missing-resource-paths
+            "rg TODO .." context
+            `(:level additive
+              :additional-permissions
+              (:file-system ((:path ,parent-path :access read)))))))
+      (delete-directory parent t))))
+
 (mevedel-deftest mevedel-tool-exec--check-permission-async ()
   ,test
   (test)
@@ -1256,6 +1307,42 @@ the decision log identifies complete confinement bypass authority"
     (mevedel-tool-exec--check-permission-async
      nil '(:command "echo hello") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
+  :doc "outside-root resource:
+default Bash requests exact additive read authority before parent traversal"
+  (let* ((parent (make-temp-file "mevedel-bash-boundary-" t))
+         (root (file-name-concat parent "workspace"))
+         (default-directory (file-name-as-directory root))
+         (mevedel-permission-rules nil)
+         outcome)
+    (unwind-protect
+        (progn
+          (make-directory root)
+          (mevedel-tool-exec--check-permission-async
+           nil
+           `(:command "rg -n TODO .."
+             :permission-context
+             (:mode ask :allowed-roots (,root) :resource-grants nil))
+           (lambda (result) (setq outcome result)))
+          (should (eq 'deny (car-safe outcome)))
+          (should (string-match-p "additional_permissions.file_system.read"
+                                  (cdr outcome))))
+      (delete-directory parent t)))
+  :doc "inside-root resource:
+default Bash keeps bare dot inspection automatic"
+  (let* ((root (make-temp-file "mevedel-bash-boundary-" t))
+         (default-directory (file-name-as-directory root))
+         (mevedel-permission-rules nil)
+         outcome)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--check-permission-async
+           nil
+           `(:command "rg -n TODO ."
+             :permission-context
+             (:mode ask :allowed-roots (,root) :resource-grants nil))
+           (lambda (result) (setq outcome result)))
+          (should (eq 'allow outcome)))
+      (delete-directory root t)))
   :doc "returns nil when input has no command"
   (let (outcome)
     (mevedel-tool-exec--check-permission-async

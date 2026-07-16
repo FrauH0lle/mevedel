@@ -86,6 +86,8 @@
                   "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
                   "mevedel-transcript" (pos))
+(declare-function mevedel-transcript--tool-id-in-range
+                  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript--tool-block-bounds-for-run
                   "mevedel-transcript" (seg-start seg-end &optional limit))
 (declare-function mevedel-transcript-segments
@@ -3680,8 +3682,11 @@ are merged into a single summary."
   (and (eq (car left) 'tool)
        (eq (car right) 'tool)
        (with-current-buffer data-buf
-         (equal (get-text-property (cadr left) 'gptel)
-                (get-text-property (cadr right) 'gptel)))))
+         (let ((left-id (mevedel-transcript--tool-id-in-range
+                         (cadr left) (caddr left)))
+               (right-id (mevedel-transcript--tool-id-in-range
+                          (cadr right) (caddr right))))
+           (and left-id right-id (equal left-id right-id))))))
 
 (defun mevedel-view--merge-tool-hook-audit-segments (segments data-buf)
   "Merge hook audit side-channel SEGMENTS into adjacent tool segments."

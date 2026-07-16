@@ -32,6 +32,15 @@
       (should (equal 'heuristic (plist-get analysis :parser)))
       (should (equal '("./README.md") (plist-get analysis :resources)))
       (should (consp (plist-get analysis :reasons)))))
+  :doc "bare directory resources:
+`mevedel-bash-analysis-analyze' preserves current and parent directory operands"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (should
+     (equal '("." "..")
+            (plist-get
+             (mevedel-bash-analysis-analyze "rg TODO . && rg TODO ..")
+             :resources))))
   :doc "unknown command:
 `mevedel-bash-analysis-analyze' classifies an understood command conservatively"
   (cl-letf (((symbol-function 'treesit-language-available-p)

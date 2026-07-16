@@ -260,6 +260,15 @@ resolved independently and is never supplied by the resource grant. Explicit
 path denies remain final. Network and filesystem additions may be combined
 without changing any unrequested confinement boundary.
 
+Before Bash executes, identified literal resources are resolved against the
+working directory. Resources outside the allowed roots require an exact
+additive grant; bare `.` and `..` operands participate in this check. Command
+authorization is resolved first so an explicit command deny retains precedence.
+Provider-shaped empty optional fields, such as disabled network plus empty
+filesystem lists, are treated as omitted rather than as an authority request.
+Non-empty additions still require `with_additional_permissions` and a
+justification.
+
 `require_escalated` is a separate complete bypass for Bash and batch Eval. It
 requires a justification and cannot be combined with additive permissions. It
 prompts in every permission mode, including `full-auto`, unless a matching
