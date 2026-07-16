@@ -2240,6 +2240,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
     (setf (mevedel-session-plan-queue session) nil
           (mevedel-session-plan-metadata session) '(:guardian-pending t))
     (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+    (setf (mevedel-session-plan-metadata session) '(:revision-pending t))
+    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
     (setf (mevedel-session-plan-metadata session) nil)
     (should-not
      (mevedel-view--queued-user-message-auto-drain-blocked-p session))))
@@ -2571,6 +2573,35 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (mevedel-view-send)))
       (should-not send-called)
       (should (equal "stop before implementing"
+                     (plist-get
+                      (car (mevedel-session-queued-user-messages session))
+                      :input)))))
+
+  :doc "plain input during planner revision joins the intervention queue"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-revision" :root "/tmp/vq" :name "vq"
+                :file-cache (mevedel-file-cache--create
+                             :table (make-hash-table :test #'equal)
+                             :order nil :total-bytes 0)))
+           (session (mevedel-session-create "main" ws))
+           send-called)
+      (setf (mevedel-session-plan-metadata session)
+            '(:revision-pending t))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--current-request nil))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq send-called t)))
+                ((symbol-function
+                  'mevedel-view--schedule-late-queued-user-message-drain)
+                 #'ignore))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "change the approach")
+          (mevedel-view-send)))
+      (should-not send-called)
+      (should (equal "change the approach"
                      (plist-get
                       (car (mevedel-session-queued-user-messages session))
                       :input)))))

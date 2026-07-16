@@ -225,6 +225,33 @@
             (should (text-property-any
                      0 (length line) 'mevedel-view-cockpit-area area line)))))))
 
+  :doc "status strip distinguishes planner revisions from guardian re-reviews"
+  (mevedel-view-test--with-buffers
+    (let* ((goal
+            (mevedel-goal--create
+             :status 'active :phase 'awaiting-approval :cycle 1
+             :cycles
+             '((:cycle 1 :providers
+                ((planning :provider "Planner:model" :effort high)
+                 (goal-guardian :provider "Guardian:model" :effort low))))))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setf (mevedel-session-plan-metadata session)
+              '(:revision-count 0 :revision-pending t))
+        (should
+         (string-match-p
+          (regexp-quote "revising plan 1/2 · Planner:model/high")
+          (mevedel-view--status-strip)))
+        (setf (mevedel-session-plan-metadata session)
+              '(:revision-count 1 :guardian-pending t))
+        (should
+         (string-match-p
+          (regexp-quote
+           "guardian reviewing revision 1/2 · Guardian:model/low")
+          (mevedel-view--status-strip))))))
+
   :doc "status strip shows completion and the restored session model"
   (mevedel-view-test--with-buffers
     (let* ((goal (mevedel-goal--create
@@ -335,26 +362,40 @@
 
   :doc "unrestricted fallback stays visible without changing a multiline draft"
   (mevedel-view-test--with-buffers
-    (with-current-buffer view-buf
-      (goto-char (mevedel-view--input-start))
-      (insert ">first line\nsecond line")
-      (let ((draft (buffer-substring-no-properties
-                    (mevedel-view--input-start) (point-max))))
-        (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
-                   (lambda (&rest _)
-                     '(:sandbox unavailable
-                       :filesystem unrestricted
-                       :network unrestricted
-                       :reason "Bubblewrap is not supported")))
-                  ((symbol-function 'mevedel-view-agent-status-fragment)
-                   #'ignore))
-          (mevedel-view--render-status data-buf)
-          (should (equal draft
-                         (buffer-substring-no-properties
-                          (mevedel-view--input-start) (point-max))))
-          (should (string-match-p
-                   "sandbox: unavailable; filesystem: unrestricted; network: unrestricted"
-                   (buffer-substring-no-properties (point-min) (point-max)))))))))
+    (let* ((goal
+            (mevedel-goal--create
+             :status 'active :phase 'awaiting-approval :cycle 1
+             :cycles '((:cycle 1))))
+           (session (mevedel-session--create :name "main" :goal goal)))
+      (setf (mevedel-session-plan-metadata session)
+            '(:revision-count 1 :guardian-pending t))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert ">first line\nsecond line")
+        (let ((draft (buffer-substring-no-properties
+                      (mevedel-view--input-start) (point-max))))
+          (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+                     (lambda (&rest _)
+                       '(:sandbox unavailable
+                         :filesystem unrestricted
+                         :network unrestricted
+                         :reason "Bubblewrap is not supported")))
+                    ((symbol-function 'mevedel-view-agent-status-fragment)
+                     #'ignore))
+            (mevedel-view--render-status data-buf)
+            (should (equal draft
+                           (buffer-substring-no-properties
+                            (mevedel-view--input-start) (point-max))))
+            (should
+             (string-match-p
+              "guardian reviewing revision 1/2"
+              (mevedel-view--status-strip)))
+            (should (string-match-p
+                     "sandbox: unavailable; filesystem: unrestricted; network: unrestricted"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))))))))
 
 (mevedel-deftest mevedel-view--sandbox-state-changed ()
   ,test
