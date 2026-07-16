@@ -225,6 +225,76 @@ Each binding is (NAME KEYS)."
                              start (match-end 0)))
                      count))))))
 
+(mevedel-deftest mevedel-goal--planning-prompt ()
+  ,test
+  (test)
+  :doc "prioritizes outcomes and gives flexible structured plan guidance"
+  (let* ((session (mevedel-session--create :save-path "/tmp/session/"))
+         (mevedel--session session)
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship with observable success criteria"
+                :status 'active :phase 'planning :cycle 1))
+         (prompt (mevedel-goal--planning-prompt goal)))
+    (dolist (needle
+             '("Goal objective and achievement criteria"
+               "authoritative referenced requirements"
+               "accepted plan is an implementation approach"
+               "## Goal"
+               "## Achievement Criteria"
+               "## Approach"
+               "## Regression Coverage"
+               "## Validation"
+               "## Assumptions"
+               "inapplicable sections"
+               "authoritative PRD, specification, or ticket"
+               "exactly one line-oriented <proposed_plan>"))
+      (should (string-match-p (regexp-quote needle) prompt)))
+    (should-not (string-match-p "decision-complete" prompt))))
+
+(mevedel-deftest mevedel-goal--feedback-draft-text ()
+  ,test
+  (test)
+  :doc "uses the same outcome-first structure for user-requested revision"
+  (let ((draft
+         (mevedel-goal--feedback-draft-text
+          "/tmp/current-plan.md" "Cover the failure path")))
+    (dolist (needle
+             '("Cover the failure path"
+               "Goal objective and achievement criteria"
+               "authoritative referenced requirements"
+               "## Goal"
+               "## Achievement Criteria"
+               "## Approach"
+               "## Regression Coverage"
+               "## Validation"
+               "## Assumptions"
+               "inapplicable sections"
+               "authoritative PRD, specification, or ticket"
+               "one full replacement <proposed_plan>"
+               "/tmp/current-plan.md"))
+      (should (string-match-p (regexp-quote needle) draft)))
+    (should-not (string-match-p "decision-complete" draft))))
+
+(mevedel-deftest mevedel-goal--review-prompt ()
+  ,test
+  (test)
+  :doc "reviews Goal achievement rather than literal plan completion"
+  (let* ((session (mevedel-session--create :save-path "/tmp/session/"))
+         (mevedel--session session)
+         (goal (mevedel-goal--create
+                :id "g1" :objective "Ship with observable success criteria"
+                :status 'active :phase 'reviewing :cycle 1))
+         (prompt (mevedel-goal--review-prompt goal)))
+    (dolist (needle
+             '("Goal objective and achievement criteria"
+               "authoritative referenced requirements"
+               "accepted plan as an implementation approach"
+               "observable evidence"
+               "Completing every plan step is insufficient"
+               "Reasonable divergence from plan details is acceptable"
+               "verdict: complete|continue|blocked"))
+      (should (string-match-p (regexp-quote needle) prompt)))))
+
 (mevedel-deftest mevedel-goal--enqueue-event-reminder ()
   ,test
   (test)

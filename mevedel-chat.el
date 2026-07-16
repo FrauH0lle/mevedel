@@ -1488,7 +1488,7 @@ without prior conversation context."
                          (insert-file-contents plan-file)
                          (buffer-string)))
          (prompt
-          (format "%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state:\n\n%s"
+          (format "%s\n\nImplementation instructions:\nThe Goal objective and achievement criteria are authoritative, followed by authoritative referenced requirements. The accepted plan is an implementation approach. Implement it against the current repository state while preserving those outcomes. Reasonable divergence from plan details is allowed when repository evidence supports a safer or more effective route, but do not change the Goal, its criteria, or referenced requirements.\n\nAccepted plan:\n%s"
                   goal-context plan-content)))
     (with-current-buffer chat-buffer
       (condition-case err

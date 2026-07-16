@@ -176,6 +176,34 @@ Nil means no budget.  Presets may set this buffer-locally."
 
 (make-variable-buffer-local 'mevedel-goal-token-budget)
 
+(defconst mevedel-goal--plan-guidance
+  "Treat the Goal objective and achievement criteria as the completion contract, followed by authoritative referenced requirements. The accepted plan is an implementation approach, not a competing completion contract. Investigate the current repository state and propose a concise outcome-first plan.
+
+Use this structure when applicable:
+
+## Goal
+- State the desired outcome and important non-goals.
+
+## Achievement Criteria
+- List observable conditions that prove the Goal is achieved.
+- Reference an authoritative PRD, specification, or ticket when it provides the criteria.
+
+## Approach
+- Describe the intended method by subsystem or behavior.
+- Include implementation details only when needed to resolve ambiguity, material risk, public interfaces, data shape, or architecture.
+
+## Regression Coverage
+- List user-visible flows, edge cases, failure scenarios, and intentionally unchanged behavior that tests should cover.
+
+## Validation
+- List exact focused test/build commands and other evidence to collect.
+
+## Assumptions
+- Record defaults, constraints, compatibility expectations, and unresolved inferences.
+
+Ordinary plans should use the full structure, but omit genuinely inapplicable sections. A concise plan may delegate detail to a clear authoritative PRD, specification, or ticket reference without repeating it."
+  "Outcome-first guidance shared by initial and user-requested Goal planning.")
+
 (defcustom mevedel-goal-execution-home 'current
   "Execution home selected for a newly started Goal.
 `current' uses the current session checkout.  `worktree' creates one Goal-owned
@@ -627,16 +655,17 @@ is non-nil, label the fragment as a compaction-time snapshot instead."
 (defun mevedel-goal--planning-prompt (goal)
   "Return the planning request for GOAL."
   (format
-   "%s\n\nPlanning instructions:\n%sInvestigate the current repository state and propose the next decision-complete implementation plan. This phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
+   "%s\n\nPlanning instructions:\n%s%s\n\nThis phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
    (mevedel-goal-context-fragment goal mevedel--session)
    (if-let* ((findings (mevedel-goal-review-findings goal)))
        (format "Prior review findings to resolve:\n%s\n\n" findings)
-     "")))
+     "")
+   mevedel-goal--plan-guidance))
 
 (defun mevedel-goal--review-prompt (goal)
   "Return the one-cycle completion review request for GOAL."
   (format
-   "%s\n\nReview instructions:\nReview the implementation against the whole objective and current repository evidence. This phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole objective is proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
+   "%s\n\nReview instructions:\nReview the implementation against current repository evidence using this authority order: Goal objective and achievement criteria, authoritative referenced requirements, then the accepted plan as an implementation approach. Require observable evidence that the desired outcome is achieved. Completing every plan step is insufficient when the Goal remains unmet. Reasonable divergence from plan details is acceptable when the authoritative outcomes are proven.\n\nThis phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole Goal and its achievement criteria are proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
    (mevedel-goal-context-fragment goal mevedel--session)))
 
 (defun mevedel-goal--recovery-prompt (goal checkpoint)
@@ -1482,8 +1511,9 @@ HOME-MUTABLE-P means the first approval may still select another home."
   "Return editable Plan feedback draft text referencing PLAN-PATH.
 When FEEDBACK is non-nil, prefill it in the feedback section."
   (format
-   "Plan feedback:\n\n%s\n\nRevise the proposed plan to address the feedback. Treat the current plan artifact as reference-only: read it if needed, but do not edit it. When the revised plan is decision-complete, emit exactly one full replacement <proposed_plan> block.\n\nCurrent plan artifact: %s"
+   "Plan feedback:\n\n%s\n\nRevise the proposed plan to address the feedback. Treat the current plan artifact as reference-only: read it if needed, but do not edit it.\n\n%s\n\nEmit exactly one full replacement <proposed_plan> block.\n\nCurrent plan artifact: %s"
    (or feedback "")
+   mevedel-goal--plan-guidance
    (or plan-path "latest plan artifact")))
 
 (defun mevedel-goal--insert-feedback-draft
