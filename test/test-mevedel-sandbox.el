@@ -388,20 +388,39 @@
 (mevedel-deftest mevedel-sandbox-visible-facts ()
   ,test
   (test)
-  :doc "uses the active invocation boundary before the selected default"
+  :doc "conservatively combines active boundaries until every child settles"
   (let ((mevedel-sandbox--active-boundaries
          (make-hash-table :test #'eq))
         (mevedel-sandbox-state-change-hook nil)
         (session (list :session))
-        (token (gensym "active-"))
-        (default '(:sandbox bubblewrap :network isolated))
-        (active '(:sandbox escalated :network unrestricted)))
+        (escalated-token (gensym "escalated-"))
+        (confined-token (gensym "confined-"))
+        (default '(:sandbox bubblewrap
+                   :filesystem workspace-write
+                   :network isolated))
+        (escalated '(:sandbox escalated
+                     :filesystem unrestricted
+                     :network unrestricted))
+        (confined '(:sandbox bubblewrap
+                    :filesystem workspace-write
+                    :network isolated
+                    :additional-filesystem 2
+                    :additional-filesystem-read 1
+                    :additional-filesystem-write 1)))
     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
                (lambda (&rest _) default)))
       (should (eq default (mevedel-sandbox-visible-facts session)))
-      (mevedel-sandbox-track-active session token active)
-      (should (eq active (mevedel-sandbox-visible-facts session)))
-      (mevedel-sandbox-track-active session token nil)
+      (mevedel-sandbox-track-active session escalated-token escalated)
+      (mevedel-sandbox-track-active session confined-token confined)
+      (let ((visible (mevedel-sandbox-visible-facts session)))
+        (should (eq 'escalated (plist-get visible :sandbox)))
+        (should (eq 'unrestricted (plist-get visible :filesystem)))
+        (should (eq 'unrestricted (plist-get visible :network)))
+        (should (= 1 (plist-get visible :additional-filesystem-read)))
+        (should (= 1 (plist-get visible :additional-filesystem-write))))
+      (mevedel-sandbox-track-active session escalated-token nil)
+      (should (equal confined (mevedel-sandbox-visible-facts session)))
+      (mevedel-sandbox-track-active session confined-token nil)
       (should (eq default (mevedel-sandbox-visible-facts session))))))
 
 (mevedel-deftest mevedel-sandbox--confined-preparation ()
@@ -564,7 +583,11 @@ exact read and write mounts follow protected masks without broadening siblings"
             (should-not (member sibling command))
             (should (member "--unshare-net" command))
             (should (= 2 (plist-get (plist-get prepared :facts)
-                                    :additional-filesystem)))))
+                                    :additional-filesystem)))
+            (should (= 1 (plist-get (plist-get prepared :facts)
+                                    :additional-filesystem-read)))
+            (should (= 1 (plist-get (plist-get prepared :facts)
+                                    :additional-filesystem-write)))))
       (mevedel-sandbox-cleanup prepared)
       (delete-directory root t)))
   :doc "required backend:
@@ -924,6 +947,15 @@ the named protected files reopen while parent and sibling restrictions remain"
     (mevedel-sandbox-status-text
      '(:sandbox bubblewrap :filesystem workspace-write :network isolated))
     "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"))
+  :doc "additive filesystem status:
+`mevedel-sandbox-status-text' reports active read and write grant counts"
+  (should
+   (equal
+    (mevedel-sandbox-status-text
+     '(:sandbox bubblewrap :filesystem workspace-write :network isolated
+       :additional-filesystem-read 2 :additional-filesystem-write 1))
+    (concat "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
+            "; additional filesystem: 2 read, 1 write")))
   :doc "unrestricted status:
 `mevedel-sandbox-status-text' includes the persistent fallback reason"
   (should

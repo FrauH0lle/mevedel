@@ -430,8 +430,8 @@ requested process starts."
 (defun mevedel-sandbox-track-active (session token facts)
   "Set TOKEN's active boundary FACTS for SESSION, or remove it when nil.
 
-The newest or most recently updated token is the visible boundary when a
-session has concurrent child invocations.  Return TOKEN."
+Newer entries are stored first; visibility remains conservative when a session
+has concurrent child invocations.  Return TOKEN."
   (when session
     (let ((entries
            (assq-delete-all
@@ -453,10 +453,48 @@ session has concurrent child invocations.  Return TOKEN."
   token)
 
 (defun mevedel-sandbox-visible-facts (&optional session)
-  "Return SESSION's active child facts or its selected default boundary."
-  (or (cdr (car (and session
-                     (gethash session mevedel-sandbox--active-boundaries))))
-      (mevedel-sandbox-pending-facts)))
+  "Return a conservative summary of SESSION's active facts or its default."
+  (let (visible visible-score unrestricted-filesystem unrestricted-network
+                additional-read additional-write)
+    (dolist (entry (and session
+                        (gethash session mevedel-sandbox--active-boundaries)))
+      (let* ((facts (cdr entry))
+             (read-count (or (plist-get facts :additional-filesystem-read) 0))
+             (write-count
+              (or (plist-get facts :additional-filesystem-write) 0))
+             (score (cond
+                     ((eq 'unrestricted (plist-get facts :filesystem)) 4)
+                     ((> write-count 0) 3)
+                     ((> read-count 0) 2)
+                     ((eq 'unrestricted (plist-get facts :network)) 1)
+                     (t 0))))
+        (setq unrestricted-filesystem
+              (or unrestricted-filesystem
+                  (eq 'unrestricted (plist-get facts :filesystem)))
+              unrestricted-network
+              (or unrestricted-network
+                  (eq 'unrestricted (plist-get facts :network)))
+              additional-read (+ (or additional-read 0) read-count)
+              additional-write (+ (or additional-write 0) write-count))
+        (when (or (null visible) (> score visible-score))
+          (setq visible facts
+                visible-score score))))
+    (if (not visible)
+        (mevedel-sandbox-pending-facts)
+      (let ((summary (copy-sequence visible)))
+        (when unrestricted-filesystem
+          (setq summary (plist-put summary :filesystem 'unrestricted)))
+        (when unrestricted-network
+          (setq summary (plist-put summary :network 'unrestricted)))
+        (when (> (+ additional-read additional-write) 0)
+          (setq summary
+                (plist-put summary :additional-filesystem-read additional-read))
+          (setq summary
+                (plist-put summary :additional-filesystem-write additional-write))
+          (setq summary
+                (plist-put summary :additional-filesystem
+                           (+ additional-read additional-write))))
+        summary))))
 
 (defun mevedel-sandbox--direct-preparation (command sandbox reason)
   "Return direct preparation for COMMAND with SANDBOX and REASON facts."
@@ -575,6 +613,12 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
             (eq t (plist-get additional-permissions :network)))
            (filesystem-permissions
             (plist-get additional-permissions :file-system))
+           (filesystem-read-count
+            (cl-count 'read filesystem-permissions
+                      :key (lambda (grant) (plist-get grant :access))))
+           (filesystem-write-count
+            (cl-count 'write filesystem-permissions
+                      :key (lambda (grant) (plist-get grant :access))))
            (filesystem-mounts
             (mevedel-sandbox--additional-filesystem-mounts
              additional-permissions))
@@ -586,7 +630,9 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
                         :writable-roots roots
                         :protected-paths (plist-get protected :count)
                         :additional-filesystem
-                        (length filesystem-permissions)))
+                        (length filesystem-permissions)
+                        :additional-filesystem-read filesystem-read-count
+                        :additional-filesystem-write filesystem-write-count))
            (arguments
             (append
              (list "--new-session"
@@ -714,6 +760,11 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
            (plist-get facts :sandbox)
            (plist-get facts :filesystem)
            (plist-get facts :network))
+   (let ((read-count (or (plist-get facts :additional-filesystem-read) 0))
+         (write-count (or (plist-get facts :additional-filesystem-write) 0)))
+     (when (> (+ read-count write-count) 0)
+       (format "; additional filesystem: %d read, %d write"
+               read-count write-count)))
    (let ((reason (plist-get facts :reason)))
      (when reason
        (format "; reason: %s" reason)))))

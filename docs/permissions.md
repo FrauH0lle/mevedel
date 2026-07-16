@@ -297,6 +297,9 @@ selected default, including deliberate `off` mode, required-mode refusal, and
 Eval child runs, the row switches to that invocation's additive, escalated, or
 fallback facts and returns to the default after settlement. The completed
 result retains the same invocation facts for the transcript and audit trail.
+Additive filesystem facts include read and write grant counts. Concurrent
+children are summarized conservatively so a less-confined active dimension is
+not hidden by a later, more-confined invocation.
 
 Protected restrictions are layered after writable roots. Existing glob matches
 and canonical targets become concrete mounts; `.git` pointer files also protect

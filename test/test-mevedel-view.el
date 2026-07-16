@@ -364,7 +364,8 @@
     (let* ((session (mevedel-session--create :name "sandbox-status"))
            (mevedel-sandbox--active-boundaries
             (make-hash-table :test #'eq))
-           (token (gensym "child-")))
+           (token (gensym "child-"))
+           (confined-token (gensym "confined-")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -396,7 +397,31 @@
           (should (equal ">first line\nsecond line"
                          (buffer-substring-no-properties
                           (mevedel-view--input-start) (point-max)))))
+        (mevedel-sandbox-track-active
+         session confined-token
+         '(:sandbox bubblewrap
+           :filesystem workspace-write
+           :network isolated
+           :additional-filesystem 2
+           :additional-filesystem-read 1
+           :additional-filesystem-write 1))
+        (with-current-buffer view-buf
+          (should (string-match-p
+                   (concat "sandbox: escalated; filesystem: unrestricted; "
+                           "network: unrestricted; additional filesystem: "
+                           "1 read, 1 write")
+                   (buffer-substring-no-properties (point-min) (point-max)))))
         (mevedel-sandbox-track-active session token nil)
+        (with-current-buffer view-buf
+          (should (string-match-p
+                   (concat "sandbox: bubblewrap; filesystem: workspace-write; "
+                           "network: isolated; additional filesystem: "
+                           "1 read, 1 write")
+                   (buffer-substring-no-properties (point-min) (point-max))))
+          (should (equal ">first line\nsecond line"
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max)))))
+        (mevedel-sandbox-track-active session confined-token nil)
         (with-current-buffer view-buf
           (should (string-match-p
                    "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
