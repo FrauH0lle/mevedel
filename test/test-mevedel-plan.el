@@ -128,31 +128,43 @@
                            (plist-get artifact :path)))
             (should (equal 'presented
                            (plist-get (mevedel-session-plan-metadata session)
-                                      :status)))))
+                                      :status)))
+            (should
+             (equal (mevedel-plan-hash "# Plan")
+                    (plist-get (mevedel-session-plan-metadata session)
+                               :hash)))))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-archive-accepted
-  (:doc "copies a current artifact to an immutable accepted artifact")
+  (:doc "reuses an identical deterministic accepted artifact")
   ,test
   (test)
-  (let* ((save-dir (make-temp-file "mevedel-plan-archive-" t))
-         (path (file-name-concat save-dir "current.md")))
+  (let ((save-dir (make-temp-file "mevedel-plan-archive-" t)))
     (unwind-protect
-        (progn
-          (write-region "# Plan" nil path nil 'silent)
+        (with-temp-buffer
           (let* ((session
                   (mevedel-session--create :name "test" :save-path save-dir))
+                 (artifact
+                  (mevedel-plan-write-current
+                   "# Plan" session (current-buffer) "current.md"))
                  (accepted
                   (mevedel-plan-archive-accepted
-                   (list :absolute-path path) session
-                   "goals/g1/cycle-001-plan.md")))
+                   artifact session "goals/g1/cycle-001-plan.md")))
             (should (file-exists-p (plist-get accepted :absolute-path)))
             (should (equal "goals/g1/cycle-001-plan.md"
                            (plist-get accepted :path)))
-            (should-error
-             (mevedel-plan-archive-accepted
-              (list :absolute-path path) session
-              "goals/g1/cycle-001-plan.md"))))
+            (should
+             (equal accepted
+                    (mevedel-plan-archive-accepted
+                     artifact session
+                     "goals/g1/cycle-001-plan.md")))
+            (let ((different
+                   (mevedel-plan-write-current
+                    "# Different" session (current-buffer) "current.md")))
+              (should-error
+               (mevedel-plan-archive-accepted
+                different session "goals/g1/cycle-001-plan.md")
+               :type 'error))))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-current-body

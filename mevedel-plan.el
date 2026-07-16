@@ -156,6 +156,7 @@ Return an explicit artifact plist containing `:path', `:absolute-path', and
                                        nil))))
       (setq metadata (plist-put metadata :path relative-path))
       (setq metadata (plist-put metadata :absolute-path path))
+      (setq metadata (plist-put metadata :hash hash))
       (setq metadata (plist-put metadata :status 'presented))
       (setq metadata (plist-put metadata :updated-turn turn))
       (setq metadata (plist-put metadata :updated-at
@@ -180,8 +181,9 @@ CURRENT-ARTIFACT is the plist returned by `mevedel-plan-write-current'.
 RELATIVE-PATH names a deterministic immutable destination when non-nil.
 Return a plist containing `:path' and `:absolute-path'."
   (require 'mevedel-structs)
-  (let ((plan-path (plist-get current-artifact :absolute-path)))
-    (unless (and plan-path (file-exists-p plan-path))
+  (let ((plan-path (plist-get current-artifact :absolute-path))
+        (plan-hash (plist-get current-artifact :hash)))
+    (unless (and plan-path plan-hash (file-exists-p plan-path))
       (error "Accepted plan artifact does not exist"))
     (let* ((save-path (mevedel-session-save-path session))
            (dir (file-name-directory plan-path))
@@ -198,7 +200,14 @@ Return a plist containing `:path' and `:absolute-path'."
                                               timestamp index)))
           (setq index (1+ index))))
       (make-directory (file-name-directory archive-path) t)
-      (copy-file plan-path archive-path)
+      (if (file-exists-p archive-path)
+          (with-temp-buffer
+            (insert-file-contents archive-path)
+            (unless (and relative-path
+                         (equal plan-hash
+                                (mevedel-plan-hash (buffer-string))))
+              (error "Accepted plan artifact already exists with different content")))
+        (copy-file plan-path archive-path))
       (list :path (and save-path (file-relative-name archive-path save-path))
             :absolute-path archive-path))))
 

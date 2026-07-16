@@ -264,6 +264,13 @@ CALLBACK receives a plist containing either `:plan' or `:error'.")
   "Return GOAL's mutable current-plan relative path."
   (file-name-concat (mevedel-goal--relative-dir goal) "current-plan.md"))
 
+(defun mevedel-goal--revision-plan-relative-path (goal revision)
+  "Return GOAL's immutable candidate path for REVISION."
+  (file-name-concat
+   (mevedel-goal--relative-dir goal)
+   (format "cycle-%03d-revision-%03d-plan.md"
+           (mevedel-goal-cycle goal) revision)))
+
 (defun mevedel-goal--cycle-plan-relative-path (goal)
   "Return GOAL's current immutable cycle-plan relative path."
   (file-name-concat
@@ -1123,6 +1130,108 @@ When LIMIT-REACHED is non-nil, disclose the automatic correction ceiling."
                     mevedel-goal--max-automatic-revisions))))
    "\n\n"))
 
+(defun mevedel-goal--complete-plan-revision-record-p (record)
+  "Return non-nil when RECORD is a complete settled revision audit."
+  (and (integerp (plist-get record :revision))
+       (stringp (plist-get record :input-plan-hash))
+       (stringp (plist-get record :replacement-plan-hash))
+       (eq (plist-get record :verdict) 'revise)
+       (when-let* ((reason (plist-get record :reason)))
+         (and (stringp reason) (not (string-blank-p reason))))
+       (when-let* ((feedback (plist-get record :feedback)))
+         (and (consp feedback)
+              (cl-every (lambda (item)
+                          (and (stringp item)
+                               (not (string-blank-p item))))
+                        feedback)))
+       (plist-member record :guardian-provider)
+       (plist-member record :guardian-effort)
+       (plist-member record :planner-provider)
+       (plist-member record :planner-effort)
+       (eq (plist-get record :settlement-state) 'settled)
+       (stringp (plist-get record :started-at))
+       (stringp (plist-get record :settled-at))))
+
+(defun mevedel-goal--plan-revision-recovery-action
+    (metadata record plan-hash guardian-audit)
+  "Classify revision recovery from durable state.
+METADATA is the session plan metadata, RECORD is the latest revision audit,
+PLAN-HASH identifies the recorded current candidate, and GUARDIAN-AUDIT is
+the matching guardian result when one exists."
+  (cond
+   ((and (plist-get metadata :revision-pending)
+         (null record))
+    'present-previous)
+   ((and (mevedel-goal--complete-plan-revision-record-p record)
+         (equal plan-hash (plist-get metadata :hash))
+         (equal plan-hash (plist-get record :replacement-plan-hash))
+         (not (equal plan-hash (plist-get record :input-plan-hash)))
+         (null guardian-audit))
+    'review-replacement)
+   ((and record
+         (memq (plist-get record :settlement-state)
+               '(started failed)))
+    'present-previous)))
+
+(defun mevedel-goal--recover-plan-revision
+    (goal session chat-buffer)
+  "Resume GOAL from its durable automatic revision boundary.
+Return non-nil when revision recovery handled continuation for SESSION in
+CHAT-BUFFER."
+  (let* ((metadata (mevedel-session-plan-metadata session))
+         (record
+          (car
+           (last
+            (plist-get (mevedel-goal-cycle-record goal)
+                       :plan-revisions))))
+         (plan (mevedel-plan-current-body session))
+         (plan-hash (and plan (mevedel-plan-hash plan)))
+         (audit (and plan
+                     (mevedel-goal--guardian-decision-for-plan goal plan)))
+         (action
+          (and plan
+               (mevedel-goal--plan-revision-recovery-action
+                metadata record plan-hash audit))))
+    (pcase action
+      ('review-replacement
+       (let ((revision (plist-get record :revision)))
+         (mevedel-goal--plan-metadata-put
+          session :revision-count
+          (max revision
+               (or (plist-get metadata :revision-count) 0)))
+         (mevedel-goal--plan-metadata-put session :revision-pending nil)
+         (mevedel-goal--plan-metadata-put session :guardian-pending nil)
+         (mevedel-goal--record-plan-revision
+          goal session chat-buffer revision
+          :recovered-at (format-time-string "%FT%T%z"))
+         (mevedel-goal--guard-current-plan goal chat-buffer)
+         t))
+      ('present-previous
+       (mevedel-goal--plan-metadata-put session :revision-pending nil)
+       (mevedel-goal--plan-metadata-put session :guardian-pending nil)
+       (if record
+           (let ((failure
+                  (or (plist-get record :failure)
+                      "Planner revision was interrupted before a replacement plan was persisted")))
+             (mevedel-goal--record-plan-revision
+              goal session chat-buffer (plist-get record :revision)
+              :settlement-state 'failed
+              :failure failure
+              :failed-at (or (plist-get record :failed-at)
+                             (format-time-string "%FT%T%z")))
+             (mevedel-goal-present-plan
+              plan chat-buffer
+              (mevedel-goal--revision-escalation-reason
+               (list :reason (plist-get record :reason)
+                     :feedback (plist-get record :feedback))
+               (list :error failure))))
+         (require 'mevedel-session-persistence)
+         (mevedel-session-persistence-save session chat-buffer)
+         (mevedel-goal-present-plan
+          plan chat-buffer
+          "Automatic plan revision was interrupted before its audit record was persisted; explicit approval is required."))
+       t))))
+
 (defun mevedel-goal--planner-revision-finished
     (goal-id revision input-plan input-hash decision chat-buffer result)
   "Apply planner revision RESULT for GOAL-ID and INPUT-PLAN.
@@ -1145,6 +1254,8 @@ still-current candidate reviewed in CHAT-BUFFER."
                   (and (stringp replacement)
                        (not (string-blank-p replacement))
                        (mevedel-plan-hash replacement)))
+                 (previous-metadata
+                  (copy-tree (mevedel-session-plan-metadata session)))
                  persisted)
             (if (and replacement-hash
                      (not (equal input-hash replacement-hash)))
@@ -1152,8 +1263,8 @@ still-current candidate reviewed in CHAT-BUFFER."
                     (progn
                       (mevedel-plan-write-current
                        replacement session chat-buffer
-                       (mevedel-goal--current-plan-relative-path goal))
-                      (setq persisted t)
+                       (mevedel-goal--revision-plan-relative-path
+                        goal revision))
                       (mevedel-goal--plan-metadata-put
                        session :revision-count revision)
                       (mevedel-goal--record-plan-revision
@@ -1163,6 +1274,7 @@ still-current candidate reviewed in CHAT-BUFFER."
                        :planner-effort (plist-get result :effort)
                        :settlement-state 'settled
                        :settled-at (format-time-string "%FT%T%z"))
+                      (setq persisted t)
                       (if (and
                            (eq (mevedel-goal-approval-policy goal) 'automatic)
                            (not (mevedel-goal--pending-interaction-p session)))
@@ -1171,6 +1283,9 @@ still-current candidate reviewed in CHAT-BUFFER."
                          replacement chat-buffer
                          "Automatic plan revision completed, but automatic continuation was interrupted.")))
                   (error
+                   (unless persisted
+                     (setf (mevedel-session-plan-metadata session)
+                           previous-metadata))
                    (ignore-errors
                      (mevedel-goal--record-plan-revision
                       goal session chat-buffer revision
@@ -1457,31 +1572,37 @@ still-current candidate reviewed in CHAT-BUFFER."
                 (mevedel-goal--planning-prompt goal))
               (format "Resume Goal %s" (mevedel-goal-id goal))))
           ('awaiting-approval
-           (cond
-            ((not (eq (mevedel-goal-approval-policy goal) 'automatic))
-             (mevedel-goal-restore-pending-approval
-              mevedel--session (current-buffer)))
-            ((and (eq (plist-get checkpoint :phase) 'planning)
-                  (eq (plist-get checkpoint :dispatch-state) 'settled)
-                  (mevedel-goal-continuation-ready-p
-                   mevedel--session 'planning 'guardian))
-             (mevedel-goal--guard-current-plan goal (current-buffer)))
-            ((and (eq (plist-get checkpoint :phase) 'guardian)
-                  (memq (plist-get checkpoint :dispatch-state)
-                        '(started unknown failed)))
-             (mevedel-goal--guard-current-plan goal (current-buffer)))
-            ((and (eq (plist-get checkpoint :phase) 'guardian)
-                  (eq (plist-get checkpoint :dispatch-state) 'settled)
-                  (mevedel-goal--guardian-approved-p goal)
-                  (mevedel-goal-continuation-ready-p
-                   mevedel--session 'guardian 'implementing))
-             (when-let* ((plan (mevedel-plan-current-body mevedel--session)))
-               (mevedel-goal--approval-callback
-                plan (current-buffer)
-                (list :context (mevedel-goal-implementation-context goal)))))
-            (t
-             (mevedel-goal-restore-pending-approval
-              mevedel--session (current-buffer)))))
+           (unless
+               (and (eq (mevedel-goal-approval-policy goal) 'automatic)
+                    (mevedel-goal--recover-plan-revision
+                     goal mevedel--session (current-buffer)))
+             (cond
+              ((not (eq (mevedel-goal-approval-policy goal) 'automatic))
+               (mevedel-goal-restore-pending-approval
+                mevedel--session (current-buffer)))
+              ((and (eq (plist-get checkpoint :phase) 'planning)
+                    (eq (plist-get checkpoint :dispatch-state) 'settled)
+                    (mevedel-goal-continuation-ready-p
+                     mevedel--session 'planning 'guardian))
+               (mevedel-goal--guard-current-plan goal (current-buffer)))
+              ((and (eq (plist-get checkpoint :phase) 'guardian)
+                    (memq (plist-get checkpoint :dispatch-state)
+                          '(started unknown failed)))
+               (mevedel-goal--guard-current-plan goal (current-buffer)))
+              ((and (eq (plist-get checkpoint :phase) 'guardian)
+                    (eq (plist-get checkpoint :dispatch-state) 'settled)
+                    (mevedel-goal--guardian-approved-p goal)
+                    (mevedel-goal-continuation-ready-p
+                     mevedel--session 'guardian 'implementing))
+               (when-let* ((plan
+                            (mevedel-plan-current-body mevedel--session)))
+                 (mevedel-goal--approval-callback
+                  plan (current-buffer)
+                  (list :context
+                        (mevedel-goal-implementation-context goal)))))
+              (t
+               (mevedel-goal-restore-pending-approval
+                mevedel--session (current-buffer))))))
           ('implementing
            (if (and (memq (plist-get checkpoint :dispatch-state)
                           '(prepared failed))
