@@ -81,6 +81,10 @@
 (declare-function mevedel-session-persistence-write
                   "mevedel-session-persistence" (path plist))
 
+;; `mevedel-system'
+(declare-function mevedel-system-render-prompt-file
+                  "mevedel-system" (relative-path &optional replacements))
+
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest args))
 (declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
@@ -163,6 +167,11 @@
   :type 'number
   :group 'mevedel)
 
+(defcustom mevedel-goal-planner-revision-timeout 120
+  "Seconds before an automatic planner revision escalates to the user."
+  :type 'number
+  :group 'mevedel)
+
 (defcustom mevedel-goal-max-transient-retries 1
   "Maximum automatic retries for a failed read-only Goal request."
   :type 'natnum
@@ -227,6 +236,11 @@ explicitly select full context."
   "Function called with GOAL, PLAN, CHAT-BUFFER, and CALLBACK.
 CALLBACK receives a normalized guardian decision plist.")
 
+(defvar mevedel-goal-planner-revision-function
+  #'mevedel-goal--planner-revision-request
+  "Function called with GOAL, PLAN, DECISION, CHAT-BUFFER, and CALLBACK.
+CALLBACK receives a plist containing either `:plan' or `:error'.")
+
 (defconst mevedel-goal--review-open-tag "<goal_review>"
   "Opening tag for structured Goal review results.")
 
@@ -238,6 +252,9 @@ CALLBACK receives a normalized guardian decision plist.")
 
 (defconst mevedel-goal--guardian-close-tag "</goal_guardian>"
   "Closing tag for structured Goal guardian results.")
+
+(defconst mevedel-goal--max-automatic-revisions 1
+  "Maximum planner corrections within one automatic approval boundary.")
 
 (defun mevedel-goal--relative-dir (goal)
   "Return GOAL's artifact directory relative to its session."
@@ -626,6 +643,8 @@ is non-nil, label the fragment as a compaction-time snapshot instead."
                   (list :type 'goal-guardian
                         :verdict (plist-get decision :verdict)
                         :reason (plist-get decision :reason)
+                        :feedback (copy-sequence
+                                   (plist-get decision :feedback))
                         :plan-hash plan-hash
                         :provider (or (plist-get decision :provider) "unavailable")
                         :effort (plist-get decision :effort)
@@ -650,7 +669,9 @@ is non-nil, label the fragment as a compaction-time snapshot instead."
   (when-let* ((session (or session mevedel--session))
               (goal (mevedel-session-goal session)))
     (and (eq (mevedel-goal-status goal) 'active)
-         (memq (mevedel-goal-phase goal) '(planning reviewing)))))
+         (or (memq (mevedel-goal-phase goal) '(planning reviewing))
+             (plist-get (mevedel-session-plan-metadata session)
+                        :revision-pending)))))
 
 (defun mevedel-goal--planning-prompt (goal)
   "Return the planning request for GOAL."
@@ -676,41 +697,144 @@ is non-nil, label the fragment as a compaction-time snapshot instead."
    (or (plist-get checkpoint :attempt-id) "unknown")
    (or (plist-get checkpoint :dispatch-state) 'unknown)))
 
-(defun mevedel-goal--guardian-prompt (goal plan)
-  "Return the tool-free automatic approval request for GOAL and PLAN."
+(defun mevedel-goal--guardian-reference-paths (plan)
+  "Return explicit PRD, specification, or ticket paths mentioned in PLAN."
+  (let ((case-fold-search t)
+        paths)
+    (with-temp-buffer
+      (insert plan)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let* ((start (line-beginning-position))
+               (end (line-end-position))
+               (reference-line
+                (string-match-p
+                 "\\_<\\(?:prd\\|specification\\|spec\\|ticket\\)\\_>"
+                 (buffer-substring-no-properties start end))))
+          (while (re-search-forward
+                  "\\(?:^\\|[^[:alnum:]_./-]\\)\\([[:alnum:]_./-]+\\.md\\)"
+                  end t)
+            (let ((path (match-string-no-properties 1)))
+              (when (or reference-line
+                        (string-match-p
+                         "\\(?:prd\\|spec\\|ticket\\)"
+                         (file-name-nondirectory path)))
+                (push path paths))))
+          (forward-line 1))))
+    (delete-dups (nreverse paths))))
+
+(defun mevedel-goal--guardian-reference-evidence (plan)
+  "Return deterministic local reference evidence for PLAN."
+  (let ((base (or (and (bound-and-true-p mevedel--session)
+                       (mevedel-session-working-directory mevedel--session))
+                  default-directory)))
+    (if-let* ((paths (mevedel-goal--guardian-reference-paths plan)))
+        (string-join
+         (mapcar
+          (lambda (path)
+            (let ((absolute (expand-file-name path base)))
+              (format "%s: %s"
+                      path
+                      (cond
+                       ((not (file-exists-p absolute)) "missing")
+                       ((not (file-readable-p absolute)) "exists but is unreadable")
+                       (t "exists and is readable")))))
+          paths)
+         "\n")
+      "No explicit local PRD, specification, or ticket path detected.")))
+
+(defun mevedel-goal--guardian-review-position (&optional session)
+  "Return the current guardian review position for SESSION."
+  (let ((count (or (plist-get
+                    (and session (mevedel-session-plan-metadata session))
+                    :revision-count)
+                   0)))
+    (if (> count 0)
+        (intern (format "revision-%d" count))
+      'initial)))
+
+(defun mevedel-goal--guardian-prompt
+    (goal plan &optional review-position remaining-revisions)
+  "Return untrusted guardian evidence for GOAL and PLAN.
+REVIEW-POSITION and REMAINING-REVISIONS describe the current automatic
+approval boundary."
   (format
-   "%s\n\nGuardian instructions:\nProposed plan:\n%s\n\nJudge only whether this plan is safe and credible to implement automatically. Check objective alignment, scope boundaries, dangerous or irreversible effects, ambiguity, and verification quality. Do not rewrite the plan. Return exactly:\n<goal_guardian>\nverdict: approve|ask\nreason: concise reason\n</goal_guardian>\nUse ask whenever user judgment, missing constraints, or clarification is required."
+   "Goal context:\n```text\n%s\n```\n\nReview position: %s\nAutomatic revisions remaining: %d\n\nReference validation:\n```text\n%s\n```\n\nProposed plan:\n```text\n%s\n```"
    (mevedel-goal-context-fragment goal mevedel--session)
+   (or review-position 'initial)
+   (or remaining-revisions mevedel-goal--max-automatic-revisions)
+   (mevedel-goal--guardian-reference-evidence plan)
    plan))
 
 (defun mevedel-goal--parse-guardian (text)
   "Return a validated Goal guardian decision parsed from TEXT, or nil."
-  (let ((case-fold-search nil)
-        (text (and (stringp text) (string-trim text))))
-    (when (and text
-               (string-match
-                (concat "\\`" (regexp-quote mevedel-goal--guardian-open-tag)
-                        "[ \t]*\n"
-                        "verdict:[ \t]*\\(approve\\|ask\\)[ \t]*\n"
-                        "reason:[ \t]*\\(\\(?:.\\|\n\\)*?\\)[ \t\n]*"
-                        (regexp-quote mevedel-goal--guardian-close-tag)
-                        "\\'")
-                text))
-      (let ((reason (string-trim (match-string 2 text))))
-        (unless (string-blank-p reason)
-          (list :verdict (intern (match-string 1 text))
-                :reason reason))))))
+  (when (stringp text)
+    (let* ((lines (split-string (string-trim text) "\n" nil))
+           (count (length lines)))
+      (when (and (>= count 5)
+                 (equal (nth 0 lines) mevedel-goal--guardian-open-tag)
+                 (equal (car (last lines))
+                        mevedel-goal--guardian-close-tag)
+                 (string-match
+                  "\\`verdict:[ \t]*\\(approve\\|revise\\|ask\\)[ \t]*\\'"
+                  (nth 1 lines))
+                 (string-match
+                  "\\`reason:[ \t]*\\(.+?\\)[ \t]*\\'" (nth 2 lines))
+                 (equal (nth 3 lines) "feedback:"))
+        (let* ((verdict
+                (intern
+                 (string-trim
+                  (substring (nth 1 lines) (length "verdict:")))))
+               (reason
+                (progn
+                  (string-match
+                   "\\`reason:[ \t]*\\(.+?\\)[ \t]*\\'" (nth 2 lines))
+                  (string-trim (match-string 1 (nth 2 lines)))))
+               (feedback-lines (cl-subseq lines 4 (1- count)))
+               (feedback
+                (mapcar
+                 (lambda (line)
+                   (and (string-match "\\`-[ \t]+\\(.+\\)\\'" line)
+                        (string-trim (match-string 1 line))))
+                 feedback-lines)))
+          (when (and (not (string-blank-p reason))
+                     (not (memq nil feedback))
+                     (pcase verdict
+                       ('approve (null feedback))
+                       ((or 'revise 'ask) feedback)))
+            (list :verdict verdict :reason reason :feedback feedback)))))))
+
+(defun mevedel-goal--guardian-failure-decision (reason &rest properties)
+  "Return a structurally valid internal ask decision for REASON.
+Append PROPERTIES to the decision."
+  (append
+   (list :verdict 'ask
+         :reason reason
+         :feedback
+         '("Review the latest valid plan manually before implementation."))
+   properties))
 
 (defun mevedel-goal--normalize-guardian-decision (decision)
   "Return validated guardian DECISION or a fail-closed ask decision."
   (let ((verdict (plist-get decision :verdict))
-        (reason (plist-get decision :reason)))
-    (if (and (memq verdict '(approve ask))
+        (reason (plist-get decision :reason))
+        (feedback (plist-get decision :feedback)))
+    (if (and (memq verdict '(approve revise ask))
              (stringp reason)
-             (not (string-blank-p reason)))
+             (not (string-blank-p reason))
+             (or (null feedback)
+                 (and (proper-list-p feedback)
+                      (cl-every
+                       (lambda (item)
+                         (and (stringp item)
+                              (not (string-blank-p item))))
+                       feedback)))
+             (pcase verdict
+               ('approve (null feedback))
+               ((or 'revise 'ask) feedback)))
         decision
-      (list :verdict 'ask
-            :reason "Goal guardian returned malformed output"))))
+      (mevedel-goal--guardian-failure-decision
+       "Goal guardian returned malformed output"))))
 
 (defun mevedel-goal--guardian-provider-label (policy)
   "Return a stable provider/model label for resolved guardian POLICY."
@@ -721,7 +845,8 @@ is non-nil, label the fragment as a compaction-time snapshot instead."
 The request has no tools or conversational transcript insertion."
   (if (not (require 'gptel nil t))
       (funcall callback
-               (list :verdict 'ask :reason "Goal guardian is unavailable"))
+               (mevedel-goal--guardian-failure-decision
+                "Goal guardian is unavailable"))
     (let ((done nil)
           (stream (buffer-local-value 'gptel-stream chat-buffer))
           chunks
@@ -743,9 +868,8 @@ The request has no tools or conversational transcript insertion."
                (finish
                 (append
                  (or decision
-                     (list :verdict 'ask
-                           :reason
-                           "Goal guardian returned malformed output"))
+                     (mevedel-goal--guardian-failure-decision
+                      "Goal guardian returned malformed output"))
                  (list
                   :provider
                   (mevedel-goal--guardian-provider-label policy)
@@ -759,16 +883,35 @@ The request has no tools or conversational transcript insertion."
                      (mevedel-goal--record-token-usage goal nil)))
                  (finish
                   (append
-                   (list :verdict 'ask
-                         :reason "Goal guardian timed out"
-                         :checkpoint-state 'failed)
+                   (mevedel-goal--guardian-failure-decision
+                    "Goal guardian timed out"
+                    :checkpoint-state 'failed)
                    (when policy
                      (list :provider
                            (mevedel-goal--guardian-provider-label policy)
                            :effort (plist-get policy :effort))))))))
         (condition-case err
             (progn
-              (let ((prompt (mevedel-goal--guardian-prompt goal plan)))
+              (let* ((session
+                      (buffer-local-value 'mevedel--session chat-buffer))
+                     (count
+                      (or (plist-get
+                           (and session
+                                (mevedel-session-plan-metadata session))
+                           :revision-count)
+                          0))
+                     (system-prompt
+                      (progn
+                        (require 'mevedel-system)
+                        (mevedel-system-render-prompt-file
+                         "prompts/goals/goal-guardian-system.md")))
+                     (prompt
+                      (mevedel-goal--guardian-prompt
+                       goal plan
+                       (mevedel-goal--guardian-review-position session)
+                       (max 0
+                            (- mevedel-goal--max-automatic-revisions
+                               count)))))
                 (mevedel-goal--call-with-workload
                  'goal-guardian
                  (lambda ()
@@ -783,6 +926,7 @@ The request has no tools or conversational transcript insertion."
                       prompt
                       :buffer chat-buffer
                       :stream stream
+                      :system system-prompt
                       :transforms nil
                       :callback
                       (lambda (response info)
@@ -801,13 +945,217 @@ The request has no tools or conversational transcript insertion."
           (error
            (finish
             (append
-             (list :verdict 'ask
-                   :reason (format "Goal guardian failed: %s"
-                                   (error-message-string err))
-                   :checkpoint-state 'failed)
+             (mevedel-goal--guardian-failure-decision
+              (format "Goal guardian failed: %s"
+                      (error-message-string err))
+              :checkpoint-state 'failed)
              (when policy
                (list :provider (mevedel-goal--guardian-provider-label policy)
                      :effort (plist-get policy :effort)))))))))))
+
+(defun mevedel-goal--planner-revision-prompt
+    (goal plan decision revision-number)
+  "Return the planner correction prompt for GOAL, PLAN, and DECISION.
+REVISION-NUMBER identifies the correction round."
+  (format
+   "%s\n\nAutomatic plan revision:\nRevision: %d\nGuardian reason: %s\nGuardian feedback:\n%s\n\nCurrent proposed plan:\n%s\n\n%s\n\nThis phase is read-only. Address all feedback together and return one complete replacement plan in exactly one line-oriented <proposed_plan>...</proposed_plan> block. Do not return a point-by-point reply."
+   (mevedel-goal-context-fragment goal mevedel--session)
+   revision-number
+   (plist-get decision :reason)
+   (mapconcat (lambda (item) (concat "- " item))
+              (plist-get decision :feedback) "\n")
+   plan
+   mevedel-goal--plan-guidance))
+
+(defun mevedel-goal--planner-revision-request
+    (goal plan decision chat-buffer callback)
+  "Request one automatic replacement for PLAN, then call CALLBACK."
+  (if (not (require 'gptel nil t))
+      (funcall callback '(:error "Planner is unavailable"))
+    (let* ((session (buffer-local-value 'mevedel--session chat-buffer))
+           (done nil)
+           (stream (buffer-local-value 'gptel-stream chat-buffer))
+           chunks
+           policy
+           timer
+           (revision-number
+            (1+ (or (plist-get
+                     (and session
+                          (mevedel-session-plan-metadata session))
+                     :revision-count)
+                    0))))
+      (cl-labels
+          ((finish (result)
+             (unless done
+               (setq done t)
+               (when timer
+                 (cancel-timer timer))
+               (when (buffer-live-p chat-buffer)
+                 (with-current-buffer chat-buffer
+                   (funcall callback result)))))
+           (settle-response (response info)
+             (when (buffer-live-p chat-buffer)
+               (with-current-buffer chat-buffer
+                 (mevedel-goal--record-token-usage goal info response)))
+             (let ((replacement
+                    (and (stringp response)
+                         (mevedel-plan-extract-proposed response))))
+               (finish
+                (append
+                 (if replacement
+                     (list :plan replacement)
+                   (list
+                    :error "Planner returned no complete replacement plan"))
+                 (when policy
+                   (list :provider (mevedel-goal--policy-label policy)
+                         :effort (plist-get policy :effort))))))))
+        (setq timer
+              (run-at-time
+               mevedel-goal-planner-revision-timeout nil
+               (lambda ()
+                 (finish
+                  (append
+                   (list :error "Planner revision timed out")
+                   (when policy
+                     (list :provider (mevedel-goal--policy-label policy)
+                           :effort (plist-get policy :effort))))))))
+        (condition-case err
+            (let ((prompt
+                   (with-current-buffer chat-buffer
+                     (mevedel-goal--planner-revision-prompt
+                      goal plan decision revision-number))))
+              (with-current-buffer chat-buffer
+                (mevedel-goal--call-with-workload
+                 'planning
+                 (lambda ()
+                   (setq policy
+                         (list :backend gptel-backend
+                               :model gptel-model
+                               :effort gptel-reasoning-effort))
+                   (gptel-request
+                    prompt
+                    :buffer chat-buffer
+                    :stream stream
+                    :transforms nil
+                    :callback
+                    (lambda (response info)
+                      (cond
+                       (done nil)
+                       ((and (consp response)
+                             (eq (car response) 'reasoning)))
+                       ((and (plist-get info :stream)
+                             (stringp response))
+                        (push response chunks))
+                       ((eq response t)
+                        (settle-response
+                         (apply #'concat (nreverse chunks)) info))
+                       ((stringp response)
+                        (settle-response response info))
+                       ((or (null response) (eq response 'abort))
+                        (finish
+                         (list
+                          :error
+                          "Planner revision request failed"))))))))))
+          (error
+           (finish
+            (list :error
+                  (format "Planner revision failed: %s"
+                          (error-message-string err))))))))))
+
+(defun mevedel-goal--revision-escalation-reason (decision result)
+  "Return user-facing escalation text for DECISION and planner RESULT."
+  (string-join
+   (delq nil
+         (list
+          (plist-get decision :reason)
+          (when-let* ((feedback (plist-get decision :feedback)))
+            (concat "Requested corrections:\n"
+                    (mapconcat (lambda (item) (concat "- " item))
+                               feedback "\n")))
+          (plist-get result :error)))
+   "\n\n"))
+
+(defun mevedel-goal--planner-revision-finished
+    (goal-id input-plan input-hash decision chat-buffer result)
+  "Apply planner revision RESULT for GOAL-ID and INPUT-PLAN.
+INPUT-HASH identifies the still-current candidate reviewed in CHAT-BUFFER."
+  (when (buffer-live-p chat-buffer)
+    (with-current-buffer chat-buffer
+      (when-let* ((session (and (bound-and-true-p mevedel--session)
+                                mevedel--session))
+                  (goal (mevedel-session-goal session))
+                  ((equal goal-id (mevedel-goal-id goal))))
+        (mevedel-goal--plan-metadata-put session :revision-pending nil)
+        (mevedel-goal--save-session-state session chat-buffer)
+        (when-let* (((eq (mevedel-goal-status goal) 'active))
+                    ((eq (mevedel-goal-phase goal) 'awaiting-approval))
+                    (current-plan (mevedel-plan-current-body session))
+                    ((equal input-hash (mevedel-plan-hash current-plan))))
+          (let* ((replacement (plist-get result :plan))
+                 (replacement-hash
+                  (and (stringp replacement)
+                       (not (string-blank-p replacement))
+                       (mevedel-plan-hash replacement))))
+            (if (and replacement-hash
+                     (not (equal input-hash replacement-hash)))
+                (progn
+                  (mevedel-plan-write-current
+                   replacement session chat-buffer
+                   (mevedel-goal--current-plan-relative-path goal))
+                  (mevedel-goal--plan-metadata-put
+                   session :revision-count
+                   (1+ (or (plist-get
+                            (mevedel-session-plan-metadata session)
+                            :revision-count)
+                           0)))
+                  (mevedel-goal--save-session-state session chat-buffer)
+                  (if (and
+                       (eq (mevedel-goal-approval-policy goal) 'automatic)
+                       (not (mevedel-goal--pending-interaction-p session)))
+                      (mevedel-goal--guard-current-plan goal chat-buffer)
+                    (mevedel-goal-present-plan
+                     replacement chat-buffer
+                     "Automatic plan revision completed, but automatic continuation was interrupted.")))
+              (mevedel-goal-present-plan
+               input-plan chat-buffer
+               (mevedel-goal--revision-escalation-reason
+                decision
+                (if (and replacement-hash
+                         (equal input-hash replacement-hash))
+                    (plist-put
+                     (copy-sequence result) :error
+                     "Planner returned the same plan after guardian feedback")
+                  (if (plist-get result :error)
+                      result
+                    (plist-put
+                     (copy-sequence result) :error
+                     "Planner returned no complete replacement plan"))))))))))))
+
+(defun mevedel-goal--start-plan-revision
+    (goal plan decision chat-buffer)
+  "Start one planner correction for PLAN after guardian DECISION."
+  (let ((session (buffer-local-value 'mevedel--session chat-buffer))
+        (goal-id (mevedel-goal-id goal))
+        (plan-hash (mevedel-plan-hash plan)))
+    (mevedel-goal--plan-metadata-put session :revision-pending t)
+    (mevedel-goal--save-session-state session chat-buffer)
+    (condition-case err
+        (funcall
+         mevedel-goal-planner-revision-function
+         goal plan decision chat-buffer
+         (lambda (result)
+           (mevedel-goal--planner-revision-finished
+            goal-id plan plan-hash decision chat-buffer result)))
+      (error
+       (mevedel-goal--plan-metadata-put session :revision-pending nil)
+       (mevedel-goal--save-session-state session chat-buffer)
+       (mevedel-goal-present-plan
+        plan chat-buffer
+        (mevedel-goal--revision-escalation-reason
+         decision
+         (list :error
+               (format "Planner revision failed: %s"
+                       (error-message-string err)))))))))
 
 (defun mevedel-goal--new-id ()
   "Return a fresh compact Goal identifier."
@@ -2010,47 +2358,65 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
              goal decision plan-hash session chat-buffer)
           (error
            (setq decision
-                 (list :verdict 'ask
-                       :reason
-                       (format "Could not persist Goal guardian audit: %s"
-                               (error-message-string err))))))
-        (if (eq (plist-get decision :verdict) 'approve)
-            ;; gptel invokes callbacks before removing the completed request
-            ;; from its registry.  Continue on the next event-loop boundary to
-            ;; avoid nested request dispatch and recheck user intervention.
-            (run-at-time
-             0 nil
-             (lambda ()
-               (when (buffer-live-p chat-buffer)
-                 (with-current-buffer chat-buffer
-                   (when-let* ((current-session
-                                (and (bound-and-true-p mevedel--session)
-                                     mevedel--session))
-                               (current-goal
-                                (mevedel-session-goal current-session))
-                               ((equal goal-id (mevedel-goal-id current-goal)))
-                               ((eq (mevedel-goal-status current-goal) 'active))
-                               ((eq (mevedel-goal-phase current-goal)
-                                    'awaiting-approval)))
-                     (if (and
-                          (eq (mevedel-goal-approval-policy current-goal)
-                              'automatic)
-                          (mevedel-goal-continuation-ready-p
-                           current-session 'guardian 'implementing))
-                         (mevedel-goal--approval-callback
-                          plan chat-buffer
-                          (list :context
-                                (mevedel-goal-implementation-context
-                                 current-goal)))
-                       (mevedel-goal-present-plan
-                        plan chat-buffer
-                        (when (eq (mevedel-goal-approval-policy current-goal)
-                                  'automatic)
-                          "Automatic approval deferred because user input or an interaction is pending."))))))))
-          (mevedel-goal--enqueue-event-reminder
-           session "guardian escalated plan approval to the user")
-          (mevedel-goal-present-plan
-           plan chat-buffer (plist-get decision :reason)))))))
+                 (mevedel-goal--guardian-failure-decision
+                  (format "Could not persist Goal guardian audit: %s"
+                          (error-message-string err))))))
+        (pcase (plist-get decision :verdict)
+          ('approve
+           ;; gptel invokes callbacks before removing the completed request
+           ;; from its registry.  Continue on the next event-loop boundary to
+           ;; avoid nested request dispatch and recheck user intervention.
+           (run-at-time
+            0 nil
+            (lambda ()
+              (when (buffer-live-p chat-buffer)
+                (with-current-buffer chat-buffer
+                  (when-let* ((current-session
+                               (and (bound-and-true-p mevedel--session)
+                                    mevedel--session))
+                              (current-goal
+                               (mevedel-session-goal current-session))
+                              ((equal goal-id (mevedel-goal-id current-goal)))
+                              ((eq (mevedel-goal-status current-goal) 'active))
+                              ((eq (mevedel-goal-phase current-goal)
+                                   'awaiting-approval)))
+                    (if (and
+                         (eq (mevedel-goal-approval-policy current-goal)
+                             'automatic)
+                         (mevedel-goal-continuation-ready-p
+                          current-session 'guardian 'implementing))
+                        (mevedel-goal--approval-callback
+                         plan chat-buffer
+                         (list :context
+                               (mevedel-goal-implementation-context
+                                current-goal)))
+                      (mevedel-goal-present-plan
+                       plan chat-buffer
+                       (when (eq (mevedel-goal-approval-policy current-goal)
+                                 'automatic)
+                         "Automatic approval deferred because user input or an interaction is pending.")))))))))
+          ('revise
+           (if (and
+                (eq (mevedel-goal-approval-policy goal) 'automatic)
+                (< (or (plist-get
+                        (mevedel-session-plan-metadata session)
+                        :revision-count)
+                       0)
+                   mevedel-goal--max-automatic-revisions)
+                (not (mevedel-goal--pending-interaction-p session)))
+               (mevedel-goal--start-plan-revision
+                goal plan decision chat-buffer)
+             (mevedel-goal--enqueue-event-reminder
+              session "guardian revision requires user approval")
+             (mevedel-goal-present-plan
+              plan chat-buffer
+              (mevedel-goal--revision-escalation-reason decision nil))))
+          (_
+           (mevedel-goal--enqueue-event-reminder
+            session "guardian escalated plan approval to the user")
+           (mevedel-goal-present-plan
+            plan chat-buffer
+            (mevedel-goal--revision-escalation-reason decision nil))))))))
 
 (defun mevedel-goal--guard-current-plan (goal chat-buffer)
   "Run the mandatory automatic guardian for GOAL's current plan."
@@ -2070,9 +2436,10 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
         (error
          (mevedel-goal--guardian-finished
           goal-id plan plan-hash chat-buffer
-          (list :verdict 'ask
-                :reason (format "Goal guardian failed: %s"
-                                (error-message-string err)))))))))
+          (mevedel-goal--guardian-failure-decision
+           (format "Goal guardian failed: %s"
+                   (error-message-string err))
+           :checkpoint-state 'failed)))))))
 
 (defun mevedel-goal--response-text (start end)
   "Return response text between START and END in the current buffer."
@@ -2119,6 +2486,10 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                      (mevedel-goal--save-session-state session (current-buffer))
                      (message "mevedel: goal paused after duplicate plan"))
                  (setf (mevedel-goal-phase goal) 'awaiting-approval)
+                 (mevedel-goal--plan-metadata-put
+                  session :revision-count 0)
+                 (mevedel-goal--plan-metadata-put
+                  session :revision-pending nil)
                  (mevedel-goal--enqueue-event-reminder
                   session "planning finished; plan awaits approval")
                  (if (eq (mevedel-goal-approval-policy goal) 'automatic)
