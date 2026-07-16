@@ -326,7 +326,7 @@
       (should (eq 'deny-rule (plist-get decision :via)))
       (should (eq :session (plist-get decision :bucket)))))
 
-  :doc "read-only Goal phase denies mutation before protected-path prompting"
+  :doc "Goal inspection denies native edits before protected-path prompting"
   (test-mevedel-permissions--with-goal-phase 'planning
     (let ((tool (mevedel-tool--create
                  :name "Edit" :read-only-p nil :groups '(edit)))
@@ -1856,7 +1856,7 @@ must restore the prior value to avoid cross-test pollution."
                      :mode 'ask)))
       (delete-directory root t)))
 
-  :doc "Goal review denies non-read-only tools inside the workspace"
+  :doc "Goal review denies native edits inside the workspace"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-workspace-plan-" t)))
          (child (file-name-concat root "file.el"))

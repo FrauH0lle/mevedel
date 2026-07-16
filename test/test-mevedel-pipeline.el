@@ -2144,8 +2144,8 @@
 				'mevedel-tool-exec--start-sandboxed-child-process)
 			       (lambda (_name _command _workdir _roots _timeout callback
 					&optional additional-permissions
-					sandbox-permissions)
-				 (ignore sandbox-permissions)
+					sandbox-permissions session)
+				 (ignore sandbox-permissions session)
 				 (push additional-permissions launches)
 				 (funcall
 				  callback

@@ -290,13 +290,13 @@ Trusted skill substitutions keep those facts out of the substituted literal;
 an unrestricted substitution instead emits a user-visible warning while the
 active facts remain recorded.
 
-The main view's status zone continuously displays the selected default child
-boundary as `sandbox`, `filesystem`, and `network` facts. It therefore exposes
-Linux Bubblewrap confinement, deliberate `off` mode, required-mode refusal,
-and `auto` fallback on unsupported or unavailable backends without relying on
-a one-time message. Per-invocation additive and full-escalation facts remain in
-the corresponding Bash or batch-Eval result because they do not change the
-default boundary for later calls.
+The main view's status zone continuously displays the active child boundary as
+`sandbox`, `filesystem`, and `network` facts. With no child running it shows the
+selected default, including deliberate `off` mode, required-mode refusal, and
+`auto` fallback on unsupported or unavailable backends. While a Bash or batch
+Eval child runs, the row switches to that invocation's additive, escalated, or
+fallback facts and returns to the default after settlement. The completed
+result retains the same invocation facts for the transcript and audit trail.
 
 Protected restrictions are layered after writable roots. Existing glob matches
 and canonical targets become concrete mounts; `.git` pointer files also protect

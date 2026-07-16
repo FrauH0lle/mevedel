@@ -47,10 +47,10 @@
                   "mevedel-permission-queue" (&optional session))
 
 ;; `mevedel-sandbox'
-(declare-function mevedel-sandbox-pending-facts
-                  "mevedel-sandbox"
-                  (&optional additional-permissions sandbox-permissions))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
+(declare-function mevedel-sandbox-visible-facts
+                  "mevedel-sandbox" (&optional session))
+(defvar mevedel-sandbox-state-change-hook)
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
@@ -999,12 +999,13 @@ the editable composer signal instead of settling queued interactions."
   "Return status fragments for MODEL."
   (let (fragments)
     (require 'mevedel-sandbox)
-    (let* ((facts (mevedel-sandbox-pending-facts))
+    (let* ((facts (mevedel-sandbox-visible-facts
+                   (plist-get model :session)))
            (body (concat (mevedel-sandbox-status-text facts) "\n")))
       (add-text-properties 0 (length body) '(font-lock-face shadow) body)
       (push (list :namespace 'status
                   :id 'sandbox
-                  :priority 10
+                  :priority 200
                   :body body)
             fragments))
     (when-let* ((body (plist-get model :task-body)))
@@ -1028,8 +1029,20 @@ the editable composer signal instead of settling queued interactions."
       (push fragment fragments))
     (nreverse fragments)))
 
+(defun mevedel-view--sandbox-state-changed (session)
+  "Refresh main views owned by SESSION after its child boundary changes."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'mevedel-view-mode)
+                 (not mevedel-view--agent-transcript-p)
+                 (eq session (mevedel-view--status-session)))
+        (mevedel-view--render-status)))))
+
+(add-hook 'mevedel-sandbox-state-change-hook
+          #'mevedel-view--sandbox-state-changed)
+
 (defun mevedel-view--render-status (&optional data-buf)
-  "Render task and aggregate agent status fragments for DATA-BUF."
+  "Render sandbox, task, and aggregate agent status for DATA-BUF."
   (unless mevedel-view--agent-transcript-p
     (require 'mevedel-view-zone)
     (let* ((model (mevedel-view--status-model data-buf))

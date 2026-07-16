@@ -242,8 +242,9 @@ known-safe commands, but they cannot authorize dangerous or complex Bash, live
 Eval, protected resources, or full execution escalation. An ordinary sub-agent
 may request additive or full authority only through the same user-visible queue;
 there is no separate model-visible access-request tool. The main view's
-persistent confinement row describes the default child boundary, while each
-Bash or batch-Eval result records the boundary actually used by that call.
+persistent confinement row shows the default child boundary while idle and the
+actual boundary while a child runs; each Bash or batch-Eval result records the
+boundary used by that call.
 
 ## Task status
 

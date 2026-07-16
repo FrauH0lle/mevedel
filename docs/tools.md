@@ -352,7 +352,8 @@ does not use that child seam. Batch mode isolates interactive Emacs state and,
 when the platform sandbox is active, applies the same filesystem, protected
 path, process, and network boundaries as Bash.
 
-The main view keeps the default child sandbox, filesystem, and network boundary
-visible in its status zone. Each Bash and batch-Eval result separately records
-the boundary that actually applied to that invocation, including additive
-network/filesystem authority, full escalation, and unrestricted fallback.
+The main view keeps the child sandbox, filesystem, and network boundary visible
+in its status zone. It shows the selected default while idle, switches to the
+actual additive, escalated, or fallback boundary for the lifetime of a Bash or
+batch-Eval child, and returns to the default on settlement. Each result also
+records the boundary that applied to its invocation.
