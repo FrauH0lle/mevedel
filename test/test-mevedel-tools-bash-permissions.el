@@ -1224,8 +1224,9 @@ the decision log identifies complete confinement bypass authority"
     (should (eq captured-model 'workload-model))
     (should (eq captured-effort 'high)))
 
-  :doc "surfaces unsupported guardian effort before dispatch"
+  :doc "unsupported guardian effort fails open before dispatch"
   (let ((requested nil)
+        (guidance :unset)
         (mevedel-permission-guardian-timeout 60))
     (require 'gptel nil t)
     (cl-letf (((symbol-function 'mevedel-model-resolve-workload)
@@ -1234,11 +1235,11 @@ the decision log identifies complete confinement bypass authority"
               ((symbol-function 'gptel-request)
                (lambda (&rest _)
                  (setq requested t))))
-      (should-error
-       (mevedel-tool-exec--bash-guardian-model-async
-        "pwd" '(:dangerous nil :unparseable nil) #'ignore)
-       :type 'user-error))
-    (should-not requested)))
+      (mevedel-tool-exec--bash-guardian-model-async
+       "pwd" '(:dangerous nil :unparseable nil)
+       (lambda (result) (setq guidance result))))
+    (should-not requested)
+    (should-not guidance)))
 
 
 ;;

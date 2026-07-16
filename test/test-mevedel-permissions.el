@@ -436,7 +436,7 @@
                   :path "/repo/.git/config"
                   :mode 'full-auto)
                 'ask)))
-  :doc "read-only Goal phase denies non-read-only protected paths"
+  :doc "Goal inspection denies native edits before protected-path prompts"
   (test-mevedel-permissions--with-goal-phase 'reviewing
     (let ((mevedel-permission-rules nil)
           (mevedel-protected-paths '(("**/.git/**" . read-only)))
@@ -447,7 +447,7 @@
                     :path "/repo/.git/config"
                     :mode 'full-auto)
                   'deny))))
-  :doc "read-only Goal phase keeps read-only protected paths as ask"
+  :doc "Goal inspection keeps read-only protected paths as ask"
   (test-mevedel-permissions--with-goal-phase 'planning
     (let ((mevedel-permission-rules nil)
           (mevedel-protected-paths '(("**/.git/**" . read-only)))
