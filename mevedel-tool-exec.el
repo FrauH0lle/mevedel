@@ -112,6 +112,8 @@
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 (declare-function mevedel-sandbox-strip-marker
                   "mevedel-sandbox" (preparation child-result))
+(declare-function mevedel-sandbox-track-active
+                  "mevedel-sandbox" (session token facts))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-skill-permission-rules
@@ -2032,7 +2034,7 @@ On systems with `setsid', timeout signals cover the whole process group."
 
 (defun mevedel-tool-exec--start-sandboxed-child-process
     (name command workdir writable-roots timeout callback
-          &optional additional-permissions sandbox-permissions)
+          &optional additional-permissions sandbox-permissions session)
   "Start COMMAND through the selected confinement boundary.
 
 NAME, WORKDIR, TIMEOUT, and CALLBACK follow
@@ -2040,65 +2042,73 @@ NAME, WORKDIR, TIMEOUT, and CALLBACK follow
 filesystem roots.  In `auto' mode only a Bubblewrap failure before the marker
 may retry COMMAND directly; a started command is never replayed.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
-SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
+SANDBOX-PERMISSIONS may be `require-escalated' after authorization.
+SESSION owns the user-visible active boundary while the child is running."
   (require 'mevedel-sandbox)
-  (let ((preparation
-         (mevedel-sandbox-prepare
-          command workdir writable-roots additional-permissions
-          sandbox-permissions)))
-    (pcase (plist-get preparation :state)
-      ('refused
-       (funcall
-        callback
-        (list :exit-code -1
-              :output ""
-              :timed-out-p nil
-              :error (list 'error (plist-get preparation :error))
-              :sandbox-facts (plist-get preparation :facts)))
-       nil)
-      ('unrestricted
-       (mevedel-tool-exec--start-child-process
-        name (plist-get preparation :command) workdir timeout
-        (lambda (child-result)
-          (funcall
-           callback
-           (mevedel-tool-exec--child-with-sandbox-facts
-            child-result (plist-get preparation :facts))))))
-      ('confined
-       (mevedel-tool-exec--start-child-process
-        name (plist-get preparation :command) workdir timeout
-        (lambda (child-result)
-          (if (and (plist-get preparation :fallback-p)
-                   (mevedel-sandbox-launch-failed-p
-                    preparation child-result))
-              (let ((facts
-                     (mevedel-sandbox--record-launch-failure
-                      child-result)))
-                (mevedel-sandbox-cleanup preparation)
-                (mevedel-tool-exec--start-child-process
-                 name (plist-get preparation :original-command)
-                 workdir timeout
-                 (lambda (fallback-result)
-                   (funcall
-                    callback
-                    (mevedel-tool-exec--child-with-sandbox-facts
-                     fallback-result facts)))))
-            (let ((facts
-                   (if (mevedel-sandbox-launch-failed-p
-                        preparation child-result)
+  (let* ((session (or session (mevedel-tool-exec--permission-log-session)))
+         (active-token (and session (gensym "sandbox-child-")))
+         (preparation
+          (mevedel-sandbox-prepare
+           command workdir writable-roots additional-permissions
+           sandbox-permissions)))
+    (cl-labels
+        ((show-active (facts)
+           (when active-token
+             (mevedel-sandbox-track-active session active-token facts)))
+         (finish (child-result facts)
+           (when active-token
+             (mevedel-sandbox-track-active session active-token nil))
+           (funcall
+            callback
+            (mevedel-tool-exec--child-with-sandbox-facts
+             child-result facts))))
+      (pcase (plist-get preparation :state)
+        ('refused
+         (funcall
+          callback
+          (list :exit-code -1
+                :output ""
+                :timed-out-p nil
+                :error (list 'error (plist-get preparation :error))
+                :sandbox-facts (plist-get preparation :facts)))
+         nil)
+        ('unrestricted
+         (show-active (plist-get preparation :facts))
+         (mevedel-tool-exec--start-child-process
+          name (plist-get preparation :command) workdir timeout
+          (lambda (child-result)
+            (finish child-result (plist-get preparation :facts)))))
+        ('confined
+         (show-active (plist-get preparation :facts))
+         (mevedel-tool-exec--start-child-process
+          name (plist-get preparation :command) workdir timeout
+          (lambda (child-result)
+            (if (and (plist-get preparation :fallback-p)
+                     (mevedel-sandbox-launch-failed-p
+                      preparation child-result))
+                (let ((facts
                        (mevedel-sandbox--record-launch-failure
-                        child-result)
-                     (plist-get preparation :facts)))
-                  (clean-result
-                   (mevedel-sandbox-strip-marker
-                    preparation child-result)))
-              (mevedel-sandbox-cleanup preparation)
-              (funcall
-               callback
-               (mevedel-tool-exec--child-with-sandbox-facts
-                clean-result facts)))))))
-      (_ (error "Unknown sandbox preparation state: %s"
-                (plist-get preparation :state))))))
+                        child-result)))
+                  (show-active facts)
+                  (mevedel-sandbox-cleanup preparation)
+                  (mevedel-tool-exec--start-child-process
+                   name (plist-get preparation :original-command)
+                   workdir timeout
+                   (lambda (fallback-result)
+                     (finish fallback-result facts))))
+              (let ((facts
+                     (if (mevedel-sandbox-launch-failed-p
+                          preparation child-result)
+                         (mevedel-sandbox--record-launch-failure
+                          child-result)
+                       (plist-get preparation :facts)))
+                    (clean-result
+                     (mevedel-sandbox-strip-marker
+                      preparation child-result)))
+                (mevedel-sandbox-cleanup preparation)
+                (finish clean-result facts))))))
+        (_ (error "Unknown sandbox preparation state: %s"
+                  (plist-get preparation :state)))))))
 
 (defun mevedel-tool-exec--sandbox-disclosure
     (text child-result &optional suppress-p)
@@ -2140,6 +2150,7 @@ and optional :timeout_seconds."
     (unless (stringp command)
       (error "Parameter command is required"))
     (let* ((request (mevedel-tool-exec--sandbox-request args 'bash))
+           (session (mevedel-tool-exec--permission-log-session))
            (timeout (mevedel-tool-exec--bash-timeout-seconds args))
            (workdir (mevedel-tool-exec--default-directory)))
       (mevedel-tool-exec--start-sandboxed-child-process
@@ -2163,7 +2174,8 @@ and optional :timeout_seconds."
               child-result
               (plist-get args :suppress-sandbox-disclosure-p))))))
        (plist-get request :additional-permissions)
-       (plist-get request :sandbox-permissions)))))
+       (plist-get request :sandbox-permissions)
+       session))))
 
 
 ;;
@@ -2322,6 +2334,7 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
 ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (let* ((workdir (mevedel-tool-exec--default-directory))
+         (session (mevedel-tool-exec--permission-log-session))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
          (script (mevedel-tool-exec--eval-batch-script
@@ -2368,7 +2381,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                       child-result)))
                  (ignore-errors (delete-file script-file))
                  (ignore-errors (delete-file result-file)))))
-           additional-permissions sandbox-permissions))
+           additional-permissions sandbox-permissions session))
       (error
        (ignore-errors (delete-file script-file))
        (ignore-errors (delete-file result-file))

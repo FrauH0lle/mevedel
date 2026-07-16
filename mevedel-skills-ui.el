@@ -310,7 +310,7 @@ Routes through the lifecycle-aware permission transition path."
        'mevedel-view-sent))))
 
 (defun mevedel-cmd--auto (_args)
-  "Toggle auto edit mode for the current session."
+  "Toggle auto permission mode for the current session."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (let* ((current (or (mevedel-session-permission-mode mevedel--session)

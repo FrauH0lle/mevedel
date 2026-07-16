@@ -307,13 +307,28 @@
                  :filesystem workspace-write
                  :network isolated)))
             ((symbol-function 'mevedel-view-agent-status-fragment)
-             #'ignore))
-    (let* ((fragments (mevedel-view--status-fragments nil))
+             (lambda ()
+               '(:namespace status :id agents :priority 0
+                 :body "agents\n"))))
+    (let* ((fragments
+            (mevedel-view--status-fragments '(:task-body "tasks\n")))
            (sandbox (seq-find
                      (lambda (fragment)
                        (eq (plist-get fragment :id) 'sandbox))
-                     fragments)))
+                     fragments))
+           (tasks (seq-find
+                   (lambda (fragment)
+                     (eq (plist-get fragment :id) 'tasks))
+                   fragments))
+           (agents (seq-find
+                    (lambda (fragment)
+                      (eq (plist-get fragment :id) 'agents))
+                    fragments)))
       (should sandbox)
+      (should (> (plist-get sandbox :priority)
+                 (plist-get tasks :priority)))
+      (should (> (plist-get tasks :priority)
+                 (plist-get agents :priority)))
       (should (string-match-p
                "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
                (plist-get sandbox :body)))))
@@ -339,6 +354,52 @@
                           (mevedel-view--input-start) (point-max))))
           (should (string-match-p
                    "sandbox: unavailable; filesystem: unrestricted; network: unrestricted"
+                   (buffer-substring-no-properties (point-min) (point-max)))))))))
+
+(mevedel-deftest mevedel-view--sandbox-state-changed ()
+  ,test
+  (test)
+  :doc "in-flight additive and full escalation replace the default status until settlement"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "sandbox-status"))
+           (mevedel-sandbox--active-boundaries
+            (make-hash-table :test #'eq))
+           (token (gensym "child-")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert ">first line\nsecond line"))
+      (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+                 (lambda (&rest _)
+                   '(:sandbox bubblewrap
+                     :filesystem workspace-write
+                     :network isolated))))
+        (mevedel-sandbox-track-active
+         session token
+         '(:sandbox bubblewrap
+           :filesystem workspace-write
+           :network unrestricted))
+        (with-current-buffer view-buf
+          (should (string-match-p
+                   "sandbox: bubblewrap; filesystem: workspace-write; network: unrestricted"
+                   (buffer-substring-no-properties (point-min) (point-max)))))
+        (mevedel-sandbox-track-active
+         session token
+         '(:sandbox escalated
+           :filesystem unrestricted
+           :network unrestricted))
+        (with-current-buffer view-buf
+          (should (string-match-p
+                   "sandbox: escalated; filesystem: unrestricted; network: unrestricted"
+                   (buffer-substring-no-properties (point-min) (point-max))))
+          (should (equal ">first line\nsecond line"
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max)))))
+        (mevedel-sandbox-track-active session token nil)
+        (with-current-buffer view-buf
+          (should (string-match-p
+                   "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
                    (buffer-substring-no-properties (point-min) (point-max)))))))))
 
 (mevedel-deftest mevedel-view--dnd-file-mentions

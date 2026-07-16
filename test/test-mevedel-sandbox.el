@@ -340,6 +340,70 @@
         :reason "Full execution escalation requested")
       (mevedel-sandbox-pending-facts nil 'require-escalated)))))
 
+(mevedel-deftest mevedel-sandbox-track-active ()
+  ,test
+  (test)
+  :doc "tracks, updates, and removes the most recent boundary per session"
+  (let ((mevedel-sandbox--active-boundaries
+         (make-hash-table :test #'eq))
+        (mevedel-sandbox-state-change-hook nil)
+        (session (list :session))
+        (first (gensym "first-"))
+        (second (gensym "second-"))
+        events)
+    (add-hook 'mevedel-sandbox-state-change-hook
+              (lambda (changed) (push changed events)))
+    (mevedel-sandbox-track-active
+     session first '(:sandbox bubblewrap :network isolated))
+    (mevedel-sandbox-track-active
+     session second '(:sandbox bubblewrap :network unrestricted))
+    (should (eq 'unrestricted
+                (plist-get (cdr (car (gethash session
+                                              mevedel-sandbox--active-boundaries)))
+                           :network)))
+    (mevedel-sandbox-track-active
+     session first '(:sandbox escalated :network unrestricted))
+    (should (eq first (caar (gethash session
+                                    mevedel-sandbox--active-boundaries))))
+    (mevedel-sandbox-track-active session first nil)
+    (should (eq second (caar (gethash session
+                                     mevedel-sandbox--active-boundaries))))
+    (mevedel-sandbox-track-active session second nil)
+    (should-not (gethash session mevedel-sandbox--active-boundaries))
+    (should (= 5 (length events))))
+  :doc "observer failures cannot interrupt active-boundary tracking"
+  (let ((mevedel-sandbox--active-boundaries
+         (make-hash-table :test #'eq))
+        (mevedel-sandbox-state-change-hook
+         (list (lambda (_session) (error "Observer failed"))))
+        warned)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (_type message &rest _)
+                 (setq warned message))))
+      (mevedel-sandbox-track-active
+       'session 'token '(:sandbox bubblewrap)))
+    (should (gethash 'session mevedel-sandbox--active-boundaries))
+    (should (string-match-p "Could not refresh sandbox status" warned))))
+
+(mevedel-deftest mevedel-sandbox-visible-facts ()
+  ,test
+  (test)
+  :doc "uses the active invocation boundary before the selected default"
+  (let ((mevedel-sandbox--active-boundaries
+         (make-hash-table :test #'eq))
+        (mevedel-sandbox-state-change-hook nil)
+        (session (list :session))
+        (token (gensym "active-"))
+        (default '(:sandbox bubblewrap :network isolated))
+        (active '(:sandbox escalated :network unrestricted)))
+    (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+               (lambda (&rest _) default)))
+      (should (eq default (mevedel-sandbox-visible-facts session)))
+      (mevedel-sandbox-track-active session token active)
+      (should (eq active (mevedel-sandbox-visible-facts session)))
+      (mevedel-sandbox-track-active session token nil)
+      (should (eq default (mevedel-sandbox-visible-facts session))))))
+
 (mevedel-deftest mevedel-sandbox--confined-preparation ()
   ,test
   (test)

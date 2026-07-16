@@ -44,6 +44,13 @@ directly and visibly disables confinement."
 (defvar mevedel-sandbox--last-facts nil
   "Most recently prepared child-confinement facts.")
 
+(defvar mevedel-sandbox--active-boundaries
+  (make-hash-table :test #'eq :weakness 'key)
+  "Active child boundaries keyed by owning session.")
+
+(defvar mevedel-sandbox-state-change-hook nil
+  "Hook run with the owning session when its visible boundary changes.")
+
 (defconst mevedel-sandbox--marker-script
   "printf '%s\\n' \"$1\"; shift; exec \"$@\""
   "Shell wrapper that records entry into the requested process boundary.")
@@ -419,6 +426,37 @@ requested process starts."
          'unavailable (plist-get availability :reason))))))
    (t
     (error "Unknown sandbox mode: %s" mevedel-sandbox-mode))))
+
+(defun mevedel-sandbox-track-active (session token facts)
+  "Set TOKEN's active boundary FACTS for SESSION, or remove it when nil.
+
+The newest or most recently updated token is the visible boundary when a
+session has concurrent child invocations.  Return TOKEN."
+  (when session
+    (let ((entries
+           (assq-delete-all
+            token (copy-sequence
+                   (gethash session mevedel-sandbox--active-boundaries)))))
+      (when facts
+        (push (cons token facts) entries))
+      (if entries
+          (puthash session entries mevedel-sandbox--active-boundaries)
+        (remhash session mevedel-sandbox--active-boundaries))
+      (condition-case err
+          (run-hook-with-args 'mevedel-sandbox-state-change-hook session)
+        (error
+         (display-warning
+          'mevedel
+          (format "Could not refresh sandbox status: %s"
+                  (error-message-string err))
+          :warning)))))
+  token)
+
+(defun mevedel-sandbox-visible-facts (&optional session)
+  "Return SESSION's active child facts or its selected default boundary."
+  (or (cdr (car (and session
+                     (gethash session mevedel-sandbox--active-boundaries))))
+      (mevedel-sandbox-pending-facts)))
 
 (defun mevedel-sandbox--direct-preparation (command sandbox reason)
   "Return direct preparation for COMMAND with SANDBOX and REASON facts."

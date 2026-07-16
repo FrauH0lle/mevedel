@@ -2144,7 +2144,50 @@ the decision log identifies complete confinement bypass authority"
     (should (equal (plist-get result :exit-code) -1))
     (should (string-match-p "test unavailable"
                             (error-message-string
-                             (plist-get result :error))))))
+                             (plist-get result :error)))))
+  :doc "active invocation facts are tracked until additive and escalated children settle"
+  (dolist (case
+           '(((:state confined :command ("bwrap")
+              :facts (:sandbox bubblewrap
+                      :filesystem workspace-write
+                      :network unrestricted))
+             bubblewrap)
+            ((:state unrestricted :command ("true")
+              :facts (:sandbox escalated
+                      :filesystem unrestricted
+                      :network unrestricted))
+             escalated)))
+    (let* ((preparation (car case))
+           (expected (cadr case))
+           (session (list expected))
+           (mevedel-sandbox--active-boundaries
+            (make-hash-table :test #'eq))
+           (mevedel-sandbox-state-change-hook nil)
+           child-callback
+           result)
+      (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
+                 (lambda (&rest _) preparation))
+                ((symbol-function 'mevedel-tool-exec--start-child-process)
+                 (lambda (_name _command _workdir _timeout callback)
+                   (setq child-callback callback)
+                   'child))
+                ((symbol-function 'mevedel-sandbox-launch-failed-p)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'mevedel-sandbox-strip-marker)
+                 (lambda (_preparation child-result) child-result))
+                ((symbol-function 'mevedel-sandbox-cleanup) #'ignore))
+        (mevedel-tool-exec--start-sandboxed-child-process
+         "active" '("true") temporary-file-directory nil nil
+         (lambda (child-result) (setq result child-result))
+         nil nil session)
+        (should child-callback)
+        (should (eq expected
+                    (plist-get (mevedel-sandbox-visible-facts session)
+                               :sandbox)))
+        (funcall child-callback
+                 '(:exit-code 0 :output "" :timed-out-p nil))
+        (should result)
+        (should-not (gethash session mevedel-sandbox--active-boundaries))))))
 
 
 
