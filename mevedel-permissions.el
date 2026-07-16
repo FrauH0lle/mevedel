@@ -1073,6 +1073,8 @@ RESOURCE-GRANTS define the filesystem boundary."
             name (extract #'mevedel-tool-get-name name))))
   (let* ((read-only-p
           (when tool-struct (mevedel-tool-read-only-p tool-struct)))
+         (native-edit-p
+          (and tool-struct (memq 'edit (mevedel-tool-groups tool-struct))))
          (resource-access (or resource-access
                               (if read-only-p 'read 'write)))
          (resource-granted-p
@@ -1089,7 +1091,7 @@ RESOURCE-GRANTS define the filesystem boundary."
            (deny-bucket
             (mevedel-permission--decision
              'deny 'deny-rule :bucket deny-bucket))
-           ((and (not read-only-p)
+           ((and native-edit-p
                  (mevedel-permission--goal-read-only-phase-p session))
             (mevedel-permission--decision 'deny 'goal-phase)))))
     (list :tool-name tool-name
@@ -1143,7 +1145,7 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       read-only Goal phase + mutating tool -> deny
+       Goal planning/review phase + native edit tool -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.

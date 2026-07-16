@@ -7,7 +7,7 @@ flowchart TD
     A[Tool call] --> B[Extract specifiers]
     B --> C{Any deny rule?}
     C -- Yes --> Z[Deny]
-    C -- No --> D{Goal planning or review<br/>and mutating tool?}
+    C -- No --> D{Goal planning or review<br/>and native edit tool?}
     D -- Yes --> Z
     D -- No --> E{Command checker?}
     E -- Yes --> F{Checker or rules<br/>authorize command?}
@@ -36,7 +36,7 @@ Single decision function `mevedel-check-permission`. Decision chain:
 1. Extract specifier values via `get-path` / `get-pattern` / `get-domain` /
    `get-name` slots
 2. Deny rules (across all buckets — see bucket precedence below)
-3. Active Goal planning or review with a non-read-only tool → deny
+3. Active Goal planning or review with a tool in the native `edit` group → deny
 4. Tool's own `check-permission` slot decides command authority
 5. Allow/ask rules (innermost-bucket-first — see bucket precedence below)
 6. Permission-mode hard deny, if any
@@ -89,9 +89,11 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
   decision wins.
-- Goal planning and review deny non-read-only tools before allow rules are
-  considered. This restriction is independent of the session permission mode,
-  so skill, session, persistent, and default allow rules cannot bypass it.
+- Goal planning and review deny the native `edit` tool group before allow rules
+  are considered. This restriction is independent of the session permission
+  mode, so skill, session, persistent, and default allow rules cannot bypass
+  it. Bash and Eval remain available through their normal permission policy;
+  an inspection phase is not an OS-enforced read-only environment.
 - Automatic Goal guardians receive no tools at all. Guardian approval changes
   lifecycle state only; it never raises the session permission mode. Fully
   unattended implementation therefore still requires an explicit `full-auto`
@@ -303,14 +305,18 @@ snapshot.
 Bash prompts. Outside `full-auto`, it is advisory only: the normal
 permission chain still decides `allow` / `ask` / `deny`, explicit deny
 rules still win, Goal phase restrictions and protected-path policy are
-unchanged, and
-the user remains authoritative. In `full-auto`, the guardian is
+unchanged, and the user remains authoritative. The reviewer receives the
+normalized command class, parser, reasons, identified resources, and pending
+confinement facts. Its normalized response contains only risk,
+recommendation, and reason, so it cannot rewrite deterministic analysis or
+grant authority. In `full-auto`, the guardian is
 deny-only for commands that the normal classifier would have treated as
 suspicious; deny recommendations veto, while timeouts, failures, invalid
 output, and non-deny recommendations allow by default.
 
-Guardian guidance runs only after Bash resolves to `ask`. The permission
-prompt is shown immediately with:
+Interactive guardian guidance runs after Bash resolves to `ask`; the
+deny-only `full-auto` path runs only for commands that would otherwise have
+asked. The interactive permission prompt is shown immediately with:
 
 ```text
 Guardian guidance
@@ -361,8 +367,9 @@ expression is author-written SKILL.md content, not model-generated Eval
 input. A trusted elisp injection may bypass the prompt only when an
 active unqualified `Eval` allow rule covers it, typically from the
 skill's `allowed-tools: [Eval]`. Eval deny rules still win absolutely,
-and Goal planning/review suppress mutating Eval calls. Markers introduced
-by argument substitution are not trusted literals and are left as text.
+and Goal planning/review route Eval through this same normal policy rather
+than suppressing it as a native edit tool. Markers introduced by argument
+substitution are not trusted literals and are left as text.
 Literal markers may still contain substituted text in their expression
 body; only the marker syntax and delimiters carry the trusted-literal
 provenance.

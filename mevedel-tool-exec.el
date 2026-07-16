@@ -102,6 +102,9 @@
 (declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
 (declare-function mevedel-sandbox-launch-failed-p
                   "mevedel-sandbox" (preparation child-result))
+(declare-function mevedel-sandbox-pending-facts
+                  "mevedel-sandbox"
+                  (&optional additional-permissions sandbox-permissions))
 (declare-function mevedel-sandbox-prepare
                   "mevedel-sandbox"
                   (command workdir writable-roots &optional
@@ -631,16 +634,15 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
             outcome tool-name detail level session workspace metadata-p))))
        (and session (list session)))))))
 
-(defun mevedel-tool-exec--separate-resource-authority (input request)
-  "Return INPUT with REQUEST's filesystem gate marked as independent."
-  (if (not (plist-get (plist-get request :additional-permissions)
-                      :file-system))
-      input
-    (let* ((copy (copy-sequence input))
-           (context (copy-sequence (plist-get copy :permission-context))))
+(defun mevedel-tool-exec--command-permission-input (input request)
+  "Return INPUT carrying REQUEST facts for command authorization."
+  (let* ((copy (copy-sequence input))
+         (context (copy-sequence (plist-get copy :permission-context))))
+    (setq context (plist-put context :sandbox-request request))
+    (when (plist-get (plist-get request :additional-permissions) :file-system)
       (setq context
-            (plist-put context :resource-authority-separated-p t))
-      (plist-put copy :permission-context context))))
+            (plist-put context :resource-authority-separated-p t)))
+    (plist-put copy :permission-context context)))
 
 (defun mevedel-tool-exec--analyze-bash (command)
   "Return normalized Bash analysis for COMMAND."
@@ -669,15 +671,17 @@ When t, mevedel asks the current gptel model for advisory-only Bash
 risk classification while an `ask' prompt is pending.
 
 A function value is useful for custom classifiers and tests.  It is
-called as (FUNCTION COMMAND CONTEXT CALLBACK), where CONTEXT is a plist
-with parser metadata and CALLBACK accepts either nil or a plist:
+called as (FUNCTION COMMAND CONTEXT CALLBACK), where CONTEXT contains
+normalized analysis and pending confinement facts, and CALLBACK accepts
+either nil or a plist:
 
   (:risk low|medium|high|critical
    :recommendation allow-once|ask|deny
    :reason \"short explanation\")
 
-The result is never used for enforcement.  Explicit deny, read-only Goal
-phases, protected-path policy, and the user's decision remain authoritative."
+The result never grants authority or changes deterministic Bash analysis.
+Explicit denies, native-edit Goal restrictions, protected-path policy, and
+the user's decision remain authoritative."
   :type '(choice (const :tag "Disabled" nil)
                  (const :tag "Use gptel reviewer" t)
                  function)
@@ -1119,17 +1123,36 @@ authorize dangerous or complex syntax."
   (string-join
    (delq nil
          (list
+          (when-let* ((class (plist-get context :class)))
+            (format "Command class: %s" class))
+          (when-let* ((parser (plist-get context :parser)))
+            (format "Parser: %s" parser))
           (format "Dangerous command detected: %s"
                   (if (plist-get context :dangerous) "yes" "no"))
           (format "Complex or unparseable syntax: %s"
                   (if (plist-get context :unparseable) "yes" "no"))
+          (when-let* ((reasons (plist-get context :reasons)))
+            (format "Analysis reasons: %s"
+                    (if (cl-every #'stringp reasons)
+                        (string-join reasons "; ")
+                      (prin1-to-string reasons))))
+          (when-let* ((resources (plist-get context :resources)))
+            (format "Identified resources: %s"
+                    (if (and (listp resources)
+                             (cl-every #'stringp resources))
+                        (string-join resources ", ")
+                      (prin1-to-string resources))))
           (when-let* ((commands (or (plist-get context :commands-summary)
                                     (and-let* ((commands (plist-get context :commands)))
                                       (string-join commands ", ")))))
             (format "Detected commands: %s" commands))
           (when-let* ((patterns (plist-get context :allow-patterns)))
             (format "Suggested allow patterns: %s"
-                    (string-join patterns ", ")))))
+                    (string-join patterns ", ")))
+          (when-let* ((facts (plist-get context :sandbox-facts)))
+            (require 'mevedel-sandbox)
+            (format "Confinement: %s"
+                    (mevedel-sandbox-status-text facts)))))
    "\n"))
 
 (defun mevedel-tool-exec--bash-guardian-model-async (command context callback)
@@ -1243,11 +1266,19 @@ suspicious Bash."
             :permission-context permission-context)
            'ask)))
 
-(defun mevedel-tool-exec--bash-guardian-context (command)
-  "Return guardian context plist for COMMAND."
+(defun mevedel-tool-exec--bash-guardian-context
+    (command &optional permission-context)
+  "Return guardian context for COMMAND and PERMISSION-CONTEXT."
   (let* ((analysis (mevedel-tool-exec--analyze-bash command))
-         (commands (mevedel-tool-exec--bash-command-names analysis)))
-    (list :class (plist-get analysis :class)
+         (commands (mevedel-tool-exec--bash-command-names analysis))
+         (request (plist-get permission-context :sandbox-request))
+         (additional-permissions
+          (plist-get request :additional-permissions))
+         (sandbox-permissions
+          (plist-get request :sandbox-permissions)))
+    (require 'mevedel-sandbox)
+    (list :analysis analysis
+          :class (plist-get analysis :class)
           :dangerous (eq (plist-get analysis :class) 'dangerous)
           :commands commands
           :commands-summary (mevedel-tool-exec--bash-commands-summary commands)
@@ -1255,16 +1286,21 @@ suspicious Bash."
           :reasons (plist-get analysis :reasons)
           :resources (plist-get analysis :resources)
           :unparseable (eq (plist-get analysis :class) 'complex)
-          :allow-patterns (mevedel-tool-exec--bash-allow-patterns command))))
+          :allow-patterns (mevedel-tool-exec--bash-allow-patterns command)
+          :sandbox-facts
+          (mevedel-sandbox-pending-facts
+           additional-permissions sandbox-permissions))))
 
 (defun mevedel-tool-exec--bash-deny-only-guardian-async
-    (command cont &optional metadata-p)
-  "Run deny-only guardian review for COMMAND and METADATA-P, then call CONT.
+    (command cont &optional metadata-p permission-context)
+  "Run deny-only guardian review for COMMAND, then call CONT.
+METADATA-P controls decision metadata.  PERMISSION-CONTEXT supplies the
+pending child-confinement request.
 Guardian deny recommendations become `deny'.  Timeout, failure, invalid
 output, and non-deny recommendations allow by default."
   (mevedel-tool-exec--bash-guardian-classify-async
    command
-   (mevedel-tool-exec--bash-guardian-context command)
+   (mevedel-tool-exec--bash-guardian-context command permission-context)
    (lambda (guardian)
      (let ((outcome (if (eq (plist-get guardian :recommendation) 'deny)
                         'deny
@@ -1486,7 +1522,7 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
              (request (mevedel-tool-exec--sandbox-request
                        input 'eval mode))
              (command-input
-              (mevedel-tool-exec--separate-resource-authority
+              (mevedel-tool-exec--command-permission-input
                input request)))
         (if (eq (plist-get request :level) 'escalated)
             (mevedel-tool-exec--check-full-escalation-async
@@ -1537,7 +1573,7 @@ parity with the sync slot."
                    (mevedel-tool-exec--bash-full-auto-guardian-needed-p
                     command permission-context))
               (mevedel-tool-exec--bash-deny-only-guardian-async
-               command cont metadata-p)
+               command cont metadata-p permission-context)
             (when metadata-p
               (mevedel-tool-exec--log-permission-decision
                "Bash" decision 'bash-classifier
@@ -1578,15 +1614,21 @@ parity with the sync slot."
                  (workspace (or (plist-get permission-context :workspace)
                                 (and session
                                      (mevedel-session-workspace session))))
-                 (analysis (mevedel-tool-exec--analyze-bash command))
+                 (guardian-context
+                  (and mevedel-permission-guardian
+                       (mevedel-tool-exec--bash-guardian-context
+                        command permission-context)))
+                 (analysis
+                  (or (plist-get guardian-context :analysis)
+                      (mevedel-tool-exec--analyze-bash command)))
                  (command-class (plist-get analysis :class))
                  (commands (mevedel-tool-exec--bash-command-names analysis))
                  (commands-summary
                   (mevedel-tool-exec--bash-commands-summary commands))
                  (unparseable (eq command-class 'complex))
                  (allow-patterns
-                  (mevedel-tool-exec--bash-allow-patterns command))
-                 (dangerous (eq command-class 'dangerous))
+                  (or (plist-get guardian-context :allow-patterns)
+                      (mevedel-tool-exec--bash-allow-patterns command)))
                  (rule-creating-p
                   (not (memq command-class '(dangerous complex))))
                  (guardian-cell
@@ -1699,28 +1741,25 @@ parity with the sync slot."
                 (with-current-buffer source-buffer
                   (mevedel-permission--enqueue entry session))
               (mevedel-permission--enqueue entry session))
-            (mevedel-tool-exec--bash-guardian-classify-async
-             command
-             (list :dangerous dangerous
-                   :commands commands
-                   :commands-summary commands-summary
-                   :unparseable unparseable
-                   :allow-patterns allow-patterns
-                   :workspace workspace)
-             (lambda (guardian)
-               (when guardian-pending
-                 (let ((was-pending (eq (cadr guardian-cell) 'pending)))
-                   (setcar guardian-cell guardian)
-                   (when was-pending
-                     (setcar (cdr guardian-cell)
-                             (if guardian 'done 'unavailable)))
-                   (when (or guardian was-pending)
-                     ;; Replace the pending placeholder in-place with
-                     ;; either guidance or an unavailable note.
-                     (when (buffer-live-p source-buffer)
-                       (with-current-buffer source-buffer
-                         (mevedel-permission-queue--render-head
-                          session)))))))))))))))
+            (when mevedel-permission-guardian
+              (setq guardian-context
+                    (plist-put guardian-context :workspace workspace))
+              (mevedel-tool-exec--bash-guardian-classify-async
+               command guardian-context
+               (lambda (guardian)
+                 (when guardian-pending
+                   (let ((was-pending (eq (cadr guardian-cell) 'pending)))
+                     (setcar guardian-cell guardian)
+                     (when was-pending
+                       (setcar (cdr guardian-cell)
+                               (if guardian 'done 'unavailable)))
+                     (when (or guardian was-pending)
+                       ;; Replace the pending placeholder in-place with
+                       ;; either guidance or an unavailable note.
+                       (when (buffer-live-p source-buffer)
+                         (with-current-buffer source-buffer
+                           (mevedel-permission-queue--render-head
+                            session))))))))))))))))
 
 (defun mevedel-tool-exec--check-permission-async
     (tool-struct input cont)
@@ -1729,7 +1768,7 @@ TOOL-STRUCT and CONT follow the async permission slot contract."
   (condition-case err
       (let* ((request (mevedel-tool-exec--sandbox-request input 'bash))
              (command-input
-              (mevedel-tool-exec--separate-resource-authority
+              (mevedel-tool-exec--command-permission-input
                input request)))
         (if (eq (plist-get request :level) 'escalated)
             (mevedel-tool-exec--check-full-escalation-async

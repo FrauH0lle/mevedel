@@ -28,6 +28,7 @@
                byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-bash-dangerous-commands)
 (defvar warning-minimum-level)
 
 (defun test-mevedel-pipeline--format-media-data-block
@@ -1039,7 +1040,8 @@
 		 :doc "fails with Permission denied for mutation during Goal planning"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Edit"
-			       :read-only-p nil))
+			       :read-only-p nil
+			       :groups '(edit)))
 			(session (mevedel-session--create
 			          :name "goal" :permission-mode 'full-auto))
 			(ctx (list :tool tool :args nil :session session))
@@ -1052,6 +1054,141 @@
 		   (mevedel-pipeline--step-permission
 		    ctx #'ignore (lambda (r) (setq fail-reason r)))
 		   (should (equal fail-reason "Permission denied")))
+		 :doc "Goal inspection routes Bash and Eval through normal policy"
+		 (let* ((session (mevedel-session--create
+				  :name "goal" :permission-mode 'full-auto))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil))
+		   (setf (mevedel-session-goal session)
+			 (mevedel-goal--create
+			  :objective "test" :status 'active :phase 'planning))
+		   (dolist (case '(("Bash" (:command "pwd"))
+				   ("Eval" (:expression "(+ 1 1)" :mode "live"))))
+		     (let ((tool (mevedel-tool-ensure (car case)))
+			   next-called
+			   fail-reason)
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args (cadr case) :session session)
+			(lambda (_context) (setq next-called t))
+			(lambda (reason) (setq fail-reason reason)))
+		       (should next-called)
+		       (should-not fail-reason))))
+		 :doc "guardian context is advisory and includes deterministic confinement facts"
+		 (let* ((session (mevedel-session--create
+				  :name "guardian" :permission-mode 'ask))
+			(tool (mevedel-tool-ensure "Bash"))
+			(facts '(:sandbox bubblewrap
+				 :filesystem workspace-write
+				 :network isolated))
+			(mevedel-permission-rules nil)
+			(mevedel-protected-paths nil)
+			(mevedel-bash-dangerous-commands '("rm"))
+			guardian-context
+			(mevedel-permission-guardian
+			 (lambda (_command context callback)
+			   (setq guardian-context context)
+			   (funcall callback
+				    '(:risk "critical"
+				      :recommendation "deny"
+				      :reason "Deletes a file."
+				      :class "read-only"))))
+			entry
+			next-called
+			fail-reason)
+		   (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+			      (lambda (&rest _) facts))
+			     ((symbol-function 'mevedel-permission--enqueue)
+			      (lambda (queued &optional _session)
+				(setq entry queued)))
+			     ((symbol-function
+			       'mevedel-permission-queue--render-head)
+			      #'ignore))
+		     (mevedel-pipeline--step-permission
+		      (list :tool tool :args '(:command "rm /tmp/file")
+			    :session session)
+		      (lambda (_context) (setq next-called t))
+		      (lambda (reason) (setq fail-reason reason))))
+		   (should (eq 'dangerous (plist-get guardian-context :class)))
+		   (should
+		    (equal facts
+			   (plist-get guardian-context :sandbox-facts)))
+		   (should-not next-called)
+		   (should-not fail-reason)
+		   (should-not
+		    (plist-member
+		     (car (plist-get entry :guardian-cell)) :class))
+		   ;; Even a deny recommendation remains advisory in ask mode.
+		   (funcall (plist-get entry :callback) 'allow-once)
+		   (should next-called)
+		   (should-not fail-reason))
+		 :doc "guardian failure preserves interactive Bash prompts in ask and auto"
+		 (dolist (mode '(ask auto))
+		   (let* ((session (mevedel-session--create
+				    :name "guardian" :permission-mode mode))
+			  (tool (mevedel-tool-ensure "Bash"))
+			  (mevedel-permission-rules nil)
+			  (mevedel-protected-paths nil)
+			  (mevedel-bash-dangerous-commands '("rm"))
+			  (mevedel-permission-guardian
+			   (lambda (_command _context callback)
+			     (funcall callback nil)))
+			  entry
+			  next-called
+			  fail-reason)
+		     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+				(lambda (&rest _)
+				  '(:sandbox bubblewrap
+				    :filesystem workspace-write
+				    :network isolated)))
+			       ((symbol-function 'mevedel-permission--enqueue)
+				(lambda (queued &optional _session)
+				  (setq entry queued)))
+			       ((symbol-function
+				 'mevedel-permission-queue--render-head)
+				#'ignore))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args '(:command "rm /tmp/file")
+			      :session session)
+			(lambda (_context) (setq next-called t))
+			(lambda (reason) (setq fail-reason reason))))
+		     (should entry)
+		     (should-not next-called)
+		     (should-not fail-reason)
+		     (funcall (plist-get entry :callback) 'allow-once)
+		     (should next-called)))
+		 :doc "full-auto guardian may veto suspicious Bash but failure allows"
+		 (dolist (guardian-result
+			  '((:risk "high" :recommendation "deny"
+			     :reason "Deletes a file.")
+			    nil))
+		   (let* ((session (mevedel-session--create
+				    :name "guardian"
+				    :permission-mode 'full-auto))
+			  (tool (mevedel-tool-ensure "Bash"))
+			  (mevedel-permission-rules nil)
+			  (mevedel-protected-paths nil)
+			  (mevedel-bash-dangerous-commands '("rm"))
+			  (mevedel-permission-guardian
+			   (lambda (_command _context callback)
+			     (funcall callback guardian-result)))
+			  next-called
+			  fail-reason)
+		     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+				(lambda (&rest _)
+				  '(:sandbox bubblewrap
+				    :filesystem workspace-write
+				    :network isolated))))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args '(:command "rm /tmp/file")
+			      :session session)
+			(lambda (_context) (setq next-called t))
+			(lambda (reason) (setq fail-reason reason))))
+		     (if guardian-result
+			 (progn
+			   (should-not next-called)
+			   (should (equal "Permission denied" fail-reason)))
+		       (should next-called)
+		       (should-not fail-reason))))
 		 :doc "tool check-permission returning allow is respected"
 		 (let* ((tool (mevedel-tool--create
 			       :name "CustomTool"
@@ -1575,7 +1712,8 @@
 		 ;; captures `mevedel--session' at tool entry and threads it
 		 ;; through `:session' on the context, the permission step honors
 		 ;; the parent's session rules.
-		 (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+		 (let* ((tool (mevedel-tool--create
+			       :name "Edit" :read-only-p nil :groups '(edit)))
 			(parent-session
 			 (mevedel-session--create
 			  :name "parent"
@@ -1601,7 +1739,8 @@
 				  '(("Edit" :path "/foo/*" :action allow)))))
 
 		 :doc "permission-mode toggle on parent observed by sub-agent next call"
-		 (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))
+		 (let* ((tool (mevedel-tool--create
+			       :name "Edit" :read-only-p nil :groups '(edit)))
 			(parent-session
 			 (mevedel-session--create
 			  :name "parent" :permission-mode 'ask))

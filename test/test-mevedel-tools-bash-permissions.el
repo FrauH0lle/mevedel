@@ -1090,7 +1090,14 @@ the decision log identifies complete confinement bypass authority"
   :doc "rejects invalid guardian guidance"
   (should-not
    (mevedel-tool-exec--bash-guardian-normalize
-    '(:risk "safe" :recommendation "allow" :reason "Looks fine."))))
+    '(:risk "safe" :recommendation "allow" :reason "Looks fine.")))
+  :doc "drops fields that could pretend to alter deterministic analysis"
+  (should
+   (equal
+    '(:risk high :recommendation deny :reason "Dangerous.")
+    (mevedel-tool-exec--bash-guardian-normalize
+     '(:risk "high" :recommendation "deny" :reason "Dangerous."
+       :class "read-only" :decision "allow")))))
 
 (mevedel-deftest mevedel-tool-exec--bash-guardian-context-string ()
   ,test
@@ -1111,7 +1118,52 @@ the decision log identifies complete confinement bypass authority"
                '(:dangerous nil
                  :unparseable nil
                  :commands ("git" "bash")))))
-    (should (string-match-p "Detected commands: git, bash" text))))
+    (should (string-match-p "Detected commands: git, bash" text)))
+  :doc "renders deterministic analysis and active confinement facts"
+  (let ((text
+         (mevedel-tool-exec--bash-guardian-context-string
+          '(:class dangerous
+            :parser treesit
+            :reasons ("rm can delete files")
+            :resources ("/tmp/file")
+            :sandbox-facts
+            (:sandbox bubblewrap
+             :filesystem workspace-write
+             :network isolated)))))
+    (should (string-match-p "Command class: dangerous" text))
+    (should (string-match-p "Parser: treesit" text))
+    (should (string-match-p "Analysis reasons: rm can delete files" text))
+    (should (string-match-p "Identified resources: /tmp/file" text))
+    (should
+     (string-match-p
+      "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
+      text))))
+
+(mevedel-deftest mevedel-tool-exec--bash-guardian-context ()
+  ,test
+  (test)
+  :doc "combines normalized analysis with pending confinement facts"
+  (let ((facts '(:sandbox bubblewrap
+                 :filesystem workspace-write
+                 :network isolated))
+        captured-request)
+    (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+               (lambda (additional sandbox)
+                 (setq captured-request (list additional sandbox))
+                 facts)))
+      (let ((context
+             (mevedel-tool-exec--bash-guardian-context
+              "rm /tmp/file"
+              '(:sandbox-request
+                (:additional-permissions (:network nil)
+                 :sandbox-permissions use-default)))))
+        (should (eq 'dangerous (plist-get context :class)))
+        (should (plist-get context :parser))
+        (should (plist-get context :reasons))
+        (should (plist-member context :resources))
+        (should (eq facts (plist-get context :sandbox-facts)))
+        (should
+         (equal '((:network nil) use-default) captured-request))))))
 
 (mevedel-deftest mevedel-tool-exec--bash-guardian-model-async ()
   ,test

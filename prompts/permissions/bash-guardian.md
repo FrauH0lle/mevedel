@@ -41,7 +41,7 @@ Command:
 {{COMMAND}}
 ```
 
-Parser context:
+Deterministic analysis and confinement context:
 ```text
 {{CONTEXT}}
 ```

@@ -383,6 +383,43 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
         :network 'unrestricted
         :reason reason))
 
+(defun mevedel-sandbox-pending-facts
+    (&optional additional-permissions sandbox-permissions)
+  "Return the selected boundary facts for a pending child request.
+
+ADDITIONAL-PERMISSIONS is the validated additive profile.
+SANDBOX-PERMISSIONS may be `require-escalated'.  This preview may probe the
+configured backend, but it does not prepare a command or mutate launch facts.
+An `auto' launch can still fall back if Bubblewrap later fails before the
+requested process starts."
+  (cond
+   ((eq sandbox-permissions 'require-escalated)
+    (mevedel-sandbox--unrestricted-facts
+     'escalated "Full execution escalation requested"))
+   ((eq mevedel-sandbox-mode 'off)
+    (mevedel-sandbox--unrestricted-facts
+     'off "Confinement disabled by mevedel-sandbox-mode"))
+   ((memq mevedel-sandbox-mode '(auto required))
+    (let ((availability (mevedel-sandbox-probe)))
+      (cond
+       ((plist-get availability :available)
+        (list :sandbox 'bubblewrap
+              :filesystem 'workspace-write
+              :network
+              (if (eq t (plist-get additional-permissions :network))
+                  'unrestricted
+                'isolated)))
+       ((eq mevedel-sandbox-mode 'required)
+        (list :sandbox 'refused
+              :filesystem 'unavailable
+              :network 'unavailable
+              :reason (plist-get availability :reason)))
+       (t
+        (mevedel-sandbox--unrestricted-facts
+         'unavailable (plist-get availability :reason))))))
+   (t
+    (error "Unknown sandbox mode: %s" mevedel-sandbox-mode))))
+
 (defun mevedel-sandbox--direct-preparation (command sandbox reason)
   "Return direct preparation for COMMAND with SANDBOX and REASON facts."
   (let ((facts (mevedel-sandbox--unrestricted-facts sandbox reason)))
