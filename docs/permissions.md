@@ -290,6 +290,14 @@ Trusted skill substitutions keep those facts out of the substituted literal;
 an unrestricted substitution instead emits a user-visible warning while the
 active facts remain recorded.
 
+The main view's status zone continuously displays the selected default child
+boundary as `sandbox`, `filesystem`, and `network` facts. It therefore exposes
+Linux Bubblewrap confinement, deliberate `off` mode, required-mode refusal,
+and `auto` fallback on unsupported or unavailable backends without relying on
+a one-time message. Per-invocation additive and full-escalation facts remain in
+the corresponding Bash or batch-Eval result because they do not change the
+default boundary for later calls.
+
 Protected restrictions are layered after writable roots. Existing glob matches
 and canonical targets become concrete mounts; `.git` pointer files also protect
 their Git directory target. Read-only paths remain visible but immutable, while
