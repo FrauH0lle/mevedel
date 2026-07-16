@@ -399,8 +399,9 @@ on the owned request or agent invocation. For instructions they exist only on
 the temporary preparation request and do not grant tools to the consuming
 request. These buckets outrank session and persistent rules for allow/ask
 resolution, while deny remains absolute across all buckets. Active Goal
-planning and review phases deny non-read-only tools before skill allow grants
-are considered.
+planning and review phases deny tools in the native `edit` group before skill
+allow grants are considered. Bash and Eval still follow normal permission
+policy in those phases.
 
 ## Hooks
 

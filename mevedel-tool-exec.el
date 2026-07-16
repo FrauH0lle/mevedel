@@ -1175,7 +1175,7 @@ guidance or nil."
                mevedel-permission-guardian-timeout nil
                (lambda ()
                  (finish nil))))
-        (condition-case err
+        (condition-case nil
             (let* ((policy
                     (progn
                       (require 'mevedel-models)
@@ -1210,11 +1210,6 @@ guidance or nil."
                     (gptel-model (plist-get policy :model))
                     (gptel-reasoning-effort (plist-get policy :effort)))
                 (funcall request-fn)))
-          (user-error
-           (setq done t)
-           (when timer
-             (cancel-timer timer))
-           (signal (car err) (cdr err)))
           (error
            (finish nil)))))))
 

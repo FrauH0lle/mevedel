@@ -1156,6 +1156,42 @@
 		     (should-not fail-reason)
 		     (funcall (plist-get entry :callback) 'allow-once)
 		     (should next-called)))
+		 :doc "model guardian errors preserve prompts and full-auto execution"
+		 (dolist (mode '(ask auto full-auto))
+		   (let* ((session (mevedel-session--create
+				    :name "guardian" :permission-mode mode))
+			  (tool (mevedel-tool-ensure "Bash"))
+			  (mevedel-permission-rules nil)
+			  (mevedel-protected-paths nil)
+			  (mevedel-bash-dangerous-commands '("rm"))
+			  (mevedel-permission-guardian t)
+			  entry
+			  next-called
+			  fail-reason)
+		     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+				(lambda (&rest _)
+				  '(:sandbox bubblewrap
+				    :filesystem workspace-write
+				    :network isolated)))
+			       ((symbol-function 'mevedel-model-resolve-workload)
+				(lambda (&rest _)
+				  (user-error "Guardian model unavailable")))
+			       ((symbol-function 'mevedel-permission--enqueue)
+				(lambda (queued &optional _session)
+				  (setq entry queued)))
+			       ((symbol-function
+				 'mevedel-permission-queue--render-head)
+				#'ignore))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args '(:command "rm /tmp/file")
+			      :session session)
+			(lambda (_context) (setq next-called t))
+			(lambda (reason) (setq fail-reason reason))))
+		     (if (eq mode 'full-auto)
+			 (should next-called)
+		       (should entry)
+		       (should-not next-called))
+		     (should-not fail-reason)))
 		 :doc "full-auto guardian may veto suspicious Bash but failure allows"
 		 (dolist (guardian-result
 			  '((:risk "high" :recommendation "deny"
