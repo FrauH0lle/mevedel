@@ -131,7 +131,7 @@ interaction chrome around that transcript.
 |   inline agent/tool handles, and any in-flight live tail.     |
 +------------------------- status marker ----------------------+
 | Status zone                                                  |
-|   Task status and aggregate running/blocked agent rows.       |
+|   Active child confinement, tasks, and aggregate agent rows.  |
 +---------------------- interaction marker --------------------+
 | Interaction zone                                             |
 |   Permission prompts, plan approvals, Ask,                    |
@@ -152,8 +152,9 @@ Terminology:
   Pending tool rows like `Calling Read...` are fragment-backed live-tail
   history content, not status-zone content.
 - **Status zone**: session status chrome between `mevedel-view--status-marker`
-  and `mevedel-view--interaction-marker`; it is for task rows and aggregate
-  agent status rows.
+  and `mevedel-view--interaction-marker`. Its persistent sandbox row reports
+  the currently selected sandbox, filesystem, and network boundary, including
+  unsupported/unavailable fallback; task and aggregate-agent rows follow it.
 - **Interaction zone**: user-action chrome between
   `mevedel-view--interaction-marker` and the request progress row; it is for
   queued prompts and controls that require user response.
@@ -232,8 +233,9 @@ Current fragment namespaces:
   from `mevedel-view--pending-tool-calls`. They are removed and recreated
   from pending state; they must not be preserved as source-backed transcript
   text or deleted by heuristic `Calling ...` line matching.
-- `status`: `tasks` and `agents` status-zone blocks. Task and aggregate-agent
-  disclosure state is backed by fragment collapse state.
+- `status`: the persistent `sandbox` boundary row plus `tasks` and `agents`
+  status-zone blocks. Task and aggregate-agent disclosure state is backed by
+  fragment collapse state.
 - `interaction`: queued user controls plus a non-navigatable `:separator`
   fragment. Ask, permission, plan, preview, and queued-user-message
   callers continue to use the descriptor registry.

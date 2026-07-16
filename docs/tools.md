@@ -141,6 +141,8 @@ families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
 the Agent, StopAgent, ToolSearch, and SendMessage adapters. Ask's questionnaire,
 handler, renderer, and schema live in `mevedel-tool-ask.el`. Exact external-path
 authority is part of the normal permission pipeline, not a model-visible tool.
+The same shared resource-grant interface authorizes native filesystem tools and
+additive Bash/batch-Eval mounts; command authorization remains independent.
 
 All direct user interactions share the settlement and cancellation primitive in
 `mevedel-interaction-prompt.el`. Domain owners supply their own text, keymaps,
@@ -349,3 +351,8 @@ cleanup, process-group handling, and optional Bubblewrap confinement; live Eval
 does not use that child seam. Batch mode isolates interactive Emacs state and,
 when the platform sandbox is active, applies the same filesystem, protected
 path, process, and network boundaries as Bash.
+
+The main view keeps the default child sandbox, filesystem, and network boundary
+visible in its status zone. Each Bash and batch-Eval result separately records
+the boundary that actually applied to that invocation, including additive
+network/filesystem authority, full escalation, and unrestricted fallback.

@@ -46,6 +46,12 @@
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
 
+;; `mevedel-sandbox'
+(declare-function mevedel-sandbox-pending-facts
+                  "mevedel-sandbox"
+                  (&optional additional-permissions sandbox-permissions))
+(declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
+
 ;; `mevedel-structs'
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
@@ -992,6 +998,15 @@ the editable composer signal instead of settling queued interactions."
 (defun mevedel-view--status-fragments (model)
   "Return status fragments for MODEL."
   (let (fragments)
+    (require 'mevedel-sandbox)
+    (let* ((facts (mevedel-sandbox-pending-facts))
+           (body (concat (mevedel-sandbox-status-text facts) "\n")))
+      (add-text-properties 0 (length body) '(font-lock-face shadow) body)
+      (push (list :namespace 'status
+                  :id 'sandbox
+                  :priority 10
+                  :body body)
+            fragments))
     (when-let* ((body (plist-get model :task-body)))
       (let ((fragment (list :namespace 'status
                             :id 'tasks

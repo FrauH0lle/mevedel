@@ -229,6 +229,22 @@ transcript. Terminal agent outcomes stay in their inline tool handles
 and transcript views instead of being repeated in the aggregate status
 zone.
 
+## Permission and confinement propagation
+
+Sub-agents use the parent session's permission mode, direct rules, and exact
+resource grants by reference. Their Bash and Eval calls therefore follow the
+same command policy, protected-path checks, and optional child confinement as
+the main agent. Any required user decision is attributed to the originating
+agent but rendered in the parent view's shared permission queue.
+
+Delegated invocation/request rules may narrow authority and may allow ordinary
+known-safe commands, but they cannot authorize dangerous or complex Bash, live
+Eval, protected resources, or full execution escalation. An ordinary sub-agent
+may request additive or full authority only through the same user-visible queue;
+there is no separate model-visible access-request tool. The main view's
+persistent confinement row describes the default child boundary, while each
+Bash or batch-Eval result records the boundary actually used by that call.
+
 ## Task status
 
 Tasks tracked per caller (main chat and each sub-agent separately).

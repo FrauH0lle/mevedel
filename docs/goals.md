@@ -29,6 +29,9 @@ environments. The implementer cannot complete a Goal; only a structured review
 verdict can do that. A `continue` verdict carries review findings into a new
 planning cycle. Every accepted plan is copied from `current-plan.md` to an
 immutable cycle artifact before implementation.
+Goal phase changes do not weaken or strengthen child confinement: Bash and
+batch Eval continue to use the selected sandbox boundary, which remains visible
+in the main view's status zone.
 
 ## Commands and approval policy
 

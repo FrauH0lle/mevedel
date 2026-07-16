@@ -297,6 +297,50 @@
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 
+(mevedel-deftest mevedel-view--status-fragments ()
+  ,test
+  (test)
+  :doc "status zone continuously discloses the default child boundary"
+  (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+             (lambda (&rest _)
+               '(:sandbox bubblewrap
+                 :filesystem workspace-write
+                 :network isolated)))
+            ((symbol-function 'mevedel-view-agent-status-fragment)
+             #'ignore))
+    (let* ((fragments (mevedel-view--status-fragments nil))
+           (sandbox (seq-find
+                     (lambda (fragment)
+                       (eq (plist-get fragment :id) 'sandbox))
+                     fragments)))
+      (should sandbox)
+      (should (string-match-p
+               "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
+               (plist-get sandbox :body)))))
+
+  :doc "unrestricted fallback stays visible without changing a multiline draft"
+  (mevedel-view-test--with-buffers
+    (with-current-buffer view-buf
+      (goto-char (mevedel-view--input-start))
+      (insert ">first line\nsecond line")
+      (let ((draft (buffer-substring-no-properties
+                    (mevedel-view--input-start) (point-max))))
+        (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+                   (lambda (&rest _)
+                     '(:sandbox unavailable
+                       :filesystem unrestricted
+                       :network unrestricted
+                       :reason "Bubblewrap is not supported")))
+                  ((symbol-function 'mevedel-view-agent-status-fragment)
+                   #'ignore))
+          (mevedel-view--render-status data-buf)
+          (should (equal draft
+                         (buffer-substring-no-properties
+                          (mevedel-view--input-start) (point-max))))
+          (should (string-match-p
+                   "sandbox: unavailable; filesystem: unrestricted; network: unrestricted"
+                   (buffer-substring-no-properties (point-min) (point-max)))))))))
+
 (mevedel-deftest mevedel-view--dnd-file-mentions
   (:doc "view drag/drop inserts @file mentions and records exact grants")
   ,test
