@@ -905,6 +905,28 @@
 ;;
 ;;; Permission step
 
+(mevedel-deftest mevedel-pipeline--permission-origin ()
+  ,test
+  (test)
+  :doc "prefers an explicit prompt origin over request and invocation owners"
+  (let ((request
+         (mevedel-request--create :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+    (should
+     (equal
+      "explicit--bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      (mevedel-pipeline--permission-origin
+       (list :request request)
+       "explicit--bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))))
+  :doc "uses the scoped request owner before an agent or main fallback"
+  (let ((request
+         (mevedel-request--create :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+    (should
+     (equal
+      "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      (mevedel-pipeline--permission-origin (list :request request)))))
+  :doc "falls back to main without a scoped owner"
+  (should (equal "main" (mevedel-pipeline--permission-origin nil))))
+
 (mevedel-deftest mevedel-pipeline--step-permission ()
 		 ,test
 		 (test)

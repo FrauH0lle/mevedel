@@ -380,6 +380,38 @@
     (mevedel-request-end)
     (should (null mevedel--current-request))))
 
+(mevedel-deftest mevedel-request-cancel ()
+  ,test
+  (test)
+  :doc "cancels only an explicit request's scoped permission owner"
+  (let* ((session (mevedel-session--create))
+         (request
+          (mevedel-request--create
+           :session session
+           :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+         swept)
+    (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-origin)
+               (lambda (origin actual-session &optional _no-render)
+                 (setq swept (list origin actual-session)))))
+      (mevedel-request-cancel request))
+    (should
+     (equal
+      "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      (car swept)))
+    (should (eq session (cadr swept))))
+  :doc "drains registered cancellers without changing the ambient request"
+  (let* ((ambient (mevedel-request--create))
+         (request (mevedel-request--create))
+         fired)
+    (let ((mevedel--current-request ambient))
+      (mevedel-request-push-canceller
+       request (lambda () (setq fired t)))
+      (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-origin)
+                 #'ignore))
+        (mevedel-request-cancel request))
+      (should fired)
+      (should (eq ambient mevedel--current-request)))))
+
 (mevedel-deftest mevedel-session-activate-dropped-file-grants ()
   ,test
   (test)

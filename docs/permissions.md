@@ -94,10 +94,11 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   mode, so skill, session, persistent, and default allow rules cannot bypass
   it. Bash and Eval remain available through their normal permission policy;
   an inspection phase is not an OS-enforced read-only environment.
-- Automatic Goal guardians receive no tools at all. Guardian approval changes
-  lifecycle state only; it never raises the session permission mode. Fully
-  unattended implementation therefore still requires an explicit `full-auto`
-  selection.
+- Automatic Goal guardians receive no tools at all and trust clear references
+  to existing PRDs or tickets rather than inspecting them. Guardian approval
+  changes lifecycle state only; it never raises the session permission mode.
+  Fully unattended implementation therefore still requires an explicit
+  `full-auto` selection.
 
 ## Rule format
 
@@ -384,8 +385,10 @@ policy from the current session's `mevedel-model-workloads`, or to a custom
 `(lambda (command context callback) ...)` classifier for tests or local
 policy. `mevedel-permission-guardian-timeout` controls the wait for
 reviewer output; the default is 20 seconds. The model prompt lives in
-`prompts/permissions/bash-guardian-system.md`. Elisp constructs the separate
-user message containing the command evidence.
+`prompts/permissions/bash-guardian-system.md`. The maintained
+[guardian prompt contract](guardian-prompts.md) records its trusted wording and
+semantic examples. Elisp constructs the separate user message containing the
+command evidence.
 
 The model-backed reviewer runs as an isolated guardian request. Its system
 message contains only the trusted reviewer policy, authority limits,

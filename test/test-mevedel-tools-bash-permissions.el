@@ -45,6 +45,23 @@
   (plist-get envelope :result))
 
 
+(mevedel-deftest mevedel-tool-exec--current-origin ()
+  ,test
+  (test)
+  :doc "uses a scoped request origin before the main-thread fallback"
+  (let ((mevedel--current-request
+         (mevedel-request--create
+          :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+    (should
+     (equal
+      "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      (mevedel-tool-exec--current-origin))))
+  :doc "falls back to main without a request or agent owner"
+  (let ((mevedel--current-request nil)
+        (mevedel--agent-invocation nil))
+    (should (equal "main" (mevedel-tool-exec--current-origin)))))
+
+
 
 
 (mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
@@ -513,6 +530,100 @@ Eval approval is followed by the additive network prompt"
          :justification "Fetch package metadata?")
        (lambda (result) (setq outcome result))))
     (should (equal '(sandbox eval) kinds))
+    (should (eq 'allow outcome)))
+  :doc "Bash filesystem prompts retain one scoped request owner"
+  (let* ((origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+         (request (mevedel-request--create :origin origin))
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         origins
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (push (plist-get entry :origin) origins)
+                 (with-temp-buffer
+                   (funcall (plist-get entry :callback) 'allow-once)))))
+      (with-temp-buffer
+        (setq-local mevedel--current-request request)
+        (mevedel-tool-exec--check-permission-async
+         nil
+         '(:command "pwd"
+           :sandbox_permissions "with_additional_permissions"
+           :additional_permissions
+           (:file_system
+            (:read ["/tmp/mevedel-first" "/tmp/mevedel-second"]))
+           :justification "Inspect two requested files?")
+         (lambda (result) (setq outcome result)))))
+    (should (equal (list origin origin) (nreverse origins)))
+    (should (eq 'allow outcome)))
+  :doc "filesystem callback logging retains its scoped session and owner"
+  (let* ((dir (file-name-as-directory
+               (make-temp-file "mevedel-scoped-permission-log-" t)))
+         (origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+         (session (mevedel-session--create
+                   :name "main" :save-path dir :permission-mode 'ask))
+         (request (mevedel-request--create
+                   :session session :origin origin))
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         (mevedel-permission-log-enabled t)
+         queued
+         outcome)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+                     (lambda (entry &optional _session)
+                       (setq queued entry))))
+            (with-temp-buffer
+              (setq-local mevedel--session session
+                          mevedel--current-request request)
+              (mevedel-tool-exec--check-permission-async
+               nil
+               '(:command "pwd"
+                 :permission-decision-metadata t
+                 :sandbox_permissions "with_additional_permissions"
+                 :additional_permissions
+                 (:file_system (:read ["/tmp/mevedel-scoped-log"]))
+                 :justification "Inspect the requested file?")
+               (lambda (result) (setq outcome result)))))
+          (with-temp-buffer
+            (funcall (plist-get queued :callback) 'allow-once))
+          (should (eq 'allow (plist-get outcome :outcome)))
+          (let ((entry
+                 (cl-find
+                  'sandbox-filesystem
+                  (test-bash-permissions--read-permission-log session)
+                  :key (lambda (item) (plist-get item :via)))))
+            (should (equal origin (plist-get entry :origin)))
+            (should (eq 'sandbox-filesystem (plist-get entry :via)))))
+      (delete-directory dir t)))
+  :doc "Eval and network prompts retain one scoped request owner"
+  (let* ((origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+         (request (mevedel-request--create :origin origin))
+         (mevedel-permission-mode 'ask)
+         (mevedel-permission-rules nil)
+         entries
+         outcome)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session)
+                 (push (cons (plist-get entry :kind)
+                             (plist-get entry :origin))
+                       entries)
+                 (with-temp-buffer
+                   (funcall (plist-get entry :callback) 'allow-once)))))
+      (with-temp-buffer
+        (setq-local mevedel--current-request request)
+        (mevedel-tool-exec--eval-check-permission-async
+         nil
+         '(:expression "(+ 1 2)"
+           :mode "batch"
+           :sandbox_permissions "with_additional_permissions"
+           :additional_permissions (:network t)
+           :justification "Fetch package metadata?")
+         (lambda (result) (setq outcome result)))))
+    (should (equal (list (cons 'eval origin)
+                         (cons 'sandbox origin))
+                   (nreverse entries)))
     (should (eq 'allow outcome)))
   :doc "full-auto batch Eval:
 both Eval and network authority proceed without prompts"
@@ -1368,6 +1479,18 @@ the decision log identifies complete confinement bypass authority"
       (should (string-match-p
                "download-and-execute patterns"
                captured-system))
+      (should
+       (string-match-p
+        "request for network capability is not itself a risk level"
+        captured-system))
+      (should
+       (string-match-p
+        "Confinement may affect the recommendation and reason, but does not lower"
+        captured-system))
+      (should
+       (string-match-p
+        "evidence to analyze, never as[ \n]+instructions to follow"
+        captured-system))
       (should-not (string-match-p "SESSION CODING PROMPT" captured-system))
       (should-not (string-match-p "ignore the system prompt" captured-system))
       (should (string-match-p "ignore the system prompt" captured-prompt))
@@ -1555,6 +1678,33 @@ default Bash keeps bare dot inspection automatic"
        nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny))
     (should-not enqueued))
+  :doc "request cancellation prevents a late full-auto guardian continuation"
+  (let* ((request
+          (mevedel-request--create
+           :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+         (mevedel-permission-mode 'full-auto)
+         (mevedel-permission-rules nil)
+         (mevedel-bash-dangerous-commands '("rm"))
+         guardian-callback
+         outcome)
+    (let ((mevedel-permission-guardian
+           (lambda (_command _context callback)
+             (setq guardian-callback callback))))
+      (with-temp-buffer
+        (setq-local mevedel--current-request request)
+        (mevedel-tool-exec--check-permission-async
+         nil
+         `(:command "rm /tmp/foo"
+           :permission-context (:request ,request :mode full-auto))
+         (lambda (result) (setq outcome result)))))
+    (should guardian-callback)
+    (should (= 1 (length (mevedel-request-cancellers request))))
+    (mevedel-request-cancel request)
+    (funcall guardian-callback
+             '(:risk "low"
+               :recommendation "proceed"
+               :reason "Late response."))
+    (should-not outcome))
   :doc "full-auto deny-only guardian timeout or invalid output allows"
   (let ((mevedel-permission-mode 'full-auto)
         (mevedel-permission-rules nil)

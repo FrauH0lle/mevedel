@@ -47,6 +47,8 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/permissions.md`](docs/permissions.md) — 9-step decision chain,
   bucket precedence, Goal phase restrictions, Bash/Eval specifics,
   sub-agent permission propagation, example config
+- [`docs/guardian-prompts.md`](docs/guardian-prompts.md) — trusted guardian
+  prompts, untrusted evidence boundaries, response contracts, examples
 - [`docs/agents.md`](docs/agents.md) — explorer/coordinator/
   verifier/reviewer, background spawning + BWAIT, SendMessage mailboxes,
   coordinator and review skills, task status fragment

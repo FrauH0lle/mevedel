@@ -11,16 +11,25 @@
 (require 'cl-lib)
 
 (eval-when-compile
+  (require 'gptel-request)
   (require 'mevedel-plan)
   (require 'mevedel-tool-registry))
 (require 'mevedel-queue)
 (require 'mevedel-utilities)
 
 ;; `gptel'
+(declare-function gptel--copy-tool "ext:gptel-request" (cl-x) t)
+(declare-function gptel--display-tool-calls "ext:gptel-request" (calls info))
+(declare-function gptel--reject-tool-calls "ext:gptel" (&optional calls overlay))
 (declare-function gptel--model-name "ext:gptel" (model))
+(declare-function gptel-abort "ext:gptel-request" (buffer))
 (declare-function gptel-backend-name "ext:gptel" (backend))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
+(declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-request "ext:gptel" (prompt &rest args))
+(declare-function gptel-tool-async "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-function "ext:gptel-request" (cl-x) t)
+(declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel-backend)
 (defvar gptel-model)
 (defvar gptel-prompt-transform-functions)
@@ -106,6 +115,9 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request--create "mevedel-structs" (&rest args))
+(declare-function mevedel-request-cancel "mevedel-structs"
+                  (request &optional abort-plan-queue))
 (declare-function mevedel-session-enqueue-pending-reminder
                   "mevedel-structs" (session body))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -676,6 +688,76 @@ USAGE-CONTEXT supplies request-local `:estimated-input-tokens' and
           (+ (or (mevedel-goal-token-usage goal) 0) count))
     count))
 
+(cl-defstruct
+    (mevedel-goal--request-leg
+     (:constructor mevedel-goal--request-leg-create (goal buffer)))
+  "Request-local usage state for one possibly continued model request."
+  goal
+  buffer
+  context
+  (active t)
+  chunks
+  (reported-total 0)
+  fallback-since-reported)
+
+(defun mevedel-goal--request-leg-begin (leg)
+  "Mark LEG as a newly active model-request leg."
+  (setf (mevedel-goal--request-leg-active leg) t
+        (mevedel-goal--request-leg-chunks leg) nil))
+
+(defun mevedel-goal--request-leg-append (leg chunk)
+  "Record streamed response CHUNK for active request LEG."
+  (setf (mevedel-goal--request-leg-active leg) t)
+  (push chunk (mevedel-goal--request-leg-chunks leg)))
+
+(defun mevedel-goal--request-leg-charge (leg info &optional response)
+  "Charge active request LEG once using request-local INFO and RESPONSE."
+  (when (mevedel-goal--request-leg-active leg)
+    (setf (mevedel-goal--request-leg-active leg) nil)
+    (require 'mevedel-compact)
+    (let* ((tokens (and info (plist-get info :tokens)))
+           (tokens-full (and info (plist-get info :tokens-full)))
+           (tokens-count
+            (mevedel--compact-token-usage-count tokens))
+           (full-count
+            (mevedel--compact-token-usage-count tokens-full))
+           (reported-count
+            (cond
+             ((and tokens-count (> tokens-count 0))
+              (cl-incf
+               (mevedel-goal--request-leg-reported-total leg)
+               tokens-count)
+              tokens-count)
+             ((and full-count (> full-count 0))
+              (prog1
+                  (unless
+                      (mevedel-goal--request-leg-fallback-since-reported leg)
+                    (max
+                     0
+                     (- full-count
+                        (mevedel-goal--request-leg-reported-total leg))))
+                (setf
+                 (mevedel-goal--request-leg-reported-total leg) full-count
+                 (mevedel-goal--request-leg-fallback-since-reported leg) nil)))))
+           (leg-response
+            (or response
+                (when-let* ((chunks
+                             (mevedel-goal--request-leg-chunks leg)))
+                  (apply #'concat (nreverse chunks)))))
+           (buffer (mevedel-goal--request-leg-buffer leg)))
+      (setf (mevedel-goal--request-leg-chunks leg) nil)
+      (unless (and reported-count (> reported-count 0))
+        (setf (mevedel-goal--request-leg-fallback-since-reported leg) t))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (mevedel-goal--charge-token-usage
+           (mevedel-goal--request-leg-goal leg)
+           (and reported-count
+                (> reported-count 0)
+                (list :tokens (list :input reported-count)))
+           leg-response
+           (mevedel-goal--request-leg-context leg)))))))
+
 (defun mevedel-goal--record-token-usage (goal info &optional response)
   "Charge GOAL once for its checkpoint request INFO and RESPONSE."
   (let ((checkpoint (copy-tree (mevedel-goal-checkpoint goal))))
@@ -1078,6 +1160,70 @@ REVISION-NUMBER identifies the correction round."
    plan
    mevedel-goal--plan-guidance))
 
+(defun mevedel-goal--guard-planner-tool-calls (calls info live-p)
+  "Return CALLS and INFO tool specs guarded by LIVE-P after settlement."
+  (let* ((guarded-tools nil)
+         (guarded-calls
+          (mapcar
+           (pcase-lambda (`(,tool ,args ,result-callback))
+             (let* ((function (gptel-tool-function tool))
+                    (async (gptel-tool-async tool))
+                    (guarded-tool (gptel--copy-tool tool)))
+               (setf
+                (gptel-tool-function guarded-tool)
+                (if async
+                    (lambda (callback &rest function-args)
+                      (when (funcall live-p)
+                        (apply function callback function-args)))
+                  (lambda (&rest function-args)
+                    (when (funcall live-p)
+                      (apply function function-args)))))
+               (push (cons (gptel-tool-name tool) guarded-tool)
+                     guarded-tools)
+               (list
+                guarded-tool
+                args
+                (lambda (result)
+                  (when (funcall live-p)
+                    (funcall result-callback result))))))
+           calls)))
+    (when-let* ((tools (plist-get info :tools)))
+      (plist-put
+       info :tools
+       (mapcar
+        (lambda (tool)
+          (or (alist-get (gptel-tool-name tool)
+                         guarded-tools nil nil #'equal)
+              tool))
+        tools)))
+    guarded-calls))
+
+(defun mevedel-goal--tool-confirmation-overlay (display info)
+  "Return the dispatch overlay associated with DISPLAY and INFO."
+  (when-let* ((buffer
+               (or (and (overlayp display) (overlay-buffer display))
+                   (and-let* ((position (plist-get info :position)))
+                     (marker-buffer position)))))
+    (with-current-buffer buffer
+      (cl-find-if
+       (lambda (overlay)
+         (and (eq (overlay-get overlay 'info) info)
+              (overlay-get overlay 'gptel-tool)))
+       (overlays-in (point-min) (point-max))))))
+
+(defun mevedel-goal--stop-planner-request
+    (fsm chat-buffer request tool-overlay)
+  "Cancel REQUEST, its TOOL-OVERLAY, and active FSM in CHAT-BUFFER."
+  (mevedel-request-cancel request)
+  (when (and (overlayp tool-overlay) (overlay-buffer tool-overlay))
+    (gptel--reject-tool-calls nil tool-overlay))
+  (when fsm
+    (let ((info (gptel-fsm-info fsm)))
+      (when info
+        (plist-put info :callback #'ignore)))
+    (setf (gptel-fsm-state fsm) 'ABRT)
+    (gptel-abort chat-buffer)))
+
 (defun mevedel-goal--planner-revision-request
     (goal plan decision chat-buffer callback)
   "Request one automatic replacement for PLAN, then call CALLBACK."
@@ -1087,9 +1233,25 @@ REVISION-NUMBER identifies the correction round."
            (done nil)
            (stream (buffer-local-value 'gptel-stream chat-buffer))
            chunks
+           (previous-request
+            (buffer-local-value 'mevedel--current-request chat-buffer))
            policy
+           (planner-request
+            (mevedel-request--create
+             :session session
+             :origin
+             (format
+              "goal-plan-revision--%s"
+              (md5
+               (format "%s:%s:%s"
+                       (mevedel-goal-id goal)
+                       (float-time)
+                       (random))))))
+           request-fsm
+           tool-confirmation-overlay
            timer
-           usage-context
+           (usage-leg
+            (mevedel-goal--request-leg-create goal chat-buffer))
            (revision-number
             (1+ (or (plist-get
                      (and session
@@ -1097,19 +1259,23 @@ REVISION-NUMBER identifies the correction round."
                      :revision-count)
                     0))))
       (cl-labels
-          ((finish (result)
+          ((finish (result &optional stop-request)
              (unless done
                (setq done t)
                (when timer
                  (cancel-timer timer))
+               (when stop-request
+                 (mevedel-goal--stop-planner-request
+                  request-fsm chat-buffer planner-request
+                  tool-confirmation-overlay))
                (when (buffer-live-p chat-buffer)
                  (with-current-buffer chat-buffer
+                   (when (eq mevedel--current-request planner-request)
+                     (setq-local mevedel--current-request previous-request))
                    (funcall callback result)))))
-           (settle-response (response info)
-             (when (buffer-live-p chat-buffer)
-               (with-current-buffer chat-buffer
-                 (mevedel-goal--charge-token-usage
-                  goal info response usage-context)))
+           (settle-response (response info usage-response)
+             (mevedel-goal--request-leg-charge
+              usage-leg info usage-response)
              (let ((replacement
                     (and (stringp response)
                          (mevedel-plan-extract-proposed response))))
@@ -1127,18 +1293,14 @@ REVISION-NUMBER identifies the correction round."
                mevedel-goal-planner-revision-timeout nil
                (lambda ()
                  (unless done
-                   (when (buffer-live-p chat-buffer)
-                     (with-current-buffer chat-buffer
-                       (mevedel-goal--charge-token-usage
-                        goal nil
-                        (and chunks (apply #'concat (nreverse chunks)))
-                        usage-context)))
+                   (mevedel-goal--request-leg-charge usage-leg nil)
                    (finish
                     (append
                      (list :error "Planner revision timed out")
                      (when policy
                        (list :provider (mevedel-goal--policy-label policy)
-                             :effort (plist-get policy :effort)))))))))
+                             :effort (plist-get policy :effort))))
+                    t)))))
         (condition-case err
             (let* ((prompt
                     (with-current-buffer chat-buffer
@@ -1149,11 +1311,12 @@ REVISION-NUMBER identifies the correction round."
                       (if (functionp gptel-system-prompt)
                           (funcall gptel-system-prompt)
                         gptel-system-prompt))))
-              (setq usage-context
-                    (list
-                     :estimated-input-tokens
-                     (mevedel-goal--estimate-request-input-tokens
-                      prompt system-prompt)))
+              (setf
+               (mevedel-goal--request-leg-context usage-leg)
+               (list
+                :estimated-input-tokens
+                (mevedel-goal--estimate-request-input-tokens
+                 prompt system-prompt)))
               (with-current-buffer chat-buffer
                 (mevedel-goal--call-with-workload
                  'planning
@@ -1162,43 +1325,75 @@ REVISION-NUMBER identifies the correction round."
                          (list :backend gptel-backend
                                :model gptel-model
                                :effort gptel-reasoning-effort))
-                   (gptel-request
-                    prompt
-                    :buffer chat-buffer
-                    :stream stream
-                    :system system-prompt
-                    :transforms nil
-                    :callback
-                    (lambda (response info)
-                      (cond
-                       (done nil)
-                       ((and (consp response)
-                             (eq (car response) 'reasoning)))
-                       ((and (plist-get info :stream)
-                             (stringp response))
-                        (push response chunks))
-                       ((eq response t)
-                        (settle-response
-                         (apply #'concat (nreverse chunks)) info))
-                       ((stringp response)
-                        (settle-response response info))
-                       ((or (null response) (eq response 'abort))
-                        (when (buffer-live-p chat-buffer)
-                          (with-current-buffer chat-buffer
-                            (mevedel-goal--charge-token-usage
-                             goal info
-                             (and chunks
-                                  (apply #'concat (nreverse chunks)))
-                             usage-context)))
-                        (finish
-                         (list
-                          :error
-                          "Planner revision request failed"))))))))))
+                   (setq
+                    request-fsm
+                    (progn
+                      (setq-local mevedel--current-request planner-request)
+                      (gptel-request
+                       prompt
+                       :buffer chat-buffer
+                       :stream stream
+                       :system system-prompt
+                       :transforms nil
+                       :callback
+                       (lambda (response info)
+                         (cond
+                          (done nil)
+                          ((and (consp response)
+                                (eq (car response) 'reasoning)))
+                          ((and (consp response)
+                                (eq (car response) 'tool-call))
+                           (when (or (plist-get info :tokens)
+                                     (plist-get info :tokens-full))
+                             (mevedel-goal--request-leg-charge usage-leg info))
+                           (setq
+                            tool-confirmation-overlay
+                            (mevedel-goal--tool-confirmation-overlay
+                             (gptel--display-tool-calls
+                              (mevedel-goal--guard-planner-tool-calls
+                               (cdr response)
+                               info
+                               (lambda () (not done)))
+                              info)
+                             info)))
+                          ((and (consp response)
+                                (eq (car response) 'tool-result))
+                           (mevedel-goal--request-leg-charge usage-leg info)
+                           (mevedel-goal--request-leg-begin usage-leg))
+                          ((and (plist-get info :stream)
+                                (stringp response))
+                           (push response chunks)
+                           (mevedel-goal--request-leg-append
+                            usage-leg response))
+                          ((eq response t)
+                           (if (plist-get info :tool-use)
+                               (mevedel-goal--request-leg-charge
+                                usage-leg info)
+                             (settle-response
+                              (apply #'concat (nreverse chunks))
+                              info nil)))
+                          ((stringp response)
+                           (if (plist-get info :tool-use)
+                               (progn
+                                 (push response chunks)
+                                 (mevedel-goal--request-leg-charge
+                                  usage-leg info response))
+                             (settle-response
+                              (apply #'concat
+                                     (nreverse (cons response chunks)))
+                              info response)))
+                          ((or (null response) (eq response 'abort))
+                           (mevedel-goal--request-leg-charge usage-leg info)
+                           (finish
+                            (list
+                             :error
+                             "Planner revision request failed"))))))))))))
           (error
            (finish
             (list :error
                   (format "Planner revision failed: %s"
-                          (error-message-string err))))))))))
+                          (error-message-string err)))
+            t)))))))
 
 (defun mevedel-goal--revision-escalation-reason
     (decision result &optional limit-reached)

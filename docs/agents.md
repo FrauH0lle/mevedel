@@ -25,9 +25,11 @@ generated from persisted session state. Planning, guardian, implementation,
 review, and recovery then add only their phase-specific instructions.
 For `/goal auto <objective>`, each proposal first goes through an internal
 `goal-guardian` workload request. That request has no tools and is not inserted
-as a conversational turn. Its approve-or-ask decision is persisted and shown
-as an audit disclosure; every non-approval fails closed to the normal plan
-approval interaction.
+as a conversational turn. Its `approve`, `revise`, or `ask` decision is
+persisted and shown as an audit disclosure. `Revise` permits at most two
+automatic planning corrections and guardian re-reviews; `ask`, failures, and
+unresolved final review return the latest valid plan to the normal approval
+interaction.
 
 The controller persists a write-ahead checkpoint before each of those phase
 requests. Read-only planning, guardian, and review attempts are safe to retry.

@@ -22,14 +22,19 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **MCP mention binding** — The association between an `@mcp` mention and one server-name/resource-URI pair. It reads the resource's latest contents and treats a replacement server with the same name as the same locator.
 - **agent mention** — An `@agent:name` mention that selects the currently registered agent definition by its unique name when dispatched.
 - **directive** — An instruction that asks the agent to discuss, implement, revise, tutor, or process work.
-- **goal** — A durable user objective that may require multiple planning and execution cycles before it is complete or blocked.
+- **goal** — A durable user objective and its achievement criteria that may require multiple planning and execution cycles before it is complete or blocked.
+- **achievement criteria** — The observable conditions that prove a Goal has been achieved. They govern completion even when implementation reasonably differs from the accepted plan.
 - **goal cycle** — One planning, approval, implementation, and review iteration toward a goal.
-- **plan** — The proposed implementation approach for one goal cycle, subject to user approval.
+- **plan** — An implementation-ready approach for one goal cycle at its natural level of detail, subject to user or Goal guardian approval. It supports the Goal and achievement criteria rather than replacing them, and may be concise when incorporated PRDs or tickets provide the substance.
+- **plan template** — Outcome-first guidance organizing a plan around Goal, achievement criteria, approach, regression coverage, validation, and assumptions. Its headings are not a parser-enforced schema or approval checklist.
 - **goal phase** — The current stage of active work within a goal: planning, awaiting approval, implementing, or reviewing.
 - **goal status** — The lifecycle state controlling whether a goal may continue: active, paused, blocked, or complete. Status is independent of the goal's current phase.
 - **goal token budget** — An optional limit on model tokens consumed across a goal's workloads. Exhausting it pauses the goal without implying completion.
 - **goal approval policy** — A goal-level choice between requiring user approval for every plan and sending plans through the goal guardian for automatic approval. It is independent of tool permission mode, and changes take effect at the next unresolved plan-approval boundary.
-- **goal guardian** — A model-based reviewer that either approves an automatic goal's proposed plan or escalates it for user approval. It judges plans before implementation; it does not review completed work.
+- **goal guardian** — A model-based reviewer that approves an automatic Goal's proposed plan, requests a bounded automatic revision, or escalates a decision to the user. It judges plans before implementation; it does not review completed work.
+- **plan revision round** — One automatic planner response to concrete Goal guardian feedback followed by another guardian review. At most two rounds occur at one plan-approval boundary before control returns to the user.
+- **permission guardian** — A model-based Bash risk reviewer that annotates pending permission decisions without granting authority. It is advisory in `ask` and `auto`, and may only veto Bash execution in `full-auto`.
+- **guardian request** — An isolated model request whose trusted system instructions define one guardian's review policy while its user message contains only the untrusted evidence being reviewed. It does not inherit the session's coding-assistant prompt, transcript, tools, memories, skills, or workspace instructions.
 - **goal review** — A post-implementation evidence audit that decides whether the whole goal is complete, another goal cycle is required, or progress is blocked.
 - **execution home** — The session and worktree in which a goal performs implementation; it is selected once for the goal and remains stable across cycles.
 - **goal owner** — The single session allowed to continue a goal. Moving a goal to a worktree transfers ownership rather than copying it.

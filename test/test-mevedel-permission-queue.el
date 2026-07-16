@@ -514,6 +514,28 @@
 ;;
 ;;; Render dispatch
 
+(mevedel-deftest mevedel-permission-queue--attribution-origin
+  (:doc "attributes prompts only to verified session agents")
+  ,test
+  (test)
+
+  :doc "scoped non-agent request owners are not rendered as agents"
+  (let* ((session (test-pq--make-session))
+         (entry
+          (list :session session
+                :origin
+                "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+    (should-not (mevedel-permission-queue--attribution-origin entry)))
+
+  :doc "registered agent request owners retain attribution"
+  (let* ((session (test-pq--make-session))
+         (origin "verifier--abcdef123456abcdef123456abcdef12")
+         (entry (list :session session :origin origin)))
+    (setf (mevedel-session-agent-transcripts session)
+          (list (cons origin '(:status running))))
+    (should (equal origin
+                   (mevedel-permission-queue--attribution-origin entry)))))
+
 (mevedel-deftest mevedel-permission-queue--render-generic
   (:doc "renders generic permission queue entries")
   ,test
@@ -896,6 +918,9 @@
         (parent-view (generate-new-buffer " *test-pq-parent-view*"))
         (agent-data (generate-new-buffer " *test-pq-agent-data*"))
         (session (test-pq--make-session)))
+    (setf (mevedel-session-agent-transcripts session)
+          '(("verifier--abcdef123456abcdef123456abcdef12"
+             :status running)))
     (unwind-protect
         (progn
           (with-current-buffer parent-data
@@ -937,6 +962,9 @@
         (agent-data (generate-new-buffer " *test-pq-agent-status-data*"))
         (session (test-pq--make-session))
         outcomes)
+    (setf (mevedel-session-agent-transcripts session)
+          '(("verifier--abcdef123456abcdef123456abcdef12"
+             :status running)))
     (unwind-protect
         (progn
           (with-current-buffer parent-data

@@ -111,6 +111,19 @@ SESSION defaults to the current session."
                         (mevedel-permission-queue--current-session))))
     (mevedel-queue--set mevedel-permission-queue--spec sess queue)))
 
+(defun mevedel-permission-queue--attribution-origin (entry)
+  "Return ENTRY's verified agent origin for prompt attribution."
+  (let ((origin (plist-get entry :origin))
+        (session (plist-get entry :session)))
+    (when (and session
+               (not (equal origin "main"))
+               (or (assoc origin
+                          (mevedel-session-agent-transcripts session))
+                   (assoc origin (mevedel-session-agents session))
+                   (member origin
+                           (mevedel-session-background-agents session))))
+      origin)))
+
 (defun mevedel-permission-queue--log-props (entry &rest props)
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
   (let ((base nil))
@@ -154,7 +167,7 @@ ENTRY plist keys:
   :resource-access       -- `read' / `write' for exact filesystem grants
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
-  :origin                -- \"main\" or canonical agent-id (leaf)
+  :origin                -- \"main\" or a scoped request/agent identity
   :command               -- string (`bash' only)
   :analysis              -- normalized Bash analysis (`bash' only)
   :command-class         -- Bash command class (`bash' only)
@@ -207,7 +220,7 @@ Dispatches on entry's `:kind' via `--render-entry'."
         (include-always (plist-get entry :include-always))
         (count (length (mevedel-permission-queue--get
                         (plist-get entry :session))))
-        (origin (plist-get entry :origin))
+        (origin (mevedel-permission-queue--attribution-origin entry))
         (cb (lambda (outcome)
               (mevedel-permission-queue--on-head-outcome entry outcome))))
     (mevedel-permission--prompt-async-attributed
@@ -229,7 +242,8 @@ engine removes the head and returns the pinned tool-level denial."
     (unless (fboundp 'mevedel-permission--prompt-async-bash)
       (error "Bash permission UI unavailable"))
     (mevedel-permission--prompt-async-bash
-     command command-class include-always (plist-get entry :origin)
+     command command-class include-always
+     (mevedel-permission-queue--attribution-origin entry)
      (lambda (outcome)
        (mevedel-permission-queue--on-head-outcome entry outcome))
      count entry)))
@@ -244,7 +258,7 @@ final mapping)."
   (let ((expr (plist-get entry :expression))
         (mode (plist-get entry :mode))
         (preserve-ui (plist-get entry :preserve-ui))
-        (origin (plist-get entry :origin))
+        (origin (mevedel-permission-queue--attribution-origin entry))
         (count (length (mevedel-permission-queue--get
                         (plist-get entry :session)))))
     (mevedel--prompt-user-for-eval
@@ -262,7 +276,7 @@ final mapping)."
    (plist-get entry :tool-name)
    (plist-get entry :detail)
    (plist-get entry :justification)
-   (plist-get entry :origin)
+   (mevedel-permission-queue--attribution-origin entry)
    (lambda (outcome)
      (mevedel-permission-queue--on-head-outcome entry outcome))
    (length (mevedel-permission-queue--get (plist-get entry :session)))

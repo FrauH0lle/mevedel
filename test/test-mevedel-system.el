@@ -71,6 +71,27 @@
 ;;
 ;;; Prompt builder
 
+(mevedel-deftest mevedel-system-render-prompt-file ()
+  ,test
+  (test)
+  :doc "keeps maintained guardian prompt contracts synchronized exactly"
+  (let ((guardian-doc
+         (with-temp-buffer
+           (insert-file-contents
+            (file-name-concat
+             (file-name-directory (locate-library "mevedel"))
+             "docs" "guardian-prompts.md"))
+           (buffer-string))))
+    (dolist
+        (prompt-path
+         '("prompts/permissions/bash-guardian-system.md"
+           "prompts/goals/goal-guardian-system.md"))
+      (let ((prompt (mevedel-system-render-prompt-file prompt-path)))
+        (should
+         (string-match-p
+          (regexp-quote (concat "```text\n" prompt "```"))
+          guardian-doc))))))
+
 (mevedel-deftest mevedel-system-build-prompt
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry)

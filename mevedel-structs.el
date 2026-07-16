@@ -432,7 +432,7 @@ Created at request start, cleared in the termination handler."
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
-  origin            ; "main" or canonical agent-id that owns this request
+  origin            ; "main" or scoped request/agent identity
   ;; Rules accumulated by an owning skill die with the request struct.
   skill-permission-rules
   hook-rules)
@@ -546,25 +546,25 @@ the new request struct."
     (setq mevedel--current-request request)
     request))
 
-(defun mevedel-request-end (&optional abort-plan-queue)
-  "Clean up the current request.
-
-Drains all registered cancellers, then clears
-`mevedel--current-request'.  Queued permission prompts are swept only
-for this request's owner, so a parent turn ending does not abort
-background sub-agent prompts.  Plan approvals normally outlive the
-request that presented them; when ABORT-PLAN-QUEUE is non-nil, abort
-them too for stale-request replacement."
-  (when mevedel--current-request
-    (let ((session (mevedel-request-session mevedel--current-request))
-          (origin (or (mevedel-request-origin mevedel--current-request)
-                      "main")))
-      (mevedel-request-drain-cancellers mevedel--current-request)
+(defun mevedel-request-cancel (request &optional abort-plan-queue)
+  "Cancel REQUEST and its owned pending interactions.
+Queued permission prompts are swept only for REQUEST's owner.  Plan
+approvals normally outlive the request that presented them; when
+ABORT-PLAN-QUEUE is non-nil, abort them too."
+  (when request
+    (let ((session (mevedel-request-session request))
+          (origin (or (mevedel-request-origin request) "main")))
+      (mevedel-request-drain-cancellers request)
       (when (fboundp 'mevedel-permission-queue-sweep-origin)
         (mevedel-permission-queue-sweep-origin origin session))
       (when (and abort-plan-queue
                  (fboundp 'mevedel-plan-queue-abort-all))
-        (mevedel-plan-queue-abort-all session)))
+        (mevedel-plan-queue-abort-all session)))))
+
+(defun mevedel-request-end (&optional abort-plan-queue)
+  "Cancel the current request, then clear `mevedel--current-request'."
+  (when mevedel--current-request
+    (mevedel-request-cancel mevedel--current-request abort-plan-queue)
     (setq mevedel--current-request nil)))
 
 (provide 'mevedel-structs)
