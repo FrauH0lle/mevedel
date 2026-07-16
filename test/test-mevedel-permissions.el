@@ -341,6 +341,21 @@
                     (mevedel-permission-decision-raw-outcome decision)))
         (should (eq 'goal-phase (plist-get decision :via)))))))
 
+  :doc "automatic plan revision denies native edits while awaiting approval"
+  (test-mevedel-permissions--with-goal-phase 'awaiting-approval
+    (setf (mevedel-session-plan-metadata mevedel--session)
+          '(:revision-pending t))
+    (let* ((tool (mevedel-tool--create
+                  :name "Write" :read-only-p nil :groups '(edit)))
+           (context
+            (mevedel-permission--preflight
+             "Write" :tool-struct tool :path "/repo/file.el"
+             :mode 'full-auto))
+           (decision (plist-get context :early-decision)))
+      (should (eq 'deny
+                  (mevedel-permission-decision-raw-outcome decision)))
+      (should (eq 'goal-phase (plist-get decision :via)))))
+
 (mevedel-deftest mevedel-check-permission-async-with-metadata ()
   ,test
   (test)
