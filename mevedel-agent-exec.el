@@ -156,6 +156,10 @@
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-owner-live-p
+                  "mevedel-execution" (session owner))
+
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision &optional event))
@@ -225,6 +229,10 @@
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-refresh-agent-rendering
                   "mevedel-view-agent" (view-buffer agent-id))
+
+;; `mevedel-view-stream'
+(declare-function mevedel-view-stream-retry-execution-terminals
+                  "mevedel-view-stream" (&rest args))
 
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
@@ -394,6 +402,12 @@ initial task prompt and (optionally) calling `set-visited-file-name'."
                 #'mevedel-view-agent-live-transcript-pre-tool nil t)
       (add-hook 'gptel-post-tool-call-functions
                 #'mevedel-view-agent-live-transcript-post-tool nil t)
+      ;; Authoritative terminal Bash updates belong to the agent data buffer,
+      ;; even when no transcript inspection view is open. The final response
+      ;; boundary runs after gptel has inserted all parallel tool rows.
+      (require 'mevedel-view-stream)
+      (add-hook 'gptel-post-response-functions
+                #'mevedel-view-stream-retry-execution-terminals nil t)
       ;; bump the invocation's call-count on each
       ;; tool dispatch so the parent's running-handle badge reads
       ;; [running * N calls] rather than the zero-suppressed
@@ -1578,12 +1592,19 @@ bookkeeping."
                 ;; preventing finalize from running on the actual final
                 ;; turn.  The check below holds finalize until the
                 ;; sub-agent's background-agents and messages mailbox
-                ;; are both empty -- at that point a text-only turn is
-                ;; truly final.
+                ;; are both empty and no owned execution is unsettled --
+                ;; at that point a text-only turn is truly final.
                 (let ((inv (mevedel-agent-exec--invocation-from-info info)))
                   (and
+                   (mevedel-agent-invocation-p inv)
                    (not (mevedel-agent-invocation-background-agents inv))
-                   (not (mevedel-agent-invocation-messages inv))))))
+                   (not (mevedel-agent-invocation-messages inv))
+                   (not
+                    (progn
+                      (require 'mevedel-execution)
+                      (mevedel-execution-owner-live-p
+                       (mevedel-agent-invocation-parent-session inv)
+                       (mevedel-agent-invocation-agent-id inv))))))))
     (let ((fired nil)
           (partial-prefix (or (car partial-cell) ""))
           (partial-chunks nil)

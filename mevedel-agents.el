@@ -343,6 +343,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (activity nil :type list)
   ;; Runtime-only caches for live agent updates.
   (hook-audits nil :type list)
+  (execution-settlement-retry-count 0 :type integer)
+  (execution-settlement-retry-timer nil)
   (transcript-save-timer nil)
   (render-data-start-marker nil)
   (render-data-end-marker nil)

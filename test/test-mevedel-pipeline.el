@@ -358,6 +358,14 @@
 ;;
 ;;; Handler step
 
+(mevedel-deftest mevedel-pipeline-active-tool-use-id ()
+		 ,test
+		 (test)
+		 :doc "returns the dynamically scoped handler identity"
+		 (let ((mevedel-pipeline--active-tool-use-id "call-17"))
+		   (should (equal "call-17"
+				  (mevedel-pipeline-active-tool-use-id)))))
+
 (mevedel-deftest mevedel-pipeline--step-handler ()
 		 ,test
 		 (test)
@@ -387,6 +395,18 @@
 		   (mevedel-pipeline--step-handler
 		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
 		   (should (equal (plist-get result-ctx :result) "async data")))
+		 :doc "binds the durable tool-use id while an async handler starts"
+		 (let* (seen
+			(tool (mevedel-tool--create
+			       :name "IdentifiedTool"
+			       :handler
+			       (lambda (callback _args)
+				 (setq seen (mevedel-pipeline-active-tool-use-id))
+				 (funcall callback '(:result "ok")))
+			       :async-p t))
+			(ctx (list :tool tool :args nil :tool-use-id "call-42")))
+		   (mevedel-pipeline--step-handler ctx #'ignore #'ignore)
+		   (should (equal "call-42" seen)))
 		 :doc "async handler can defer continuation"
 		 (let* (saved-cb
 			(tool (mevedel-tool--create
@@ -1237,6 +1257,7 @@
 			entry
 			next-called
 			fail-reason)
+		   (require 'mevedel-sandbox)
 		   (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
 			      (lambda (&rest _) facts))
 			     ((symbol-function 'mevedel-permission--enqueue)
@@ -4249,6 +4270,76 @@
 			'(:kind agent-transcript :agent-id "a--1" :status completed)))
 		     (should (string-match-p "\\`before\n" (buffer-string)))
 		     (should (string-match-p "after\n\\'" (buffer-string))))))
+
+(mevedel-deftest mevedel-pipeline-update-tool-render-data ()
+		 ,test
+		 (test)
+		 :doc "merges durable execution facts into the matching tool segment"
+		 (with-temp-buffer
+		   (let* ((tool-id "tool-live")
+			  (property (cons 'tool tool-id))
+			  (block (mevedel-pipeline--format-render-data-block
+				  '(:status success :state running))))
+		     (insert
+		      (propertize
+		       (concat "(:name \"Bash\" :args (:command \"printf x\"))\n"
+			       "initial" block)
+		       'gptel property))
+		     (should
+		      (mevedel-pipeline-update-tool-render-data
+		       (current-buffer) tool-id
+		       '(:status error :state completed :execution-output "head\ntail")))
+		     (let* ((bounds (mevedel-pipeline--tool-segment-bounds tool-id))
+			    (raw (buffer-substring-no-properties
+				  (car bounds) (cdr bounds)))
+			    (parsed (mevedel-pipeline-extract-render-data raw))
+			    (data (cdr parsed)))
+		       (should (string-search "initial" (car parsed)))
+		       (should (eq 'error (plist-get data :status)))
+		       (should (eq 'completed (plist-get data :state)))
+		       (should (equal "head\ntail"
+				      (plist-get data :execution-output)))
+		       (should (equal property
+				      (get-text-property (1- (cdr bounds)) 'gptel))))))
+
+		 :doc "appends a hidden block when the matching segment has none"
+		 (with-temp-buffer
+		   (insert (propertize "(:name \"Bash\" :args nil)\nresult"
+				       'gptel '(tool . "tool-empty")))
+		   (should
+		    (mevedel-pipeline-update-tool-render-data
+		     (current-buffer) "tool-empty" '(:execution-output "final")))
+		   (let* ((bounds (mevedel-pipeline--tool-segment-bounds "tool-empty"))
+			  (parsed
+			   (mevedel-pipeline-extract-render-data
+			    (buffer-substring-no-properties (car bounds) (cdr bounds)))))
+		     (should (equal "final"
+				    (plist-get (cdr parsed) :execution-output))))
+		   (should-not
+		    (mevedel-pipeline-update-tool-render-data
+		     (current-buffer) "missing" '(:execution-output "lost"))))
+
+		 :doc "finds a normalized adjacent side channel before the next tool"
+		 (with-temp-buffer
+		   (insert (propertize "(:name \"Bash\" :args nil)\ninitial"
+				       'gptel '(tool . "tool-normalized")))
+		   (insert
+		    (propertize
+		     (mevedel-pipeline--format-render-data-block
+		      '(:status success :state running))
+		     'gptel 'ignore))
+		   (insert (propertize "(:name \"Read\" :args nil)\nnext"
+				       'gptel '(tool . "tool-next")))
+		   (should
+		    (mevedel-pipeline-update-tool-render-data
+		     (current-buffer) "tool-normalized"
+		     '(:state completed :execution-output "final")))
+		   (let ((parsed
+			  (mevedel-pipeline-extract-render-data
+			   (buffer-substring-no-properties (point-min) (point-max)))))
+		     (should (eq 'completed (plist-get (cdr parsed) :state)))
+		     (should (equal "final"
+				    (plist-get (cdr parsed) :execution-output))))))
 
 (provide 'test-mevedel-pipeline)
 ;;; test-mevedel-pipeline.el ends here

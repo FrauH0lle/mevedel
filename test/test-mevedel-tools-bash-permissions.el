@@ -2060,6 +2060,17 @@ default Bash keeps bare dot inspection automatic"
     (should (string-match-p "output_path=\"/tmp/a&amp;b\"" xml))
     (should-not (string-match-p "chunk" xml))))
 
+(mevedel-deftest mevedel-tool-exec-format-execution-metadata ()
+  ,test
+  (test)
+  :doc "formats shared live and terminal row metadata"
+  (should
+   (equal "running · 2.5s · 3 lines · 42 bytes · timeout 30s · exec-1"
+          (mevedel-tool-exec-format-execution-metadata
+           '(:state running :wall-time-seconds 2.5
+             :output-lines 3 :output-bytes 42 :execution-id "exec-1")
+           30))))
+
 (mevedel-deftest mevedel-tool-exec--observation-envelope ()
   ,test
   (test)
@@ -2190,6 +2201,39 @@ default Bash keeps bare dot inspection automatic"
                    (butlast captured)))
     (should (eq 'success (plist-get result :status)))))
 
+(mevedel-deftest mevedel-tool-exec-handle-execution-event ()
+  ,test
+  (test)
+  :doc "queues unread output and final facts for an independent completion"
+  (require 'mevedel-agent-runtime)
+  (let ((session (mevedel-session--create :name "test"))
+        captured)
+    (cl-letf (((symbol-function
+                'mevedel-agent-runtime-queue-execution-completion)
+               (lambda (&rest args)
+                 (setq captured args)
+                 t)))
+      (should
+       (mevedel-tool-exec-handle-execution-event
+        (list :type 'terminal :delivery 'mailbox
+              :session session :owner "main"
+              :tool-args '(:command "printf done")
+              :observation
+              '(:output "done"
+                :facts (:execution-id "exec-1" :state completed
+                        :termination exited :exit-code 0 :outcome success
+                        :wall-time-seconds 0.1 :output-bytes 4
+                        :output-lines 1 :omitted-output-bytes 0 :tty nil)))
+        session)))
+    (should (equal (list session "main") (butlast captured)))
+    (should (string-match-p "done" (car (last captured))))
+    (should (string-match-p "execution_id=\\\"exec-1\\\""
+                            (car (last captured)))))
+  :doc "ignores model-claimed terminal events"
+  (should-not
+   (mevedel-tool-exec-handle-execution-event
+    '(:type terminal :delivery model) nil)))
+
 (mevedel-deftest mevedel-tool-exec--bash
   ()
   ,test
@@ -2214,6 +2258,17 @@ default Bash keeps bare dot inspection automatic"
       (test-bash-permissions--call-bash
        #'ignore '(:command "printf done" :wait-for-completion-p t)))
     (should-not (plist-get (cdr captured) :yield-time-ms)))
+  :doc "forwards original arguments and durable tool-use identity"
+  (let ((mevedel-pipeline--active-tool-use-id "call-bash-7")
+        captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest keys) (setq captured keys))))
+      (test-bash-permissions--call-bash
+       #'ignore '(:command "printf identity" :yield-time_ms 250)))
+    (should (equal "call-bash-7"
+                   (plist-get (cdr captured) :tool-use-id)))
+    (should (equal '(:command "printf identity" :yield-time_ms 250)
+                   (plist-get (cdr captured) :tool-args))))
   :doc "forwards only proven read-only analysis to scheduler admission"
   (let (read-only unknown)
     (cl-letf (((symbol-function 'mevedel-execution-start-bash)

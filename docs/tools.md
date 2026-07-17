@@ -386,6 +386,38 @@ unread cursor and returns canonical execution facts separately from the raw
 output. Unread ranges beyond 2000 characters use the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 
+Managed executions publish transient progress after two seconds, at most four
+times per second. The existing Bash row shows the bounded output tail, elapsed
+time, line and byte counts, configured timeout, and the execution ID once the
+command has yielded. These progress updates live only in bounded view state and
+never create transcript turns. Events carry the originating data buffer and
+durable tool-use ID, so the matching main or agent view is selected directly.
+Terminal settlement replaces the original row's hidden render-data side channel
+in the authoritative transcript with the bounded whole-artifact head-and-tail
+preview plus exit, outcome, duration, and omitted-output facts. The provider
+scrubber keeps that durable UI state model-hidden, while transcript persistence
+keeps it stable across cache turnover and resume. Parallel completion may beat
+gptel's insertion of the original row; a bounded data-buffer queue retains that
+terminal projection and retries it at tool and final-render boundaries.
+Agent data buffers run the final-boundary retry even when no transcript view is
+open.
+
+Terminal delivery has one claimant. A model observation that sees completion
+claims the final result and retires the handle without a mailbox duplicate. If
+a yielded process exits independently, or the user stops it outside the model
+tool, its unread output and final facts are queued synchronously in the fixed
+main or sub-agent owner mailbox without starting a model request. For a
+sub-agent already parked in BWAIT, acceptance may settle
+the agent directly in DONE by appending the Bash result to its final response;
+completion arriving just before BWAIT is latched and settled on BWAIT entry.
+Transient direct-settlement failures use an invocation-owned bounded backoff
+from the durable mailbox; persistent failure stops the agent. This also starts
+no model request. The handle retires only after a mailbox
+consumer acknowledges the message. Rejected delivery remains explicitly
+unsettled and owner-reachable. Passive progress/view subscribers cannot
+acknowledge durable delivery. Finished records never appear in live execution
+listings.
+
 Terminal facts preserve the raw exit code and derive a separate `outcome`.
 Zero is `success`. Exit one is `no-match` for one proven simple `grep` or `rg`
 command, `different` for `diff`, and `false` for `test` or `[`. These outcomes

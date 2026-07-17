@@ -150,6 +150,16 @@ and drain via `mevedel-tools--handle-message-inject` in WAIT state, wrapped
 as `<agent-message from="SENDER">...</agent-message>` and injected as a
 user turn via `gptel--inject-prompt`. Polymorphic accessor
 `mevedel-agent-runtime--ctx-messages` dispatches on session vs invocation.
+Independently completed yielded Bash executions use the same mailbox storage
+through the session or invocation object captured for their fixed owner when
+Bash starts. The invocation remains parked while an owned execution is
+unsettled. Once the agent has produced its answer, completion is latched across
+the BWAIT boundary in either arrival order. The runtime drains execution-only
+messages into that final answer and settles the agent directly without a model
+request; transient callback failures retry with bounded backoff from the
+durable mailbox, while persistent failure stops the agent. Ordinary
+mailbox messages still resume BWAIT through WAIT; execution-only contents
+neither start a paid continuation nor arm the agent watchdog.
 
 ## Coordinator skill
 

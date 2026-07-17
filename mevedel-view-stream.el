@@ -21,6 +21,10 @@
 ;; `mevedel-compact'
 (defvar mevedel--compaction-in-flight)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-update-tool-render-data
+                  "mevedel-pipeline" (buffer tool-use-id updates))
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
@@ -28,8 +32,13 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-tool-exec'
+(declare-function mevedel-tool-exec-format-execution-metadata
+                  "mevedel-tool-exec" (facts timeout-seconds))
+
 ;; `mevedel-view'
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
+(declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
 (defvar mevedel-view-pending-tools-visible-max)
 (defvar mevedel-view-spinner-animate)
@@ -38,6 +47,7 @@
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--agent-status-counts "mevedel-view-agent" ())
+(defvar mevedel-view--agent-id)
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
@@ -51,6 +61,8 @@
 ;; `mevedel-view-render'
 (declare-function mevedel-view--append-request-summary
                   "mevedel-view-render" (data-buf start))
+(declare-function mevedel-view--cache-put
+                  "mevedel-view-render" (table key value counter-symbol))
 (declare-function mevedel-view--debug-log
                   "mevedel-view-render" (event &rest data))
 (declare-function mevedel-view--debug-spinner-state
@@ -67,6 +79,7 @@
                   "mevedel-view-render" (data-buf &optional start end))
 (declare-function mevedel-view--request-progress-anchor
                   "mevedel-view-render" ())
+(defvar mevedel-view--tool-rendering-cache)
 
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-clear "mevedel-view-zone" (namespace))
@@ -124,6 +137,18 @@ render path walks this alist and emits one `Calling X…' line per
 entry in arrival order, respecting
 `mevedel-view-pending-tools-visible-max' for truncation when many
 tools are in flight in parallel.")
+
+(defvar-local mevedel-view--execution-event-entries 0
+  "Number of entries retained in `mevedel-view--execution-events'.")
+
+(defvar-local mevedel-view--execution-events nil
+  "Latest transient Bash event keyed by durable tool-use id.")
+
+(defvar-local mevedel-view-stream--pending-execution-terminals nil
+  "Terminal Bash render data waiting for its transcript row.")
+
+(defconst mevedel-view-stream--pending-execution-terminal-limit 64
+  "Maximum terminal Bash updates retained while rows are unavailable.")
 
 (defvar-local mevedel-view--stream-render-timer nil
   "Idle timer scheduling a `gptel-post-stream-hook'-driven render.
@@ -861,8 +886,166 @@ POSITION may be an integer or marker."
                                      mevedel-view--pending-tool-calls)))))
       (mevedel-view--insert-pending-tool-lines visible))))
 
+(defun mevedel-view-stream--execution-view-buffer (data-buffer)
+  "Return the visible view backed by DATA-BUFFER, or nil."
+  (and (buffer-live-p data-buffer)
+       (cl-find-if
+        (lambda (buffer)
+          (and (buffer-live-p buffer)
+               (eq data-buffer
+                   (buffer-local-value 'mevedel--data-buffer buffer))))
+        (buffer-list))))
+
+(defun mevedel-view-stream--execution-status (facts)
+  "Return visual status for terminal execution FACTS."
+  (if (memq (plist-get facts :outcome)
+            '(success no-match different false))
+      'success
+    'error))
+
+(defun mevedel-view-stream--terminal-render-data (event)
+  "Return durable terminal render data projected from EVENT."
+  (let ((facts (copy-tree (plist-get event :facts))))
+    (append
+     facts
+     (list :status (mevedel-view-stream--execution-status facts)
+           :live-execution-p nil
+           :timeout-seconds (plist-get event :timeout-seconds)
+           :sandbox-facts
+           (copy-tree
+            (plist-get (plist-get event :observation) :sandbox-facts))
+           :execution-output
+           (copy-sequence (or (plist-get event :whole-output) ""))))))
+
+(defun mevedel-view-stream--pending-execution-table (data-buffer)
+  "Return DATA-BUFFER's pending terminal table, creating it if needed."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (unless (hash-table-p mevedel-view-stream--pending-execution-terminals)
+        (setq-local mevedel-view-stream--pending-execution-terminals
+                    (make-hash-table :test #'equal)))
+      mevedel-view-stream--pending-execution-terminals)))
+
+(defun mevedel-view-stream--store-pending-execution-terminal
+    (data-buffer tool-use-id render-data)
+  "Retain RENDER-DATA until TOOL-USE-ID appears in DATA-BUFFER."
+  (when-let* ((table
+               (mevedel-view-stream--pending-execution-table data-buffer)))
+    (when (and (not (gethash tool-use-id table))
+               (>= (hash-table-count table)
+                   mevedel-view-stream--pending-execution-terminal-limit))
+      (let (evicted)
+        (maphash (lambda (key _value)
+                   (unless evicted (setq evicted key)))
+                 table)
+        (when evicted
+          (remhash evicted table)
+          (display-warning
+           'mevedel
+           (format "Discarding stale terminal update for tool %s" evicted)
+           :warning))))
+    (puthash tool-use-id render-data table)))
+
+(defun mevedel-view-stream--retry-pending-execution-terminals (data-buffer)
+  "Persist pending terminal Bash updates whose rows exist in DATA-BUFFER."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (when (hash-table-p mevedel-view-stream--pending-execution-terminals)
+        (require 'mevedel-pipeline)
+        (let (settled)
+          (maphash
+           (lambda (tool-use-id render-data)
+             (when (mevedel-pipeline-update-tool-render-data
+                    data-buffer tool-use-id render-data)
+               (push tool-use-id settled)))
+           mevedel-view-stream--pending-execution-terminals)
+          (dolist (tool-use-id settled)
+            (remhash tool-use-id
+                     mevedel-view-stream--pending-execution-terminals)))))))
+
+(defun mevedel-view-stream-retry-execution-terminals (&rest _args)
+  "Persist pending terminal Bash updates in the current data buffer."
+  (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
+  nil)
+
+(defun mevedel-view-stream--cache-execution-progress (event)
+  "Cache bounded transient progress from EVENT in the current view."
+  (when-let* ((tool-use-id (plist-get event :tool-use-id)))
+    (unless (hash-table-p mevedel-view--execution-events)
+      (setq mevedel-view--execution-events (make-hash-table :test #'equal)))
+    (mevedel-view--cache-put
+     mevedel-view--execution-events tool-use-id
+     (list :type 'progress
+           :facts (copy-tree (plist-get event :facts))
+           :timeout-seconds (plist-get event :timeout-seconds)
+           :output-tail (plist-get event :output-tail))
+     'mevedel-view--execution-event-entries)))
+
+(defun mevedel-view-stream--remove-execution-progress (tool-use-id)
+  "Remove TOOL-USE-ID's transient progress from the current view."
+  (when (and tool-use-id
+             (hash-table-p mevedel-view--execution-events)
+             (gethash tool-use-id mevedel-view--execution-events))
+    (remhash tool-use-id mevedel-view--execution-events)
+    (setq mevedel-view--execution-event-entries
+          (max 0 (1- mevedel-view--execution-event-entries)))))
+
+(defun mevedel-view-stream--update-execution-pending-row (event)
+  "Update the current view's pending row from progress EVENT."
+  (let* ((tool-use-id (plist-get event :tool-use-id))
+         (facts (plist-get event :facts))
+         (args (plist-get event :tool-args))
+         (tail (plist-get event :output-tail))
+         (entry (and tool-use-id
+                     (assoc tool-use-id mevedel-view--pending-tool-calls))))
+    (when entry
+      (setcdr entry
+              (concat
+               (mevedel-view--tool-status-string "Bash" args)
+               " — "
+               (mevedel-tool-exec-format-execution-metadata
+                facts (plist-get event :timeout-seconds))
+               (and (stringp tail)
+                    (not (string-empty-p tail))
+                    (concat "\n" tail))))
+      (mevedel-view--refresh-pending-tool-lines))))
+
+(defun mevedel-view-stream-handle-execution-event (event)
+  "Apply Bash EVENT to its authoritative row and visible view.
+Always return nil; only the mailbox sink may acknowledge durable delivery."
+  (let* ((type (plist-get event :type))
+         (tool-use-id (plist-get event :tool-use-id))
+         (data-buffer (plist-get event :data-buffer))
+         (view-buffer
+          (mevedel-view-stream--execution-view-buffer data-buffer)))
+    (when (and (eq type 'terminal) tool-use-id)
+      (require 'mevedel-pipeline)
+      (let ((render-data
+             (mevedel-view-stream--terminal-render-data event)))
+        (if (mevedel-pipeline-update-tool-render-data
+             data-buffer tool-use-id render-data)
+            (when-let* ((table
+                         (mevedel-view-stream--pending-execution-table
+                          data-buffer)))
+              (remhash tool-use-id table))
+          (mevedel-view-stream--store-pending-execution-terminal
+           data-buffer tool-use-id render-data))))
+    (when view-buffer
+      (with-current-buffer view-buffer
+        (pcase type
+          ('progress
+           (mevedel-view-stream--cache-execution-progress event)
+           (mevedel-view-stream--update-execution-pending-row event))
+          ('terminal
+           (mevedel-view-stream--remove-execution-progress tool-use-id)))
+        (when (hash-table-p mevedel-view--tool-rendering-cache)
+          (clrhash mevedel-view--tool-rendering-cache))
+        (mevedel-view-rerender view-buffer))))
+  nil)
+
 (defun mevedel-view--render-stream-update (data-buf)
   "Incrementally render DATA-BUF, isolating observer-view failures."
+  (mevedel-view-stream--retry-pending-execution-terminals data-buf)
   (if (not mevedel-view--agent-transcript-p)
       (mevedel-view--render-incremental data-buf)
     (condition-case err
@@ -998,6 +1181,7 @@ Runs as a `gptel-post-tool-call-functions' hook in the data buffer.
 ARGS is the tool-call plist.  The lightweight pending-tool live line is
 refreshed immediately, while the heavier incremental render is
 debounced so bursts of completed tool calls coalesce."
+  (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -1119,6 +1303,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
 
 (defun mevedel-view-stream-render-response (start end)
   "Finish and render gptel response bounds START and END."
+  (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
   (when-let* ((view-buf (buffer-local-value 'mevedel--view-buffer
                                             (current-buffer)))
               ((buffer-live-p view-buf)))

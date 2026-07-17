@@ -66,6 +66,9 @@
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
+(defvar mevedel-pipeline--active-tool-use-id nil
+  "Tool-use id dynamically visible while a handler starts its work.")
+
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
@@ -323,6 +326,10 @@ that bypass `mevedel-pipeline-run-tool'."
     (when call
       (plist-put call :mevedel-claimed t)
       (plist-get call :id))))
+
+(defun mevedel-pipeline-active-tool-use-id ()
+  "Return the durable tool-use id of the currently starting handler."
+  mevedel-pipeline--active-tool-use-id)
 
 (defun mevedel-pipeline--run (steps callback context)
   "Run the pipeline, calling CALLBACK with the result.
@@ -1194,11 +1201,13 @@ buffer."
                                       (mevedel-tool-name tool))))))
          (invoke
           (lambda ()
-            (mevedel-tool-repair-mark-executed repair-entry)
-            (mevedel-pipeline--record-use tool)
-            (if (mevedel-tool-async-p tool)
-                (funcall handler finish args)
-              (funcall finish (funcall handler args)))))
+            (let ((mevedel-pipeline--active-tool-use-id
+                   (plist-get context :tool-use-id)))
+              (mevedel-tool-repair-mark-executed repair-entry)
+              (mevedel-pipeline--record-use tool)
+              (if (mevedel-tool-async-p tool)
+                  (funcall handler finish args)
+                (funcall finish (funcall handler args))))))
          (dispatch-buffer (plist-get context :buffer)))
     (cond
      ((null dispatch-buffer) (funcall invoke))
@@ -1424,6 +1433,114 @@ result."
           (when surrounding-gptel
             (setq block (propertize block 'gptel surrounding-gptel)))
           (insert block))))))
+
+(defun mevedel-pipeline--tool-segment-bounds (tool-use-id)
+  "Return current-buffer bounds carrying TOOL-USE-ID, or nil."
+  (let ((target (cons 'tool tool-use-id))
+        (position (point-min))
+        bounds)
+    (while (and (< position (point-max)) (not bounds))
+      (let* ((value (get-text-property position 'gptel))
+             (next (or (next-single-property-change
+                        position 'gptel nil (point-max))
+                       (point-max))))
+        (when (equal value target)
+          (let ((end next))
+            (while (and (< end (point-max))
+                        (equal (get-text-property end 'gptel) target))
+              (setq end (or (next-single-property-change
+                             end 'gptel nil (point-max))
+                            (point-max))))
+            (setq bounds (cons position end))))
+        (setq position next)))
+    bounds))
+
+(defun mevedel-pipeline--render-data-block-bounds (beg end)
+  "Return render-data block bounds inside BEG..END, or nil."
+  (save-excursion
+    (goto-char beg)
+    (when (search-forward mevedel-pipeline--render-data-open end t)
+      (let* ((open-beg (match-beginning 0))
+             (block-beg (if (and (> open-beg beg)
+                                 (eq (char-before open-beg) ?\n))
+                            (1- open-beg)
+                          open-beg)))
+        (when (search-forward mevedel-pipeline--render-data-close end t)
+          (let ((close-end (match-end 0)))
+            (cons block-beg
+                  (if (and (< close-end end)
+                           (eq (char-after close-end) ?\n))
+                      (1+ close-end)
+                    close-end))))))))
+
+(defun mevedel-pipeline--next-tool-segment-start (position tool-use-id)
+  "Return the first different tool segment after POSITION.
+TOOL-USE-ID identifies property runs that still belong to the current tool."
+  (let ((cursor position)
+        found)
+    (while (and (< cursor (point-max)) (not found))
+      (let ((property (get-text-property cursor 'gptel)))
+        (when (and (consp property)
+                   (eq (car property) 'tool)
+                   (not (equal (cdr property) tool-use-id)))
+          (setq found cursor)))
+      (unless found
+        (setq cursor
+              (or (next-single-property-change
+                   cursor 'gptel nil (point-max))
+                  (point-max)))))
+    found))
+
+(defun mevedel-pipeline--plist-merge (base updates)
+  "Return a copy of BASE with each key in UPDATES replaced."
+  (let ((merged (copy-tree base)))
+    (while updates
+      (setq merged (plist-put merged (pop updates) (pop updates))))
+    merged))
+
+(defun mevedel-pipeline-update-tool-render-data
+    (buffer tool-use-id updates)
+  "Merge UPDATES into TOOL-USE-ID's hidden render data in BUFFER.
+
+Return non-nil when the authoritative tool segment was found and updated.
+The side channel remains inside the segment's `gptel' property run, so it is
+persisted with the transcript while the provider scrubber keeps it model-hidden."
+  (when (and (buffer-live-p buffer)
+             (stringp tool-use-id)
+             (listp updates))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (when-let* ((segment
+                     (mevedel-pipeline--tool-segment-bounds tool-use-id)))
+          (let* ((beg (car segment))
+                 (end (cdr segment))
+                 (search-end
+                  (or (mevedel-pipeline--next-tool-segment-start
+                       end tool-use-id)
+                      (point-max)))
+                 (block
+                  (mevedel-pipeline--render-data-block-bounds
+                   beg search-end))
+                 (existing
+                  (and block
+                       (cdr
+                        (mevedel-pipeline-extract-render-data
+                         (buffer-substring-no-properties
+                          (car block) (cdr block))))))
+                 (render-data
+                  (mevedel-pipeline--plist-merge existing updates))
+                 (inhibit-modification-hooks t)
+                 (inhibit-read-only t))
+            (if block
+                (mevedel-pipeline--patch-render-data-block
+                 (car block) (cdr block) render-data)
+              (goto-char end)
+              (insert
+               (propertize
+                (mevedel-pipeline--format-render-data-block render-data)
+                'gptel (get-text-property beg 'gptel))))
+            t))))))
 
 (defun mevedel--parse-tool-results-scrub-advice (orig-fun backend tool-use)
   "Strip render-data blocks from TOOL-USE results for BACKEND via ORIG-FUN.

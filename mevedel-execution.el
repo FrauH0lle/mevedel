@@ -71,6 +71,17 @@ the complete spool remains at the path in the execution facts."
   :type 'integer
   :group 'mevedel)
 
+(defcustom mevedel-execution-progress-delay 2
+  "Seconds before a managed Bash execution publishes live progress."
+  :type 'number
+  :group 'mevedel)
+
+(defcustom mevedel-execution-progress-interval 0.25
+  "Seconds between managed Bash progress events.
+Values below 0.25 are clamped so the UI receives at most four per second."
+  :type 'number
+  :group 'mevedel)
+
 (defconst mevedel-execution-live-limit 64
   "Maximum number of live managed Bash processes in one session.")
 
@@ -104,10 +115,21 @@ the complete spool remains at the path in the execution facts."
   records
   scheduler)
 
+(cl-defstruct (mevedel-execution--origin
+               (:constructor mevedel-execution--origin-create))
+  "Immutable ownership and transcript correlation for one execution."
+  data-buffer
+  owner
+  owner-context
+  session
+  tool-args
+  tool-use-id)
+
 (cl-defstruct (mevedel-execution--record
                (:constructor mevedel-execution--record-create))
   "Private state for one operating-system process."
   callback
+  delivery-state
   error-data
   execution-id
   exit-code
@@ -122,17 +144,20 @@ the complete spool remains at the path in the execution facts."
   observer
   observer-timer
   omitted-output-bytes
+  origin
   outcome-function
-  owner
+  output-chars
+  output-head
   output-limit-p
+  output-tail
   process
+  progress-timer
   read-offset
   retained-p
   sandbox-active-token
   sandbox-facts
   sandbox-preparation
   scheduler-lease
-  session
   settle-timer
   spool-path
   started-at
@@ -154,6 +179,18 @@ the complete spool remains at the path in the execution facts."
 
 (defvar mevedel-execution--orphan-state nil
   "Private state for children that have no chat session owner.")
+
+(defvar mevedel-execution-event-functions nil
+  "Functions notified of immutable managed execution event plists.
+
+Each function receives one event.  Return values are ignored and errors are
+contained by the execution module.")
+
+(defvar mevedel-execution-mailbox-delivery-function nil
+  "Function that synchronously secures one terminal event in its owner mailbox.
+The function receives an immutable event plist and its private owner context,
+then returns non-nil only after durable delivery.  This is deliberately
+separate from passive event hooks; the context is never published to them.")
 
 
 ;;
@@ -247,6 +284,7 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
   (dolist (timer (list (mevedel-execution--record-timeout-timer record)
                        (mevedel-execution--record-force-timer record)
                        (mevedel-execution--record-observer-timer record)
+                       (mevedel-execution--record-progress-timer record)
                        (mevedel-execution--record-settle-timer record)
                        (mevedel-execution--record-watch-timer record)
                        (mevedel-execution--record-yield-timer record)))
@@ -259,7 +297,9 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
   (when-let* ((active-token
               (mevedel-execution--record-sandbox-active-token record)))
     (mevedel-sandbox-track-active
-     (mevedel-execution--record-session record) active-token nil))
+     (mevedel-execution--origin-session
+      (mevedel-execution--record-origin record))
+     active-token nil))
   (setf (mevedel-execution--record-process record) nil
         (mevedel-execution--record-group-id record) nil
         (mevedel-execution--record-sandbox-active-token record) nil))
@@ -274,7 +314,8 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
       (ignore-errors (delete-file path))))
   (let ((state
          (mevedel-execution--state-for-session
-          (mevedel-execution--record-session record))))
+          (mevedel-execution--origin-session
+           (mevedel-execution--record-origin record)))))
     (remhash (or (mevedel-execution--record-execution-id record)
                  (mevedel-execution--record-token record))
              (mevedel-execution--state-records state))))
@@ -415,7 +456,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
   (let* ((record
           (mevedel-execution--record-create
            :callback callback
-           :session session
+           :origin (mevedel-execution--origin-create :session session)
            :spool-path (make-temp-file "mevedel-execution-output-")
            :started-at (float-time)
            :token (gensym "execution-process-")))
@@ -477,20 +518,30 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
             (setq high (1- middle)))))
       (substring text 0 low))))
 
-(defun mevedel-execution--retain-unread (record text)
-  "Retain bounded unread preview TEXT and counters in RECORD."
-  (let* ((limit mevedel-execution-inline-output-limit)
-         (head (concat (or (mevedel-execution--record-unread-head record) "")
-                       text))
-         (tail (concat (or (mevedel-execution--record-unread-tail record) "")
-                       text)))
-    (setf (mevedel-execution--record-unread-chars record)
-          (+ (or (mevedel-execution--record-unread-chars record) 0)
-             (length text))
-          (mevedel-execution--record-unread-head record)
-          (substring head 0 (min limit (length head)))
-          (mevedel-execution--record-unread-tail record)
-          (substring tail (max 0 (- (length tail) limit))))))
+(defun mevedel-execution--retain-output (record text)
+  "Retain bounded whole and unread preview TEXT in RECORD."
+  (cl-labels
+      ((next (chars head tail)
+         (let* ((limit mevedel-execution-inline-output-limit)
+                (head (concat (or head "") text))
+                (tail (concat (or tail "") text)))
+           (list (+ (or chars 0) (length text))
+                 (substring head 0 (min limit (length head)))
+                 (substring tail (max 0 (- (length tail) limit)))))))
+    (pcase-let ((`(,chars ,head ,tail)
+                 (next (mevedel-execution--record-output-chars record)
+                       (mevedel-execution--record-output-head record)
+                       (mevedel-execution--record-output-tail record))))
+      (setf (mevedel-execution--record-output-chars record) chars
+            (mevedel-execution--record-output-head record) head
+            (mevedel-execution--record-output-tail record) tail))
+    (pcase-let ((`(,chars ,head ,tail)
+                 (next (mevedel-execution--record-unread-chars record)
+                       (mevedel-execution--record-unread-head record)
+                       (mevedel-execution--record-unread-tail record))))
+      (setf (mevedel-execution--record-unread-chars record) chars
+            (mevedel-execution--record-unread-head record) head
+            (mevedel-execution--record-unread-tail record) tail))))
 
 (defun mevedel-execution--write-managed-output (record text)
   "Write a UTF-8-safe bounded prefix of TEXT and update RECORD."
@@ -501,7 +552,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
     (unless (string-empty-p written-text)
       (let ((coding-system-for-write 'utf-8-unix))
         (write-region written-text nil path t 'silent))
-      (mevedel-execution--retain-unread record written-text)
+      (mevedel-execution--retain-output record written-text)
       (cl-incf (mevedel-execution--record-newline-count record)
                (cl-count ?\n written-text))
       (setf (mevedel-execution--record-last-byte-newline-p record)
@@ -601,6 +652,87 @@ preserve the default zero-success/nonzero-failure rule."
           (and (mevedel-execution--record-retained-p record)
                (mevedel-execution--record-spool-path record)))))
 
+(defun mevedel-execution--event (record type &rest properties)
+  "Return an immutable TYPE event for RECORD with PROPERTIES."
+  (append
+   (list :type type
+         :emitted-at (float-time)
+         :session (mevedel-execution--origin-session
+                   (mevedel-execution--record-origin record))
+         :data-buffer (mevedel-execution--origin-data-buffer
+                       (mevedel-execution--record-origin record))
+         :owner (mevedel-execution--origin-owner
+                 (mevedel-execution--record-origin record))
+         :tool-args
+         (copy-tree
+          (mevedel-execution--origin-tool-args
+           (mevedel-execution--record-origin record)))
+         :tool-use-id (mevedel-execution--origin-tool-use-id
+                       (mevedel-execution--record-origin record))
+         :timeout-seconds (mevedel-execution--record-timeout record)
+         :facts (mevedel-execution--facts record))
+   properties))
+
+(defun mevedel-execution--copy-event (event)
+  "Return an isolated copy of EVENT, including mutable string leaves."
+  (cl-labels
+      ((copy-value (value)
+         (cond
+          ((stringp value) (copy-sequence value))
+          ((consp value)
+           (cons (copy-value (car value))
+                 (copy-value (cdr value))))
+          (t value))))
+    (copy-value event)))
+
+(defun mevedel-execution--emit-event (event)
+  "Publish EVENT to passive consumers, ignoring their return values."
+  (dolist (function mevedel-execution-event-functions)
+    (when (functionp function)
+      (condition-case err
+          (funcall function (mevedel-execution--copy-event event))
+        (error
+         (display-warning
+          'mevedel
+          (format "Execution event consumer failed: %s"
+                  (error-message-string err))
+          :warning))))))
+
+(defun mevedel-execution--deliver-mailbox-event (record event)
+  "Return non-nil after the mailbox sink secures RECORD's EVENT."
+  (when (functionp mevedel-execution-mailbox-delivery-function)
+    (condition-case err
+        (funcall mevedel-execution-mailbox-delivery-function
+                 (mevedel-execution--copy-event event)
+                 (mevedel-execution--origin-owner-context
+                  (mevedel-execution--record-origin record)))
+      (error
+       (display-warning
+        'mevedel
+        (format "Execution mailbox delivery failed: %s"
+                (error-message-string err))
+        :warning)
+       nil))))
+
+(defun mevedel-execution--whole-preview (record)
+  "Return RECORD's bounded whole-artifact head-and-tail preview."
+  (require 'mevedel-utilities)
+  (plist-get
+   (mevedel--head-tail-preview-parts
+    (or (mevedel-execution--record-output-head record) "")
+    (or (mevedel-execution--record-output-tail record) "")
+    (or (mevedel-execution--record-output-chars record) 0)
+    mevedel-execution-inline-output-limit)
+   :text))
+
+(defun mevedel-execution--emit-progress (record)
+  "Publish one bounded progress event for live RECORD."
+  (unless (mevedel-execution--record-finished-p record)
+    (mevedel-execution--emit-event
+     (mevedel-execution--event
+      record 'progress
+      :output-tail (or (mevedel-execution--record-output-tail record) "")))))
+
 (defun mevedel-execution--unread-preview (record unread-bytes)
   "Return RECORD's bounded unread preview for UNREAD-BYTES."
   (require 'mevedel-utilities)
@@ -616,16 +748,20 @@ preserve the default zero-success/nonzero-failure rule."
     (list :output (plist-get parts :text)
           :omitted (max 0 (- unread-bytes visible-bytes)))))
 
-(defun mevedel-execution--observation (record &optional claim-final)
-  "Return RECORD's next unread observation.
-
-When CLAIM-FINAL is non-nil, mark this observation as the single final model
-delivery and retire the private handle while preserving retained artifacts."
+(defun mevedel-execution--unread-range (record)
+  "Return RECORD's next unread range without consuming it."
   (let* ((start (or (mevedel-execution--record-read-offset record) 0))
          (end (mevedel-execution--record-output-bytes record))
-         (range (mevedel-execution--unread-preview record (- end start)))
-         (omitted (plist-get range :omitted)))
-    (setf (mevedel-execution--record-read-offset record) end
+         (preview (mevedel-execution--unread-preview record (- end start))))
+    (list :end end
+          :omitted (plist-get preview :omitted)
+          :output (plist-get preview :output))))
+
+(defun mevedel-execution--consume-unread-range (record range)
+  "Commit consumption of RECORD's unread RANGE."
+  (let ((omitted (plist-get range :omitted)))
+    (setf (mevedel-execution--record-read-offset record)
+          (plist-get range :end)
           (mevedel-execution--record-unread-chars record) 0
           (mevedel-execution--record-unread-head record) ""
           (mevedel-execution--record-unread-tail record) ""
@@ -633,18 +769,83 @@ delivery and retire the private handle while preserving retained artifacts."
           (+ (or (mevedel-execution--record-omitted-output-bytes record) 0)
              omitted))
     (when (> omitted 0)
-      (setf (mevedel-execution--record-retained-p record) t))
+      (setf (mevedel-execution--record-retained-p record) t))))
+
+(defun mevedel-execution--range-observation
+    (record range &optional claimed project-unconsumed)
+  "Return an observation of RECORD and unread RANGE.
+CLAIMED non-nil marks it as the final model delivery.
+PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
+  (let ((facts (mevedel-execution--facts record)))
+    (when project-unconsumed
+      (setq facts
+            (plist-put
+             facts :omitted-output-bytes
+             (+ (or (plist-get facts :omitted-output-bytes) 0)
+                (plist-get range :omitted)))))
+    (list :output (plist-get range :output)
+          :facts facts
+          :sandbox-facts (mevedel-execution--record-sandbox-facts record)
+          :error (mevedel-execution--record-error-data record)
+          :claimed-final-p (and claimed t))))
+
+(defun mevedel-execution--terminal-event (record delivery observation)
+  "Return RECORD's terminal event for DELIVERY and OBSERVATION."
+  (let ((event
+         (mevedel-execution--event
+          record 'terminal
+          :delivery delivery
+          :observation observation
+          :whole-output (mevedel-execution--whole-preview record))))
+    (plist-put event :facts (plist-get observation :facts))))
+
+(defun mevedel-execution--observation (record &optional claim-final)
+  "Return RECORD's next unread observation.
+
+When CLAIM-FINAL is non-nil, mark this observation as the single final model
+delivery and retire the private handle while preserving retained artifacts."
+  (when (and claim-final
+             (mevedel-execution--record-delivery-state record))
+    (signal 'mevedel-execution-not-found
+            (list "Execution terminal result is already claimed")))
+  (when claim-final
+    (setf (mevedel-execution--record-delivery-state record) 'model))
+  (let ((range (mevedel-execution--unread-range record)))
+    (mevedel-execution--consume-unread-range record range)
     (let ((observation
-           (list :output (plist-get range :output)
-                 :facts (mevedel-execution--facts record)
-                 :sandbox-facts
-                 (mevedel-execution--record-sandbox-facts record)
-                 :error (mevedel-execution--record-error-data record)
-                 :claimed-final-p (and claim-final t))))
+           (mevedel-execution--range-observation record range claim-final)))
       (when claim-final
+        (mevedel-execution--emit-event
+         (mevedel-execution--terminal-event record 'model observation))
         (mevedel-execution--cleanup-record
          record (mevedel-execution--record-retained-p record)))
       observation)))
+
+(defun mevedel-execution--deliver-independent (record)
+  "Secure RECORD's unread terminal result in its owner mailbox."
+  (unless (mevedel-execution--record-delivery-state record)
+    (setf (mevedel-execution--record-delivery-state record) 'mailbox)
+    (let* ((range (mevedel-execution--unread-range record))
+           (observation
+            (mevedel-execution--range-observation record range t t))
+           (event
+            (mevedel-execution--terminal-event record 'mailbox observation)))
+      (let ((delivered-p
+             (mevedel-execution--deliver-mailbox-event record event)))
+        (mevedel-execution--emit-event event)
+        (if delivered-p
+          (progn
+            (mevedel-execution--consume-unread-range record range)
+            (mevedel-execution--cleanup-record
+             record (mevedel-execution--record-retained-p record))
+            t)
+          (display-warning
+           'mevedel
+           (format "Execution %s completion has no mailbox consumer"
+                   (mevedel-execution--record-execution-id record))
+           :warning)
+          (setf (mevedel-execution--record-delivery-state record) nil)
+          nil)))))
 
 (defun mevedel-execution--deliver-observer (record)
   "Deliver RECORD's terminal observation to its waiting observer."
@@ -705,13 +906,18 @@ delivery and retire the private handle while preserving retained artifacts."
           (mevedel-execution--record-marker-buffer record) :done
           (mevedel-execution--record-last-byte-newline-p record) nil
           (mevedel-execution--record-newline-count record) 0
+          (mevedel-execution--record-output-chars record) 0
+          (mevedel-execution--record-output-head record) ""
+          (mevedel-execution--record-output-tail record) ""
           (mevedel-execution--record-read-offset record) 0
           (mevedel-execution--record-sandbox-facts record) facts
           (mevedel-execution--record-sandbox-preparation record) nil
           (mevedel-execution--record-unread-chars record) 0
           (mevedel-execution--record-unread-head record) ""
           (mevedel-execution--record-unread-tail record) "")
-    (when-let* ((session (mevedel-execution--record-session record)))
+    (when-let* ((session
+                 (mevedel-execution--origin-session
+                  (mevedel-execution--record-origin record))))
       (let ((active-token (gensym "sandbox-bash-fallback-")))
         (setf (mevedel-execution--record-sandbox-active-token record)
               active-token)
@@ -752,7 +958,10 @@ delivery and retire the private handle while preserving retained artifacts."
         (mevedel-execution--release-runtime record)
         (mevedel-execution--release-scheduler record)
         (if (mevedel-execution--record-yielded-p record)
-            (mevedel-execution--deliver-observer record)
+            (if (mevedel-execution--record-observer record)
+                (mevedel-execution--deliver-observer record)
+              (when mevedel-execution-mailbox-delivery-function
+                (mevedel-execution--deliver-independent record)))
           (let ((callback (mevedel-execution--record-callback record)))
             (funcall callback
                      (mevedel-execution--observation record t))))))))
@@ -764,11 +973,19 @@ delivery and retire the private handle while preserving retained artifacts."
     (setf (mevedel-execution--record-yielded-p record) t
           (mevedel-execution--record-retained-p record) t)
     (mevedel-execution--release-scheduler record)
+    (mevedel-execution--emit-event
+     (mevedel-execution--event record 'yield))
     (funcall (mevedel-execution--record-callback record)
              (mevedel-execution--observation record))))
 
 (defun mevedel-execution--arm-managed-timers (record)
   "Arm RECORD's yield and optional timeout clocks."
+  (when mevedel-execution-event-functions
+    (setf (mevedel-execution--record-progress-timer record)
+          (run-at-time
+           (max 0 mevedel-execution-progress-delay)
+           (max 0.25 mevedel-execution-progress-interval)
+           #'mevedel-execution--emit-progress record)))
   (when-let* ((yield-time-ms
                (mevedel-execution--record-yield-time-ms record)))
     (setf (mevedel-execution--record-yield-timer record)
@@ -807,7 +1024,9 @@ delivery and retire the private handle while preserving retained artifacts."
      (funcall (mevedel-execution--record-callback record)
               (mevedel-execution--observation record t)))
     ((or 'unrestricted 'confined)
-     (let* ((session (mevedel-execution--record-session record))
+     (let* ((session
+             (mevedel-execution--origin-session
+              (mevedel-execution--record-origin record)))
             (active-token (and session (gensym "sandbox-bash-"))))
        (setf (mevedel-execution--record-marker record)
              (plist-get preparation :marker)
@@ -844,16 +1063,22 @@ delivery and retire the private handle while preserving retained artifacts."
       (mevedel-execution--begin-stop record 'aborted))))
 
 (cl-defun mevedel-execution-start-bash
-    (callback &key session owner request command workdir writable-roots timeout
+    (callback &key session data-buffer owner owner-context request
+              command workdir
+              writable-roots timeout
               additional-permissions sandbox-permissions artifact-directory
-              outcome-function read-only-p tty (yield-time-ms 10000))
+              outcome-function read-only-p tool-args tool-use-id tty
+              (yield-time-ms 10000))
   "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
 
-SESSION and canonical OWNER fix the control boundary.  REQUEST owns the
-foreground lifetime only.  Remaining confinement arguments match the one-shot
-interface.  ARTIFACT-DIRECTORY owns the spool retained after yield.
+SESSION, canonical OWNER, and OWNER-CONTEXT fix the control boundary.
+OWNER-CONTEXT is the durable mailbox object captured at spawn.
+REQUEST owns the foreground lifetime only.  Remaining confinement arguments
+match the one-shot interface.  ARTIFACT-DIRECTORY owns the spool after yield.
 OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
+DATA-BUFFER and TOOL-USE-ID identify the authoritative transcript row.
+TOOL-ARGS correlates immutable events with the original call.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement."
@@ -874,8 +1099,17 @@ terminal settlement."
             (mevedel-execution--record-create
              :callback callback :execution-id id
              :marker-buffer nil :newline-count 0
+             :origin
+             (mevedel-execution--origin-create
+              :data-buffer data-buffer
+              :owner (or owner "main")
+              :owner-context owner-context
+              :session session
+              :tool-args tool-args
+              :tool-use-id tool-use-id)
              :outcome-function outcome-function
-             :owner (or owner "main") :read-offset 0 :session session
+             :output-chars 0 :output-head "" :output-tail ""
+             :read-offset 0
              :spool-path
              (make-temp-file
               (file-name-concat artifact-directory "execution-") nil ".log")
@@ -921,7 +1155,8 @@ terminal settlement."
     (unless (and record
                  (mevedel-execution--record-execution-id record)
                  (mevedel-execution--record-yielded-p record)
-                 (equal (mevedel-execution--record-owner record)
+                 (equal (mevedel-execution--origin-owner
+                         (mevedel-execution--record-origin record))
                         (or owner "main")))
       (signal 'mevedel-execution-not-found
               (list "No yielded execution with that id")))
@@ -995,11 +1230,28 @@ after WAIT-MS while the process remains live."
      (lambda (_key record)
        (when (and (mevedel-execution--record-execution-id record)
                   (mevedel-execution--record-yielded-p record)
-                  (equal (mevedel-execution--record-owner record)
+                  (not (mevedel-execution--record-finished-p record))
+                  (equal (mevedel-execution--origin-owner
+                          (mevedel-execution--record-origin record))
                          (or owner "main")))
          (push (mevedel-execution--facts record) facts)))
      (mevedel-execution--state-records state))
     (nreverse facts)))
+
+(defun mevedel-execution-owner-live-p (session owner)
+  "Return non-nil when OWNER has an unsettled execution in SESSION."
+  (when-let* ((state (and session
+                          (mevedel-session-execution-state session))))
+    (let (live-p)
+      (maphash
+       (lambda (_key record)
+         (when (and (not (mevedel-execution--record-delivery-state record))
+                    (equal (mevedel-execution--origin-owner
+                            (mevedel-execution--record-origin record))
+                           owner))
+           (setq live-p t)))
+       (mevedel-execution--state-records state))
+      live-p)))
 
 (defun mevedel-execution-stop (session owner execution-id callback)
   "Stop owner-scoped yielded EXECUTION-ID and call CALLBACK at settlement."
@@ -1013,6 +1265,24 @@ after WAIT-MS while the process remains live."
        session owner execution-id callback :wait-ms 300000)
       (mevedel-execution--begin-stop record 'stopped))
     nil))
+
+(defun mevedel-execution-stop-user (session execution-id)
+  "Stop yielded EXECUTION-ID in SESSION with user delivery authority.
+
+Unlike the owner-scoped model tool, a user stop delivers terminal output to
+the execution owner's mailbox."
+  (let* ((state (mevedel-execution--state-for-session session))
+         (record (gethash execution-id
+                          (mevedel-execution--state-records state))))
+    (unless (and record
+                 (mevedel-execution--record-execution-id record)
+                 (mevedel-execution--record-yielded-p record))
+      (signal 'mevedel-execution-not-found
+              (list "No yielded execution with that id")))
+    (if (mevedel-execution--record-finished-p record)
+        (mevedel-execution--deliver-independent record)
+      (mevedel-execution--flush-observer record)
+      (mevedel-execution--begin-stop record 'stopped))))
 
 
 ;;

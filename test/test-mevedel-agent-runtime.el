@@ -79,6 +79,325 @@
     (kill-buffer buffer)))
 
 
+(mevedel-deftest mevedel-agent-runtime-queue-execution-completion ()
+  ,test
+  (test)
+  :doc "queues main completions without transitioning or launching a request"
+  (let ((session (mevedel-agent-runtime-test--make-session))
+        transitions requests)
+    (cl-letf (((symbol-function 'gptel-fsm-transition)
+               (lambda (&rest args) (push args transitions)))
+              ((symbol-function 'gptel-request)
+               (lambda (&rest args) (push args requests))))
+      (should
+       (mevedel-agent-runtime-queue-execution-completion
+        session "main" "finished\n<bash-execution/>")))
+    (should-not transitions)
+    (should-not requests)
+    (should (= 1 (length (mevedel-session-messages session))))
+    (should (equal "finished\n<bash-execution/>"
+                   (plist-get (car (mevedel-session-messages session))
+                              :body))))
+  :doc "queues an agent completion through its durable invocation object"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (parent-buffer (generate-new-buffer " *execution-owner*"))
+         (agent-id "explorer--execution-owner")
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id agent-id
+           :parent-session session
+           :parent-data-buffer parent-buffer))
+         (fsm
+          (gptel-make-fsm
+           :state 'WAIT
+           :info (list :mevedel-agent-invocation invocation))))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (should
+           (mevedel-agent-runtime-queue-execution-completion
+            invocation agent-id "agent finished"))
+          (should-not (mevedel-session-messages session))
+          (should (= 1 (length
+                        (mevedel-agent-invocation-messages invocation))))
+          (should (equal "agent finished"
+                         (plist-get
+                          (car (mevedel-agent-invocation-messages invocation))
+                          :body)))
+          (should-not
+           (mevedel-agent-runtime-queue-execution-completion
+            invocation "explorer--missing" "lost")))
+      (kill-buffer parent-buffer)))
+  :doc "settles an execution-only BWAIT agent without a model request"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (parent-buffer (generate-new-buffer " *execution-parent*"))
+         (agent-buffer (generate-new-buffer " *execution-agent*"))
+         (agent-id "explorer--execution-bwait")
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id agent-id
+           :parent-session session
+           :parent-data-buffer parent-buffer
+           :buffer agent-buffer))
+         result requests
+         (fsm
+          (gptel-make-fsm
+           :state 'BWAIT
+           :info
+           (list :buffer agent-buffer
+                 :mevedel-agent-invocation invocation
+                 :mevedel-agent-terminal-callback
+                 (lambda (response)
+                   (mevedel-agent-runtime--complete-foreground-agent
+                    invocation response))))))
+    (unwind-protect
+        (progn
+          (setf
+           (mevedel-agent-invocation-parent-tool-callback invocation)
+           (lambda (response)
+             (setq result response)
+             (setf
+              (mevedel-agent-invocation-foreground-result-reported-p
+               invocation)
+              t)))
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+                     (lambda (_invocation) "Agent answer."))
+                    ((symbol-function 'mevedel-execution-owner-live-p)
+                     (lambda (_session _owner) nil))
+                    ((symbol-function 'gptel-request)
+                     (lambda (&rest args) (push args requests))))
+            (should
+             (mevedel-agent-runtime-queue-execution-completion
+              invocation agent-id "Bash completed with exit code 0.")))
+          (should-not requests)
+          (should (eq 'DONE (gptel-fsm-state fsm)))
+          (should (string-match-p "Agent answer" result))
+          (should (string-match-p "Bash completed" result))
+          (should-not (mevedel-agent-invocation-messages invocation)))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+  :doc "retries a completion queued just before the agent enters BWAIT"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (parent-buffer (generate-new-buffer " *execution-latched-parent*"))
+         (agent-buffer (generate-new-buffer " *execution-latched-agent*"))
+         (agent-id "explorer--execution-latched")
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id agent-id :parent-session session
+           :parent-data-buffer parent-buffer :buffer agent-buffer))
+         result requests
+         (fsm
+          (gptel-make-fsm
+           :state 'TYPE
+           :info
+           (list :buffer agent-buffer
+                 :mevedel-agent-invocation invocation
+                 :mevedel-agent-terminal-callback
+                 (lambda (response) (setq result response))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+                     (lambda (_invocation) "Latched answer."))
+                    ((symbol-function 'mevedel-execution-owner-live-p)
+                     (lambda (_session _owner) nil))
+                    ((symbol-function 'gptel-request)
+                     (lambda (&rest args) (push args requests))))
+            (should
+             (mevedel-agent-runtime-queue-execution-completion
+              invocation agent-id "Latched Bash completion."))
+            (should-not result)
+            (should (mevedel-agent-invocation-messages invocation))
+            (setf (gptel-fsm-state fsm) 'BWAIT)
+            (mevedel-agent-runtime--handle-bwait fsm))
+          (should-not requests)
+          (should (eq 'DONE (gptel-fsm-state fsm)))
+          (should (string-match-p "Latched answer" result))
+          (should (string-match-p "Latched Bash completion" result))
+          (should-not (mevedel-agent-invocation-messages invocation)))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+  :doc "retries transient failure after durable BWAIT delivery"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (parent-buffer (generate-new-buffer " *execution-retry-parent*"))
+         (agent-buffer (generate-new-buffer " *execution-retry-agent*"))
+         (agent-id "explorer--execution-retry")
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id agent-id :parent-session session
+           :parent-data-buffer parent-buffer :buffer agent-buffer))
+         (attempts 0)
+         result requests
+         (fsm
+          (gptel-make-fsm
+           :state 'BWAIT
+           :info
+           (list :buffer agent-buffer
+                 :mevedel-agent-invocation invocation
+                 :mevedel-agent-terminal-callback
+                 (lambda (response)
+                   (cl-incf attempts)
+                   (if (= attempts 1)
+                       (error "Transient callback failure")
+                     (setq result response)))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+                     (lambda (_invocation) "Retry answer."))
+                    ((symbol-function 'mevedel-execution-owner-live-p)
+                     (lambda (_session _owner) nil))
+                    ((symbol-function 'gptel-request)
+                     (lambda (&rest args) (push args requests))))
+            (should
+             (mevedel-agent-runtime-queue-execution-completion
+              invocation agent-id "Retry Bash completion."))
+            (with-timeout (2 (error "Timed out waiting for retry"))
+              (while (not (eq (gptel-fsm-state fsm) 'DONE))
+                (accept-process-output nil 0.02))))
+          (should-not requests)
+          (should (= 2 attempts))
+          (should (string-match-p "Retry Bash completion" result))
+          (should-not (mevedel-agent-invocation-messages invocation)))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+  :doc "bounds permanent callback failure and stops the owning agent"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (parent-buffer (generate-new-buffer " *execution-failed-parent*"))
+         (agent-buffer (generate-new-buffer " *execution-failed-agent*"))
+         (agent-id "explorer--execution-failed")
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id agent-id :parent-session session
+           :parent-data-buffer parent-buffer :buffer agent-buffer))
+         (attempts 0)
+         stopped requests
+         (fsm
+          (gptel-make-fsm
+           :state 'BWAIT
+           :info
+           (list :buffer agent-buffer
+                 :mevedel-agent-invocation invocation
+                 :mevedel-agent-terminal-callback
+                 (lambda (_response)
+                   (cl-incf attempts)
+                   (error "Permanent callback failure"))))))
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (let ((mevedel-agent-runtime--execution-settlement-retry-delays
+                 '(0.01 0.01)))
+            (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
+                       (lambda (_invocation) "Failed answer."))
+                      ((symbol-function 'mevedel-execution-owner-live-p)
+                       (lambda (_session _owner) nil))
+                      ((symbol-function 'gptel-request)
+                       (lambda (&rest args) (push args requests)))
+                      ((symbol-function 'mevedel-agent-runtime-stop)
+                       (lambda (seen-id reason seen-buffer)
+                         (setq stopped (list seen-id reason seen-buffer))
+                         (setf (gptel-fsm-state fsm) 'ABRT))))
+              (should
+               (mevedel-agent-runtime-queue-execution-completion
+                invocation agent-id "Failed Bash completion."))
+              (with-timeout (2 (error "Timed out waiting for bounded retry"))
+                (while (not stopped)
+                  (accept-process-output nil 0.02)))))
+          (should-not requests)
+          (should (= 3 attempts))
+          (should (equal agent-id (car stopped)))
+          (should (eq parent-buffer (caddr stopped)))
+          (should-not
+           (mevedel-agent-invocation-execution-settlement-retry-timer
+            invocation))
+          (should (zerop
+                   (mevedel-agent-invocation-execution-settlement-retry-count
+                    invocation)))
+          (should (mevedel-agent-invocation-messages invocation)))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+  :doc "retries background parent delivery before retiring the agent"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (parent-buffer
+          (generate-new-buffer " *execution-background-parent*"))
+         (agent-buffer
+          (generate-new-buffer " *execution-background-agent*"))
+         (agent-id "explorer--execution-background")
+         (agent (mevedel-agent--create :name "explorer"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent agent
+           :agent-id agent-id
+           :description "Run a background command"
+           :parent-session session
+           :parent-context session
+           :parent-data-buffer parent-buffer
+           :buffer agent-buffer
+           :background-p t))
+         (original-push
+          (symbol-function 'mevedel-agent-runtime--ctx-push-message))
+         (parent-push-attempts 0)
+         requests
+         (fsm
+          (gptel-make-fsm
+           :state 'BWAIT
+           :info
+           (list :buffer agent-buffer
+                 :mevedel-agent-invocation invocation
+                 :mevedel-agent-terminal-callback
+                 (lambda (response)
+                   (mevedel-agent-runtime--complete-background-agent
+                    invocation response))))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-background-agents session) (list agent-id))
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (let ((mevedel-agent-runtime--execution-settlement-retry-delays
+                 '(0.01 0.01)))
+            (cl-letf
+                (((symbol-function 'mevedel-agent-exec--final-response-text)
+                  (lambda (_invocation) "Background answer."))
+                 ((symbol-function 'mevedel-execution-owner-live-p)
+                  (lambda (_session _owner) nil))
+                 ((symbol-function 'gptel-request)
+                  (lambda (&rest args) (push args requests)))
+                 ((symbol-function 'mevedel-agent-runtime--ctx-push-message)
+                  (lambda (context message)
+                    (when (eq context session)
+                      (cl-incf parent-push-attempts)
+                      (when (= parent-push-attempts 1)
+                        (error "Transient parent mailbox failure")))
+                    (funcall original-push context message))))
+              (should
+               (mevedel-agent-runtime-queue-execution-completion
+                invocation agent-id "Background Bash completion."))
+              (with-timeout (2 (error "Timed out waiting for parent retry"))
+                (while (not (eq (gptel-fsm-state fsm) 'DONE))
+                  (accept-process-output nil 0.02)))))
+          (should-not requests)
+          (should (= 2 parent-push-attempts))
+          (should (= 1 (length (mevedel-session-messages session))))
+          (should-not (mevedel-agent-invocation-messages invocation))
+          (should-not (mevedel-session-background-agents session))
+          (with-current-buffer parent-buffer
+            (should-not (assoc agent-id mevedel-agent-runtime--fsms))))
+      (when (buffer-live-p agent-buffer) (kill-buffer agent-buffer))
+      (when (buffer-live-p parent-buffer) (kill-buffer parent-buffer)))))
+
+
 
 (mevedel-deftest mevedel-agent-runtime--agent-result-format ()
   ,test
@@ -1460,7 +1779,24 @@
           (mevedel-agent-runtime--ctx-push-message
            session '(:from "explorer--x" :body "done"))
           (should (mevedel-agent-runtime--background-agents-pending-p info)))
-      (kill-buffer buf))))
+      (kill-buffer buf)))
+
+  :doc "parks an invocation while its captured owner has a live execution"
+  (require 'mevedel-tool-ui)
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (agent-id "explorer--bash-owner")
+         (inv (mevedel-agent-invocation--create
+               :agent-id agent-id
+               :agent (mevedel-agent--create :name "explorer")
+               :parent-session session))
+         (info (list :mevedel-agent-invocation inv))
+         captured)
+    (cl-letf (((symbol-function 'mevedel-execution-owner-live-p)
+               (lambda (seen-session seen-owner)
+                 (setq captured (list seen-session seen-owner))
+                 t)))
+      (should (mevedel-agent-runtime--background-agents-pending-p info)))
+    (should (equal (list session agent-id) captured))))
 
 (mevedel-deftest mevedel-agent-runtime--bwait-injected-table
   ()
@@ -1608,6 +1944,123 @@
             ;; Parent FSM should have been resumed to WAIT.
             (should (eq 'WAIT (gptel-fsm-state parent-fsm)))
             (should resumed)))
+      (kill-buffer buf)))
+
+  :doc "direct foreground settlement retains state until delivery succeeds"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (buf (generate-new-buffer " *mt-bwait-foreground-execution*"))
+         (live-p t)
+         (attempts 0)
+         captured-cb invocation result)
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-agent-runtime--fsms nil)
+          (let ((mevedel-agent-no-progress-timeout nil))
+            (cl-letf (((symbol-function 'mevedel-execution-owner-live-p)
+                       (lambda (_session _owner) live-p))
+                      ((symbol-function 'mevedel-agent-exec--run)
+                       (lambda (cb _type _desc _prompt inv agent-buffer
+                                   &optional configure)
+                         (setq captured-cb cb
+                               invocation inv)
+                         (let ((fsm
+                                (gptel-make-fsm
+                                 :state 'TYPE
+                                 :info (list :buffer agent-buffer))))
+                           (funcall configure fsm inv)
+                           (setf (gptel-fsm-info fsm)
+                                 (plist-put
+                                  (gptel-fsm-info fsm)
+                                  :mevedel-agent-terminal-callback cb))
+                           fsm))))
+              (mevedel-agent-runtime-dispatch
+               (lambda (value)
+                 (cl-incf attempts)
+                 (if (= attempts 1)
+                     (error "Transient parent callback failure")
+                   (setq result value)))
+               (mevedel-agent-get "explorer") "survey" "survey files")
+              (funcall captured-cb "Done.")
+              (should-not result)
+              (should (zerop attempts))
+              (should (assoc
+                       (mevedel-agent-invocation-agent-id invocation)
+                      mevedel-agent-runtime--fsms))
+              (setq live-p nil)
+              (let ((mevedel-agent-runtime--direct-execution-settlement-p t))
+                (should-error (funcall captured-cb "Done.")))
+              (should (= 1 attempts))
+              (should-not
+               (mevedel-agent-invocation-foreground-result-reported-p
+                invocation))
+              (should (assoc
+                       (mevedel-agent-invocation-agent-id invocation)
+                       mevedel-agent-runtime--fsms))
+              (let ((mevedel-agent-runtime--direct-execution-settlement-p t))
+                (funcall captured-cb "Done."))
+              (should (= 2 attempts))
+              (should result)
+              (should-not
+               (assoc (mevedel-agent-invocation-agent-id invocation)
+                      mevedel-agent-runtime--fsms)))))
+      (when (and invocation
+                 (buffer-live-p (mevedel-agent-invocation-buffer invocation)))
+        (kill-buffer (mevedel-agent-invocation-buffer invocation)))
+      (kill-buffer buf)))
+
+  :doc "ordinary foreground callback failure cannot strand the Agent tool"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (buf (generate-new-buffer " *mt-foreground-one-shot-failure*"))
+         (attempts 0)
+         raw-callback callback-info invocation)
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel-agent-runtime--fsms nil)
+          (let ((mevedel-agent-no-progress-timeout nil))
+            (cl-letf
+                (((symbol-function 'mevedel-execution-owner-live-p)
+                  (lambda (_session _owner) nil))
+                 ((symbol-function 'mevedel-agent-exec--run)
+                  (lambda (cb agent-type description _prompt inv agent-buffer
+                              &optional configure)
+                    (setq invocation inv
+                          callback-info
+                          (list :buffer agent-buffer
+                                :stream t
+                                :mevedel-agent-invocation inv)
+                          raw-callback
+                          (mevedel-agent-exec--make-callback
+                           cb agent-type description nil (list "")))
+                    (let ((fsm
+                           (gptel-make-fsm
+                            :state 'TYPE
+                            :info callback-info)))
+                      (funcall configure fsm inv)
+                      fsm))))
+              (mevedel-agent-runtime-dispatch
+               (lambda (_value)
+                 (cl-incf attempts)
+                 (error "Rejected terminal Agent result"))
+               (mevedel-agent-get "explorer") "survey" "survey files")
+              (should
+               (assoc (mevedel-agent-invocation-agent-id invocation)
+                      mevedel-agent-runtime--fsms))
+              (funcall raw-callback "Done." callback-info)
+              (funcall raw-callback t callback-info)
+              (should (= 1 attempts))
+              (should
+               (mevedel-agent-invocation-foreground-result-reported-p
+                invocation))
+              (should-not
+               (assoc (mevedel-agent-invocation-agent-id invocation)
+                      mevedel-agent-runtime--fsms))
+              (funcall raw-callback t callback-info)
+              (should (= 1 attempts)))))
+      (when (and invocation
+                 (buffer-live-p (mevedel-agent-invocation-buffer invocation)))
+        (kill-buffer (mevedel-agent-invocation-buffer invocation)))
       (kill-buffer buf)))
 
   :doc "watchdog keeps BWAIT parked when messages and live agents coexist"
@@ -2056,6 +2509,44 @@
             (mevedel-agent-runtime--bwait-watchdog-expire parent)
             (should (eq 'WAIT (gptel-fsm-state parent)))
             (should (null (mevedel-session-background-agents session)))))
+      (kill-buffer buf)))
+
+  :doc "execution-only mailbox stays parked without an unsolicited request"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-execution-only*"))
+         scheduled)
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-messages session)
+                '((:from "bash:main" :body "done"
+                   :execution-result-p t)))
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (cl-letf (((symbol-function 'run-at-time)
+                       (lambda (&rest args)
+                         (setq scheduled args)
+                         'timer))
+                      ((symbol-function 'gptel--update-status)
+                       (lambda (&rest _args) nil)))
+              (mevedel-agent-runtime--handle-bwait parent))
+            (should (eq 'BWAIT (gptel-fsm-state parent)))
+            (should-not scheduled)))
+      (kill-buffer buf)))
+
+  :doc "watchdog never resumes an execution-only mailbox"
+  (let* ((session (mevedel-agent-runtime-test--make-session))
+         (buf (generate-new-buffer " *mt-wd-execution-watchdog*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-messages session)
+                '((:from "bash:main" :body "done"
+                   :execution-result-p t)))
+          (let ((parent (gptel-make-fsm :info (list :buffer buf)
+                                        :handlers nil :state 'BWAIT)))
+            (mevedel-agent-runtime--bwait-watchdog-expire parent)
+            (should (eq 'BWAIT (gptel-fsm-state parent)))))
       (kill-buffer buf)))
 
   :doc "slow live agents remain parked in BWAIT and re-arm watchdog"
