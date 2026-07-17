@@ -166,6 +166,8 @@
 (declare-function mevedel-view--spinner-region-p
                   "mevedel-view-stream" (start end))
 (defvar mevedel-view--data-turn-start)
+(defvar mevedel-view--execution-events)
+(defvar mevedel-view-stream--pending-execution-terminals)
 (defvar mevedel-view--in-flight-turn-start)
 (defvar mevedel-view--pending-tool-calls)
 (defvar mevedel-view-spinner-frames)
@@ -705,14 +707,14 @@ through font-lock refontification cycles.  Returns S."
 
 (defun mevedel-view--cache-put (table key value counter-symbol)
   "Put VALUE in TABLE under KEY and bump COUNTER-SYMBOL.
-Clear TABLE when `mevedel-view-render-cache-max-entries' is exceeded."
+Clear TABLE before adding beyond `mevedel-view-render-cache-max-entries'."
   (unless (gethash key table)
+    (when (>= (symbol-value counter-symbol)
+              mevedel-view-render-cache-max-entries)
+      (clrhash table)
+      (set counter-symbol 0))
     (set counter-symbol (1+ (symbol-value counter-symbol))))
   (puthash key value table)
-  (when (> (symbol-value counter-symbol)
-           mevedel-view-render-cache-max-entries)
-    (clrhash table)
-    (set counter-symbol 0))
   value)
 
 (defun mevedel-view--fontify-response (text)
@@ -1100,6 +1102,7 @@ renderer to fall back to the bare `Tool' one-liner."
                                     (mevedel-view--read-args-media-p args))))
                      (visible-result (car extract)))
                 (list :name name
+                      :tool-use-id tool-id
                       :args args
                       :result (if wrapped-p
                                   (mevedel-view--strip-trailing-tool-marker
@@ -1476,6 +1479,8 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                            mevedel-view-source ,source
                            mevedel-view-source-key ,(mevedel-view--source-collapse-state-key
                                                      source vtype)
+                           mevedel-view-force-expanded
+                           ,(and (plist-get rendering :force-expanded-p) t)
                            mevedel-view-rendered t))
     (mevedel-view--decorate-markdown-in-range ins-start (point))))
 
@@ -1551,8 +1556,41 @@ RAW is an optional precomputed expanded tool segment text."
                      data-buf seg-start seg-end raw)))
     (let* ((name (plist-get call :name))
            (args (plist-get call :args))
-           (result (plist-get call :result))
-           (render-data (plist-get call :render-data))
+           (tool-use-id (plist-get call :tool-use-id))
+           (event
+            (and (equal name "Bash")
+                 (hash-table-p mevedel-view--execution-events)
+                 (gethash tool-use-id mevedel-view--execution-events)))
+           (terminal-render-data
+            (and (equal name "Bash")
+                 (buffer-live-p data-buf)
+                 (let ((table
+                        (buffer-local-value
+                         'mevedel-view-stream--pending-execution-terminals
+                         data-buf)))
+                   (and (hash-table-p table)
+                        (gethash tool-use-id table)))))
+           (event-type (plist-get event :type))
+           (call-render-data (plist-get call :render-data))
+           (result
+            (cond
+             ((eq event-type 'progress)
+              (or (plist-get event :output-tail) ""))
+             ((plist-member call-render-data :execution-output)
+              (or (plist-get call-render-data :execution-output) ""))
+             ((plist-member terminal-render-data :execution-output)
+              (or (plist-get terminal-render-data :execution-output) ""))
+             (t (plist-get call :result))))
+           (render-data
+            (if (eq event-type 'progress)
+                (let ((facts (copy-sequence (plist-get event :facts))))
+                  (append
+                   facts
+                   (list :status 'success
+                         :live-execution-p t
+                         :timeout-seconds
+                         (plist-get event :timeout-seconds))))
+              (or terminal-render-data call-render-data)))
            (tool (mevedel-tool-get name))
            (custom (and tool
                         (mevedel-view--invoke-renderer
@@ -2207,12 +2245,14 @@ an explicitly expanded section."
 (defun mevedel-view--rendering-with-collapse-state (rendering source)
   "Return RENDERING with saved collapse state from SOURCE applied.
 When no saved state exists, return RENDERING unchanged."
-  (if-let* ((rendering rendering)
+  (if (plist-get rendering :force-expanded-p)
+      (plist-put (copy-sequence rendering) :initially-collapsed-p nil)
+    (if-let* ((rendering rendering)
             (vtype (or (plist-get rendering :vtype) 'tool-summary))
             (entry (mevedel-view--source-collapse-state-entry source vtype)))
-      (plist-put (copy-sequence rendering)
-                 :initially-collapsed-p (cdr entry))
-    rendering))
+        (plist-put (copy-sequence rendering)
+                   :initially-collapsed-p (cdr entry))
+      rendering)))
 
 (defun mevedel-view--collapse-state-next-change (pos limit)
   "Return the next fold-relevant property change after POS before LIMIT."
@@ -2333,6 +2373,9 @@ a marker so toggles that change buffer length do not invalidate the walk."
                          (collapsed (and (get-text-property
                                           pos 'mevedel-view-collapsed)
                                          t))
+                         (force-expanded
+                          (get-text-property pos
+                                             'mevedel-view-force-expanded))
                          (source-key (get-text-property
                                       pos 'mevedel-view-source-key))
                          (mailbox-bounds
@@ -2349,7 +2392,8 @@ a marker so toggles that change buffer length do not invalidate the walk."
                            (mailbox-bounds
                             (mevedel-view--mailbox-collapse-state-key
                              pos mailbox-counts)))))
-                    (when-let* ((entry (and key (assoc key states)))
+                    (when-let* (((not force-expanded))
+                                (entry (and key (assoc key states)))
                                 ((not (eq collapsed (cdr entry)))))
                       (goto-char pos)
                       (cond

@@ -525,6 +525,13 @@ always prompt for the session name."
   ;; Define custom tools
   (mevedel-tools-register)
 
+  ;; Reflect managed Bash progress in the view and secure independent
+  ;; completions in the original owner's mailbox.
+  (add-hook 'mevedel-execution-event-functions
+            #'mevedel-view-stream-handle-execution-event)
+  (setq mevedel-execution-mailbox-delivery-function
+        #'mevedel-tool-exec-handle-execution-event)
+
   ;; Define gptel presets
   (mevedel--define-presets)
 
@@ -599,6 +606,11 @@ always prompt for the session name."
   (interactive)
   ;; Remove tools
   (setf (alist-get "mevedel" gptel--known-tools nil 'remove #'equal) nil)
+  (remove-hook 'mevedel-execution-event-functions
+               #'mevedel-view-stream-handle-execution-event)
+  (when (eq mevedel-execution-mailbox-delivery-function
+            #'mevedel-tool-exec-handle-execution-event)
+    (setq mevedel-execution-mailbox-delivery-function nil))
   ;; Remove presets
   (dolist (preset '(mevedel-discuss mevedel-implement mevedel-revise))
     (setf (alist-get preset gptel--known-presets nil 'remove) nil))

@@ -181,6 +181,238 @@
         (should warned)
         (should (equal before (buffer-string)))))))
 
+(mevedel-deftest mevedel-view-stream-handle-execution-event ()
+  ,test
+  (test)
+  :doc "progress stays transient while terminal rows persist across cache turnover"
+  (mevedel-view-stream-test--with-buffers
+    (let* ((session (mevedel-session--create :name "execution-view"))
+           (draft "> quoted\nsecond line")
+           (bash-tool
+            (mevedel-tool--create
+             :name "Bash" :renderer #'mevedel-tool-exec--render-bash))
+           (mevedel-view-render-cache-max-entries 1)
+           data-before)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (insert "#+begin_tool (Bash :command \"printf run\")\n")
+        (let ((start (point))
+              (block
+               (mevedel-pipeline--format-render-data-block
+                '(:status success :state running :live-execution-p t))))
+          (insert
+           (concat "(:name \"Bash\" :args (:command \"printf run\"))\n\ninitial"
+                   block))
+          (put-text-property start (point) 'gptel '(tool . "call-live")))
+        (insert "#+end_tool\n"
+                "#+begin_tool (Bash :command \"printf new\")\n")
+        (let ((start (point)))
+          (insert "(:name \"Bash\" :args (:command \"printf new\"))\n\nnew\n")
+          (put-text-property start (point) 'gptel '(tool . "call-new")))
+        (insert "#+end_tool\n")
+        (setq data-before (buffer-string)))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--full-rerender)
+        (mevedel-view-stream-test--insert-composer-draft draft 3)
+        (let ((point-offset (- (point) (mevedel-view--input-start))))
+          (cl-letf (((symbol-function 'mevedel-tool-get)
+                     (lambda (name)
+                       (and (equal name "Bash") bash-tool)))
+                    ((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional _buffer)
+                       (mevedel-view--full-rerender)
+                       'rerender-timer)))
+            (should-not
+             (mevedel-view-stream-handle-execution-event
+              (list :type 'progress :session session :data-buffer data-buf
+                    :owner "main"
+                    :tool-use-id "call-live"
+                    :tool-args '(:command "printf run")
+                    :timeout-seconds 30 :output-tail "live tail"
+                    :facts '(:execution-id "exec-000001" :state running
+                             :wall-time-seconds 2.5 :output-bytes 9
+                             :output-lines 1 :omitted-output-bytes 0))))
+            (let* ((bounds
+                    (with-current-buffer data-buf
+                      (mevedel-pipeline--tool-segment-bounds "call-live")))
+                   (rendering
+                    (mevedel-view--compute-segment-rendering
+                     data-buf (car bounds) (cdr bounds))))
+              (should (equal "live tail" (plist-get rendering :body)))
+              (should (plist-get rendering :force-expanded-p)))
+            (let ((cached (gethash "call-live"
+                                   mevedel-view--execution-events)))
+              (should (equal "live tail" (plist-get cached :output-tail)))
+              (should-not (plist-member cached :owner-context))
+              (should-not (plist-member cached :observation)))
+            (with-current-buffer data-buf
+              (should (equal data-before (buffer-string))))
+            (should (string-match-p
+                     "live tail"
+                     (buffer-substring-no-properties
+                      (point-min) (mevedel-view--input-start))))
+            (should (string-match-p
+                     "exec-000001"
+                     (buffer-substring-no-properties
+                      (point-min) (mevedel-view--input-start))))
+            (should-not
+             (mevedel-view-stream-handle-execution-event
+              (list :type 'terminal :delivery 'mailbox :session session
+                    :data-buffer data-buf
+                    :owner "main"
+                    :tool-use-id "call-live"
+                    :tool-args '(:command "printf run")
+                    :timeout-seconds 30 :whole-output "whole head\nwhole tail"
+                    :facts '(:execution-id "exec-000001" :state completed
+                             :termination exited :exit-code 0 :outcome success
+                             :wall-time-seconds 3.0 :output-bytes 21
+                             :output-lines 2 :omitted-output-bytes 0))))
+            (should-not (gethash "call-live" mevedel-view--execution-events))
+            (let ((parsed
+                   (with-current-buffer data-buf
+                     (mevedel-pipeline-extract-render-data
+                      (buffer-substring-no-properties
+                       (point-min) (point-max))))))
+              (should (equal "whole head\nwhole tail"
+                             (plist-get (cdr parsed) :execution-output))))
+            (let ((visible (buffer-substring-no-properties
+                            (point-min) (mevedel-view--input-start))))
+              (should (string-match-p "whole head" visible))
+              (should (string-match-p "whole tail" visible))
+              (should (string-match-p "completed" visible)))
+            (should-not
+             (mevedel-view-stream-handle-execution-event
+              (list :type 'progress :session session :data-buffer data-buf
+                    :owner "main"
+                    :tool-use-id "call-new"
+                    :tool-args '(:command "printf new")
+                    :output-tail "new live tail"
+                    :facts '(:execution-id "exec-000002" :state running
+                             :wall-time-seconds 2.1 :output-bytes 13
+                             :output-lines 1 :omitted-output-bytes 0))))
+            (should (gethash "call-new" mevedel-view--execution-events))
+            (should-not (gethash "call-live" mevedel-view--execution-events))
+            (let ((visible (buffer-substring-no-properties
+                            (point-min) (mevedel-view--input-start))))
+              (should (string-match-p "whole head" visible))
+              (should (string-match-p "whole tail" visible))
+              (should (string-match-p "new live tail" visible)))
+            (should (equal draft (mevedel-view--input-text)))
+            (should (= point-offset
+                       (- (point) (mevedel-view--input-start)))))))
+      (with-current-buffer data-buf
+        (should (equal (mevedel-pipeline--strip-render-data-blocks data-before)
+                       (mevedel-pipeline--strip-render-data-blocks
+                        (buffer-string)))))))
+  :doc "retains a terminal event until its parallel tool row is inserted"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer data-buf
+      (insert "#+begin_tool (Read :file_path \"other\")\n")
+      (let ((start (point)))
+        (insert "(:name \"Read\" :args (:file_path \"other\"))\n\nwaiting\n")
+        (put-text-property start (point) 'gptel '(tool . "call-other")))
+      (insert "#+end_tool\n"))
+    (mevedel-view-stream-handle-execution-event
+     (list :type 'terminal :delivery 'mailbox :data-buffer data-buf
+           :owner "main" :tool-use-id "call-late"
+           :tool-args '(:command "printf late")
+           :whole-output "late terminal output"
+           :facts '(:execution-id "exec-000003" :state completed
+                    :termination exited :exit-code 0 :outcome success
+                    :wall-time-seconds 2.4 :output-bytes 20
+                    :output-lines 1 :omitted-output-bytes 0)))
+    (with-current-buffer data-buf
+      (should (gethash "call-late"
+                       mevedel-view-stream--pending-execution-terminals))
+      (insert "#+begin_tool (Bash :command \"printf late\")\n")
+      (let ((start (point)))
+        (insert "(:name \"Bash\" :args (:command \"printf late\"))\n\nyielded\n")
+        (put-text-property start (point) 'gptel '(tool . "call-late")))
+      (insert "#+end_tool\n")
+      (mevedel-view-stream--retry-pending-execution-terminals data-buf)
+      (should-not (gethash
+                   "call-late"
+                   mevedel-view-stream--pending-execution-terminals))
+      (let ((parsed
+             (mevedel-pipeline-extract-render-data
+              (buffer-substring-no-properties (point-min) (point-max)))))
+        (should (equal "late terminal output"
+                       (plist-get (cdr parsed) :execution-output))))))
+  :doc "finalizes a headless agent row at the data-buffer response boundary"
+  (let ((agent-data (generate-new-buffer " *execution-headless-agent*")))
+    (unwind-protect
+        (progn
+          (mevedel-view-stream-handle-execution-event
+           (list :type 'terminal :delivery 'mailbox
+                 :data-buffer agent-data :owner "explorer--headless"
+                 :tool-use-id "call-headless"
+                 :tool-args '(:command "printf headless")
+                 :whole-output "headless terminal output"
+                 :facts '(:execution-id "exec-000004" :state completed
+                          :termination exited :exit-code 0 :outcome success
+                          :wall-time-seconds 2.6 :output-bytes 24
+                          :output-lines 1 :omitted-output-bytes 0)))
+          (with-current-buffer agent-data
+            (should-not (bound-and-true-p mevedel--view-buffer))
+            (should (gethash
+                     "call-headless"
+                     mevedel-view-stream--pending-execution-terminals))
+            (insert "#+begin_tool (Bash :command \"printf headless\")\n")
+            (let ((start (point)))
+              (insert "(:name \"Bash\" :args (:command \"printf headless\"))\n\nyielded\n")
+              (put-text-property start (point) 'gptel
+                                 '(tool . "call-headless")))
+            (insert "#+end_tool\n")
+            (mevedel-view-stream-retry-execution-terminals)
+            (should-not
+             (gethash
+              "call-headless"
+              mevedel-view-stream--pending-execution-terminals))
+            (let ((parsed
+                   (mevedel-pipeline-extract-render-data
+                    (buffer-substring-no-properties
+                     (point-min) (point-max)))))
+              (should
+               (equal "headless terminal output"
+                      (plist-get (cdr parsed) :execution-output))))))
+      (kill-buffer agent-data)))
+  :doc "routes same-session progress to the matching owner view"
+  (let ((session (mevedel-session--create :name "execution-routing"))
+        (main-data (generate-new-buffer " *execution-main-data*"))
+        (main-view (generate-new-buffer " *execution-main-view*"))
+        (agent-data (generate-new-buffer " *execution-agent-data*"))
+        (agent-view (generate-new-buffer " *execution-agent-view*"))
+        targets)
+    (unwind-protect
+        (progn
+          (dolist (buffer (list main-data agent-data))
+            (with-current-buffer buffer
+              (setq-local mevedel--session session)))
+          (with-current-buffer main-view
+            (setq-local mevedel--data-buffer main-data)
+            (setq-local mevedel-view--agent-transcript-p nil)
+            (setq-local mevedel-view--pending-tool-calls nil))
+          (with-current-buffer agent-view
+            (setq-local mevedel--data-buffer agent-data)
+            (setq-local mevedel-view--agent-transcript-p t)
+            (setq-local mevedel-view--agent-id "explorer--owned")
+            (setq-local mevedel-view--pending-tool-calls nil))
+          (cl-letf (((symbol-function 'mevedel-view-rerender)
+                     (lambda (&optional buffer) (push buffer targets))))
+            (mevedel-view-stream-handle-execution-event
+             (list :type 'progress :session session :data-buffer agent-data
+                   :owner "explorer--owned"
+                   :facts nil :tool-args nil))
+            (mevedel-view-stream-handle-execution-event
+             (list :type 'progress :session session :data-buffer main-data
+                   :owner "main"
+                   :facts nil :tool-args nil)))
+          (should (equal (list main-view agent-view) targets)))
+      (dolist (buffer (list main-data main-view agent-data agent-view))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-view-stream-install ()
   ,test
   (test)

@@ -31,6 +31,11 @@
 (defvar gptel-use-tools)
 (defvar read-eval)
 
+;; `mevedel-agent-runtime'
+(declare-function mevedel-agent-runtime-queue-execution-completion
+                  "mevedel-agent-runtime"
+                  (context owner body))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
@@ -78,10 +83,6 @@
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
 
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline--tool-results-dir
-                  "mevedel-pipeline" (session buffer))
-
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
                   "mevedel-permissions" t t)
@@ -119,6 +120,12 @@
                   "mevedel-permissions" ())
 (defvar mevedel-permission-mode)
 (defvar mevedel-permission-rules)
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--tool-results-dir
+                  "mevedel-pipeline" (session buffer))
+(declare-function mevedel-pipeline-active-tool-use-id
+                  "mevedel-pipeline" ())
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-pending-facts
@@ -2106,6 +2113,23 @@ direct non-workspace uses."
            attributes))))
     (format "<bash-execution %s/>" (string-join (nreverse attributes) " "))))
 
+(defun mevedel-tool-exec-format-execution-metadata (facts timeout-seconds)
+  "Return compact UI metadata for execution FACTS and TIMEOUT-SECONDS."
+  (string-join
+   (delq nil
+         (list
+          (when-let* ((state (plist-get facts :state)))
+            (symbol-name state))
+          (when (plist-member facts :wall-time-seconds)
+            (format "%.1fs" (or (plist-get facts :wall-time-seconds) 0)))
+          (when (plist-member facts :output-lines)
+            (format "%d lines" (or (plist-get facts :output-lines) 0)))
+          (when (plist-member facts :output-bytes)
+            (format "%d bytes" (or (plist-get facts :output-bytes) 0)))
+          (and timeout-seconds (format "timeout %ss" timeout-seconds))
+          (plist-get facts :execution-id)))
+   " · "))
+
 (defun mevedel-tool-exec--bash-outcome (analysis exit-code termination)
   "Derive a canonical outcome from ANALYSIS, EXIT-CODE, and TERMINATION."
   (let* ((commands (plist-get analysis :commands))
@@ -2160,6 +2184,22 @@ stopped command's outcome."
                   (list :sandbox-facts
                         (plist-get observation :sandbox-facts))))))
 
+(defun mevedel-tool-exec-handle-execution-event (event owner-context)
+  "Secure an independently completed Bash EVENT in its owner mailbox."
+  (when (and (eq (plist-get event :type) 'terminal)
+             (eq (plist-get event :delivery) 'mailbox))
+    (let* ((args (plist-get event :tool-args))
+           (observation (plist-get event :observation))
+           (envelope
+            (mevedel-tool-exec--observation-envelope
+             observation
+             (plist-get args :suppress-sandbox-disclosure-p))))
+      (require 'mevedel-agent-runtime)
+      (mevedel-agent-runtime-queue-execution-completion
+       owner-context
+       (plist-get event :owner)
+       (plist-get envelope :result)))))
+
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
 CALLBACK receives the result envelope.  ARGS is a plist with :command
@@ -2175,6 +2215,9 @@ and optional :timeout_seconds."
                 (error "Shell-native background execution is not supported; use yield_time_ms")))
            (sandbox-request (mevedel-tool-exec--sandbox-request args 'bash))
            (session (mevedel-tool-exec--permission-log-session))
+           (invocation
+            (and (boundp 'mevedel--agent-invocation)
+                 mevedel--agent-invocation))
            (owner (mevedel-tool-exec--current-origin))
            (timeout (mevedel-tool-exec--bash-timeout-seconds args))
            (yield-time-ms
@@ -2190,7 +2233,11 @@ and optional :timeout_seconds."
           callback
           (mevedel-tool-exec--observation-envelope
            observation (plist-get args :suppress-sandbox-disclosure-p))))
-       :session session :owner owner :request mevedel--current-request
+       :session session :data-buffer (current-buffer)
+       :owner owner :request mevedel--current-request
+       :owner-context (or invocation session)
+       :tool-args args
+       :tool-use-id (mevedel-pipeline-active-tool-use-id)
        :command (list "bash" "-lc" command)
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
@@ -2492,12 +2539,21 @@ Header shows a truncated first line of the command; body fontifies as
   (when (stringp result)
     (let* ((cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
-           (status (plist-get render-data :status)))
-      (list :header (format "%s: %s" (or name "Bash") first-line)
+           (status (plist-get render-data :status))
+           (state (plist-get render-data :state))
+           (metadata
+            (and state
+                 (mevedel-tool-exec-format-execution-metadata
+                  render-data (plist-get render-data :timeout-seconds)))))
+      (list :header (concat (format "%s: %s" (or name "Bash") first-line)
+                            (and metadata (format " (%s)" metadata)))
             :body result
             :body-mode 'sh-mode
             :status status
-            :initially-collapsed-p t))))
+            :force-expanded-p
+            (and (plist-get render-data :live-execution-p) t)
+            :initially-collapsed-p
+            (not (plist-get render-data :live-execution-p))))))
 
 (defun mevedel-tool-exec--render-eval (name args result _render-data)
   "Return rendering plist for Eval NAME with ARGS and RESULT."

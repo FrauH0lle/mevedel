@@ -159,6 +159,31 @@ fire-count and payload."
 							   (should (equal "Found 2 defcustoms with :set"
 									  (car (car fired))))))
 
+		 :doc "terminal text waits while the invocation owns a live execution"
+		 (let* ((session (mevedel-session--create :name "execution-owner"))
+			(agent-id "explorer--live-execution")
+			(inv (mevedel-agent-invocation--create
+			      :agent-id agent-id :parent-session session))
+			(fired nil)
+			(live-p t)
+			(cb (mevedel-agent-exec--make-callback
+			     (lambda (&rest args) (push args fired))
+			     "explorer" "Wait for Bash" (point-min-marker)
+			     (list "")))
+			(info (list :stream t :mevedel-agent-invocation inv)))
+		   (cl-letf (((symbol-function 'mevedel-execution-owner-live-p)
+			      (lambda (seen-session seen-owner)
+				(should (eq session seen-session))
+				(should (equal agent-id seen-owner))
+				live-p)))
+		     (funcall cb "Agent answer." info)
+		     (funcall cb t info)
+		     (should-not fired)
+		     (setq live-p nil)
+		     (funcall cb t info)
+		     (should (= 1 (length fired)))
+		     (should (equal "Agent answer." (car (car fired))))))
+
 		 :doc "streaming: chunks do not rebuild partial text before terminal"
 		 (let* ((fired nil)
 			(main-cb (lambda (&rest args) (push args fired)))

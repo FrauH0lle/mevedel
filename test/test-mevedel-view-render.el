@@ -3141,6 +3141,7 @@ state of its inner sections"
       (let ((call (mevedel-view--tool-call-parse
                    data-buf (point-min) (point-max))))
         (should (equal "Read" (plist-get call :name)))
+        (should (equal "call_1" (plist-get call :tool-use-id)))
         (should (equal '(:file_path "/tmp/f") (plist-get call :args)))
         (should (string-match-p "plain result" (plist-get call :result)))
         (should (null (plist-get call :render-data))))))

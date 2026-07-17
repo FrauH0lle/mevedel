@@ -105,6 +105,10 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-owner-live-p
+                  "mevedel-execution" (session owner))
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer
                   "mevedel-interaction-prompt" (&optional buffer))
@@ -182,11 +186,180 @@
         (list 'setf (list 'mevedel-agent-invocation-messages ctx) value)
         (list 'setf (list 'mevedel-session-messages ctx) value)))
 
+(defun mevedel-agent-runtime--ctx-resumable-messages-p (ctx)
+  "Return non-nil when CTX has a message allowed to resume BWAIT.
+Execution completions use direct terminal settlement; they must never launch a
+model request merely because a background process settled."
+  (cl-some
+   (lambda (message)
+     (not (plist-get message :execution-result-p)))
+   (mevedel-agent-runtime--ctx-messages ctx)))
+
+(defun mevedel-agent-runtime--invocation-execution-live-p (invocation)
+  "Return non-nil when INVOCATION owns an unsettled execution."
+  (and (mevedel-agent-invocation-p invocation)
+       (progn
+         (require 'mevedel-execution)
+         (mevedel-execution-owner-live-p
+          (mevedel-agent-invocation-parent-session invocation)
+          (mevedel-agent-invocation-agent-id invocation)))))
+
 (defun mevedel-agent-runtime--ctx-push-message (ctx message)
   "Queue MESSAGE on CTX's inbound mailbox."
   (if (mevedel-agent-invocation-p ctx)
       (push message (mevedel-agent-invocation-messages ctx))
     (push message (mevedel-session-messages ctx))))
+
+(defun mevedel-agent-runtime--execution-settlement-response (invocation)
+  "Return INVOCATION's final response with queued Bash completions appended."
+  (let* ((messages
+          (nreverse
+           (copy-sequence
+            (mevedel-agent-runtime--ctx-messages invocation))))
+         (bodies
+          (delq nil
+                (mapcar
+                 (lambda (message)
+                   (and (plist-get message :execution-result-p)
+                        (plist-get message :body)))
+                 messages)))
+         (response
+          (or (mevedel-agent-exec--final-response-text invocation)
+              "Agent finished while a Bash execution was still running.")))
+    (if bodies
+        (concat response
+                "\n\nBash completion after the agent's final response:\n\n"
+                (string-join bodies "\n\n"))
+      response)))
+
+(defconst mevedel-agent-runtime--execution-settlement-retry-delays '(0.1 0.5)
+  "Backoff delays before a failed direct settlement stops its agent.")
+
+(defun mevedel-agent-runtime--cancel-execution-settlement-retry (invocation)
+  "Cancel INVOCATION's owned direct-settlement retry, if any."
+  (when (mevedel-agent-invocation-p invocation)
+    (when-let* ((timer
+                 (mevedel-agent-invocation-execution-settlement-retry-timer
+                  invocation)))
+      (when (timerp timer)
+        (cancel-timer timer)))
+    (setf
+     (mevedel-agent-invocation-execution-settlement-retry-count invocation) 0
+     (mevedel-agent-invocation-execution-settlement-retry-timer invocation)
+     nil)))
+
+(defun mevedel-agent-runtime--schedule-execution-settlement-retry
+    (invocation fsm)
+  "Schedule INVOCATION's next bounded settlement retry for FSM."
+  (let* ((count
+          (1+ (mevedel-agent-invocation-execution-settlement-retry-count
+               invocation)))
+         (delay
+          (nth (1- count)
+               mevedel-agent-runtime--execution-settlement-retry-delays)))
+    (setf
+     (mevedel-agent-invocation-execution-settlement-retry-count invocation)
+     count)
+    (if delay
+        (setf
+         (mevedel-agent-invocation-execution-settlement-retry-timer invocation)
+         (run-at-time
+          delay nil #'mevedel-agent-runtime--retry-execution-only-bwait
+          invocation fsm))
+      (mevedel-agent-runtime--cancel-execution-settlement-retry invocation)
+      (condition-case err
+          (mevedel-agent-runtime-stop
+           (mevedel-agent-invocation-agent-id invocation)
+           "Could not deliver a completed Bash execution to the parent"
+           (mevedel-agent-invocation-parent-data-buffer invocation))
+        (error
+         (display-warning
+          'mevedel
+          (format "Failed to stop agent after settlement retries: %s"
+                  (error-message-string err))
+          :warning))))))
+
+(defun mevedel-agent-runtime--retry-execution-only-bwait (invocation fsm)
+  "Retry direct execution-only settlement for INVOCATION and FSM."
+  (when (mevedel-agent-invocation-p invocation)
+    (setf
+     (mevedel-agent-invocation-execution-settlement-retry-timer invocation)
+     nil))
+  (when (and (mevedel-agent-invocation-p invocation)
+             (eq (gptel-fsm-state fsm) 'BWAIT)
+             (mevedel-agent-runtime--ctx-messages invocation))
+    (mevedel-agent-runtime--settle-execution-only-bwait invocation fsm)))
+
+(defun mevedel-agent-runtime--settle-execution-only-bwait
+    (invocation &optional known-fsm)
+  "Settle INVOCATION's execution-only BWAIT without another model request."
+  (when-let* (((mevedel-agent-invocation-p invocation))
+              (messages (mevedel-agent-runtime--ctx-messages invocation))
+              ((not (mevedel-agent-runtime--ctx-resumable-messages-p
+                     invocation)))
+              ((not (mevedel-agent-runtime--ctx-background-agents invocation)))
+              (session (mevedel-agent-invocation-parent-session invocation))
+              (agent-id (mevedel-agent-invocation-agent-id invocation))
+              ((not (mevedel-execution-owner-live-p session agent-id)))
+              (parent-buffer
+               (mevedel-agent-invocation-parent-data-buffer invocation))
+              (fsm (or known-fsm
+                       (mevedel-agent-runtime--background-agent-fsm
+                        agent-id parent-buffer)))
+              ((eq (gptel-fsm-state fsm) 'BWAIT))
+              (callback
+               (plist-get (gptel-fsm-info fsm)
+                          :mevedel-agent-terminal-callback))
+              ((functionp callback)))
+    (let ((response
+           (mevedel-agent-runtime--execution-settlement-response invocation)))
+      (setf (mevedel-agent-runtime--ctx-messages invocation) nil)
+      (condition-case err
+          (progn
+            (let ((mevedel-agent-runtime--direct-execution-settlement-p t))
+              (funcall callback response))
+            (gptel--fsm-transition fsm 'DONE)
+            (mevedel-agent-runtime--cancel-execution-settlement-retry
+             invocation)
+            t)
+        (error
+         (setf (mevedel-agent-runtime--ctx-messages invocation) messages)
+         (display-warning
+          'mevedel
+          (format "Execution-owned agent settlement failed: %s"
+                  (error-message-string err))
+          :warning)
+         (mevedel-agent-runtime--schedule-execution-settlement-retry
+          invocation fsm)
+         nil)))))
+
+(defun mevedel-agent-runtime-queue-execution-completion
+    (context owner body)
+  "Queue a Bash completion BODY for OWNER in durable mailbox CONTEXT.
+
+CONTEXT is the session or agent invocation captured when Bash started.  This
+secures the inbound message synchronously.  An execution-only agent BWAIT may
+then settle directly in DONE, but this function never launches a request.
+Return non-nil only after the message is secured."
+  (when (and (stringp body)
+             (or (and (mevedel-session-p context)
+                      (equal owner "main"))
+                 (and (mevedel-agent-invocation-p context)
+                      (equal owner
+                             (mevedel-agent-invocation-agent-id context))
+                      (mevedel-agent-runtime--background-agent-fsm
+                       owner
+                       (mevedel-agent-invocation-parent-data-buffer
+                        context)))))
+    (mevedel-agent-runtime--ctx-push-message
+     context
+     (list :from (format "bash:%s" owner)
+           :body body
+           :execution-result-p t
+           :timestamp (current-time)))
+    (when (mevedel-agent-invocation-p context)
+      (mevedel-agent-runtime--settle-execution-only-bwait context))
+    t))
 
 (defun mevedel-agent-runtime--ctx-background-agents (ctx)
   "Return CTX's running background-agent IDs."
@@ -251,6 +424,9 @@ Set via `setopt mevedel-agent-runtime-debug t' before reproducing a
 multi-agent hang.  The output goes to `*Messages*' (only)."
   :type 'boolean
   :group 'mevedel)
+
+(defvar mevedel-agent-runtime--direct-execution-settlement-p nil
+  "Dynamically non-nil while delivering an execution-owned terminal result.")
 
 (defcustom mevedel-agent-background-timeout 600
   "Maximum seconds between BWAIT watchdog checks.
@@ -462,26 +638,33 @@ not mutated."
     result))
 
 (defun mevedel-agent-runtime--background-agents-pending-p (info)
-  "Return non-nil if INFO's context has pending background work.
+  "Return non-nil if INFO's context has pending asynchronous work.
 
 Used as a transition predicate: when the LLM produces no tool calls
-but background agents are still running OR undelivered agent results
-sit in the mailbox, the FSM parks in BWAIT instead of terminating in
-DONE.  Checks the agent invocation on the FSM info plist first,
+but background agents or owned Bash executions are still running, or
+undelivered results sit in the mailbox, the FSM parks in BWAIT instead of
+terminating in DONE.  Checks the agent invocation on the FSM info plist first,
 falling back to the buffer-local session.
 
 Checking both `background-agents' and `messages' covers the race where
 a background agent finishes and drains from `background-agents' before
 the parent FSM reaches TYPE -- the result is in the mailbox and must
 not be lost."
-  (let ((ctx (or (and (mevedel-agent-invocation-p
-                      (plist-get info :mevedel-agent-invocation))
-                     (plist-get info :mevedel-agent-invocation))
-                 (when-let* ((buf (plist-get info :buffer))
-                             ((buffer-live-p buf)))
-                   (buffer-local-value 'mevedel--session buf)))))
+  (let* ((invocation
+          (and (mevedel-agent-invocation-p
+                (plist-get info :mevedel-agent-invocation))
+               (plist-get info :mevedel-agent-invocation)))
+         (ctx (or invocation
+                  (when-let* ((buf (plist-get info :buffer))
+                              ((buffer-live-p buf)))
+                    (buffer-local-value 'mevedel--session buf)))))
     (and ctx (or (mevedel-agent-runtime--ctx-background-agents ctx)
-                 (mevedel-agent-runtime--ctx-messages ctx)))))
+                 (mevedel-agent-runtime--ctx-messages ctx)
+                 (and invocation
+                      (require 'mevedel-execution)
+                      (mevedel-execution-owner-live-p
+                       (mevedel-agent-invocation-parent-session invocation)
+                       (mevedel-agent-invocation-agent-id invocation)))))))
 
 (defun mevedel-agent-runtime--background-agent-fsm (agent-id parent-buffer)
   "Return AGENT-ID's child FSM from PARENT-BUFFER's registry."
@@ -659,8 +842,10 @@ agents stay tracked and keep the parent parked in BWAIT."
                               live-remaining)))
             (run-at-time delay nil
                          #'mevedel-agent-runtime--bwait-watchdog-expire fsm)))
-         ((and ctx (mevedel-agent-runtime--ctx-messages ctx))
+         ((and ctx
+               (mevedel-agent-runtime--ctx-resumable-messages-p ctx))
           (gptel--fsm-transition fsm 'WAIT))
+         ((mevedel-agent-runtime--background-agents-pending-p info))
          (t
           (gptel--fsm-transition fsm 'DONE)))))))
 
@@ -672,8 +857,10 @@ agent's completion callback will resume the FSM by transitioning
 from BWAIT to WAIT.
 
 If background agents have already delivered results to the mailbox
-\(no agents pending but messages queued), transitions to WAIT
-immediately so the message-inject handler can drain the mailbox.
+\(no agents pending but resumable messages queued), transitions to WAIT
+immediately so the message-inject handler can drain the mailbox. Bash-only
+completion is settled directly either by mailbox delivery or when BWAIT is
+entered, whichever observes the completed execution second.
 
 Arms a watchdog timer for stranded-agent recovery and shared
 no-progress auto-stop so a lost or stuck child cannot park the FSM
@@ -686,23 +873,40 @@ forever."
                     (when (and parent-buffer
                                (buffer-live-p parent-buffer))
                       (buffer-local-value 'mevedel--session
-                                          parent-buffer)))))
-      (if (and ctx
-               (not (mevedel-agent-runtime--ctx-background-agents ctx))
-               (mevedel-agent-runtime--ctx-messages ctx))
-          ;; No agents pending but messages waiting -- go straight to WAIT.
-          (gptel--fsm-transition fsm 'WAIT)
-        ;; Background agents still running -- park and wait.
+                                          parent-buffer))))
+           (background-agents
+            (and ctx
+                 (mevedel-agent-runtime--ctx-background-agents ctx))))
+      (cond
+       ((and (mevedel-agent-invocation-p ctx)
+             (not background-agents)
+             (mevedel-agent-runtime--ctx-messages ctx)
+             (not (mevedel-agent-runtime--ctx-resumable-messages-p ctx)))
+        (unless (mevedel-agent-runtime--settle-execution-only-bwait ctx fsm)
+          (when-let* ((buf (plist-get info :buffer))
+                      ((buffer-live-p buf)))
+            (with-current-buffer buf
+              (gptel--update-status
+               " Waiting for background work..." 'warning)))))
+       ((and ctx
+             (not background-agents)
+             (mevedel-agent-runtime--ctx-resumable-messages-p ctx))
+        ;; No agents pending but messages waiting -- go straight to WAIT.
+        (gptel--fsm-transition fsm 'WAIT))
+       (t
+        ;; Background work or a live execution remains parked.
         (when-let* ((buf (plist-get info :buffer))
                     ((buffer-live-p buf)))
           (with-current-buffer buf
-            (gptel--update-status " Waiting for agents..." 'warning)))
-        (when-let* ((delay
-                     (mevedel-agent-runtime--bwait-watchdog-delay
-                      (mevedel-agent-runtime--background-watchdog-arm-live
-                       ctx parent-buffer))))
-          (run-at-time delay nil
-                       #'mevedel-agent-runtime--bwait-watchdog-expire fsm))))))
+            (gptel--update-status " Waiting for background work..." 'warning)))
+        (when background-agents
+          (when-let* ((delay
+                       (mevedel-agent-runtime--bwait-watchdog-delay
+                        (mevedel-agent-runtime--background-watchdog-arm-live
+                         ctx parent-buffer))))
+            (run-at-time delay nil
+                         #'mevedel-agent-runtime--bwait-watchdog-expire
+                         fsm))))))))
 
 (defun mevedel-agent-runtime--inject-bwait-transition (fsm terminal-handler)
   "Modify FSM's transition table to add the BWAIT parking state.
@@ -976,6 +1180,7 @@ Returns the parsed verdict symbol, or nil."
 (defun mevedel-agent-runtime--remove-agent-registry-entry
     (invocation agent-id &optional parent-buffer)
   "Remove AGENT-ID from INVOCATION's parent agent registry."
+  (mevedel-agent-runtime--cancel-execution-settlement-retry invocation)
   (mevedel-agent-runtime--foreground-watchdog-cancel agent-id)
   (mevedel-agent-runtime--background-watchdog-cancel agent-id)
   (let ((buf (or parent-buffer
@@ -1056,7 +1261,10 @@ not deliver duplicate `<agent-result>' blocks."
                      :timestamp (current-time)))
               (setq pushed t))
           (error
-           (message "mevedel-agent-runtime-dispatch bg push error: %S" err)))
+           (if mevedel-agent-runtime--direct-execution-settlement-p
+               (signal (car err) (cdr err))
+             (message "mevedel-agent-runtime-dispatch bg push error: %S"
+                      err))))
         (when pushed
           (setf (mevedel-agent-invocation-background-result-reported-p
                  invocation)
@@ -2018,10 +2226,14 @@ resolver and permission resolver pick them up."
                (background
                 ;; Background mode: deliver result to parent's mailbox.
                 (lambda (response &rest _rest)
-                  (mevedel-agent-runtime--complete-background-agent
-                   invocation
-                   (mevedel-agent-runtime--normalize-terminal-response
-                    invocation response))))
+                  (unless (and (stringp response)
+                               (not (string-prefix-p "Error:" response))
+                               (mevedel-agent-runtime--invocation-execution-live-p
+                                invocation))
+                    (mevedel-agent-runtime--complete-background-agent
+                     invocation
+                     (mevedel-agent-runtime--normalize-terminal-response
+                      invocation response)))))
                (t
                 ;; Foreground mode: fire main-cb once when no pending
                 ;; work remains on either axis.  Wrap success
@@ -2047,17 +2259,28 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                                (and (stringp response)
                                     (substring response 0
                                                (min 80 (length response)))))))
-                  (let ((finish
-                         (lambda (result args)
-                           (setq fired t)
-                           (setf
-                            (mevedel-agent-invocation-foreground-result-reported-p
-                             invocation)
-                            t)
-                           (unwind-protect
-                               (apply main-cb result args)
-                             (mevedel-agent-runtime--remove-agent-registry-entry
-                              invocation agent-id parent-data-buffer)))))
+                  (let* ((commit
+                          (lambda ()
+                            (setq fired t)
+                            (setf
+                             (mevedel-agent-invocation-foreground-result-reported-p
+                              invocation)
+                             t)
+                            (mevedel-agent-runtime--remove-agent-registry-entry
+                             invocation agent-id parent-data-buffer)))
+                         (finish
+                          (lambda (result args)
+                            (if mevedel-agent-runtime--direct-execution-settlement-p
+                                ;; The invocation-owned retry must remain able
+                                ;; to find and redeliver this result.
+                                (progn
+                                  (apply main-cb result args)
+                                  (funcall commit))
+                              ;; Ordinary agent callbacks are one-shot.  Retire
+                              ;; coherently even if their guarded caller rejects
+                              ;; the terminal result.
+                              (funcall commit)
+                              (apply main-cb result args)))))
                     (unless fired
                       (cond
                        ((and (stringp response)
@@ -2066,7 +2289,10 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                        ((and this-ctx
                              (or (mevedel-agent-runtime--ctx-background-agents
                                   this-ctx)
-                                 (mevedel-agent-runtime--ctx-messages this-ctx)))
+                                 (mevedel-agent-runtime--ctx-resumable-messages-p
+                                  this-ctx)
+                                 (mevedel-agent-runtime--invocation-execution-live-p
+                                  invocation)))
                         nil)
                        (t
                         (funcall

@@ -85,6 +85,37 @@ Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
 resolver at spawn, so later observations derive the same canonical facts
 without moving command semantics into the process module.
 
+Each mutable process record points to one immutable origin record containing
+the session, owner, private mailbox context, data buffer, tool arguments, and
+tool-use ID. Delivery state is explicit and separate from process completion:
+a finished result rejected by its mailbox remains unsettled and owner-reachable
+until either the model or a mailbox consumer claims it.
+
+The execution module also publishes isolated yield, progress, and terminal
+event snapshots. The pipeline supplies the durable gptel tool-use ID and
+originating data buffer when Bash starts. Live progress remains a bounded,
+disposable view projection; terminal output and structured facts replace the
+original row's hidden render-data side channel in the authoritative transcript.
+If a parallel tool result has not inserted that row yet, the data buffer keeps
+a bounded pending terminal projection and retries at later tool and render
+boundaries. Agent data buffers also retry unconditionally at their final
+response boundary, so this does not depend on an open transcript view.
+Completion therefore survives row-order races, cache turnover, and session
+persistence without entering the model-visible result. Passive event
+subscribers receive independent copies,
+never the private owner context, and cannot acknowledge delivery. Terminal
+delivery is claimed exactly once by either a model observer or the single
+mailbox sink, using the session or agent invocation captured at spawn. The
+agent runtime parks an invocation while its owner has an unsettled execution.
+The agent's terminal callback remains gated while any owned execution is
+unsettled. Whether the last completion arrives before or after BWAIT entry,
+the runtime appends the queued completion to the agent's final response and
+settles the agent directly in DONE. A transient callback failure leaves the
+mailbox message intact and schedules an invocation-owned, bounded backoff
+retry; persistent failure stops the agent instead of looping. This terminal path
+launches no model request. Mixed ordinary mailbox messages still resume
+through WAIT.
+
 ## gptel integration
 
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in
