@@ -582,6 +582,47 @@ spanning lines")))
                   (insert-file-contents seg1)
                   (should-not (string-match-p "###" (buffer-string))))))))
       (when (file-directory-p tempdir)
+        (delete-directory tempdir t))))
+
+  :doc "`/clear' refreshes stale visited metadata before direct prefix trim"
+  (let* ((session (mevedel-skills-test--make-session))
+         (tempdir (make-temp-file "mevedel-clear-direct-stale-test-" t))
+         (save-path (file-name-as-directory tempdir))
+         (seg1 (file-name-concat save-path "segment-0001.chat.org")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) save-path)
+          (setf (mevedel-session-session-id session) "clear-direct-stale-test")
+          (setf (mevedel-session-current-segment session) 1)
+          (setf (mevedel-session-created-at session) "2026-05-08T10-00-00")
+          (setf (mevedel-session-updated-at session) "2026-05-08T10-00-00")
+          (with-temp-buffer
+            (org-mode)
+            (let ((gptel-prompt-prefix-alist
+                   (cons (cons major-mode "### ")
+                         gptel-prompt-prefix-alist)))
+              (setq mevedel--session session)
+              (setq buffer-file-name seg1)
+              (insert "Completed turn\n### ")
+              (write-region (point-min) (point-max) seg1 nil 'silent)
+              (set-visited-file-modtime)
+              (set-buffer-modified-p nil)
+              (set-file-times seg1 (time-add (current-time) 5))
+              (should-not (verify-visited-file-modtime (current-buffer)))
+              (cl-letf (((symbol-function
+                          'mevedel-session-persistence--save-instructions)
+                         (lambda (&rest _args) nil))
+                        ((symbol-function 'mevedel-version)
+                         (lambda (&rest _args) "test-version"))
+                        ((symbol-function 'ask-user-about-supersession-threat)
+                         (lambda (&rest _args)
+                           (error "Supersession prompt"))))
+                (mevedel-cmd--clear nil)
+                (should (= 2 (mevedel-session-current-segment session)))
+                (should (equal (file-name-concat
+                                save-path "segment-0002.chat.org")
+                               buffer-file-name))))))
+      (when (file-directory-p tempdir)
         (delete-directory tempdir t)))))
 
 (mevedel-deftest mevedel-cmd--skills ()

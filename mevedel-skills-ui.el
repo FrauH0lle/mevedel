@@ -346,6 +346,7 @@ Routes through the lifecycle-aware permission transition path."
            (mevedel-session-save-path mevedel--session)
            buffer-file-name)
       (require 'mevedel-session-persistence)
+      (mevedel-session-persistence--refresh-visited-file-modtime-or-error)
       (let ((inhibit-read-only t))
         (mevedel-cmd--clear-trim-bare-prefix prefix))
       (mevedel-session-persistence-start-fresh-segment
