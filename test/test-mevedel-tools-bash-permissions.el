@@ -2091,6 +2091,31 @@ default Bash keeps bare dot inspection automatic"
     (should (= 0 (plist-get (plist-get envelope :render-data)
                             :exit-code)))))
 
+(mevedel-deftest mevedel-tool-exec--bash-outcome ()
+  ,test
+  (test)
+  :doc "derives supported outcomes and conservatively falls back"
+  (dolist (case '(("rg needle" 1 exited no-match)
+                  ("diff one two" 1 exited different)
+                  ("test 1 = 2" 1 exited false)
+                  ("[ 1 = 2 ]" 1 exited false)
+                  ("grep needle" 2 exited failure)
+                  ("rg needle" 2 exited failure)
+                  ("diff one two" 2 exited failure)
+                  ("test 1 = 2" 2 exited failure)
+                  ("grep needle" 0 exited success)
+                  ("true && grep needle" 1 exited failure)
+                  ("grep needle >out" 1 exited failure)
+                  ("/bin/grep needle" 1 exited failure)
+                  ("false" 1 exited failure)
+                  ("grep needle" 1 stopped failure)))
+    (pcase-let ((`(,command ,exit-code ,termination ,expected) case))
+      (should
+       (eq expected
+           (mevedel-tool-exec--bash-outcome
+            (mevedel-bash-analysis-analyze command)
+            exit-code termination))))))
+
 (mevedel-deftest mevedel-tool-exec--write-stdin ()
   ,test
   (test)
@@ -2201,6 +2226,33 @@ default Bash keeps bare dot inspection automatic"
        #'ignore '(:command "touch scheduler-test")))
     (should (eq t (plist-get (cdr read-only) :read-only-p)))
     (should-not (plist-get (cdr unknown) :read-only-p)))
+  :doc "shares one special outcome across handler status, XML, and render data"
+  (let (envelope)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args)
+                 (let ((outcome-function
+                        (plist-get (cdr args) :outcome-function)))
+                   (funcall
+                    (car args)
+                    (list
+                     :output "raw"
+                     :facts
+                     (list
+                      :state 'completed :termination 'exited :exit-code 1
+                      :outcome (funcall outcome-function 1 'exited)
+                      :wall-time-seconds 0.1 :output-bytes 3
+                      :output-lines 1 :omitted-output-bytes 0 :tty nil)))))))
+      (test-bash-permissions--call-bash
+       (lambda (value) (setq envelope value))
+       '(:command "diff one two")))
+    (let ((facts (plist-get envelope :render-data)))
+      (should (eq 'different (plist-get facts :outcome)))
+      (should (eq 'success (plist-get envelope :status)))
+      (should (= 1 (plist-get facts :exit-code)))
+      (should (string-prefix-p "raw\n\n<bash-execution"
+                               (plist-get envelope :result)))
+      (should (string-match-p "outcome=\"different\""
+                              (plist-get envelope :result)))))
   :doc "passes explicit PTY mode without changing execution authority"
   (let (captured)
     (cl-letf (((symbol-function 'mevedel-execution-start-bash)

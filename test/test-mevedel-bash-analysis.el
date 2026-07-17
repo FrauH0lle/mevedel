@@ -55,6 +55,17 @@
     (should (equal 'unknown
                    (plist-get (mevedel-bash-analysis-analyze "./cat file")
                               :class))))
+  :doc "test brackets:
+`mevedel-bash-analysis-analyze' recognizes literal bracket command delimiters"
+  (cl-letf (((symbol-function 'treesit-language-available-p)
+             (lambda (_language) nil)))
+    (let ((analysis (mevedel-bash-analysis-analyze "[ 1 = 2 ]")))
+      (should (equal 'unknown (plist-get analysis :class)))
+      (should (equal '(("[" "1" "=" "2" "]"))
+                     (plist-get analysis :commands))))
+    (should (equal 'complex
+                   (plist-get (mevedel-bash-analysis-analyze "echo [12]")
+                              :class))))
   :doc "Bash escaping:
 `mevedel-bash-analysis-analyze' returns shell-accurate plain argv"
   (cl-letf (((symbol-function 'treesit-language-available-p)

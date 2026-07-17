@@ -31,6 +31,9 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
 - Chain dependent commands with `&&` (or `;` if failures are OK)
 - Use absolute paths instead of `cd` when possible
 - For parallel commands, make multiple `Bash` calls in one message
+- Execution facts preserve the raw exit code and distinguish `no-match` for a
+  simple `grep`/`rg`, `different` for `diff`, and `false` for `test`/`[`. These
+  outcomes are expected command results, not execution failures
 - Run tests, check your work or otherwise close the loop to verify changes you make
 - Do NOT use newlines to separate commands (newlines are ok in quoted strings)
 

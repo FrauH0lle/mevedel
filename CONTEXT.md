@@ -62,6 +62,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **execution ID** — The session-scoped opaque handle for a yielded Bash execution. It is neither a chat session identifier nor an operating-system process identifier.
 - **execution owner** — The main session agent or canonical sub-agent that started a yielded Bash execution and alone may address it through model tools. User-facing session controls retain authority over every execution in the session.
 - **execution output artifact** — The session-owned file containing the complete merged output of a yielded or oversized Bash execution when the displayed result is only a preview.
+- **execution outcome** — The canonical interpretation of a Bash exit: `success`, `failure`, `no-match`, `different`, or `false`. It does not replace or rewrite the raw exit code or command output.
 - **Bash command authorization** — The decision that a Bash invocation form may execute, established by an explicit permission rule or conservative command classification. An explicit allow rule may override any classifier category.
 - **Bash resource authorization** — The separate decision that a Bash invocation may access its identified filesystem operands. It is cumulative with Bash command authorization, so allowing a command form does not grant paths outside allowed roots.
 - **execution confinement** — OS-enforced restrictions applied to model-triggered child processes after permission authorization. It limits process effects but does not decide whether a tool call is allowed.

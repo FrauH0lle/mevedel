@@ -122,6 +122,7 @@ the complete spool remains at the path in the execution facts."
   observer
   observer-timer
   omitted-output-bytes
+  outcome-function
   owner
   output-limit-p
   process
@@ -547,21 +548,48 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
         (and (mevedel-execution--record-error-data record) 'spawn-failed)
         'exited)))
 
+(defun mevedel-execution--resolve-outcome
+    (outcome-function exit-code termination)
+  "Resolve a canonical outcome without risking execution settlement.
+
+OUTCOME-FUNCTION may interpret EXIT-CODE and TERMINATION.  Without one,
+preserve the default zero-success/nonzero-failure rule."
+  (let ((default-outcome
+         (if (and (integerp exit-code) (zerop exit-code))
+             'success
+           'failure)))
+    (if (null outcome-function)
+        default-outcome
+      (condition-case err
+          (let ((outcome (funcall outcome-function exit-code termination)))
+            (unless (memq outcome '(success failure no-match different false))
+              (error "Invalid execution outcome: %S" outcome))
+            outcome)
+        (error
+         (display-warning
+          'mevedel
+          (format "Execution outcome resolver failed: %s"
+                  (error-message-string err))
+          :warning)
+         default-outcome)))))
+
 (defun mevedel-execution--facts (record)
   "Return an immutable public fact snapshot for RECORD."
   (let* ((finished (mevedel-execution--record-finished-p record))
          (exit-code (and finished
-                         (mevedel-execution--record-exit-code record))))
+                         (mevedel-execution--record-exit-code record)))
+         (termination (mevedel-execution--termination record))
+         (outcome-function
+          (mevedel-execution--record-outcome-function record)))
     (list :execution-id
           (and (mevedel-execution--record-yielded-p record)
                (mevedel-execution--record-execution-id record))
           :state (if finished 'completed 'running)
-          :termination (mevedel-execution--termination record)
+          :termination termination
           :exit-code exit-code
           :outcome (and finished
-                        (if (and (integerp exit-code) (zerop exit-code))
-                            'success
-                          'failure))
+                        (mevedel-execution--resolve-outcome
+                         outcome-function exit-code termination))
           :wall-time-seconds
           (- (float-time) (mevedel-execution--record-started-at record))
           :output-bytes (mevedel-execution--record-output-bytes record)
@@ -818,12 +846,13 @@ delivery and retire the private handle while preserving retained artifacts."
 (cl-defun mevedel-execution-start-bash
     (callback &key session owner request command workdir writable-roots timeout
               additional-permissions sandbox-permissions artifact-directory
-              read-only-p tty (yield-time-ms 10000))
+              outcome-function read-only-p tty (yield-time-ms 10000))
   "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
 
 SESSION and canonical OWNER fix the control boundary.  REQUEST owns the
 foreground lifetime only.  Remaining confinement arguments match the one-shot
 interface.  ARTIFACT-DIRECTORY owns the spool retained after yield.
+OUTCOME-FUNCTION derives canonical outcome from exit code and termination.
 READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
@@ -845,6 +874,7 @@ terminal settlement."
             (mevedel-execution--record-create
              :callback callback :execution-id id
              :marker-buffer nil :newline-count 0
+             :outcome-function outcome-function
              :owner (or owner "main") :read-offset 0 :session session
              :spool-path
              (make-temp-file
