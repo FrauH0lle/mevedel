@@ -381,9 +381,11 @@ Ctrl-C character signals the process group in either mode. Every observation
 returns only the newly unread output. `ListExecutions` exposes only the caller's
 yielded handles, and `StopExecution` terminates only a handle owned by that
 caller. Terminal facts record PTY mode and preserve the raw process exit or
-signal status. There is no chunk ID: each observation advances one private
-unread cursor and returns canonical execution facts separately from the raw
-output. Unread ranges beyond 2000 characters use the shared newline-aware,
+signal status. Canonical lifecycle state distinguishes `queued`, `running`,
+`stopping`, and `completed`; Interrupt rejects queued work that has not started,
+while Stop cancels it. There is no chunk ID: each observation advances one
+private unread cursor and returns canonical execution facts separately from
+the raw output. Unread ranges beyond 2000 characters use the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 
 Managed executions publish transient progress after two seconds, at most four
@@ -417,6 +419,18 @@ consumer acknowledges the message. Rejected delivery remains explicitly
 unsettled and owner-reachable. Passive progress/view subscribers cannot
 acknowledge durable delivery. Finished records never appear in live execution
 listings.
+
+Users have a separate session-wide control surface. `/ps`, the view's live
+execution status row, and the session cockpit's `Processes` row open a
+tabulated list containing foreground and yielded work from every model owner.
+It shows the opaque execution ID, canonical owner, command, PTY mode, elapsed
+time, output bytes, and sandbox state. Details include the bounded live tail
+and current spool path. The user may send a PTY line, signal Ctrl-C, stop the
+process group, or open the spool. `/stop EXECUTION_ID` stops directly; bare
+`/stop` opens the same cockpit. These user controls do not widen model tool
+authority: `WriteStdin`, `ListExecutions`, and `StopExecution` remain scoped to
+the calling owner and yielded handles. Progress and completion refresh the
+table in place, and terminal rows disappear instead of becoming tombstones.
 
 Terminal facts preserve the raw exit code and derive a separate `outcome`.
 Zero is `success`. Exit one is `no-match` for one proven simple `grep` or `rg`

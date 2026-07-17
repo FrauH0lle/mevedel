@@ -116,6 +116,14 @@ retry; persistent failure stops the agent instead of looping. This terminal path
 launches no model request. Mixed ordinary mailbox messages still resume
 through WAIT.
 
+`mevedel-executions-list.el` is the user-facing projection of that private
+registry. The execution module returns immutable all-owner snapshots and
+accepts session-user control by execution ID; process records and operating-
+system identifiers remain private. Model tools continue through the narrower
+yielded-and-owner-scoped interface. Registry membership changes update the
+view's live execution count and cockpit rows, while progress and yield events
+refresh live row details without creating transcript state.
+
 ## gptel integration
 
 Direct via `gptel-request` and `gptel-fsm`. Tools registered in

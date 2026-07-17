@@ -54,6 +54,14 @@
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-stop-user
+                  "mevedel-execution" (session execution-id))
+
+;; `mevedel-executions-list'
+(declare-function mevedel-executions-list-open
+                  "mevedel-executions-list" (&optional context))
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
 (declare-function mevedel-goal-description "mevedel-goal" (&optional goal))
@@ -194,6 +202,8 @@
     ("mode" . " [command] ask | auto | full-auto")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
+    ("ps" . " [command] no args; list live executions")
+    ("stop" . " [command] optional execution ID")
     ("auto" . " [command] no args; toggle auto mode")
     ("clear" . " [command] no args; start a fresh segment")
     ("help" . " [command] no args; list commands and skills")
@@ -660,6 +670,25 @@ Routes through the lifecycle-aware permission transition path."
           (user-error "No mevedel session cockpit here"))
       (message "Usage: /tools [list]"))))
 
+(defun mevedel-cmd--ps (args)
+  "Open the live execution cockpit using ARGS."
+  (if (string-blank-p (or args ""))
+      (progn
+        (require 'mevedel-executions-list)
+        (mevedel-executions-list-open))
+    (message "Usage: /ps")))
+
+(defun mevedel-cmd--stop (args)
+  "Stop the execution named by ARGS, or open the execution cockpit."
+  (let ((execution-id (string-trim (or args ""))))
+    (if (string-empty-p execution-id)
+        (mevedel-cmd--ps nil)
+      (unless (bound-and-true-p mevedel--session)
+        (user-error "No mevedel session in this buffer"))
+      (require 'mevedel-execution)
+      (mevedel-execution-stop-user mevedel--session execution-id)
+      (message "mevedel: execution %s stopping" execution-id))))
+
 (defvar mevedel-slash-commands
   '(("tokens"  . mevedel-cmd--tokens)
     ("model"   . mevedel-cmd--model)
@@ -668,6 +697,8 @@ Routes through the lifecycle-aware permission transition path."
     ("mode"    . mevedel-cmd--mode)
     ("skills"  . mevedel-cmd--skills)
     ("tools"   . mevedel-cmd--tools)
+    ("ps"      . mevedel-cmd--ps)
+    ("stop"    . mevedel-cmd--stop)
     ("auto"    . mevedel-cmd--auto)
     ("clear"   . mevedel-cmd--clear)
     ("help"    . mevedel-cmd--help)
@@ -679,6 +710,13 @@ trimmed), and is expected to execute immediately and report its own
 result.  If a handler returns a string, the dispatch path shows it with
 `message'.
 Handlers have access to the buffer-local `mevedel--session'.")
+
+(defun mevedel-skills-local-command-active-request-p (name args)
+  "Return non-nil when local command NAME with ARGS may run mid-request."
+  (or (member name '("ps" "stop"))
+      (and (string= name "goal")
+           (member (car (split-string (or args "") "[ \t\n]+" t))
+                   '("pause" "edit")))))
 
 
 ;;

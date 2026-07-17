@@ -186,6 +186,12 @@ Values below 0.25 are clamped so the UI receives at most four per second."
 Each function receives one event.  Return values are ignored and errors are
 contained by the execution module.")
 
+(defvar mevedel-execution-state-change-hook nil
+  "Functions notified when a session's live execution set changes.
+
+Each function receives the owning session and originating data buffer.  Errors
+are contained by the execution module.")
+
 (defvar mevedel-execution-mailbox-delivery-function nil
   "Function that synchronously secures one terminal event in its owner mailbox.
 The function receives an immutable event plist and its private owner context,
@@ -195,6 +201,11 @@ separate from passive event hooks; the context is never published to them.")
 
 ;;
 ;;; State and environment
+
+(defun mevedel-execution--managed-live-p (record)
+  "Return non-nil when RECORD is a user-visible live Bash execution."
+  (and (mevedel-execution--record-execution-id record)
+       (not (mevedel-execution--record-finished-p record))))
 
 (defun mevedel-execution--new-state ()
   "Return an empty opaque execution state."
@@ -223,6 +234,24 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
     (dolist (entry mevedel-execution--environment)
       (setenv (car entry) (cdr entry)))
     process-environment))
+
+(defun mevedel-execution--notify-state-change (record)
+  "Notify observers that RECORD's session execution set changed."
+  (when (mevedel-execution--record-execution-id record)
+    (let* ((origin (mevedel-execution--record-origin record))
+           (session (mevedel-execution--origin-session origin))
+           (data-buffer (mevedel-execution--origin-data-buffer origin)))
+      (when session
+        (dolist (function mevedel-execution-state-change-hook)
+          (when (functionp function)
+            (condition-case err
+                (funcall function session data-buffer)
+              (error
+               (display-warning
+                'mevedel
+                (format "Execution state consumer failed: %s"
+                        (error-message-string err))
+                :warning)))))))))
 
 
 ;;
@@ -308,17 +337,20 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
   "Release runtime and registry state for RECORD.
 
 Delete its spool unless PRESERVE-SPOOL is non-nil."
-  (mevedel-execution--release-runtime record)
-  (unless preserve-spool
-    (when-let* ((path (mevedel-execution--record-spool-path record)))
-      (ignore-errors (delete-file path))))
-  (let ((state
-         (mevedel-execution--state-for-session
-          (mevedel-execution--origin-session
-           (mevedel-execution--record-origin record)))))
-    (remhash (or (mevedel-execution--record-execution-id record)
-                 (mevedel-execution--record-token record))
-             (mevedel-execution--state-records state))))
+  (let ((removed-live-p (mevedel-execution--managed-live-p record)))
+    (mevedel-execution--release-runtime record)
+    (unless preserve-spool
+      (when-let* ((path (mevedel-execution--record-spool-path record)))
+        (ignore-errors (delete-file path))))
+    (let ((state
+           (mevedel-execution--state-for-session
+            (mevedel-execution--origin-session
+             (mevedel-execution--record-origin record)))))
+      (remhash (or (mevedel-execution--record-execution-id record)
+                   (mevedel-execution--record-token record))
+               (mevedel-execution--state-records state))
+      (when removed-live-p
+        (mevedel-execution--notify-state-change record)))))
 
 (defun mevedel-execution--finish-record (record status &optional error-data)
   "Settle RECORD once with STATUS and optional ERROR-DATA."
@@ -493,8 +525,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
   (let ((count 0))
     (maphash
      (lambda (_key record)
-       (when (and (mevedel-execution--record-execution-id record)
-                  (not (mevedel-execution--record-finished-p record)))
+       (when (mevedel-execution--managed-live-p record)
          (setq count (1+ count))))
      (mevedel-execution--state-records state))
     count))
@@ -624,6 +655,14 @@ preserve the default zero-success/nonzero-failure rule."
           :warning)
          default-outcome)))))
 
+(defun mevedel-execution--lifecycle-state (record)
+  "Return RECORD's canonical public lifecycle state."
+  (cond
+   ((mevedel-execution--record-finished-p record) 'completed)
+   ((mevedel-execution--record-stop-p record) 'stopping)
+   ((processp (mevedel-execution--record-process record)) 'running)
+   (t 'queued)))
+
 (defun mevedel-execution--facts (record)
   "Return an immutable public fact snapshot for RECORD."
   (let* ((finished (mevedel-execution--record-finished-p record))
@@ -635,7 +674,7 @@ preserve the default zero-success/nonzero-failure rule."
     (list :execution-id
           (and (mevedel-execution--record-yielded-p record)
                (mevedel-execution--record-execution-id record))
-          :state (if finished 'completed 'running)
+          :state (mevedel-execution--lifecycle-state record)
           :termination termination
           :exit-code exit-code
           :outcome (and finished
@@ -955,6 +994,7 @@ delivery and retire the private handle while preserving retained artifacts."
         (when preparation
           (mevedel-sandbox-cleanup preparation))
         (setf (mevedel-execution--record-finished-p record) t)
+        (mevedel-execution--notify-state-change record)
         (mevedel-execution--release-runtime record)
         (mevedel-execution--release-scheduler record)
         (if (mevedel-execution--record-yielded-p record)
@@ -980,7 +1020,9 @@ delivery and retire the private handle while preserving retained artifacts."
 
 (defun mevedel-execution--arm-managed-timers (record)
   "Arm RECORD's yield and optional timeout clocks."
-  (when mevedel-execution-event-functions
+  (when (and mevedel-execution-event-functions
+             (mevedel-execution--origin-tool-use-id
+              (mevedel-execution--record-origin record)))
     (setf (mevedel-execution--record-progress-timer record)
           (run-at-time
            (max 0 mevedel-execution-progress-delay)
@@ -1016,13 +1058,10 @@ delivery and retire the private handle while preserving retained artifacts."
      (setf (mevedel-execution--record-error-data record)
            (list 'error (plist-get preparation :error))
            (mevedel-execution--record-exit-code record) -1
-           (mevedel-execution--record-finished-p record) t
            (mevedel-execution--record-sandbox-facts record)
            (plist-get preparation :facts)
            (mevedel-execution--record-termination record) 'spawn-failed)
-     (mevedel-execution--release-scheduler record)
-     (funcall (mevedel-execution--record-callback record)
-              (mevedel-execution--observation record t)))
+     (mevedel-execution--finish-managed record))
     ((or 'unrestricted 'confined)
      (let* ((session
              (mevedel-execution--origin-session
@@ -1117,6 +1156,7 @@ terminal settlement."
              :tty-p (and tty t) :workdir workdir
              :yield-time-ms yield-time-ms)))
       (puthash id record (mevedel-execution--state-records state))
+      (mevedel-execution--notify-state-change record)
       (let ((lease
              (mevedel-execution-scheduler-submit
               (mevedel-execution--state-scheduler state)
@@ -1238,6 +1278,96 @@ after WAIT-MS while the process remains live."
      (mevedel-execution--state-records state))
     (nreverse facts)))
 
+(defun mevedel-execution--user-snapshot (record)
+  "Return an immutable user-authority snapshot for live RECORD."
+  (let* ((origin (mevedel-execution--record-origin record))
+         (tool-args (mevedel-execution--origin-tool-args origin))
+         (sandbox-facts (mevedel-execution--record-sandbox-facts record))
+         (facts
+          (plist-put
+           (mevedel-execution--facts record)
+           :execution-id
+           (mevedel-execution--record-execution-id record))))
+    (mevedel-execution--copy-event
+     (append
+      facts
+      (list :owner (mevedel-execution--origin-owner origin)
+            :command (or (plist-get tool-args :command) "")
+            :yielded (and (mevedel-execution--record-yielded-p record) t)
+            :started-at (mevedel-execution--record-started-at record)
+            :timeout-seconds (mevedel-execution--record-timeout record)
+            :output-tail
+            (or (mevedel-execution--record-output-tail record) "")
+            :artifact-path (mevedel-execution--record-spool-path record)
+            :sandbox-state (or (plist-get sandbox-facts :sandbox) 'pending)
+            :sandbox-facts sandbox-facts)))))
+
+(defun mevedel-execution-list-user (session)
+  "Return immutable snapshots for every live execution in SESSION."
+  (when-let* ((state (and session
+                          (mevedel-session-execution-state session))))
+    (let (snapshots)
+      (maphash
+       (lambda (_key record)
+         (when (mevedel-execution--managed-live-p record)
+           (push (mevedel-execution--user-snapshot record) snapshots)))
+       (mevedel-execution--state-records state))
+      (sort snapshots
+            (lambda (left right)
+              (< (plist-get left :started-at)
+                 (plist-get right :started-at)))))))
+
+(defun mevedel-execution-count-user (session)
+  "Return the number of live executions in SESSION."
+  (if-let* ((state (and session
+                        (mevedel-session-execution-state session))))
+      (mevedel-execution--managed-count state)
+    0))
+
+(defun mevedel-execution--user-live-record (session execution-id)
+  "Return live EXECUTION-ID in SESSION with user authority, or signal."
+  (let* ((state (and session
+                     (mevedel-session-execution-state session)))
+         (record (and state
+                      (gethash execution-id
+                               (mevedel-execution--state-records state)))))
+    (unless (and record
+                 (not (mevedel-execution--record-finished-p record)))
+      (signal 'mevedel-execution-not-found
+              (list "No live execution with that id")))
+    record))
+
+(defun mevedel-execution-write-user (session execution-id chars)
+  "Send CHARS to PTY EXECUTION-ID in SESSION with user authority."
+  (unless (and (stringp chars) (not (string-empty-p chars)))
+    (signal 'mevedel-execution-input-error
+            (list "Execution input must be a non-empty string")))
+  (let* ((record (mevedel-execution--user-live-record session execution-id))
+         (process (mevedel-execution--record-process record)))
+    (unless (mevedel-execution--record-tty-p record)
+      (signal 'mevedel-execution-input-error
+              (list "Pipe-mode Bash stdin is closed")))
+    (unless (process-live-p process)
+      (signal 'mevedel-execution-input-error
+              (list "Execution is no longer running")))
+    (process-send-string process chars)
+    t))
+
+(defun mevedel-execution-interrupt-user (session execution-id)
+  "Interrupt live EXECUTION-ID in SESSION with user authority."
+  (let* ((record
+          (mevedel-execution--user-live-record session execution-id))
+         (process (mevedel-execution--record-process record)))
+    (unless process
+      (signal 'mevedel-execution-input-error
+              (list "Execution has not started")))
+    (unless (or (process-live-p process)
+                (mevedel-execution--group-live-p record))
+      (signal 'mevedel-execution-not-found
+              (list "Execution is no longer running")))
+    (mevedel-execution--signal-record record 'INT)
+    t))
+
 (defun mevedel-execution-owner-live-p (session owner)
   "Return non-nil when OWNER has an unsettled execution in SESSION."
   (when-let* ((state (and session
@@ -1267,22 +1397,23 @@ after WAIT-MS while the process remains live."
     nil))
 
 (defun mevedel-execution-stop-user (session execution-id)
-  "Stop yielded EXECUTION-ID in SESSION with user delivery authority.
+  "Stop live EXECUTION-ID in SESSION with user delivery authority.
 
-Unlike the owner-scoped model tool, a user stop delivers terminal output to
-the execution owner's mailbox."
-  (let* ((state (mevedel-execution--state-for-session session))
-         (record (gethash execution-id
-                          (mevedel-execution--state-records state))))
-    (unless (and record
-                 (mevedel-execution--record-execution-id record)
-                 (mevedel-execution--record-yielded-p record))
-      (signal 'mevedel-execution-not-found
-              (list "No yielded execution with that id")))
-    (if (mevedel-execution--record-finished-p record)
-        (mevedel-execution--deliver-independent record)
-      (mevedel-execution--flush-observer record)
-      (mevedel-execution--begin-stop record 'stopped))))
+Unlike the owner-scoped model tool, user control may target every owner and
+foreground state.  Yielded terminal output still goes to its owner mailbox."
+  (let ((record
+         (mevedel-execution--user-live-record session execution-id)))
+    (mevedel-execution--flush-observer record)
+    (if (and (mevedel-execution--record-scheduler-lease record)
+             (mevedel-execution-scheduler-cancel
+              (mevedel-execution--record-scheduler-lease record)))
+        (progn
+          (setf (mevedel-execution--record-exit-code record) -1
+                (mevedel-execution--record-stop-p record) t
+                (mevedel-execution--record-termination record) 'stopped)
+          (mevedel-execution--finish-managed record))
+      (mevedel-execution--begin-stop record 'stopped))
+    t))
 
 
 ;;

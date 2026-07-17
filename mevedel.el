@@ -76,6 +76,7 @@
 (require 'mevedel-skills-prompt)
 (require 'mevedel-skills-ui)
 (require 'mevedel-cockpit)
+(require 'mevedel-executions-list)
 (require 'mevedel-plugins)
 (require 'mevedel-init)
 (require 'mevedel-review)

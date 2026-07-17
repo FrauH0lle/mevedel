@@ -42,6 +42,13 @@
 (declare-function mevedel-compact "mevedel-compact"
                   (&optional aggressive instructions))
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-count-user "mevedel-execution" (session))
+
+;; `mevedel-executions-list'
+(declare-function mevedel-executions-list-open
+                  "mevedel-executions-list" (&optional context))
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
 (declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
@@ -290,6 +297,17 @@
    "Tools"
    (format "%d active" (mevedel-menu--active-tool-count))
    'warning))
+
+(defun mevedel-menu--executions-description ()
+  "Return the top-level executions row description."
+  (require 'mevedel-execution)
+  (let* ((session (mevedel-cockpit-context-session
+                   (mevedel-menu--context)))
+         (count (mevedel-execution-count-user session)))
+    (mevedel-menu--state-description
+     "Processes"
+     (format "%d live" count)
+     (if (> count 0) 'warning 'transient-inactive-value))))
 
 (defun mevedel-menu--skills-description ()
   "Return the top-level skills row description."
@@ -580,6 +598,10 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
        (require 'mevedel-tools-list)
        (mevedel-cockpit-call-in-data
         context #'mevedel-tools-list-open context))
+      ('executions
+       (require 'mevedel-executions-list)
+       (mevedel-cockpit-call-in-data
+        context #'mevedel-executions-list-open context))
       ('worktree
        (require 'mevedel-worktree)
        (mevedel-cockpit-call-in-data
@@ -718,6 +740,11 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (interactive)
   (mevedel-menu-open 'tools))
 
+(defun mevedel-menu--open-executions ()
+  "Open the live execution cockpit surface."
+  (interactive)
+  (mevedel-menu-open 'executions))
+
 (defun mevedel-menu--open-skills ()
   "Open the skills cockpit surface."
   (interactive)
@@ -753,6 +780,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
      "/model                      Model"
      "Cockpit G / P               Goal / Preset model team"
      "/tools, /tools list         Tools"
+     "/ps                         Live executions"
+     "/stop [EXECUTION_ID]        Stop one execution or open /ps"
      "/worktree, /worktree status Worktree"
      "/help                       Help"
      ""
@@ -848,6 +877,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
                                          "none"))))
     ("t" mevedel-menu--open-tools
      :description mevedel-menu--tools-description)
+    ("x" mevedel-menu--open-executions
+     :description mevedel-menu--executions-description)
     ("s" mevedel-menu--open-skills
      :description mevedel-menu--skills-description)
     ("p" mevedel-menu--open-plugins

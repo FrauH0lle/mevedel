@@ -132,6 +132,7 @@ Chat / view
   mevedel-view-zone.el        managed view-zone lifecycle + fragments
   mevedel-view-history.el     view input history ring and persistence
   mevedel-view-markdown.el    Markdown tables, links, images, paths, source panels
+  mevedel-executions-list.el  session-wide live execution cockpit and user controls
   mevedel-overlays.el         instruction overlays (references/directives)
   mevedel-mentions.el         @ref and @file mention expansion
   mevedel-persistence.el      save/load instructions

@@ -16,6 +16,8 @@
 (require 'gptel)
 (require 'gptel-openai)
 (require 'mevedel-cockpit)
+(require 'mevedel-execution)
+(require 'mevedel-executions-list)
 (require 'mevedel-file-state)
 (require 'mevedel-goal)
 (require 'mevedel-models)
@@ -50,7 +52,9 @@
   (dolist (symbol '(mevedel-cmd--auto
                     mevedel-cmd--mode
                     mevedel-cmd--model
+                    mevedel-cmd--ps
                     mevedel-cmd--skills
+                    mevedel-cmd--stop
                     mevedel-cmd--tools
                     mevedel-skills--dispatch-slash-command
                     mevedel-skills--fontify-dollar-keyword
@@ -58,6 +62,7 @@
                     mevedel-skills--parse-slash-line
                     mevedel-skills--slash-capf
                     mevedel-skills-count-label
+                    mevedel-skills-local-command-active-request-p
                     mevedel-skills-install-font-lock
                     mevedel-skills-install-slash-commands
                     mevedel-skills-list-open
@@ -704,6 +709,51 @@ spanning lines")))
   :doc "blank arguments require a session"
   (with-temp-buffer
     (should-error (mevedel-cmd--tools "") :type 'user-error)))
+
+(mevedel-deftest mevedel-cmd--ps ()
+  ,test
+  (test)
+  :doc "blank arguments open the execution cockpit and others show usage"
+  (let (opened message-text)
+    (cl-letf (((symbol-function 'mevedel-executions-list-open)
+               (lambda (&optional _context) (setq opened t)))
+              ((symbol-function 'message)
+               (lambda (format-string &rest args)
+                 (setq message-text (apply #'format format-string args)))))
+      (mevedel-cmd--ps nil)
+      (should opened)
+      (mevedel-cmd--ps "extra")
+      (should (equal "Usage: /ps" message-text)))))
+
+(mevedel-deftest mevedel-cmd--stop ()
+  ,test
+  (test)
+  :doc "bare /stop opens the execution cockpit"
+  (let (opened)
+    (cl-letf (((symbol-function 'mevedel-executions-list-open)
+               (lambda (&optional _context) (setq opened t))))
+      (mevedel-cmd--stop nil))
+    (should opened))
+  :doc "/stop ID uses session-wide user authority"
+  (let ((session (mevedel-skills-test--make-session)) stopped)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-execution-stop-user)
+                 (lambda (seen-session id)
+                   (setq stopped (list seen-session id)))))
+        (mevedel-cmd--stop " exec-000009 ")))
+    (should (equal (list session "exec-000009") stopped))))
+
+(mevedel-deftest mevedel-skills-local-command-active-request-p ()
+  ,test
+  (test)
+  :doc "allows process controls and only the safe mid-request goal actions"
+  (dolist (command '(("ps" nil) ("stop" "exec-000001")
+                     ("goal" "pause") ("goal" "edit new objective")))
+    (should (apply #'mevedel-skills-local-command-active-request-p command)))
+  (dolist (command '(("goal" "resume") ("tools" nil) ("stopper" nil)))
+    (should-not
+     (apply #'mevedel-skills-local-command-active-request-p command))))
 
 (mevedel-deftest mevedel-skills-count-label
   (:vars* ((user-dir (make-temp-file "mevedel-skills-count-" t))
