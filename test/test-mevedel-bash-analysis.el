@@ -181,7 +181,46 @@ cat file"
     (dolist (source '("echo x > out" "pwd\ncat file"))
       (should (equal 'complex
                      (plist-get (mevedel-bash-analysis-analyze source)
-                                :class))))))
+                                :class)))))
+  :doc "background fact:
+`mevedel-bash-analysis-analyze' distinguishes native background operators"
+  (progn
+    (should (plist-get (mevedel-bash-analysis-analyze "sleep 1 &")
+                       :background-p))
+    (should (plist-get (mevedel-bash-analysis-analyze "coproc sleep 1")
+                       :background-p))
+    (dolist (source '("if true; then coproc sleep 1; fi"
+                      "while true; do coproc sleep 1; done"
+                      "if false; then :; else coproc sleep 1; fi"
+                      "{ coproc sleep 1; }"
+                      "time coproc sleep 1"
+                      "time -p ! coproc sleep 1"
+                      "! time -p coproc sleep 1"
+                      "if true; then time coproc sleep 1; fi"
+                      "echo \"$(sleep 1 &)\""
+                      "echo `sleep 1 &`"
+                      "echo $(( $(sleep 1 &) + 1 ))"
+                      "(( $(sleep 1 &) + 1 ))"))
+      (should (plist-get (mevedel-bash-analysis-analyze source)
+                         :background-p)))
+    (should-not (plist-get (mevedel-bash-analysis-analyze
+                            "printf '%s' '&'")
+                           :background-p))
+    (dolist (source '("printf hi 2>&1" "printf hi &>out" "a |& b"))
+      (should-not (plist-get (mevedel-bash-analysis-analyze source)
+                             :background-p)))
+    (should-not (plist-get (mevedel-bash-analysis-analyze
+                            "echo \"$((1 & 2))\"")
+                           :background-p))
+    (dolist (source '("echo $((1 & 2))"
+                      "((1 & 2))"
+                      "for ((i = 0; i & 3; i++)); do :; done"
+                      "printf %s '$(sleep 1 &)'"
+                      "printf %s '`sleep 1 &`'"
+                      "printf %s \"\\$(sleep 1 &)\""
+                      "printf %s \"\\`sleep 1 &\\`\""))
+      (should-not (plist-get (mevedel-bash-analysis-analyze source)
+                             :background-p)))))
 
 (provide 'test-mevedel-bash-analysis)
 

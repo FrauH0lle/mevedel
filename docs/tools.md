@@ -358,7 +358,7 @@ or `convert`. Their sandbox facts stay out of successful model-visible results.
 Native filesystem permission checks remain the authorization boundary; helper
 confinement limits effects after that authorization.
 
-## Bash execution timeout
+## Managed Bash execution
 
 Bash source runs through `bash -lc`, so login-shell initialization contributes
 to the same output and timeout as the requested command. Commands are
@@ -367,7 +367,29 @@ Bash call may pass `timeout_seconds` to request a longer or shorter positive
 timeout for that invocation. On systems with `setsid`, mevedel creates a
 dedicated process group and sends TERM followed by KILL to the whole group;
 otherwise it terminates the direct child. The result includes partial combined
-stdout/stderr and a timeout notice.
+stdout/stderr and structured termination facts.
+
+Bash waits up to `yield_time_ms` (10 seconds by default, 250-30000ms). A command
+that finishes first returns normally and discards its temporary spool when all
+output fits inline. A command still running at the boundary returns its unread
+output, an opaque owner-scoped execution ID, and a retained session artifact.
+Its timeout and 64 MiB output cap continue running after yield. Pipe-mode stdin
+is closed from spawn; `WriteStdin` therefore polls unread output but rejects
+ordinary input until a PTY is explicitly requested. `ListExecutions` exposes
+only the caller's yielded handles, and `StopExecution` terminates only a handle
+owned by that caller. There is no chunk ID: each observation advances one
+private unread cursor and returns canonical execution facts separately from
+the raw output. Unread ranges beyond 2000 characters use the shared
+newline-aware, equal head-and-tail preview while the retained artifact remains
+complete.
+
+At most 64 managed Bash processes may be live in one session. The sixty-fifth
+is refused before spawn without evicting existing work. Foreground work remains
+owned by its initiating request; yielding detaches it from later request aborts
+without changing its session, model owner, sandbox boundary, working directory,
+or resource grants. Shell-native background operators are rejected because
+they would bypass this lifecycle. Remaining descendants are terminated when
+the managed shell exits.
 
 ## Eval execution scope
 

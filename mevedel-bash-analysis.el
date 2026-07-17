@@ -211,18 +211,50 @@ quotes or escaped with a backslash do not close the substitution."
 
 (defun mevedel-bash-analysis--substitution-bodies (source)
   "Return best-effort command substitution bodies found in SOURCE."
-  (let ((position 0)
+  (let ((index 0)
+        quote
+        escaped
         bodies)
-    (while (string-match "\\$(" source position)
-      (let* ((start (match-end 0))
-             (end (mevedel-bash-analysis--substitution-end source start)))
-        (when end
-          (push (substring source start (1- end)) bodies))
-        (setq position (or end (length source)))))
-    (setq position 0)
-    (while (string-match "`\\([^`]*\\)`" source position)
-      (push (match-string 1 source) bodies)
-      (setq position (match-end 0)))
+    (while (< index (length source))
+      (let ((char (aref source index))
+            (next (and (< (1+ index) (length source))
+                       (aref source (1+ index))))
+            (after-next (and (< (+ index 2) (length source))
+                             (aref source (+ index 2)))))
+        (cond
+         (escaped
+          (setq escaped nil))
+         ((and (eq char ?\\) (not (eq quote ?')))
+          (setq escaped t))
+         ((and (eq char ?') (not (eq quote ?\")))
+          (setq quote (unless (eq quote ?') ?')))
+         ((and (eq char ?\") (not (eq quote ?')))
+          (setq quote (unless (eq quote ?\") ?\")))
+         ((eq quote ?'))
+         ((and (eq char ?$) (eq next #x28) (not (eq after-next #x28)))
+          (let* ((start (+ index 2))
+                 (end (mevedel-bash-analysis--substitution-end source start)))
+            (when end
+              (push (substring source start (1- end)) bodies)
+              (setq index (1- end)))))
+         ((eq char ?`)
+          (let ((start (1+ index))
+                (search (1+ index))
+                body-escaped
+                end)
+            (while (and (< search (length source)) (not end))
+              (let ((body-char (aref source search)))
+                (cond
+                 (body-escaped (setq body-escaped nil))
+                 ((eq body-char ?\\) (setq body-escaped t))
+                 ((eq body-char ?`) (setq end search))))
+              (setq search (1+ search)))
+            (when end
+              (push (string-replace "\\`" "`"
+                                    (substring source start end))
+                    bodies)
+              (setq index end)))))
+        (setq index (1+ index))))
     (let (expanded)
       (dolist (body (nreverse bodies))
         (push body expanded)
@@ -261,6 +293,11 @@ quotes or escaped with a backslash do not close the substitution."
         (setq argv (cdr argv)))
       (when (member (car argv) '("then" "do" "else" "elif"))
         (setq argv (cdr argv)))
+      (while (member (car argv) '("!" "time"))
+        (let ((prefix (pop argv)))
+          (when (and (equal prefix "time")
+                     (equal (car argv) "-p"))
+            (setq argv (cdr argv)))))
       (mevedel-bash-analysis--candidate-from-argv argv))))
 
 (defun mevedel-bash-analysis--candidates (source segments commands)
@@ -292,8 +329,15 @@ quotes or escaped with a backslash do not close the substitution."
 (defun mevedel-bash-analysis--result
     (source parser segments commands complex-p reasons)
   "Build normalized analysis for SOURCE from PARSER, SEGMENTS, and COMMANDS."
-  (let ((class (mevedel-bash-analysis--classify commands complex-p source)))
+  (let* ((class (mevedel-bash-analysis--classify commands complex-p source))
+         (background-p
+          (cl-some
+           (lambda (fragment)
+             (member "Background execution is unsupported"
+                     (cadr (mevedel-bash-analysis--scan-segments fragment))))
+           (cons source (mevedel-bash-analysis--substitution-bodies source)))))
     (list :class class
+          :background-p (and background-p t)
           :commands commands
           :segments segments
           :candidates (mevedel-bash-analysis--candidates
@@ -322,13 +366,22 @@ quotes or escaped with a backslash do not close the substitution."
         (length (length source)))
     (cl-labels ((finish-segment
                  ()
-                 (let ((segment (string-trim (apply #'string (nreverse current)))))
+                 (let* ((segment
+                         (string-trim (apply #'string (nreverse current))))
+                        (candidate
+                         (mevedel-bash-analysis--candidate-command segment)))
+                   (when (and candidate
+                              (string-match-p
+                               "\\`coproc\\(?:[[:space:]]\\|\\'\\)"
+                               candidate))
+                     (push "Background execution is unsupported" reasons))
                    (if (string-empty-p segment)
                        (push "A command separator has an empty operand" reasons)
                      (push segment segments))
                    (setq current nil))))
       (while (< index length)
         (let* ((char (aref source index))
+               (previous (and (> index 0) (aref source (1- index))))
                (next (and (< (1+ index) length)
                           (aref source (1+ index)))))
           (cond
@@ -348,6 +401,20 @@ quotes or escaped with a backslash do not close the substitution."
             (when (and (eq quote ?\") (memq char '(?$ ?`)))
               (push "Expansion or substitution is unsupported" reasons))
             (push char current))
+           ((or (and (eq char ?$) (eq next #x28)
+                     (< (+ index 2) length)
+                     (eq (aref source (+ index 2)) #x28))
+                (and (eq char #x28) (eq next #x28)))
+            (let ((start (if (eq char ?$) (+ index 2) (1+ index))))
+              (push "Expansion or substitution is unsupported" reasons)
+              (if-let* ((end
+                         (mevedel-bash-analysis--substitution-end
+                          source start)))
+                  (progn
+                    (dotimes (offset (- end index))
+                      (push (aref source (+ index offset)) current))
+                    (setq index (1- end)))
+                (push char current))))
            ((memq char '(?$ ?` ?< ?> ?\( ?\) ?{ ?} ?* ?? ?\[ ?\] ?!))
             (push "Expansion, substitution, grouping, or redirection is unsupported"
                   reasons)
@@ -358,6 +425,10 @@ quotes or escaped with a backslash do not close the substitution."
            ((and (eq char ?&) (eq next ?&))
             (finish-segment)
             (setq index (1+ index)))
+           ((and (eq char ?&)
+                 (or (memq previous '(?> ?< ?|))
+                     (eq next ?>)))
+            (push char current))
            ((eq char ?&)
             (push "Background execution is unsupported" reasons)
             (push char current))

@@ -45,6 +45,13 @@
   (should (mevedel-pipeline--handler-return-p envelope))
   (plist-get envelope :result))
 
+(defun test-bash-permissions--call-bash (callback args)
+  "Call the Bash handler with CALLBACK and ARGS in a test session."
+  (let ((mevedel--session
+         (or mevedel--session
+             (mevedel-skills-test--make-session "bash"))))
+    (mevedel-tool-exec--bash callback args)))
+
 
 (mevedel-deftest mevedel-tool-exec--current-origin ()
   ,test
@@ -2001,26 +2008,205 @@ default Bash keeps bare dot inspection automatic"
 ;;
 ;;; Bash handler
 
-(mevedel-deftest mevedel-tool-exec--bash ()
+(mevedel-deftest mevedel-tool-exec--bash-yield-time-ms ()
+  ,test
+  (test)
+  :doc "defaults to ten seconds and accepts the inclusive bounds"
+  (should (= 10000 (mevedel-tool-exec--bash-yield-time-ms nil)))
+  (should (= 250 (mevedel-tool-exec--bash-yield-time-ms
+                  (list :yield-time_ms 250))))
+  (should (= 30000 (mevedel-tool-exec--bash-yield-time-ms
+                    (list :yield-time_ms 30000))))
+  :doc "rejects out-of-range and non-integer values"
+  (dolist (value '(249 30001 1.5 "250"))
+    (should-error
+     (mevedel-tool-exec--bash-yield-time-ms
+      (list :yield-time_ms value)))))
+
+(mevedel-deftest mevedel-tool-exec--write-wait-time-ms ()
+  ,test
+  (test)
+  :doc "uses distinct poll and input defaults"
+  (should (= 5000 (mevedel-tool-exec--write-wait-time-ms nil "")))
+  (should (= 250 (mevedel-tool-exec--write-wait-time-ms nil "x")))
+  :doc "validates the distinct poll and input ranges"
+  (should-error
+   (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 4999) ""))
+  (should-error
+   (mevedel-tool-exec--write-wait-time-ms '(:yield-time_ms 30001) "x")))
+
+(mevedel-deftest mevedel-tool-exec--execution-artifact-directory ()
+  ,test
+  (test)
+  :doc "places execution artifacts below the session tool-results directory"
+  (cl-letf (((symbol-function 'mevedel-pipeline--tool-results-dir)
+             (lambda (_session _buffer) "/tmp/tool-results")))
+    (should (equal "/tmp/tool-results/executions"
+                   (mevedel-tool-exec--execution-artifact-directory
+                    'session)))))
+
+(mevedel-deftest mevedel-tool-exec--execution-facts-xml ()
+  ,test
+  (test)
+  :doc "serializes canonical facts without a chunk id"
+  (let ((xml
+         (mevedel-tool-exec--execution-facts-xml
+          '(:execution-id "exec-1" :state running
+            :wall-time-seconds 1.25 :output-bytes 4 :output-lines 1
+            :omitted-output-bytes 0 :tty nil
+            :output-path "/tmp/a&b"))))
+    (should (string-match-p "execution_id=\"exec-1\"" xml))
+    (should (string-match-p "tty=\"false\"" xml))
+    (should (string-match-p "output_path=\"/tmp/a&amp;b\"" xml))
+    (should-not (string-match-p "chunk" xml))))
+
+(mevedel-deftest mevedel-tool-exec--observation-envelope ()
+  ,test
+  (test)
+  :doc "keeps output raw while status and facts remain structured"
+  (let* ((envelope
+          (mevedel-tool-exec--observation-envelope
+           '(:output "failure text"
+             :facts (:state completed :termination exited :exit-code 7
+                     :outcome failure :wall-time-seconds 0.1
+                     :output-bytes 12 :output-lines 1
+                     :omitted-output-bytes 0 :tty nil))))
+         (result (plist-get envelope :result)))
+    (should (eq 'error (plist-get envelope :status)))
+    (should (string-prefix-p "failure text\n\n<bash-execution" result))
+    (should-not (string-match-p "Command failed" result))
+    (should (= 7 (plist-get (plist-get envelope :render-data)
+                            :exit-code))))
+  :doc "keeps trusted injection output clean while retaining hidden facts"
+  (let ((envelope
+         (mevedel-tool-exec--observation-envelope
+          '(:output "injected"
+            :facts (:state completed :termination exited :exit-code 0
+                    :outcome success :wall-time-seconds 0.1
+                    :output-bytes 8 :output-lines 1
+                    :omitted-output-bytes 0 :tty nil))
+          t)))
+    (should (equal "injected" (plist-get envelope :result)))
+    (should (eq 'success (plist-get envelope :status)))
+    (should (= 0 (plist-get (plist-get envelope :render-data)
+                            :exit-code)))))
+
+(mevedel-deftest mevedel-tool-exec--write-stdin ()
+  ,test
+  (test)
+  :doc "polls through the captured session and canonical owner"
+  (let ((session (mevedel-session--create :name "test"))
+        captured result)
+    (let ((mevedel--session session)
+          (mevedel--current-request nil)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-observe)
+                 (lambda (&rest args)
+                   (setq captured args)
+                   (funcall
+                    (nth 3 args)
+                    '(:output "delta"
+                      :facts (:execution-id "exec-1" :state running
+                              :wall-time-seconds 1.0 :output-bytes 5
+                              :output-lines 1 :omitted-output-bytes 0
+                              :tty nil))))))
+        (mevedel-tool-exec--write-stdin
+         (lambda (value) (setq result value))
+         '(:execution_id "exec-1" :yield_time_ms 5000))))
+    (should (eq session (nth 0 captured)))
+    (should (equal "main" (nth 1 captured)))
+    (should (equal "exec-1" (nth 2 captured)))
+    (should (string-prefix-p "delta" (plist-get result :result)))))
+
+(mevedel-deftest mevedel-tool-exec--list-executions ()
+  ,test
+  (test)
+  :doc "lists only facts returned by the owner-filtered execution API"
+  (let ((session (mevedel-session--create :name "test"))
+        captured)
+    (let ((mevedel--session session)
+          (mevedel--current-request nil)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-list)
+                 (lambda (&rest args)
+                   (setq captured args)
+                   '((:execution-id "exec-1" :state running
+                      :wall-time-seconds 1.0 :output-bytes 0
+                      :output-lines 0 :omitted-output-bytes 0 :tty nil)))))
+        (let ((envelope (mevedel-tool-exec--list-executions nil)))
+          (should (string-match-p "execution_id=\"exec-1\""
+                                  (plist-get envelope :result))))))
+    (should (equal (list session "main") captured))))
+
+(mevedel-deftest mevedel-tool-exec--stop-execution ()
+  ,test
+  (test)
+  :doc "stops through the owner-filtered API and reports tool success"
+  (let ((session (mevedel-session--create :name "test"))
+        captured result)
+    (let ((mevedel--session session)
+          (mevedel--current-request nil)
+          (mevedel--agent-invocation nil))
+      (cl-letf (((symbol-function 'mevedel-execution-stop)
+                 (lambda (&rest args)
+                   (setq captured args)
+                   (funcall
+                    (nth 3 args)
+                    '(:output "partial"
+                      :facts (:execution-id "exec-1" :state completed
+                              :termination stopped :exit-code 15
+                              :outcome failure :wall-time-seconds 1.0
+                              :output-bytes 7 :output-lines 1
+                              :omitted-output-bytes 0 :tty nil))))))
+        (mevedel-tool-exec--stop-execution
+         (lambda (value) (setq result value))
+         '(:execution_id "exec-1"))))
+    (should (equal (list session "main" "exec-1")
+                   (butlast captured)))
+    (should (eq 'success (plist-get result :status)))))
+
+(mevedel-deftest mevedel-tool-exec--bash
+  ()
   ,test
   (test)
   :doc "errors on missing command"
   (should-error
-   (mevedel-tool-exec--bash #'ignore (list))
+   (test-bash-permissions--call-bash #'ignore (list))
    :type 'error)
+  :doc "rejects shell-native backgrounding"
+  (should-error
+   (test-bash-permissions--call-bash #'ignore '(:command "sleep 1 &"))
+   :type 'error)
+  :doc "validates the public yield range"
+  (should-error
+   (test-bash-permissions--call-bash
+    #'ignore (list :command "sleep 1" :yield-time_ms 100))
+   :type 'error)
+  :doc "trusted internal waits disable yielding"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured args))))
+      (test-bash-permissions--call-bash
+       #'ignore '(:command "printf done" :wait-for-completion-p t)))
+    (should-not (plist-get (cdr captured) :yield-time-ms)))
   :doc "passes approved network authority to the child launcher"
   (let (captured result)
     (cl-letf (((symbol-function
-                'mevedel-execution-start-one-shot)
+                'mevedel-execution-start-bash)
                (lambda (&rest args)
                  (setq captured args)
                  (funcall (car args)
-                          '(:exit-code 0 :output "ok" :timed-out-p nil
+                          '(:output "ok"
+                            :facts (:state completed :termination exited
+                                    :exit-code 0 :outcome success
+                                    :wall-time-seconds 0.1 :output-bytes 2
+                                    :output-lines 1 :omitted-output-bytes 0
+                                    :tty nil)
                             :sandbox-facts
                             (:sandbox bubblewrap
                              :filesystem workspace-write
                              :network unrestricted))))))
-      (mevedel-tool-exec--bash
+      (test-bash-permissions--call-bash
        (lambda (envelope)
          (setq result (test-bash-permissions--handler-result envelope)))
        '(:command "curl https://example.test"
@@ -2033,16 +2219,21 @@ default Bash keeps bare dot inspection automatic"
   :doc "passes approved full escalation to the child launcher"
   (let (captured result)
     (cl-letf (((symbol-function
-                'mevedel-execution-start-one-shot)
+                'mevedel-execution-start-bash)
                (lambda (&rest args)
                  (setq captured args)
                  (funcall (car args)
-                          '(:exit-code 0 :output "ok" :timed-out-p nil
+                          '(:output "ok"
+                            :facts (:state completed :termination exited
+                                    :exit-code 0 :outcome success
+                                    :wall-time-seconds 0.1 :output-bytes 2
+                                    :output-lines 1 :omitted-output-bytes 0
+                                    :tty nil)
                             :sandbox-facts
                             (:sandbox escalated
                              :filesystem unrestricted
                              :network unrestricted))))))
-      (mevedel-tool-exec--bash
+      (test-bash-permissions--call-bash
        (lambda (envelope)
          (setq result (test-bash-permissions--handler-result envelope)))
        '(:command "emacs --batch -Q"
@@ -2057,15 +2248,21 @@ default Bash keeps bare dot inspection automatic"
                         (make-string 50000 ?t)))
         result)
     (cl-letf (((symbol-function
-                'mevedel-execution-start-one-shot)
+                'mevedel-execution-start-bash)
                (lambda (&rest args)
                  (funcall (car args)
-                          (list :exit-code 0 :output output :timed-out-p nil
+                          (list :output output
+                                :facts
+                                '(:state completed :termination exited
+                                  :exit-code 0 :outcome success
+                                  :wall-time-seconds 0.1
+                                  :output-bytes 600000 :output-lines 1
+                                  :omitted-output-bytes 0 :tty nil)
                                 :sandbox-facts
                                 '(:sandbox bubblewrap
                                   :filesystem workspace-write
                                   :network isolated))))))
-      (mevedel-tool-exec--bash
+      (test-bash-permissions--call-bash
        (lambda (envelope)
          (setq result (test-bash-permissions--handler-result envelope)))
        '(:command "noisy-command")))
@@ -2075,7 +2272,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "executes simple command and returns output"
   (let ((result nil)
         (done nil))
-    (mevedel-tool-exec--bash
+    (test-bash-permissions--call-bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
 	     done t))
@@ -2085,10 +2282,10 @@ default Bash keeps bare dot inspection automatic"
       (while (not done)
         (accept-process-output nil 0.1)))
     (should (string-match-p "hello" result)))
-  :doc "reports exit code on failure"
+  :doc "reports raw exit code structurally without rewriting output"
   (let ((result nil)
         (done nil))
-    (mevedel-tool-exec--bash
+    (test-bash-permissions--call-bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
 	     done t))
@@ -2096,13 +2293,14 @@ default Bash keeps bare dot inspection automatic"
     (with-timeout (5 (error "Timed out"))
       (while (not done)
         (accept-process-output nil 0.1)))
-    (should (string-match-p "exit code 42" result)))
+    (should (string-match-p "exit_code=\"42\"" result))
+    (should-not (string-match-p "Command failed" result)))
   :doc "discloses automatic unrestricted fallback"
   (let ((mevedel-sandbox-mode 'auto)
         (mevedel-sandbox--probe-cache
          '(:available nil :reason "test confinement unavailable"))
         result done)
-    (mevedel-tool-exec--bash
+    (test-bash-permissions--call-bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
              done t))
@@ -2125,7 +2323,7 @@ default Bash keeps bare dot inspection automatic"
           (with-temp-file profile
             (insert "export MEVEDEL_LOGIN_MARKER=loaded\n"))
           (setenv "HOME" home)
-          (mevedel-tool-exec--bash
+          (test-bash-permissions--call-bash
            (lambda (r)
              (setq result (test-bash-permissions--handler-result r)
                    done t))
@@ -2150,7 +2348,7 @@ default Bash keeps bare dot inspection automatic"
     (make-directory agent-dir t)
     (unwind-protect
         (progn
-          (mevedel-tool-exec--bash
+          (test-bash-permissions--call-bash
 	   (lambda (r)
 	     (setq result (test-bash-permissions--handler-result r)
 		   done t))
@@ -2169,7 +2367,7 @@ default Bash keeps bare dot inspection automatic"
         (done nil)
         (mevedel-bash-timeout 30)
         (mevedel-execution--child-kill-delay 0.1))
-    (mevedel-tool-exec--bash
+    (test-bash-permissions--call-bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
              done t))
@@ -2178,7 +2376,7 @@ default Bash keeps bare dot inspection automatic"
     (with-timeout (6 (error "Timed out"))
       (while (not done)
         (accept-process-output nil 0.1)))
-    (should (string-match-p "Command timed out after 1s" result))
+    (should (string-match-p "termination=\"timed-out\"" result))
     (should (string-match-p "started" result))
     (unless (eq system-type 'windows-nt)
       (should-not (string-match-p "done" result))))
@@ -2187,7 +2385,7 @@ default Bash keeps bare dot inspection automatic"
         (done nil)
         (mevedel-bash-timeout 1)
         (mevedel-execution--child-kill-delay 0.1))
-    (mevedel-tool-exec--bash
+    (test-bash-permissions--call-bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
              done t))
@@ -2195,7 +2393,7 @@ default Bash keeps bare dot inspection automatic"
     (with-timeout (6 (error "Timed out"))
       (while (not done)
         (accept-process-output nil 0.1)))
-    (should (string-match-p "Command timed out after 1s" result))
+    (should (string-match-p "termination=\"timed-out\"" result))
     (should (string-match-p "default-started" result))
     (unless (eq system-type 'windows-nt)
       (should-not (string-match-p "default-done" result))))
@@ -2210,7 +2408,7 @@ default Bash keeps bare dot inspection automatic"
           (with-temp-file profile
             (insert "printf login-started; sleep 5\n"))
           (setenv "HOME" home)
-          (mevedel-tool-exec--bash
+          (test-bash-permissions--call-bash
            (lambda (r)
              (setq result (test-bash-permissions--handler-result r)
                    done t))
@@ -2218,25 +2416,25 @@ default Bash keeps bare dot inspection automatic"
           (with-timeout (5 (error "Timed out"))
             (while (not done)
               (accept-process-output nil 0.1)))
-          (should (string-match-p "Command timed out after 1s" result))
+          (should (string-match-p "termination=\"timed-out\"" result))
           (should (string-match-p "login-started" result))
           (should-not (string-match-p "command-ran" result)))
       (delete-directory home t)))
   :doc "rejects non-positive per-call timeout"
   (should-error
-   (mevedel-tool-exec--bash
+   (test-bash-permissions--call-bash
     #'ignore
     (list :command "echo never" :timeout_seconds 0))
    :type 'error)
   :doc "rejects invalid per-call timeout even when default is disabled"
   (let ((mevedel-bash-timeout nil))
     (should-error
-     (mevedel-tool-exec--bash
+     (test-bash-permissions--call-bash
       #'ignore
       (list :command "echo never" :timeout_seconds 0))
      :type 'error)
     (should-error
-     (mevedel-tool-exec--bash
+     (test-bash-permissions--call-bash
       #'ignore
       (list :command "echo never" :timeout_seconds "bad"))
      :type 'error))
@@ -2519,6 +2717,16 @@ default Bash keeps bare dot inspection automatic"
                        (plist-get (plist-get schema :items) :type)))))
     (should (equal "string" (plist-get justification :type)))
     (should (plist-get justification :optional)))
+  :doc "registers managed Bash lifecycle tools and yield schema"
+  (mevedel-tool-exec--register)
+  (let* ((bash (mevedel-tool-get "Bash"))
+         (args (gptel-tool-args (mevedel-tool-gptel-tool bash)))
+         (yield (seq-find (lambda (arg)
+                            (equal "yield_time_ms" (plist-get arg :name)))
+                          args)))
+    (should (equal "integer" (plist-get yield :type)))
+    (dolist (name '("WriteStdin" "ListExecutions" "StopExecution"))
+      (should (mevedel-tool-get name))))
   :doc "registers Eval mode and preserve_ui optional arguments"
   (mevedel-tool-exec--register)
   (let* ((tool (mevedel-tool-get "Eval"))
@@ -2861,8 +3069,8 @@ default Bash keeps bare dot inspection automatic"
   :doc "marks timeout results as errors"
   (let ((plist (mevedel-tool-exec--render-bash
                 "Bash" '(:command "sleep 5")
-                "Command timed out after 1s and was terminated:\nSTDOUT+STDERR:\n"
-                nil)))
+                "partial output"
+                '(:status error :termination timed-out))))
     (should (eq 'error (plist-get plist :status)))))
 
 (provide 'test-mevedel-tools-bash-permissions)

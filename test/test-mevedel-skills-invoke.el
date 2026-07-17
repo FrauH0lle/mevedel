@@ -497,7 +497,9 @@ configuration."
 (defun mevedel-skills-test--shell-injections-sync (text)
   "Drive `mevedel-skills--run-body-injections-async' with TEXT synchronously.
 Return the outcome plist produced by the async helper."
-  (let (outcome)
+  (let ((mevedel--session
+         (mevedel-skills-test--make-session "injection"))
+        outcome)
     (mevedel-skills--run-body-injections-async
      text (lambda (o) (setq outcome o)))
     (while (null outcome)
