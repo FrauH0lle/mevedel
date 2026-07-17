@@ -420,7 +420,62 @@
 			      ctx (lambda (value) (setq result-ctx value)) #'ignore)))
 			 (should (equal (plist-get result-ctx :result)
 					"/captured-dispatch/")))
-		     (kill-buffer dispatch-buffer))))
+		     (kill-buffer dispatch-buffer)))
+		 :doc "handler plist stores render-data and leaves status absent"
+		 (let* ((tool (mevedel-tool--create
+			       :name "PlistReturn"
+			       :handler (lambda (_args)
+					  (list :result "ok"
+						:render-data '(:kind diff :patch "p")))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "ok" (plist-get out :result)))
+		   (should (equal '(:kind diff :patch "p") (plist-get out :render-data)))
+		   (should-not (plist-member out :status)))
+		 :doc "handler plist stores explicit status"
+		 (let* ((tool (mevedel-tool--create
+			       :name "StatusReturn"
+			       :handler (lambda (_args)
+					  (list :result "plain failure" :status 'error))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (eq 'error (plist-get out :status))))
+		 :doc "handler plist stores media"
+		 (let* ((tool (mevedel-tool--create
+			       :name "MediaReturn"
+			       :handler (lambda (_args)
+					  (list :result "ok"
+						:media '((:path "/tmp/a.png"
+							 :mime "image/png"))))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "ok" (plist-get out :result)))
+		   (should (equal '((:path "/tmp/a.png" :mime "image/png"))
+				  (plist-get out :media))))
+		 :doc "handler returning a bare string fails the step"
+		 (let* ((tool (mevedel-tool--create
+			       :name "StringReturn"
+			       :handler (lambda (_args) "invalid")))
+			(ctx (list :tool tool :args nil))
+			failure)
+		   (mevedel-pipeline--step-handler
+		    ctx #'ignore (lambda (reason) (setq failure reason)))
+		   (should (string-match-p "expected a plist containing :result"
+					   failure)))
+		 :doc "normalizes raw byte result strings before callback"
+		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
+			(tool (mevedel-tool--create
+			       :name "RawByteReturn"
+			       :handler (lambda (_args) (list :result raw))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "\\x80" (plist-get out :result)))
+		   (should (equal "\\x80" (plist-get out :raw-result)))
+		   (should (json-serialize (list :result (plist-get out :result))))))
 
 
 ;;
@@ -442,8 +497,8 @@
 		   (should (eq (nth 4 steps) #'mevedel-pipeline--step-repair-reminder))
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-render-transform))
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "write tool includes snapshot step"
 		 (let* ((tool (mevedel-tool--create
@@ -459,8 +514,8 @@
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-repair-reminder))
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-render-transform))
 		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-specialist-nudges))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-post-tool-hooks))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-render-data))
 		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "includes persist step when max-result-size is set"
 		 (let* ((tool (mevedel-tool--create
@@ -477,10 +532,10 @@
 		   (should (eq (nth 7 steps)
 			       #'mevedel-pipeline--step-specialist-nudges))
 		   (should (eq (nth 8 steps)
-			       #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 9 steps)
 			       #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-persist))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-persist))
+		   (should (eq (nth 10 steps)
+			       #'mevedel-pipeline--step-attach-render-data))
 			   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "omits persist step when max-result-size is nil"
@@ -670,6 +725,48 @@
 		   (should (eq seen-invocation invocation))
 		   (should (equal (plist-get seen-payload :tool-response) "ok"))
 		   (should (equal result "ok")))
+		 :doc "uses explicit error status for the failure hook and payload"
+		 (let* ((tool (mevedel-tool--create :name "Bash"))
+			(context (list :tool tool
+				       :args nil
+				       :result "plain failure"
+				       :raw-result "plain failure"
+				       :status 'error
+				       :default-directory default-directory))
+			seen-event
+			seen-payload)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(setq seen-event event seen-payload payload)
+				(funcall callback nil))))
+		     (mevedel-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (eq 'PostToolUseFailure seen-event))
+		   (should (equal "plain failure" (plist-get seen-payload :error))))
+		 :doc "updated hook results retain explicit status for rendering"
+		 (let* ((tool (mevedel-tool--create :name "Bash"))
+			(context (list :tool tool
+				       :args nil
+				       :result "plain failure"
+				       :raw-result "plain failure"
+				       :status 'error
+				       :default-directory default-directory))
+			final-result)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (_event _payload callback &rest _)
+				(funcall callback '(:updated-result "redacted")))))
+		     (mevedel-pipeline--step-post-tool-hooks
+		      context
+		      (lambda (updated)
+			(mevedel-pipeline--step-attach-render-data
+			 updated
+			 (lambda (final)
+			   (setq final-result (plist-get final :result)))
+			 #'ignore))
+		      #'ignore))
+		   (let ((extracted
+			  (mevedel-pipeline-extract-render-data final-result)))
+		     (should (string-prefix-p "redacted" (car extracted)))
+		     (should (eq 'error (plist-get (cdr extracted) :status)))))
 		 :doc "strips render-data from post-tool hook payload"
 		 (let* ((tool (mevedel-tool--create :name "Read"))
 			(result (concat "visible"
@@ -2577,6 +2674,39 @@
 ;;
 ;;; Result persistence
 
+(mevedel-deftest mevedel-pipeline--head-tail-preview ()
+		 ,test
+		 (test)
+		 :doc "returns short output unchanged"
+		 (let ((mevedel-pipeline--preview-size 20))
+		   (should (equal "short" (mevedel-pipeline--head-tail-preview "short"))))
+		 :doc "returns output exactly at the preview limit unchanged"
+		 (let ((mevedel-pipeline--preview-size 20)
+		       (result "01234567890123456789"))
+		   (should (equal result (mevedel-pipeline--head-tail-preview result))))
+		 :doc "truncates output immediately above the preview limit"
+		 (let ((mevedel-pipeline--preview-size 20))
+		   (should
+		    (equal
+		     "0123456789\n[mevedel: tool output truncated; omitted 1 chars]\n1234567890"
+		     (mevedel-pipeline--head-tail-preview "012345678901234567890"))))
+		 :doc "keeps equal ends of a long single line and reports the exact omission"
+		 (let* ((mevedel-pipeline--preview-size 20)
+			(result "hhhhhhhhhhmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmtttttttttt")
+			(preview (mevedel-pipeline--head-tail-preview result)))
+		   (should
+		    (equal
+		     "hhhhhhhhhh\n[mevedel: tool output truncated; omitted 30 chars]\ntttttttttt"
+		     preview)))
+		 :doc "cuts both retained ends at nearby newline boundaries"
+		 (let* ((mevedel-pipeline--preview-size 20)
+			(result (concat "HEAD-A\n" (make-string 30 ?m) "\nTAIL-B"))
+			(preview (mevedel-pipeline--head-tail-preview result)))
+		   (should
+		    (equal
+		     "HEAD-A\n[mevedel: tool output truncated; omitted 31 chars]\nTAIL-B"
+		     preview))))
+
 (mevedel-deftest mevedel-pipeline--persist-result ()
 		 ,test
 		 (test)
@@ -2630,7 +2760,7 @@
 			   (insert-file-contents (car files))
 			   (should (string-prefix-p "quote “x”" (buffer-string)))))
 		     (delete-directory tmpdir t)))
-		 :doc "preview truncates to preview-size chars"
+		 :doc "preview preserves the head and tail while the artifact stays complete"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
 			(ws (mevedel-workspace--create :root tmpdir))
 			(save-path (file-name-as-directory
@@ -2638,16 +2768,22 @@
 			(session (mevedel-session--create
 				  :name "main" :workspace ws :save-path save-path))
 			(tool (mevedel-tool--create :name "TestTool" :max-result-size 100))
-			;; Result with clear line breaks for newline-boundary cutting
-			(result (mapconcat (lambda (_) (make-string 79 ?a))
-					   (number-sequence 1 100) "\n"))
+			(result (concat (make-string 1000 ?h)
+					(make-string 3000 ?m)
+					(make-string 1000 ?t)))
 			(persisted (mevedel-pipeline--persist-result result tool session)))
 		   (unwind-protect
-		       (progn
-			 ;; Preview should be much smaller than the full result
-			 (should (< (length persisted) (length result)))
-			 ;; Should contain the "..." truncation marker
-			 (should (string-match-p "\\.\\.\\." persisted)))
+		       (let ((file (car (directory-files
+					(file-name-concat save-path "tool-results")
+					t "\\.txt$"))))
+			 (should (string-search (make-string 100 ?h) persisted))
+			 (should (string-search (make-string 100 ?t) persisted))
+			 (should-not (string-search (make-string 100 ?m) persisted))
+			 (should (string-search "omitted 3000 chars" persisted))
+			 (should (equal result
+					(with-temp-buffer
+					  (insert-file-contents file)
+					  (buffer-string)))))
 		     (delete-directory tmpdir t)))
 		 :doc "materializes session directory when save path is absent"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
@@ -2680,7 +2816,17 @@
 		   (should (string-match-p "no session persistence directory available"
 					   truncated))
 		   (should (string-match-p "5000 chars" truncated))
-		   (should (string-match-p "BigTool" truncated))))
+		   (should (string-match-p "BigTool" truncated)))
+		 :doc "keeps both ends when persistence is unavailable"
+		 (let* ((tool (mevedel-tool--create :name "BigTool" :max-result-size 100))
+			(result (concat (make-string 1000 ?h)
+					(make-string 3000 ?m)
+					(make-string 1000 ?t)))
+			(truncated (mevedel-pipeline--truncate-result result tool)))
+		   (should (string-search (make-string 100 ?h) truncated))
+		   (should (string-search (make-string 100 ?t) truncated))
+		   (should-not (string-search (make-string 100 ?m) truncated))
+		   (should (string-search "omitted 3000 chars" truncated))))
 
 (mevedel-deftest mevedel-pipeline--truncate-error-result ()
 			 ,test
@@ -2688,11 +2834,43 @@
 			 :doc "truncates large errors while preserving error status"
 			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
 				(result (concat "Error: " (make-string 5000 ?x)))
-				(truncated (mevedel-pipeline--truncate-error-result result tool)))
+				(truncated (mevedel-pipeline--truncate-error-result
+					    result tool t)))
 			   (should (< (length truncated) (length result)))
 			   (should (string-prefix-p "Error:" truncated))
 			   (should (string-match-p "output too large" truncated))
-			   (should (string-match-p "ErrTool" truncated))))
+			   (should (string-match-p "ErrTool" truncated)))
+			 :doc "uses neutral prose for structured error status"
+			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat "plain failure " (make-string 5000 ?x)))
+				(truncated (mevedel-pipeline--truncate-error-result result tool)))
+			   (should-not (string-prefix-p "Error:" truncated))
+			   (should (string-prefix-p "Output too large" truncated)))
+			 :doc "keeps the failure tail and reports the exact omission"
+			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat (make-string 1000 ?h)
+						(make-string 3000 ?m)
+						(make-string 1000 ?t)))
+				(truncated (mevedel-pipeline--truncate-error-result result tool)))
+			   (should (string-search (make-string 100 ?h) truncated))
+			   (should (string-search (make-string 100 ?t) truncated))
+			   (should-not (string-search (make-string 100 ?m) truncated))
+			   (should (string-search "omitted 3000 chars" truncated))))
+
+(mevedel-deftest mevedel-pipeline--context-status ()
+		 ,test
+		 (test)
+		 :doc "explicit status takes precedence over visible text"
+		 (should (eq 'success
+			     (mevedel-pipeline--context-status
+			      '(:status success :result "Error: visible text"))))
+		 :doc "legacy Error prefix means error"
+		 (should (eq 'error
+			     (mevedel-pipeline--context-status
+			      '(:result "Error: legacy failure"))))
+		 :doc "plain legacy output means success"
+		 (should (eq 'success
+			     (mevedel-pipeline--context-status '(:result "ok")))))
 
 (mevedel-deftest mevedel-pipeline--step-persist ()
 		 ,test
@@ -2732,6 +2910,20 @@
 						   (plist-get next-ctx :result)))
 			   (should (< (length (plist-get next-ctx :result))
 				      original-length)))
+			 :doc "structured errors keep neutral preview prose and explicit status"
+			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
+				(result (concat (make-string 1000 ?h)
+						(make-string 3000 ?m)
+						(make-string 1000 ?t)))
+				(ctx (list :tool tool :result result :status 'error))
+				next-ctx)
+			   (mevedel-pipeline--step-persist
+			    ctx (lambda (c) (setq next-ctx c)) #'ignore)
+			   (let ((preview (plist-get next-ctx :result)))
+			     (should (eq 'error (plist-get next-ctx :status)))
+			     (should-not (string-prefix-p "Error:" preview))
+			     (should (string-search (make-string 100 ?h) preview))
+			     (should (string-search (make-string 100 ?t) preview))))
 			 :doc "persists result when over limit"
 		 (let* ((tmpdir (make-temp-file "mevedel-test-ws-" t))
 			(ws (mevedel-workspace--create :root tmpdir))
@@ -2822,6 +3014,14 @@
 		 :doc "accepts plist with :result and :render-data"
 		 (should (mevedel-pipeline--handler-return-p
 			  '(:result "ok" :render-data (:kind diff))))
+		 :doc "accepts explicit success and error status"
+		 (should (mevedel-pipeline--handler-return-p
+			  '(:result "ok" :status success)))
+		 (should (mevedel-pipeline--handler-return-p
+			  '(:result "failed" :status error)))
+		 :doc "rejects an unknown explicit status"
+		 (should-not (mevedel-pipeline--handler-return-p
+			      '(:result "maybe" :status unknown)))
 		 :doc "rejects bare string"
 		 (should-not (mevedel-pipeline--handler-return-p "just a string"))
 		 :doc "rejects nil"
@@ -2886,6 +3086,27 @@
 		   (mevedel-pipeline--step-attach-render-data
 		    ctx (lambda (c) (setq out c)) #'ignore)
 		   (should (null (plist-get out :result)))))
+		 :doc "serializes explicit handler status with render-data"
+		 (let ((ctx (list :result "failed"
+				  :status 'error
+				  :render-data '(:kind bash)))
+		       out)
+		   (mevedel-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let ((data (cdr (mevedel-pipeline-extract-render-data
+				  (plist-get out :result)))))
+		     (should (eq 'bash (plist-get data :kind)))
+		     (should (eq 'error (plist-get data :status)))))
+		 :doc "serializes explicit status even without other render-data"
+		 (let ((ctx (list :result "failed" :status 'error)) out)
+		   (mevedel-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should
+		    (eq 'error
+			(plist-get
+			 (cdr (mevedel-pipeline-extract-render-data
+			       (plist-get out :result)))
+			 :status))))
 
 (mevedel-deftest mevedel-pipeline--step-attach-media-data ()
 		 ,test
@@ -3134,55 +3355,6 @@
 		 (let ((extract (mevedel-pipeline-extract-render-data nil)))
 		   (should (null (car extract)))
 		   (should (null (cdr extract)))))
-
-(mevedel-deftest mevedel-pipeline--step-handler/render-data ()
-		 ,test
-		 (test)
-		 :doc "handler returning a plist stores :result and :render-data on context"
-		 (let* ((tool (mevedel-tool--create
-			       :name "PlistReturn"
-			       :handler (lambda (_args)
-					  (list :result "ok"
-						:render-data '(:kind diff :patch "p")))))
-			(ctx (list :tool tool :args nil))
-			out)
-		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (equal "ok" (plist-get out :result)))
-		   (should (equal '(:kind diff :patch "p") (plist-get out :render-data))))
-		 :doc "handler returning a plist stores :media on context"
-		 (let* ((tool (mevedel-tool--create
-			       :name "MediaReturn"
-			       :handler (lambda (_args)
-					  (list :result "ok"
-						:media '((:path "/tmp/a.png"
-							 :mime "image/png"))))))
-			(ctx (list :tool tool :args nil))
-			out)
-		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (equal "ok" (plist-get out :result)))
-		   (should (equal '((:path "/tmp/a.png" :mime "image/png"))
-				  (plist-get out :media))))
-		 :doc "handler returning a bare string fails the step"
-		 (let* ((tool (mevedel-tool--create
-			       :name "StringReturn"
-			       :handler (lambda (_args) "invalid")))
-			(ctx (list :tool tool :args nil))
-			failure)
-		   (mevedel-pipeline--step-handler
-		    ctx #'ignore (lambda (reason) (setq failure reason)))
-		   (should (string-match-p "expected a plist containing :result"
-					   failure)))
-		 :doc "normalizes raw byte result strings before callback"
-		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
-			(tool (mevedel-tool--create
-			       :name "RawByteReturn"
-			       :handler (lambda (_args) (list :result raw))))
-			(ctx (list :tool tool :args nil))
-			out)
-		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (equal "\\x80" (plist-get out :result)))
-		   (should (equal "\\x80" (plist-get out :raw-result)))
-		   (should (json-serialize (list :result (plist-get out :result))))))
 
 (mevedel-deftest mevedel-pipeline--step-render-transform ()
 		 ,test

@@ -5,8 +5,8 @@
 ;; Sequential step-based execution engine for mevedel tools.  Each tool
 ;; invocation runs through a standard pipeline: validate -> pre-tool-hooks ->
 ;; permission -> snapshot -> handler -> repair-reminder -> render-transform ->
-;; persist -> specialist-nudges -> attach-render-data -> post-hooks ->
-;; re-persist -> attach-media.
+;; persist -> specialist-nudges -> post-hooks -> re-persist ->
+;; attach-render-data -> attach-media.
 ;; Tool handlers that need user confirmation of a file change call
 ;; `mevedel-preview-mode-add-preview' directly; there is no explicit
 ;; confirm step in the pipeline.
@@ -140,6 +140,36 @@ the minimum of the tool value and this default.")
 (defconst mevedel-pipeline--preview-size 2000
   "Number of characters to include in the preview when a result is persisted.")
 
+(defun mevedel-pipeline--head-tail-preview (result)
+  "Return a bounded head-and-tail preview of RESULT.
+Short strings pass through unchanged.  Long strings retain equal head and
+tail budgets, preferring nearby line boundaries, and report the exact number
+of omitted characters."
+  (let ((length (length result)))
+    (if (<= length mevedel-pipeline--preview-size)
+        result
+      (let* ((head-budget (/ mevedel-pipeline--preview-size 2))
+             (tail-budget (- mevedel-pipeline--preview-size head-budget))
+             (head-newline
+              (cl-position ?\n result :from-end t :end head-budget))
+             (head-end
+              (if (and head-newline
+                       (>= head-newline (/ head-budget 2)))
+                  (1+ head-newline)
+                head-budget))
+             (tail-base (- length tail-budget))
+             (tail-newline
+              (cl-position ?\n result :start tail-base
+                           :end (min length
+                                     (+ tail-base (/ tail-budget 2)))))
+             (tail-start (if tail-newline (1+ tail-newline) tail-base)))
+        (concat (substring result 0 head-end)
+                (unless (eq ?\n (aref result (1- head-end))) "\n")
+                (format
+                 "[mevedel: tool output truncated; omitted %d chars]\n"
+                 (- tail-start head-end))
+                (substring result tail-start))))))
+
 (defun mevedel-pipeline--tool-results-dir (session buffer)
   "Return SESSION's tool-results directory, materializing when possible.
 
@@ -174,20 +204,14 @@ available, falls back to `mevedel-pipeline--truncate-result'."
              (_ (make-directory dir t))
              (file (make-temp-file (file-name-concat dir (concat name "-"))
                                    nil ".txt"))
-             (preview-end (min (length result) mevedel-pipeline--preview-size))
-             ;; Cut at last newline within preview range to avoid mid-line breaks
-             (cut (let ((nl (cl-position ?\n result :from-end t
-                                         :end preview-end)))
-                    (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
-             (has-more (< cut (length result))))
+             (preview (mevedel-pipeline--head-tail-preview result)))
         (let ((coding-system-for-write 'utf-8-unix))
           (write-region result nil file nil 'silent))
         (concat "<persisted-output>\n"
                 (format "Output too large (%d chars). Full output saved to: %s\n\n"
                         (length result) file)
-                (format "Preview (first %d chars):\n" cut)
-                (substring result 0 cut)
-                (if has-more "\n...\n" "\n")
+                "Preview (head and tail):\n"
+                preview "\n"
                 "</persisted-output>"))
     (mevedel-pipeline--truncate-result result tool)))
 
@@ -197,33 +221,27 @@ available, falls back to `mevedel-pipeline--truncate-result'."
 Used when the result exceeds the size limit but no session-owned
 persistence directory is available.  TOOL is used only for the tool
 name in the message."
-  (let* ((preview-end (min (length result) mevedel-pipeline--preview-size))
-         (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
-                (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
-         (has-more (< cut (length result))))
-    (concat (format "Output too large (%d chars) and no session persistence \
+  (concat (format "Output too large (%d chars) and no session persistence \
 directory available to persist full result (tool: %s).\n\n"
-                    (length result) (mevedel-tool-name tool))
-            (format "Preview (first %d chars):\n" cut)
-            (substring result 0 cut)
-            (if has-more "\n...\n" "\n"))))
+                  (length result) (mevedel-tool-name tool))
+          "Preview (head and tail):\n"
+          (mevedel-pipeline--head-tail-preview result)
+          "\n"))
 
-(defun mevedel-pipeline--truncate-error-result (result tool)
+(defun mevedel-pipeline--truncate-error-result
+    (result tool &optional legacy-prefix-p)
   "Truncate oversized error RESULT without persisting it.
 
-The returned string keeps an `Error:' prefix so downstream hooks and
-renderers still treat the tool call as failed.  TOOL is used only for
-the tool name in the message."
+When LEGACY-PREFIX-P is non-nil, keep an `Error:' prefix for callers that
+still derive status from display text.  Structured-status callers receive a
+neutral preview.  TOOL is used only for the tool name in the message."
   (setq result (mevedel--normalize-message-text result))
-  (let* ((preview-end (min (length result) mevedel-pipeline--preview-size))
-         (cut (let ((nl (cl-position ?\n result :from-end t :end preview-end)))
-                (if (and nl (> nl (/ preview-end 2))) nl preview-end)))
-         (has-more (< cut (length result))))
-    (concat (format "Error: output too large (%d chars; tool: %s).\n\n"
-                    (length result) (mevedel-tool-name tool))
-            (format "Preview (first %d chars):\n" cut)
-            (substring result 0 cut)
-            (if has-more "\n...\n" "\n"))))
+  (concat (format "%s too large (%d chars; tool: %s).\n\n"
+                  (if legacy-prefix-p "Error: output" "Output")
+                  (length result) (mevedel-tool-name tool))
+          "Preview (head and tail):\n"
+          (mevedel-pipeline--head-tail-preview result)
+          "\n"))
 
 
 ;;
@@ -1123,12 +1141,23 @@ against the injected set."
 (defun mevedel-pipeline--handler-return-p (value)
   "Return non-nil when VALUE is a proper handler return plist.
 
-Every key must be a keyword and the plist must contain `:result'."
+Every key must be a keyword, the plist must contain `:result', and an
+explicit `:status' must be `success' or `error'."
   (and (proper-list-p value)
        (zerop (% (length value) 2))
        (cl-loop for tail on value by #'cddr
                 always (keywordp (car tail)))
-       (plist-member value :result)))
+       (plist-member value :result)
+       (or (not (plist-member value :status))
+           (memq (plist-get value :status) '(success error)))))
+
+(defun mevedel-pipeline--context-status (context)
+  "Return CONTEXT's explicit or legacy result status."
+  (or (plist-get context :status)
+      (and (stringp (plist-get context :result))
+           (string-prefix-p "Error:" (plist-get context :result))
+           'error)
+      'success))
 
 (defun mevedel-pipeline--normalize-tool-string (value)
   "Return VALUE as JSON-safe model text when VALUE is a string."
@@ -1144,11 +1173,13 @@ its first argument followed by the args plist.  For sync tools, the
 handler receives just the args plist and returns the result directly.
 
 A handler must return a plist of the form
-`(:result VALUE :render-data DATA :media ITEMS)'.  `:result' is required;
-the side-channel keys are optional.  Invalid returns are routed through
-FAIL so asynchronous handlers cannot strand the pipeline.
+`(:result VALUE :status STATUS :render-data DATA :media ITEMS)'.  `:result'
+is required; `:status' may be `success' or `error', and the side-channel keys
+are optional.  Invalid returns are routed through FAIL so asynchronous
+handlers cannot strand the pipeline.
 
-Sets `:result' and `:render-data' in CONTEXT for downstream steps;
+Sets `:result', `:status', `:render-data', and `:media' in CONTEXT for
+downstream steps;
 NEXT is called on success.  Run the handler in CONTEXT's captured dispatch
 buffer because an asynchronous permission prompt may resume from the view
 buffer."
@@ -1167,6 +1198,10 @@ buffer."
                             (plist-put updated :result result)
                             :raw-result result)
                            :render-data (plist-get raw :render-data)))
+                    (when (plist-member raw :status)
+                      (setq updated
+                            (plist-put updated :status
+                                       (plist-get raw :status))))
                     (plist-put updated :media (plist-get raw :media)))))
          (finish (lambda (raw)
                    (if (mevedel-pipeline--handler-return-p raw)
@@ -1250,7 +1285,7 @@ channel.")
 The transform receives the normalized string result before oversized
 result persistence and before render/media side-channel attachment.
 It is skipped when the handler already supplied render-data, when the
-result is not a string, or when the result is an `Error:' string.
+result is not a string, or when the result status is `error'.
 
 FAIL is unused; transform failures warn and leave CONTEXT unchanged."
   (let* ((tool (plist-get context :tool))
@@ -1262,7 +1297,7 @@ FAIL is unused; transform failures warn and leave CONTEXT unchanged."
     (if (or existing-render-data
             (not (functionp transform))
             (not (stringp result))
-            (string-prefix-p "Error:" result))
+            (eq 'error (mevedel-pipeline--context-status context)))
         (funcall next context)
       (condition-case err
           (let ((render-data (funcall transform name args result)))
@@ -1525,19 +1560,24 @@ control trusted side-channel lookup."
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed render-data from CONTEXT, then call NEXT.
 
-When CONTEXT holds a non-nil `:render-data' value and the `:result' is
-a string, append a hidden delimiter-wrapped block carrying the
-serialized render-data.  The block is propertized `invisible' for the
-data-buffer display and recognised by the view interpreter via its
-delimiters.  An `:around' advice on `gptel--parse-tool-results' strips
-the block on the LLM path only -- see
-`mevedel-pipeline--format-render-data-block'.
+When CONTEXT holds render-data or an explicit handler status and the
+`:result' is a string, append a hidden delimiter-wrapped block carrying
+the serialized data.  Explicit status is stored under `:status' for renderer
+dispatch.  The block is propertized `invisible' for the data-buffer display
+and recognised by the view interpreter via its delimiters.  An `:around'
+advice on `gptel--parse-tool-results' strips the block on the LLM path only;
+see `mevedel-pipeline--format-render-data-block'.
 
 FAIL is unused; render-data attachment never fails.
 
-When no render-data was produced, passes CONTEXT through unchanged."
-  (let ((result (plist-get context :result))
-        (render-data (plist-get context :render-data)))
+When neither was produced, passes CONTEXT through unchanged."
+  (let* ((result (plist-get context :result))
+         (status (plist-get context :status))
+         (render-data (plist-get context :render-data))
+         (render-data
+          (if status
+              (plist-put (copy-sequence render-data) :status status)
+            render-data)))
     (if (and render-data (stringp result))
         (funcall next
                  (plist-put context :result
@@ -1581,9 +1621,9 @@ When no session-owned persistence directory is available, the result
 is still truncated to the preview size to prevent context overflow --
 only the file write is skipped.
 
-Skips entirely when the result is not a string.  Oversized error
-results are truncated, not persisted, and keep an `Error:' prefix so
-failure status is preserved.
+Skips entirely when the result is not a string.  Oversized error results are
+truncated rather than persisted.  Explicit handler status takes precedence;
+legacy handlers continue to derive error status from an `Error:' prefix.
 CONTEXT must contain :tool and :result.  NEXT is called with the
 possibly-updated context."
   (let* ((tool (plist-get context :tool))
@@ -1597,10 +1637,12 @@ possibly-updated context."
           (not (stringp result))
           (<= (length result) effective))
       (funcall next context))
-     ((string-prefix-p "Error:" result)
+     ((eq 'error (mevedel-pipeline--context-status context))
       (funcall next
                (plist-put context :result
-                          (mevedel-pipeline--truncate-error-result result tool))))
+                          (mevedel-pipeline--truncate-error-result
+                           result tool
+                           (not (plist-member context :status))))))
      (t
       ;; Result exceeds limit -- persist or truncate.  Session/buffer
       ;; context was captured at `mevedel-pipeline-run-tool'
@@ -1628,8 +1670,8 @@ explicit `:updated-result' changes the model-visible tool result."
           (mevedel-tool-media-result-for-hooks
            (mevedel-pipeline--strip-non-media-side-channel-blocks
             (plist-get context :raw-result))))
-         (event (if (and (stringp result)
-                         (string-prefix-p "Error:" result))
+         (error-p (eq 'error (mevedel-pipeline--context-status context)))
+         (event (if error-p
                     'PostToolUseFailure
                   'PostToolUse))
          (session (plist-get context :session))
@@ -1641,9 +1683,7 @@ explicit `:updated-result' changes the model-visible tool result."
       :raw-result raw-result
       :result model-result
       :tool-response model-result
-      :error (and (stringp result)
-                  (string-prefix-p "Error:" result)
-                  result))
+      :error (and error-p result))
      (lambda (decision)
        (let ((context (mevedel-pipeline--record-hook-context
                        context decision event)))
@@ -1704,19 +1744,19 @@ Returns a list of step functions based on TOOL's behavioral flags:
   7. render-transform    -- always included; no-op when tool has none
   8. persist             -- included when max-result-size is set
   9. specialist-nudges   -- bounded guidance for generic code tools
-  10. attach-render-data -- always included; no-op when handler returned
-                            no render-data
-  11. post-tool-hooks    -- always included
-  12. persist            -- included when max-result-size is set; bounds
+  10. post-tool-hooks    -- always included
+  11. persist            -- included when max-result-size is set; bounds
                             hook-updated results
+  12. attach-render-data -- always included; no-op when handler returned
+                            neither render-data nor explicit status
   13. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
+    (push #'mevedel-pipeline--step-attach-render-data steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-post-tool-hooks steps)
-    (push #'mevedel-pipeline--step-attach-render-data steps)
     (push #'mevedel-pipeline--step-specialist-nudges steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))

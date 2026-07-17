@@ -1131,9 +1131,12 @@ insert a non-string or `funcall' a non-symbol."
               (or (not (plist-member p :expandable-p))
                   (memq expandable '(nil t)))))))
 
-(defun mevedel-view--tool-render-status (result)
-  "Return the renderer dispatch status for RESULT."
-  (if (mevedel-view--tool-result-error-p result) 'error 'success))
+(defun mevedel-view--tool-render-status (result &optional render-data)
+  "Return the renderer dispatch status for RESULT and RENDER-DATA."
+  (or (and (memq (plist-get render-data :status) '(success error))
+           (plist-get render-data :status))
+      (and (mevedel-view--tool-result-error-p result) 'error)
+      'success))
 
 (defun mevedel-view--renderer-for-status (renderer status)
   "Return renderer function from RENDERER for STATUS, or nil.
@@ -1171,8 +1174,11 @@ The renderer receives RENDER-DATA as-is (possibly nil): data-driven
 renderers like the Edit/Write diff summary can check for their kind
 and opt out; output-driven renderers (Grep, Bash, Read, ...) work
 straight off ARGS and RESULT without needing render-data."
-  (let* ((renderer (and tool (mevedel-tool-renderer tool)))
-         (status (mevedel-view--tool-render-status result))
+  (let* ((explicit-status
+          (and (memq (plist-get render-data :status) '(success error))
+               (plist-get render-data :status)))
+         (renderer (and tool (mevedel-tool-renderer tool)))
+         (status (mevedel-view--tool-render-status result render-data))
          (fn (and renderer
                   (mevedel-view--renderer-for-status renderer status))))
     (when renderer
@@ -1191,7 +1197,11 @@ straight off ARGS and RESULT without needing render-data."
               (let ((plist (funcall fn tool-label args result render-data)))
                 (cond
                  ((null plist) nil)
-                 ((mevedel-view--rendering-plist-p plist) plist)
+                 ((mevedel-view--rendering-plist-p plist)
+                  (if explicit-status
+                      (plist-put (copy-sequence plist)
+                                 :status explicit-status)
+                    plist))
                  (t
                   (display-warning
                    'mevedel
@@ -1221,18 +1231,20 @@ straight off ARGS and RESULT without needing render-data."
           (setq pos (1+ next))))
       lines)))
 
-(defun mevedel-view--generic-tool-rendering (name args result &optional collapsed-only)
+(defun mevedel-view--generic-tool-rendering
+    (name args result &optional collapsed-only render-data)
   "Return a generic rendering plist for parsed tool NAME, ARGS, and RESULT.
 This is used for tools without a custom renderer, including third-party
 and MCP-style tools that are not registered in mevedel's tool registry.
-When COLLAPSED-ONLY is non-nil, omit the body from the returned plist."
+When COLLAPSED-ONLY is non-nil, omit the body from the returned plist.
+RENDER-DATA may carry the pipeline's structured `:status'."
   (let* ((tool-name (or name "Tool"))
          (primary (and (listp args)
                        (condition-case nil
                            (mevedel-tool-display-string tool-name args)
                          (error nil))))
          (lines (mevedel-view--tool-result-line-count result))
-         (status (mevedel-view--tool-render-status result))
+         (status (mevedel-view--tool-render-status result render-data))
          (metadata (if (eq status 'error)
                        "error"
                      (format "%d %s" lines
@@ -1540,16 +1552,17 @@ RAW is an optional precomputed expanded tool segment text."
     (let* ((name (plist-get call :name))
            (args (plist-get call :args))
            (result (plist-get call :result))
+           (render-data (plist-get call :render-data))
            (tool (mevedel-tool-get name))
            (custom (and tool
                         (mevedel-view--invoke-renderer
                          tool
-                         (plist-get call :render-data)
+                         render-data
                          args
                          result)))
            (rendering (or custom
                           (mevedel-view--generic-tool-rendering
-                           name args result collapsed-only))))
+                           name args result collapsed-only render-data))))
       (when-let* ((audits (append (plist-get rendering :hook-audits)
                                   (plist-get call :hook-audits))))
         (setq rendering (plist-put rendering :hook-audits audits)))

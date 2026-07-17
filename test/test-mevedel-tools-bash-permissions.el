@@ -1994,7 +1994,7 @@ default Bash keeps bare dot inspection automatic"
           (should (member '("Bash" :pattern "git describe:*" :action allow)
                           (mevedel-session-permission-rules session))))
       (delete-directory root t)
-      (mevedel-workspace-clear-registry)))
+      (mevedel-workspace-clear-registry))))
 
 
 ;;
@@ -2049,6 +2049,26 @@ default Bash keeps bare dot inspection automatic"
     (should-not (nth 6 captured))
     (should (eq 'require-escalated (nth 7 captured)))
     (should (string-match-p "sandbox: escalated" result)))
+  :doc "passes large output intact to the shared pipeline"
+  (let ((output (concat (make-string 550000 ?h)
+                        (make-string 50000 ?t)))
+        result)
+    (cl-letf (((symbol-function
+                'mevedel-tool-exec--start-sandboxed-child-process)
+               (lambda (&rest args)
+                 (funcall (nth 5 args)
+                          (list :exit-code 0 :output output :timed-out-p nil
+                                :sandbox-facts
+                                '(:sandbox bubblewrap
+                                  :filesystem workspace-write
+                                  :network isolated))))))
+      (mevedel-tool-exec--bash
+       (lambda (envelope)
+         (setq result (test-bash-permissions--handler-result envelope)))
+       '(:command "noisy-command")))
+    (should (string-prefix-p (make-string 100 ?h) result))
+    (should (string-search (make-string 100 ?t) result))
+    (should-not (string-search "Output truncated" result)))
   :doc "executes simple command and returns output"
   (let ((result nil)
         (done nil))
@@ -2220,7 +2240,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "nil default disables even per-call timeout"
   (let ((mevedel-bash-timeout nil))
     (should (null (mevedel-tool-exec--bash-timeout-seconds
-                   (list :timeout_seconds 1))))))
+                   (list :timeout_seconds 1)))))
 
 (mevedel-deftest mevedel-tool-exec--start-child-process ()
   ,test
@@ -2913,6 +2933,16 @@ default Bash keeps bare dot inspection automatic"
        (setq result (test-bash-permissions--handler-result r)))
      (list :expression "(princ \"hello world\")"))
     (should (string-match-p "STDOUT:\nhello world" result)))
+  :doc "passes large live output intact to the shared pipeline"
+  (let (result)
+    (mevedel-tool-exec--eval
+     (lambda (r)
+       (setq result (test-bash-permissions--handler-result r)))
+     (list :expression
+           "(progn (princ (make-string 550000 ?h)) (princ (make-string 50000 ?t)) 42)"
+           :mode "live"))
+    (should (string-search (make-string 100 ?t) result))
+    (should-not (string-search "Output truncated" result)))
   :doc "reports eval errors"
   (let (result)
     (mevedel-tool-exec--eval
@@ -3093,19 +3123,19 @@ default Bash keeps bare dot inspection automatic"
                    result)))
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
-  :doc "truncates oversized batch error output"
-  (let ((mevedel-tool-exec--max-output-bytes 128)
-        result)
+  :doc "preserves large batch error output for shared pipeline persistence"
+  (let (result)
     (mevedel-tool-exec--eval
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)))
-     (list :expression "(progn (princ (make-string 2048 ?a)) (error \"boom\"))"
+     (list :expression
+           "(progn (princ (make-string 550000 ?h)) (princ (make-string 50000 ?t)) (error \"boom\"))"
            :mode "batch"))
     (while (null result)
       (accept-process-output nil 0.1))
     (should (string-prefix-p "Error:" result))
-    (should (string-match-p "Output truncated" result))
-    (should (< (length result) 512))))
+    (should (string-search (make-string 100 ?t) result))
+    (should-not (string-search "Output truncated" result))))
 
 
 ;;
