@@ -1149,7 +1149,9 @@ the side-channel keys are optional.  Invalid returns are routed through
 FAIL so asynchronous handlers cannot strand the pipeline.
 
 Sets `:result' and `:render-data' in CONTEXT for downstream steps;
-NEXT is called on success."
+NEXT is called on success.  Run the handler in CONTEXT's captured dispatch
+buffer because an asynchronous permission prompt may resume from the view
+buffer."
   (let* ((tool (plist-get context :tool))
          (handler (mevedel-tool-handler tool))
          (args (plist-get context :args))
@@ -1171,12 +1173,21 @@ NEXT is called on success."
                        (funcall next (funcall store raw))
                      (funcall fail
                               (format "Tool %s handler returned invalid value; expected a plist containing :result"
-                                      (mevedel-tool-name tool)))))))
-    (mevedel-tool-repair-mark-executed repair-entry)
-    (mevedel-pipeline--record-use tool)
-    (if (mevedel-tool-async-p tool)
-        (funcall handler finish args)
-      (funcall finish (funcall handler args)))))
+                                      (mevedel-tool-name tool))))))
+         (invoke
+          (lambda ()
+            (mevedel-tool-repair-mark-executed repair-entry)
+            (mevedel-pipeline--record-use tool)
+            (if (mevedel-tool-async-p tool)
+                (funcall handler finish args)
+              (funcall finish (funcall handler args)))))
+         (dispatch-buffer (plist-get context :buffer)))
+    (cond
+     ((null dispatch-buffer) (funcall invoke))
+     ((buffer-live-p dispatch-buffer)
+      (with-current-buffer dispatch-buffer
+        (funcall invoke)))
+     (t (funcall fail "Tool dispatch buffer is no longer live")))))
 
 (defun mevedel-pipeline--step-repair-reminder (context next _fail)
   "Append one model-facing reminder for committed input repairs in CONTEXT."
