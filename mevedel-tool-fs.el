@@ -304,7 +304,8 @@ via `mevedel-view--fontify-as'."
 NAME is \"Read\".  ARGS carries `:file_path'.  RESULT is the line-numbered
 file content.  Header shows the file basename and line count; body
 fontifies as the file's natural mode when detectable from extension."
-  (when (stringp result)
+  (when (and (stringp result)
+             (not (string-match-p "\\`[ \t\n]*Error:" result)))
     (let* ((path (plist-get args :file_path))
            (visible (mevedel-tool-fs--strip-system-reminders result))
            (metadata (mevedel-tool-fs--read-render-metadata path visible))
@@ -1527,7 +1528,7 @@ and :content."
       (error
        (funcall callback
                 (mevedel-tool-fs--handler-result
-                 (format "Error writing file %s: %s"
+                 (format "Error: Writing file %s failed: %s"
                          file-path (error-message-string err))))))))
 
 (defun mevedel-tool-fs--edit (callback args)
@@ -1584,7 +1585,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :file_path,
       (error
        (funcall callback
                 (mevedel-tool-fs--handler-result
-                 (format "Error editing file %s: %s"
+                 (format "Error: Editing file %s failed: %s"
                          file-path (error-message-string err))))))))
 
 (defun mevedel-tool-fs--apply-string-replacement (temp-file old-string new-string replace-all callback)
