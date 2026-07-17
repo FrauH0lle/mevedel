@@ -2145,9 +2145,12 @@ stopped command's outcome."
   "Execute a Bash command and return its output.
 CALLBACK receives the result envelope.  ARGS is a plist with :command
 and optional :timeout_seconds."
-  (let ((command (plist-get args :command)))
+  (let ((command (plist-get args :command))
+        (tty (plist-get args :tty)))
     (unless (stringp command)
       (error "Parameter command is required"))
+    (unless (memq tty '(nil t :json-false))
+      (error "Parameter tty must be a boolean"))
     (let* ((analysis (mevedel-tool-exec--analyze-bash command))
            (_ (when (plist-get analysis :background-p)
                 (error "Shell-native background execution is not supported; use yield_time_ms")))
@@ -2172,7 +2175,7 @@ and optional :timeout_seconds."
        :command (list "bash" "-lc" command)
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
-       :timeout timeout
+       :timeout timeout :tty (eq tty t)
        :yield-time-ms yield-time-ms
        :artifact-directory
        (mevedel-tool-exec--execution-artifact-directory session)
@@ -2512,6 +2515,8 @@ Header shows a truncated first line of the command; body fontifies as
                             "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive.")
            (yield_time_ms integer :optional
                           "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000.")
+           (tty boolean :optional
+                "Allocate a PTY and retain stdin for prompts or REPL input. Defaults to false.")
            (sandbox_permissions string :optional
                                 "Child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
                                 :enum ["use_default"
@@ -2551,7 +2556,7 @@ Header shows a truncated first line of the command; body fontifies as
     :args ((execution_id string :required
                          "Opaque execution ID returned by Bash.")
            (chars string :optional
-                  "Input bytes to send. Omit or use an empty string to poll. Pipe-mode executions reject input.")
+                  "Input to send. Omit or use an empty string to poll. Ordinary input requires a PTY; a single Ctrl-C character interrupts either mode.")
            (yield_time_ms integer :optional
                           "Wait before returning: polls default to 5000ms (5000-300000); input defaults to 250ms (250-30000)."))
     :async-p t

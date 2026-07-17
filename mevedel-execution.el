@@ -3,8 +3,9 @@
 ;;; Commentary:
 
 ;; Owns model-triggered operating-system processes: stable environments,
-;; process groups, confinement, timeouts, bounded disk spooling, and private
-;; process records.  Callers receive result plists and never process objects.
+;; process groups, optional PTYs, confinement, timeouts, bounded disk spooling,
+;; and private process records.  Callers receive result plists and never process
+;; objects.
 
 ;;; Code:
 
@@ -101,7 +102,7 @@ the complete spool remains at the path in the execution facts."
   exit-code
   finished-p
   force-timer
-  group-file
+  group-id
   last-byte-newline-p
   marker
   marker-buffer
@@ -128,6 +129,7 @@ the complete spool remains at the path in the execution facts."
   timeout
   timeout-timer
   token
+  tty-p
   unread-chars
   unread-head
   unread-tail
@@ -174,63 +176,27 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 ;;
 ;;; Process groups and output spooling
 
-(defun mevedel-execution--spawn-command (command)
-  "Return process-group spawn metadata for COMMAND."
-  (let ((setsid (and (not (eq system-type 'windows-nt))
-                     (executable-find "setsid"))))
-    (if (not setsid)
-        (list :command command)
-      (let ((group-file (make-temp-file "mevedel-child-group-")))
-        (list
-         :command
-         (append
-          (list "sh" "-c"
-                "exec 3>&2; exec \"$@\" 2>/dev/null"
-                "mevedel-setsid" setsid "-f" "-w"
-                "sh" "-c"
-                "exec 2>&3; printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\""
-                "mevedel-child" group-file)
-          command)
-         :group-file group-file)))))
-
-(defun mevedel-execution--group-id (group-file)
-  "Return the positive process group id recorded in GROUP-FILE."
-  (when (and group-file (file-readable-p group-file))
-    (let ((id
-           (string-to-number
-            (string-trim
-             (with-temp-buffer
-               (insert-file-contents group-file)
-               (buffer-string))))))
-      (and (> id 0) id))))
-
 (defun mevedel-execution--signal-record (record signal)
   "Send SIGNAL to RECORD's process group when available."
   (let* ((process (mevedel-execution--record-process record))
-         (group-id
-          (mevedel-execution--group-id
-           (mevedel-execution--record-group-file record)))
-         (target (or group-id
-                     (and (processp process) (process-id process)))))
+         (group-id (mevedel-execution--record-group-id record)))
     (condition-case nil
-        (if (and group-id (> group-id 0))
+        (if (and (not (eq system-type 'windows-nt))
+                 (integerp group-id) (> group-id 0))
             (signal-process (- group-id) signal)
-          (when (and (integerp target) (> target 0))
-            (signal-process target signal)))
+          (when (process-live-p process)
+            (signal-process process signal)))
       (error
        (when (process-live-p process)
          (ignore-errors (signal-process process signal)))))))
 
 (defun mevedel-execution--group-live-p (record)
   "Return non-nil when RECORD's process group still has a member."
-  (when-let* ((group-id
-              (mevedel-execution--group-id
-               (mevedel-execution--record-group-file record))))
-    (condition-case nil
-        (progn
-          (signal-process (- group-id) 0)
-          t)
-      (error nil))))
+  (unless (eq system-type 'windows-nt)
+    (when-let* ((group-id (mevedel-execution--record-group-id record)))
+      (condition-case nil
+          (zerop (signal-process (- group-id) 0))
+        (error nil)))))
 
 (defun mevedel-execution--append-output (record chunk)
   "Append bounded raw output CHUNK to RECORD's spool."
@@ -275,14 +241,12 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
     (set-process-query-on-exit-flag process nil)
     (when (process-live-p process)
       (ignore-errors (delete-process process))))
-  (when-let* ((group-file (mevedel-execution--record-group-file record)))
-    (ignore-errors (delete-file group-file)))
   (when-let* ((active-token
               (mevedel-execution--record-sandbox-active-token record)))
     (mevedel-sandbox-track-active
      (mevedel-execution--record-session record) active-token nil))
   (setf (mevedel-execution--record-process record) nil
-        (mevedel-execution--record-group-file record) nil
+        (mevedel-execution--record-group-id record) nil
         (mevedel-execution--record-sandbox-active-token record) nil))
 
 (defun mevedel-execution--cleanup-record (record &optional preserve-spool)
@@ -366,28 +330,33 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
   "Clean remaining descendants, or settle RECORD after its shell exits."
   (setf (mevedel-execution--record-settle-timer record) nil)
   (if (mevedel-execution--group-live-p record)
-      (mevedel-execution--begin-stop record 'exited)
+      (mevedel-execution--begin-stop
+       record (or (mevedel-execution--record-termination record) 'exited))
     (mevedel-execution--finish-managed record)))
 
 (defun mevedel-execution--process-ended (record process)
   "Settle RECORD when PROCESS reaches a terminal state."
-  (when (memq (process-status process) '(exit signal))
-    (setf (mevedel-execution--record-exit-code record)
-          (process-exit-status process))
-    (if (mevedel-execution--record-execution-id record)
-        (unless (or (and (mevedel-execution--record-stop-p record)
-                         (timerp
-                          (mevedel-execution--record-force-timer record)))
-                    (timerp
-                     (mevedel-execution--record-settle-timer record)))
-          (setf (mevedel-execution--record-settle-timer record)
-                (run-at-time
-                 0.02 nil
-                 #'mevedel-execution--settle-managed-main-exit record)))
-      (unless (and (mevedel-execution--record-stop-p record)
-                   (timerp (mevedel-execution--record-force-timer record)))
-        (mevedel-execution--finish-record
-         record (mevedel-execution--record-exit-code record))))))
+  (let ((status (process-status process)))
+    (when (memq status '(exit signal))
+      (let ((exit-code (process-exit-status process)))
+        (setf (mevedel-execution--record-exit-code record) exit-code)
+        (when (and (not (mevedel-execution--record-termination record))
+                   (eq status 'signal))
+          (setf (mevedel-execution--record-termination record) 'signaled)))
+      (if (mevedel-execution--record-execution-id record)
+          (unless (or (and (mevedel-execution--record-stop-p record)
+                           (timerp
+                            (mevedel-execution--record-force-timer record)))
+                      (timerp
+                       (mevedel-execution--record-settle-timer record)))
+            (setf (mevedel-execution--record-settle-timer record)
+                  (run-at-time
+                   0.02 nil
+                   #'mevedel-execution--settle-managed-main-exit record)))
+        (unless (and (mevedel-execution--record-stop-p record)
+                     (timerp (mevedel-execution--record-force-timer record)))
+          (mevedel-execution--finish-record
+           record (mevedel-execution--record-exit-code record)))))))
 
 (defun mevedel-execution--launch-record
     (record name command workdir coding filter)
@@ -397,20 +366,22 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
           (or (and (stringp executable) (executable-find executable))
               (signal 'file-missing
                       (list "Executable not found" executable))))
-         (spawn (mevedel-execution--spawn-command command))
          (process-environment (mevedel-execution--process-environment))
          (default-directory workdir))
-    (setf (mevedel-execution--record-group-file record)
-          (plist-get spawn :group-file)
-          (mevedel-execution--record-process record)
+    (setf (mevedel-execution--record-process record)
           (make-process
-           :name name :buffer nil :command (plist-get spawn :command)
-           :coding coding :connection-type 'pipe
+           :name name :buffer nil :command command
+           :coding coding
+           :connection-type
+           (if (mevedel-execution--record-tty-p record) 'pty 'pipe)
            :filter (lambda (_process chunk) (funcall filter record chunk))
            :noquery t
            :sentinel (lambda (process _event)
                        (mevedel-execution--process-ended record process))))
-    (process-send-eof (mevedel-execution--record-process record))
+    (setf (mevedel-execution--record-group-id record)
+          (process-id (mevedel-execution--record-process record)))
+    (unless (mevedel-execution--record-tty-p record)
+      (process-send-eof (mevedel-execution--record-process record)))
     ;; A terminal status can be visible while sentinels are inhibited.
     (setf (mevedel-execution--record-watch-timer record)
           (run-at-time
@@ -583,7 +554,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
           :output-lines (mevedel-execution--managed-lines record)
           :omitted-output-bytes
           (or (mevedel-execution--record-omitted-output-bytes record) 0)
-          :tty nil
+          :tty (and (mevedel-execution--record-tty-p record) t)
           :output-path
           (and (mevedel-execution--record-retained-p record)
                (mevedel-execution--record-spool-path record)))))
@@ -774,12 +745,13 @@ delivery and retire the private handle while preserving retained artifacts."
 (cl-defun mevedel-execution-start-bash
     (callback &key session owner request command workdir writable-roots timeout
               additional-permissions sandbox-permissions artifact-directory
-              (yield-time-ms 10000))
-  "Start managed pipe-mode Bash COMMAND and call CALLBACK at terminal or yield.
+              tty (yield-time-ms 10000))
+  "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
 
 SESSION and canonical OWNER fix the control boundary.  REQUEST owns the
 foreground lifetime only.  Remaining confinement arguments match the one-shot
 interface.  ARTIFACT-DIRECTORY owns the spool retained after yield.
+TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement."
   (require 'mevedel-sandbox)
@@ -808,7 +780,8 @@ terminal settlement."
              (make-temp-file
               (file-name-concat artifact-directory "execution-") nil ".log")
              :started-at (float-time) :timeout timeout :token id
-             :workdir workdir :yield-time-ms yield-time-ms)))
+             :tty-p (and tty t) :workdir workdir
+             :yield-time-ms yield-time-ms)))
       (puthash id record (mevedel-execution--state-records state))
       (pcase (plist-get preparation :state)
         ('refused
@@ -869,17 +842,45 @@ terminal settlement."
     (session owner execution-id callback &key chars (wait-ms 0) request)
   "Observe unread output from owner-scoped yielded EXECUTION-ID.
 
-CHARS must be empty in pipe mode.  CALLBACK receives immediately for terminal
-state or after WAIT-MS while the process remains live."
-  (let ((record
-         (mevedel-execution--owned-yielded-record
-          session owner execution-id)))
-    (when (and (stringp chars) (not (string-empty-p chars)))
+Ordinary non-empty CHARS require a PTY; a single Ctrl-C character interrupts
+either process mode.  CALLBACK receives immediately for terminal state or
+after WAIT-MS while the process remains live."
+  (let* ((record
+          (mevedel-execution--owned-yielded-record
+           session owner execution-id))
+         (input-p (and (stringp chars) (not (string-empty-p chars)))))
+    (unless (or (null chars) (stringp chars))
       (signal 'mevedel-execution-input-error
-              (list "Pipe-mode Bash stdin is closed")))
+              (list "Execution input must be a string")))
+    (when (and input-p (mevedel-execution--record-observer record))
+      (mevedel-execution--flush-observer record))
     (when (mevedel-execution--record-observer record)
       (signal 'mevedel-execution-error
               (list "An observation is already waiting")))
+    (when input-p
+      (cond
+       ((equal chars (string 3))
+        (unless (or (mevedel-execution--record-finished-p record)
+                    (mevedel-execution--record-stop-p record)
+                    (not (process-live-p
+                          (mevedel-execution--record-process record))))
+          (mevedel-execution--signal-record record 'INT)))
+       ((not (mevedel-execution--record-tty-p record))
+        (signal 'mevedel-execution-input-error
+                (list "Pipe-mode Bash stdin is closed")))
+       ((or (mevedel-execution--record-finished-p record)
+            (mevedel-execution--record-stop-p record)
+            (not (process-live-p
+                  (mevedel-execution--record-process record))))
+        (signal 'mevedel-execution-input-error
+                (list "Execution is no longer running")))
+       (t
+        (condition-case nil
+            (process-send-string
+             (mevedel-execution--record-process record) chars)
+          (error
+           (signal 'mevedel-execution-input-error
+                   (list "Execution is no longer running")))))))
     (cond
      ((mevedel-execution--record-finished-p record)
       (funcall callback (mevedel-execution--observation record t)))

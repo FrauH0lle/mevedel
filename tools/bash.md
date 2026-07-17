@@ -21,8 +21,10 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
   `execution_id` when the command is still running. Use `WriteStdin` with empty
   `chars` to poll unread output, `ListExecutions` to list your yielded commands,
   and `StopExecution` to stop one
-- Pipe-mode stdin is closed. Ordinary `WriteStdin` input requires an explicit
-  PTY execution; polling does not
+- Pipe-mode stdin is closed. Set `tty=true` only for prompts, REPLs, or commands
+  whose terminal behavior is required; PTY stdin stays writable
+- `WriteStdin` sends ordinary input only to PTY executions. A single Ctrl-C
+  character interrupts the process group in either PTY or pipe mode
 - Do not use shell-native backgrounding (`&`). Lower `yield_time_ms` when a
   command should yield quickly
 - Quote file paths with spaces using double quotes
