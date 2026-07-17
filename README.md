@@ -65,6 +65,8 @@ Key features:
   multi-agent workflows
 - [ripgrep](https://github.com/BurntSushi/ripgrep) for search tools and `@file`
   directory listings
+- [Bubblewrap](https://github.com/containers/bubblewrap) on Linux for Bash and
+  batch Eval child confinement
 - Optional: [mcp.el](https://github.com/lizqwerscott/mcp.el) for `@mcp` mentions
 - Optional: Poppler (`pdftoppm`) for rendering selected PDF pages with `Read`
 - Optional: ImageMagick (`magick` or `convert`) for image/PDF resize and
@@ -712,18 +714,21 @@ login initialization is covered by the same output capture and timeout.
 
 **Child confinement** (`mevedel-sandbox-mode`): Bash and batch Eval use
 Bubblewrap on Linux when available. Mevedel finds `bwrap` through the current
-executable path and probes the real namespace profile before first use. The
-confined profile exposes the host read-only, reopens allowed roots writable,
-uses the session working directory, and gives descendants fresh process and
-network namespaces. `auto` falls back to direct execution only when the
-requested process has not started and reports unrestricted filesystem and
-network access; `required` refuses instead; `off` runs directly with the same
-unrestricted disclosure. Every child result includes the active confinement
-facts. Protected glob matches are resolved to concrete paths after writable
-roots are mounted: read-only paths are rebound immutable, inaccessible paths
-are hidden, Git directory pointer targets follow `.git`, and writable symlink
-ambiguity refuses execution. Custom entries use the same alist shape, for
-example `(("~/public-metadata/**" . read-only)
+executable path and probes the real namespace profile before first use. Each
+probe attempt is time-bounded and retains at most 64 KiB of diagnostics. If the
+host rejects only a fresh `/proc` mount, Mevedel retains filesystem, process,
+and network confinement while using the host `/proc` view and discloses that
+fact as `proc: host`. The confined profile exposes the host read-only, reopens
+allowed roots writable, uses the session working directory, and gives
+descendants fresh process and network namespaces. `auto` falls back to direct
+execution only when the requested process has not started and reports
+unrestricted filesystem and network access; `required` refuses instead; `off`
+runs directly with the same unrestricted disclosure. Every child result
+includes the active confinement facts. Protected glob matches are resolved to
+concrete paths after writable roots are mounted: read-only paths are rebound
+immutable, inaccessible paths are hidden, Git directory pointer targets follow
+`.git`, and writable symlink ambiguity refuses execution. Custom entries use
+the same alist shape, for example `(("~/public-metadata/**" . read-only)
           ("~/.credentials/**" . inaccessible))`.
 
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk

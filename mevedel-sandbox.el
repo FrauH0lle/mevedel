@@ -38,6 +38,11 @@ directly and visibly disables confinement."
           (const :tag "Off -- execute directly with disclosure" off))
   :group 'mevedel)
 
+(defcustom mevedel-sandbox-probe-timeout 0.5
+  "Maximum seconds to wait for a Bubblewrap capability probe."
+  :type 'number
+  :group 'mevedel)
+
 (defvar mevedel-sandbox--probe-cache nil
   "Cached Bubblewrap availability plist, or nil before the first probe.")
 
@@ -55,6 +60,9 @@ directly and visibly disables confinement."
   "printf '%s\\n' \"$1\"; shift; exec \"$@\""
   "Shell wrapper that records entry into the requested process boundary.")
 
+(defconst mevedel-sandbox--probe-output-limit (* 64 1024)
+  "Maximum bytes of combined Bubblewrap probe output to retain.")
+
 (define-error 'mevedel-sandbox-policy-error
   "Invalid child-confinement authority")
 
@@ -62,18 +70,103 @@ directly and visibly disables confinement."
 ;;
 ;;; Bubblewrap profile
 
-(defun mevedel-sandbox--probe-command (executable)
-  "Return a harmless confinement probe command for EXECUTABLE."
-  (list executable
-        "--new-session"
-        "--die-with-parent"
-        "--ro-bind" "/" "/"
-        "--dev" "/dev"
-        "--unshare-user"
-        "--unshare-pid"
-        "--unshare-net"
-        "--proc" "/proc"
-        "--" (or (executable-find "true") "/bin/true")))
+(defun mevedel-sandbox--probe-command (executable &optional omit-proc-p)
+  "Return a harmless confinement probe command for EXECUTABLE.
+OMIT-PROC-P leaves the host proc filesystem visible through the root bind."
+  (append
+   (list executable
+         "--new-session"
+         "--die-with-parent"
+         "--ro-bind" "/" "/"
+         "--dev" "/dev"
+         "--unshare-user"
+         "--unshare-pid"
+         "--unshare-net")
+   (unless omit-proc-p (list "--proc" "/proc"))
+   (list "--" (or (executable-find "true") "/bin/true"))))
+
+(defun mevedel-sandbox--run-probe (command)
+  "Run Bubblewrap probe COMMAND within the configured time bound."
+  (let ((output-buffer (generate-new-buffer " *mevedel-bwrap-probe*"))
+        (deadline (+ (float-time) mevedel-sandbox-probe-timeout))
+        process stderr-process timed-out result)
+    (unwind-protect
+        (condition-case err
+            (progn
+              (with-current-buffer output-buffer
+                (set-buffer-multibyte nil))
+              (let ((filter
+                     (lambda (_process output)
+                       (when (buffer-live-p output-buffer)
+                         (with-current-buffer output-buffer
+                           (let ((remaining
+                                  (- mevedel-sandbox--probe-output-limit
+                                     (buffer-size))))
+                             (when (> remaining 0)
+                               (insert
+                                (substring output 0
+                                           (min remaining
+                                                (length output)))))))))))
+                (setq stderr-process
+                      (make-pipe-process
+                       :name "mevedel-bwrap-probe-stderr"
+                       :buffer output-buffer
+                       :coding 'no-conversion
+                       :filter filter
+                       :noquery t
+                       :sentinel #'ignore))
+              (setq process
+                    (make-process
+                     :name "mevedel-bwrap-probe"
+                     :buffer output-buffer
+                     :stderr stderr-process
+                     :command command
+                     :coding 'no-conversion
+                     :connection-type 'pipe
+                     :filter filter
+                     :noquery t
+                     :sentinel #'ignore)))
+              (while (and (process-live-p process)
+                          (< (float-time) deadline))
+                (accept-process-output
+                 process (max 0 (- deadline (float-time)))))
+              (when (process-live-p process)
+                (setq timed-out t)
+                (delete-process process))
+              (accept-process-output process 0.01)
+              (setq result
+                    (list :status (process-exit-status process)
+                          :output (with-current-buffer output-buffer
+                                    (buffer-string))
+                          :timed-out-p timed-out)))
+          (error
+           (setq result (list :error (error-message-string err)))))
+      (when (process-live-p process)
+        (delete-process process))
+      (when (process-live-p stderr-process)
+        (delete-process stderr-process))
+      (when (buffer-live-p output-buffer)
+        (kill-buffer output-buffer)))
+    result))
+
+(defun mevedel-sandbox--probe-succeeded-p (probe)
+  "Return non-nil when PROBE completed successfully."
+  (let ((status (plist-get probe :status)))
+    (and (integerp status) (zerop status))))
+
+(defun mevedel-sandbox--probe-failure-reason (probe)
+  "Return a concise diagnostic for failed PROBE facts."
+  (let ((status (plist-get probe :status))
+        (detail (string-trim (or (plist-get probe :output) ""))))
+    (cond
+     ((plist-get probe :timed-out-p)
+      "Bubblewrap probe timed out")
+     ((plist-get probe :error)
+      (format "Bubblewrap probe failed: %s" (plist-get probe :error)))
+     ((string-empty-p detail)
+      (format "Bubblewrap probe failed with exit code %s" status))
+     (t
+      (format "Bubblewrap probe failed: %s" detail)))))
 
 (defun mevedel-sandbox-probe ()
   "Return and cache the availability facts for Linux Bubblewrap.
@@ -90,29 +183,31 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
          (let ((executable (executable-find "bwrap")))
            (if (not executable)
                (list :available nil :reason "'bwrap' is not installed")
-             (with-temp-buffer
-               (condition-case err
-                   (let ((status
-                          (apply #'call-process executable nil t nil
-                                 (cdr (mevedel-sandbox--probe-command
-                                       executable)))))
-                     (if (and (integerp status) (zerop status))
-                         (list :available t :executable executable)
-                       (list :available nil
+             (let ((probe
+                    (mevedel-sandbox--run-probe
+                     (mevedel-sandbox--probe-command executable))))
+               (cond
+                ((mevedel-sandbox--probe-succeeded-p probe)
+                 (list :available t :executable executable :mount-proc t))
+                ((or (plist-get probe :timed-out-p)
+                     (plist-get probe :error))
+                 (list :available nil
+                       :executable executable
+                       :reason
+                       (mevedel-sandbox--probe-failure-reason probe)))
+                (t
+                 (let ((without-proc
+                        (mevedel-sandbox--run-probe
+                         (mevedel-sandbox--probe-command executable t))))
+                   (if (mevedel-sandbox--probe-succeeded-p without-proc)
+                       (list :available t
                              :executable executable
-                             :reason
-                             (format "Bubblewrap probe failed%s"
-                                     (let ((detail
-                                            (string-trim (buffer-string))))
-                                       (if (string-empty-p detail)
-                                           (format " with exit code %s" status)
-                                         (format ": %s" detail)))))))
-                 (error
-                  (list :available nil
-                        :executable executable
-                        :reason
-                        (format "Bubblewrap probe failed: %s"
-                                (error-message-string err))))))))))))
+                             :mount-proc nil)
+                     (list :available nil
+                           :executable executable
+                           :reason
+                           (mevedel-sandbox--probe-failure-reason
+                            without-proc)))))))))))))
 
 (defun mevedel-sandbox--canonical-directories (roots)
   "Return existing canonical directories from ROOTS without duplicates."
@@ -412,6 +507,9 @@ requested process starts."
        ((plist-get availability :available)
         (list :sandbox 'bubblewrap
               :filesystem 'workspace-write
+              :proc (if (plist-get availability :mount-proc)
+                        'fresh
+                      'host)
               :network
               (if (eq t (plist-get additional-permissions :network))
                   'unrestricted
@@ -455,7 +553,7 @@ has concurrent child invocations.  Return TOKEN."
 (defun mevedel-sandbox-visible-facts (&optional session)
   "Return a conservative summary of SESSION's active facts or its default."
   (let (visible visible-score unrestricted-filesystem unrestricted-network
-                additional-read additional-write)
+                host-proc-p additional-read additional-write)
     (dolist (entry (and session
                         (gethash session mevedel-sandbox--active-boundaries)))
       (let* ((facts (cdr entry))
@@ -474,6 +572,8 @@ has concurrent child invocations.  Return TOKEN."
               unrestricted-network
               (or unrestricted-network
                   (eq 'unrestricted (plist-get facts :network)))
+              host-proc-p
+              (or host-proc-p (eq 'host (plist-get facts :proc)))
               additional-read (+ (or additional-read 0) read-count)
               additional-write (+ (or additional-write 0) write-count))
         (when (or (null visible) (> score visible-score))
@@ -486,6 +586,8 @@ has concurrent child invocations.  Return TOKEN."
           (setq summary (plist-put summary :filesystem 'unrestricted)))
         (when unrestricted-network
           (setq summary (plist-put summary :network 'unrestricted)))
+        (when host-proc-p
+          (setq summary (plist-put summary :proc 'host)))
         (when (> (+ additional-read additional-write) 0)
           (setq summary
                 (plist-put summary :additional-filesystem-read additional-read))
@@ -586,8 +688,10 @@ has concurrent child invocations.  Return TOKEN."
            append (list option path)))
 
 (defun mevedel-sandbox--confined-preparation
-    (command workdir writable-roots executable additional-permissions)
+    (command workdir writable-roots executable mount-proc-p
+             additional-permissions)
   "Prepare COMMAND in WORKDIR with WRITABLE-ROOTS using EXECUTABLE.
+MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile."
   (require 'cl-lib)
   (let* ((canonical-workdir
@@ -624,6 +728,7 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
              additional-permissions))
            (facts (list :sandbox 'bubblewrap
                         :filesystem 'workspace-write
+                        :proc (if mount-proc-p 'fresh 'host)
                         :network (if network-access-p
                                      'unrestricted
                                    'isolated)
@@ -653,9 +758,9 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
                    "--unshare-pid")
              (unless network-access-p
                (list "--unshare-net"))
-             (list
-                   "--proc" "/proc"
-                   "--chdir" canonical-workdir
+             (when mount-proc-p
+               (list "--proc" "/proc"))
+             (list "--chdir" canonical-workdir
                    "--"
                    "sh" "-c" mevedel-sandbox--marker-script
                    "mevedel-sandbox" marker)
@@ -704,6 +809,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
                         (mevedel-sandbox--confined-preparation
                          command workdir writable-roots
                          (plist-get availability :executable)
+                         (plist-get availability :mount-proc)
                          additional-permissions)))
                    (plist-put preparation :fallback-p
                               (eq mevedel-sandbox-mode 'auto)))
@@ -765,6 +871,8 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
      (when (> (+ read-count write-count) 0)
        (format "; additional filesystem: %d read, %d write"
                read-count write-count)))
+   (when (eq (plist-get facts :proc) 'host)
+     "; proc: host")
    (let ((reason (plist-get facts :reason)))
      (when reason
        (format "; reason: %s" reason)))))

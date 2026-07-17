@@ -240,15 +240,20 @@ request-scoped delegated patterns may not. Explicit denies always win.
 
 Bash and batch Eval share the guarded child launcher and, independently of the
 permission mode, consult `mevedel-sandbox-mode`. On Linux, `auto` resolves
-`bwrap` with `executable-find` and caches one real probe of the core mount,
-user, process, and network namespaces. A successful profile mounts `/`
-read-only, rebinds the workspace, temporary directory, memory roots, manually
-configured roots, and session working directory writable, installs a fresh
-`/proc`, and changes to the canonical working directory. The default profile
-also isolates the network. A justified additive network request prompts in
-`ask` and `auto`, proceeds automatically in `full-auto` after command
-authorization, and changes only network isolation for that invocation. The
-namespace and mount boundary is inherited by descendants.
+`bwrap` with `executable-find` and caches a real probe of the core mount, user,
+process, and network namespaces. Each probe attempt defaults to a 500 ms bound
+and retains at most 64 KiB of combined diagnostics. If the full probe fails,
+Mevedel retries without replacing `/proc`. A successful retry retains the
+mount, user, process, and network boundary while exposing the host `/proc`
+view; pending and execution facts record `proc: host` instead of treating the
+whole backend as unavailable. A full successful profile mounts `/` read-only,
+rebinds the workspace, temporary directory, memory roots, manually configured
+roots, and session working directory writable, installs a fresh `/proc`, and
+changes to the canonical working directory. The default profile also isolates
+the network. A justified additive network request prompts in `ask` and `auto`,
+proceeds automatically in `full-auto` after command authorization, and changes
+only network isolation for that invocation. The namespace and mount boundary
+is inherited by descendants.
 
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
@@ -301,15 +306,16 @@ an unrestricted substitution instead emits a user-visible warning while the
 active facts remain recorded.
 
 The main view's status zone continuously displays the active child boundary as
-`sandbox`, `filesystem`, and `network` facts. With no child running it shows the
-selected default, including deliberate `off` mode, required-mode refusal, and
-`auto` fallback on unsupported or unavailable backends. While a Bash or batch
-Eval child runs, the row switches to that invocation's additive, escalated, or
-fallback facts and returns to the default after settlement. The completed
-result retains the same invocation facts for the transcript and audit trail.
-Additive filesystem facts include read and write grant counts. Concurrent
-children are summarized conservatively so a less-confined active dimension is
-not hidden by a later, more-confined invocation.
+`sandbox`, `filesystem`, and `network` facts, plus `proc: host` when the fresh
+proc mount is unavailable. With no child running it shows the selected default,
+including deliberate `off` mode, required-mode refusal, and `auto` fallback on
+unsupported or unavailable backends. While a Bash or batch Eval child runs,
+the row switches to that invocation's additive, escalated, or fallback facts
+and returns to the default after settlement. The completed result retains the
+same invocation facts for the transcript and audit trail. Additive filesystem
+facts include read and write grant counts. Concurrent children are summarized
+conservatively so a less-confined active dimension is not hidden by a later,
+more-confined invocation.
 
 Protected restrictions are layered after writable roots. Existing glob matches
 and canonical targets become concrete mounts; `.git` pointer files also protect

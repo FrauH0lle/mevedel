@@ -14,6 +14,8 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(defvar mevedel-sandbox-probe-timeout)
+
 
 ;;
 ;;; Sandbox preparation
@@ -46,7 +48,64 @@
       (should (plist-member result :available))
       (if (plist-get result :available)
           (should (stringp (plist-get result :executable)))
-        (should (stringp (plist-get result :reason)))))))
+        (should (stringp (plist-get result :reason))))))
+  :doc "bounded probe:
+`mevedel-sandbox-probe' terminates a stalled Bubblewrap candidate"
+  (let* ((root (make-temp-file "mevedel-sandbox-probe-timeout-" t))
+         (executable (file-name-concat root "bwrap"))
+         (exec-path (list root))
+         (mevedel-sandbox--probe-cache nil)
+         (mevedel-sandbox-probe-timeout 0.05)
+         result started)
+    (unwind-protect
+        (progn
+          (with-temp-file executable
+            (insert "#!/bin/sh\nexec /bin/sleep 5\n"))
+          (set-file-modes executable #o700)
+          (setq started (float-time))
+          (setq result (mevedel-sandbox-probe))
+          (should-not (plist-get result :available))
+          (should (string-match-p "timed out" (plist-get result :reason)))
+          (should (< (- (float-time) started) 0.5)))
+      (delete-directory root t)))
+  :doc "bounded diagnostics:
+`mevedel-sandbox-probe' caps output from a noisy Bubblewrap candidate"
+  (let* ((root (make-temp-file "mevedel-sandbox-probe-output-" t))
+         (executable (file-name-concat root "bwrap"))
+         (exec-path (list root))
+         (mevedel-sandbox--probe-cache nil)
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file executable
+            (insert "#!/bin/sh\nprintf '%s' '"
+                    (make-string (* 128 1024) ?x)
+                    "'\nexit 1\n"))
+          (set-file-modes executable #o700)
+          (setq result (mevedel-sandbox-probe))
+          (should-not (plist-get result :available))
+          (should (< (length (plist-get result :reason)) 70000)))
+      (delete-directory root t)))
+  :doc "fresh proc fallback:
+`mevedel-sandbox-probe' retains confinement when only `--proc' is rejected"
+  (let* ((root (make-temp-file "mevedel-sandbox-probe-proc-" t))
+         (executable (file-name-concat root "bwrap"))
+         (exec-path (list root))
+         (mevedel-sandbox--probe-cache nil)
+         result)
+    (unwind-protect
+        (progn
+          (with-temp-file executable
+            (insert (concat "#!/bin/sh\n"
+                            "for argument in \"$@\"; do\n"
+                            "  [ \"$argument\" = --proc ] && exit 1\n"
+                            "done\n"
+                            "exit 0\n")))
+          (set-file-modes executable #o700)
+          (setq result (mevedel-sandbox-probe))
+          (should (plist-get result :available))
+          (should-not (plist-get result :mount-proc)))
+      (delete-directory root t))))
 
 (mevedel-deftest mevedel-sandbox--canonical-directories ()
   ,test
@@ -299,16 +358,19 @@
   (let ((mevedel-sandbox-mode 'auto)
         (mevedel-sandbox--last-facts '(:sentinel t)))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
-               (lambda () '(:available t :executable "/test/bwrap"))))
+               (lambda () '(:available t :executable "/test/bwrap"
+                            :mount-proc t))))
       (should
        (equal
-        '(:sandbox bubblewrap :filesystem workspace-write :network isolated)
+        '(:sandbox bubblewrap :filesystem workspace-write :proc fresh
+          :network isolated)
         (mevedel-sandbox-pending-facts)))
       (should (equal '(:sentinel t) mevedel-sandbox--last-facts))))
   :doc "reflects requested additive network authority"
   (let ((mevedel-sandbox-mode 'required))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
-               (lambda () '(:available t :executable "/test/bwrap"))))
+               (lambda () '(:available t :executable "/test/bwrap"
+                            :mount-proc t))))
       (should
        (eq 'unrestricted
            (plist-get
@@ -395,6 +457,7 @@
         (session (list :session))
         (escalated-token (gensym "escalated-"))
         (confined-token (gensym "confined-"))
+        (host-proc-token (gensym "host-proc-"))
         (default '(:sandbox bubblewrap
                    :filesystem workspace-write
                    :network isolated))
@@ -403,22 +466,32 @@
                      :network unrestricted))
         (confined '(:sandbox bubblewrap
                     :filesystem workspace-write
+                    :proc fresh
                     :network isolated
                     :additional-filesystem 2
                     :additional-filesystem-read 1
-                    :additional-filesystem-write 1)))
+                    :additional-filesystem-write 1))
+        (host-proc '(:sandbox bubblewrap
+                     :filesystem workspace-write
+                     :proc host
+                     :network isolated)))
     (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
                (lambda (&rest _) default)))
       (should (eq default (mevedel-sandbox-visible-facts session)))
       (mevedel-sandbox-track-active session escalated-token escalated)
       (mevedel-sandbox-track-active session confined-token confined)
+      (mevedel-sandbox-track-active session host-proc-token host-proc)
       (let ((visible (mevedel-sandbox-visible-facts session)))
         (should (eq 'escalated (plist-get visible :sandbox)))
         (should (eq 'unrestricted (plist-get visible :filesystem)))
         (should (eq 'unrestricted (plist-get visible :network)))
+        (should (eq 'host (plist-get visible :proc)))
         (should (= 1 (plist-get visible :additional-filesystem-read)))
         (should (= 1 (plist-get visible :additional-filesystem-write))))
       (mevedel-sandbox-track-active session escalated-token nil)
+      (should (eq 'host
+                  (plist-get (mevedel-sandbox-visible-facts session) :proc)))
+      (mevedel-sandbox-track-active session host-proc-token nil)
       (should (equal confined (mevedel-sandbox-visible-facts session)))
       (mevedel-sandbox-track-active session confined-token nil)
       (should (eq default (mevedel-sandbox-visible-facts session))))))
@@ -433,7 +506,7 @@
     (unwind-protect
         (let ((prepared
                (mevedel-sandbox--confined-preparation
-                '("true") root (list root) "/test/bwrap" nil)))
+                '("true") root (list root) "/test/bwrap" t nil)))
           (should (eq (plist-get prepared :state) 'confined))
           (should (equal (car (plist-get prepared :command)) "/test/bwrap"))
           (should (string-prefix-p "MEVEDEL_SANDBOX_STARTED_"
@@ -470,7 +543,7 @@
          (workdir (file-name-as-directory root))
          (mevedel-sandbox-mode 'auto)
          (mevedel-sandbox--probe-cache
-          (list :available t :executable executable))
+          (list :available t :executable executable :mount-proc t))
          (prepared
           (mevedel-sandbox-prepare
            '("sh" "-c" "printf ok") workdir (list root))))
@@ -487,6 +560,29 @@
           (should (member "--chdir" command))
           (should (equal (plist-get (plist-get prepared :facts) :network)
                          'isolated)))
+      (delete-directory root t)))
+  :doc "host proc fallback:
+`mevedel-sandbox-prepare' keeps namespace confinement without a fresh proc mount"
+  (let* ((root (make-temp-file "mevedel-sandbox-host-proc-" t))
+         (mevedel-sandbox-mode 'required)
+         (mevedel-sandbox--probe-cache
+          '(:available t :executable "/test/bwrap" :mount-proc nil))
+         (prepared
+          (mevedel-sandbox-prepare '("true") root (list root)))
+         (command (plist-get prepared :command)))
+    (unwind-protect
+        (progn
+          (should (eq (plist-get prepared :state) 'confined))
+          (should (member "--unshare-user" command))
+          (should (member "--unshare-pid" command))
+          (should (member "--unshare-net" command))
+          (should-not (member "--proc" command))
+          (should (eq (plist-get (plist-get prepared :facts) :proc) 'host))
+          (should (string-match-p
+                   "proc: host"
+                   (mevedel-sandbox-status-text
+                    (plist-get prepared :facts)))))
+      (mevedel-sandbox-cleanup prepared)
       (delete-directory root t)))
   :doc "automatic fallback:
 `mevedel-sandbox-prepare' discloses unrestricted direct execution"
@@ -507,7 +603,7 @@
   (let* ((root (make-temp-file "mevedel-sandbox-network-" t))
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
-          '(:available t :executable "/test/bwrap"))
+          '(:available t :executable "/test/bwrap" :mount-proc t))
          (default
           (mevedel-sandbox-prepare '("true") root (list root)))
          (network
@@ -555,7 +651,7 @@ exact read and write mounts follow protected masks without broadening siblings"
             (,(concat credentials "/**") . inaccessible)))
          (mevedel-sandbox-mode 'required)
          (mevedel-sandbox--probe-cache
-          '(:available t :executable "/test/bwrap"))
+          '(:available t :executable "/test/bwrap" :mount-proc t))
          prepared)
     (unwind-protect
         (progn
@@ -608,7 +704,8 @@ exact read and write mounts follow protected masks without broadening siblings"
          (mevedel-sandbox-mode 'auto)
          (mevedel-sandbox--probe-cache
           (list :available t
-                :executable (or (executable-find "bwrap") "bwrap"))))
+                :executable (or (executable-find "bwrap") "bwrap")
+                :mount-proc t)))
     (unwind-protect
         (let ((prepared
                (mevedel-sandbox-prepare '("true") outside (list root))))
