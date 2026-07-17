@@ -2,11 +2,12 @@
 
 ;;; Commentary:
 
-;; Builds and probes the Linux Bubblewrap boundary used by Bash and batch Eval.
-;; The host is read-only, approved roots are rebound writable, and process and
-;; network namespaces cover the requested process and all descendants.  This
-;; module prepares execution facts; the tool executor owns asynchronous launch
-;; and the narrowly permitted pre-exec fallback.
+;; Builds and probes the Linux Bubblewrap boundary used by model-triggered
+;; child processes.  The host is read-only, approved roots are rebound
+;; writable, and process and network namespaces cover the requested process
+;; and all descendants.  This module prepares execution facts;
+;; `mevedel-execution' owns launch, teardown, and the narrowly permitted
+;; pre-exec fallback.
 
 ;;; Code:
 
@@ -26,7 +27,7 @@
 ;;; Configuration and state
 
 (defcustom mevedel-sandbox-mode 'auto
-  "Child-process confinement policy for Bash and batch Eval.
+  "Confinement policy for model-triggered child processes.
 
 `auto' uses Bubblewrap when its cached probe succeeds and otherwise executes
 directly with unrestricted-filesystem and unrestricted-network disclosure.

@@ -1,9 +1,9 @@
-;;; mevedel-tool-exec.el -- Bash and Eval tools -*- lexical-binding: t -*-
+;;; mevedel-tool-exec.el --- Bash and Eval tool adapters -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Bash command execution with permission system and Eval tool for elisp
-;; evaluation.
+;; Bash and Eval schemas, permissions, validation, result formatting, and
+;; rendering.  `mevedel-execution' owns their operating-system children.
 
 ;;; Code:
 
@@ -43,6 +43,10 @@
 (declare-function mevedel-bash-analysis-analyze
                   "mevedel-bash-analysis" (source))
 (defvar mevedel-bash-dangerous-commands)
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-start-one-shot
+                  "mevedel-execution" (callback &rest keys))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
@@ -89,10 +93,10 @@
                   (workspace))
 (declare-function mevedel-permission--normalize-outcome
                   "mevedel-permissions" (outcome))
-(declare-function mevedel-permission--path-protected-p
-                  "mevedel-permissions" (path))
 (declare-function mevedel-permission--path-in-allowed-roots-p
                   "mevedel-permissions" (path roots))
+(declare-function mevedel-permission--path-protected-p
+                  "mevedel-permissions" (path))
 (declare-function mevedel-permission--resource-granted-p
                   "mevedel-permissions" (path access grants))
 (declare-function mevedel-permission--rules-action "mevedel-permissions"
@@ -103,39 +107,26 @@
 (defvar mevedel-permission-rules)
 
 ;; `mevedel-sandbox'
-(declare-function mevedel-sandbox--record-launch-failure
-                  "mevedel-sandbox" (child-result))
-(declare-function mevedel-sandbox-cleanup "mevedel-sandbox" (preparation))
-(declare-function mevedel-sandbox-launch-failed-p
-                  "mevedel-sandbox" (preparation child-result))
 (declare-function mevedel-sandbox-pending-facts
                   "mevedel-sandbox"
                   (&optional additional-permissions sandbox-permissions))
-(declare-function mevedel-sandbox-prepare
-                  "mevedel-sandbox"
-                  (command workdir writable-roots &optional
-                           additional-permissions sandbox-permissions))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
-(declare-function mevedel-sandbox-strip-marker
-                  "mevedel-sandbox" (preparation child-result))
-(declare-function mevedel-sandbox-track-active
-                  "mevedel-sandbox" (session token facts))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-skill-permission-rules
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-origin "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
+(declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(defvar mevedel--session)
 (defvar mevedel--current-request)
+(defvar mevedel--session)
 (defvar mevedel--workspace)
 
 ;; `mevedel-system'
@@ -1959,10 +1950,6 @@ stays exact to avoid broad negative rules from a single rejection."
     (_ 'deny)))
 
 
-(defconst mevedel-tool-exec--child-kill-delay 2
-  "Seconds to wait before force-killing a timed-out child process.")
-
-
 ;;
 ;;; Bash
 
@@ -2000,152 +1987,6 @@ direct non-workspace uses."
      (t
       (error "Variable mevedel-bash-timeout must be nil or a positive integer")))))
 
-(defun mevedel-tool-exec--child-spawn-command (command)
-  "Return spawn metadata for child process COMMAND.
-Use `setsid' when available so timeout signals can reach descendants."
-  (let ((setsid (and (not (eq system-type 'windows-nt))
-                     (executable-find "setsid"))))
-    (if (not setsid)
-        (list :command command)
-      (let ((group-file (make-temp-file "mevedel-child-group-")))
-        (list
-         :command
-         (append
-          (list setsid "-f" "-w"
-                "sh" "-c"
-                "printf '%s' \"$$\" > \"$1\"; shift; exec \"$@\""
-                "mevedel-child" group-file)
-          command)
-         :group-file group-file)))))
-
-(defun mevedel-tool-exec--child-group-id (group-file)
-  "Return the positive process group id recorded in GROUP-FILE."
-  (when (and group-file (file-readable-p group-file))
-    (let ((id (string-to-number
-               (string-trim
-                (with-temp-buffer
-                  (insert-file-contents group-file)
-                  (buffer-string))))))
-      (and (> id 0) id))))
-
-(defun mevedel-tool-exec--signal-child-process
-    (process process-group-p signal &optional pid)
-  "Send SIGNAL to PROCESS, using PROCESS-GROUP-P and PID when requested.
-When PID is non-nil, use it as the process group id even if PROCESS
-has already exited."
-  (let ((target-pid (or pid (and (processp process) (process-id process)))))
-    (condition-case nil
-        (if (and process-group-p (integerp target-pid) (> target-pid 0))
-            (signal-process (- target-pid) signal)
-          (when (processp process)
-            (signal-process process signal)))
-      (error
-       (when (process-live-p process)
-         (ignore-errors
-           (signal-process process signal)))))))
-
-(defun mevedel-tool-exec--start-child-process
-    (name command workdir timeout callback)
-  "Start COMMAND as NAME in WORKDIR and call CALLBACK when it settles.
-
-CALLBACK receives a plist with :exit-code, :output, :timed-out-p,
-and optional :error.  TIMEOUT is nil or a positive number of seconds.
-On systems with `setsid', timeout signals cover the whole process group."
-  (let (output-buffer spawn group-file timer force-timer settle-timer
-                      timed-out finished exit-code process)
-    (cl-labels
-        ((process-output ()
-           (if (buffer-live-p output-buffer)
-               (with-current-buffer output-buffer
-                 (buffer-string))
-             ""))
-         (cleanup ()
-           (when (processp process)
-             (set-process-query-on-exit-flag process nil)
-             (when (process-live-p process)
-               (ignore-errors (delete-process process))))
-           (when (buffer-live-p output-buffer)
-             (let ((kill-buffer-query-functions nil))
-               (kill-buffer output-buffer)))
-           (when group-file
-             (ignore-errors (delete-file group-file))))
-         (finish (status &optional error-data)
-           (unless finished
-             (setq finished t)
-             (when (timerp timer)
-               (cancel-timer timer))
-             (when (timerp force-timer)
-               (cancel-timer force-timer))
-             (when (timerp settle-timer)
-               (cancel-timer settle-timer))
-             (let ((output (process-output)))
-               (cleanup)
-               (funcall callback
-                        (list :exit-code status
-                              :output output
-                              :timed-out-p timed-out
-                              :error error-data)))))
-         (process-ended (child)
-           (when (memq (process-status child) '(exit signal))
-             (setq exit-code (process-exit-status child))
-             ;; A timed-out process group still needs the delayed KILL even
-             ;; when its leader exits promptly after TERM.
-             (unless (and timed-out (timerp force-timer))
-               (finish exit-code))))
-         (settle-after-kill ()
-           (unless finished
-             (finish (or exit-code -1))))
-         (force-kill ()
-           (unless finished
-             (let ((group-id
-                    (mevedel-tool-exec--child-group-id group-file)))
-               ;; Give the sentinel a bounded chance to drain the pipe after
-               ;; KILL before falling back to explicit settlement.
-               (setq force-timer nil
-                     settle-timer
-                     (run-at-time mevedel-tool-exec--child-kill-delay
-                                  nil #'settle-after-kill))
-               (mevedel-tool-exec--signal-child-process
-                process (and group-id t) 'KILL group-id))))
-         (time-out ()
-           (unless finished
-             (if (not (process-live-p process))
-                 (finish (process-exit-status process))
-               (let ((group-id
-                      (mevedel-tool-exec--child-group-id group-file)))
-                 (setq timed-out t)
-                 (mevedel-tool-exec--signal-child-process
-                  process (and group-id t) 'TERM group-id)
-                 (setq force-timer
-                       (run-at-time mevedel-tool-exec--child-kill-delay
-                                    nil #'force-kill)))))))
-      (condition-case err
-          (progn
-            (setq output-buffer
-                  (generate-new-buffer (format " *%s*" name)))
-            (setq spawn (mevedel-tool-exec--child-spawn-command command)
-                  group-file (plist-get spawn :group-file))
-            (setq process
-                  (let ((default-directory workdir))
-                    (with-current-buffer output-buffer
-                      (setq-local default-directory workdir))
-                    (make-process
-                     :name name
-                     :buffer output-buffer
-                     :command (plist-get spawn :command)
-                     :connection-type 'pipe
-                     :noquery t
-                     :sentinel
-                     (lambda (child _event)
-                       (process-ended child)))))
-            (when timeout
-              (setq timer
-                    (run-at-time timeout nil #'time-out)))
-            process)
-        (error
-         (finish -1 err)
-         nil)))))
-
 (defun mevedel-tool-exec--sandbox-writable-roots (workdir)
   "Return writable child-confinement roots for WORKDIR."
   (let ((roots
@@ -2159,88 +2000,6 @@ On systems with `setsid', timeout signals cover the whole process group."
                  (list (file-name-as-directory (expand-file-name workdir))))
              (list (file-name-as-directory
                     (expand-file-name temporary-file-directory)))))))
-
-(defun mevedel-tool-exec--child-with-sandbox-facts (child-result facts)
-  "Return a copy of CHILD-RESULT carrying sandbox FACTS."
-  (plist-put (copy-sequence child-result) :sandbox-facts facts))
-
-(defun mevedel-tool-exec--start-sandboxed-child-process
-    (name command workdir writable-roots timeout callback
-          &optional additional-permissions sandbox-permissions session)
-  "Start COMMAND through the selected confinement boundary.
-
-NAME, WORKDIR, TIMEOUT, and CALLBACK follow
-`mevedel-tool-exec--start-child-process'.  WRITABLE-ROOTS are the approved
-filesystem roots.  In `auto' mode only a Bubblewrap failure before the marker
-may retry COMMAND directly; a started command is never replayed.
-ADDITIONAL-PERMISSIONS is the validated additive execution profile.
-SANDBOX-PERMISSIONS may be `require-escalated' after authorization.
-SESSION owns the user-visible active boundary while the child is running."
-  (require 'mevedel-sandbox)
-  (let* ((session (or session (mevedel-tool-exec--permission-log-session)))
-         (active-token (and session (gensym "sandbox-child-")))
-         (preparation
-          (mevedel-sandbox-prepare
-           command workdir writable-roots additional-permissions
-           sandbox-permissions)))
-    (cl-labels
-        ((show-active (facts)
-           (when active-token
-             (mevedel-sandbox-track-active session active-token facts)))
-         (finish (child-result facts)
-           (when active-token
-             (mevedel-sandbox-track-active session active-token nil))
-           (funcall
-            callback
-            (mevedel-tool-exec--child-with-sandbox-facts
-             child-result facts))))
-      (pcase (plist-get preparation :state)
-        ('refused
-         (funcall
-          callback
-          (list :exit-code -1
-                :output ""
-                :timed-out-p nil
-                :error (list 'error (plist-get preparation :error))
-                :sandbox-facts (plist-get preparation :facts)))
-         nil)
-        ('unrestricted
-         (show-active (plist-get preparation :facts))
-         (mevedel-tool-exec--start-child-process
-          name (plist-get preparation :command) workdir timeout
-          (lambda (child-result)
-            (finish child-result (plist-get preparation :facts)))))
-        ('confined
-         (show-active (plist-get preparation :facts))
-         (mevedel-tool-exec--start-child-process
-          name (plist-get preparation :command) workdir timeout
-          (lambda (child-result)
-            (if (and (plist-get preparation :fallback-p)
-                     (mevedel-sandbox-launch-failed-p
-                      preparation child-result))
-                (let ((facts
-                       (mevedel-sandbox--record-launch-failure
-                        child-result)))
-                  (show-active facts)
-                  (mevedel-sandbox-cleanup preparation)
-                  (mevedel-tool-exec--start-child-process
-                   name (plist-get preparation :original-command)
-                   workdir timeout
-                   (lambda (fallback-result)
-                     (finish fallback-result facts))))
-              (let ((facts
-                     (if (mevedel-sandbox-launch-failed-p
-                          preparation child-result)
-                         (mevedel-sandbox--record-launch-failure
-                          child-result)
-                       (plist-get preparation :facts)))
-                    (clean-result
-                     (mevedel-sandbox-strip-marker
-                      preparation child-result)))
-                (mevedel-sandbox-cleanup preparation)
-                (finish clean-result facts))))))
-        (_ (error "Unknown sandbox preparation state: %s"
-                  (plist-get preparation :state)))))))
 
 (defun mevedel-tool-exec--sandbox-disclosure
     (text child-result &optional suppress-p)
@@ -2285,9 +2044,8 @@ and optional :timeout_seconds."
            (session (mevedel-tool-exec--permission-log-session))
            (timeout (mevedel-tool-exec--bash-timeout-seconds args))
            (workdir (mevedel-tool-exec--default-directory)))
-      (mevedel-tool-exec--start-sandboxed-child-process
-       "mevedel-bash" (list "bash" "-lc" command)
-       workdir (mevedel-tool-exec--sandbox-writable-roots workdir) timeout
+      (require 'mevedel-execution)
+      (mevedel-execution-start-one-shot
        (lambda (child-result)
          (let ((error-data (plist-get child-result :error)))
            (funcall
@@ -2304,9 +2062,13 @@ and optional :timeout_seconds."
                  timeout))
               child-result
               (plist-get args :suppress-sandbox-disclosure-p))))))
-       (plist-get request :additional-permissions)
-       (plist-get request :sandbox-permissions)
-       session))))
+       :name "mevedel-bash" :command (list "bash" "-lc" command)
+       :workdir workdir
+       :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
+       :timeout timeout
+       :additional-permissions (plist-get request :additional-permissions)
+       :sandbox-permissions (plist-get request :sandbox-permissions)
+       :session session))))
 
 
 ;;
@@ -2457,11 +2219,8 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
         (progn
           (with-temp-file script-file
             (insert script))
-          (mevedel-tool-exec--start-sandboxed-child-process
-           "mevedel-eval-batch"
-           (list (expand-file-name invocation-name invocation-directory)
-                 "-Q" "--batch" "-l" script-file)
-           workdir (mevedel-tool-exec--sandbox-writable-roots workdir) nil
+          (require 'mevedel-execution)
+          (mevedel-execution-start-one-shot
            (lambda (child-result)
              (let* ((exit-code (plist-get child-result :exit-code))
                     (diagnostics (plist-get child-result :output))
@@ -2494,7 +2253,15 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                       child-result)))
                  (ignore-errors (delete-file script-file))
                  (ignore-errors (delete-file result-file)))))
-           additional-permissions sandbox-permissions session))
+           :name "mevedel-eval-batch"
+           :command
+           (list (expand-file-name invocation-name invocation-directory)
+                 "-Q" "--batch" "-l" script-file)
+           :workdir workdir
+           :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
+           :additional-permissions additional-permissions
+           :sandbox-permissions sandbox-permissions
+           :session session))
       (error
        (ignore-errors (delete-file script-file))
        (ignore-errors (delete-file result-file))

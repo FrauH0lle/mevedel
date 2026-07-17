@@ -31,7 +31,9 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   invoked skills, session-scoped hook rules/log/context, permission
   queue, plan queue, selected preset and resolved mevedel preset settings,
   the current session-owned Goal, and a transient bounded tool-input repair
-  log.
+  log. Its transient `execution-state` slot is opaque outside
+  `mevedel-execution.el`; process records, timers, spools, and process groups
+  never enter the general session model or persisted sidecar.
 - **`mevedel-goal`**: stable identity and objective, lifecycle status,
   current phase and cycle, approval policy, owning session, accepted plan
   artifact, lightweight cycle records, structured review result and carried
@@ -71,6 +73,12 @@ Tools execute in the data-buffer context with `default-directory` set to
 the session working directory. File modifications are tracked per request
 via `mevedel-request-file-snapshots`, while cross-turn file metadata
 lives on the workspace file cache and session touched-files map.
+
+`mevedel-execution.el` is the operating-system process boundary. It owns
+process creation, process-group signaling, timeout cleanup, Bubblewrap launch
+and fallback, stable child environments, and bounded disk spooling. Bash and
+batch Eval remain tool adapters in `mevedel-tool-exec.el`; native filesystem
+tools use the execution module's confined one-shot helper interface.
 
 ## gptel integration
 

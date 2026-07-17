@@ -11,6 +11,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-exec)
+(require 'mevedel-execution)
 (require 'mevedel-models)
 (require 'mevedel-pipeline)
 (require 'mevedel-permission-log)
@@ -2010,10 +2011,10 @@ default Bash keeps bare dot inspection automatic"
   :doc "passes approved network authority to the child launcher"
   (let (captured result)
     (cl-letf (((symbol-function
-                'mevedel-tool-exec--start-sandboxed-child-process)
+                'mevedel-execution-start-one-shot)
                (lambda (&rest args)
                  (setq captured args)
-                 (funcall (nth 5 args)
+                 (funcall (car args)
                           '(:exit-code 0 :output "ok" :timed-out-p nil
                             :sandbox-facts
                             (:sandbox bubblewrap
@@ -2026,15 +2027,16 @@ default Bash keeps bare dot inspection automatic"
          :sandbox_permissions "with_additional_permissions"
          :additional_permissions (:network t)
          :justification "Download the requested page?")))
-    (should (equal '(:network t) (nth 6 captured)))
+    (should (equal '(:network t)
+                   (plist-get (cdr captured) :additional-permissions)))
     (should (string-match-p "network: unrestricted" result)))
   :doc "passes approved full escalation to the child launcher"
   (let (captured result)
     (cl-letf (((symbol-function
-                'mevedel-tool-exec--start-sandboxed-child-process)
+                'mevedel-execution-start-one-shot)
                (lambda (&rest args)
                  (setq captured args)
-                 (funcall (nth 5 args)
+                 (funcall (car args)
                           '(:exit-code 0 :output "ok" :timed-out-p nil
                             :sandbox-facts
                             (:sandbox escalated
@@ -2046,17 +2048,18 @@ default Bash keeps bare dot inspection automatic"
        '(:command "emacs --batch -Q"
          :sandbox_permissions "require_escalated"
          :justification "Run without confinement?")))
-    (should-not (nth 6 captured))
-    (should (eq 'require-escalated (nth 7 captured)))
+    (should-not (plist-get (cdr captured) :additional-permissions))
+    (should (eq 'require-escalated
+                (plist-get (cdr captured) :sandbox-permissions)))
     (should (string-match-p "sandbox: escalated" result)))
   :doc "passes large output intact to the shared pipeline"
   (let ((output (concat (make-string 550000 ?h)
                         (make-string 50000 ?t)))
         result)
     (cl-letf (((symbol-function
-                'mevedel-tool-exec--start-sandboxed-child-process)
+                'mevedel-execution-start-one-shot)
                (lambda (&rest args)
-                 (funcall (nth 5 args)
+                 (funcall (car args)
                           (list :exit-code 0 :output output :timed-out-p nil
                                 :sandbox-facts
                                 '(:sandbox bubblewrap
@@ -2165,7 +2168,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((result nil)
         (done nil)
         (mevedel-bash-timeout 30)
-        (mevedel-tool-exec--child-kill-delay 0.1))
+        (mevedel-execution--child-kill-delay 0.1))
     (mevedel-tool-exec--bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
@@ -2183,7 +2186,7 @@ default Bash keeps bare dot inspection automatic"
   (let ((result nil)
         (done nil)
         (mevedel-bash-timeout 1)
-        (mevedel-tool-exec--child-kill-delay 0.1))
+        (mevedel-execution--child-kill-delay 0.1))
     (mevedel-tool-exec--bash
      (lambda (r)
        (setq result (test-bash-permissions--handler-result r)
@@ -2200,7 +2203,7 @@ default Bash keeps bare dot inspection automatic"
   (let* ((home (make-temp-file "mevedel-bash-login-timeout-" t))
          (profile (file-name-concat home ".bash_profile"))
          (process-environment (copy-sequence process-environment))
-         (mevedel-tool-exec--child-kill-delay 0.1)
+         (mevedel-execution--child-kill-delay 0.1)
          result done)
     (unwind-protect
         (progn
@@ -2242,142 +2245,6 @@ default Bash keeps bare dot inspection automatic"
     (should (null (mevedel-tool-exec--bash-timeout-seconds
                    (list :timeout_seconds 1)))))
 
-(mevedel-deftest mevedel-tool-exec--start-child-process ()
-  ,test
-  (test)
-  :doc "settles once and leaks no buffer when launcher setup fails"
-  (let ((buffer-name " *mevedel-test-setup-failure*")
-        result
-        (callback-count 0))
-    (cl-letf (((symbol-function 'mevedel-tool-exec--child-spawn-command)
-               (lambda (_command)
-                 (error "setup failed"))))
-      (should-not
-       (mevedel-tool-exec--start-child-process
-        "mevedel-test-setup-failure" (list "true") default-directory nil
-        (lambda (child-result)
-          (cl-incf callback-count)
-          (setq result child-result)))))
-    (should (= 1 callback-count))
-    (should (equal '(error "setup failed") (plist-get result :error)))
-    (should-not (get-buffer buffer-name)))
-  :doc "captures combined output and a nonzero exit status"
-  (let (result done)
-    (mevedel-tool-exec--start-child-process
-     "mevedel-test-child"
-     (list "bash" "-c" "printf child-output; exit 7")
-     default-directory nil
-     (lambda (child-result)
-       (setq result child-result
-             done t)))
-    (with-timeout (5 (error "Timed out"))
-      (while (not done)
-        (accept-process-output nil 0.1)))
-    (should (= 7 (plist-get result :exit-code)))
-    (should (equal "child-output" (plist-get result :output)))
-    (should-not (plist-get result :timed-out-p)))
-  :doc "times out once, terminates descendants, and cleans its buffer"
-  (if (or (eq system-type 'windows-nt)
-          (not (executable-find "setsid")))
-      (ert-skip "Process-group test requires setsid")
-    (let* ((root (make-temp-file "mevedel-child-timeout-" t))
-           (pid-file (file-name-concat root "child.pid"))
-           (script (format "sleep 30 & child=$!; printf %%s $child > %s; wait $child"
-                           (shell-quote-argument pid-file)))
-           (mevedel-tool-exec--child-kill-delay 0.1)
-           result process child-pid done
-           (callback-count 0))
-      (unwind-protect
-          (progn
-            (setq process
-                  (mevedel-tool-exec--start-child-process
-                   "mevedel-test-timeout"
-                   (list "bash" "-c" script)
-                   default-directory 1
-                   (lambda (child-result)
-                     (cl-incf callback-count)
-                     (setq result child-result
-                           done t))))
-            (with-timeout (5 (error "Timed out"))
-              (while (not done)
-                (accept-process-output nil 0.05)))
-            (should (= 1 callback-count))
-            (should (plist-get result :timed-out-p))
-            (should (file-exists-p pid-file))
-            (setq child-pid
-                  (string-to-number
-                   (string-trim
-                    (with-temp-buffer
-                      (insert-file-contents pid-file)
-                      (buffer-string)))))
-            (with-timeout (2 (error "Descendant survived timeout"))
-              (while (process-attributes child-pid)
-                (accept-process-output nil 0.05)))
-            (should-not (buffer-live-p (process-buffer process))))
-        (when (and child-pid (process-attributes child-pid))
-          (ignore-errors (signal-process child-pid 'KILL)))
-        (delete-directory root t))))
-  :doc "drains a surviving descendant after the leader exits on TERM"
-  (if (or (eq system-type 'windows-nt)
-          (not (executable-find "setsid")))
-      (ert-skip "Process-group test requires setsid")
-    (let* ((root (make-temp-file "mevedel-child-drain-" t))
-           (child-script (file-name-concat root "child.sh"))
-           (ready-file (file-name-concat root "ready"))
-           (pid-file (file-name-concat root "child.pid"))
-           (command
-            (format
-             (concat
-              "leader=$$; bash %s $leader %s %s & "
-              "while [ ! -f %s ]; do :; done; "
-              "trap 'exit 0' TERM; while :; do :; done")
-             (shell-quote-argument child-script)
-             (shell-quote-argument ready-file)
-             (shell-quote-argument pid-file)
-             (shell-quote-argument ready-file)))
-           (mevedel-tool-exec--child-kill-delay 1)
-           result child-pid done)
-      (unwind-protect
-          (progn
-            (with-temp-file child-script
-              (insert
-               (concat
-                "leader=$1\nready=$2\npid_file=$3\n"
-                "trap '' HUP\n"
-                "on_term() {\n"
-                "  trap '' TERM\n"
-                "  while kill -0 \"$leader\" 2>/dev/null; do :; done\n"
-                "  printf descendant-after-term\n"
-                "  while :; do :; done\n"
-                "}\n"
-                "trap on_term TERM\n"
-                "printf '%s' \"$$\" > \"$pid_file\"\n"
-                "printf ready > \"$ready\"\n"
-                "while :; do :; done\n")))
-            (mevedel-tool-exec--start-child-process
-             "mevedel-test-drain"
-             (list "bash" "-c" command)
-             default-directory 1
-             (lambda (child-result)
-               (setq result child-result
-                     done t)))
-            (with-timeout (5 (error "Timed out"))
-              (while (not done)
-                (accept-process-output nil 0.05)))
-            (should (plist-get result :timed-out-p))
-            (should (string-match-p "descendant-after-term"
-                                    (plist-get result :output)))
-            (setq child-pid
-                  (string-to-number
-                   (string-trim
-                    (with-temp-buffer
-                      (insert-file-contents pid-file)
-                      (buffer-string)))))
-            (should-not (process-attributes child-pid)))
-        (when (and child-pid (process-attributes child-pid))
-          (ignore-errors (signal-process child-pid 'KILL)))
-        (delete-directory root t)))))
-
 (mevedel-deftest mevedel-tool-exec--sandbox-writable-roots ()
   ,test
   (test)
@@ -2394,19 +2261,6 @@ default Bash keeps bare dot inspection automatic"
     (should (member (file-name-as-directory
                      (expand-file-name temporary-file-directory))
                     roots))))
-
-(mevedel-deftest mevedel-tool-exec--child-with-sandbox-facts ()
-  ,test
-  (test)
-  :doc "child execution facts:
-`mevedel-tool-exec--child-with-sandbox-facts' preserves the original result"
-  (let* ((result '(:exit-code 0 :output "ok"))
-         (facts '(:sandbox bubblewrap))
-         (combined
-          (mevedel-tool-exec--child-with-sandbox-facts result facts)))
-    (should (equal (plist-get combined :output) "ok"))
-    (should (eq (plist-get combined :sandbox-facts) facts))
-    (should-not (plist-member result :sandbox-facts))))
 
 (mevedel-deftest mevedel-tool-exec--sandbox-disclosure ()
   ,test
@@ -2436,158 +2290,6 @@ default Bash keeps bare dot inspection automatic"
         "literal"))
       (should (string-match-p "without confinement" warning))
       (should (string-match-p "network: unrestricted" warning)))))
-
-(mevedel-deftest mevedel-tool-exec--start-sandboxed-child-process ()
-  ,test
-  (test)
-  :doc "disabled confinement:
-`mevedel-tool-exec--start-sandboxed-child-process' runs directly with facts"
-  (let* ((root (make-temp-file "mevedel-sandbox-direct-" t))
-         (mevedel-sandbox-mode 'off)
-         result done)
-    (unwind-protect
-        (progn
-          (mevedel-tool-exec--start-sandboxed-child-process
-           "mevedel-test-direct" '("sh" "-c" "printf direct")
-           root (list root) nil
-           (lambda (child-result)
-             (setq result child-result done t)))
-          (with-timeout (5 (error "Timed out"))
-            (while (not done)
-              (accept-process-output nil 0.05)))
-          (should (equal (plist-get result :output) "direct"))
-          (should (eq (plist-get (plist-get result :sandbox-facts) :sandbox)
-                      'off)))
-      (delete-directory root t)))
-  :doc "automatic pre-exec fallback:
-`mevedel-tool-exec--start-sandboxed-child-process' retries directly once"
-  (let* ((root (make-temp-file "mevedel-sandbox-fallback-" t))
-         (result-file (file-name-concat root "result"))
-         (mevedel-sandbox-mode 'auto)
-         (mevedel-sandbox--probe-cache
-          '(:available t :executable "/bin/false"))
-         (mevedel-sandbox--last-facts nil)
-         result done (callback-count 0))
-    (unwind-protect
-        (progn
-          (mevedel-tool-exec--start-sandboxed-child-process
-           "mevedel-test-fallback"
-           (list "sh" "-c"
-                 (format "printf fallback > %s"
-                         (shell-quote-argument result-file)))
-           root (list root) nil
-           (lambda (child-result)
-             (cl-incf callback-count)
-             (setq result child-result done t)))
-          (with-timeout (5 (error "Timed out"))
-            (while (not done)
-              (accept-process-output nil 0.05)))
-          (should (= callback-count 1))
-          (should (file-exists-p result-file))
-          (should (eq (plist-get (plist-get result :sandbox-facts) :sandbox)
-                      'unavailable))
-          (should (eq (plist-get (plist-get result :sandbox-facts) :network)
-                      'unrestricted))
-          (should (eq (plist-get mevedel-sandbox--last-facts :sandbox)
-                      'unavailable)))
-      (delete-directory root t)))
-  :doc "post-start failure:
-`mevedel-tool-exec--start-sandboxed-child-process' never replays after marker"
-  (let* ((root (make-temp-file "mevedel-sandbox-no-replay-" t))
-         (fake-bwrap (file-name-concat root "fake-bwrap"))
-         (result-file (file-name-concat root "must-not-exist"))
-         (mevedel-sandbox-mode 'auto)
-         result done)
-    (unwind-protect
-        (progn
-          (with-temp-file fake-bwrap
-            (insert
-             (concat
-              "#!/bin/sh\n"
-              "next=\n"
-              "for arg do\n"
-              "  if [ \"$next\" ]; then printf '%s\\n' \"$arg\"; exit 23; fi\n"
-              "  if [ \"$arg\" = mevedel-sandbox ]; then next=1; fi\n"
-              "done\n"
-              "exit 24\n")))
-          (set-file-modes fake-bwrap #o755)
-          (let ((mevedel-sandbox--probe-cache
-                 (list :available t :executable fake-bwrap)))
-            (mevedel-tool-exec--start-sandboxed-child-process
-             "mevedel-test-no-replay"
-             (list "sh" "-c"
-                   (format "printf replayed > %s"
-                           (shell-quote-argument result-file)))
-             root (list root) nil
-             (lambda (child-result)
-               (setq result child-result done t))))
-          (with-timeout (5 (error "Timed out"))
-            (while (not done)
-              (accept-process-output nil 0.05)))
-          (should (= (plist-get result :exit-code) 23))
-          (should-not (file-exists-p result-file))
-          (should (eq (plist-get (plist-get result :sandbox-facts) :sandbox)
-                      'bubblewrap)))
-      (delete-directory root t)))
-  :doc "required unavailable backend:
-`mevedel-tool-exec--start-sandboxed-child-process' refuses before launch"
-  (let ((mevedel-sandbox-mode 'required)
-        (mevedel-sandbox--probe-cache
-         '(:available nil :reason "test unavailable"))
-        result)
-    (should-not
-     (mevedel-tool-exec--start-sandboxed-child-process
-      "mevedel-test-required" '("true") temporary-file-directory nil nil
-      (lambda (child-result) (setq result child-result))))
-    (should (equal (plist-get result :exit-code) -1))
-    (should (string-match-p "test unavailable"
-                            (error-message-string
-                             (plist-get result :error)))))
-  :doc "active invocation facts are tracked until additive and escalated children settle"
-  (dolist (case
-           '(((:state confined :command ("bwrap")
-              :facts (:sandbox bubblewrap
-                      :filesystem workspace-write
-                      :network unrestricted))
-             bubblewrap)
-            ((:state unrestricted :command ("true")
-              :facts (:sandbox escalated
-                      :filesystem unrestricted
-                      :network unrestricted))
-             escalated)))
-    (let* ((preparation (car case))
-           (expected (cadr case))
-           (session (list expected))
-           (mevedel-sandbox--active-boundaries
-            (make-hash-table :test #'eq))
-           (mevedel-sandbox-state-change-hook nil)
-           child-callback
-           result)
-      (cl-letf (((symbol-function 'mevedel-sandbox-prepare)
-                 (lambda (&rest _) preparation))
-                ((symbol-function 'mevedel-tool-exec--start-child-process)
-                 (lambda (_name _command _workdir _timeout callback)
-                   (setq child-callback callback)
-                   'child))
-                ((symbol-function 'mevedel-sandbox-launch-failed-p)
-                 (lambda (&rest _) nil))
-                ((symbol-function 'mevedel-sandbox-strip-marker)
-                 (lambda (_preparation child-result) child-result))
-                ((symbol-function 'mevedel-sandbox-cleanup) #'ignore))
-        (mevedel-tool-exec--start-sandboxed-child-process
-         "active" '("true") temporary-file-directory nil nil
-         (lambda (child-result) (setq result child-result))
-         nil nil session)
-        (should child-callback)
-        (should (eq expected
-                    (plist-get (mevedel-sandbox-visible-facts session)
-                               :sandbox)))
-        (funcall child-callback
-                 '(:exit-code 0 :output "" :timed-out-p nil))
-        (should result)
-        (should-not (gethash session mevedel-sandbox--active-boundaries))))))
-
-
 
 ;;
 ;;; Eval check-permission adapter
@@ -3013,10 +2715,10 @@ default Bash keeps bare dot inspection automatic"
       (set-window-configuration original)))
   :doc "evaluates simple expressions in batch mode"
   (let ((original-start
-         (symbol-function 'mevedel-tool-exec--start-child-process))
+         (symbol-function 'mevedel-execution-start-one-shot))
         (child-starts 0)
         result)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--start-child-process)
+    (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
                (lambda (&rest args)
                  (cl-incf child-starts)
                  (apply original-start args))))
@@ -3031,7 +2733,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "live mode does not use the child-process seam"
   (let ((child-starts 0)
         result)
-    (cl-letf (((symbol-function 'mevedel-tool-exec--start-child-process)
+    (cl-letf (((symbol-function 'mevedel-execution-start-one-shot)
                (lambda (&rest _args)
                  (cl-incf child-starts))))
       (mevedel-tool-exec--eval

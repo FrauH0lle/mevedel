@@ -7,6 +7,7 @@
 (require 'mevedel-structs)
 (require 'ert)
 (require 'mevedel-file-state)
+(require 'mevedel-execution)
 (require 'mevedel-tool-registry)
 (require 'mevedel-view)
 (require 'mevedel-tool-fs)
@@ -23,6 +24,49 @@
 
 (defvar gptel-backend)
 (defvar mevedel--diff-preview-buffer-name "*mevedel-diff-preview*")
+
+
+;;
+;;; External helper execution
+
+(mevedel-deftest mevedel-tool-fs--call-process-capturing-output ()
+  ,test
+  (test)
+  :doc "routes a structured command and declared paths through the helper layer"
+  (let ((session (mevedel-session--create))
+        captured)
+    (cl-letf (((symbol-function 'mevedel-execution-run-helper)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(:exit-code 7 :output " helper output \n"))))
+      (let ((mevedel--session session))
+        (should
+         (equal '(7 . "helper output")
+                (mevedel-tool-fs--call-process-capturing-output
+                 "media-helper" '("helper" "--flag") '("/input")
+                 '("/artifacts"))))))
+    (should (equal '("media-helper" ("helper" "--flag") ("/input")
+                     ("/artifacts") nil)
+                   (seq-take captured 5)))
+    (should (eq session (nth 5 captured)))))
+
+(mevedel-deftest mevedel-tools--generate-diff ()
+  ,test
+  (test)
+  :doc "routes diff through the helper layer with both snapshots read-only"
+  (let ((session (mevedel-session--create))
+        captured)
+    (cl-letf (((symbol-function 'mevedel-execution-run-helper)
+               (lambda (&rest args)
+                 (setq captured args)
+                 '(:exit-code 1 :output "unified diff"))))
+      (let ((mevedel--session session))
+        (should (equal "unified diff\n"
+                       (mevedel-tools--generate-diff
+                        "old" "new" "file.el")))))
+    (should (equal "diff" (car (nth 1 captured))))
+    (should (= 2 (length (nth 2 captured))))
+    (should (eq session (nth 5 captured)))))
 
 
 ;;
@@ -570,13 +614,16 @@
         (let ((mevedel-tool-fs--pdf-pages-max-base64-chars 8))
           (cl-letf (((symbol-function 'executable-find)
                      (lambda (cmd) (and (equal cmd "pdftoppm") t)))
-                    ((symbol-function 'call-process)
-                     (lambda (_program &rest args)
-                       (let ((prefix (car (last args))))
-                         (test-mevedel-tool-fs--write-bytes
-                          (concat prefix ".png")
-                          test-mevedel-tool-fs--png-bytes))
-                       0))
+                    ((symbol-function 'mevedel-execution-run-helper)
+                     (lambda (_name command _read-paths _writable-roots
+                                    &rest _)
+                       (if (equal (car command) "pdftoppm")
+                           (progn
+                             (test-mevedel-tool-fs--write-bytes
+                              (concat (car (last command)) ".png")
+                              test-mevedel-tool-fs--png-bytes)
+                             '(:exit-code 0 :output ""))
+                         '(:exit-code 1 :output ""))))
                     ((symbol-function 'gptel--model-capable-p)
                      (lambda (cap &optional _model) (eq cap 'media)))
                     ((symbol-function 'gptel--model-mime-capable-p)
@@ -969,6 +1016,29 @@
 (mevedel-deftest mevedel-tool-fs--glob ()
   ,test
   (test)
+  :doc "runs ripgrep through the helper layer with the search path read-only"
+  (let ((session (mevedel-session--create))
+        (tmp-dir (make-temp-file "mevedel-test-" t))
+        captured result)
+    (unwind-protect
+        (progn
+          (with-temp-file (file-name-concat tmp-dir "found.el")
+            (insert "content"))
+          (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                     (lambda (&rest helper-args)
+                       (setq captured helper-args)
+                       (funcall (car helper-args)
+                                '(:exit-code 0 :output "found.el\n"
+                                  :timed-out-p nil)))))
+            (let ((mevedel--session session))
+              (setq result
+                    (test-mevedel-tool-fs--await-callback
+                     #'mevedel-tool-fs--glob
+                     (list :pattern "*.el" :path tmp-dir)))))
+          (should (equal (list tmp-dir) (nth 3 captured)))
+          (should (eq session (nth 6 captured)))
+          (should (string-match-p "found\\.el" result)))
+      (delete-directory tmp-dir t)))
   :doc "finds files matching pattern"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (result nil))
@@ -1045,6 +1115,29 @@
 (mevedel-deftest mevedel-tool-fs--grep ()
   ,test
   (test)
+  :doc "runs ripgrep through the helper layer with the search path read-only"
+  (let ((session (mevedel-session--create))
+        (tmp (make-temp-file "mevedel-test-"))
+        captured result)
+    (unwind-protect
+        (progn
+          (with-temp-file tmp (insert "needle\n"))
+          (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                     (lambda (&rest helper-args)
+                       (setq captured helper-args)
+                       (funcall (car helper-args)
+                                (list :exit-code 0
+                                      :output (concat tmp "\n")
+                                      :timed-out-p nil)))))
+            (let ((mevedel--session session))
+              (setq result
+                    (test-mevedel-tool-fs--await-callback
+                     #'mevedel-tool-fs--grep
+                     (list :pattern "needle" :path tmp)))))
+          (should (equal (list tmp) (nth 3 captured)))
+          (should (eq session (nth 6 captured)))
+          (should (string-match-p (regexp-quote tmp) result)))
+      (delete-file tmp)))
   :doc "files_with_matches: returns matching file paths"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (result nil))

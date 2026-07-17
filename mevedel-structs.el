@@ -211,6 +211,7 @@ workspace."
   repair-log         ; transient bounded tool-input repair telemetry
   permission-log-pending ; transient diagnostics awaiting materialization
   hook-context-pending ; transient hook context injected into the next prompt
+  execution-state   ; transient opaque state owned by `mevedel-execution'
   ;; Persistence -- nil until lazy materialization.
   save-path         ; absolute path to the session directory under .mevedel/sessions/
   session-id        ; string: stable session identifier (matches save-path basename)
@@ -358,6 +359,10 @@ workspace root and is kept stable for the lifetime of the session."
 (defun mevedel-session-set-queued-user-messages (session queue)
   "Set SESSION's transient queued user message QUEUE."
   (setf (mevedel-session-queued-user-messages session) queue))
+
+(defun mevedel-session--set-execution-state (session state)
+  "Store opaque execution-module STATE on SESSION."
+  (setf (mevedel-session-execution-state session) state))
 
 (defun mevedel-session--normalize-dropped-file-path (path)
   "Return PATH as an expanded file name, or nil when invalid."
