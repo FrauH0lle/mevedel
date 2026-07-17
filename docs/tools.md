@@ -20,9 +20,9 @@ flowchart TD
     I --> J[Render transform]
     J --> K[Persist oversized result]
     K --> L[Specialist nudges]
-    L --> M[Attach render-data]
-    M --> N[PostToolUse or failure hooks]
-    N --> O[Re-persist capped result]
+    L --> M[PostToolUse or failure hooks]
+    M --> N[Re-persist capped result]
+    N --> O[Attach render-data]
     O --> P[Attach media data]
 ```
 
@@ -184,8 +184,8 @@ tool permission slots, so they do not currently fire `PermissionRequest`.
 `PermissionDenied` runs after denial and can add model-facing feedback or
 context, but it cannot reopen the denied tool call.
 
-Post-tool hooks run after initial oversized-result persistence,
-specialist nudges, and render-data attachment. The specialist-nudge step is a
+Post-tool hooks run after initial oversized-result persistence and specialist
+nudges, but before final render-data attachment. The specialist-nudge step is a
 thin pipeline delegation to `mevedel-specialist-nudges.el`, which owns all
 `Read`/`Grep` eligibility, family throttling, deferred `ToolSearch` guidance,
 and model-visible reminder text. Post-tool hooks receive both the raw
@@ -237,11 +237,12 @@ Alist form dispatches on the visible result status:
 ((success . FN) (error . FN) (default . FN))
 ```
 
-The view computes dispatch status from the visible result:
-`error` when `mevedel-view--tool-result-error-p` matches, otherwise
-`success`. Lookup tries the exact status first, then `default`, then
-the generic renderer. A rendering plist's `:status` affects only the
-visual marker; it does not participate in dispatch.
+The view first uses structured `:status` from render-data, then falls back to
+the visible result: `error` when `mevedel-view--tool-result-error-p` matches,
+otherwise `success`. Lookup tries the exact status first, then `default`, then
+the generic renderer. Explicit pipeline status also overrides a custom
+rendering plist's visual `:status`; without explicit status, the rendering
+plist controls only the visual marker and does not participate in dispatch.
 
 Rendering plist: `(:header STRING :body STRING :body-mode SYMBOL
 :status SYMBOL :expandable-p BOOL :initially-collapsed-p BOOL)`.
@@ -272,9 +273,9 @@ render metadata from string output:
 `RESULT` is the normalized string result before oversized-result
 persistence and before render/media side-channel attachment. The
 transform runs only when the handler did not already provide
-`:render-data`, only for non-error string results, and never changes
-`:result` or `:raw-result`. Transform errors emit a warning and leave the
-tool result unchanged.
+`:render-data`, only for string results whose pipeline status is not `error`,
+and never changes `:result` or `:raw-result`. Transform errors emit a warning
+and leave the tool result unchanged.
 
 Transforms must return small metadata, not copies of large result
 bodies. The pipeline rejects oversized transform metadata so a transform
@@ -283,10 +284,11 @@ render-data.
 
 ### Render-data side channel
 
-Every handler returns a plist containing `:result`; when it also includes
-`:render-data DATA`, the pipeline
-writes `:result` to the data buffer and appends a hidden block wrapped in
-`<!-- mevedel-render-data -->` delimiters, propertized
+Every handler returns a plist containing `:result` and may set `:status` to
+`success` or `error`. Handlers without explicit status retain the legacy
+`Error:`-prefix classification. When a handler includes `:render-data DATA` or
+explicit status, the pipeline writes `:result` to the data buffer and appends a
+hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
 `'gptel 'ignore` and `'invisible t`. Parser:
 `mevedel-pipeline-extract-render-data`.
 
@@ -316,9 +318,12 @@ When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved
 to `.mevedel/tool-results/` and replaced with a preview wrapped in
 `<persisted-output>` XML. The LLM can `Read` the file to see the full
-output. Oversized error results (`"Error:"` prefix) are truncated but
-not persisted, preserving failure status without injecting huge error
-blobs. No workspace → no persistence.
+output. Oversized error results are truncated but not persisted; explicit
+handler status takes precedence over the legacy `Error:` prefix. Every
+oversized preview keeps equal head and tail budgets, prefers nearby newline
+boundaries, and reports the exact omitted character count. The persisted file
+remains complete. Bash and Eval do not apply an earlier prefix-only cap. No
+workspace → no persistence.
 
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
 Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k,

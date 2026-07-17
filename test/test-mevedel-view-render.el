@@ -2607,6 +2607,21 @@ state of its inner sections"
 ;;
 ;;; Renderer invocation
 
+(mevedel-deftest mevedel-view--tool-render-status ()
+  ,test
+  (test)
+  :doc "prefers structured error status over plain result text"
+  (should (eq 'error
+              (mevedel-view--tool-render-status
+               "plain failure" '(:status error))))
+  :doc "prefers structured success status over legacy error prose"
+  (should (eq 'success
+              (mevedel-view--tool-render-status
+               "Error: visible text" '(:status success))))
+  :doc "falls back to legacy result classification"
+  (should (eq 'error
+              (mevedel-view--tool-render-status "Error: legacy failure"))))
+
 (mevedel-deftest mevedel-view--invoke-renderer ()
   ,test
   (test)
@@ -2627,6 +2642,29 @@ state of its inner sections"
                            (list :header "x")))))
     (should (equal '(:header "x")
                    (mevedel-view--invoke-renderer tool nil nil "ok"))))
+  :doc "structured status fills a custom renderer's omitted visual status"
+  (let ((tool (mevedel-tool--create
+               :name "StructuredVisual"
+               :renderer (lambda (_name _args _result _data)
+                           (list :header "x")))))
+    (should (equal '(:header "x" :status error)
+                   (mevedel-view--invoke-renderer
+                    tool '(:status error) nil "plain failure"))))
+  :doc "structured status overrides a conflicting custom visual status"
+  (let ((tool (mevedel-tool--create
+               :name "StructuredOverride"
+               :renderer (lambda (_name _args _result _data)
+                           (list :header "x" :status 'success)))))
+    (should (equal '(:header "x" :status error)
+                   (mevedel-view--invoke-renderer
+                    tool '(:status error) nil "plain failure"))))
+  :doc "legacy custom renderer status remains authoritative without structure"
+  (let ((tool (mevedel-tool--create
+               :name "LegacyVisual"
+               :renderer (lambda (_name _args _result _data)
+                           (list :header "x" :status 'error)))))
+    (should (equal '(:header "x" :status error)
+                   (mevedel-view--invoke-renderer tool nil nil "plain"))))
 
   :doc "data-driven renderers can opt out by returning nil when render-data is absent"
   (let ((tool (mevedel-tool--create
@@ -2657,6 +2695,18 @@ state of its inner sections"
     (should (equal '(:header "error")
                    (mevedel-view--invoke-renderer
                     tool nil nil "Error: bad"))))
+  :doc "renderer alist honors structured error status without failure prose"
+  (let* ((success-fn (lambda (_name _args _result _data)
+                       (list :header "success")))
+         (error-fn (lambda (_name _args _result _data)
+                     (list :header "error")))
+         (tool (mevedel-tool--create
+                :name "StructuredStatus"
+                :renderer `((success . ,success-fn)
+                            (error . ,error-fn)))))
+    (should (equal '(:header "error" :status error)
+                   (mevedel-view--invoke-renderer
+                    tool '(:status error) nil "plain failure"))))
   :doc "renderer alist falls back to default status"
   (let* ((default-fn (lambda (_name _args _result _data)
                        (list :header "default")))
@@ -2753,6 +2803,16 @@ state of its inner sections"
                        (plist-get rendering :header)))
         (should (eq 'error (plist-get rendering :status)))
         (should (string-prefix-p "Error:" (plist-get rendering :body))))))
+  :doc "generic rendering honors structured error status without failure prose"
+  (with-temp-buffer
+    (insert "(:name \"ThirdParty\" :args (:query \"thing\"))\nplain failure")
+    (insert (mevedel-pipeline--format-render-data-block '(:status error)))
+    (let ((rendering (mevedel-view--segment-rendering
+                      (current-buffer) (point-min) (point-max))))
+      (should (equal "ThirdParty: thing (error)"
+                     (plist-get rendering :header)))
+      (should (eq 'error (plist-get rendering :status)))
+      (should (equal "plain failure" (plist-get rendering :body)))))
   :doc "collapsed cached renderings omit bodies but expansion keeps them"
   (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
         (mevedel-view--render-cache-entries 0))

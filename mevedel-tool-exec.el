@@ -1959,27 +1959,8 @@ stays exact to avoid broad negative rules from a single rejection."
     (_ 'deny)))
 
 
-;;
-;;; Output size guard
-
-(defconst mevedel-tool-exec--max-output-bytes (* 512 1024)
-  "Hard cap on Bash/Eval tool output size in bytes.
-Output exceeding this limit is truncated with a notice appended.")
-
 (defconst mevedel-tool-exec--child-kill-delay 2
   "Seconds to wait before force-killing a timed-out child process.")
-
-(defun mevedel-tool-exec--truncate-output (output)
-  "Truncate OUTPUT string if it exceeds the byte limit.
-Returns OUTPUT unchanged when within budget, or a truncated copy
-with a notice when it exceeds `mevedel-tool-exec--max-output-bytes'."
-  (if (<= (length output) mevedel-tool-exec--max-output-bytes)
-      output
-    (concat
-     (substring output 0 mevedel-tool-exec--max-output-bytes)
-     (format "\n\n... Output truncated (%dK of %dK bytes shown)."
-             (/ mevedel-tool-exec--max-output-bytes 1024)
-             (/ (length output) 1024)))))
 
 
 ;;
@@ -2318,8 +2299,7 @@ and optional :timeout_seconds."
                   (format "Failed to start process: %s" error-data)
                 (mevedel-tool-exec--bash-format-result
                  (plist-get child-result :exit-code)
-                 (mevedel-tool-exec--truncate-output
-                  (plist-get child-result :output))
+                 (plist-get child-result :output)
                  (plist-get child-result :timed-out-p)
                  timeout))
               child-result
@@ -2351,16 +2331,15 @@ and optional :timeout_seconds."
 (defun mevedel-tool-exec--eval-format-result
     (result output result-format)
   "Format Eval RESULT and captured OUTPUT for RESULT-FORMAT."
-  (mevedel-tool-exec--truncate-output
-   (if (equal result-format "injection")
-       (concat
-        (format "%S" result)
-        (and (not (string-empty-p (or output "")))
-             (format "\n\nSTDOUT:\n%s" output)))
-     (concat
-      (format "Result:\n%S" result)
-      (and (not (string-empty-p (or output "")))
-           (format "\n\nSTDOUT:\n%s" output))))))
+  (if (equal result-format "injection")
+      (concat
+       (format "%S" result)
+       (and (not (string-empty-p (or output "")))
+            (format "\n\nSTDOUT:\n%s" output)))
+    (concat
+     (format "Result:\n%S" result)
+     (and (not (string-empty-p (or output "")))
+          (format "\n\nSTDOUT:\n%s" output)))))
 
 (defun mevedel-tool-exec--eval-format-error (err output)
   "Format Eval error ERR and captured OUTPUT."
@@ -2385,17 +2364,15 @@ window configuration after evaluation."
                     (mevedel-tool-exec--default-directory)))
               (setq result (eval (read expression) t))
               (when (> (buffer-size standard-output) 0)
-                (setq output (mevedel-tool-exec--truncate-output
-                              (with-current-buffer standard-output
-                                (buffer-string)))))
+                (setq output (with-current-buffer standard-output
+                               (buffer-string))))
               (setq response
                     (mevedel-tool-exec--eval-format-result
                      result output result-format)))
           ((error user-error)
            (when (> (buffer-size standard-output) 0)
-             (setq output (mevedel-tool-exec--truncate-output
-                           (with-current-buffer standard-output
-                             (buffer-string)))))
+             (setq output (with-current-buffer standard-output
+                            (buffer-string))))
            (setq response
                  (mevedel-tool-exec--eval-format-error err output))))
       (when (window-configuration-p window-configuration)
@@ -2416,20 +2393,10 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
            (expression ,expression)
            (result-file ,result-file)
            (result-format ',result-format)
-           (max-output-bytes ,mevedel-tool-exec--max-output-bytes)
            (stdout-buffer (generate-new-buffer " *mevedel-eval-batch-stdout*"))
            result output)
        (unwind-protect
-           (let ((standard-output stdout-buffer)
-                 (truncate-output
-                  (lambda (text)
-                    (if (<= (length text) max-output-bytes)
-                        text
-                      (concat
-                       (substring text 0 max-output-bytes)
-                       (format "\n\n... Output truncated (%dK of %dK bytes shown)."
-                               (/ max-output-bytes 1024)
-                               (/ (length text) 1024)))))))
+           (let ((standard-output stdout-buffer))
              (condition-case err
                  (progn
                    (setq result (eval (read expression) t))
@@ -2439,17 +2406,15 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
                    (with-temp-file result-file
                      (prin1 (list :status 'ok
                                   :text
-                                  (funcall
-                                   truncate-output
-                                   (if (equal result-format "injection")
-                                       (concat
-                                        (format "%S" result)
-                                        (and (> (length (or output "")) 0)
-                                             (format "\n\nSTDOUT:\n%s" output)))
-                                     (concat
-                                      (format "Result:\n%S" result)
-                                      (and (> (length (or output "")) 0)
-                                           (format "\n\nSTDOUT:\n%s" output))))))
+                                  (if (equal result-format "injection")
+                                      (concat
+                                       (format "%S" result)
+                                       (and (> (length (or output "")) 0)
+                                            (format "\n\nSTDOUT:\n%s" output)))
+                                    (concat
+                                     (format "Result:\n%S" result)
+                                     (and (> (length (or output "")) 0)
+                                          (format "\n\nSTDOUT:\n%s" output)))))
                             (current-buffer))))
                ((error user-error)
                 (setq output
@@ -2459,13 +2424,11 @@ WORKDIR, LOAD-PATH-VALUE, and RESULT-FORMAT configure the child Emacs."
                 (with-temp-file result-file
                   (prin1 (list :status 'error
                                :text
-                               (funcall
-                                truncate-output
-                                (concat
-                                 (format "Error: Eval failed with error %S: %S"
-                                         (car err) (cdr err))
-                                 (and (> (length (or output "")) 0)
-                                      (format "\n\nSTDOUT:\n%s" output)))))
+                               (concat
+                                (format "Error: Eval failed with error %S: %S"
+                                        (car err) (cdr err))
+                                (and (> (length (or output "")) 0)
+                                     (format "\n\nSTDOUT:\n%s" output))))
                          (current-buffer))))))
          (when (buffer-live-p stdout-buffer)
            (kill-buffer stdout-buffer)))))))
@@ -2513,22 +2476,21 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                     (list
                      :result
                      (mevedel-tool-exec--sandbox-disclosure
-                      (mevedel-tool-exec--truncate-output
-                       (cond
-                        ((eq (plist-get payload :status) 'ok)
-                         (or (plist-get payload :text) ""))
-                        ((eq (plist-get payload :status) 'error)
-                         (or (plist-get payload :text) "Error: Eval failed"))
-                        ((plist-get child-result :error)
-                         (format "Failed to start Eval batch process: %s"
-                                 (plist-get child-result :error)))
-                        (t
-                         (format
-                          "Error: Eval batch process failed with exit code %d%s"
-                          exit-code
-                          (if (string-empty-p (or diagnostics ""))
-                              ""
-                            (format ":\n%s" diagnostics))))))
+                      (cond
+                       ((eq (plist-get payload :status) 'ok)
+                        (or (plist-get payload :text) ""))
+                       ((eq (plist-get payload :status) 'error)
+                        (or (plist-get payload :text) "Error: Eval failed"))
+                       ((plist-get child-result :error)
+                        (format "Failed to start Eval batch process: %s"
+                                (plist-get child-result :error)))
+                       (t
+                        (format
+                         "Error: Eval batch process failed with exit code %d%s"
+                         exit-code
+                         (if (string-empty-p (or diagnostics ""))
+                             ""
+                           (format ":\n%s" diagnostics)))))
                       child-result)))
                  (ignore-errors (delete-file script-file))
                  (ignore-errors (delete-file result-file)))))
