@@ -386,6 +386,15 @@ unread cursor and returns canonical execution facts separately from the raw
 output. Unread ranges beyond 2000 characters use the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 
+Terminal facts preserve the raw exit code and derive a separate `outcome`.
+Zero is `success`. Exit one is `no-match` for one proven simple `grep` or `rg`
+command, `different` for `diff`, and `false` for `test` or `[`. These outcomes
+are successful tool observations rather than execution errors. Exit codes two
+and above, non-exit termination, path-qualified executables, and compound,
+dangerous, complex, or unsupported analysis fall back to `failure`. Command
+output is never prefixed or rewritten to encode the outcome. Model-visible XML
+and UI render data consume the same canonical fact snapshot.
+
 Analyzer-proven read-only Bash calls may overlap within one session. Unknown,
 unparsable, and mutating calls use the exclusive lane. Admission is FIFO: once
 an exclusive call is waiting, later readers wait behind it, preventing writer

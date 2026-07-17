@@ -62,7 +62,8 @@
     (test-mevedel-execution--wait (lambda () (zerop remaining)))))
 
 (cl-defun test-mevedel-execution--start-managed
-    (session root command &key (owner "main") tty timeout (yield-time-ms 10))
+    (session root command &key (owner "main") outcome-function tty timeout
+             (yield-time-ms 10))
   "Start managed COMMAND for SESSION at ROOT and return its first observation."
   (let (observation)
     (mevedel-execution-start-bash
@@ -70,6 +71,7 @@
      :session session :owner owner :command command
      :workdir root :writable-roots (list root)
      :artifact-directory (file-name-concat root "artifacts")
+     :outcome-function outcome-function
      :timeout timeout :tty tty :yield-time-ms yield-time-ms)
     (test-mevedel-execution--wait (lambda () observation))
     observation))
@@ -345,6 +347,27 @@
           (should (= 0 (file-attribute-size (file-attributes spool)))))
       (delete-file spool))))
 
+(mevedel-deftest mevedel-execution--resolve-outcome ()
+  ,test
+  (test)
+  :doc "accepts canonical outcomes and defaults without an adapter resolver"
+  (should (eq 'success (mevedel-execution--resolve-outcome nil 0 'exited)))
+  (should (eq 'failure (mevedel-execution--resolve-outcome nil 1 'exited)))
+  (dolist (outcome '(success failure no-match different false))
+    (should
+     (eq outcome
+         (mevedel-execution--resolve-outcome
+          (lambda (_exit-code _termination) outcome)
+          1 'exited))))
+  :doc "contains throwing and invalid adapter resolvers"
+  (dolist (resolver
+           (list (lambda (_exit-code _termination) (error "Resolver failed"))
+                 (lambda (_exit-code _termination) 'invalid)))
+    (should (eq 'success
+                (mevedel-execution--resolve-outcome resolver 0 'exited)))
+    (should (eq 'failure
+                (mevedel-execution--resolve-outcome resolver 1 'exited)))))
+
 (mevedel-deftest mevedel-execution-start-bash ()
   ,test
   (test)
@@ -378,6 +401,31 @@
           (should-not
            (directory-files (file-name-concat root "artifacts")
                             nil "\\`execution-")))
+      (delete-directory root t)))
+  :doc "retains the adapter outcome resolver across yield and observation"
+  (let* ((root (make-temp-file "mevedel-managed-outcome-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         initial final)
+    (unwind-protect
+        (progn
+          (setq initial
+                (test-mevedel-execution--start-managed
+                 session root '("sh" "-c" "sleep .05; exit 1")
+                 :outcome-function
+                 (lambda (exit-code termination)
+                   (if (and (= exit-code 1) (eq termination 'exited))
+                       'false
+                     'failure))))
+          (should (eq 'running
+                      (plist-get (plist-get initial :facts) :state)))
+          (setq final
+                (test-mevedel-execution--observe
+                 session
+                 (plist-get (plist-get initial :facts) :execution-id)))
+          (should (= 1 (plist-get (plist-get final :facts) :exit-code)))
+          (should (eq 'false
+                      (plist-get (plist-get final :facts) :outcome))))
       (delete-directory root t)))
   :doc "retains one oversized pre-yield artifact with a head-and-tail preview"
   (let* ((root (make-temp-file "mevedel-managed-oversized-" t))
@@ -771,6 +819,32 @@
           (should (equal "finished" (plist-get final :output)))
           (should (plist-get final :claimed-final-p)))
       (delete-directory root t)))
+  :doc "bad outcome resolvers cannot block final delivery or handle cleanup"
+  (dolist (resolver
+           (list (lambda (_exit-code _termination) (error "Resolver failed"))
+                 (lambda (_exit-code _termination) 'invalid)))
+    (let* ((root (make-temp-file "mevedel-managed-bad-outcome-" t))
+           (session (test-mevedel-execution--session root))
+           (mevedel-sandbox-mode 'off)
+           (initial
+            (test-mevedel-execution--start-managed
+             session root '("sh" "-c" "sleep .05; exit 1")
+             :outcome-function resolver))
+           (id (plist-get (plist-get initial :facts) :execution-id))
+           final)
+      (unwind-protect
+          (progn
+            (test-mevedel-execution--wait
+             (lambda ()
+               (mevedel-execution--record-finished-p
+                (mevedel-execution--owned-yielded-record
+                 session "main" id))))
+            (setq final (test-mevedel-execution--observe session id))
+            (should (eq 'failure
+                        (plist-get (plist-get final :facts) :outcome)))
+            (should (plist-get final :claimed-final-p))
+            (should-not (mevedel-execution-list session "main")))
+        (delete-directory root t))))
   :doc "owner mismatches reveal no execution state"
   (let* ((root (make-temp-file "mevedel-managed-owner-" t))
          (session (test-mevedel-execution--session root))

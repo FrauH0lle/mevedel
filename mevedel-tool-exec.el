@@ -2106,6 +2106,24 @@ direct non-workspace uses."
            attributes))))
     (format "<bash-execution %s/>" (string-join (nreverse attributes) " "))))
 
+(defun mevedel-tool-exec--bash-outcome (analysis exit-code termination)
+  "Derive a canonical outcome from ANALYSIS, EXIT-CODE, and TERMINATION."
+  (let* ((commands (plist-get analysis :commands))
+         (command
+          (and (= (length commands) 1)
+               (not (memq (plist-get analysis :class) '(complex dangerous)))
+               (caar commands)))
+         (exit-one-outcome
+          (pcase command
+            ((or "grep" "rg") 'no-match)
+            ("diff" 'different)
+            ((or "test" "[") 'false))))
+    (cond
+     ((not (eq termination 'exited)) 'failure)
+     ((and (integerp exit-code) (zerop exit-code)) 'success)
+     ((and (equal exit-code 1) exit-one-outcome) exit-one-outcome)
+     (t 'failure))))
+
 (defun mevedel-tool-exec--observation-envelope
     (observation &optional suppress-sandbox-disclosure-p force-success-p)
   "Return a handler envelope for managed OBSERVATION.
@@ -2131,7 +2149,8 @@ stopped command's outcome."
          (status
           (if (or force-success-p
                   (not (eq (plist-get facts :state) 'completed))
-                  (eq (plist-get facts :outcome) 'success))
+                  (memq (plist-get facts :outcome)
+                        '(success no-match different false)))
               'success
             'error)))
     (list :result result
@@ -2176,6 +2195,9 @@ and optional :timeout_seconds."
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
        :timeout timeout
+       :outcome-function
+       (lambda (exit-code termination)
+         (mevedel-tool-exec--bash-outcome analysis exit-code termination))
        :read-only-p (eq (plist-get analysis :class) 'read-only)
        :tty (eq tty t)
        :yield-time-ms yield-time-ms

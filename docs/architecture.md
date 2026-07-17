@@ -81,7 +81,9 @@ per-session process state. `mevedel-execution-scheduler.el` admits managed Bash
 through a fair session-scoped readers/writer lane. Bash and batch Eval remain
 tool adapters in `mevedel-tool-exec.el`; native filesystem tools use the
 execution module's confined one-shot helper interface without entering the
-Bash scheduler.
+Bash scheduler. The Bash adapter also captures its analyzed exit-outcome
+resolver at spawn, so later observations derive the same canonical facts
+without moving command semantics into the process module.
 
 ## gptel integration
 

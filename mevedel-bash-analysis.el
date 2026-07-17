@@ -415,6 +415,21 @@ quotes or escaped with a backslash do not close the substitution."
                       (push (aref source (+ index offset)) current))
                     (setq index (1- end)))
                 (push char current))))
+           ((and (eq char ?\[)
+                 (or (null next) (memq next '(?\s ?\t)))
+                 (string-match-p
+                  "\\`[[:space:]]*\\'"
+                  (apply #'string (reverse current))))
+            (push char current))
+           ((and (eq char ?\])
+                 (memq previous '(?\s ?\t))
+                 (let ((remaining
+                        (string-trim-left (substring source (1+ index)))))
+                   (or (string-empty-p remaining)
+                       (string-prefix-p "&&" remaining)
+                       (string-prefix-p "||" remaining)
+                       (memq (aref remaining 0) '(?\; ?\| ?\n)))))
+            (push char current))
            ((memq char '(?$ ?` ?< ?> ?\( ?\) ?{ ?} ?* ?? ?\[ ?\] ?!))
             (push "Expansion, substitution, grouping, or redirection is unsupported"
                   reasons)
