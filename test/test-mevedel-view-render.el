@@ -55,6 +55,14 @@
 ;;
 ;;; Turn grouping and tool summaries
 
+(mevedel-deftest mevedel-view--tool-result-error-p ()
+  ,test
+  (test)
+  :doc "recognizes canonical and legacy prose error prefixes"
+  (should (mevedel-view--tool-result-error-p "Error: File is missing"))
+  (should (mevedel-view--tool-result-error-p "Error writing file: denied"))
+  (should-not (mevedel-view--tool-result-error-p "Writing file succeeded")))
+
 (mevedel-deftest mevedel-view--group-into-turns ()
   ,test
   (test)

@@ -1465,6 +1465,20 @@
                                     (list :file_path target
                                           :content "fresh\n")))
           (should (null captured-original)))
+      (delete-directory tmp-dir t)))
+  :doc "preview failures use the canonical error prefix"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (temporary-file-directory (file-name-as-directory tmp-dir))
+         (target (file-name-concat tmp-dir "failed.txt"))
+         result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-preview-mode-add-preview)
+                   (lambda (&rest _args)
+                     (error "Preview failed"))))
+          (mevedel-tool-fs--write
+           (lambda (value) (setq result value))
+           (list :file_path target :content "content"))
+          (should (string-prefix-p "Error:" (plist-get result :result))))
       (delete-directory tmp-dir t))))
 
 
@@ -1839,6 +1853,12 @@
   (test)
   :doc "returns nil for non-string result"
   (should (null (mevedel-tool-fs--render-read "Read" '(:file_path "/x.el") nil nil)))
+
+  :doc "returns nil for error results"
+  (should (null
+           (mevedel-tool-fs--render-read
+            "Read" '(:file_path "/missing.el")
+            "Error: File /missing.el does not exist" nil)))
 
   :doc "header shows basename and line count; body-mode from extension"
   (let* ((body "1->foo\n2->bar\n3->baz\n")

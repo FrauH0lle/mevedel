@@ -296,7 +296,7 @@ face used for NAME."
   "Return non-nil when RESULT-TEXT resembles a tool-level failure."
   (and (stringp result-text)
        (string-match-p
-        "\\`[ \t\n]*\\(?:Error:\\|FAILED\\b\\|Tool failed\\b\\)"
+        "\\`[ \t\n]*\\(?:Error\\b\\|FAILED\\b\\|Tool failed\\b\\)"
         result-text)))
 
 (defun mevedel-view--tool-summary-line
