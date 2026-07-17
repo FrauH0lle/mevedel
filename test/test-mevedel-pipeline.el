@@ -399,7 +399,28 @@
 		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
 		   (should-not result-ctx)
 		   (funcall saved-cb '(:result "deferred-result"))
-		   (should (equal (plist-get result-ctx :result) "deferred-result"))))
+		   (should (equal (plist-get result-ctx :result) "deferred-result")))
+		 :doc "handler runs in the captured dispatch buffer"
+		 (let* ((dispatch-buffer (generate-new-buffer " *handler-dispatch*"))
+			(tool (mevedel-tool--create
+			       :name "ContextTool"
+			       :handler (lambda (_args)
+					  (list :result default-directory))
+			       :async-p nil))
+			(ctx (list :tool tool :args nil :buffer dispatch-buffer))
+			result-ctx)
+		   (unwind-protect
+		       (progn
+			 (with-current-buffer dispatch-buffer
+			   (setq-local default-directory "/captured-dispatch/"))
+			 (cl-letf (((symbol-function 'mevedel-pipeline--record-use)
+				    #'ignore))
+			   (with-temp-buffer
+			     (mevedel-pipeline--step-handler
+			      ctx (lambda (value) (setq result-ctx value)) #'ignore)))
+			 (should (equal (plist-get result-ctx :result)
+					"/captured-dispatch/")))
+		     (kill-buffer dispatch-buffer))))
 
 
 ;;
