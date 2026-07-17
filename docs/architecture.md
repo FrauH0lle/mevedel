@@ -76,9 +76,12 @@ lives on the workspace file cache and session touched-files map.
 
 `mevedel-execution.el` is the operating-system process boundary. It owns
 process creation, process-group signaling, timeout cleanup, Bubblewrap launch
-and fallback, stable child environments, and bounded disk spooling. Bash and
-batch Eval remain tool adapters in `mevedel-tool-exec.el`; native filesystem
-tools use the execution module's confined one-shot helper interface.
+and fallback, stable child environments, bounded disk spooling, and opaque
+per-session process state. `mevedel-execution-scheduler.el` admits managed Bash
+through a fair session-scoped readers/writer lane. Bash and batch Eval remain
+tool adapters in `mevedel-tool-exec.el`; native filesystem tools use the
+execution module's confined one-shot helper interface without entering the
+Bash scheduler.
 
 ## gptel integration
 

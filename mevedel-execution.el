@@ -13,6 +13,16 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `mevedel-execution-scheduler'
+(declare-function mevedel-execution-scheduler-cancel
+                  "mevedel-execution-scheduler" (lease))
+(declare-function mevedel-execution-scheduler-create
+                  "mevedel-execution-scheduler" ())
+(declare-function mevedel-execution-scheduler-release
+                  "mevedel-execution-scheduler" (lease))
+(declare-function mevedel-execution-scheduler-submit
+                  "mevedel-execution-scheduler" (scheduler mode start))
+
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
                   "mevedel-sandbox" (child-result))
@@ -91,7 +101,8 @@ the complete spool remains at the path in the execution facts."
                (:constructor mevedel-execution--state-create))
   "Opaque per-session execution state."
   next-id
-  records)
+  records
+  scheduler)
 
 (cl-defstruct (mevedel-execution--record
                (:constructor mevedel-execution--record-create))
@@ -119,6 +130,7 @@ the complete spool remains at the path in the execution facts."
   sandbox-active-token
   sandbox-facts
   sandbox-preparation
+  scheduler-lease
   session
   settle-timer
   spool-path
@@ -148,9 +160,11 @@ the complete spool remains at the path in the execution facts."
 
 (defun mevedel-execution--new-state ()
   "Return an empty opaque execution state."
+  (require 'mevedel-execution-scheduler)
   (mevedel-execution--state-create
    :next-id 0
-   :records (make-hash-table :test #'equal)))
+   :records (make-hash-table :test #'equal)
+   :scheduler (mevedel-execution-scheduler-create)))
 
 (defun mevedel-execution--state-for-session (session)
   "Return the private execution state for SESSION.
@@ -678,6 +692,12 @@ delivery and retire the private handle while preserving retained artifacts."
      record (plist-get preparation :original-command))
     (mevedel-execution--arm-managed-timers record)))
 
+(defun mevedel-execution--release-scheduler (record)
+  "Release RECORD's scheduler lease exactly once."
+  (when-let* ((lease (mevedel-execution--record-scheduler-lease record)))
+    (setf (mevedel-execution--record-scheduler-lease record) nil)
+    (mevedel-execution-scheduler-release lease)))
+
 (defun mevedel-execution--finish-managed (record)
   "Settle managed RECORD without delivering unsolicited model output."
   (unless (mevedel-execution--record-finished-p record)
@@ -702,6 +722,7 @@ delivery and retire the private handle while preserving retained artifacts."
           (mevedel-sandbox-cleanup preparation))
         (setf (mevedel-execution--record-finished-p record) t)
         (mevedel-execution--release-runtime record)
+        (mevedel-execution--release-scheduler record)
         (if (mevedel-execution--record-yielded-p record)
             (mevedel-execution--deliver-observer record)
           (let ((callback (mevedel-execution--record-callback record)))
@@ -714,6 +735,7 @@ delivery and retire the private handle while preserving retained artifacts."
               (mevedel-execution--record-yielded-p record))
     (setf (mevedel-execution--record-yielded-p record) t
           (mevedel-execution--record-retained-p record) t)
+    (mevedel-execution--release-scheduler record)
     (funcall (mevedel-execution--record-callback record)
              (mevedel-execution--observation record))))
 
@@ -742,15 +764,67 @@ delivery and retire the private handle while preserving retained artifacts."
            (mevedel-execution--record-termination record) 'spawn-failed)
      (mevedel-execution--finish-managed record))))
 
+(defun mevedel-execution--start-admitted (record preparation)
+  "Start scheduler-admitted RECORD from PREPARATION."
+  (pcase (plist-get preparation :state)
+    ('refused
+     (setf (mevedel-execution--record-error-data record)
+           (list 'error (plist-get preparation :error))
+           (mevedel-execution--record-exit-code record) -1
+           (mevedel-execution--record-finished-p record) t
+           (mevedel-execution--record-sandbox-facts record)
+           (plist-get preparation :facts)
+           (mevedel-execution--record-termination record) 'spawn-failed)
+     (mevedel-execution--release-scheduler record)
+     (funcall (mevedel-execution--record-callback record)
+              (mevedel-execution--observation record t)))
+    ((or 'unrestricted 'confined)
+     (let* ((session (mevedel-execution--record-session record))
+            (active-token (and session (gensym "sandbox-bash-"))))
+       (setf (mevedel-execution--record-marker record)
+             (plist-get preparation :marker)
+             (mevedel-execution--record-marker-buffer record)
+             (unless (plist-get preparation :marker) :done)
+             (mevedel-execution--record-sandbox-active-token record)
+             active-token
+             (mevedel-execution--record-sandbox-facts record)
+             (plist-get preparation :facts)
+             (mevedel-execution--record-sandbox-preparation record)
+             preparation)
+       (when active-token
+         (mevedel-sandbox-track-active
+          session active-token (plist-get preparation :facts)))
+       (mevedel-execution--launch-managed
+        record (plist-get preparation :command))
+       (unless (mevedel-execution--record-finished-p record)
+         (mevedel-execution--arm-managed-timers record))))
+    (_
+     (mevedel-execution--cleanup-record record)
+     (error "Unknown sandbox preparation state: %s"
+            (plist-get preparation :state)))))
+
+(defun mevedel-execution--abort-request-record (record)
+  "Abort queued or foreground RECORD for its originating request."
+  (unless (or (mevedel-execution--record-finished-p record)
+              (mevedel-execution--record-yielded-p record))
+    (if (mevedel-execution-scheduler-cancel
+         (mevedel-execution--record-scheduler-lease record))
+        (progn
+          (setf (mevedel-execution--record-exit-code record) -1
+                (mevedel-execution--record-termination record) 'aborted)
+          (mevedel-execution--finish-managed record))
+      (mevedel-execution--begin-stop record 'aborted))))
+
 (cl-defun mevedel-execution-start-bash
     (callback &key session owner request command workdir writable-roots timeout
               additional-permissions sandbox-permissions artifact-directory
-              tty (yield-time-ms 10000))
+              read-only-p tty (yield-time-ms 10000))
   "Start managed Bash COMMAND and call CALLBACK at terminal or yield.
 
 SESSION and canonical OWNER fix the control boundary.  REQUEST owns the
 foreground lifetime only.  Remaining confinement arguments match the one-shot
 interface.  ARTIFACT-DIRECTORY owns the spool retained after yield.
+READ-ONLY-P selects the overlapping reader lane; all other calls are exclusive.
 TTY non-nil explicitly allocates a terminal and retains writable stdin.
 YIELD-TIME-MS may be nil only for trusted internal callers that must wait for
 terminal settlement."
@@ -763,11 +837,7 @@ terminal settlement."
               mevedel-execution-live-limit)
       (signal 'mevedel-execution-limit
               (list "A session may have at most 64 live Bash processes")))
-    (let* ((preparation
-            (mevedel-sandbox-prepare
-             command workdir writable-roots additional-permissions
-             sandbox-permissions))
-           (id (mevedel-execution--next-id state))
+    (let* ((id (mevedel-execution--next-id state))
            (artifact-directory
             (or artifact-directory temporary-file-directory))
            (_ (make-directory artifact-directory t))
@@ -783,45 +853,34 @@ terminal settlement."
              :tty-p (and tty t) :workdir workdir
              :yield-time-ms yield-time-ms)))
       (puthash id record (mevedel-execution--state-records state))
-      (pcase (plist-get preparation :state)
-        ('refused
-         (setf (mevedel-execution--record-error-data record)
-               (list 'error (plist-get preparation :error))
-               (mevedel-execution--record-exit-code record) -1
-               (mevedel-execution--record-finished-p record) t
-               (mevedel-execution--record-sandbox-facts record)
-               (plist-get preparation :facts)
-               (mevedel-execution--record-termination record) 'spawn-failed)
-         (funcall callback (mevedel-execution--observation record t)))
-        ((or 'unrestricted 'confined)
-         (let ((active-token (and session (gensym "sandbox-bash-"))))
-           (setf (mevedel-execution--record-marker record)
-                 (plist-get preparation :marker)
-                 (mevedel-execution--record-marker-buffer record)
-                 (unless (plist-get preparation :marker) :done)
-                 (mevedel-execution--record-sandbox-active-token record)
-                 active-token
-                 (mevedel-execution--record-sandbox-facts record)
-                 (plist-get preparation :facts)
-                 (mevedel-execution--record-sandbox-preparation record)
-                 preparation)
-           (when active-token
-             (mevedel-sandbox-track-active
-              session active-token (plist-get preparation :facts)))
-           (mevedel-execution--launch-managed
-            record (plist-get preparation :command))
-           (unless (mevedel-execution--record-finished-p record)
-             (mevedel-execution--arm-managed-timers record)
-             (when request
-               (mevedel-request-push-canceller
-                request
-                (lambda ()
-                  (unless (mevedel-execution--record-yielded-p record)
-                    (mevedel-execution--begin-stop record 'aborted))))))))
-        (_
-         (mevedel-execution--cleanup-record record)
-         (error "Unknown sandbox preparation state: %s"
-                (plist-get preparation :state))))
+      (let ((lease
+             (mevedel-execution-scheduler-submit
+              (mevedel-execution--state-scheduler state)
+              (if read-only-p 'read 'exclusive)
+              (lambda (admitted-lease)
+                (setf (mevedel-execution--record-scheduler-lease record)
+                      admitted-lease)
+                (condition-case err
+                    (mevedel-execution--start-admitted
+                     record
+                     (mevedel-sandbox-prepare
+                      command workdir writable-roots additional-permissions
+                      sandbox-permissions))
+                  (error
+                   (setf (mevedel-execution--record-error-data record) err
+                         (mevedel-execution--record-exit-code record) -1
+                         (mevedel-execution--record-termination record)
+                         'spawn-failed)
+                   (mevedel-execution--finish-managed record)))))))
+        (unless (or (mevedel-execution--record-finished-p record)
+                    (mevedel-execution--record-scheduler-lease record))
+          (setf (mevedel-execution--record-scheduler-lease record) lease)))
+      (when (and request
+                 (not (mevedel-execution--record-finished-p record))
+                 (not (mevedel-execution--record-yielded-p record)))
+        (mevedel-request-push-canceller
+         request
+         (lambda () (mevedel-execution--abort-request-record record))))
       nil)))
 
 (defun mevedel-execution--owned-yielded-record (session owner execution-id)
