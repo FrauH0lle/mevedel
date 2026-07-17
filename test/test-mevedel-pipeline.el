@@ -2283,7 +2283,7 @@
 		       (let ((tool (mevedel-tool-get "Bash")))
 			 (cl-letf
 			     (((symbol-function
-				'mevedel-execution-start-one-shot)
+				'mevedel-execution-start-bash)
 			       (lambda (callback &rest keys)
 				 (let ((additional-permissions
 					(plist-get keys :additional-permissions)))
@@ -2291,14 +2291,24 @@
 				 (funcall
 				  callback
 				  (if additional-permissions
-				      '(:exit-code 0 :output "downloaded"
-					:timed-out-p nil
+				      '(:output "downloaded"
+					:facts
+					(:state completed :termination exited
+					 :exit-code 0 :outcome success
+					 :wall-time-seconds 0.1 :output-bytes 10
+					 :output-lines 1 :omitted-output-bytes 0
+					 :tty nil)
 					:sandbox-facts
 					(:sandbox bubblewrap
 					 :filesystem workspace-write
 					 :network unrestricted))
-				    '(:exit-code 7 :output "network denied"
-				      :timed-out-p nil
+				    '(:output "network denied"
+				      :facts
+				      (:state completed :termination exited
+				       :exit-code 7 :outcome failure
+				       :wall-time-seconds 0.1 :output-bytes 14
+				       :output-lines 1 :omitted-output-bytes 0
+				       :tty nil)
 				      :sandbox-facts
 				      (:sandbox bubblewrap
 				       :filesystem workspace-write

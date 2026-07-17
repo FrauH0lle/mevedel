@@ -83,6 +83,10 @@
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
+(declare-function mevedel-pipeline-extract-render-data
+                  "mevedel-pipeline"
+                  (result-string &optional session expected-tool-use-id
+                                 allow-payload-tool-use-id))
 (declare-function mevedel-pipeline-run-tool "mevedel-pipeline"
                   (tool callback args))
 
@@ -576,7 +580,9 @@ original shell-injection marker used in diagnostics."
                     '((trust-literal-p boolean :optional
                                        "Internal trusted skill input.")
                       (suppress-sandbox-disclosure-p boolean :optional
-                                                     "Keep execution metadata out of substituted output.")))))
+                                                     "Keep execution metadata out of substituted output.")
+                      (wait-for-completion-p boolean :optional
+                                             "Wait for terminal settlement instead of yielding.")))))
     (cond
      ((null tool)
       (funcall callback
@@ -590,24 +596,29 @@ original shell-injection marker used in diagnostics."
             (mevedel-pipeline-run-tool
              tool
              (lambda (result)
-               (cond
-                ((and (stringp result)
-                      (string-prefix-p "Error: Permission denied" result))
-                 (funcall callback
-                          `(:status error :reason permission-denied
-                                    :message ,(format "Shell expansion %s denied: %s"
-                                                      marker result))))
-                ((mevedel-skills--injection-outcome-error-p result)
-                 (funcall callback
-                          `(:status error :reason shell-failure
-                                    :message ,(format "Shell expansion %s failed: %s"
-                                                      marker result))))
-                (t
-                 (funcall callback
-                          `(:status ok :output ,(string-trim-right
-                                                 (or result "")))))))
+               (pcase-let* ((`(,visible . ,render-data)
+                              (mevedel-pipeline-extract-render-data result))
+                             (status (plist-get render-data :status)))
+                 (cond
+                  ((and (stringp visible)
+                        (string-prefix-p "Error: Permission denied" visible))
+                   (funcall callback
+                            `(:status error :reason permission-denied
+                                      :message ,(format "Shell expansion %s denied: %s"
+                                                        marker visible))))
+                  ((or (eq status 'error)
+                       (mevedel-skills--injection-outcome-error-p visible))
+                   (funcall callback
+                            `(:status error :reason shell-failure
+                                      :message ,(format "Shell expansion %s failed: %s"
+                                                        marker visible))))
+                  (t
+                   (funcall callback
+                            `(:status ok :output ,(string-trim-right
+                                                   (or visible ""))))))))
              (list :command command
                    :suppress-sandbox-disclosure-p t
+                   :wait-for-completion-p t
                    :trust-literal-p
                    (mevedel-skills--author-ranges-p
                     command 0 (length command)))))

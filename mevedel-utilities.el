@@ -279,6 +279,49 @@ the rest of the list rotated around it.  Otherwise, returns the LIST."
       (push (substring text start index) parts))
     (apply #'concat (nreverse parts))))
 
+(defun mevedel--head-tail-preview-parts
+    (head tail total-length &optional preview-size)
+  "Return a newline-aware preview plist from bounded HEAD and TAIL.
+
+TOTAL-LENGTH is the complete character count.  HEAD and TAIL must contain at
+least PREVIEW-SIZE prefix and suffix characters respectively when the complete
+text is oversized.  The result contains `:text', `:head', `:tail', and the
+exact `:omitted-chars'."
+  (let ((preview-size (or preview-size 2000)))
+    (if (<= total-length preview-size)
+        (let ((text (substring head 0 total-length)))
+          (list :text text :head text :tail "" :omitted-chars 0))
+      (let* ((head-budget (/ preview-size 2))
+             (tail-budget (- preview-size head-budget))
+             (head-newline
+              (cl-position ?\n head :from-end t :end head-budget))
+             (head-end
+              (if (and head-newline
+                       (>= head-newline (/ head-budget 2)))
+                  (1+ head-newline)
+                head-budget))
+             (tail-window (substring tail (- (length tail) tail-budget)))
+             (tail-newline
+              (cl-position ?\n tail-window
+                           :end (min tail-budget (/ tail-budget 2))))
+             (tail-cut (if tail-newline (1+ tail-newline) 0))
+             (tail-start (+ (- total-length tail-budget) tail-cut))
+             (head-text (substring head 0 head-end))
+             (tail-text (substring tail-window tail-cut))
+             (omitted (- tail-start head-end)))
+        (list
+         :text
+         (concat head-text
+                 (unless (eq ?\n (aref head-text (1- (length head-text))))
+                   "\n")
+                 (format
+                  "[mevedel: tool output truncated; omitted %d chars]\n"
+                  omitted)
+                 tail-text)
+         :head head-text
+         :tail tail-text
+         :omitted-chars omitted)))))
+
 (defun mevedel--normalize-message-text (text)
   "Return TEXT with raw UTF-8 byte sequences decoded for display/storage.
 

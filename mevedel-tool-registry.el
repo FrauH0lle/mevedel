@@ -114,7 +114,8 @@ created as a side effect of registration and handles serialization."
   '(("Agent" "SendMessage" "StopAgent" "ToolSearch"
      mevedel-tool-ui mevedel-tool-ui--register)
     ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
-    ("Bash" "Eval" mevedel-tool-exec mevedel-tool-exec--register)
+    ("Bash" "Eval" "ListExecutions" "StopExecution" "WriteStdin"
+     mevedel-tool-exec mevedel-tool-exec--register)
     ("Edit" "Glob" "Grep" "MkDir" "Read" "Write"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("GetHints" "RecordHint" mevedel-tool-tutor mevedel-tool-tutor--register)

@@ -25,6 +25,24 @@
         (throw 'found t)))
     nil))
 
+(mevedel-deftest mevedel--head-tail-preview-parts ()
+  ,test
+  (test)
+
+  :doc "returns short content unchanged"
+  (let ((preview (mevedel--head-tail-preview-parts "short" "short" 5 10)))
+    (should (equal "short" (plist-get preview :text)))
+    (should (= 0 (plist-get preview :omitted-chars))))
+
+  :doc "uses bounded newline-aware parts and an exact character count"
+  (let ((preview
+         (mevedel--head-tail-preview-parts
+          "1234\n67890" "abc\ndefghi" 30 10)))
+    (should (equal
+             "1234\n[mevedel: tool output truncated; omitted 20 chars]\nefghi"
+             (plist-get preview :text)))
+    (should (= 20 (plist-get preview :omitted-chars)))))
+
 (mevedel-deftest mevedel--normalize-message-text ()
   ,test
   (test)

@@ -17,6 +17,14 @@ editing files. Use the provided file tools instead: `Read`, `Write`,
   the default sandbox; never copy an earlier call's additional permissions
 - Commands time out by default; use `timeout_seconds` for commands that need a
   longer positive timeout
+- Bash waits up to `yield_time_ms` (10 seconds by default) and returns an
+  `execution_id` when the command is still running. Use `WriteStdin` with empty
+  `chars` to poll unread output, `ListExecutions` to list your yielded commands,
+  and `StopExecution` to stop one
+- Pipe-mode stdin is closed. Ordinary `WriteStdin` input requires an explicit
+  PTY execution; polling does not
+- Do not use shell-native backgrounding (`&`). Lower `yield_time_ms` when a
+  command should yield quickly
 - Quote file paths with spaces using double quotes
 - Chain dependent commands with `&&` (or `;` if failures are OK)
 - Use absolute paths instead of `cd` when possible

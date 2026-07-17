@@ -45,8 +45,18 @@
 (defvar mevedel-bash-dangerous-commands)
 
 ;; `mevedel-execution'
+(declare-function mevedel-execution-list
+                  "mevedel-execution" (session owner))
+(declare-function mevedel-execution-observe
+                  "mevedel-execution"
+                  (session owner execution-id callback &rest keys))
+(declare-function mevedel-execution-start-bash
+                  "mevedel-execution" (callback &rest keys))
 (declare-function mevedel-execution-start-one-shot
                   "mevedel-execution" (callback &rest keys))
+(declare-function mevedel-execution-stop
+                  "mevedel-execution"
+                  (session owner execution-id callback))
 
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
@@ -67,6 +77,10 @@
                   "mevedel-permission-queue" ())
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline--tool-results-dir
+                  "mevedel-pipeline" (session buffer))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission--apply-prompt-result
@@ -126,6 +140,7 @@
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 
@@ -139,6 +154,9 @@
 ;; `mevedel-workspace'
 (declare-function mevedel--all-allowed-roots
                   "mevedel-workspace" (&optional buffer))
+
+;; `xml'
+(declare-function xml-escape-string "xml" (string))
 
 
 ;;
@@ -1987,6 +2005,44 @@ direct non-workspace uses."
      (t
       (error "Variable mevedel-bash-timeout must be nil or a positive integer")))))
 
+(defun mevedel-tool-exec--bash-yield-time-ms (input)
+  "Return the validated Bash yield time in milliseconds from INPUT."
+  (let* ((milliseconds
+          (if (plist-member input :yield-time_ms)
+              (plist-get input :yield-time_ms)
+            10000)))
+    (unless (and (integerp milliseconds)
+                 (<= 250 milliseconds)
+                 (<= milliseconds 30000))
+      (error "Parameter yield_time_ms must be an integer from 250 to 30000"))
+    milliseconds))
+
+(defun mevedel-tool-exec--write-wait-time-ms (input chars)
+  "Return the validated observation wait from INPUT and CHARS."
+  (let* ((input-p (and (stringp chars) (not (string-empty-p chars))))
+         (milliseconds
+          (if (plist-member input :yield-time_ms)
+              (plist-get input :yield-time_ms)
+            (if input-p 250 5000)))
+         (minimum (if input-p 250 5000))
+         (maximum (if input-p 30000 300000)))
+    (unless (and (integerp milliseconds)
+                 (<= minimum milliseconds)
+                 (<= milliseconds maximum))
+      (error "Parameter yield_time_ms must be an integer from %d to %d"
+             minimum maximum))
+    milliseconds))
+
+(defun mevedel-tool-exec--execution-artifact-directory (session)
+  "Return SESSION's retained execution artifact directory, if available."
+  (when-let* ((root
+              (mevedel-pipeline--tool-results-dir
+               session
+               (or (and (boundp 'mevedel--data-buffer)
+                        mevedel--data-buffer)
+                   (current-buffer)))))
+    (file-name-concat root "executions")))
+
 (defun mevedel-tool-exec--sandbox-writable-roots (workdir)
   "Return writable child-confinement roots for WORKDIR."
   (let ((roots
@@ -2022,16 +2078,68 @@ direct non-workspace uses."
               (unless (string-empty-p (or text "")) "\n\n")
               "[" (mevedel-sandbox-status-text facts) "]")))))
 
-(defun mevedel-tool-exec--bash-format-result (exit-code output timed-out timeout)
-  "Return Bash result text for EXIT-CODE, OUTPUT, TIMED-OUT, and TIMEOUT."
-  (cond
-   (timed-out
-    (format "Command timed out after %ss and was terminated:\nSTDOUT+STDERR:\n%s"
-            timeout output))
-   ((zerop exit-code) output)
-   (t
-    (format "Command failed with exit code %d:\nSTDOUT+STDERR:\n%s"
-            exit-code output))))
+(defun mevedel-tool-exec--execution-facts-xml (facts)
+  "Return compact model-visible XML derived from canonical FACTS."
+  (require 'xml)
+  (let (attributes)
+    (dolist (entry '((:execution-id . "execution_id")
+                     (:state . "state")
+                     (:termination . "termination")
+                     (:exit-code . "exit_code")
+                     (:outcome . "outcome")
+                     (:wall-time-seconds . "wall_time_seconds")
+                     (:output-bytes . "output_bytes")
+                     (:output-lines . "output_lines")
+                     (:omitted-output-bytes . "omitted_output_bytes")
+                     (:tty . "tty")
+                     (:output-path . "output_path")))
+      (let ((value (plist-get facts (car entry))))
+        (when (or value (eq (car entry) :tty))
+          (push
+           (format "%s=\"%s\"" (cdr entry)
+                   (xml-escape-string
+                    (cond
+                     ((eq value t) "true")
+                     ((null value) "false")
+                     ((floatp value) (format "%.3f" value))
+                     (t (format "%s" value)))))
+           attributes))))
+    (format "<bash-execution %s/>" (string-join (nreverse attributes) " "))))
+
+(defun mevedel-tool-exec--observation-envelope
+    (observation &optional suppress-sandbox-disclosure-p force-success-p)
+  "Return a handler envelope for managed OBSERVATION.
+
+SUPPRESS-SANDBOX-DISCLOSURE-P preserves trusted internal expansion behavior.
+FORCE-SUCCESS-P makes control-tool completion successful independently of the
+stopped command's outcome."
+  (let* ((facts (plist-get observation :facts))
+         (output (or (plist-get observation :output) ""))
+         (error-data (plist-get observation :error))
+         (body (if error-data
+                   (format "Failed to start process: %s" error-data)
+                 output))
+         (with-sandbox
+          (mevedel-tool-exec--sandbox-disclosure
+           body observation suppress-sandbox-disclosure-p))
+         (result
+          (if suppress-sandbox-disclosure-p
+              with-sandbox
+            (concat with-sandbox
+                    (unless (string-empty-p with-sandbox) "\n\n")
+                    (mevedel-tool-exec--execution-facts-xml facts))))
+         (status
+          (if (or force-success-p
+                  (not (eq (plist-get facts :state) 'completed))
+                  (eq (plist-get facts :outcome) 'success))
+              'success
+            'error)))
+    (list :result result
+          :status status
+          :render-data
+          (append (copy-sequence facts)
+                  (list :sandbox-facts
+                        (plist-get observation :sandbox-facts))))))
 
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.
@@ -2040,35 +2148,90 @@ and optional :timeout_seconds."
   (let ((command (plist-get args :command)))
     (unless (stringp command)
       (error "Parameter command is required"))
-    (let* ((request (mevedel-tool-exec--sandbox-request args 'bash))
+    (let* ((analysis (mevedel-tool-exec--analyze-bash command))
+           (_ (when (plist-get analysis :background-p)
+                (error "Shell-native background execution is not supported; use yield_time_ms")))
+           (sandbox-request (mevedel-tool-exec--sandbox-request args 'bash))
            (session (mevedel-tool-exec--permission-log-session))
+           (owner (mevedel-tool-exec--current-origin))
            (timeout (mevedel-tool-exec--bash-timeout-seconds args))
+           (yield-time-ms
+            (unless (plist-get args :wait-for-completion-p)
+              (mevedel-tool-exec--bash-yield-time-ms args)))
            (workdir (mevedel-tool-exec--default-directory)))
+      (unless session
+        (error "Bash requires an active session"))
       (require 'mevedel-execution)
-      (mevedel-execution-start-one-shot
-       (lambda (child-result)
-         (let ((error-data (plist-get child-result :error)))
-           (funcall
-            callback
-            (list
-             :result
-             (mevedel-tool-exec--sandbox-disclosure
-              (if error-data
-                  (format "Failed to start process: %s" error-data)
-                (mevedel-tool-exec--bash-format-result
-                 (plist-get child-result :exit-code)
-                 (plist-get child-result :output)
-                 (plist-get child-result :timed-out-p)
-                 timeout))
-              child-result
-              (plist-get args :suppress-sandbox-disclosure-p))))))
-       :name "mevedel-bash" :command (list "bash" "-lc" command)
+      (mevedel-execution-start-bash
+       (lambda (observation)
+         (funcall
+          callback
+          (mevedel-tool-exec--observation-envelope
+           observation (plist-get args :suppress-sandbox-disclosure-p))))
+       :session session :owner owner :request mevedel--current-request
+       :command (list "bash" "-lc" command)
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
        :timeout timeout
-       :additional-permissions (plist-get request :additional-permissions)
-       :sandbox-permissions (plist-get request :sandbox-permissions)
-       :session session))))
+       :yield-time-ms yield-time-ms
+       :artifact-directory
+       (mevedel-tool-exec--execution-artifact-directory session)
+       :additional-permissions
+       (plist-get sandbox-request :additional-permissions)
+       :sandbox-permissions
+       (plist-get sandbox-request :sandbox-permissions)))))
+
+(defun mevedel-tool-exec--write-stdin (callback args)
+  "Poll or write to one owner-scoped yielded execution from ARGS."
+  (let* ((execution-id (plist-get args :execution_id))
+         (chars (or (plist-get args :chars) ""))
+         (session (mevedel-tool-exec--permission-log-session))
+         (owner (mevedel-tool-exec--current-origin))
+         (wait-ms (mevedel-tool-exec--write-wait-time-ms args chars)))
+    (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
+      (error "Parameter execution_id is required"))
+    (unless (stringp chars)
+      (error "Parameter chars must be a string"))
+    (unless session
+      (error "WriteStdin requires an active session"))
+    (require 'mevedel-execution)
+    (mevedel-execution-observe
+     session owner execution-id
+     (lambda (observation)
+       (funcall callback
+                (mevedel-tool-exec--observation-envelope observation)))
+     :chars chars :wait-ms wait-ms :request mevedel--current-request)))
+
+(defun mevedel-tool-exec--list-executions (_args)
+  "Return yielded executions visible to the current model owner."
+  (let ((session (mevedel-tool-exec--permission-log-session))
+        (owner (mevedel-tool-exec--current-origin)))
+    (unless session
+      (error "ListExecutions requires an active session"))
+    (require 'mevedel-execution)
+    (let* ((facts (mevedel-execution-list session owner))
+           (result
+            (if facts
+                (mapconcat #'mevedel-tool-exec--execution-facts-xml facts "\n")
+              "No yielded executions.")))
+      (list :result result :status 'success :render-data facts))))
+
+(defun mevedel-tool-exec--stop-execution (callback args)
+  "Stop one owner-scoped yielded execution named by ARGS."
+  (let ((execution-id (plist-get args :execution_id))
+        (session (mevedel-tool-exec--permission-log-session))
+        (owner (mevedel-tool-exec--current-origin)))
+    (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
+      (error "Parameter execution_id is required"))
+    (unless session
+      (error "StopExecution requires an active session"))
+    (require 'mevedel-execution)
+    (mevedel-execution-stop
+     session owner execution-id
+     (lambda (observation)
+       (funcall callback
+                (mevedel-tool-exec--observation-envelope
+                 observation nil t))))))
 
 
 ;;
@@ -2294,7 +2457,7 @@ CALLBACK receives the result envelope.  ARGS is a plist with :expression."
 ;;
 ;;; Renderers
 
-(defun mevedel-tool-exec--render-bash (name args result _render-data)
+(defun mevedel-tool-exec--render-bash (name args result render-data)
   "Rendering plist for the Bash tool.
 NAME is \"Bash\".  ARGS carries `:command'.  RESULT is stdout/stderr.
 Header shows a truncated first line of the command; body fontifies as
@@ -2302,11 +2465,7 @@ Header shows a truncated first line of the command; body fontifies as
   (when (stringp result)
     (let* ((cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
-           (status (and (or (string-prefix-p "Command failed" result)
-                            (string-prefix-p "Command timed out" result)
-                            (string-prefix-p "Failed to start" result)
-                            (string-prefix-p "Error:" result))
-                        'error)))
+           (status (plist-get render-data :status)))
       (list :header (format "%s: %s" (or name "Bash") first-line)
             :body result
             :body-mode 'sh-mode
@@ -2351,6 +2510,8 @@ Header shows a truncated first line of the command; body fontifies as
                    "The Bash command to execute from the session working directory. Can include pipes and standard shell operators.")
            (timeout_seconds integer :optional
                             "Optional timeout in seconds. Defaults to `mevedel-bash-timeout' (120 seconds). Must be positive.")
+           (yield_time_ms integer :optional
+                          "Milliseconds to wait before yielding a still-running command. Defaults to 10000; range 250-30000.")
            (sandbox_permissions string :optional
                                 "Child-execution authority: use_default, with_additional_permissions, or require_escalated for a complete confinement bypass."
                                 :enum ["use_default"
@@ -2381,6 +2542,40 @@ Header shows a truncated first line of the command; body fontifies as
     :groups (eval)
     :check-permission-async #'mevedel-tool-exec--check-permission-async
     :get-pattern (lambda (input) (plist-get input :command))
+    :renderer #'mevedel-tool-exec--render-bash)
+
+  (mevedel-define-tool
+    :name "WriteStdin"
+    :description "Poll unread output or send input to a yielded Bash execution."
+    :handler #'mevedel-tool-exec--write-stdin
+    :args ((execution_id string :required
+                         "Opaque execution ID returned by Bash.")
+           (chars string :optional
+                  "Input bytes to send. Omit or use an empty string to poll. Pipe-mode executions reject input.")
+           (yield_time_ms integer :optional
+                          "Wait before returning: polls default to 5000ms (5000-300000); input defaults to 250ms (250-30000)."))
+    :async-p t
+    :max-result-size 30000
+    :groups (eval)
+    :renderer #'mevedel-tool-exec--render-bash)
+
+  (mevedel-define-tool
+    :name "ListExecutions"
+    :description "List yielded Bash executions owned by this agent."
+    :handler #'mevedel-tool-exec--list-executions
+    :args ()
+    :read-only-p t
+    :groups (eval))
+
+  (mevedel-define-tool
+    :name "StopExecution"
+    :description "Stop one yielded Bash execution owned by this agent."
+    :handler #'mevedel-tool-exec--stop-execution
+    :args ((execution_id string :required
+                         "Opaque execution ID returned by Bash."))
+    :async-p t
+    :max-result-size 30000
+    :groups (eval)
     :renderer #'mevedel-tool-exec--render-bash)
 
   (mevedel-define-tool

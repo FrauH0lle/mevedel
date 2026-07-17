@@ -148,27 +148,10 @@ of omitted characters."
   (let ((length (length result)))
     (if (<= length mevedel-pipeline--preview-size)
         result
-      (let* ((head-budget (/ mevedel-pipeline--preview-size 2))
-             (tail-budget (- mevedel-pipeline--preview-size head-budget))
-             (head-newline
-              (cl-position ?\n result :from-end t :end head-budget))
-             (head-end
-              (if (and head-newline
-                       (>= head-newline (/ head-budget 2)))
-                  (1+ head-newline)
-                head-budget))
-             (tail-base (- length tail-budget))
-             (tail-newline
-              (cl-position ?\n result :start tail-base
-                           :end (min length
-                                     (+ tail-base (/ tail-budget 2)))))
-             (tail-start (if tail-newline (1+ tail-newline) tail-base)))
-        (concat (substring result 0 head-end)
-                (unless (eq ?\n (aref result (1- head-end))) "\n")
-                (format
-                 "[mevedel: tool output truncated; omitted %d chars]\n"
-                 (- tail-start head-end))
-                (substring result tail-start))))))
+      (plist-get
+       (mevedel--head-tail-preview-parts
+        result result length mevedel-pipeline--preview-size)
+       :text))))
 
 (defun mevedel-pipeline--tool-results-dir (session buffer)
   "Return SESSION's tool-results directory, materializing when possible.
