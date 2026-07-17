@@ -2189,6 +2189,26 @@ default Bash keeps bare dot inspection automatic"
       (test-bash-permissions--call-bash
        #'ignore '(:command "printf done" :wait-for-completion-p t)))
     (should-not (plist-get (cdr captured) :yield-time-ms)))
+  :doc "passes explicit PTY mode without changing execution authority"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured args))))
+      (test-bash-permissions--call-bash
+       #'ignore '(:command "printf prompt" :tty t)))
+    (should (eq t (plist-get (cdr captured) :tty)))
+    (should-not (plist-get (cdr captured) :additional-permissions))
+    (should-not (plist-get (cdr captured) :sandbox-permissions)))
+  :doc "normalizes JSON false PTY mode and rejects non-booleans"
+  (let (captured)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args) (setq captured args))))
+      (test-bash-permissions--call-bash
+       #'ignore '(:command "printf plain" :tty :json-false)))
+    (should-not (plist-get (cdr captured) :tty))
+    (should-error
+     (test-bash-permissions--call-bash
+      #'ignore '(:command "printf invalid" :tty "yes"))
+     :type 'error))
   :doc "passes approved network authority to the child launcher"
   (let (captured result)
     (cl-letf (((symbol-function
@@ -2723,8 +2743,13 @@ default Bash keeps bare dot inspection automatic"
          (args (gptel-tool-args (mevedel-tool-gptel-tool bash)))
          (yield (seq-find (lambda (arg)
                             (equal "yield_time_ms" (plist-get arg :name)))
-                          args)))
+                          args))
+         (tty (seq-find (lambda (arg)
+                          (equal "tty" (plist-get arg :name)))
+                        args)))
     (should (equal "integer" (plist-get yield :type)))
+    (should (equal "boolean" (plist-get tty :type)))
+    (should (plist-get tty :optional))
     (dolist (name '("WriteStdin" "ListExecutions" "StopExecution"))
       (should (mevedel-tool-get name))))
   :doc "registers Eval mode and preserve_ui optional arguments"
