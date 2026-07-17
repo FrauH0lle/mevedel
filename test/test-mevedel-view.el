@@ -12,6 +12,8 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
+(require 'mevedel-execution)
+(require 'mevedel-executions-list)
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
 (require 'mevedel-menu)
@@ -328,17 +330,23 @@
   ,test
   (test)
   :doc "status zone continuously discloses the default child boundary"
-  (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
+  (let ((session (mevedel-session--create :name "status")))
+    (cl-letf (((symbol-function 'mevedel-sandbox-pending-facts)
              (lambda (&rest _)
                '(:sandbox bubblewrap
                  :filesystem workspace-write
                  :network isolated)))
+            ((symbol-function 'mevedel-execution-count-user)
+             (lambda (seen-session)
+               (should (eq session seen-session))
+               2))
             ((symbol-function 'mevedel-view-agent-status-fragment)
              (lambda ()
                '(:namespace status :id agents :priority 0
                  :body "agents\n"))))
     (let* ((fragments
-            (mevedel-view--status-fragments '(:task-body "tasks\n")))
+            (mevedel-view--status-fragments
+             (list :session session :task-body "tasks\n")))
            (sandbox (seq-find
                      (lambda (fragment)
                        (eq (plist-get fragment :id) 'sandbox))
@@ -346,7 +354,11 @@
            (tasks (seq-find
                    (lambda (fragment)
                      (eq (plist-get fragment :id) 'tasks))
-                   fragments))
+                     fragments))
+           (executions (seq-find
+                        (lambda (fragment)
+                          (eq (plist-get fragment :id) 'executions))
+                        fragments))
            (agents (seq-find
                     (lambda (fragment)
                       (eq (plist-get fragment :id) 'agents))
@@ -355,10 +367,14 @@
       (should (> (plist-get sandbox :priority)
                  (plist-get tasks :priority)))
       (should (> (plist-get tasks :priority)
+                 (plist-get executions :priority)))
+      (should (> (plist-get executions :priority)
                  (plist-get agents :priority)))
+      (should (string-match-p "Executions: 2 live"
+                              (plist-get executions :body)))
       (should (string-match-p
                "sandbox: bubblewrap; filesystem: workspace-write; network: isolated"
-               (plist-get sandbox :body)))))
+               (plist-get sandbox :body))))))
 
   :doc "unrestricted fallback stays visible without changing a multiline draft"
   (mevedel-view-test--with-buffers
@@ -383,7 +399,9 @@
                          :network unrestricted
                          :reason "Bubblewrap is not supported")))
                     ((symbol-function 'mevedel-view-agent-status-fragment)
-                     #'ignore))
+                     #'ignore)
+                    ((symbol-function 'mevedel-execution-count-user)
+                     (lambda (_session) 1)))
             (mevedel-view--render-status data-buf)
             (should (equal draft
                            (buffer-substring-no-properties
@@ -393,9 +411,77 @@
               "guardian reviewing revision 1/2"
               (mevedel-view--status-strip)))
             (should (string-match-p
+                     "Executions: 1 live"
+                     (buffer-substring-no-properties
+                      (point-min) (point-max))))
+            (should (string-match-p
                      "sandbox: unavailable; filesystem: unrestricted; network: unrestricted"
                      (buffer-substring-no-properties
                       (point-min) (point-max))))))))))
+
+(mevedel-deftest mevedel-view--execution-state-changed ()
+  ,test
+  (test)
+  :doc "live-count redraw preserves a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "execution-status"))
+          (draft "> quoted\nsecond line"))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert draft)
+        (goto-char (+ (mevedel-view--input-start) 4)))
+      (cl-letf (((symbol-function 'mevedel-execution-count-user)
+                 (lambda (seen-session)
+                   (should (eq session seen-session))
+                   1))
+                ((symbol-function 'mevedel-view-agent-status-fragment)
+                 #'ignore))
+        (mevedel-view--execution-state-changed session data-buf))
+      (with-current-buffer view-buf
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should (string-match-p
+                 "Executions: 1 live"
+                 (buffer-substring-no-properties
+                  (point-min) (mevedel-view--input-start)))))))
+  :doc "routes an agent execution update to its parent session view"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create :name "agent-execution-status"))
+          (agent-data (generate-new-buffer " *mevedel-agent-execution*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer agent-data
+              (setq-local
+               mevedel--agent-invocation
+               (mevedel-agent-invocation--create
+                :parent-data-buffer data-buf)))
+            (cl-letf (((symbol-function 'mevedel-execution-count-user)
+                       (lambda (seen-session)
+                         (should (eq session seen-session))
+                         1))
+                      ((symbol-function 'mevedel-view-agent-status-fragment)
+                       #'ignore))
+              (mevedel-view--execution-state-changed session agent-data))
+            (with-current-buffer view-buf
+              (should (string-match-p
+                       "Executions: 1 live"
+                       (buffer-substring-no-properties
+                        (point-min) (mevedel-view--input-start))))))
+        (kill-buffer agent-data)))))
+
+(mevedel-deftest mevedel-view-open-executions ()
+  ,test
+  (test)
+  :doc "opens the live execution cockpit"
+  (let (opened)
+    (cl-letf (((symbol-function 'mevedel-executions-list-open)
+               (lambda (&optional _context) (setq opened t))))
+      (mevedel-view-open-executions))
+    (should opened)))
 
 (mevedel-deftest mevedel-view--sandbox-state-changed ()
   ,test

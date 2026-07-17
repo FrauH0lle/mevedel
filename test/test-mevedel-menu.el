@@ -16,6 +16,8 @@
                byte-compile-current-file))
           "helpers"))
 (require 'mevedel-cockpit)
+(require 'mevedel-execution)
+(require 'mevedel-executions-list)
 (require 'mevedel-gptel-bridge)
 (require 'mevedel-menu)
 (require 'mevedel-goal)
@@ -134,15 +136,19 @@
             (mevedel-menu-open (car area))
             (should (eq called-prefix (cdr area))))))))
 
-  :doc "opens requested tools, skills, and plugins management surfaces"
+  :doc "opens requested tools, executions, skills, and plugins surfaces"
   (mevedel-menu-test--with-buffers
-    (let (tools-context tools-buffer
+    (let (tools-context tools-buffer executions-context executions-buffer
           skills-context skills-buffer
           plugins-context plugins-buffer)
       (cl-letf (((symbol-function 'mevedel-tools-list-open)
                  (lambda (context)
                    (setq tools-context context
                          tools-buffer (current-buffer))))
+                ((symbol-function 'mevedel-executions-list-open)
+                 (lambda (context)
+                   (setq executions-context context
+                         executions-buffer (current-buffer))))
                 ((symbol-function 'mevedel-skills-list-open)
                  (lambda (context)
                    (setq skills-context context
@@ -153,6 +159,7 @@
                          plugins-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-menu-open 'tools)
+          (mevedel-menu-open 'executions)
           (mevedel-menu-open 'skills)
           (mevedel-menu-open 'plugins)))
       (should (eq (mevedel-cockpit-context-session tools-context) session))
@@ -163,6 +170,11 @@
       (should (eq (mevedel-cockpit-context-origin-buffer tools-context)
                   view-buf))
       (should (eq tools-buffer data-buf))
+      (should (eq (mevedel-cockpit-context-session executions-context)
+                  session))
+      (should (eq (mevedel-cockpit-context-view-buffer executions-context)
+                  view-buf))
+      (should (eq executions-buffer data-buf))
       (should (eq (mevedel-cockpit-context-session skills-context)
                   session))
       (should (eq (mevedel-cockpit-context-view-buffer skills-context)
@@ -397,6 +409,15 @@
       (mevedel-menu--open-preset))
     (should (eq 'preset area))))
 
+(mevedel-deftest mevedel-menu--open-executions ()
+  ,test (test)
+  :doc "routes to the executions area"
+  (let (area)
+    (cl-letf (((symbol-function 'mevedel-menu-open)
+               (lambda (value) (setq area value))))
+      (mevedel-menu--open-executions))
+    (should (eq 'executions area))))
+
 (mevedel-deftest mevedel-menu--goal-call ()
   ,test (test)
   :doc "runs lifecycle functions in the data buffer"
@@ -579,6 +600,20 @@
                          (substring-no-properties
                           (mevedel-menu--worktree-description))))))))
 
+(mevedel-deftest mevedel-menu--executions-description ()
+  ,test
+  (test)
+  :doc "shows the current live execution count"
+  (mevedel-menu-test--with-buffers
+    (cl-letf (((symbol-function 'mevedel-execution-count-user)
+               (lambda (seen-session)
+                 (should (eq session seen-session))
+                 3)))
+      (with-current-buffer view-buf
+        (should (string= "Processes 3 live"
+                         (substring-no-properties
+                          (mevedel-menu--executions-description))))))))
+
 (mevedel-deftest mevedel-menu--top-descriptions ()
   ,test
   (test)
@@ -645,6 +680,8 @@
                       "Slash commands that open UI"
                       "Direct slash commands"
                       "/mode MODE, /model MODEL"
+                      "/ps"
+                      "/stop [EXECUTION_ID]"
                       "Modes"
                       "View and data buffers"))
       (should (string-match-p (regexp-quote needle) text)))

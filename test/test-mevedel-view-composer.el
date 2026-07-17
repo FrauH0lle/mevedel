@@ -801,7 +801,25 @@
         (insert "/goal pause")
         (mevedel-view-send)
         (should (equal "pause" seen))
-        (should (string-empty-p (mevedel-view--input-text)))))))
+        (should (string-empty-p (mevedel-view--input-text))))))
+  :doc "/ps and /stop remain available during an active request"
+  (dolist (command '("ps" "stop"))
+    (mevedel-view-test--with-buffers
+      (let* (seen
+             (commands
+              (list (cons command (lambda (args) (setq seen args))))))
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request t
+                      mevedel-slash-commands commands))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert (if (string= command "stop")
+                      "/stop exec-000001"
+                    "/ps"))
+          (mevedel-view-send)
+          (should (equal (if (string= command "stop") "exec-000001" "")
+                         seen))
+          (should (string-empty-p (mevedel-view--input-text))))))))
 
 (mevedel-deftest mevedel-view-send/dollar-text ()
   ,test

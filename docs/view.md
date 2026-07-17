@@ -199,6 +199,12 @@ the live view/data pair once and routes each action to the owner buffer. The
 explicit `g gptel menu` cockpit row is the advanced bridge into gptel's menu
 from the paired data buffer.
 
+While managed Bash work is live, the status zone shows its session-wide count
+as an `Executions` fragment. Activating it opens the execution cockpit. The
+main cockpit exposes the same surface as `Processes`, and `/ps` opens it
+directly. Execution start and settlement reconcile this fragment through the
+normal managed-zone path, preserving composer text, point, and windows.
+
 ## Managed-zone chrome
 
 `mevedel-view-zone.el` owns the four fixed fragment-backed regions of

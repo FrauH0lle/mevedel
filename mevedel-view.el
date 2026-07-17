@@ -24,8 +24,21 @@
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-chat'
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-count-user "mevedel-execution" (session))
+(defvar mevedel-execution-state-change-hook)
+
+;; `mevedel-executions-list'
+(declare-function mevedel-executions-list-open
+                  "mevedel-executions-list" (&optional context))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-approval-status
@@ -1037,6 +1050,23 @@ the editable composer signal instead of settling queued interactions."
         (when suffix
           (setq fragment (plist-put fragment :body-suffix suffix)))
         (push fragment fragments)))
+    (when-let* ((session (plist-get model :session))
+                (count (progn
+                         (require 'mevedel-execution)
+                         (mevedel-execution-count-user session)))
+                ((> count 0)))
+      (let ((body (format "Executions: %d live\n" count)))
+        (add-text-properties 0 (length body)
+                             '(font-lock-face shadow) body)
+        (push (list :namespace 'status
+                    :id 'executions
+                    :priority 50
+                    :body body
+                    :keymap (mevedel-view--display-fragment-keymap)
+                    :navigatable t
+                    :activate #'mevedel-view-open-executions
+                    :entry 'executions)
+              fragments)))
     (when-let* ((fragment (mevedel-view-agent-status-fragment)))
       (push fragment fragments))
     (nreverse fragments)))
@@ -1052,6 +1082,35 @@ the editable composer signal instead of settling queued interactions."
 
 (add-hook 'mevedel-sandbox-state-change-hook
           #'mevedel-view--sandbox-state-changed)
+
+(defun mevedel-view-open-executions ()
+  "Open the current session's live execution cockpit."
+  (interactive)
+  (require 'mevedel-executions-list)
+  (mevedel-executions-list-open))
+
+(defun mevedel-view--execution-state-changed (session data-buffer)
+  "Refresh main views owned by SESSION after live executions change."
+  (when (buffer-live-p data-buffer)
+    (let* ((invocation
+            (buffer-local-value 'mevedel--agent-invocation data-buffer))
+           (main-data-buffer
+            (if invocation
+                (mevedel-agent-invocation-parent-data-buffer invocation)
+              data-buffer))
+           (view-buffer
+            (and (buffer-live-p main-data-buffer)
+                 (buffer-local-value 'mevedel--view-buffer
+                                     main-data-buffer))))
+      (when (buffer-live-p view-buffer)
+        (with-current-buffer view-buffer
+          (when (and (derived-mode-p 'mevedel-view-mode)
+                     (not mevedel-view--agent-transcript-p)
+                     (eq session (mevedel-view--status-session)))
+            (mevedel-view--render-status)))))))
+
+(add-hook 'mevedel-execution-state-change-hook
+          #'mevedel-view--execution-state-changed)
 
 (defun mevedel-view--render-status (&optional data-buf)
   "Render sandbox, task, and aggregate agent status for DATA-BUF."

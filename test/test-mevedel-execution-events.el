@@ -341,6 +341,29 @@
           (should (= 0 (plist-get (plist-get observation :facts)
                                   :exit-code))))
       (delete-directory root t)))
+  :doc "skips recurring progress when no transcript row can consume it"
+  (let* ((root (make-temp-file "mevedel-managed-no-progress-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         (mevedel-execution--child-kill-delay 0.05)
+         (mevedel-execution-event-functions (list #'ignore))
+         initial id)
+    (unwind-protect
+        (progn
+          (setq initial
+                (test-mevedel-execution--start-managed
+                 session root '("sh" "-c" "sleep 30")))
+          (setq id (plist-get (plist-get initial :facts) :execution-id))
+          (let ((record
+                 (gethash
+                  id
+                  (mevedel-execution--state-records
+                   (mevedel-session-execution-state session)))))
+            (should record)
+            (should-not
+             (mevedel-execution--record-progress-timer record)))
+          (test-mevedel-execution--stop-all session "main" (list id)))
+      (delete-directory root t)))
   :doc "refuses a sixty-fifth live managed process without eviction"
   (let* ((root (make-temp-file "mevedel-managed-limit-" t))
          (session (test-mevedel-execution--session root))
@@ -666,7 +689,9 @@
                       session "main" id #'ignore)
                    (mevedel-execution-not-found
                     (setq reentrant-error err)))
-                 (mevedel-execution-stop-user session id)
+                 (should-error
+                  (mevedel-execution-stop-user session id)
+                  :type 'mevedel-execution-not-found)
                  t)))
           (setq initial
                 (test-mevedel-execution--start-managed

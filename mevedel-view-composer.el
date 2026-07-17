@@ -135,6 +135,8 @@
                   "mevedel-skills-ui"
                   (buffer session local-commands &optional input-start))
 (declare-function mevedel-skills-install-font-lock "mevedel-skills-ui" ())
+(declare-function mevedel-skills-local-command-active-request-p
+                  "mevedel-skills-ui" (name args))
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
@@ -1487,12 +1489,10 @@ fork."
                       (and (bound-and-true-p mevedel--session)
                            mevedel--session)))))
           (if (and slash-parsed
-                   (string= (nth 0 slash-parsed) "goal")
-                   (member (car (split-string (or (nth 1 slash-parsed) "")
-                                              "[ \t\n]+" t))
-                           '("pause" "edit")))
+                   (mevedel-skills-local-command-active-request-p
+                    (nth 0 slash-parsed) (nth 1 slash-parsed)))
               (let ((result (with-current-buffer mevedel--data-buffer
-                              (funcall (cdr (assoc "goal"
+                              (funcall (cdr (assoc (nth 0 slash-parsed)
                                                   mevedel-slash-commands))
                                        (nth 1 slash-parsed)))))
                 (when (stringp result) (message "%s" result))
