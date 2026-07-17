@@ -386,6 +386,15 @@ unread cursor and returns canonical execution facts separately from the raw
 output. Unread ranges beyond 2000 characters use the shared newline-aware,
 equal head-and-tail preview while the retained artifact remains complete.
 
+Analyzer-proven read-only Bash calls may overlap within one session. Unknown,
+unparsable, and mutating calls use the exclusive lane. Admission is FIFO: once
+an exclusive call is waiting, later readers wait behind it, preventing writer
+starvation. Main and sub-agent owners share their session's scheduler, while
+separate sessions remain independent. A command releases its scheduler lease
+when it finishes, aborts, or yields; a yielded operating-system process keeps
+running under its original owner and resource boundary without blocking later
+admission.
+
 At most 64 managed Bash processes may be live in one session. The sixty-fifth
 is refused before spawn without evicting existing work. Foreground work remains
 owned by its initiating request; yielding detaches it from later request aborts

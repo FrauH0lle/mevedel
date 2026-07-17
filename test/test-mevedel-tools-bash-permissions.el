@@ -2189,6 +2189,18 @@ default Bash keeps bare dot inspection automatic"
       (test-bash-permissions--call-bash
        #'ignore '(:command "printf done" :wait-for-completion-p t)))
     (should-not (plist-get (cdr captured) :yield-time-ms)))
+  :doc "forwards only proven read-only analysis to scheduler admission"
+  (let (read-only unknown)
+    (cl-letf (((symbol-function 'mevedel-execution-start-bash)
+               (lambda (&rest args)
+                 (if read-only
+                     (setq unknown args)
+                   (setq read-only args)))))
+      (test-bash-permissions--call-bash #'ignore '(:command "pwd"))
+      (test-bash-permissions--call-bash
+       #'ignore '(:command "touch scheduler-test")))
+    (should (eq t (plist-get (cdr read-only) :read-only-p)))
+    (should-not (plist-get (cdr unknown) :read-only-p)))
   :doc "passes explicit PTY mode without changing execution authority"
   (let (captured)
     (cl-letf (((symbol-function 'mevedel-execution-start-bash)

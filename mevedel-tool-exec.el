@@ -2175,7 +2175,9 @@ and optional :timeout_seconds."
        :command (list "bash" "-lc" command)
        :workdir workdir
        :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
-       :timeout timeout :tty (eq tty t)
+       :timeout timeout
+       :read-only-p (eq (plist-get analysis :class) 'read-only)
+       :tty (eq tty t)
        :yield-time-ms yield-time-ms
        :artifact-directory
        (mevedel-tool-exec--execution-artifact-directory session)
