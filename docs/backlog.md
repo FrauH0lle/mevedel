@@ -29,10 +29,6 @@ Remove items when they are implemented, obsolete, or no longer valuable.
   and display the warning also in the view buffer (but not permanent via the data
   buffer).
 
-- Steal Command-specific argument policies, /home/roland/codex/codex-rs/shell-command/src/command_safety/is_safe_command.rs:67
-
-- Extend mevedel's sandbox beyond Bash/Eval to every tool for which filesystem,
-  network, or process confinement is useful.
 - Steal Codex's unified execution lifecycle for Bash: yield interactive or
   long-running commands to session-owned process IDs; support optional PTYs,
   input, polling, interrupts, live output, background completion, listing,

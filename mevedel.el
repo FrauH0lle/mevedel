@@ -52,6 +52,7 @@
 (require 'mevedel-models)
 (require 'mevedel-plan)
 (require 'mevedel-sandbox)
+(require 'mevedel-execution)
 (require 'mevedel-tools)
 (require 'mevedel-tools-list)
 (require 'mevedel-system)

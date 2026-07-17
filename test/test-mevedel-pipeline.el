@@ -9,6 +9,7 @@
 (require 'mevedel-pipeline)
 (require 'mevedel-tool-media)
 (require 'mevedel-permissions)
+(require 'mevedel-execution)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tools)
@@ -1219,6 +1220,7 @@
 			(tool (mevedel-tool-ensure "Bash"))
 			(facts '(:sandbox bubblewrap
 				 :filesystem workspace-write
+				 :proc fresh
 				 :network isolated))
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
@@ -2281,12 +2283,11 @@
 		       (let ((tool (mevedel-tool-get "Bash")))
 			 (cl-letf
 			     (((symbol-function
-				'mevedel-tool-exec--start-sandboxed-child-process)
-			       (lambda (_name _command _workdir _roots _timeout callback
-					&optional additional-permissions
-					sandbox-permissions session)
-				 (ignore sandbox-permissions session)
-				 (push additional-permissions launches)
+				'mevedel-execution-start-one-shot)
+			       (lambda (callback &rest keys)
+				 (let ((additional-permissions
+					(plist-get keys :additional-permissions)))
+				   (push additional-permissions launches)
 				 (funcall
 				  callback
 				  (if additional-permissions
@@ -2301,7 +2302,7 @@
 				      :sandbox-facts
 				      (:sandbox bubblewrap
 				       :filesystem workspace-write
-				       :network isolated)))))))
+				       :network isolated))))))))
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (result) (setq first-result result))
 			    '(:command "pwd"))
@@ -2362,7 +2363,7 @@
 				 (push (plist-get entry :kind) enqueued-kinds)
 				 (funcall (plist-get entry :callback) 'deny-once)))
 			      ((symbol-function
-				'mevedel-tool-exec--start-sandboxed-child-process)
+				'mevedel-execution-start-one-shot)
 			       (lambda (&rest _args) (setq launched t))))
 			   (mevedel-pipeline-run-tool
 			    tool (lambda (value) (setq result value))

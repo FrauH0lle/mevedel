@@ -195,6 +195,15 @@
     (should (eq (mevedel-session-workspace s1)
                 (mevedel-session-workspace s2)))))
 
+(mevedel-deftest mevedel-session--set-execution-state ()
+  ,test
+  (test)
+  :doc "stores opaque transient execution state by identity"
+  (let* ((session (mevedel-session--create))
+         (state (make-symbol "execution-state")))
+    (mevedel-session--set-execution-state session state)
+    (should (eq state (mevedel-session-execution-state session)))))
+
 
 ;;
 ;;; Session buffer name

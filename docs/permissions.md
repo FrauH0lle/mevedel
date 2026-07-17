@@ -238,8 +238,9 @@ request-scoped delegated patterns may not. Explicit denies always win.
 
 ### Child confinement
 
-Bash and batch Eval share the guarded child launcher and, independently of the
-permission mode, consult `mevedel-sandbox-mode`. On Linux, `auto` resolves
+Bash, batch Eval, and native external tool helpers share the guarded child
+launcher and, independently of the permission mode, consult
+`mevedel-sandbox-mode`. On Linux, `auto` resolves
 `bwrap` with `executable-find` and caches a real probe of the core mount, user,
 process, and network namespaces. Each probe attempt defaults to a 500 ms bound
 and retains at most 64 KiB of combined diagnostics. If the full probe fails,
@@ -254,6 +255,16 @@ the network. A justified additive network request prompts in `ask` and `auto`,
 proceeds automatically in `full-auto` after command authorization, and changes
 only network isolation for that invocation. The namespace and mount boundary
 is inherited by descendants.
+
+Native tools pass already-authorized input and search paths to the launcher as
+read-only mounts and pass only their generated-artifact directories as writable
+roots. Each invocation also gets a private writable scratch directory, which is
+removed on settlement. This currently covers `diff` for previews, `rg` for
+Read directory listings, Glob, and Grep, and `pdfinfo`, `pdftoppm`, and
+ImageMagick for Read media handling. These helper profiles are chosen by native
+code; they do not add model-facing escalation arguments or another permission
+prompt. Live Emacs operations, long-lived language servers, hooks, and
+user-triggered Git, clipboard, and UI helpers are not external tool helpers.
 
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
@@ -299,8 +310,9 @@ permits one direct fallback. A command failure, signal, or timeout after the
 marker is returned exactly once and is never replayed. `required` returns an
 execution error instead of falling back, while `off` selects direct execution
 deliberately. Direct execution always reports `filesystem: unrestricted` and
-`network: unrestricted`; confined and direct child results both append their
-active sandbox facts for the model and audit trail.
+`network: unrestricted`. Bash and batch-Eval results append their active
+sandbox facts for the model and audit trail. Native helper facts remain
+internal and in tests rather than being added to successful tool content.
 Trusted skill substitutions keep those facts out of the substituted literal;
 an unrestricted substitution instead emits a user-visible warning while the
 active facts remain recorded.
@@ -309,13 +321,13 @@ The main view's status zone continuously displays the active child boundary as
 `sandbox`, `filesystem`, and `network` facts, plus `proc: host` when the fresh
 proc mount is unavailable. With no child running it shows the selected default,
 including deliberate `off` mode, required-mode refusal, and `auto` fallback on
-unsupported or unavailable backends. While a Bash or batch Eval child runs,
-the row switches to that invocation's additive, escalated, or fallback facts
-and returns to the default after settlement. The completed result retains the
-same invocation facts for the transcript and audit trail. Additive filesystem
-facts include read and write grant counts. Concurrent children are summarized
-conservatively so a less-confined active dimension is not hidden by a later,
-more-confined invocation.
+unsupported or unavailable backends. While a Bash, batch Eval, or external
+tool helper child runs, the row switches to that invocation's actual facts and
+returns to the default after settlement. Completed Bash and batch-Eval results
+retain the same invocation facts for the transcript and audit trail. Additive
+filesystem facts include read and write grant counts. Concurrent children are
+summarized conservatively so a less-confined active dimension is not hidden by
+a later, more-confined invocation.
 
 Protected restrictions are layered after writable roots. Existing glob matches
 and canonical targets become concrete mounts; `.git` pointer files also protect

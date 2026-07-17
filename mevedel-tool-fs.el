@@ -13,49 +13,64 @@
   (require 'mevedel-tool-registry))
 
 ;; `diff-mode'
-(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
-(declare-function mevedel-tool-string-arg "mevedel-tool-registry"
-                  (args key &optional default))
-(declare-function mevedel-tool-integer-arg "mevedel-tool-registry"
-                  (args key &optional default))
-
 (declare-function diff-setup-buffer-type "diff-mode" ())
 
-;; `mevedel-chat'
-(defvar mevedel--diff-preview-buffer-name)
+;; `gptel-anthropic'
+(declare-function gptel-anthropic-p "ext:gptel-anthropic" (cl-x) t)
 
-;; Circular: mevedel-tool-fs <-> mevedel-preview-mode
-(declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
-
-;; `mevedel-structs'
-(defvar mevedel--workspace)
-(defvar mevedel--session)
-(defvar mevedel--current-request)
-(defvar mevedel--agent-invocation)
-(defvar mevedel--data-buffer)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
-
-;; `mevedel-file-state'
-(declare-function mevedel-session-record-file-access
-                  "mevedel-file-state" (session path kind &optional offset limit))
-(declare-function mevedel-session-read-is-duplicate-p
-                  "mevedel-file-state" (session path offset limit))
+;; `gptel-bedrock'
+(declare-function gptel-bedrock-p "ext:gptel-bedrock" (cl-x) t)
 
 ;; `gptel-request'
 (declare-function gptel--model-capable-p "ext:gptel-request"
                   (cap &optional model))
 (declare-function gptel--model-mime-capable-p "ext:gptel-request"
                   (mime &optional model))
-(declare-function gptel-anthropic-p "ext:gptel-anthropic" (cl-x) t)
-(declare-function gptel-bedrock-p "ext:gptel-bedrock" (cl-x) t)
 (defvar gptel-backend)
+
+;; `mevedel-chat'
+(defvar mevedel--diff-preview-buffer-name)
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-run-helper
+                  "mevedel-execution"
+                  (name command read-paths writable-roots
+                        &optional timeout session))
+(declare-function mevedel-execution-start-helper
+                  "mevedel-execution"
+                  (callback name command read-paths writable-roots
+                            &optional timeout session))
+
+;; `mevedel-file-state'
+(declare-function mevedel-session-read-is-duplicate-p
+                  "mevedel-file-state" (session path offset limit))
+(declare-function mevedel-session-record-file-access
+                  "mevedel-file-state" (session path kind &optional offset limit))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--tool-results-dir
                   "mevedel-pipeline" (session buffer))
+
+;; `mevedel-preview-mode'
+(declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
+
+;; `mevedel-structs'
+(declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(defvar mevedel--agent-invocation)
+(defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
+(defvar mevedel--workspace)
+
+;; `mevedel-tool-registry'
+(declare-function mevedel-tool-integer-arg "mevedel-tool-registry"
+                  (args key &optional default))
+(declare-function mevedel-tool-string-arg "mevedel-tool-registry"
+                  (args key &optional default))
+(declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
 
 (defvar mevedel-tool-fs--read-render-cache (make-hash-table :test #'equal)
   "Cache for cheap `Read' renderer header metadata.")
@@ -73,27 +88,36 @@ MODIFIED is labeled `/dev/null' to mimic git's new/deleted-file display.
 When LABELS-REAL is non-nil, both sides are always labeled `a/FILEPATH'
 and `b/FILEPATH'.  Use this when the diff will be fed to ediff's
 patching machinery, which needs a real source path to resolve."
-  (with-temp-buffer
-    (let ((orig-file (make-temp-file "mevedel-orig-"))
-          (mod-file (make-temp-file "mevedel-mod-")))
-      (unwind-protect
-          (progn
-            (with-temp-file orig-file (when original (insert original)))
-            (with-temp-file mod-file (when modified (insert modified)))
-            (call-process "diff" nil t nil
-                          "-u"
-                          "--label" (if (or labels-real
-                                            (and original (not (string-empty-p original))))
-                                        (concat "a/" filepath)
-                                      "/dev/null")
-                          "--label" (if (or labels-real
-                                            (and modified (not (string-empty-p modified))))
-                                        (concat "b/" filepath)
-                                      "/dev/null")
-                          orig-file mod-file)
-            (buffer-string))
-        (when (file-exists-p orig-file) (delete-file orig-file))
-        (when (file-exists-p mod-file) (delete-file mod-file))))))
+  (let ((session (bound-and-true-p mevedel--session)))
+    (with-temp-buffer
+      (let ((orig-file (make-temp-file "mevedel-orig-"))
+            (mod-file (make-temp-file "mevedel-mod-")))
+        (unwind-protect
+            (progn
+              (with-temp-file orig-file (when original (insert original)))
+              (with-temp-file mod-file (when modified (insert modified)))
+              (let ((output
+                     (cdr
+                      (mevedel-tool-fs--call-process-capturing-output
+                       "mevedel-diff"
+                       (list "diff" "-u"
+                             "--label" (if (or labels-real
+                                               (and original
+                                                    (not (string-empty-p
+                                                          original))))
+                                           (concat "a/" filepath)
+                                         "/dev/null")
+                             "--label" (if (or labels-real
+                                               (and modified
+                                                    (not (string-empty-p
+                                                          modified))))
+                                           (concat "b/" filepath)
+                                         "/dev/null")
+                             orig-file mod-file)
+                       (list orig-file mod-file) nil session))))
+                (if (string-empty-p output) "" (concat output "\n"))))
+          (when (file-exists-p orig-file) (delete-file orig-file))
+          (when (file-exists-p mod-file) (delete-file mod-file)))))))
 
 (defun mevedel-tool-fs--setup-diff-buffer (temp-file real-path workspace root
                                                      &optional chat-buffer labels-real)
@@ -637,11 +661,19 @@ invalid forms or ranges over the per-request page limit."
   (or (executable-find "magick")
       (executable-find "convert")))
 
-(defun mevedel-tool-fs--call-process-capturing-output (program &rest args)
-  "Call PROGRAM with ARGS, returning (EXIT-CODE . OUTPUT)."
-  (with-temp-buffer
-    (let ((exit-code (apply #'call-process program nil (list t t) nil args)))
-      (cons exit-code (string-trim (buffer-string))))))
+(defun mevedel-tool-fs--call-process-capturing-output
+    (name command read-paths &optional writable-roots session)
+  "Run helper COMMAND as NAME, returning (EXIT-CODE . OUTPUT).
+READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary."
+  (require 'mevedel-execution)
+  (let* ((result (mevedel-execution-run-helper
+                  name command read-paths writable-roots nil
+                  (or session (bound-and-true-p mevedel--session))))
+         (error-data (plist-get result :error)))
+    (when error-data
+      (signal (car error-data) (cdr error-data)))
+    (cons (plist-get result :exit-code)
+          (string-trim (plist-get result :output)))))
 
 (defun mevedel-tool-fs--file-size (path)
   "Return PATH's size in bytes, or nil when unavailable."
@@ -653,7 +685,7 @@ invalid forms or ranges over the per-request page limit."
   (when (executable-find "pdfinfo")
     (pcase-let ((`(,exit-code . ,output)
                  (mevedel-tool-fs--call-process-capturing-output
-                  "pdfinfo" path)))
+                  "mevedel-pdfinfo" (list "pdfinfo" path) (list path))))
       (when (and (zerop exit-code)
                  (string-match "^Pages:[[:space:]]+\\([0-9]+\\)" output))
         (string-to-number (match-string 1 output))))))
@@ -764,8 +796,9 @@ The returned value is a cons cell (PATH . MIME).  If ARGS contains
                                   (list "-quality" "85"))
                                 (list output))))
           (pcase-let ((`(,exit-code . ,process-output)
-                       (apply #'mevedel-tool-fs--call-process-capturing-output
-                              cmd im-args)))
+                       (mevedel-tool-fs--call-process-capturing-output
+                        "mevedel-imagemagick" (cons cmd im-args) (list path)
+                        (list (file-name-directory output)))))
             (unless (zerop exit-code)
               (error "ImageMagick failed while preparing media file%s"
                      (if (string-empty-p process-output)
@@ -900,11 +933,13 @@ Return a media result plist."
                (output (concat prefix ".png")))
           (pcase-let ((`(,exit-code . ,process-output)
                        (mevedel-tool-fs--call-process-capturing-output
-                        "pdftoppm"
-                        "-f" (number-to-string page)
-                        "-l" (number-to-string page)
-                        "-singlefile"
-                        "-png" path prefix)))
+                        "mevedel-pdftoppm"
+                        (list "pdftoppm"
+                              "-f" (number-to-string page)
+                              "-l" (number-to-string page)
+                              "-singlefile"
+                              "-png" path prefix)
+                        (list path) (list (file-name-directory output)))))
             (unless (zerop exit-code)
               (error "'pdftoppm' failed while rendering page %d of %s%s"
                      page path
@@ -1077,23 +1112,24 @@ PATH is not a readable directory, or rg exits with an unexpected code."
       (error "`ripgrep' not installed"))
     (unless (and (file-directory-p path) (file-readable-p path))
       (error "%s is not a readable directory" path))
-    (with-temp-buffer
-      (let* ((default-directory (file-name-as-directory path))
-             (exit (call-process "rg" nil t nil
-                                 "--files" "--hidden" "--follow"
-                                 "--sort" "path" ".")))
+    (pcase-let* ((`(,exit . ,output)
+                  (mevedel-tool-fs--call-process-capturing-output
+                   "mevedel-list-directory"
+                   (list "rg" "--files" "--hidden" "--follow"
+                         "--sort" "path" path)
+                   (list path))))
         (cond
          ((= exit 0)
-          (let* ((raw (split-string (buffer-string) "\n" t))
+          (let* ((raw (split-string output "\n" t))
                  (all (mapcar (lambda (s)
                                 (setq s (replace-regexp-in-string "\\\\" "/" s))
-                                (if (string-prefix-p "./" s) (substring s 2) s))
+                                (file-relative-name s path))
                               raw))
                  (truncated (> (length all) max))
                  (entries (if truncated (seq-take all max) all)))
             (cons entries truncated)))
          ((= exit 1) (cons nil nil))
-         (t (error "`rg' exited with code %d listing %s" exit path)))))))
+         (t (error "`rg' exited with code %d listing %s" exit path))))))
 
 (defun mevedel-tool-fs--slurp-file-contents (path &optional offset limit)
   "Return file PATH content with OFFSET and LIMIT.
@@ -1314,45 +1350,35 @@ and optional :path."
     (setq path (expand-file-name (substitute-in-file-name (or path "."))))
     (unless (and (file-readable-p path) (file-directory-p path))
       (error "Path %s is not a readable directory" path))
-    (let* ((rg-args (list "--files" "--hidden" "--color=never"
+    (let* ((session (bound-and-true-p mevedel--session))
+           (rg-args (list "--files" "--hidden" "--color=never"
                           "--follow" "--sort" "modified"
                           "--iglob" pattern
-                          path))
-           (output-buffer (generate-new-buffer " *mevedel-glob*")))
-      (condition-case err
-          (make-process
-           :name "mevedel-glob"
-           :buffer output-buffer
-           :stderr output-buffer
-           :command (cons "rg" rg-args)
-           :connection-type 'pipe
-           :noquery t
-           :sentinel
-           (lambda (process _event)
-             (when (memq (process-status process) '(exit signal))
-               (let ((exit-code (process-exit-status process))
-                     result)
-                 (when (buffer-live-p output-buffer)
-                   (with-current-buffer output-buffer
-                     (cond
-                      ((= exit-code 0) nil)
-                      ((= exit-code 1)
-                       (erase-buffer)
-                       (insert "No files found matching pattern"))
-                      (t
-                       (goto-char (point-min))
-                       (insert (format "Error: glob failed (exit code %d)\n\n"
-                                       exit-code))))
-                     (setq result (mevedel-tool-fs--finalize-glob-buffer))))
-                 (when (buffer-live-p output-buffer)
-                   (kill-buffer output-buffer))
-                 (funcall callback
-                          (mevedel-tool-fs--handler-result
-                           (or result "")))))))
-        (error
-         (when (buffer-live-p output-buffer)
-           (kill-buffer output-buffer))
-         (error "%s" (error-message-string err)))))))
+                          path)))
+      (require 'mevedel-execution)
+      (mevedel-execution-start-helper
+       (lambda (child-result)
+         (with-temp-buffer
+           (insert (plist-get child-result :output))
+           (let ((exit-code (plist-get child-result :exit-code))
+                 (error-data (plist-get child-result :error)))
+             (cond
+              (error-data
+               (erase-buffer)
+               (insert (format "Error: glob failed to start: %s"
+                               (error-message-string error-data))))
+              ((= exit-code 0) nil)
+              ((= exit-code 1)
+               (erase-buffer)
+               (insert "No files found matching pattern"))
+              (t
+               (goto-char (point-min))
+               (insert (format "Error: glob failed (exit code %d)\n\n"
+                               exit-code))))
+             (funcall callback
+                      (mevedel-tool-fs--handler-result
+                       (mevedel-tool-fs--finalize-glob-buffer))))))
+       "mevedel-glob" (cons "rg" rg-args) (list path) nil nil session))))
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
@@ -1387,7 +1413,7 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     (unless (file-readable-p path)
       (error "Path %s is not readable" path))
     (let ((rg-args nil)
-          (output-buffer (generate-new-buffer " *mevedel-grep*")))
+          (session (bound-and-true-p mevedel--session)))
       ;; Output mode flags
       (pcase output-mode
         ("content"
@@ -1416,79 +1442,60 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
       (push pattern rg-args)
       (push path rg-args)
       (setq rg-args (nreverse rg-args))
-      (condition-case err
-          (make-process
-           :name "mevedel-grep"
-           :buffer output-buffer
-           :stderr output-buffer
-           :command (cons "rg" rg-args)
-           :connection-type 'pipe
-           :noquery t
-           :sentinel
-           (lambda (process _event)
-             (when (memq (process-status process) '(exit signal))
-               (let ((exit-code (process-exit-status process))
-                     result)
-                 (when (buffer-live-p output-buffer)
-                   (with-current-buffer output-buffer
-                     (cond
-                      ((= exit-code 0) nil)
-                      ((= exit-code 1)
-                       (erase-buffer)
-                       (insert "No matches found"))
-                      (t
-                       (goto-char (point-min))
-                       (insert
-                        (format "Error: search failed (exit code %d)\n\n"
-                                exit-code))))
-                     ;; Apply offset and head_limit
-                     (when (or (> offset 0) head-limit)
-                       (goto-char (point-min))
-                       (let ((total-lines (count-lines (point-min)
-                                                       (point-max))))
-                         (when (> offset 0)
-                           (forward-line offset)
-                           (delete-region (point-min) (point))
-                           (cl-decf total-lines offset))
-                         (when (and head-limit (> total-lines head-limit))
-                           (goto-char (point-min))
-                           (forward-line head-limit)
-                           (delete-region (point) (point-max))
-                           (goto-char (point-max))
-                           (insert
-                            (format "\n... Results truncated (limit: %d, offset: %d)"
-                                    head-limit offset)))))
-                     ;; Hard cap on total output size to prevent
-                     ;; context overflow.  Even with line-count and
-                     ;; per-line truncation, results can be
-                     ;; dangerously large.
-                     (when (> (buffer-size)
-                              mevedel-tool-fs--grep-max-output-bytes)
-                       (goto-char (point-min))
-                       (forward-char
-                        mevedel-tool-fs--grep-max-output-bytes)
-                       ;; Truncate at the last complete line within
-                       ;; the budget.
-                       (beginning-of-line)
-                       (delete-region (point) (point-max))
-                       (goto-char (point-max))
-                       (insert
-                        (format "\n... Output truncated at %dK byte limit. \
+      (require 'mevedel-execution)
+      (mevedel-execution-start-helper
+       (lambda (child-result)
+         (with-temp-buffer
+           (insert (plist-get child-result :output))
+           (let ((exit-code (plist-get child-result :exit-code))
+                 (error-data (plist-get child-result :error)))
+             (cond
+              (error-data
+               (erase-buffer)
+               (insert (format "Error: search failed to start: %s"
+                               (error-message-string error-data))))
+              ((= exit-code 0) nil)
+              ((= exit-code 1)
+               (erase-buffer)
+               (insert "No matches found"))
+              (t
+               (goto-char (point-min))
+               (insert
+                (format "Error: search failed (exit code %d)\n\n"
+                        exit-code))))
+             ;; Apply offset and head_limit.
+             (when (or (> offset 0) head-limit)
+               (goto-char (point-min))
+               (let ((total-lines (count-lines (point-min) (point-max))))
+                 (when (> offset 0)
+                   (forward-line offset)
+                   (delete-region (point-min) (point))
+                   (cl-decf total-lines offset))
+                 (when (and head-limit (> total-lines head-limit))
+                   (goto-char (point-min))
+                   (forward-line head-limit)
+                   (delete-region (point) (point-max))
+                   (goto-char (point-max))
+                   (insert
+                    (format "\n... Results truncated (limit: %d, offset: %d)"
+                            head-limit offset)))))
+             ;; Bound total output even after line-count truncation.
+             (when (> (buffer-size) mevedel-tool-fs--grep-max-output-bytes)
+               (goto-char (point-min))
+               (forward-char mevedel-tool-fs--grep-max-output-bytes)
+               (beginning-of-line)
+               (delete-region (point) (point-max))
+               (goto-char (point-max))
+               (insert
+                (format "\n... Output truncated at %dK byte limit. \
 Narrow your search with :glob, :type, or a more specific :pattern."
-                                (/ mevedel-tool-fs--grep-max-output-bytes
-                                   1024))))
-                     (setq result
-                           (replace-regexp-in-string "\r\n?" "\n"
-                                                     (buffer-string)))))
-                 (when (buffer-live-p output-buffer)
-                   (kill-buffer output-buffer))
-                 (funcall callback
-                          (mevedel-tool-fs--handler-result
-                           (or result "")))))))
-        (error
-         (when (buffer-live-p output-buffer)
-           (kill-buffer output-buffer))
-         (error "%s" (error-message-string err)))))))
+                        (/ mevedel-tool-fs--grep-max-output-bytes 1024))))
+             (funcall
+              callback
+              (mevedel-tool-fs--handler-result
+               (replace-regexp-in-string "\r\n?" "\n"
+                                         (buffer-string)))))))
+       "mevedel-grep" (cons "rg" rg-args) (list path) nil nil session))))
 
 
 ;;

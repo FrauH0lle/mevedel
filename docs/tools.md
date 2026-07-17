@@ -332,6 +332,32 @@ short). Background agent mailbox deliveries inline at most a 32 KiB
 preview of the final response and point to the persisted transcript when
 available.
 
+## External helper confinement
+
+Native tool implementations launch short-lived external helpers through
+`mevedel-execution.el`, the same process boundary used by Bash and batch Eval.
+The caller supplies a structured argv, authorized read paths, and explicit
+writable artifact directories. The module adds a private scratch working
+directory, applies `mevedel-sandbox-mode`, tracks the active boundary in the
+status zone, owns timeout/process-group cleanup, and removes the scratch
+directory after the callback. Output streams directly into a bounded temporary
+disk spool rather than an Emacs process buffer; the one-shot terminal result
+contains the captured output and structured exit, timeout, output-limit, byte,
+and wall-time facts. In `auto`, it may retry directly only after a pre-exec
+Bubblewrap failure; it never replays a helper that may have started. `required`
+fails the tool explicitly and `off` runs directly.
+
+All operating-system children receive deterministic defaults for UTF-8 locale,
+no color, terminal mode, and pagers, plus `MEVEDEL_EXECUTION=1`. An invocation
+can still override these variables inside its own command. Ordinary one-shot
+stdin is closed immediately.
+
+The current external-helper inventory is `diff`; `rg` for Read directory
+listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`
+or `convert`. Their sandbox facts stay out of successful model-visible results.
+Native filesystem permission checks remain the authorization boundary; helper
+confinement limits effects after that authorization.
+
 ## Bash execution timeout
 
 Bash source runs through `bash -lc`, so login-shell initialization contributes
@@ -359,8 +385,8 @@ path, process, and network boundaries as Bash.
 
 The main view keeps the child sandbox, filesystem, and network boundary visible
 in its status zone. It shows the selected default while idle, switches to the
-actual additive, escalated, or fallback boundary for the lifetime of a Bash or
-batch-Eval child, and returns to the default on settlement. Each result also
-records the boundary that applied to its invocation. Additive filesystem state
-includes read and write grant counts; concurrent children are summarized
+actual boundary for the lifetime of a Bash, batch-Eval, or external-helper
+child, and returns to the default on settlement. Bash and batch-Eval results
+also record the boundary that applied to their invocation. Additive filesystem
+state includes read and write grant counts; concurrent children are summarized
 without hiding their least-confined active dimensions.
