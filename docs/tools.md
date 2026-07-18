@@ -138,8 +138,8 @@ families (`xref`, `imenu`, `treesitter`, `elisp`, `web`).
 ### Interaction tool ownership
 
 `mevedel-tool-ui.el` assembles the user-interaction tool surface and owns the
-Agent, FollowupAgent, ListAgents, StopAgent, ToolSearch, and SendMessage
-adapters. Ask's questionnaire, handler, renderer, and schema live in
+Agent, FollowupAgent, ListAgents, StopAgent, ToolSearch, SendMessage, and
+WaitAgent adapters. Ask's questionnaire, handler, renderer, and schema live in
 `mevedel-tool-ask.el`. Exact external-path authority is part of the normal
 permission pipeline, not a model-visible tool.
 The same shared resource-grant interface authorizes native filesystem tools and

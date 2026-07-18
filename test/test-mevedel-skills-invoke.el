@@ -36,6 +36,7 @@
   ,test
   (test)
   (dolist (symbol '(mevedel-skills--drain-pending-context
+                    mevedel-skills-commit-invoked-records
                     mevedel-skills--transform-apply-model-override
                     mevedel-skills--parse-arguments
                     mevedel-skills--substitute-vars
@@ -76,6 +77,19 @@
 
 ;;
 ;;; Request-scoped skill context
+
+(mevedel-deftest mevedel-skills-commit-invoked-records ()
+  ,test
+  (test)
+  :doc "appends prepared records in order and treats nil as a no-op"
+  (let* ((session (mevedel-skills-test--make-session))
+         (first (mevedel-skill-invocation-record--create :name "first"))
+         (second (mevedel-skill-invocation-record--create :name "second")))
+    (mevedel-skills-commit-invoked-records session (list first))
+    (mevedel-skills-commit-invoked-records session nil)
+    (mevedel-skills-commit-invoked-records session (list second))
+    (should (equal (list first second)
+                   (mevedel-session-invoked-skills session)))))
 
 (mevedel-deftest mevedel-skills--current-prompt-region ()
   ,test

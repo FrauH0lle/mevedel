@@ -770,8 +770,12 @@ A mention is considered live when both of the following hold:
              (memq (char-syntax (char-before match-beg))
                    '(?\s ?>))))))
 
-(defun mevedel--transform-expand-mentions (fsm)
-  "GPtel transform function expanding every mention type.
+(defun mevedel-mentions--expand-buffer
+    (session chat-buffer insertion-point)
+  "Expand mentions in the current buffer with explicit request context.
+SESSION owns deduplication state.  CHAT-BUFFER provides permission context.
+Insert reminders at INSERTION-POINT.  Return media and deduplication effects
+for the caller to apply explicitly.
 
 Walks the whole prompt buffer, replacing each raw mention with a
 compact placeholder.  For each novel mention (first occurrence in the
@@ -781,21 +785,16 @@ Mentions whose key and content hash match what the session's
 `mentions-shown' table already recorded are replaced with the
 placeholder but not re-expanded as reminders.
 
-FSM is the gptel finite-state machine; its info plist's :buffer entry
-points back at the chat buffer that owns the session.  Dispatches per
-`mevedel-mention-handlers'."
-  (let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
-         (session (and chat-buffer (buffer-live-p chat-buffer)
-                       (buffer-local-value 'mevedel--session chat-buffer)))
-         (workspace-root
+Dispatches per `mevedel-mention-handlers'."
+  (let* ((workspace-root
           (and session
                (when-let* ((ws (mevedel-session-workspace session)))
                  (mevedel-workspace-root ws))))
          (mentions-shown (and session
                               (mevedel-session-mentions-shown session)))
-         (turn (and session (mevedel-session-turn-count session)))
          (seen-this-pass (make-hash-table :test #'equal))
          (new-items nil)
+         (media-contexts nil)
          (warnings nil))
     (require 'mevedel-mention-bindings)
     (dolist (entry mevedel-mention-handlers)
@@ -855,8 +854,7 @@ points back at the chat buffer that owns the session.  Dispatches per
                   (when warning
                     (push warning warnings))
                   (when media-context
-                    (apply #'mevedel-mentions--add-media-context
-                           media-context))
+                    (push media-context media-contexts))
                   (when (or fresh-reminder-p media-context)
                     (when (and key (or fresh-reminder-p media-context))
                       (puthash key t seen-this-pass))
@@ -873,7 +871,7 @@ points back at the chat buffer that owns the session.  Dispatches per
                                  (and (plist-get item :reminder)
                                       item))
                                new-items))))
-      (goto-char (mevedel-transcript-prompt-transform-start))
+      (goto-char insertion-point)
       (save-excursion
         (dolist (item (nreverse reminder-items))
           (let ((start (point)))
@@ -883,13 +881,46 @@ points back at the chat buffer that owns the session.  Dispatches per
             (remove-text-properties
              start (point)
              '(gptel nil response nil invisible nil front-sticky nil))))))
-    (when (and mentions-shown turn)
-      (dolist (item new-items)
-        (when (and (plist-get item :key)
-                   (plist-get item :hash))
-          (puthash (plist-get item :key)
-                   (cons turn (plist-get item :hash))
-                   mentions-shown))))))
+    (list :media-contexts (nreverse media-contexts)
+          :dedup-updates
+          (cl-loop for item in new-items
+                   when (and (plist-get item :key)
+                             (plist-get item :hash))
+                   collect (cons (plist-get item :key)
+                                 (plist-get item :hash))))))
+
+(defun mevedel-mentions--commit-expansion (session expansion)
+  "Record deduplication data from EXPANSION in SESSION."
+  (when (and session (mevedel-session-turn-count session))
+    (let ((mentions-shown (mevedel-session-mentions-shown session))
+          (turn (mevedel-session-turn-count session)))
+      (dolist (update (plist-get expansion :dedup-updates))
+        (puthash (car update) (cons turn (cdr update)) mentions-shown)))))
+
+(defun mevedel-mentions-expand-user-input (text session)
+  "Expand bound mentions in TEXT for SESSION into a structured result.
+Return text, media contexts, and deferred deduplication updates.  The caller
+must explicitly commit the result after accepting every media context."
+  (let ((chat-buffer (current-buffer)))
+    (with-temp-buffer
+      (insert text)
+      (let ((expansion
+             (mevedel-mentions--expand-buffer
+              session chat-buffer (point-min))))
+        (plist-put expansion :text (buffer-string))))))
+
+(defun mevedel--transform-expand-mentions (fsm)
+  "GPtel transform function expanding every mention type for FSM."
+  (let* ((chat-buffer (and fsm (plist-get (gptel-fsm-info fsm) :buffer)))
+         (session (and chat-buffer (buffer-live-p chat-buffer)
+                       (buffer-local-value 'mevedel--session chat-buffer))))
+    (let ((expansion
+           (mevedel-mentions--expand-buffer
+            session chat-buffer
+            (mevedel-transcript-prompt-transform-start))))
+      (dolist (context (plist-get expansion :media-contexts))
+        (apply #'mevedel-mentions--add-media-context context))
+      (mevedel-mentions--commit-expansion session expansion))))
 
 
 ;;

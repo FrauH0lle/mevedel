@@ -202,6 +202,7 @@ workspace."
   messages          ; list of inbound-message plists queued for next turn
   agent-registry    ; alist: canonical path -> retained `mevedel-agent-record'
   (agent-root-activity 'idle) ; root roster activity: running or idle
+  agent-root-waiter ; transient async WaitAgent callback and timer
   (agent-turn-capacity 3) ; maximum active non-root turns in this session tree
   queued-user-messages ; transient FIFO of bound original prompts awaiting preparation
   dropped-file-grants ; pending exact-file read grants from drag/drop
@@ -366,6 +367,14 @@ workspace root and is kept stable for the lifetime of the session."
 (defun mevedel-session--set-agent-registry (session registry)
   "Store retained agent REGISTRY on SESSION."
   (setf (mevedel-session-agent-registry session) registry))
+
+(defun mevedel-session--set-agent-root-waiter (session waiter)
+  "Store transient root WaitAgent WAITER on SESSION."
+  (setf (mevedel-session-agent-root-waiter session) waiter))
+
+(defun mevedel-session--set-messages (session messages)
+  "Store unread root mailbox MESSAGES on SESSION."
+  (setf (mevedel-session-messages session) messages))
 
 (defun mevedel-session--set-execution-state (session state)
   "Store opaque execution-module STATE on SESSION."

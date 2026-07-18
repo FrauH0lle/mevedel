@@ -56,25 +56,44 @@
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (defvar gptel--ersatz-json-tool)
 
-;; `mevedel-agent-exec' -- agent buffer back-pointer for parent-chain walks
-(defvar mevedel--agent-invocation)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-permission-queue-sweep-origin
-                  "mevedel-permission-queue"
-                  (origin &optional session no-render))
-(declare-function mevedel-plan-queue-sweep-agent
-                  "mevedel-goal" (origin &optional session))
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-clear-context-mailbox
+                  "mevedel-agent-control" (context))
+(declare-function mevedel-agent-control-context-mailbox
+                  "mevedel-agent-control" (context))
+
+;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec--insert-injected-prompt
                   "mevedel-agent-exec" (invocation block &optional position))
 (declare-function mevedel-agent-exec--record-activity
                   "mevedel-agent-exec"
                   (invocation item &optional reserved))
+(defvar mevedel--agent-invocation)
+
+;; `mevedel-agent-runtime'
+(declare-function mevedel-agent-runtime--agent-invocation-at
+                  "mevedel-agent-runtime" (fsm))
+(declare-function mevedel-agent-runtime--agent-result-parse-id
+                  "mevedel-agent-runtime" (text))
+(defvar mevedel-agent-runtime--fsms)
+
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
+
+;; `mevedel-goal'
+(declare-function mevedel-plan-queue-sweep-agent
+                  "mevedel-goal" (origin &optional session))
+
+;; `mevedel-permission-queue'
+(declare-function mevedel-permission-queue-sweep-origin
+                  "mevedel-permission-queue"
+                  (origin &optional session no-render))
 
 ;; `mevedel-structs'
 (defvar mevedel--session)
@@ -83,12 +102,6 @@
 (declare-function mevedel-tool-get "mevedel-tool-registry" (name &optional category))
 (declare-function mevedel-tool-groups "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-truthy-p "mevedel-tool-registry" (value))
-
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--agent-invocation-at "mevedel-agent-runtime" (fsm))
-(declare-function mevedel-agent-runtime--agent-result-parse-id "mevedel-agent-runtime"
-                  (text))
-(defvar mevedel-agent-runtime--fsms)
 
 ;;
 ;;; Tool registration
@@ -129,12 +142,11 @@ aggressively."
   :group 'mevedel)
 
 (defcustom mevedel-agent-message-max-size 20000
-  "Maximum byte size of a single queued inter-agent message body.
+  "Maximum character size of a legacy inbound mailbox body.
 
-Background-agent results are wrapped and queued onto the parent's
-mailbox.  Large fan-out produces very large follow-up prompts; each
-body is truncated to this size with a marker so the LLM knows the
-payload was capped.  Set to nil to disable truncation."
+V1 background-agent results use this cap to limit large follow-up prompts.
+Canonical MAIL and RESULT records follow their V2 delivery contracts instead.
+Set to nil to disable legacy truncation."
   :type '(choice (integer :tag "Max bytes")
                  (const :tag "Disabled" nil))
   :group 'mevedel)
@@ -670,21 +682,31 @@ asynchronously on the recipient's next FSM turn via
 
 (defun mevedel-tools--message-delivery-block (msg)
   "Return the user-role delivery block for mailbox MSG."
-  (if (eq (plist-get msg :type) 'RESULT)
-      (format "<agent-result sender=\"%s\" recipient=\"%s\" outcome=\"%s\">\n%s\n</agent-result>"
-              (plist-get msg :sender)
-              (plist-get msg :recipient)
-              (plist-get msg :outcome)
-              (mevedel-tools--mailbox-body-escape
-               (or (plist-get msg :payload) "")))
-    (let ((body (or (plist-get msg :body) "")))
-      (if (and (plist-get msg :agent-result-p)
-               (mevedel-tools--agent-result-block-p body))
-          body
-        (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
-                (or (plist-get msg :from) "unknown")
-                (mevedel-tools--mailbox-body-escape
-                 (mevedel-tools--truncate-message-body body)))))))
+  (pcase (plist-get msg :type)
+    ('RESULT
+     (format "<agent-result sender=\"%s\" recipient=\"%s\" outcome=\"%s\">\n%s\n</agent-result>"
+             (plist-get msg :sender)
+             (plist-get msg :recipient)
+             (plist-get msg :outcome)
+             (mevedel-tools--mailbox-body-escape
+              (or (plist-get msg :payload) ""))))
+    ('MAIL
+     (format "<agent-message type=\"MAIL\" sender=\"%s\" recipient=\"%s\">\n%s\n</agent-message>"
+             (plist-get msg :sender)
+             (plist-get msg :recipient)
+             (mevedel-tools--mailbox-body-escape
+              (or (plist-get msg :payload) ""))))
+    ('USER
+     (or (plist-get msg :payload) ""))
+    (_
+     (let ((body (or (plist-get msg :body) "")))
+       (if (and (plist-get msg :agent-result-p)
+                (mevedel-tools--agent-result-block-p body))
+           body
+         (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
+                 (or (plist-get msg :from) "unknown")
+                 (mevedel-tools--mailbox-body-escape
+                  (mevedel-tools--truncate-message-body body))))))))
 
 (defun mevedel-tools--live-buffer-marker-p (marker buffer)
   "Return non-nil when MARKER points into BUFFER."
@@ -746,8 +768,11 @@ asynchronously on the recipient's next FSM turn via
          messages))
     messages))
 
-(defun mevedel-tools--insert-session-injected-prompt (session fsm block)
-  "Insert injected mailbox BLOCK for SESSION and FSM into the data buffer.
+(defun mevedel-tools--insert-session-injected-prompt
+    (session fsm message block)
+  "Insert injected MESSAGE for SESSION and FSM into the data buffer.
+BLOCK is the model-visible form.  MESSAGE may provide a separate transcript
+payload and hidden hook audit records.
 
 `gptel--inject-prompt' mutates the realized request payload, but
 does not write that synthetic user-role message back to the data
@@ -763,9 +788,20 @@ sync with what the model actually saw."
                 ((eq session (mevedel-tools--buffer-local-session buf))))
       (condition-case err
           (with-current-buffer buf
-            (let ((inhibit-read-only t)
-                  (marker (mevedel-tools--active-response-marker info buf)))
-              (mevedel--insert-user-role-block-at-marker block marker)))
+            (let* ((inhibit-read-only t)
+                   (marker (mevedel-tools--active-response-marker info buf))
+                   (transcript-block
+                    (or (plist-get message :transcript-payload) block))
+                   (range
+                    (mevedel--insert-user-role-block-at-marker
+                     transcript-block marker)))
+              (when range
+                (save-excursion
+                  (goto-char (cdr range))
+                  (dolist (audit (plist-get message :hook-audits))
+                    (insert (mevedel--format-hook-audit-record audit)))
+                  (when marker
+                    (set-marker marker (point)))))))
         (error
          (message "mevedel: insert session injected prompt failed: %S"
                   err))))))
@@ -774,65 +810,61 @@ sync with what the model actually saw."
   "WAIT-state handler: drain FSM's inbox into the next request.
 
 Runs before `gptel--handle-wait' fires the HTTP request.  For the
-context that owns FSM (session or agent invocation), reads the
-`messages' mailbox, wraps each queued message in an
-canonical delivery block, and appends a single user-role
-message to `info :data :messages' via `gptel--inject-prompt'.  Each
-body is truncated via `mevedel-tools--truncate-message-body' to keep
-fan-out bounded.  The mailbox is cleared after draining so each
-message is delivered exactly once; arrival order is preserved by
-reversing the push-on-head queue.
-
-Also write the joined block to the owning transcript buffer so the
-audit log captures injected user-role content that
-`gptel--inject-prompt' otherwise leaves only in the realized
-request payload.  Sub-agents write to their agent transcript; main
-sessions write to the session data buffer.  The buffer write is
-best-effort -- the LLM payload remains authoritative regardless of
-buffer state."
-  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
-              (queued (mevedel-agent-runtime--ctx-messages ctx)))
-    (let* ((info (gptel-fsm-info fsm))
-           (messages (mevedel-tools--filter-duplicate-agent-results
-                      (nreverse queued) ctx fsm))
-           (data (plist-get info :data)))
-      (when messages
-        (let* ((blocks (mapcar
-                        #'mevedel-tools--message-delivery-block
-                        messages))
-               (joined (string-join blocks "\n\n")))
-          (when data
-            ;; On the sub-agent's first WAIT cycle, inject the messages
-            ;; ahead of the user task prompt so the API request matches
-            ;; the audit-log ordering (reminder/message first, then
-            ;; user task).  On later cycles, append normally -- mailbox
-            ;; messages logically follow the prior assistant turn.
-            (let ((position (and (mevedel-agent-invocation-p ctx)
-	                         (zerop (or (mevedel-agent-invocation-turn-count
-	                                     ctx)
-	                                    0))
-	                         0)))
-              (when (and (fboundp 'mevedel-agent-invocation-p)
-                         (mevedel-agent-invocation-p ctx))
-                (dolist (msg messages)
-                  (mevedel-agent-exec--record-activity
-                   ctx
-                   (list :type 'message
-                         :from (or (plist-get msg :from) "unknown")
-                         :summary
-                         (format "message from %s"
-                                 (or (plist-get msg :from) "unknown")))))
-                (when (fboundp 'mevedel-agent-exec--insert-injected-prompt)
-                  (mevedel-agent-exec--insert-injected-prompt
-                   ctx joined (and position 'prepend))))
-              (unless (mevedel-agent-invocation-p ctx)
-                (mevedel-tools--insert-session-injected-prompt ctx fsm joined))
-              (gptel--inject-prompt
-               (plist-get info :backend) data
-               (list :role "user"
-                     :content joined)
-               position)))))
-      (setf (mevedel-agent-runtime--ctx-messages ctx) nil))))
+context that owns FSM, injects each unread record as a separate user-role
+communication block, and then removes it from the retained FIFO.  Agent
+follow-up steering queued on the active invocation uses the same boundary.
+Each injected block is also written to the owning transcript, preserving the
+model-visible communication in conversation history."
+  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
+    (require 'mevedel-agent-control)
+    (let* ((agent-p (mevedel-agent-invocation-p ctx))
+           (retained (mevedel-agent-control-context-mailbox ctx))
+           (steering
+            (and agent-p
+                 (reverse (mevedel-agent-runtime--ctx-messages ctx))))
+           (messages
+            (mevedel-tools--filter-duplicate-agent-results
+             (cl-stable-sort
+              (append retained steering)
+              (lambda (left right)
+                (let ((left-time (plist-get left :timestamp))
+                      (right-time (plist-get right :timestamp)))
+                  (and left-time right-time
+                       (time-less-p left-time right-time)))))
+             ctx fsm))
+           (info (gptel-fsm-info fsm))
+           (data (plist-get info :data))
+           (prepend-p
+            (and agent-p
+                 (zerop (or (mevedel-agent-invocation-turn-count ctx) 0)))))
+      (when (and messages data)
+        (cl-loop
+         for message in messages
+         for index from 0
+         for block = (mevedel-tools--message-delivery-block message)
+         for sender = (or (plist-get message :sender)
+                          (plist-get message :from)
+                          "unknown")
+         do
+         (when agent-p
+           (mevedel-agent-exec--record-activity
+            ctx
+            (list :type 'message
+                  :from sender
+                  :summary (format "message from %s" sender)))
+           (mevedel-agent-exec--insert-injected-prompt
+            ctx block (and prepend-p 'prepend)))
+         (unless agent-p
+           (mevedel-tools--insert-session-injected-prompt
+            ctx fsm message block))
+         (gptel--inject-prompt
+          (plist-get info :backend) data
+          (list :role "user" :content block)
+          (and prepend-p index))))
+      (when (or (null messages) data)
+        (mevedel-agent-control-clear-context-mailbox ctx)
+        (when agent-p
+          (setf (mevedel-agent-runtime--ctx-messages ctx) nil))))))
 
 (defun mevedel-tools--handle-terminal-mailbox (fsm)
   "Terminal-state handler: log mailbox drops + sweep parent's perm queue.

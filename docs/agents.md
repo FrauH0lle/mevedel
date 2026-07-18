@@ -7,7 +7,10 @@ child's storage identity, path, activity, and transcript location after the
 turn settles. `ListAgents` returns the path-sorted retained roster without
 storage IDs or transcript content. `FollowupAgent` continues an idle retained
 conversation or steers a running invocation at its next safe request boundary;
-later terminal results still go to the original spawn parent.
+later terminal results still go to the original spawn parent. `SendMessage`
+queues plain-text mail for `/root` or any retained path without activating a
+turn. `WaitAgent` suspends its ordinary asynchronous tool callback until mail,
+user steering, follow-up steering, or its bounded successful timeout wakes it.
 
 Specialist definitions declared with `mevedel-define-agent` back dedicated
 commands and internal forked invocation paths:
@@ -153,13 +156,32 @@ the tool and command names when it is still waiting on live agents.
 
 ## Inter-agent messaging (SendMessage)
 
-Fire-and-forget async messages. Aliases `"main"`, `"chat"`, `"coordinator"`
-resolve to the main session mailbox; exact agent-id or `"<type>--"` prefix
-match resolves to a sub-agent. Messages queue on the recipient's mailbox
-and drain via `mevedel-tools--handle-message-inject` in WAIT state, wrapped
-as `<agent-message from="SENDER">...</agent-message>` and injected as a
-user turn via `gptel--inject-prompt`. Polymorphic accessor
-`mevedel-agent-runtime--ctx-messages` dispatches on session vs invocation.
+`SendMessage(target, message)` resolves canonical or relative retained paths
+tree-wide. It queues one canonical `MAIL` record containing type, sender path,
+recipient path, and payload; it never starts an idle turn. Successful sends
+return an empty result and render `Interacted with PATH`. Canonical `MAIL`
+payloads are retained in full; the legacy mailbox body cap does not truncate
+them.
+
+Before a recipient's next model sample, its retained unread queue drains in
+FIFO order. Each record is injected as a separate user-role communication
+block and written to the retained conversation transcript before the unread
+record is removed. Mail queued for an idle agent therefore waits for a later
+follow-up, while mail for an active agent is delivered at its next ordinary
+WAIT boundary. The tool result never duplicates the message body.
+
+`WaitAgent(timeout_ms?)` is a wake primitive over the caller's mailbox, not a
+message transport. Its ordinary asynchronous callback stays pending without a
+model sample and without releasing the caller's active-turn slot. Existing or
+new mail releases it immediately; follow-up steering and yielded Bash
+completion also release it. New root user input becomes a separate user-role
+steering message in the same resumed request, so no intermediate model sample
+can run before the input is visible. The default timeout is 30,000 ms, the
+inclusive bounds are
+10,000 through 3,600,000 ms, and timeout is a successful outcome. Its result
+contains only the wake reason. The view renders `Waiting for agents` while the
+tool is pending and `Finished waiting` after it settles.
+
 Independently completed yielded Bash executions use the same mailbox storage
 through the session or invocation object captured for their fixed owner when
 Bash starts. The invocation remains parked while an owned execution is
@@ -167,9 +189,9 @@ unsettled. Once the agent has produced its answer, completion is latched across
 the BWAIT boundary in either arrival order. The runtime drains execution-only
 messages into that final answer and settles the agent directly without a model
 request; transient callback failures retry with bounded backoff from the
-durable mailbox, while persistent failure stops the agent. Ordinary
-mailbox messages still resume BWAIT through WAIT; execution-only contents
-neither start a paid continuation nor arm the agent watchdog.
+durable mailbox, while persistent failure stops the agent. Legacy
+execution-only contents neither start a paid continuation nor arm the agent
+watchdog.
 
 ## Review and verify commands
 

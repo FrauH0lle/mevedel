@@ -5,7 +5,8 @@
 ;; Owns the path-addressed, session-scoped agent registry and the admission and
 ;; settlement transaction for asynchronous agent turns.  Provider execution
 ;; remains in `mevedel-agent-runtime'; this module gives it durable identities,
-;; tree-wide capacity, and canonical RESULT records.
+;; tree-wide capacity, canonical RESULT/MAIL/USER records, retained mailboxes,
+;; and the WaitAgent suspension and wake lifecycle.
 
 ;;; Code:
 
@@ -19,8 +20,6 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--ctx-push-message
-                  "mevedel-agent-runtime" (ctx message))
 (declare-function mevedel-agent-runtime-dispatch
                   "mevedel-agent-runtime" t t)
 (declare-function mevedel-agent-runtime-dispatch--abandon-persistence
@@ -34,6 +33,10 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-messages
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
@@ -44,11 +47,19 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session--set-agent-registry
                   "mevedel-structs" (session registry))
+(declare-function mevedel-session--set-agent-root-waiter
+                  "mevedel-structs" (session waiter))
+(declare-function mevedel-session--set-messages
+                  "mevedel-structs" (session messages))
 (declare-function mevedel-session-agent-registry
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-root-activity
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-agent-root-waiter
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-turn-capacity
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-messages
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (object))
 
@@ -59,6 +70,21 @@
 
 (defconst mevedel-agent-control--result-limit (* 32 1024)
   "Maximum number of characters in an inline RESULT payload.")
+
+(defconst mevedel-agent-control--wait-default-ms 30000
+  "Default WaitAgent timeout in milliseconds.")
+
+(defconst mevedel-agent-control--wait-min-ms 10000
+  "Minimum WaitAgent timeout in milliseconds.")
+
+(defconst mevedel-agent-control--wait-max-ms 3600000
+  "Maximum WaitAgent timeout in milliseconds.")
+
+(cl-defstruct (mevedel-agent-waiter
+               (:constructor mevedel-agent-waiter--create))
+  "One suspended ordinary asynchronous WaitAgent tool call."
+  callback
+  timer)
 
 (cl-defstruct (mevedel-agent-record
                (:constructor mevedel-agent-record--create))
@@ -71,7 +97,9 @@
   activity
   conversation-location
   conversation-buffer
-  invocation)
+  invocation
+  mailbox
+  waiter)
 
 (defun mevedel-agent-control--active-p (record)
   "Return non-nil when RECORD owns one active-turn slot."
@@ -97,7 +125,9 @@
 (defun mevedel-agent-control-teardown-session (session)
   "Kill every retained conversation buffer owned by SESSION."
   (when (mevedel-session-p session)
+    (mevedel-agent-control-cancel-wait session "/root")
     (dolist (entry (mevedel-session-agent-registry session))
+      (mevedel-agent-control-cancel-wait session (car entry))
       (when-let* ((buffer
                    (mevedel-agent-record-conversation-buffer (cdr entry)))
                   ((buffer-live-p buffer)))
@@ -125,22 +155,24 @@
          (string-match-p
           "\\`/root\\(?:/[a-z0-9_]+\\)*\\'" path))))
 
+(defun mevedel-agent-control--path-for-invocation (session invocation)
+  "Return INVOCATION's retained canonical path in SESSION."
+  (let ((agent-id (mevedel-agent-invocation-agent-id invocation)))
+    (car (cl-find agent-id
+                  (mevedel-session-agent-registry session)
+                  :key (lambda (item)
+                         (mevedel-agent-record-id (cdr item)))
+                  :test #'equal))))
+
 (defun mevedel-agent-control-current-path (session)
   "Return the current caller's canonical path in SESSION."
   (let ((invocation (and (boundp 'mevedel--agent-invocation)
                          mevedel--agent-invocation)))
     (if (not invocation)
         "/root"
-      (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
-             (entry
-              (cl-find agent-id
-                       (mevedel-session-agent-registry session)
-                       :key (lambda (item)
-                              (mevedel-agent-record-id (cdr item)))
-                       :test #'equal)))
-        (unless entry
-          (error "Current agent is not registered: %s" agent-id))
-        (car entry)))))
+      (or (mevedel-agent-control--path-for-invocation session invocation)
+          (error "Current agent is not registered: %s"
+                 (mevedel-agent-invocation-agent-id invocation))))))
 
 (defun mevedel-agent-control-resolve-path (session caller-path target)
   "Resolve TARGET from CALLER-PATH to an addressable path in SESSION."
@@ -158,6 +190,185 @@
                 (assoc path (mevedel-session-agent-registry session)))
       (user-error "Unknown agent target: %s" target))
     path))
+
+(defun mevedel-agent-control--record-at-path (session path)
+  "Return SESSION's retained record at PATH, or signal an error."
+  (or (cdr (assoc path (mevedel-session-agent-registry session)))
+      (error "Unknown agent path: %s" path)))
+
+(defun mevedel-agent-control--mailbox-queue (session path)
+  "Return PATH's reverse-order unread queue in SESSION."
+  (if (equal path "/root")
+      (mevedel-session-messages session)
+    (mevedel-agent-record-mailbox
+     (mevedel-agent-control--record-at-path session path))))
+
+(defun mevedel-agent-control--set-mailbox-queue (session path queue)
+  "Set PATH's reverse-order unread QUEUE in SESSION."
+  (if (equal path "/root")
+      (mevedel-session--set-messages session queue)
+    (setf (mevedel-agent-record-mailbox
+           (mevedel-agent-control--record-at-path session path))
+          queue)))
+
+(defun mevedel-agent-control--mailbox (session path)
+  "Return PATH's unread records in SESSION in FIFO order."
+  (reverse (mevedel-agent-control--mailbox-queue session path)))
+
+(defun mevedel-agent-control-context-mailbox (context)
+  "Return CONTEXT's retained unread records in FIFO order."
+  (if (mevedel-session-p context)
+      (mevedel-agent-control--mailbox context "/root")
+    (let* ((session (mevedel-agent-invocation-parent-session context))
+           (path (and session
+                      (mevedel-agent-control--path-for-invocation
+                       session context))))
+      (and path (mevedel-agent-control--mailbox session path)))))
+
+(defun mevedel-agent-control-clear-context-mailbox (context)
+  "Remove all retained unread records for CONTEXT."
+  (if (mevedel-session-p context)
+      (mevedel-agent-control--set-mailbox-queue context "/root" nil)
+    (let* ((session (mevedel-agent-invocation-parent-session context))
+           (path (and session
+                      (mevedel-agent-control--path-for-invocation
+                       session context))))
+      (when path
+        (mevedel-agent-control--set-mailbox-queue session path nil)))))
+
+(defun mevedel-agent-control--waiter (session path)
+  "Return PATH's active waiter in SESSION, or nil."
+  (if (equal path "/root")
+      (mevedel-session-agent-root-waiter session)
+    (when-let* ((record
+                 (cdr (assoc path
+                             (mevedel-session-agent-registry session)))))
+      (mevedel-agent-record-waiter record))))
+
+(defun mevedel-agent-control--set-waiter (session path waiter)
+  "Set PATH's active WAITER in SESSION."
+  (if (equal path "/root")
+      (mevedel-session--set-agent-root-waiter session waiter)
+    (setf (mevedel-agent-record-waiter
+           (mevedel-agent-control--record-at-path session path))
+          waiter)))
+
+(defun mevedel-agent-control-cancel-wait (session path)
+  "Cancel PATH's active wait in SESSION without invoking its callback."
+  (when-let* ((waiter (mevedel-agent-control--waiter session path)))
+    (mevedel-agent-control--set-waiter session path nil)
+    (when-let* ((timer (mevedel-agent-waiter-timer waiter))
+                ((timerp timer)))
+      (cancel-timer timer))
+    t))
+
+(defun mevedel-agent-control--wake (session path reason)
+  "Wake PATH's waiter in SESSION with REASON exactly once."
+  (when-let* ((waiter (mevedel-agent-control--waiter session path)))
+    (let ((callback (mevedel-agent-waiter-callback waiter)))
+      (mevedel-agent-control-cancel-wait session path)
+      (funcall callback reason)
+      t)))
+
+(defun mevedel-agent-control--wait-timeout (session path waiter)
+  "Wake PATH for timeout if WAITER is still current in SESSION."
+  (when (eq waiter (mevedel-agent-control--waiter session path))
+    (mevedel-agent-control--wake session path 'timeout)))
+
+(defun mevedel-agent-control-wait (session callback &optional timeout-ms)
+  "Suspend SESSION's current caller until mail, steering, or TIMEOUT-MS.
+CALLBACK receives one of `mailbox', `steering', `user', or `timeout'.
+Return the caller path when suspended, and nil after an immediate release."
+  (let ((timeout (or timeout-ms mevedel-agent-control--wait-default-ms)))
+    (unless (and (integerp timeout)
+                 (<= mevedel-agent-control--wait-min-ms timeout)
+                 (<= timeout mevedel-agent-control--wait-max-ms))
+      (user-error "WaitAgent timeout_ms must be an integer from %d through %d"
+                  mevedel-agent-control--wait-min-ms
+                  mevedel-agent-control--wait-max-ms))
+    (let ((path (mevedel-agent-control-current-path session)))
+      (cond
+       ((or (mevedel-agent-control--mailbox-queue session path)
+            (and (boundp 'mevedel--agent-invocation)
+                 mevedel--agent-invocation
+                 (mevedel-agent-invocation-messages
+                  mevedel--agent-invocation)))
+        (funcall callback 'mailbox)
+        nil)
+       ((mevedel-agent-control--waiter session path)
+        (error "Agent is already waiting: %s" path))
+       (t
+        (let ((waiter (mevedel-agent-waiter--create :callback callback)))
+          (mevedel-agent-control--set-waiter session path waiter)
+          (setf (mevedel-agent-waiter-timer waiter)
+                (run-at-time
+                 (/ timeout 1000.0) nil
+                 #'mevedel-agent-control--wait-timeout
+                 session path waiter))
+          path))))))
+
+(defun mevedel-agent-control-notify-context-mailbox (context &optional reason)
+  "Wake CONTEXT's WaitAgent for mailbox activity with optional REASON."
+  (if (mevedel-session-p context)
+      (mevedel-agent-control--wake context "/root" (or reason 'mailbox))
+    (let* ((session (mevedel-agent-invocation-parent-session context))
+           (path (and session
+                      (mevedel-agent-control--path-for-invocation
+                       session context))))
+      (and path
+           (mevedel-agent-control--wake
+            session path (or reason 'mailbox))))))
+
+(defun mevedel-agent-control-root-waiting-p (session)
+  "Return non-nil when SESSION's root has an active WaitAgent callback."
+  (and (mevedel-agent-control--waiter session "/root") t))
+
+(defun mevedel-agent-control--enqueue
+    (session recipient record &optional wake-reason)
+  "Queue RECORD for RECIPIENT in SESSION and wake a matching wait."
+  (mevedel-agent-control--set-mailbox-queue
+   session recipient
+   (cons record (mevedel-agent-control--mailbox-queue session recipient)))
+  (mevedel-agent-control--wake
+   session recipient (or wake-reason 'mailbox)))
+
+(defun mevedel-agent-control-steer-user
+    (session message &optional before-wake metadata)
+  "Deliver MESSAGE when SESSION's root is explicitly waiting.
+Call BEFORE-WAKE before releasing the wait.  Return non-nil only when the
+input became steering for the current turn.  METADATA may carry the separate
+transcript payload and hook audits."
+  (when (mevedel-agent-control--waiter session "/root")
+    (when before-wake
+      (funcall before-wake))
+    (mevedel-agent-control--enqueue
+     session "/root"
+     (list :type 'USER
+           :sender "user"
+           :recipient "/root"
+           :payload message
+           :transcript-payload (plist-get metadata :transcript-payload)
+           :hook-audits (plist-get metadata :hook-audits)
+           :timestamp (current-time))
+     'user)
+    t))
+
+(defun mevedel-agent-control-send-message (session target message)
+  "Queue one canonical MAIL with MESSAGE for TARGET in SESSION.
+Return the resolved recipient path.  Sending never activates a turn."
+  (unless (and (stringp message) (not (string-empty-p message)))
+    (user-error "SendMessage message must be non-empty plain text"))
+  (let* ((sender (mevedel-agent-control-current-path session))
+         (recipient
+          (mevedel-agent-control-resolve-path session sender target)))
+    (mevedel-agent-control--enqueue
+     session recipient
+     (list :type 'MAIL
+           :sender sender
+           :recipient recipient
+           :payload message
+           :timestamp (current-time)))
+    recipient))
 
 (defun mevedel-agent-control-list-agents (session &optional path-prefix)
   "Return SESSION's minimal roster, optionally below PATH-PREFIX."
@@ -279,8 +490,10 @@
               response)))
       (setf (mevedel-agent-record-activity record) 'idle)
       (setf (mevedel-agent-record-invocation record) nil)
-      (mevedel-agent-runtime--ctx-push-message
-       session
+      (mevedel-agent-control-cancel-wait
+       session (mevedel-agent-record-path record))
+      (mevedel-agent-control--enqueue
+       session (mevedel-agent-record-parent-path record)
        (list :type 'RESULT
              :sender (mevedel-agent-record-path record)
              :recipient (mevedel-agent-record-parent-path record)
@@ -344,9 +557,10 @@
     (let ((record (cdr (assoc path
                               (mevedel-session-agent-registry session)))))
       (if (mevedel-agent-control--active-p record)
-          (mevedel-agent-runtime-steer
-           (mevedel-agent-record-invocation record)
-           caller-path message)
+          (progn
+            (mevedel-agent-runtime-steer
+             (mevedel-agent-record-invocation record)
+             caller-path message))
         (when (>= (mevedel-agent-control--active-count session)
                   (mevedel-session-agent-turn-capacity session))
           (user-error "Agent tree is at its active-turn capacity"))
