@@ -264,26 +264,40 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 ;;
 ;;; Process groups and output spooling
 
-(defun mevedel-execution--signal-confined-descendants (record signal)
-  "Send SIGNAL to RECORD's command tree inside Bubblewrap."
-  (let ((children (make-hash-table :test #'eql))
+(defun mevedel-execution--signal-confined-group (record signal)
+  "Send SIGNAL to RECORD's foreground process group inside Bubblewrap."
+  (let ((outer-group-id (mevedel-execution--record-group-id record))
+        (children (make-hash-table :test #'eql))
+        (attributes (make-hash-table :test #'eql))
         (pending (list (mevedel-execution--record-group-id record)))
-        signal-sent-p)
+        group-id)
     (dolist (pid (list-system-processes))
-      (when-let* ((parent (alist-get 'ppid (process-attributes pid))))
+      (when-let* ((attrs (process-attributes pid))
+                  (parent (alist-get 'ppid attrs)))
+        (puthash pid attrs attributes)
         (push pid (gethash parent children))))
-    (while pending
+    (while (and pending (not group-id))
       (let ((pid (pop pending)))
         (dolist (child (gethash pid children))
           (push child pending)
-          (unless (equal "bwrap"
-                         (alist-get 'comm (process-attributes child)))
-            (condition-case nil
-                (progn
-                  (signal-process child signal)
-                  (setq signal-sent-p t))
-              (error nil))))))
-    signal-sent-p))
+          (let ((attrs (gethash child attributes)))
+            (unless (equal "bwrap" (alist-get 'comm attrs))
+              (let ((candidate
+                     (let ((foreground (alist-get 'tpgid attrs)))
+                       (if (and (integerp foreground)
+                                (> foreground 0)
+                                (not (eql foreground outer-group-id)))
+                           foreground
+                         (alist-get 'pgrp attrs)))))
+                (when (and (integerp candidate) (> candidate 0))
+                  (unless (eql candidate outer-group-id)
+                    (setq group-id candidate)))))))))
+    (when group-id
+      (condition-case nil
+          (progn
+            (signal-process (- group-id) signal)
+            t)
+        (error nil)))))
 
 (defun mevedel-execution--signal-record (record signal)
   "Send SIGNAL to RECORD's process group when available."
@@ -297,8 +311,7 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
         (cond
          ((and confined-p
                (eq signal 'INT)
-               (mevedel-execution--signal-confined-descendants
-                record signal)))
+               (mevedel-execution--signal-confined-group record signal)))
          ((and (eq signal 'INT)
                (mevedel-execution--record-tty-p record)
                (process-live-p process))

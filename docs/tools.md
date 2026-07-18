@@ -378,7 +378,8 @@ is closed from spawn. Explicit `tty=true` instead allocates a PTY and retains
 writable stdin without changing the captured owner, workdir, confinement, or
 resource grants. `WriteStdin` sends ordinary input only to PTYs. Unconfined
 Ctrl-C is written through PTYs or signals pipe-mode process groups; confined
-Ctrl-C instead reaches the command tree across Bubblewrap's session boundary.
+Ctrl-C instead signals the foreground process group once across Bubblewrap's
+session boundary.
 Every observation returns only the newly unread output. `ListExecutions`
 exposes only the caller's yielded handles, and `StopExecution` terminates only
 a handle owned by that caller. Terminal facts record PTY mode and preserve the

@@ -504,7 +504,7 @@
            (initial
             (test-mevedel-execution--start-managed
              session root
-             '("bash" "-c"
+             '("bash" "-lc"
                "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep 1; done")
              :tty tty))
            (id (plist-get (plist-get initial :facts) :execution-id))
@@ -518,7 +518,9 @@
             (should (string-match-p "interrupted" (plist-get final :output)))
             (should (= 130 (plist-get (plist-get final :facts) :exit-code)))
             (should (eq 'exited
-                        (plist-get (plist-get final :facts) :termination))))
+                        (plist-get (plist-get final :facts) :termination)))
+            (should (eq 'completed
+                        (plist-get (plist-get final :facts) :state))))
         (delete-directory root t))))
   :doc "keeps trapped and late Ctrl-C exit status distinct from signals"
   (dolist (command '(("sh" "-c"
