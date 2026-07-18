@@ -264,16 +264,50 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
 ;;
 ;;; Process groups and output spooling
 
+(defun mevedel-execution--signal-confined-descendants (record signal)
+  "Send SIGNAL to RECORD's command tree inside Bubblewrap."
+  (let ((children (make-hash-table :test #'eql))
+        (pending (list (mevedel-execution--record-group-id record)))
+        signal-sent-p)
+    (dolist (pid (list-system-processes))
+      (when-let* ((parent (alist-get 'ppid (process-attributes pid))))
+        (push pid (gethash parent children))))
+    (while pending
+      (let ((pid (pop pending)))
+        (dolist (child (gethash pid children))
+          (push child pending)
+          (unless (equal "bwrap"
+                         (alist-get 'comm (process-attributes child)))
+            (condition-case nil
+                (progn
+                  (signal-process child signal)
+                  (setq signal-sent-p t))
+              (error nil))))))
+    signal-sent-p))
+
 (defun mevedel-execution--signal-record (record signal)
   "Send SIGNAL to RECORD's process group when available."
   (let* ((process (mevedel-execution--record-process record))
-         (group-id (mevedel-execution--record-group-id record)))
+         (group-id (mevedel-execution--record-group-id record))
+         (confined-p
+          (eq 'bubblewrap
+              (plist-get (mevedel-execution--record-sandbox-facts record)
+                         :sandbox))))
     (condition-case nil
-        (if (and (not (eq system-type 'windows-nt))
-                 (integerp group-id) (> group-id 0))
-            (signal-process (- group-id) signal)
-          (when (process-live-p process)
-            (signal-process process signal)))
+        (cond
+         ((and confined-p
+               (eq signal 'INT)
+               (mevedel-execution--signal-confined-descendants
+                record signal)))
+         ((and (eq signal 'INT)
+               (mevedel-execution--record-tty-p record)
+               (process-live-p process))
+          (process-send-string process (string 3)))
+         ((and (not (eq system-type 'windows-nt))
+               (integerp group-id) (> group-id 0))
+          (signal-process (- group-id) signal))
+         ((process-live-p process)
+          (signal-process process signal)))
       (error
        (when (process-live-p process)
          (ignore-errors (signal-process process signal)))))))

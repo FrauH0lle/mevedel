@@ -376,12 +376,14 @@ output, an opaque owner-scoped execution ID, and a retained session artifact.
 Its timeout and 64 MiB output cap continue running after yield. Pipe-mode stdin
 is closed from spawn. Explicit `tty=true` instead allocates a PTY and retains
 writable stdin without changing the captured owner, workdir, confinement, or
-resource grants. `WriteStdin` sends ordinary input only to PTYs; a single
-Ctrl-C character signals the process group in either mode. Every observation
-returns only the newly unread output. `ListExecutions` exposes only the caller's
-yielded handles, and `StopExecution` terminates only a handle owned by that
-caller. Terminal facts record PTY mode and preserve the raw process exit or
-signal status. Canonical lifecycle state distinguishes `queued`, `running`,
+resource grants. `WriteStdin` sends ordinary input only to PTYs. Unconfined
+Ctrl-C is written through PTYs or signals pipe-mode process groups; confined
+Ctrl-C instead reaches the command tree across Bubblewrap's session boundary.
+Every observation returns only the newly unread output. `ListExecutions`
+exposes only the caller's yielded handles, and `StopExecution` terminates only
+a handle owned by that caller. Terminal facts record PTY mode and preserve the
+raw process exit or signal status. Canonical lifecycle state distinguishes
+`queued`, `running`,
 `stopping`, and `completed`; Interrupt rejects queued work that has not started,
 while Stop cancels it. There is no chunk ID: each observation advances one
 private unread cursor and returns canonical execution facts separately from
@@ -389,7 +391,7 @@ the raw output. Unread ranges beyond 2000 characters use the shared newline-awar
 equal head-and-tail preview while the retained artifact remains complete.
 
 Managed executions publish transient progress after two seconds, at most four
-times per second. The existing Bash row shows the bounded output tail, elapsed
+times per second. The existing Bash row shows the last five output lines, elapsed
 time, line and byte counts, configured timeout, and the execution ID once the
 command has yielded. These progress updates live only in bounded view state and
 never create transcript turns. Events carry the originating data buffer and
@@ -419,6 +421,10 @@ consumer acknowledges the message. Rejected delivery remains explicitly
 unsettled and owner-reachable. Passive progress/view subscribers cannot
 acknowledge durable delivery. Finished records never appear in live execution
 listings.
+
+The transcript view renders execution-only mailbox deliveries as compact Bash
+completion cards while retaining their full model-facing disclosure in the
+authoritative data buffer.
 
 Users have a separate session-wide control surface. `/ps`, the view's live
 execution status row, and the session cockpit's `Processes` row open a
