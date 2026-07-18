@@ -26,7 +26,8 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
 - **`mevedel-session`**: per-chat state: workspace, working
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,
-  deferred tool state, mailbox messages, background agents, mention
+  deferred tool state, mailbox messages, the retained agent registry,
+  root activity and tree capacity, background agents, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
   queue, plan queue, selected preset and resolved mevedel preset settings,

@@ -11,6 +11,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-agent-control)
 (require 'mevedel-view)
 (require 'mevedel-view-agent)
 (require 'mevedel-view-stream)
@@ -154,24 +155,64 @@
 
   :doc "ordinary views are not handled"
   (with-temp-buffer
-    (should-not (mevedel-view-agent-handle-view-kill))))
+    (should-not (mevedel-view-agent-handle-view-kill)))
+
+  :doc "closing an inspection view preserves retained conversation data"
+  (let* ((session
+          (mevedel-session-create
+           "main"
+           (mevedel-workspace--create
+            :type 'project :id "retained-view"
+            :root temporary-file-directory :name "retained-view")))
+         (data-buffer (generate-new-buffer " *test-retained-agent-data*"))
+         (view-buffer (generate-new-buffer " *test-retained-agent-view*"))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker"
+                  :conversation-buffer data-buffer)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--view-buffer view-buffer))
+          (with-current-buffer view-buffer
+            (setq-local mevedel-view--agent-transcript-p t)
+            (setq-local mevedel-view--agent-transcript-info
+                        (list :status 'completed :session session))
+            (setq-local mevedel--data-buffer data-buffer)
+            (mevedel-view-close-agent-transcript))
+          (should-not (buffer-live-p view-buffer))
+          (should (buffer-live-p data-buffer)))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-view-agent-cleanup-parent
   (:doc "removes transcript views owned by a parent")
   ,test
   (test)
 
-  :doc "parent cleanup kills its terminal transcript view and data buffer"
-  (let ((parent (generate-new-buffer " *test-agent-parent*"))
-        (data-buffer (generate-new-buffer " *test-agent-data*"))
-        (view-buffer (generate-new-buffer " *test-agent-view*")))
+  :doc "parent cleanup also kills retained data at session teardown"
+  (let* ((parent (generate-new-buffer " *test-agent-parent*"))
+         (data-buffer (generate-new-buffer " *test-agent-data*"))
+         (view-buffer (generate-new-buffer " *test-agent-view*"))
+         (session
+          (mevedel-session-create
+           "main"
+           (mevedel-workspace--create
+            :type 'project :id "retained-cleanup"
+            :root temporary-file-directory :name "retained-cleanup")))
+         (record (mevedel-agent-record--create
+                  :path "/root/worker"
+                  :conversation-buffer data-buffer)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
     (unwind-protect
         (progn
           (with-current-buffer view-buffer
             (setq-local mevedel-view--agent-transcript-p t)
             (setq-local mevedel-view--agent-transcript-parent-view parent)
             (setq-local mevedel-view--agent-transcript-info
-                        '(:status completed))
+                        (list :status 'completed :session session))
             (setq-local mevedel--data-buffer data-buffer))
           (mevedel-view-agent-cleanup-parent parent)
           (should-not (buffer-live-p view-buffer))

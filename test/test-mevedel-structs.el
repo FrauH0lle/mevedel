@@ -183,6 +183,7 @@
     (should (= 0 (mevedel-session-turn-count session)))
     (should (null (mevedel-session-agents session)))
     (should (null (mevedel-session-agent-registry session)))
+    (should (eq 'idle (mevedel-session-agent-root-activity session)))
     (should (= 3 (mevedel-session-agent-turn-capacity session)))
     (should (null (mevedel-session-tasks session)))
     (should (null (mevedel-session-reminders session)))
@@ -286,6 +287,8 @@
       (should (mevedel-request-p req))
       (should (eq req mevedel--current-request))
       (should (eq session (mevedel-request-session req)))
+      (should (eq 'running
+                  (mevedel-session-agent-root-activity session)))
       (should (hash-table-p (mevedel-request-file-snapshots req)))
       (should (null (mevedel-request-directive-uuid req)))))
 
@@ -308,7 +311,9 @@
       (setq-local mevedel--agent-invocation inv)
       (let ((req (mevedel-request-begin session)))
         (should (equal "verifier--abc"
-                       (mevedel-request-origin req))))))
+                       (mevedel-request-origin req)))
+        (should (eq 'idle
+                    (mevedel-session-agent-root-activity session))))))
 
   :doc "replaces stale request with warning"
   (with-temp-buffer
@@ -363,7 +368,9 @@
       (mevedel-request-begin session)
       (should mevedel--current-request)
       (mevedel-request-end)
-      (should (null mevedel--current-request))))
+      (should (null mevedel--current-request))
+      (should (eq 'idle
+                  (mevedel-session-agent-root-activity session)))))
 
   :doc "drains every registered canceller on end"
   (with-temp-buffer

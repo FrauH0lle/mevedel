@@ -13,6 +13,10 @@
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-retained-buffer-p
+                  "mevedel-agent-control" (session buffer))
+
 ;; `mevedel-agent-exec'
 (defvar mevedel--agent-invocation)
 
@@ -312,6 +316,12 @@ running in the UI."
     (with-current-buffer parent
       (setq mevedel-view--agent-transcript-window nil))))
 
+(defun mevedel-view--retained-agent-data-p (data-buffer transcript-info)
+  "Return non-nil when TRANSCRIPT-INFO's session retains DATA-BUFFER."
+  (and (fboundp 'mevedel-agent-control-retained-buffer-p)
+       (mevedel-agent-control-retained-buffer-p
+        (plist-get transcript-info :session) data-buffer)))
+
 (defun mevedel-view-agent-handle-view-kill ()
   "Clean up the current transcript view and return non-nil when handled."
   (when (bound-and-true-p mevedel-view--agent-transcript-p)
@@ -325,6 +335,8 @@ running in the UI."
           (when (eq mevedel--view-buffer view-buffer)
             (setq mevedel--view-buffer nil)))
         (unless (or live-p
+                    (mevedel-view--retained-agent-data-p
+                     data-buffer mevedel-view--agent-transcript-info)
                     mevedel-view--agent-transcript-data-kill-in-progress)
           (let ((mevedel-view--agent-transcript-data-kill-in-progress t))
             (kill-buffer data-buffer)))))
@@ -355,12 +367,15 @@ running in the UI."
                    (eq mevedel--data-buffer data-buffer)))
         (push buf views)))))
 
-(defun mevedel-view--kill-agent-transcript-view (view-buffer)
-  "Kill transcript inspection VIEW-BUFFER and its non-live data buffer."
+(defun mevedel-view--kill-agent-transcript-view
+    (view-buffer &optional kill-retained)
+  "Kill transcript inspection VIEW-BUFFER and disposable data.
+Also kill retained conversation data when KILL-RETAINED is non-nil."
   (when (mevedel-view--agent-transcript-view-p view-buffer)
-    (let (data-buffer live-p)
+    (let (data-buffer live-p transcript-info)
       (with-current-buffer view-buffer
         (setq data-buffer mevedel--data-buffer
+              transcript-info mevedel-view--agent-transcript-info
               live-p (plist-get mevedel-view--agent-transcript-info
                                 :live-buffer)))
       (dolist (win (get-buffer-window-list view-buffer nil t))
@@ -370,14 +385,17 @@ running in the UI."
         (kill-buffer view-buffer))
       (when (and (not live-p)
                  data-buffer
-                 (buffer-live-p data-buffer))
+                 (buffer-live-p data-buffer)
+                 (or kill-retained
+                     (not (mevedel-view--retained-agent-data-p
+                           data-buffer transcript-info))))
         (let ((mevedel-view--agent-transcript-data-kill-in-progress t))
           (kill-buffer data-buffer))))))
 
 (defun mevedel-view-agent-cleanup-parent (parent-view)
   "Kill every transcript inspection view opened from PARENT-VIEW."
   (dolist (view (mevedel-view--agent-transcript-views-for-parent parent-view))
-    (mevedel-view--kill-agent-transcript-view view)))
+    (mevedel-view--kill-agent-transcript-view view t)))
 
 (defun mevedel-view--on-agent-transcript-data-killed ()
   "Kill live transcript inspection views when their data buffer dies."

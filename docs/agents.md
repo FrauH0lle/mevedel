@@ -4,7 +4,10 @@ The model-facing `Agent` tool starts a retained default child asynchronously.
 It accepts a lowercase `task_name` path segment and a complete `message`, then
 returns the committed canonical path immediately. The root session retains the
 child's storage identity, path, activity, and transcript location after the
-turn settles.
+turn settles. `ListAgents` returns the path-sorted retained roster without
+storage IDs or transcript content. `FollowupAgent` continues an idle retained
+conversation or steers a running invocation at its next safe request boundary;
+later terminal results still go to the original spawn parent.
 
 Specialist definitions declared with `mevedel-define-agent` back dedicated
 commands and internal forked invocation paths:

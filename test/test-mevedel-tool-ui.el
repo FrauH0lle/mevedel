@@ -9,6 +9,7 @@
 
 (require 'gptel)
 (require 'json)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-registry)
@@ -74,8 +75,8 @@
   :doc "assembles the user-interaction tool surface"
   (progn
     (mevedel-tool-ui--register)
-    (dolist (name '("Ask" "Agent" "StopAgent"
-                    "ToolSearch" "SendMessage"))
+    (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
+                    "StopAgent" "ToolSearch" "SendMessage"))
       (should (mevedel-tool-get name)))
     (should-not (mevedel-tool-get "RequestAccess"))))
 
@@ -228,6 +229,242 @@
               (should-error (mevedel-tool-ui--agent #'ignore args)))))
       (dolist (invocation invocations)
         (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (mevedel-session-save-path session)
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session)))
+      (when (buffer-live-p parent)
+        (kill-buffer parent))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-ui--list-agents
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "returns only the stable path-sorted roster and applies subtree filters"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'project :id "list-agents"
+                     :root temporary-file-directory :name "list-agents"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *mevedel-list-agents*")))
+    (setf (mevedel-session-agent-registry session)
+          (list
+           (cons "/root/zeta"
+                 (mevedel-agent-record--create
+                  :id "default--private-z" :path "/root/zeta"
+                  :role "default" :activity 'idle
+                  :conversation-location "agents/zeta.chat.org"))
+           (cons "/root/alpha"
+                 (mevedel-agent-record--create
+                  :id "default--private-a" :path "/root/alpha"
+                  :role "default" :activity 'running))))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (let ((result (plist-get (mevedel-tool-ui--list-agents nil)
+                                   :result)))
+            (should (< (string-match "/root" result)
+                       (string-match "/root/alpha" result)))
+            (should (< (string-match "/root/alpha" result)
+                       (string-match "/root/zeta" result)))
+            (should-not (string-match-p "private" result))
+            (should-not (string-match-p "chat.org" result)))
+          (let ((result
+                 (plist-get
+                  (mevedel-tool-ui--list-agents
+                   '(:path_prefix "/root/alpha"))
+                  :result)))
+            (should (string-match-p "/root/alpha" result))
+            (should-not (string-match-p "/root/zeta" result))))
+      (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-tool-ui--followup-agent
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "continues an idle retained conversation and reports to its spawn parent"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-followup-idle-" t)))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "followup-idle" root "followup-idle"))
+         (session (mevedel-session-create "main" workspace))
+         (parent (generate-new-buffer " *mevedel-followup-idle-parent*"))
+         launches
+         fail-launch)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (setq-local mevedel--workspace workspace)
+          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+                     (lambda (callback _role _description message invocation
+                                       buffer &optional _configure)
+                       (when fail-launch
+                         (error "Simulated provider launch failure"))
+                       (setq launches
+                             (append launches
+                                     (list (list :callback callback
+                                                 :invocation invocation
+                                                 :message message
+                                                 :buffer buffer))))
+                       'provider-request)))
+            (let (started)
+              (mevedel-tool-ui--agent
+               (lambda (value &rest _) (setq started value))
+               '(:task_name "worker" :message "Inspect feature one."))
+              (should started))
+            (let* ((initial (car launches))
+                   (initial-invocation (plist-get initial :invocation))
+                   (initial-buffer (plist-get initial :buffer))
+                   (initial-id
+                    (mevedel-agent-invocation-agent-id initial-invocation)))
+              (funcall (plist-get initial :callback) "Feature one reviewed.")
+              (setf (mevedel-session-messages session) nil)
+              (let ((result
+                     (mevedel-tool-ui--followup-agent
+                      '(:target "worker"
+                        :message "Now review feature two."))))
+                (should (equal "" (plist-get result :result)))
+                (should (equal "/root/worker"
+                               (plist-get (plist-get result :render-data)
+                                          :path))))
+              (should (= 2 (length launches)))
+              (let* ((followup (nth 1 launches))
+                     (followup-invocation
+                      (plist-get followup :invocation)))
+                (should (eq initial-buffer (plist-get followup :buffer)))
+                (should (equal initial-id
+                               (mevedel-agent-invocation-agent-id
+                                followup-invocation)))
+                (with-current-buffer initial-buffer
+                  (let ((text (buffer-string)))
+                    (should (< (string-match "Inspect feature one" text)
+                               (string-match "Now review feature two" text)))))
+                (funcall (plist-get followup :callback)
+                         "Feature two reviewed."))
+              (let ((result (car (mevedel-session-messages session))))
+                (should (= 1 (length (mevedel-session-messages session))))
+                (should (equal "/root/worker" (plist-get result :sender)))
+                (should (equal "/root" (plist-get result :recipient)))
+                (should (string-match-p "Feature two reviewed"
+                                        (plist-get result :payload))))
+              (let* ((record
+                      (cdr (assoc "/root/worker"
+                                  (mevedel-session-agent-registry session))))
+                     (location
+                      (mevedel-agent-record-conversation-location record))
+                     (text (with-current-buffer initial-buffer
+                             (buffer-string))))
+                (cl-letf
+                    (((symbol-function
+                       'mevedel-agent-exec--save-transcript-buffer)
+                      (lambda (_invocation) nil)))
+                  (should-error
+                   (mevedel-tool-ui--followup-agent
+                    '(:target "worker"
+                      :message "This task must roll back."))))
+                (should (= 2 (length launches)))
+                (should (eq 'idle (mevedel-agent-record-activity record)))
+                (should (equal location
+                               (mevedel-agent-record-conversation-location
+                                record)))
+                (should (equal text
+                               (with-current-buffer initial-buffer
+                                 (buffer-string))))
+                (should
+                 (eq 'completed
+                     (plist-get
+                      (cdr (assoc
+                            (mevedel-agent-record-id record)
+                            (mevedel-session-agent-transcripts session)))
+                      :status)))
+                (setq fail-launch t)
+                (should-error
+                 (mevedel-tool-ui--followup-agent
+                  '(:target "worker"
+                    :message "Record a failed launch.")))
+                (should (= 2 (length launches)))
+                (should (eq 'idle (mevedel-agent-record-activity record)))
+                (should-not (mevedel-agent-record-invocation record))))))
+      (dolist (launch launches)
+        (when-let* ((buffer (plist-get launch :buffer))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer
+            (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (mevedel-session-save-path session)
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session)))
+      (when (buffer-live-p parent)
+        (kill-buffer parent))
+      (delete-directory root t)))
+
+  :doc "steers a running target at its next boundary when capacity is full"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-followup-running-" t)))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "followup-running" root "followup-running"))
+         (session (mevedel-session-create "main" workspace))
+         (parent (generate-new-buffer " *mevedel-followup-running-parent*"))
+         launches)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (setq-local mevedel--workspace workspace)
+          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+                     (lambda (callback _role _description message invocation
+                                       buffer &optional _configure)
+                       (let ((fsm
+                              (gptel-make-fsm
+                               :state 'TOOL
+                               :info
+                               (list :mevedel-agent-invocation invocation))))
+                         (with-current-buffer
+                             (mevedel-agent-invocation-parent-data-buffer
+                              invocation)
+                           (setf
+                            (alist-get
+                             (mevedel-agent-invocation-agent-id invocation)
+                             mevedel-agent-runtime--fsms nil nil #'equal)
+                            fsm)))
+                       (setq launches
+                             (append launches
+                                     (list (list :callback callback
+                                                 :invocation invocation
+                                                 :message message
+                                                 :buffer buffer))))
+                       'provider-request)))
+            (dolist (name '("one" "two" "three"))
+              (mevedel-tool-ui--agent
+               #'ignore (list :task_name name :message "Initial task.")))
+            (should (= 3 (mevedel-agent-control--active-count session)))
+            (let ((result
+                   (mevedel-tool-ui--followup-agent
+                    '(:target "/root/one"
+                      :message "Incorporate this steering."))))
+              (should (equal "" (plist-get result :result))))
+            (should (= 3 (length launches)))
+            (should (= 3 (mevedel-agent-control--active-count session)))
+            (should-not (mevedel-session-messages session))
+            (let* ((first (car launches))
+                   (invocation (plist-get first :invocation))
+                   (message (car (mevedel-agent-invocation-messages
+                                  invocation))))
+              (should (equal "/root" (plist-get message :from)))
+              (should (equal "Incorporate this steering."
+                             (plist-get message :body)))
+              ;; The ordinary WAIT handler drains the follow-up before the
+              ;; provider's next safe request boundary.
+              (setf (mevedel-agent-invocation-messages invocation) nil)
+              (funcall (plist-get first :callback)
+                       "Steered task finished."))
+            (should (= 3 (length launches)))
+            (should (= 2 (mevedel-agent-control--active-count session)))
+            (should (= 1 (length (mevedel-session-messages session))))))
+      (dolist (launch launches)
+        (when-let* ((buffer (plist-get launch :buffer))
                     ((buffer-live-p buffer)))
           (with-current-buffer buffer
             (set-buffer-modified-p nil))
@@ -416,6 +653,37 @@
              header))
     (should-not (string-match-p "\n" header))
     (should (string-match-p "\\[running · 9 calls\\]" header))))
+
+(mevedel-deftest mevedel-tool-ui--render-agent-interaction
+  (:doc "Renders retained-agent interaction events")
+  ,test
+  (test)
+  :doc "renders Interacted with PATH without changing a leading-> draft"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line")
+          (rendering
+           (mevedel-tool-ui--render-agent-interaction
+            "FollowupAgent"
+            '(:target "/root/spec_review")
+            ""
+            '(:kind collaboration-event
+              :event interacted
+              :path "/root/spec_review"))))
+      (should (equal "Interacted with /root/spec_review"
+                     (plist-get rendering :header)))
+      (should-not
+       (mevedel-tool-ui--render-agent-interaction
+        "FollowupAgent" '(:target "/root/missing")
+        "Error: Unknown agent target" nil))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (should (string= draft (mevedel-view--input-text)))))))
 
 (provide 'test-mevedel-tool-ui)
 

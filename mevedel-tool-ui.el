@@ -3,8 +3,9 @@
 ;;; Commentary:
 
 ;; Assembles the user-interaction tool surface and owns the small adapters for
-;; Agent, StopAgent, ToolSearch, and SendMessage.  Ask lives in a focused tool
-;; module; generic, Bash, and Eval prompts live in the permission-prompt module.
+;; Agent, FollowupAgent, ListAgents, StopAgent, ToolSearch, and SendMessage.
+;; Ask lives in a focused tool module; generic, Bash, and Eval prompts live in
+;; the permission-prompt module.
 
 ;;; Code:
 
@@ -14,6 +15,10 @@
   (require 'subr-x))
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-followup
+                  "mevedel-agent-control" t t)
+(declare-function mevedel-agent-control-list-agents
+                  "mevedel-agent-control" (session &optional path-prefix))
 (declare-function mevedel-agent-control-spawn
                   "mevedel-agent-control" t t)
 (declare-function mevedel-agent-record-conversation-location
@@ -182,6 +187,35 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
                    (mevedel-agent-record-conversation-location record)
                    :status 'running))))))
 
+(defun mevedel-tool-ui--followup-agent (args)
+  "Continue or steer the retained agent described by ARGS."
+  (require 'mevedel-agent-control)
+  (let* ((record
+          (mevedel-agent-control-followup
+           mevedel--session
+           (plist-get args :target)
+           (plist-get args :message)
+           :parent-fsm (and (boundp 'mevedel-tools--current-fsm)
+                            mevedel-tools--current-fsm)
+           :message-handler #'mevedel-tools--handle-message-inject
+           :terminal-handler #'mevedel-tools--handle-terminal-mailbox))
+         (path (mevedel-agent-record-path record)))
+    (list :result ""
+          :render-data
+          (list :kind 'collaboration-event
+                :event 'interacted
+                :path path))))
+
+(defun mevedel-tool-ui--list-agents (args)
+  "Return the retained agent roster described by ARGS."
+  (require 'json)
+  (require 'mevedel-agent-control)
+  (list :result
+        (json-serialize
+         (vconcat
+          (mevedel-agent-control-list-agents
+           mevedel--session (plist-get args :path_prefix))))))
+
 (defun mevedel-tool-ui--stop-agent (args)
   "Stop the running sub-agent named by ARGS."
   (require 'mevedel-agent-runtime)
@@ -275,6 +309,15 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
               :hook-audits (plist-get effective-render-data :hook-audits)
               :initially-collapsed-p t)))))
 
+(defun mevedel-tool-ui--render-agent-interaction
+    (_name _args result render-data)
+  "Render an agent interaction RESULT from RENDER-DATA."
+  (when (and (stringp result)
+             (stringp (plist-get render-data :path)))
+    (list :header (format "Interacted with %s"
+                          (plist-get render-data :path))
+          :expandable-p nil)))
+
 (defun mevedel-tool-ui--result-status (result)
   "Return a renderer status for RESULT."
   (and (stringp result)
@@ -341,6 +384,28 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     :get-name (lambda (args) (plist-get args :task_name))
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-agent)
+  (mevedel-define-tool
+    :name "FollowupAgent"
+    :description "Continue or steer one retained non-root agent."
+    :prompt-file "tools/followupagent.md"
+    :handler #'mevedel-tool-ui--followup-agent
+    :args ((target string :required
+                   "Canonical path or relative descendant path.")
+           (message string :required
+                    "Complete non-empty follow-up task."))
+    :groups (util)
+    :get-name (lambda (args) (plist-get args :target))
+    :read-only-p t
+    :renderer #'mevedel-tool-ui--render-agent-interaction)
+  (mevedel-define-tool
+    :name "ListAgents"
+    :description "List retained agent paths, roles, and activity."
+    :prompt-file "tools/listagents.md"
+    :handler #'mevedel-tool-ui--list-agents
+    :args ((path_prefix string :optional
+                        "Canonical subtree path prefix."))
+    :groups (util)
+    :read-only-p t)
   (mevedel-define-tool
     :name "StopAgent"
     :description "Stop a running sub-agent owned by the current session."

@@ -212,6 +212,23 @@ model request merely because a background process settled."
       (push message (mevedel-agent-invocation-messages ctx))
     (push message (mevedel-session-messages ctx))))
 
+(defun mevedel-agent-runtime-steer (invocation sender message)
+  "Queue a follow-up from SENDER for INVOCATION's next safe boundary."
+  (unless (mevedel-agent-invocation-p invocation)
+    (error "Running agent has no live invocation"))
+  (let ((fsm
+         (mevedel-agent-runtime--background-agent-fsm
+          (mevedel-agent-invocation-agent-id invocation)
+          (mevedel-agent-invocation-parent-data-buffer invocation))))
+    (unless (mevedel-agent-runtime--agent-fsm-live-p fsm)
+      (error "Running agent has no live request"))
+    (mevedel-agent-runtime--ctx-push-message
+     invocation
+     (list :from sender :body message :timestamp (current-time)))
+    (when (eq (gptel-fsm-state fsm) 'BWAIT)
+      (gptel--fsm-transition fsm 'WAIT))
+    t))
+
 (defun mevedel-agent-runtime--execution-settlement-response (invocation)
   "Return INVOCATION's final response with queued Bash completions appended."
   (let* ((messages
@@ -426,6 +443,9 @@ Set via `setopt mevedel-agent-runtime-debug t' before reproducing a
 multi-agent hang.  The output goes to `*Messages*' (only)."
   :type 'boolean
   :group 'mevedel)
+
+(defvar mevedel-agent-runtime--retain-buffer nil
+  "Non-nil while finalizing a retained agent conversation buffer.")
 
 (defvar mevedel-agent-runtime--direct-execution-settlement-p nil
   "Dynamically non-nil while delivering an execution-owned terminal result.")
@@ -1923,6 +1943,7 @@ unobserved transcript buffer."
                  (and (fboundp 'mevedel-view-agent-live-transcript-finalize)
                       (mevedel-view-agent-live-transcript-finalize invocation))))
             (when (and buf (buffer-live-p buf)
+                       (not mevedel-agent-runtime--retain-buffer)
                        (not view-kept)
                        (null (get-buffer-window-list buf nil t)))
               (with-current-buffer buf
@@ -2115,7 +2136,8 @@ defaults to the data buffer reachable from the current buffer."
              skill-permission-rules
              skill-model-override skill-effort-override
              skill-hook-rules
-             on-invocation on-settle)
+             on-invocation on-settle
+             retained-id retained-buffer retained-transcript)
   "Dispatch AGENT with DESCRIPTION and PROMPT, delivering to MAIN-CB.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
@@ -2123,6 +2145,8 @@ verified it is non-nil.  BACKGROUND, MODEL-TIER, SKILL-PERMISSION-RULES,
 SKILL-MODEL-OVERRIDE, SKILL-EFFORT-OVERRIDE, SKILL-HOOK-RULES, and
 ON-INVOCATION seeds the invocation before request dispatch.  ON-SETTLE, when
 non-nil, owns background settlement instead of the default mailbox path.
+RETAINED-ID, RETAINED-BUFFER, and RETAINED-TRANSCRIPT continue an existing
+conversation identity rather than allocating a new one.
 
 Dispatch order:
 
@@ -2152,11 +2176,15 @@ invocation's matching slots so the child request's pre-realization model
 resolver and permission resolver pick them up."
   (require 'mevedel-agent-exec)
   (require 'mevedel-models)
+  (when (or retained-id retained-buffer retained-transcript)
+    (unless (and retained-id retained-buffer retained-transcript)
+      (error "Retained agent identity requires id, buffer, and transcript")))
   (let* ((agent-type (mevedel-agent-name agent))
-         (agent-id (concat agent-type "--"
-                           (md5 (format "%s%s%s%s"
-                                        (system-name) (emacs-pid)
-                                        (current-time) (random)))))
+         (agent-id (or retained-id
+                       (concat agent-type "--"
+                               (md5 (format "%s%s%s%s"
+                                            (system-name) (emacs-pid)
+                                            (current-time) (random))))))
          (invocation (mevedel-agent-invocation-create agent))
          (parent-data-buffer (current-buffer))
          (parent-session (and (boundp 'mevedel--session) mevedel--session))
@@ -2198,29 +2226,54 @@ resolver and permission resolver pick them up."
             (append (mevedel-agent-invocation-hook-rules invocation)
                     skill-hook-rules)))
     (let ((agent-buffer
-           (mevedel-agent-exec--allocate-agent-buffer
-            invocation parent-data-buffer)))
+           (or (and (buffer-live-p retained-buffer) retained-buffer)
+               (and retained-buffer
+                    (error "Retained agent buffer is not live"))
+               (mevedel-agent-exec--allocate-agent-buffer
+                invocation parent-data-buffer))))
       (setf (mevedel-agent-invocation-buffer invocation) agent-buffer)
-      ;; Try to set up persistence (shallow materialize + transcript file).
-      (mevedel-agent-runtime-dispatch--setup-transcript invocation agent-buffer)
+      (if retained-buffer
+          (progn
+            (require 'mevedel-session-persistence)
+            (setf (mevedel-agent-invocation-transcript-relative-path invocation)
+                  retained-transcript)
+            (with-current-buffer agent-buffer
+              (setq-local mevedel--agent-invocation invocation)))
+        ;; Try to set up persistence (shallow materialize + transcript file).
+        (mevedel-agent-runtime-dispatch--setup-transcript
+         invocation agent-buffer))
       ;; Insert the initial task prompt.  Persist it before the
       ;; first request dispatch so a crash mid-first-response still
       ;; leaves the prompt on disk.  If the initial save fails (full
-      ;; disk, perms, read-only mount), drop persistence: clear
-      ;; `buffer-file-name', drop the in-memory transcript entry,
-      ;; and continue with the agent buffer as ephemeral.
+      ;; disk, perms, read-only mount), a fresh conversation drops
+      ;; persistence and continues as ephemeral.  A retained
+      ;; conversation instead rolls back the prompt and rejects the
+      ;; follow-up so its completed transcript remains intact.
       (with-current-buffer agent-buffer
-        (let ((inhibit-read-only t))
+        (let ((inhibit-read-only t)
+              (prompt-start (point-max))
+              (was-modified (buffer-modified-p)))
           (goto-char (point-max))
           (unless (bobp) (insert "\n"))
           (insert (format "* Agent Task: %s\n\n%s\n"
                           (or description "")
-                          (or prompt ""))))
-        (when (mevedel-agent-invocation-transcript-relative-path invocation)
-          (let ((saved
-                 (mevedel-agent-exec--save-transcript-buffer invocation)))
-            (unless saved
-              (mevedel-agent-runtime-dispatch--abandon-persistence invocation)))))
+                          (or prompt "")))
+          (when (mevedel-agent-invocation-transcript-relative-path invocation)
+            (let ((saved
+                   (mevedel-agent-exec--save-transcript-buffer invocation)))
+              (unless saved
+                (if retained-buffer
+                    (progn
+                      (delete-region prompt-start (point-max))
+                      (set-buffer-modified-p was-modified)
+                      (error "Retained agent conversation could not be persisted"))
+                  (mevedel-agent-runtime-dispatch--abandon-persistence
+                   invocation)))))))
+      (when retained-buffer
+        (mevedel-session-persistence--update-transcript-entry
+         parent-session agent-id
+         (list :status 'running
+               :updated-at (format-time-string "%FT%H-%M-%S"))))
       (when on-invocation
         (if on-settle
             (funcall on-invocation invocation)
@@ -2243,8 +2296,10 @@ resolver and permission resolver pick them up."
                                (mevedel-agent-runtime--invocation-execution-live-p
                                 invocation))
                     (let ((terminal
-                           (mevedel-agent-runtime--normalize-terminal-response
-                            invocation response)))
+                           (let ((mevedel-agent-runtime--retain-buffer
+                                  (and on-settle t)))
+                             (mevedel-agent-runtime--normalize-terminal-response
+                              invocation response))))
                       (if on-settle
                           (unless fired
                             (setq fired t)

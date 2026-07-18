@@ -13,6 +13,11 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `mevedel-agent-exec'
+(declare-function mevedel-agent-exec--flush-transcript-save
+                  "mevedel-agent-exec" (invocation))
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime--ctx-push-message
                   "mevedel-agent-runtime" (ctx message))
@@ -20,6 +25,8 @@
                   "mevedel-agent-runtime" t t)
 (declare-function mevedel-agent-runtime-dispatch--abandon-persistence
                   "mevedel-agent-runtime" (invocation))
+(declare-function mevedel-agent-runtime-steer
+                  "mevedel-agent-runtime" (invocation sender message))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-default "mevedel-agents" ())
@@ -38,6 +45,8 @@
 (declare-function mevedel-session--set-agent-registry
                   "mevedel-structs" (session registry))
 (declare-function mevedel-session-agent-registry
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-agent-root-activity
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-turn-capacity
                   "mevedel-structs" (cl-x) t)
@@ -61,6 +70,7 @@
   configuration
   activity
   conversation-location
+  conversation-buffer
   invocation)
 
 (defun mevedel-agent-control--active-p (record)
@@ -73,6 +83,115 @@
    (lambda (entry)
      (mevedel-agent-control--active-p (cdr entry)))
    (mevedel-session-agent-registry session)))
+
+(defun mevedel-agent-control-retained-buffer-p (session buffer)
+  "Return non-nil when SESSION retains BUFFER as an agent conversation."
+  (and (mevedel-session-p session)
+       (buffer-live-p buffer)
+       (cl-some
+        (lambda (entry)
+          (eq buffer
+              (mevedel-agent-record-conversation-buffer (cdr entry))))
+        (mevedel-session-agent-registry session))))
+
+(defun mevedel-agent-control-teardown-session (session)
+  "Kill every retained conversation buffer owned by SESSION."
+  (when (mevedel-session-p session)
+    (dolist (entry (mevedel-session-agent-registry session))
+      (when-let* ((buffer
+                   (mevedel-agent-record-conversation-buffer (cdr entry)))
+                  ((buffer-live-p buffer)))
+        (let ((saved-p
+               (with-current-buffer buffer
+                 (or (not (buffer-modified-p))
+                     (when (and (boundp 'mevedel--agent-invocation)
+                                mevedel--agent-invocation)
+                       (require 'mevedel-agent-exec)
+                       (mevedel-agent-exec--flush-transcript-save
+                        mevedel--agent-invocation))))))
+          (if saved-p
+              (kill-buffer buffer)
+            (display-warning
+             'mevedel
+             (format
+              "Retained agent transcript could not be saved during session teardown: %s"
+              (car entry))
+             :warning)))))))
+
+(defun mevedel-agent-control--canonical-path-p (path)
+  "Return non-nil when PATH is a canonical agent path."
+  (and (stringp path)
+       (let ((case-fold-search nil))
+         (string-match-p
+          "\\`/root\\(?:/[a-z0-9_]+\\)*\\'" path))))
+
+(defun mevedel-agent-control-current-path (session)
+  "Return the current caller's canonical path in SESSION."
+  (let ((invocation (and (boundp 'mevedel--agent-invocation)
+                         mevedel--agent-invocation)))
+    (if (not invocation)
+        "/root"
+      (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
+             (entry
+              (cl-find agent-id
+                       (mevedel-session-agent-registry session)
+                       :key (lambda (item)
+                              (mevedel-agent-record-id (cdr item)))
+                       :test #'equal)))
+        (unless entry
+          (error "Current agent is not registered: %s" agent-id))
+        (car entry)))))
+
+(defun mevedel-agent-control-resolve-path (session caller-path target)
+  "Resolve TARGET from CALLER-PATH to an addressable path in SESSION."
+  (unless (mevedel-agent-control--canonical-path-p caller-path)
+    (error "Invalid caller agent path: %s" caller-path))
+  (unless (and (stringp target) (not (string-empty-p target)))
+    (user-error "Agent target must be a non-empty path"))
+  (let ((path
+         (if (string-prefix-p "/" target)
+             target
+           (concat caller-path "/" target))))
+    (unless (mevedel-agent-control--canonical-path-p path)
+      (user-error "Invalid agent target: %s" target))
+    (unless (or (equal path "/root")
+                (assoc path (mevedel-session-agent-registry session)))
+      (user-error "Unknown agent target: %s" target))
+    path))
+
+(defun mevedel-agent-control-list-agents (session &optional path-prefix)
+  "Return SESSION's minimal roster, optionally below PATH-PREFIX."
+  (when (and path-prefix
+             (not (mevedel-agent-control--canonical-path-p path-prefix)))
+    (user-error "Invalid agent path prefix: %s" path-prefix))
+  (let* ((records
+          (mapcar
+           (lambda (entry)
+             (let ((record (cdr entry)))
+               (list :path (mevedel-agent-record-path record)
+                     :role (mevedel-agent-record-role record)
+                     :activity
+                     (symbol-name
+                      (mevedel-agent-record-activity record)))))
+           (mevedel-session-agent-registry session)))
+         (roster
+          (cons (list :path "/root" :role "default"
+                      :activity
+                      (symbol-name
+                       (mevedel-session-agent-root-activity session)))
+                records))
+         (filtered
+          (if path-prefix
+              (cl-remove-if-not
+               (lambda (entry)
+                 (let ((path (plist-get entry :path)))
+                   (or (equal path path-prefix)
+                       (string-prefix-p (concat path-prefix "/") path))))
+               roster)
+            roster)))
+    (sort filtered
+          (lambda (a b)
+            (string-lessp (plist-get a :path) (plist-get b :path))))))
 
 (defun mevedel-agent-control--validate-spawn (session task-name message)
   "Validate SESSION, TASK-NAME, and MESSAGE for a new child."
@@ -174,8 +293,75 @@
   (setf (mevedel-agent-record-id record)
         (mevedel-agent-invocation-agent-id invocation))
   (setf (mevedel-agent-record-invocation record) invocation)
+  (setf (mevedel-agent-record-conversation-buffer record)
+        (mevedel-agent-invocation-buffer invocation))
   (setf (mevedel-agent-record-conversation-location record)
         (mevedel-agent-invocation-transcript-relative-path invocation)))
+
+(cl-defun mevedel-agent-control--dispatch-followup
+    (session record message
+             &key parent-fsm message-handler terminal-handler)
+  "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
+  (let ((buffer (mevedel-agent-record-conversation-buffer record)))
+    (unless (buffer-live-p buffer)
+      (error "Agent conversation is not live: %s"
+             (mevedel-agent-record-path record)))
+    (unless
+        (mevedel-agent-runtime-dispatch
+         #'ignore (mevedel-agent-default)
+         (file-name-nondirectory (mevedel-agent-record-path record)) message
+         :background t
+         :parent-context session
+         :parent-fsm parent-fsm
+         :message-handler message-handler
+         :terminal-handler terminal-handler
+         :retained-id (mevedel-agent-record-id record)
+         :retained-buffer buffer
+         :retained-transcript
+         (mevedel-agent-record-conversation-location record)
+         :on-invocation
+         (apply-partially
+          #'mevedel-agent-control--record-invocation record)
+         :on-settle
+         (apply-partially
+          #'mevedel-agent-control--settle session record))
+      (error "Agent provider request did not start"))
+    (when (eq (mevedel-agent-record-activity record) 'starting)
+      (setf (mevedel-agent-record-activity record) 'running))
+    record))
+
+(cl-defun mevedel-agent-control-followup
+    (session target message
+             &key parent-fsm message-handler terminal-handler)
+  "Start or steer TARGET with MESSAGE in SESSION and return its record."
+  (unless (and (stringp message) (not (string-empty-p message)))
+    (user-error "FollowupAgent message must be non-empty plain text"))
+  (let* ((caller-path (mevedel-agent-control-current-path session))
+         (path (mevedel-agent-control-resolve-path
+                session caller-path target)))
+    (when (equal path "/root")
+      (user-error "FollowupAgent cannot activate /root"))
+    (let ((record (cdr (assoc path
+                              (mevedel-session-agent-registry session)))))
+      (if (mevedel-agent-control--active-p record)
+          (mevedel-agent-runtime-steer
+           (mevedel-agent-record-invocation record)
+           caller-path message)
+        (when (>= (mevedel-agent-control--active-count session)
+                  (mevedel-session-agent-turn-capacity session))
+          (user-error "Agent tree is at its active-turn capacity"))
+        (setf (mevedel-agent-record-activity record) 'starting)
+        (condition-case err
+            (mevedel-agent-control--dispatch-followup
+             session record message
+             :parent-fsm parent-fsm
+             :message-handler message-handler
+             :terminal-handler terminal-handler)
+          (error
+           (setf (mevedel-agent-record-activity record) 'idle)
+           (setf (mevedel-agent-record-invocation record) nil)
+           (signal (car err) (cdr err)))))
+      record)))
 
 (cl-defun mevedel-agent-control-spawn
     (session task-name message
