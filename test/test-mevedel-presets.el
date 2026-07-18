@@ -167,6 +167,27 @@
 ;;
 ;;; mevedel-define-preset macro
 
+(mevedel-deftest mevedel--define-presets
+  (:before-each (mevedel-tool-clear-registry)
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+
+  :doc "keeps Bash lifecycle controls active in every Bash preset"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (dolist (preset '(mevedel-discuss mevedel-implement mevedel-tutor))
+      (let* ((metadata (mevedel-preset--resolved-metadata preset))
+             (resolved
+              (mevedel-tool-resolve (plist-get metadata :tool-specs)))
+             (active
+              (mapcar #'mevedel-tool-name (plist-get resolved :active))))
+        (dolist (name '("Bash" "WriteStdin" "ListExecutions"
+                        "StopExecution"))
+          (should (member name active)))))))
+
 (mevedel-deftest mevedel-preset--variable-for-key
   ()
   ,test
