@@ -1243,6 +1243,13 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
       (with-current-buffer view-buffer
         (pcase type
           ('progress
+           (setq event
+                 (plist-put
+                  (copy-sequence event) :output-tail
+                  (string-join
+                   (last (string-lines
+                          (or (plist-get event :output-tail) "")) 5)
+                   "\n")))
            (mevedel-view-stream--cache-execution-progress event)
            (mevedel-view-stream--update-execution-pending-row event))
           ('terminal

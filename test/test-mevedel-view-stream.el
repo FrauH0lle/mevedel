@@ -229,7 +229,8 @@
                     :owner "main"
                     :tool-use-id "call-live"
                     :tool-args '(:command "printf run")
-                    :timeout-seconds 30 :output-tail "live tail"
+                    :timeout-seconds 30
+                    :output-tail "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7"
                     :facts '(:execution-id "exec-000001" :state running
                              :wall-time-seconds 2.5 :output-bytes 9
                              :output-lines 1 :omitted-output-bytes 0))))
@@ -239,19 +240,25 @@
                    (rendering
                     (mevedel-view--compute-segment-rendering
                      data-buf (car bounds) (cdr bounds))))
-              (should (equal "live tail" (plist-get rendering :body)))
+              (should (equal "line 3\nline 4\nline 5\nline 6\nline 7"
+                             (plist-get rendering :body)))
               (should (plist-get rendering :force-expanded-p)))
             (let ((cached (gethash "call-live"
                                    mevedel-view--execution-events)))
-              (should (equal "live tail" (plist-get cached :output-tail)))
+              (should (equal "line 3\nline 4\nline 5\nline 6\nline 7"
+                             (plist-get cached :output-tail)))
               (should-not (plist-member cached :owner-context))
               (should-not (plist-member cached :observation)))
             (with-current-buffer data-buf
               (should (equal data-before (buffer-string))))
             (should (string-match-p
-                     "live tail"
+                     "line 7"
                      (buffer-substring-no-properties
                       (point-min) (mevedel-view--input-start))))
+            (should-not (string-match-p
+                         "line 1"
+                         (buffer-substring-no-properties
+                          (point-min) (mevedel-view--input-start))))
             (should (string-match-p
                      "exec-000001"
                      (buffer-substring-no-properties

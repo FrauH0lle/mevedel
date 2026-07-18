@@ -495,6 +495,31 @@
             (should (eq (and tty t)
                         (plist-get (plist-get final :facts) :tty))))
         (delete-directory root t))))
+  :doc "Ctrl-C reaches a trapped Bash through confined pipe and PTY transports"
+  (skip-unless (plist-get (mevedel-sandbox-probe) :available))
+  (dolist (tty '(nil t))
+    (let* ((root (make-temp-file "mevedel-managed-confined-interrupt-" t))
+           (session (test-mevedel-execution--session root))
+           (mevedel-sandbox-mode 'required)
+           (initial
+            (test-mevedel-execution--start-managed
+             session root
+             '("bash" "-c"
+               "trap 'printf \"interrupted\\n\"; exit 130' INT; while :; do printf 'heartbeat\\n'; sleep 1; done")
+             :tty tty))
+           (id (plist-get (plist-get initial :facts) :execution-id))
+           final)
+      (unwind-protect
+          (progn
+            (test-mevedel-execution--observe session id :wait-ms 1200)
+            (setq final
+                  (test-mevedel-execution--observe
+                   session id :chars (string 3)))
+            (should (string-match-p "interrupted" (plist-get final :output)))
+            (should (= 130 (plist-get (plist-get final :facts) :exit-code)))
+            (should (eq 'exited
+                        (plist-get (plist-get final :facts) :termination))))
+        (delete-directory root t))))
   :doc "keeps trapped and late Ctrl-C exit status distinct from signals"
   (dolist (command '(("sh" "-c"
                       "trap 'exit 2' INT; printf ready; while :; do sleep 1; done")
