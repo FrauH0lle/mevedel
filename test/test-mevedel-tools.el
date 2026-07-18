@@ -1340,6 +1340,57 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
     (mevedel-tools--handle-message-inject fsm)
     (should (equal 1 (length (plist-get data :messages))))))
 
+(mevedel-deftest mevedel-tools--handle-agent-roster-inject ()
+  ,test
+  (test)
+  :doc "injects each new direct child once and never exposes grandchildren"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buffer (generate-new-buffer " *mt-agent-roster*"))
+         (data (list :messages (vector)))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :backend nil :data data))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (setf (mevedel-session-agent-registry session)
+                (list
+                 (cons "/root/worker"
+                       (mevedel-agent-record--create
+                        :path "/root/worker" :parent-path "/root"
+                        :role "worker" :activity 'running))
+                 (cons "/root/worker/review"
+                       (mevedel-agent-record--create
+                        :path "/root/worker/review"
+                        :parent-path "/root/worker"
+                        :role "reviewer" :activity 'running))))
+          (mevedel-tools--handle-agent-roster-inject fsm)
+          (should (= 1 (length (plist-get data :messages))))
+          (let ((content
+                 (plist-get (aref (plist-get data :messages) 0) :content)))
+            (should (string-match-p "Direct child agents:" content))
+            (should (string-match-p "/root/worker.*worker" content))
+            (should-not (string-match-p "/root/worker/review" content)))
+          (mevedel-tools--handle-agent-roster-inject fsm)
+          (should (= 1 (length (plist-get data :messages))))
+          (push
+           (cons "/root/explore"
+                 (mevedel-agent-record--create
+                  :path "/root/explore" :parent-path "/root"
+                  :role "explorer" :activity 'idle))
+           (mevedel-session-agent-registry session))
+          (mevedel-tools--handle-agent-roster-inject fsm)
+          (should (= 2 (length (plist-get data :messages))))
+          (should
+           (string-match-p
+            "/root/explore.*explorer"
+            (plist-get (aref (plist-get data :messages) 1) :content)))
+          (should
+           (string-match-p
+            "New direct child agents:"
+            (plist-get (aref (plist-get data :messages) 1) :content))))
+      (kill-buffer buffer))))
+
 
 ;;
 ;;; Background agent spawning

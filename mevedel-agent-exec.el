@@ -205,6 +205,10 @@
 (declare-function mevedel-tool-task-finalize-owner
                   "mevedel-tool-task" (session owner status))
 
+;; `mevedel-tools'
+(declare-function mevedel-tools--handle-agent-roster-inject
+                  "mevedel-tools" (fsm))
+
 (defvar mevedel-agent-exec-debug nil
   "Non-nil enables request-driver lifecycle diagnostics.")
 
@@ -1110,7 +1114,8 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
                          :fallback-partial fallback-partial)))))))
 
 (defvar mevedel-agent-exec--handlers
-  `((WAIT ,#'mevedel-agent-exec--handle-wait-activity
+  `((WAIT ,#'mevedel-tools--handle-agent-roster-inject
+     ,#'mevedel-agent-exec--handle-wait-activity
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage
           ,#'mevedel--compact-record-token-baseline
@@ -1136,6 +1141,7 @@ Modelled after the upstream `gptel-agent-request--handlers' table.
 
 Additions:
 
+- `WAIT' injects the caller's compact direct-child roster before sampling.
 - `TRET' gains `mevedel-agent-exec--handle-tret-save' so transcripts are durable
   across long tool loops (gptel's post-response hook fires only at DONE/ABRT,
   not TRET).

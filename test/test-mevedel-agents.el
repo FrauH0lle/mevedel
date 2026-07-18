@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-agents)
+(require 'mevedel-skills-core)
 (require 'mevedel-tools)
 (require 'helpers
          (file-name-concat
@@ -20,15 +21,14 @@
 ;;
 ;;; Agent definitions
 
-(defun test-mevedel-agents--tool-names (agent-name)
-  "Return explicit tool names from AGENT-NAME's effective specs."
-  (delq nil
-        (mapcar (lambda (spec)
-                  (and (consp spec)
-                       (eq :tool (car spec))
-                       (cadr spec)))
-                (mevedel-agent--effective-specs
-                 (mevedel-agent-get agent-name)))))
+(defun test-mevedel-agents--resolved-tool-names (agent-name)
+  "Return resolved active tool names for AGENT-NAME."
+  (mapcar #'mevedel-tool-name
+          (plist-get
+           (mevedel-tool-resolve
+            (mevedel-agent--effective-specs
+             (mevedel-agent-get agent-name)))
+           :active)))
 
 (defun test-mevedel-agents--restore-builtins ()
   "Restore bundled agent definitions after tests that clear the registry."
@@ -41,13 +41,99 @@
   ,test
   (test)
   :doc "explorer receives skill tools while review/verify/coordinator do not"
-  (let ((explorer (test-mevedel-agents--tool-names "explorer")))
+  (let ((explorer (test-mevedel-agents--resolved-tool-names "explorer")))
     (should (member "Skill" explorer))
     (should (member "ListSkills" explorer)))
   (dolist (name '("coordinator" "verifier" "reviewer"))
-    (let ((tools (test-mevedel-agents--tool-names name)))
+    (let ((tools (test-mevedel-agents--resolved-tool-names name)))
       (should-not (member "Skill" tools))
       (should-not (member "ListSkills" tools)))))
+
+(mevedel-deftest mevedel-agent--specs-contain-tool-p/test
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "checks resolved active tools rather than raw spec spelling"
+  (should (mevedel-agent--specs-contain-tool-p
+           '((:tool "Agent")) "Agent"))
+  (should-not (mevedel-agent--specs-contain-tool-p
+               '((:tool "Read")) "Agent")))
+
+(mevedel-deftest mevedel-agent--declared-specs/test
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "appends role-specific user extras before authority augmentation"
+  (let* ((mevedel-agent-extra-tool-specs
+          '((explorer (:tool "Eval"))))
+         (specs (mevedel-agent--declared-specs
+                 (mevedel-agent-get "explorer"))))
+    (should (member '(:tool "Agent") specs))
+    (should (member '(:tool "Eval") specs))
+    (should-not (member '(:tool "SendMessage") specs))))
+
+(mevedel-deftest mevedel-agent-resolve-role/test
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "omitted roles select default while named roles resolve visibly"
+  (should (eq (mevedel-agent-default)
+              (mevedel-agent-resolve-role nil)))
+  (should (equal "worker"
+                 (mevedel-agent-name
+                  (mevedel-agent-resolve-role "worker"))))
+  (dolist (role '("" "missing" worker))
+    (should-error (mevedel-agent-resolve-role role) :type 'user-error)))
+
+(mevedel-deftest mevedel-agent-role-tools/test
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "worker and explorer orchestrate while reviewer and verifier are leaves"
+  (let ((control '("Agent" "FollowupAgent" "WaitAgent" "InterruptAgent"))
+        (observation '("SendMessage" "ListAgents")))
+    (dolist (name '("worker" "explorer" "reviewer" "verifier"))
+      (let ((tools (test-mevedel-agents--resolved-tool-names name)))
+        (dolist (tool observation)
+          (should (member tool tools)))
+        (if (member name '("worker" "explorer"))
+            (dolist (tool control)
+              (should (member tool tools)))
+          (dolist (tool control)
+            (should-not (member tool tools)))))))
+
+  :doc "worker has independent broad implementation capabilities"
+  (let ((tools (test-mevedel-agents--resolved-tool-names "worker")))
+    (dolist (tool '("Read" "Write" "Edit" "Bash" "Eval"
+                    "XrefDefinitions" "Skill" "TaskCreate"))
+      (should (member tool tools))))
+
+  :doc "explorer remains directly read-only despite delegation authority"
+  (dolist (tool (plist-get
+                 (mevedel-tool-resolve
+                  (mevedel-agent--effective-specs
+                   (mevedel-agent-get "explorer")))
+                 :active))
+    (unless (member (mevedel-tool-name tool)
+                    '("Agent" "FollowupAgent" "WaitAgent"
+                      "InterruptAgent" "SendMessage" "ListAgents"))
+      (should (mevedel-tool-read-only-p tool))))
+
+  :doc "custom roles with Agent receive the complete control bundle"
+  (unwind-protect
+      (progn
+        (mevedel-define-agent delegator-test
+          :description "Capability bundle test."
+          :tools ((:tool "Agent"))
+          :system-prompt "Delegate.")
+        (let ((tools
+               (test-mevedel-agents--resolved-tool-names
+                "delegator-test")))
+          (dolist (tool '("Agent" "FollowupAgent" "WaitAgent"
+                          "InterruptAgent" "SendMessage" "ListAgents"))
+            (should (member tool tools)))))
+    (setq mevedel-agent--registry
+          (assoc-delete-all "delegator-test" mevedel-agent--registry))))
 
 (mevedel-deftest mevedel-agent-skill-tool-capable-p/test
   (:before-each (test-mevedel-agents--restore-builtins))

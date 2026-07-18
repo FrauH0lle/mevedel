@@ -795,12 +795,14 @@ fire-count and payload."
 		 (let ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
 		       (agent-buf (generate-new-buffer " *mev-agent-child*"))
 		       (inv (mevedel-agent-invocation--create
-		             :agent (mevedel-agent--create :name "explorer")))
+		             :agent (mevedel-agent-default)))
 		       (parent-tiers '((custom)))
 		       (parent-workloads '((explorer :tier custom)))
 		       captured-buffer
 		       captured-include-reasoning
+		       captured-system
 		       captured-tiers
+		       captured-tools
 		       captured-workloads
 		       captured-fsm)
 		   (unwind-protect
@@ -818,7 +820,7 @@ fire-count and payload."
 				 (mevedel-model-workloads parent-workloads)
 				 (gptel-system-prompt "parent system")
 				 (gptel-use-tools nil)
-				 (gptel-tools nil)
+				 (gptel-tools '(parent-tool))
 				 (gptel-use-context nil)
 				 (gptel-context nil)
 				 (gptel-use-curl nil)
@@ -831,7 +833,9 @@ fire-count and payload."
 					(lambda (&optional _prompt &rest _args)
 					  (setq captured-buffer (current-buffer))
 					  (setq captured-include-reasoning
-						gptel-include-reasoning)
+						gptel-include-reasoning
+						captured-system gptel-system-prompt
+						captured-tools gptel-tools)
 					  (setq captured-tiers mevedel-model-tiers
 						captured-workloads
 						mevedel-model-workloads)))
@@ -839,10 +843,12 @@ fire-count and payload."
 					#'ignore))
 		       (setq captured-fsm
 			     (mevedel-agent-exec--run
-			      #'ignore "explorer" "count defcustoms" "prompt"
+			      #'ignore "default" "count defcustoms" "prompt"
 			      inv agent-buf)))))
 			 (should (eq captured-buffer agent-buf))
 			 (should (eq captured-include-reasoning t))
+			 (should (equal captured-system "parent system"))
+			 (should (equal captured-tools '(parent-tool)))
 			 (should (equal '((custom)) captured-tiers))
 			 (should (equal '((explorer :tier custom))
 					captured-workloads))
@@ -874,6 +880,8 @@ fire-count and payload."
 		       (progn
 			 (require 'mevedel-tool-exec)
 			 (mevedel-tool-exec--register)
+			 (require 'mevedel-tool-ui)
+			 (mevedel-tool-ui--register)
 			 (with-current-buffer parent-buf
 			   (let ((gptel-agent-preset nil)
 				 (mevedel-agent-exec--agents nil)

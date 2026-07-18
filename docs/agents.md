@@ -1,13 +1,20 @@
 # Multi-agent system
 
-The model-facing `Agent` tool starts a retained default child asynchronously.
-It accepts a lowercase `task_name` path segment and a complete `message`, then
-returns the committed canonical path immediately. The root session retains the
-child's storage identity, path, activity, and transcript location after the
-turn settles. `ListAgents` returns the path-sorted retained roster without
-storage IDs or transcript content. `FollowupAgent` continues an idle retained
-conversation or steers a running invocation at its next safe request boundary;
-later terminal results still go to the original spawn parent. `SendMessage`
+The model-facing `Agent` tool starts a retained child asynchronously. It
+accepts a lowercase `task_name` path segment, a complete `message`, and an
+optional named `role`, then returns the committed canonical path immediately.
+An omitted role selects `default` and inherits the delegator's effective
+instructions, tools, model policy, and delegation capability. A named role
+supplies its own configuration rather than intersecting its tools with the
+delegator's. Children are created below the caller, so recursive delegation
+forms paths such as `/root/implementation/tests`.
+
+The root session retains every child's storage identity, path, activity, and
+transcript location after the turn settles. `ListAgents` returns the full
+path-sorted retained roster without storage IDs or transcript content.
+`FollowupAgent` continues an idle retained conversation or steers a running
+invocation at its next safe request boundary; later terminal results still go
+to the original spawn parent. `SendMessage`
 queues plain-text mail for `/root` or any retained path without activating a
 turn. `WaitAgent` suspends its ordinary asynchronous tool callback until mail,
 user steering, follow-up steering, or its bounded successful timeout wakes it.
@@ -15,10 +22,12 @@ user steering, follow-up steering, or its bounded successful timeout wakes it.
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
 
-Specialist definitions declared with `mevedel-define-agent` back dedicated
-commands and internal forked invocation paths:
+The built-in role configurations are:
 
-- **explorer**: read-only investigation, caller-specified thoroughness
+- **worker**: broad implementation, execution, navigation, skill, task, and
+  collaboration tools, with explicit concurrent-edit guidance
+- **explorer**: directly read-only investigation with authority to delegate to
+  workers
 - **coordinator**: internal orchestration role; never implements
 - **verifier**: adversarial read-only verification; per-turn
   `verifier-read-only` reminder attached at invocation. Final reports must
@@ -27,6 +36,20 @@ commands and internal forked invocation paths:
 - **reviewer**: foreground code-review agent used by `/review`; per-turn
   `reviewer-read-only` reminder attached at invocation. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
+
+Every named role receives `SendMessage` and `ListAgents`. Possession of
+`Agent` grants transitive delegation authority and automatically supplies the
+complete `Agent`, `FollowupAgent`, `WaitAgent`, and `InterruptAgent` control
+bundle. Worker and explorer therefore orchestrate recursively; reviewer and
+verifier are communicating leaves without those control tools. The complete
+root-session tree shares the session's active-turn capacity (three non-root
+turns by default), regardless of path depth. Waiting and human-blocked turns
+remain active and continue consuming their existing slot.
+
+Before the first sample, the WAIT boundary injects only the caller's direct
+children as compact path and role references. Later WAIT boundaries add a
+child created in the same turn exactly once. Peers and deeper descendants are
+not injected; `ListAgents` is the explicit full-tree discovery surface.
 
 Interactive implementation planning is the first phase of `/goal <objective>`,
 not a planner sub-agent. The Goal controller keeps planning and review
@@ -81,9 +104,9 @@ and environment details are appended. The skills prompt section is
 derived from the resolved agent tool set: agents with `Skill` or
 `ListSkills` receive the model-facing active skill roster. Utility agents
 can therefore avoid inheriting main-agent boilerplate while still
-receiving environment context. Built-in policy currently gives explorer
-agents `Skill` and `ListSkills` plus the skills prompt section;
-coordinator, verifier, and reviewer agents remain skill-free.
+receiving environment context. Built-in policy gives worker and explorer
+agents `Skill` and `ListSkills` plus the skills prompt section; coordinator,
+verifier, and reviewer agents remain skill-free.
 
 ## Specialist invocation flow
 

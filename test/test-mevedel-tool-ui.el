@@ -90,7 +90,18 @@
       (should (mevedel-tool-get name)))
     (should-not (mevedel-tool-get "StopAgent"))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
-    (should-not (mevedel-tool-get "RequestAccess"))))
+    (should-not (mevedel-tool-get "RequestAccess")))
+
+  :doc "Agent exposes role as an optional configuration overlay"
+  (progn
+    (mevedel-tool-ui--register)
+    (let* ((tool (mevedel-tool-get "Agent"))
+           (role (cl-find-if
+                  (lambda (arg)
+                    (eq (car arg) 'role))
+                  (mevedel-tool-args tool))))
+      (should role)
+      (should (eq :optional (nth 2 role))))))
 
 (mevedel-deftest mevedel-tool-ui--agent
   (:after-each (mevedel-workspace-clear-registry))

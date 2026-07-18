@@ -13,12 +13,15 @@
 (require 'mevedel-agents)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-tools)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+
+(mevedel-tools-register)
 
 (defun mevedel-agent-control-test--session ()
   "Return a fresh in-memory session for agent-control tests."
@@ -298,12 +301,62 @@
   (let* ((session (mevedel-agent-control-test--session))
          (record nil))
     (setf (mevedel-session-agent-turn-capacity session) 1)
-    (setq record (mevedel-agent-control--reserve session "first"))
+    (setq record (mevedel-agent-control--reserve
+                  session "/root" "first" "default"))
     (should (equal "/root/first" (mevedel-agent-record-path record)))
-    (should-error (mevedel-agent-control--reserve session "first"))
-    (should-error (mevedel-agent-control--reserve session "second"))
+    (should-error (mevedel-agent-control--reserve
+                   session "/root" "first" "default"))
+    (should-error (mevedel-agent-control--reserve
+                   session "/root" "second" "worker"))
     (setf (mevedel-agent-record-activity record) 'idle)
-    (should (mevedel-agent-control--reserve session "second"))))
+    (let ((child
+           (mevedel-agent-control--reserve
+            session "/root/first" "second" "worker")))
+      (should (equal "/root/first/second"
+                     (mevedel-agent-record-path child)))
+      (should (equal "/root/first"
+                     (mevedel-agent-record-parent-path child)))
+      (should (equal "worker" (mevedel-agent-record-role child))))))
+
+(mevedel-deftest mevedel-agent-control-context-path ()
+  ,test
+  (test)
+  :doc "maps root and retained invocation contexts to canonical paths"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation--create :agent-id "alpha-id")))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (setf (mevedel-session-agent-registry session)
+          (list
+           (cons "/root/alpha"
+                 (mevedel-agent-record--create
+                  :id "alpha-id" :path "/root/alpha"))))
+    (should (equal "/root" (mevedel-agent-control-context-path session)))
+    (should (equal "/root/alpha"
+                   (mevedel-agent-control-context-path invocation)))))
+
+(mevedel-deftest mevedel-agent-control-direct-children ()
+  ,test
+  (test)
+  :doc "returns only direct children sorted by path with compact role data"
+  (let ((session (mevedel-agent-control-test--session)))
+    (setf (mevedel-session-agent-registry session)
+          (list
+           (cons "/root/zeta"
+                 (mevedel-agent-record--create
+                  :path "/root/zeta" :parent-path "/root"
+                  :role "explorer"))
+           (cons "/root/alpha/deep"
+                 (mevedel-agent-record--create
+                  :path "/root/alpha/deep" :parent-path "/root/alpha"
+                  :role "reviewer"))
+           (cons "/root/alpha"
+                 (mevedel-agent-record--create
+                  :path "/root/alpha" :parent-path "/root"
+                  :role "worker"))))
+    (should
+     (equal '((:path "/root/alpha" :role "worker")
+              (:path "/root/zeta" :role "explorer"))
+            (mevedel-agent-control-direct-children session "/root")))))
 
 (mevedel-deftest mevedel-agent-control--rollback ()
   ,test
@@ -659,14 +712,16 @@
                      'project "agent-control" root "agent-control"))
          (session (mevedel-session-create "main" workspace))
          (parent (generate-new-buffer " *agent-control-parent*"))
-         invocations)
+         invocations
+         roles)
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
           (cl-letf (((symbol-function 'mevedel-agent-exec--run)
-                     (lambda (_callback _role _description _message child
+                     (lambda (_callback role _description _message child
                                         _buffer &optional _configure)
+                       (push role roles)
                        (push child invocations)
                        'provider-request)))
             (let ((record
@@ -676,7 +731,49 @@
                              (mevedel-agent-record-path record)))
               (should (eq 'running (mevedel-agent-record-activity record)))
               (should (stringp
-                       (mevedel-agent-record-conversation-location record)))))
+                       (mevedel-agent-record-conversation-location record))))
+            (let* ((parent-invocation (car invocations))
+                   (mevedel--agent-invocation parent-invocation)
+                   (nested
+                    (mevedel-agent-control-spawn
+                     session "research" "Investigate first."
+                     :role "explorer")))
+              (should (equal "/root/worker/research"
+                             (mevedel-agent-record-path nested)))
+              (should (equal "/root/worker"
+                             (mevedel-agent-record-parent-path nested)))
+              (should (equal "explorer"
+                             (mevedel-agent-record-role nested)))
+              (should (equal "explorer" (car roles)))
+              (let ((nested-invocation
+                     (mevedel-agent-record-invocation nested)))
+                (mevedel-agent-control--settle
+                 session nested nested-invocation "Nested result."))
+              (should-not (mevedel-session-messages session))
+              (let ((result
+                     (car (mevedel-agent-control--mailbox
+                           session "/root/worker"))))
+                (should (eq 'RESULT (plist-get result :type)))
+                (should (equal "/root/worker/research"
+                               (plist-get result :sender)))
+                (should (equal "/root/worker"
+                               (plist-get result :recipient)))))
+            (should-error
+             (mevedel-agent-control-spawn
+              session "unknown" "Fail before reservation."
+              :role "not_a_role")
+             :type 'user-error)
+            (should-not (assoc "/root/unknown"
+                               (mevedel-session-agent-registry session))))
+          (let ((mevedel-agent-exec--agents
+                 '(("explorer" :description "available"))))
+            (should-error
+             (mevedel-agent-control-spawn
+              session "unavailable" "Reject session-excluded role."
+              :role "worker")
+             :type 'user-error)
+            (should-not (assoc "/root/unavailable"
+                               (mevedel-session-agent-registry session))))
           (cl-letf (((symbol-function 'mevedel-agent-exec--run)
                      (lambda (callback _role _description _message child
                                        _buffer &optional _configure)

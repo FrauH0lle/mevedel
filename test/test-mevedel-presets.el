@@ -186,7 +186,24 @@
               (mapcar #'mevedel-tool-name (plist-get resolved :active))))
         (dolist (name '("Bash" "WriteStdin" "ListExecutions"
                         "StopExecution"))
-          (should (member name active)))))))
+          (should (member name active))))))
+
+  :doc "makes every built-in role available to model-facing Agent calls"
+  (let ((mevedel-preset--registry nil)
+        (gptel--known-presets nil))
+    (mevedel-tools-register)
+    (mevedel--define-presets)
+    (with-temp-buffer
+      (mevedel-agents--setup-for-request 'mevedel-implement)
+      (let* ((tool (gptel-get-tool '("mevedel" "Agent")))
+             (role-arg
+              (cl-find-if
+               (lambda (arg) (equal (plist-get arg :name) "role"))
+               (gptel-tool-args tool)))
+             (roles (append (plist-get role-arg :enum) nil)))
+        (dolist (role '("worker" "explorer" "coordinator"
+                        "reviewer" "verifier"))
+          (should (member role roles)))))))
 
 (mevedel-deftest mevedel-preset--variable-for-key
   ()

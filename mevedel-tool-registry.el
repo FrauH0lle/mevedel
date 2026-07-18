@@ -111,7 +111,8 @@ created as a side effect of registration and handles serialization."
   "Hash-table mapping (CATEGORY NAME) lists to `mevedel-tool' structs.")
 
 (defconst mevedel-tool--builtin-registrars
-  '(("Agent" "InterruptAgent" "SendMessage" "ToolSearch" "WaitAgent"
+  '(("Agent" "FollowupAgent" "InterruptAgent" "ListAgents" "SendMessage"
+     "ToolSearch" "WaitAgent"
      mevedel-tool-ui mevedel-tool-ui--register)
     ("Ask" mevedel-tool-ask mevedel-tool-ask-register)
     ("Bash" "Eval" "ListExecutions" "StopExecution" "WriteStdin"

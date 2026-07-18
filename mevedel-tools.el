@@ -61,6 +61,10 @@
                   "mevedel-agent-control" (context))
 (declare-function mevedel-agent-control-context-mailbox
                   "mevedel-agent-control" (context))
+(declare-function mevedel-agent-control-context-path
+                  "mevedel-agent-control" (context))
+(declare-function mevedel-agent-control-direct-children
+                  "mevedel-agent-control" (session parent-path))
 
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec--insert-injected-prompt
@@ -865,6 +869,52 @@ model-visible communication in conversation history."
         (mevedel-agent-control-clear-context-mailbox ctx)
         (when agent-p
           (setf (mevedel-agent-runtime--ctx-messages ctx) nil))))))
+
+(defun mevedel-tools--handle-agent-roster-inject (fsm)
+  "WAIT-state handler: expose direct children to FSM exactly once."
+  (when-let* ((ctx (mevedel-tools--deferred-context-for fsm))
+              (session
+               (if (mevedel-session-p ctx)
+                   ctx
+                 (mevedel-agent-invocation-parent-session ctx)))
+              (parent-path
+               (progn
+                 (require 'mevedel-agent-control)
+                 (mevedel-agent-control-context-path ctx))))
+    (let* ((info (gptel-fsm-info fsm))
+           (initialized-p
+            (plist-member info :mevedel-agent-child-paths))
+           (children
+            (mevedel-agent-control-direct-children session parent-path))
+           (paths (mapcar (lambda (entry) (plist-get entry :path)) children))
+           (known (plist-get info :mevedel-agent-child-paths))
+           (new
+            (cl-remove-if
+             (lambda (entry)
+               (member (plist-get entry :path) known))
+             children))
+           (data (plist-get info :data)))
+      (when (or (null new) data)
+        (when new
+          (gptel--inject-prompt
+           (plist-get info :backend) data
+           (list
+            :role "user"
+            :content
+            (concat
+             "<agent-roster>\n"
+             (if initialized-p
+                 "New direct child agents:\n"
+               "Direct child agents:\n")
+             (mapconcat
+              (lambda (entry)
+                (format "- `%s` (`%s`)"
+                        (plist-get entry :path)
+                        (plist-get entry :role)))
+              new "\n")
+             "\n</agent-roster>"))))
+        (setf (gptel-fsm-info fsm)
+              (plist-put info :mevedel-agent-child-paths paths))))))
 
 (defun mevedel-tools--handle-terminal-mailbox (fsm)
   "Terminal-state handler: log mailbox drops + sweep parent's perm queue.
