@@ -90,10 +90,21 @@
   (system-prompt nil :type (or string function))
   (max-turns nil :type (or null integer))
   (reminders nil :type list)
-  (hook-rules nil :type list))
+  (hook-rules nil :type list)
+  (frozen-p nil :type boolean))
+
+(cl-defstruct
+    (mevedel-agent-configuration
+     (:constructor mevedel-agent-configuration--create))
+  "Frozen identity and request state for one retained agent."
+  (agent nil :type mevedel-agent)
+  (request-locals nil :type list))
 
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")
+
+(defconst mevedel-agent-task-path-property "MEVEDEL_AGENT_PATH"
+  "Org property that identifies a retained agent's own task heading.")
 
 (defvar mevedel-agent--default
   (mevedel-agent--create
@@ -112,10 +123,10 @@ Each entry is (AGENT-SYMBOL . SPEC-LIST) where SPEC-LIST uses the same
 forms accepted by `mevedel-define-agent''s :tools keyword (bare
 symbols, (:group X), (:tool X), (:deferred X)).
 
-Merged into the agent's resolved tool list at every invocation -- active
-entries flow into the sub-agent's gptel tool set and deferred entries
-seed the invocation's `deferred-set' so ToolSearch running inside the
-agent can discover them."
+Merged into the role's resolved tool list before a retained agent freezes its
+configuration. Active entries flow into the sub-agent's gptel tool set and
+deferred entries seed the invocation's `deferred-set' so ToolSearch running
+inside the agent can discover them."
   :group 'mevedel
   :type '(alist :key-type symbol :value-type (repeat sexp)))
 
@@ -137,10 +148,12 @@ agent can discover them."
 
 (defun mevedel-agent--declared-specs (agent)
   "Return AGENT's declared tool specs with user extras appended."
-  (let* ((name (mevedel-agent-name agent))
-         (extras
-          (alist-get (intern name) mevedel-agent-extra-tool-specs)))
-    (append (mevedel-agent-tools agent) extras)))
+  (if (mevedel-agent-frozen-p agent)
+      (mevedel-agent-tools agent)
+    (let* ((name (mevedel-agent-name agent))
+           (extras
+            (alist-get (intern name) mevedel-agent-extra-tool-specs)))
+      (append (mevedel-agent-tools agent) extras))))
 
 (defun mevedel-agent--effective-specs (agent)
   "Return AGENT's tool specs merged with user-declared extras.
@@ -150,7 +163,8 @@ Combines `mevedel-agent-tools' with any matching entry in
 the built-in set stays stable; user extras are appended."
   (let* ((name (mevedel-agent-name agent))
          (base (mevedel-agent--declared-specs agent)))
-    (if (equal name "default")
+    (if (or (mevedel-agent-frozen-p agent)
+            (equal name "default"))
         base
       (cl-delete-duplicates
        (append base
@@ -172,6 +186,33 @@ the built-in set stays stable; user extras are appended."
     (user-error "Agent role must be a non-empty string when provided"))
    ((mevedel-agent-get role))
    (t (user-error "Unknown agent role: %s" role))))
+
+(defun mevedel-agent-freeze (agent)
+  "Return a frozen configuration snapshot of AGENT.
+
+Dynamic system instructions and user tool augmentation are materialized in
+the caller's current session context.  Reminders and hooks remain templates,
+but are copied so later role redefinition cannot alter retained follow-ups."
+  (if (mevedel-agent-frozen-p agent)
+      agent
+    (let ((frozen (copy-mevedel-agent agent))
+          (system-prompt (mevedel-agent-system-prompt agent)))
+      (setf (mevedel-agent-tools frozen)
+            (copy-tree (mevedel-agent--effective-specs agent))
+            (mevedel-agent-system-prompt frozen)
+            (cond
+             ((stringp system-prompt) system-prompt)
+             ((functionp system-prompt) (funcall system-prompt))
+             ((null system-prompt) nil)
+             (t (error "Agent %s has invalid system-prompt: %S"
+                       (mevedel-agent-name agent) system-prompt)))
+            (mevedel-agent-reminders frozen)
+            (mevedel-reminders-clone-list
+             (mevedel-agent-reminders agent))
+            (mevedel-agent-hook-rules frozen)
+            (copy-tree (mevedel-agent-hook-rules agent))
+            (mevedel-agent-frozen-p frozen) t)
+      frozen)))
 
 (defun mevedel-agent-skill-tool-capable-p (agent)
   "Return non-nil when AGENT's resolved active tools include skills."
@@ -372,9 +413,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   ;; parent's currently active rules + the fork skill's own rules at spawn time;
   ;; later additions on either side do not propagate.
   (skill-permission-rules nil :type list)
-  ;; Explicit Agent-tool tier selector, stored as (:tier TIER). This suppresses
-  ;; the agent default even when the tier resolves to inherit.
-  model-tier-override
+  frozen-configuration
   ;; Skill-scoped selector, stored as (:tier TIER) or (:backend BACKEND :model
   ;; MODEL). The historical slot name is kept because request-scoped skill code
   ;; already uses the same terminology.

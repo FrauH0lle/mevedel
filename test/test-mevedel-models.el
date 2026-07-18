@@ -222,6 +222,17 @@
       (put 'gptel-reasoning-effort 'custom-type old-custom)
       (put 'fast-model :reasoning-effort old-effort))))
 
+(mevedel-deftest mevedel-model-parse-effort
+  ()
+  ,test
+  (test)
+  :doc "normalizes model-facing strings without duplicating model validation"
+  (progn
+    (should-not (mevedel-model-parse-effort nil))
+    (should (eq 'high (mevedel-model-parse-effort "high")))
+    (dolist (value '("" "nil" medium 3))
+      (should-error (mevedel-model-parse-effort value) :type 'user-error))))
+
 (mevedel-deftest mevedel-model-resolve-workload
   ()
   ,test

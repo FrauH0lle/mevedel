@@ -31,9 +31,13 @@
                   "mevedel-agent-runtime" (invocation sender message))
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-configuration-p
+                  "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-frozen-configuration
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-messages
                   "mevedel-agents" (cl-x) t)
@@ -49,6 +53,17 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
+
+;; `mevedel-compact'
+(declare-function mevedel-compact-context-snapshot
+                  "mevedel-compact" (fork-turns))
+
+;; `mevedel-models'
+(declare-function mevedel-model-parse-effort "mevedel-models" (value))
+(declare-function mevedel-model-parse-selector "mevedel-models" (value))
+(declare-function mevedel-model-resolve-workload
+                  "mevedel-models"
+                  (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -436,6 +451,20 @@ Return the resolved recipient path.  Sending never activates a turn."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "Agent message must be non-empty plain text")))
 
+(defun mevedel-agent-control--normalize-fork-turns (value)
+  "Normalize model-facing context fork VALUE.
+
+Nil defaults to `all'.  The only explicit forms are \"all\", \"none\", and
+positive decimal strings."
+  (cond
+   ((or (null value) (equal value "all")) 'all)
+   ((equal value "none") 'none)
+   ((and (stringp value)
+         (string-match-p "\\`[1-9][0-9]*\\'" value))
+    (string-to-number value))
+   (t (user-error
+       "Agent fork_turns must be all, none, or a positive integer string"))))
+
 (defun mevedel-agent-control--reserve
     (session parent-path task-name role)
   "Atomically reserve TASK-NAME below PARENT-PATH in SESSION for ROLE."
@@ -533,7 +562,9 @@ Return the resolved recipient path.  Sending never activates a turn."
   (setf (mevedel-agent-record-conversation-buffer record)
         (mevedel-agent-invocation-buffer invocation))
   (setf (mevedel-agent-record-conversation-location record)
-        (mevedel-agent-invocation-transcript-relative-path invocation)))
+        (mevedel-agent-invocation-transcript-relative-path invocation))
+  (setf (mevedel-agent-record-configuration record)
+        (mevedel-agent-invocation-frozen-configuration invocation)))
 
 (cl-defun mevedel-agent-control--dispatch-followup
     (session record message
@@ -543,30 +574,32 @@ Return the resolved recipient path.  Sending never activates a turn."
     (unless (buffer-live-p buffer)
       (error "Agent conversation is not live: %s"
              (mevedel-agent-record-path record)))
-    (unless
-        (mevedel-agent-runtime-dispatch
-         #'ignore
-         (mevedel-agent-resolve-role
-          (unless (equal (mevedel-agent-record-role record) "default")
-            (mevedel-agent-record-role record)))
-         (file-name-nondirectory (mevedel-agent-record-path record)) message
-         :background t
-         :parent-context session
-         :parent-fsm parent-fsm
-         :message-handler message-handler
-         :terminal-handler terminal-handler
-         :path (mevedel-agent-record-path record)
-         :retained-id (mevedel-agent-record-id record)
-         :retained-buffer buffer
-         :retained-transcript
-         (mevedel-agent-record-conversation-location record)
-         :on-invocation
-         (apply-partially
-          #'mevedel-agent-control--record-invocation record)
-         :on-settle
-         (apply-partially
-          #'mevedel-agent-control--settle session record))
-      (error "Agent provider request did not start"))
+    (let ((configuration (mevedel-agent-record-configuration record)))
+      (unless (mevedel-agent-configuration-p configuration)
+        (error "Agent has no frozen configuration: %s"
+               (mevedel-agent-record-path record)))
+      (unless
+          (mevedel-agent-runtime-dispatch
+           #'ignore nil
+           (file-name-nondirectory (mevedel-agent-record-path record)) message
+           :background t
+           :parent-context session
+           :parent-fsm parent-fsm
+           :message-handler message-handler
+           :terminal-handler terminal-handler
+           :path (mevedel-agent-record-path record)
+           :frozen-configuration configuration
+           :retained-id (mevedel-agent-record-id record)
+           :retained-buffer buffer
+           :retained-transcript
+           (mevedel-agent-record-conversation-location record)
+           :on-invocation
+           (apply-partially
+            #'mevedel-agent-control--record-invocation record)
+           :on-settle
+           (apply-partially
+            #'mevedel-agent-control--settle session record))
+        (error "Agent provider request did not start")))
     (when (eq (mevedel-agent-record-activity record) 'starting)
       (setf (mevedel-agent-record-activity record) 'running))
     record))
@@ -628,8 +661,9 @@ Return the resolved recipient path.  Sending never activates a turn."
 
 (cl-defun mevedel-agent-control-spawn
     (session task-name message
-             &key role parent-fsm message-handler terminal-handler)
-  "Spawn TASK-NAME with MESSAGE and optional ROLE in SESSION.
+             &key role fork-turns model effort
+             parent-fsm message-handler terminal-handler)
+  "Spawn TASK-NAME with MESSAGE and optional controls in SESSION.
 Return the committed retained record."
   (mevedel-agent-control--validate-spawn session task-name message)
   (require 'mevedel-agents)
@@ -640,6 +674,19 @@ Return the committed retained record."
     (user-error "Agent role is not available to this session: %s" role))
   (let* ((agent (mevedel-agent-resolve-role role))
          (role-name (mevedel-agent-name agent))
+         (fork-turns (mevedel-agent-control--normalize-fork-turns fork-turns))
+         (model-selector
+          (progn
+            (require 'mevedel-models)
+            (mevedel-model-parse-selector model)))
+         (effort (mevedel-model-parse-effort effort))
+         (model-policy
+          (mevedel-model-resolve-workload
+           (intern role-name) model-selector effort))
+         (context-snapshot
+          (progn
+            (require 'mevedel-compact)
+            (mevedel-compact-context-snapshot fork-turns)))
          (caller-path (mevedel-agent-control-current-path session))
          (parent-context
           (if (equal caller-path "/root")
@@ -659,6 +706,8 @@ Return the committed retained record."
                :parent-fsm parent-fsm
                :message-handler message-handler
                :terminal-handler terminal-handler
+               :context-snapshot context-snapshot
+               :model-policy model-policy
                :path (mevedel-agent-record-path record)
                :on-invocation
                (apply-partially

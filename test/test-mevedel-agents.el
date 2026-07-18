@@ -101,6 +101,37 @@
   (dolist (role '("" "missing" worker))
     (should-error (mevedel-agent-resolve-role role) :type 'user-error)))
 
+(mevedel-deftest mevedel-agent-freeze/test
+  (:before-each (test-mevedel-agents--restore-builtins))
+  ,test
+  (test)
+  :doc "materializes dynamic instructions and effective tools once"
+  (let* ((prompt "Initial instructions.")
+         (mevedel-agent-extra-tool-specs
+          '((freeze_test (:tool "Read"))))
+         (agent
+          (mevedel-agent--create
+           :name "freeze_test"
+           :description "Frozen role"
+           :tools '((:tool "Agent"))
+           :system-prompt (lambda () prompt)))
+         (frozen (mevedel-agent-freeze agent)))
+    (setq prompt "Mutated instructions.")
+    (setf (mevedel-agent-tools agent) '((:tool "Eval")))
+    (setq mevedel-agent-extra-tool-specs
+          '((freeze_test (:tool "Write"))))
+    (should (mevedel-agent-frozen-p frozen))
+    (should (equal "Initial instructions."
+                   (mevedel-agent-system-prompt frozen)))
+    (should (member '(:tool "Agent")
+                    (mevedel-agent--effective-specs frozen)))
+    (should (member '(:tool "Read")
+                    (mevedel-agent--effective-specs frozen)))
+    (should-not (member '(:tool "Write")
+                        (mevedel-agent--effective-specs frozen)))
+    (should-not (member '(:tool "Eval")
+                        (mevedel-agent--effective-specs frozen)))))
+
 (mevedel-deftest mevedel-agent-role-tools/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test

@@ -66,6 +66,7 @@
                   "mevedel-agents" (invocation))
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
+(defvar mevedel-agent-task-path-property)
 
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer "mevedel-chat" (&optional workspace))
@@ -164,6 +165,9 @@
                   "mevedel-view-stream" (plan))
 (declare-function mevedel-view-stream-prepare-execution-row-archive
                   "mevedel-view-stream" (data-buffer tool-use-ids))
+
+;; `org'
+(declare-function org-find-property "org" (property &optional value))
 
 
 (defcustom mevedel-compact-context-limit nil
@@ -887,6 +891,35 @@ new turn.  BODY-START defaults to the main-session body start."
                (setq after-response nil)))))))
     (nreverse starts)))
 
+(defun mevedel-compact-context-snapshot (fork-turns)
+  "Return the current effective conversation selected by FORK-TURNS.
+
+FORK-TURNS is `all', `none', or a positive integer.  The snapshot copies
+text properties because gptel uses them to distinguish user, response, and
+tool spans.  Positive limits retain the anchored summary, when present, and
+the requested number of most recent live turns.  This function reads only the
+current buffer, so turns already rotated into compacted segments cannot be
+reconstructed into a child conversation."
+  (pcase fork-turns
+    ('none "")
+    ('all (buffer-substring (point-min) (point-max)))
+    ((pred (lambda (value) (and (integerp value) (> value 0))))
+     (let* ((agent-p (bound-and-true-p mevedel--agent-invocation))
+            (summary (if agent-p
+                         (mevedel--compact-agent-summary-bounds)
+                       (mevedel--compact-summary-bounds)))
+            (body-start (or (plist-get summary :end) (point-min)))
+            (starts (mevedel--compact-turn-starts-before
+                     (point-max) body-start))
+            (count (length starts))
+            (tail-start (if (<= count fork-turns)
+                            body-start
+                          (nth (- count fork-turns) starts))))
+       (concat (and summary
+                    (buffer-substring (point-min) body-start))
+               (buffer-substring tail-start (point-max)))))
+    (_ (error "Invalid normalized context fork: %S" fork-turns))))
+
 (defun mevedel--compact-tail-start (limit aggressive &optional body-start)
   "Return tail start before LIMIT, or LIMIT when AGGRESSIVE.
 The tail starts after the response preceding the preserved recent turns.
@@ -1172,18 +1205,32 @@ PRESERVED-TAIL-TURNS is the actual count returned by
                  (mapconcat #'mevedel--format-hook-audit-record records "")))
     summary))
 
-(defun mevedel--compact-agent-summary-bounds ()
-  "Return bounds for the anchored summary in an agent transcript, or nil."
+(defun mevedel--compact-agent-task-heading (&optional invocation)
+  "Return INVOCATION's own persisted task-heading position, or nil.
+
+The path property distinguishes the current task from ancestor task headings
+copied into the transcript by a context fork.  INVOCATION defaults to the
+current agent buffer's invocation."
+  (when-let* ((invocation (or invocation
+                              (bound-and-true-p mevedel--agent-invocation)))
+              (path (mevedel-agent-invocation-require-path invocation)))
+    (require 'org)
+    (org-find-property mevedel-agent-task-path-property path)))
+
+(defun mevedel--compact-agent-summary-bounds (&optional invocation)
+  "Return INVOCATION's anchored agent-summary bounds, or nil."
   (save-excursion
-    (goto-char (point-min))
-    (when (re-search-forward "^#\\+begin_summary\\b.*$" nil t)
-      (let ((begin (match-beginning 0))
-            (body-begin (match-end 0)))
-        (when (re-search-forward "^#\\+end_summary\\b.*$" nil t)
-          (list :begin begin
-                :body-begin (1+ body-begin)
-                :body-end (match-beginning 0)
-                :end (match-end 0)))))))
+    (when-let* ((task-heading
+                 (mevedel--compact-agent-task-heading invocation)))
+      (goto-char task-heading)
+      (when (re-search-forward "^#\\+begin_summary\\b.*$" nil t)
+	(let ((begin (match-beginning 0))
+              (body-begin (match-end 0)))
+          (when (re-search-forward "^#\\+end_summary\\b.*$" nil t)
+            (list :begin begin
+                  :body-begin (1+ body-begin)
+                  :body-end (match-beginning 0)
+                  :end (match-end 0))))))))
 
 (defun mevedel--compact-agent-target (invocation)
   "Return the private compaction target for persisted INVOCATION, or nil."
@@ -1201,16 +1248,12 @@ PRESERVED-TAIL-TURNS is the actual count returned by
               ((not (file-symlink-p canonical-path)))
               ((file-writable-p canonical-path))
               ((file-writable-p (file-name-directory canonical-path)))
-              (task-heading
-               (save-excursion
-                 (goto-char (point-min))
-                 (when (re-search-forward "^\\* Agent Task:" nil t)
-                   (match-beginning 0))))
+              (task-heading (mevedel--compact-agent-task-heading invocation))
               (first-response
                (cl-find-if
                 (lambda (segment) (eq (car segment) 'response))
-                (mevedel-transcript-segments (point-min) (point-max)))))
-    (let* ((summary-bounds (mevedel--compact-agent-summary-bounds))
+                (mevedel-transcript-segments task-heading (point-max)))))
+    (let* ((summary-bounds (mevedel--compact-agent-summary-bounds invocation))
            (anchor-end (or (plist-get summary-bounds :begin)
                            (cadr first-response))))
       (when (<= task-heading anchor-end)
@@ -1229,7 +1272,10 @@ PRESERVED-TAIL-TURNS is the actual count returned by
                 :workspace (mevedel-session-workspace session)
                 :transcript-path canonical-path
                 :origin (mevedel-agent-invocation-require-path invocation)
-                :anchor-text (buffer-substring (point-min) anchor-end)
+                :history-prefix-regions
+                (and (< (point-min) task-heading)
+                     (list (cons (point-min) task-heading)))
+                :anchor-text (buffer-substring task-heading anchor-end)
                 :body-start (or (plist-get summary-bounds :end) anchor-end)
                 :previous-summary previous-summary
                 :prompt-session nil
@@ -1440,17 +1486,27 @@ the active main-session segment."
                (tail-start (mevedel--compact-tail-start
                             limit aggressive body-start))
                (compact-end (max body-start tail-start))
+               (history-regions
+                (append (plist-get target :history-prefix-regions)
+                        (list (cons body-start compact-end))))
                (archived-tool-use-ids
-                (mevedel--compact-archived-tool-use-ids
-                 body-start compact-end))
+                (delete-dups
+                 (mapcan
+                  (lambda (range)
+                    (mevedel--compact-archived-tool-use-ids
+                     (car range) (cdr range)))
+                  history-regions)))
                (preserved-tail-turns
                 (mevedel--compact-preserved-tail-turn-count
                  tail-start limit aggressive))
                (old-content
-                (mevedel--compact-region-with-tool-output-cap
-                 body-start compact-end
-                 mevedel-compact-body-tool-output-max
-                 t))
+                (mapconcat
+                 (lambda (range)
+                   (mevedel--compact-region-with-tool-output-cap
+                    (car range) (cdr range)
+                    mevedel-compact-body-tool-output-max
+                    t))
+                 history-regions ""))
                (tail-text (unless aggressive
                             (mevedel--compact-region-with-tool-output-cap
                              tail-start limit

@@ -755,10 +755,9 @@ fire-count and payload."
   ()
   ,test
   (test)
-  :doc "passes explicit Agent model and skill effort over workload policy"
+  :doc "passes direct skill model and effort over workload policy"
   (let* ((inv (mevedel-agent-invocation--create
                :path "/root/test_agent"
-               :model-tier-override '(:tier strong)
                :skill-model-override '(:tier fast)
                :skill-effort-override 'high))
          captured)
@@ -769,7 +768,144 @@ fire-count and payload."
       (should (equal '(:model chosen)
                      (mevedel-agent-exec--policy-for-invocation
                       "reviewer" inv))))
-    (should (equal '("reviewer" (:tier strong) high) captured))))
+    (should (equal '("reviewer" (:tier fast) high) captured))))
+
+(mevedel-deftest mevedel-agent-exec--request-preset
+  ()
+  ,test
+  (test)
+  :doc "resolves a named gptel-agent preset"
+  (let ((gptel-agent-preset 'named-preset)
+        (gptel-include-reasoning 'ignore)
+        captured)
+    (cl-letf (((symbol-function 'gptel-get-preset)
+               (lambda (name)
+                 (setq captured name)
+                 '(:temperature 0.4))))
+      (let ((preset
+             (mevedel-agent-exec--request-preset "default" nil)))
+        (should (eq 'named-preset captured))
+        (should (eq t (plist-get preset :use-tools)))
+        (should (equal 0.4 (plist-get preset :temperature)))
+        (should (eq 'ignore (plist-get preset :include-reasoning))))))
+
+  :doc "copies an inline preset before adding request fields"
+  (let* ((inline '(:temperature 0.2))
+         (gptel-agent-preset inline)
+         (preset (mevedel-agent-exec--request-preset "default" nil)))
+    (should (equal '(:temperature 0.2) inline))
+    (should (equal 0.2 (plist-get preset :temperature))))
+
+  :doc "rejects an invalid preset value"
+  (let ((gptel-agent-preset 42))
+    (should-error
+     (mevedel-agent-exec--request-preset "default" nil)
+     :type 'error)))
+
+(mevedel-deftest mevedel-agent-exec--request-snapshot
+  ()
+  ,test
+  (test)
+  :doc "captures every inherited request local through one schema"
+  (let* ((gptel--num-messages-to-send 7)
+         (gptel--request-params '(:custom "parent"))
+         (gptel--schema '(:type object))
+         (gptel-backend 'parent-backend)
+         (gptel-cache t)
+         (gptel-context '(("context.txt" . "parent context")))
+         (gptel-include-reasoning 'ignore)
+         (gptel-max-tokens 321)
+         (gptel-mode t)
+         (gptel-model 'parent-model)
+         (gptel-reasoning-effort 'low)
+         (gptel-stream nil)
+         (gptel-system-prompt "Parent system.")
+         (gptel-temperature 0.25)
+         (gptel-tools '(parent-tool))
+         (gptel-track-media t)
+         (gptel-track-response nil)
+         (gptel-use-context 'system)
+         (gptel-use-curl nil)
+         (gptel-use-tools 'force)
+         (context gptel-context)
+         (mevedel-model-tiers '((custom :provider "Backend:model")))
+         (mevedel-model-workloads '((explorer :tier custom)))
+         (tiers mevedel-model-tiers)
+         (workloads mevedel-model-workloads)
+         (snapshot
+          (mevedel-agent-exec--request-snapshot
+           '(:backend frozen-backend :model frozen-model :effort high))))
+    (should (= (length mevedel-agent-exec--request-local-symbols)
+               (length snapshot)))
+    (should (eq 'frozen-backend (alist-get 'gptel-backend snapshot)))
+    (should (eq 'frozen-model (alist-get 'gptel-model snapshot)))
+    (should (eq 'high (alist-get 'gptel-reasoning-effort snapshot)))
+    (should (= 7 (alist-get 'gptel--num-messages-to-send snapshot)))
+    (should (equal '(:type object) (alist-get 'gptel--schema snapshot)))
+    (should (eq t (alist-get 'gptel-track-media snapshot)))
+    (should-not (alist-get 'gptel-track-response snapshot))
+    (should (equal '(:custom "parent")
+                   (alist-get 'gptel--request-params snapshot)))
+    (should-not (eq context (alist-get 'gptel-context snapshot)))
+    (should (equal tiers (alist-get 'mevedel-model-tiers snapshot)))
+    (should-not (eq tiers (alist-get 'mevedel-model-tiers snapshot)))
+    (should (equal workloads (alist-get 'mevedel-model-workloads snapshot)))
+    (should-not
+     (eq workloads (alist-get 'mevedel-model-workloads snapshot)))))
+
+(mevedel-deftest mevedel-agent-exec-freeze-configuration
+  (:before-each (mevedel-tools-register))
+  ,test
+  (test)
+  :doc "captures exact request policy, instructions, tools, and inherited config"
+  (let* ((agent
+          (mevedel-agent--create
+           :name "freeze_test"
+           :description "Freeze request config"
+           :tools '((:tool "Read"))
+           :system-prompt "Frozen system."))
+         (invocation (mevedel-agent-invocation-create agent))
+         (gptel-agent-preset nil)
+         (gptel--num-messages-to-send 7)
+         (gptel--schema '(:type object))
+         (gptel-context '(("context.txt" . "parent context")))
+         (gptel-use-context 'system)
+         (gptel-track-media t)
+         (gptel-track-response nil)
+         (gptel-include-reasoning 'ignore)
+         (gptel-temperature 0.25)
+         (gptel-max-tokens 321)
+         (gptel-cache t)
+         (gptel--request-params '(:custom "parent"))
+         (policy '(:backend frozen-backend :model frozen-model :effort high)))
+    (let* ((configuration
+            (mevedel-agent-exec-freeze-configuration
+             "freeze_test" invocation policy))
+           (frozen-agent
+            (mevedel-agent-configuration-agent configuration))
+           (snapshot
+            (mevedel-agent-configuration-request-locals configuration)))
+      (should (mevedel-agent-configuration-p configuration))
+      (should (mevedel-agent-frozen-p frozen-agent))
+      (should (equal "freeze_test" (mevedel-agent-name frozen-agent)))
+      (should (eq 'frozen-backend (alist-get 'gptel-backend snapshot)))
+      (should (eq 'frozen-model (alist-get 'gptel-model snapshot)))
+      (should (eq 'high (alist-get 'gptel-reasoning-effort snapshot)))
+      (should (equal "Frozen system."
+                     (alist-get 'gptel-system-prompt snapshot)))
+      (should (equal 'system (alist-get 'gptel-use-context snapshot)))
+      (should (equal 'ignore (alist-get 'gptel-include-reasoning snapshot)))
+      (should (eq t (alist-get 'gptel-track-media snapshot)))
+      (should-not (alist-get 'gptel-track-response snapshot))
+      (should (= 7 (alist-get 'gptel--num-messages-to-send snapshot)))
+      (should (equal '(:type object) (alist-get 'gptel--schema snapshot)))
+      (should (equal 0.25 (alist-get 'gptel-temperature snapshot)))
+      (should (equal 321 (alist-get 'gptel-max-tokens snapshot)))
+      (should (equal '(:custom "parent")
+                     (alist-get 'gptel--request-params snapshot)))
+      (should (cl-some
+               (lambda (tool) (equal "Read" (gptel-tool-name tool)))
+               (alist-get 'gptel-tools snapshot))))))
 
 
 (mevedel-deftest mevedel-agent-exec--refresh-initial-transcript-state ()
@@ -922,6 +1058,13 @@ fire-count and payload."
 				 (gptel-cache nil)
 				 (gptel--request-params nil)
 				 (gptel--fsm-last nil))
+			     (setf
+			      (mevedel-agent-invocation-frozen-configuration inv)
+			      (mevedel-agent-exec-freeze-configuration
+			       "default" inv
+			       (list :backend gptel-backend
+			             :model gptel-model
+			             :effort gptel-reasoning-effort)))
 			     (cl-letf (((symbol-function 'gptel-request)
 					(lambda (&optional _prompt &rest _args)
 					  (setq captured-buffer (current-buffer))
@@ -958,7 +1101,7 @@ fire-count and payload."
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf)))))
 
-		 :doc "falls back to the invocation agent spec when buffer registry is missing"
+		 :doc "freezes the invocation agent spec when buffer registry is missing"
 		 (let* ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
 			(agent-buf (generate-new-buffer " *mev-agent-child*"))
 			(agent (mevedel-agent--create
@@ -982,6 +1125,7 @@ fire-count and payload."
 				 (gptel-stream nil)
 				 (gptel-backend nil)
 				 (gptel-model 'test-model)
+				 (gptel-reasoning-effort nil)
 				 (gptel-system-prompt "parent system")
 				 (gptel-use-tools nil)
 				 (gptel-tools nil)
@@ -993,6 +1137,13 @@ fire-count and payload."
 				 (gptel-cache nil)
 				 (gptel--request-params nil)
 				 (gptel--fsm-last nil))
+			     (setf
+			      (mevedel-agent-invocation-frozen-configuration inv)
+			      (mevedel-agent-exec-freeze-configuration
+			       "reviewer" inv
+			       (list :backend gptel-backend
+			             :model gptel-model
+			             :effort gptel-reasoning-effort)))
 			     (cl-letf (((symbol-function 'gptel-request)
 					(lambda (&optional _prompt &rest _args)
 					  (setq captured-system

@@ -142,6 +142,12 @@ Agent, FollowupAgent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
 WaitAgent adapters. Ask's questionnaire, handler, renderer, and schema live in
 `mevedel-tool-ask.el`. Exact external-path authority is part of the normal
 permission pipeline, not a model-visible tool.
+
+Agent's required inputs are `task_name` and `message`. Its optional `role`,
+`fork_turns`, `model`, and `effort` inputs are validated before publication:
+forks accept only `all`, `none`, or positive decimal strings; model selectors
+use the shared tier/provider parser; and effort support is delegated to the
+resolved gptel model. Invalid controls leave no retained path reservation.
 The same shared resource-grant interface authorizes native filesystem tools and
 additive Bash/batch-Eval mounts; command authorization remains independent.
 

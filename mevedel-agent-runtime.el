@@ -55,10 +55,17 @@
                   "mevedel-agent-exec" (invocation status))
 (declare-function mevedel-agent-exec--save-transcript-buffer
                   "mevedel-agent-exec" (invocation))
+(declare-function mevedel-agent-exec-freeze-configuration
+                  "mevedel-agent-exec"
+                  (agent-type invocation &optional model-policy))
 (defvar mevedel-agent-exec--suppress-activity-rerender)
 (defvar mevedel-agent-exec-debug)
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-configuration-agent
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-configuration-p
+                  "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent
@@ -78,9 +85,9 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-foreground-result-reported-p
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-hook-audits
+(declare-function mevedel-agent-invocation-frozen-configuration
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-model-tier-override
+(declare-function mevedel-agent-invocation-hook-audits
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-messages
                   "mevedel-agents" (cl-x) t)
@@ -112,6 +119,7 @@
 (declare-function mevedel-agent-invocation-verdict
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(defvar mevedel-agent-task-path-property)
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-owner-live-p
@@ -122,9 +130,6 @@
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer
                   "mevedel-interaction-prompt" (&optional buffer))
-
-;; `mevedel-models'
-(declare-function mevedel-model-tier-selector "mevedel-models" (tier))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--collect-from "mevedel-reminders"
@@ -2213,24 +2218,26 @@ defaults to the data buffer reachable from the current buffer."
 (cl-defun mevedel-agent-runtime-dispatch
     (main-cb agent description prompt
              &key background parent-context parent-fsm
-             message-handler terminal-handler model-tier
+             message-handler terminal-handler
+             context-snapshot model-policy
              skill-permission-rules
              skill-model-override skill-effort-override
              skill-hook-rules
              on-invocation on-settle
              path
+             frozen-configuration
              retained-id retained-buffer retained-transcript)
   "Dispatch AGENT with DESCRIPTION and PROMPT, delivering to MAIN-CB.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
-verified it is non-nil.  BACKGROUND, MODEL-TIER, SKILL-PERMISSION-RULES,
-SKILL-MODEL-OVERRIDE, SKILL-EFFORT-OVERRIDE, SKILL-HOOK-RULES, and
-ON-INVOCATION seeds the invocation before request dispatch.  PATH is the
-canonical session-tree address supplied by durable agent control; direct
-runtime callers receive a unique canonical path below root.  ON-SETTLE, when
-non-nil, owns background settlement instead of the default mailbox path.
-RETAINED-ID, RETAINED-BUFFER, and RETAINED-TRANSCRIPT continue an existing
-conversation identity rather than allocating a new one.
+verified it is non-nil. Context, model, effort, skill, and hook keywords seed
+the invocation before request dispatch; MODEL-POLICY may reuse a policy
+validated before admission. PATH is the canonical session-tree address
+supplied by durable agent control; direct runtime callers receive a unique
+canonical path below root. ON-SETTLE, when non-nil, owns background settlement
+instead of the default mailbox path. RETAINED-ID, RETAINED-BUFFER, and
+RETAINED-TRANSCRIPT continue an existing conversation identity rather than
+allocating a new one.
 
 Dispatch order:
 
@@ -2254,16 +2261,21 @@ Dispatch order:
   All step-12+ work runs under `unwind-protect' so a startup
   failure unregisters the registry entry.
 
-spec keyword args (SKILL-PERMISSION-RULES /
-MODEL-TIER / SKILL-MODEL-OVERRIDE / SKILL-EFFORT-OVERRIDE) seed the spawned
-invocation's matching slots so the child request's pre-realization model
-resolver and permission resolver pick them up."
+The matching invocation slots let the child request's pre-realization model
+and permission resolvers apply the captured policy."
   (require 'mevedel-agent-exec)
   (require 'mevedel-models)
+  (when (and frozen-configuration
+             (not (mevedel-agent-configuration-p frozen-configuration)))
+    (error "Invalid frozen agent configuration"))
   (when (or retained-id retained-buffer retained-transcript)
     (unless (and retained-id retained-buffer retained-transcript)
       (error "Retained agent identity requires id, buffer, and transcript")))
-  (let* ((agent-type (mevedel-agent-name agent))
+  (let* ((agent (if frozen-configuration
+                    (mevedel-agent-configuration-agent frozen-configuration)
+                  agent))
+         (_ (unless agent (error "Agent configuration is required")))
+         (agent-type (mevedel-agent-name agent))
          (agent-id (or retained-id
                        (concat agent-type "--"
                                (md5 (format "%s%s%s%s"
@@ -2297,9 +2309,6 @@ resolver and permission resolver pick them up."
     (setf (mevedel-agent-invocation-transcript-status invocation) 'running)
     (setf (mevedel-agent-invocation-background-p invocation)
           (and background t))
-    (when model-tier
-      (setf (mevedel-agent-invocation-model-tier-override invocation)
-            (mevedel-model-tier-selector model-tier)))
     ;; Seed the invocation's skill-* slots before child request realization so
     ;; model policy and the bucket-aware permission resolver see the caller's
     ;; skill scope inside the fork.
@@ -2316,6 +2325,14 @@ resolver and permission resolver pick them up."
       (setf (mevedel-agent-invocation-hook-rules invocation)
             (append (mevedel-agent-invocation-hook-rules invocation)
                     skill-hook-rules)))
+    (let ((configuration
+           (or frozen-configuration
+               (mevedel-agent-exec-freeze-configuration
+                agent-type invocation model-policy))))
+      (setf (mevedel-agent-invocation-frozen-configuration invocation)
+            configuration)
+      (setf (mevedel-agent-invocation-agent invocation)
+            (mevedel-agent-configuration-agent configuration)))
     (let ((agent-buffer
            (or (and (buffer-live-p retained-buffer) retained-buffer)
                (and retained-buffer
@@ -2345,10 +2362,19 @@ resolver and permission resolver pick them up."
               (prompt-start (point-max))
               (was-modified (buffer-modified-p)))
           (goto-char (point-max))
+          (when (and (not retained-buffer)
+                     (stringp context-snapshot)
+                     (not (string-empty-p context-snapshot)))
+            (insert context-snapshot)
+            (unless (bolp) (insert "\n")))
           (unless (bobp) (insert "\n"))
-          (insert (format "* Agent Task: %s\n\n%s\n"
-                          (or description "")
-                          (or prompt "")))
+          (insert (format "* Agent Task: %s\n" (or description "")))
+          (unless retained-buffer
+            (insert (format ":PROPERTIES:\n:%s: %s\n:END:\n"
+                            mevedel-agent-task-path-property
+                            (mevedel-agent-invocation-require-path
+                             invocation))))
+          (insert "\n" (or prompt "") "\n")
           (when (mevedel-agent-invocation-transcript-relative-path invocation)
             (let ((saved
                    (mevedel-agent-exec--save-transcript-buffer invocation)))
