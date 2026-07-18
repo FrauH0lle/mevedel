@@ -446,7 +446,8 @@ are successful tool observations rather than execution errors. Exit codes two
 and above, non-exit termination, path-qualified executables, and compound,
 dangerous, complex, or unsupported analysis fall back to `failure`. Command
 output is never prefixed or rewritten to encode the outcome. Model-visible XML
-and UI render data consume the same canonical fact snapshot.
+and UI render data consume the same canonical fact snapshot; the XML also
+repeats the exact command so parallel same-name calls remain self-identifying.
 
 Analyzer-proven read-only Bash calls may overlap within one session. Unknown,
 unparsable, and mutating calls use the exclusive lane. Admission is FIFO: once

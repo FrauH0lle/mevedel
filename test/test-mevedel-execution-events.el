@@ -55,6 +55,23 @@
            (directory-files (file-name-concat root "artifacts")
                             nil "\\`execution-")))
       (delete-directory root t)))
+  :doc "exposes the exact Bash command in every observation"
+  (let* ((root (make-temp-file "mevedel-managed-command-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-sandbox-mode 'off)
+         observation)
+    (unwind-protect
+        (progn
+          (setq observation
+                (test-mevedel-execution--start-managed
+                 session root '("sh" "-c" "printf done")
+                 :tool-args '(:command "printf done")
+                 :yield-time-ms 1000))
+          (should (equal "printf done"
+                         (plist-get (plist-get observation :facts)
+                                    :command))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "retains the adapter outcome resolver across yield and observation"
   (let* ((root (make-temp-file "mevedel-managed-outcome-" t))
          (session (test-mevedel-execution--session root))

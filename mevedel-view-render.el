@@ -82,6 +82,8 @@
                   "mevedel-transcript" (limit))
 (declare-function mevedel-transcript--mailbox-find-close
                   "mevedel-transcript" (open-regexp close-tag limit))
+(declare-function mevedel-transcript--org-tool-block-parts
+                  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
                   "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
@@ -3787,11 +3789,13 @@ are merged into a single summary."
   (and (eq (car left) 'tool)
        (eq (car right) 'tool)
        (with-current-buffer data-buf
-         (let ((left-id (mevedel-transcript--tool-id-in-range
-                         (cadr left) (caddr left)))
-               (right-id (mevedel-transcript--tool-id-in-range
-                          (cadr right) (caddr right))))
-           (and left-id right-id (equal left-id right-id))))))
+         (and (not (mevedel-transcript--org-tool-block-parts
+                    (cadr right) (caddr right)))
+              (let ((left-id (mevedel-transcript--tool-id-in-range
+                              (cadr left) (caddr left)))
+                    (right-id (mevedel-transcript--tool-id-in-range
+                               (cadr right) (caddr right))))
+                (and left-id right-id (equal left-id right-id)))))))
 
 (defun mevedel-view--merge-tool-hook-audit-segments (segments data-buf)
   "Merge hook audit side-channel SEGMENTS into adjacent tool segments."

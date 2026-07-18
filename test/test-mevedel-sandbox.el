@@ -686,6 +686,25 @@ exact read and write mounts follow protected masks without broadening siblings"
                                     :additional-filesystem-write)))))
       (mevedel-sandbox-cleanup prepared)
       (delete-directory root t)))
+  :doc "intrinsic device grants:
+`mevedel-sandbox-prepare' keeps its private /dev/null instead of remounting it"
+  (let* ((root (make-temp-file "mevedel-sandbox-dev-null-" t))
+         (mevedel-sandbox-mode 'required)
+         (mevedel-sandbox--probe-cache
+          '(:available t :executable "/test/bwrap" :mount-proc t))
+         (prepared
+          (mevedel-sandbox-prepare
+           '("true") root (list root)
+           '(:file-system ((:path "/dev/null" :access read)))))
+         (command (plist-get prepared :command))
+         (facts (plist-get prepared :facts)))
+    (unwind-protect
+        (progn
+          (should (equal "/test/bwrap" (car command)))
+          (should-not (member "--ro-bind-fd" command))
+          (should (= 0 (plist-get facts :additional-filesystem))))
+      (mevedel-sandbox-cleanup prepared)
+      (delete-directory root t)))
   :doc "required backend:
 `mevedel-sandbox-prepare' refuses execution when confinement is unavailable"
   (let ((mevedel-sandbox-mode 'required)

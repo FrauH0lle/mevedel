@@ -722,6 +722,7 @@ preserve the default zero-success/nonzero-failure rule."
 (defun mevedel-execution--facts (record)
   "Return an immutable public fact snapshot for RECORD."
   (let* ((finished (mevedel-execution--record-finished-p record))
+         (origin (mevedel-execution--record-origin record))
          (exit-code (and finished
                          (mevedel-execution--record-exit-code record)))
          (termination (mevedel-execution--termination record))
@@ -730,6 +731,8 @@ preserve the default zero-success/nonzero-failure rule."
     (list :execution-id
           (and (mevedel-execution--record-yielded-p record)
                (mevedel-execution--record-execution-id record))
+          :command
+          (plist-get (mevedel-execution--origin-tool-args origin) :command)
           :state (mevedel-execution--lifecycle-state record)
           :termination termination
           :exit-code exit-code
@@ -1337,7 +1340,6 @@ after WAIT-MS while the process remains live."
 (defun mevedel-execution--user-snapshot (record)
   "Return an immutable user-authority snapshot for live RECORD."
   (let* ((origin (mevedel-execution--record-origin record))
-         (tool-args (mevedel-execution--origin-tool-args origin))
          (sandbox-facts (mevedel-execution--record-sandbox-facts record))
          (facts
           (plist-put
@@ -1348,7 +1350,6 @@ after WAIT-MS while the process remains live."
      (append
       facts
       (list :owner (mevedel-execution--origin-owner origin)
-            :command (or (plist-get tool-args :command) "")
             :yielded (and (mevedel-execution--record-yielded-p record) t)
             :started-at (mevedel-execution--record-started-at record)
             :timeout-seconds (mevedel-execution--record-timeout record)

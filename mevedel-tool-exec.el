@@ -129,6 +129,7 @@
                   "mevedel-sandbox"
                   (&optional additional-permissions sandbox-permissions))
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
+(defvar mevedel-sandbox-intrinsic-paths)
 
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
@@ -693,6 +694,7 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
     (command permission-context request)
   "Return COMMAND resources lacking authority under PERMISSION-CONTEXT.
 REQUEST may supply exact additive filesystem grants for this invocation."
+  (require 'mevedel-sandbox)
   (let* ((base (mevedel-tool-exec--default-directory))
          (roots (or (plist-get permission-context :allowed-roots)
                     (and-let* ((root (plist-get permission-context
@@ -708,7 +710,8 @@ REQUEST may supply exact additive filesystem grants for this invocation."
     (dolist (resource
              (plist-get (mevedel-tool-exec--analyze-bash command) :resources))
       (let ((path (expand-file-name resource base)))
-        (unless (or (mevedel-permission--path-in-allowed-roots-p path roots)
+        (unless (or (member path mevedel-sandbox-intrinsic-paths)
+                    (mevedel-permission--path-in-allowed-roots-p path roots)
                     (mevedel-permission--resource-granted-p
                      path 'read grants))
           (push path missing))))
@@ -2073,6 +2076,7 @@ direct non-workspace uses."
   (require 'xml)
   (let (attributes)
     (dolist (entry '((:execution-id . "execution_id")
+                     (:command . "command")
                      (:state . "state")
                      (:termination . "termination")
                      (:exit-code . "exit_code")

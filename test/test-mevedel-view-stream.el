@@ -2921,6 +2921,33 @@
         (should-not (string-match-p "#\\+begin_tool\\|#\\+end_tool"
                                     text)))))
 
+  :doc "complete same-id Bash blocks render as separate handles"
+  (mevedel-view-stream-test--with-buffers
+    (dolist (call '(("test 1 = 2" . "<bash-execution exit_code=\"1\" outcome=\"false\"/>")
+                    ("rg missing mevedel.el" . "<bash-execution exit_code=\"1\" outcome=\"no-match\"/>")
+                    ("diff /dev/null mevedel.el" . "Error: Filesystem authority required")))
+      (mevedel-view-stream-test--insert-data
+       data-buf
+       (format "#+begin_tool (Bash :command %S)\n" (car call))
+       nil)
+      (mevedel-view-stream-test--insert-data
+       data-buf
+       (format "(:name \"Bash\" :args (:command %S))\n\n%s\n"
+               (car call) (cdr call))
+       '(tool . "duplicate-call-id"))
+      (mevedel-view-stream-test--insert-data data-buf "#+end_tool\n" nil))
+    (with-current-buffer data-buf
+      (mevedel-view-stream-render-response (point-min) (point-max)))
+    (with-current-buffer view-buf
+      (let ((text (buffer-substring-no-properties
+                   (point-min) mevedel-view--input-marker)))
+        (should (= 3 (mevedel-view-stream-test--count-substring
+                      "Bash:" text)))
+        (dolist (command '("test 1 = 2"
+                           "rg missing mevedel.el"
+                           "diff /dev/null mevedel.el"))
+          (should (string-match-p (regexp-quote command) text))))))
+
   :doc "restored stale tool bounds render and expand without garbled fragments"
   (mevedel-view-stream-test--with-buffers
     (mevedel-tool-register
