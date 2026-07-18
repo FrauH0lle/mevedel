@@ -69,6 +69,30 @@
       (should-not (plist-get result :output-limit-p))
       (should (numberp (plist-get result :wall-time-seconds)))
       (should-not (plist-member result :process))))
+  :doc "owner teardown settles a synchronous one-shot caller"
+  (let* ((root (make-temp-file "mevedel-one-shot-teardown-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-execution--workspace root) root))
+         (mevedel-sandbox-mode 'off)
+         result)
+    (unwind-protect
+        (progn
+          (run-at-time
+           0.05 nil
+           (lambda ()
+             (mevedel-execution-stop-owner session "agent-a")))
+          (setq result
+                (mevedel-execution-run-one-shot
+                 :name "mevedel-test-owner-teardown"
+                 :command '("sh" "-c" "sleep 30")
+                 :workdir root :writable-roots (list root)
+                 :session session :owner "agent-a"))
+          (should (= -1 (plist-get result :exit-code)))
+          (should (string-match-p
+                   "owner was torn down"
+                   (error-message-string (plist-get result :error)))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "counts raw output bytes independently of decoded characters"
   (let ((mevedel-sandbox-mode 'off))
     (let ((result

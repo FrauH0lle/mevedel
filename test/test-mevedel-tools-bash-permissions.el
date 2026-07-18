@@ -53,25 +53,6 @@
     (mevedel-tool-exec--bash callback args)))
 
 
-(mevedel-deftest mevedel-tool-exec--current-origin ()
-  ,test
-  (test)
-  :doc "uses a scoped request origin before the main-thread fallback"
-  (let ((mevedel--current-request
-         (mevedel-request--create
-          :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
-    (should
-     (equal
-      "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-      (mevedel-tool-exec--current-origin))))
-  :doc "falls back to main without a request or agent owner"
-  (let ((mevedel--current-request nil)
-        (mevedel--agent-invocation nil))
-    (should (equal "main" (mevedel-tool-exec--current-origin)))))
-
-
-
-
 (mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
   ,test
   (test)
@@ -3175,6 +3156,41 @@ default Bash keeps bare dot inspection automatic"
                     (format "Result:\n%S"
                             (file-name-as-directory module-dir)))
                    result)))
+      (delete-directory root t)
+      (mevedel-workspace-clear-registry)))
+  :doc "batch mode belongs to its agent and cleans temporary files on teardown"
+  (let* ((root (make-temp-file "mevedel-eval-batch-owner-" t))
+         (temporary-file-directory (file-name-as-directory root))
+         (workspace (mevedel-workspace-get-or-create
+                     'test root root "eval-owner"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel--session session)
+         (mevedel--current-request
+          (mevedel-request--create :origin "agent-eval" :session session))
+         (mevedel-sandbox-mode 'off)
+         callback-result record)
+    (unwind-protect
+        (progn
+          (mevedel-tool-exec--eval
+           (lambda (result) (setq callback-result result))
+           (list :expression "(progn (sleep-for 30) 1)" :mode "batch"))
+          (with-timeout (2 (error "Batch Eval did not start"))
+            (while
+                (progn
+                  (setq record
+                        (car
+                         (mevedel-execution--state-record-list
+                          (mevedel-session-execution-state session))))
+                  (null record))
+              (accept-process-output nil 0.02)))
+          (should (equal "agent-eval"
+                         (mevedel-execution--origin-owner
+                          (mevedel-execution--record-origin record))))
+          (should (= 1 (mevedel-execution-stop-owner session "agent-eval")))
+          (should-not callback-result)
+          (should-not
+           (directory-files root nil directory-files-no-dot-files-regexp)))
+      (mevedel-execution-teardown-session session)
       (delete-directory root t)
       (mevedel-workspace-clear-registry)))
   :doc "preserves large batch error output for shared pipeline persistence"

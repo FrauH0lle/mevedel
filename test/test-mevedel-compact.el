@@ -1081,6 +1081,25 @@
                   (mevedel--compact-agent-archive-path canonical))))
       (delete-directory tempdir t))))
 
+(mevedel-deftest mevedel--compact-archived-tool-use-ids ()
+  ,test
+  (test)
+  :doc "collects each concrete tool row removed by the compacted prefix"
+  (with-temp-buffer
+    (insert (propertize "first" 'gptel '(tool . "call-1")))
+    (insert " plain ")
+    (insert (propertize "again" 'gptel '(tool . "call-1")))
+    (insert (propertize "second" 'gptel '(tool . "call-2")))
+    (insert
+     (mevedel--format-hook-audit-record
+      '(:type execution-archive :tool-use-id "call-archived"
+        :render-data (:execution-id "exec-archived" :state running
+                      :live-execution-p t))))
+    (should
+     (equal '("call-1" "call-2" "call-archived")
+            (mevedel--compact-archived-tool-use-ids
+             (point-min) (point-max))))))
+
 (mevedel-deftest mevedel--compact-agent-apply ()
   ,test
   (test)
@@ -1188,7 +1207,7 @@
       (let ((mevedel--compact-current-request-reminder nil))
         (mevedel--compact-main-apply
          (list :session session) "summary" "tail" "pending" nil t 2)
-        (should (equal '("summary" "tail" "pending" nil) applied))
+        (should (equal '("summary" "tail" "pending" nil nil) applied))
         (should (equal "remember files"
                        mevedel--compact-current-request-reminder))
         (should-not queued)
@@ -2316,7 +2335,8 @@
                        (lambda (&rest _)
                          '(:description "test")))
                       ((symbol-function 'mevedel--compact-apply)
-                       (lambda (summary &optional _tail _pending hook-audits)
+                       (lambda (summary &optional _tail _pending hook-audits
+                                        _archive-text)
                          (setq applied-summary summary
                                applied-hook-audits hook-audits)))
                       ((symbol-function 'message)
@@ -2659,18 +2679,38 @@
          (workspace (mevedel-workspace-get-or-create
                      'project "compact-apply" tempdir "compact-apply"))
          (session (mevedel-session-create "main" workspace))
+         (execution-state (mevedel-execution--state-for-session session))
          (buffer (generate-new-buffer " *mevedel-compact-apply*")))
     (unwind-protect
         (with-current-buffer buffer
           (org-mode)
           (insert "Original transcript\n")
+          (let ((begin (point)))
+            (insert "Running Bash\n")
+            (insert
+             (propertize
+              (mevedel-pipeline--format-render-data-block
+               '(:execution-id "exec-000001" :state running
+                 :live-execution-p t))
+              'gptel '(tool . "archived-call")))
+            (put-text-property begin (point) 'gptel
+                               '(tool . "archived-call")))
           (setq-local mevedel--session session)
           (mevedel-session-persistence-ensure-files session buffer)
-          (mevedel--compact-apply
-           "summary" "tail" "pending"
-           (list '(:type compact-context
-                   :event "PreCompact"
-                   :context "compact note")))
+          (let* ((plan
+                  (mevedel-view-stream-prepare-execution-row-archive
+                   buffer '("archived-call")))
+                 (target
+                  (list :buffer buffer :session session
+                        :execution-archive-plan plan)))
+            (mevedel--compact-main-apply
+             target "summary" "tail" "pending"
+             (list '(:type compact-context
+                     :event "PreCompact"
+                     :context "compact note"))
+             nil 0))
+          (should (eq execution-state
+                      (mevedel-session-execution-state session)))
           (should (= 2 (mevedel-session-current-segment session)))
           (should (string-match-p "summary" (buffer-string)))
           (should (string-match "<!-- mevedel-hook-audit -->"
@@ -2678,15 +2718,48 @@
           (should (eq 'ignore
                       (get-text-property (match-beginning 0)
                                          'gptel (buffer-string))))
-          (should (string-match-p "tail\npending\n\\'" (buffer-string)))
+          (should (string-match-p "tail" (buffer-string)))
+          (should (string-match-p "pending\n\\'" (buffer-string)))
+          (let* ((ids
+                  (mevedel--compact-archived-tool-use-ids
+                   (point-min) (point-max)))
+                 (plan
+                  (mevedel-view-stream-prepare-execution-row-archive
+                   buffer ids))
+                 (target
+                  (list :buffer buffer :session session
+                        :execution-archive-plan plan)))
+            (should (equal '("archived-call") ids))
+            (should (= 1 (length (plist-get plan :live))))
+            (mevedel--compact-main-apply
+             target "summary again" "tail again" "pending\n"
+             nil nil 0))
+          (should (= 3 (mevedel-session-current-segment session)))
+          (should (= 1
+                     (length
+                      (mevedel-transcript-audit-records
+                       (buffer-string) 'execution-archive))))
+          (mevedel-view-stream-handle-execution-event
+           (list :type 'terminal :session session :data-buffer buffer
+                 :owner "main" :tool-use-id "archived-call"
+                 :facts '(:state completed :outcome success :exit-code 0)
+                 :whole-output "done"))
+          (should (= 1
+                     (length
+                      (mevedel-transcript-audit-records
+                       (buffer-string) 'execution-completion))))
           (let ((segment-path
                  (mevedel-session-persistence--segment-path
-                  (mevedel-session-save-path session) 2)))
+                  (mevedel-session-save-path session) 3)))
             (should (file-exists-p segment-path))
             (with-temp-buffer
               (insert-file-contents segment-path)
-              (should (string-match-p "summary" (buffer-string)))
-              (should (string-match-p "tail\n+\\'" (buffer-string)))
+              (should (string-match-p "summary again" (buffer-string)))
+              (should (string-match-p "tail again" (buffer-string)))
+              (should (= 1
+                         (length
+                          (mevedel-transcript-audit-records
+                           (buffer-string) 'execution-completion))))
               (should-not (string-match-p "pending" (buffer-string))))))
       (mevedel-session-persistence-lock-release
        (mevedel-session-save-path session))

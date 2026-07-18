@@ -47,9 +47,31 @@
 
 (require 'mevedel-transcript)
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-relocate-artifacts
+                  "mevedel-execution" (session old-root new-root))
+(declare-function mevedel-execution-session-live-p
+                  "mevedel-execution" (session))
+(declare-function mevedel-execution-teardown-all
+                  "mevedel-execution" ())
+(declare-function mevedel-execution-teardown-session
+                  "mevedel-execution" (session))
+
 ;; `mevedel-goal'
 (declare-function mevedel-goal-context-fragment
                   "mevedel-goal" (goal &optional session snapshot))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-extract-render-data
+                  "mevedel-pipeline" (result))
+(declare-function mevedel-pipeline-reconcile-lost-executions
+                  "mevedel-pipeline" (buffer &optional successor-execution-ids))
+(defvar mevedel-pipeline--render-data-close)
+(defvar mevedel-pipeline--render-data-open)
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-records
+                  "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-transcript-restore'
 (declare-function mevedel-transcript-restore-properties
@@ -104,6 +126,8 @@
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-session--set-execution-state
+                  "mevedel-structs" (session state))
 (declare-function mevedel-task-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-description "mevedel-structs" (cl-x) t)
@@ -798,6 +822,90 @@ Returns the raw plist.  Caller is responsible for passing it through
     (insert-file-contents path)
     (goto-char (point-min))
     (read (current-buffer))))
+
+(defun mevedel-session-persistence--write-current-buffer-atomically (path)
+  "Write the current buffer to PATH through a same-directory rename."
+  (let* ((directory (file-name-directory (expand-file-name path)))
+         (modes (and (file-exists-p path) (file-modes path)))
+         (temporary
+          (make-temp-file (expand-file-name ".mevedel-transcript-" directory))))
+    (unwind-protect
+        (progn
+          (write-region (point-min) (point-max) temporary nil 'silent)
+          (when modes (set-file-modes temporary modes))
+          (rename-file temporary path t))
+      (when (file-exists-p temporary)
+        (delete-file temporary)))))
+
+(defun mevedel-session-persistence--execution-successor-ids (path)
+  "Return structured execution ids present in transcript PATH."
+  (when (file-regular-p path)
+    (with-temp-buffer
+      (insert-file-contents path)
+      (require 'mevedel-pipeline)
+      (require 'mevedel-transcript-audit)
+      (let (ids)
+        (dolist (record
+                 (mevedel-transcript-audit-records
+                  (buffer-string)))
+          (when (memq (plist-get record :type)
+                      '(execution-archive execution-completion))
+            (when-let* ((id (plist-get (plist-get record :render-data)
+                                       :execution-id)))
+              (cl-pushnew id ids :test #'equal))))
+        (goto-char (point-min))
+        (while (search-forward mevedel-pipeline--render-data-open nil t)
+          (let ((begin (match-beginning 0)))
+            (when (search-forward mevedel-pipeline--render-data-close nil t)
+              (when-let* ((parsed
+                           (mevedel-pipeline-extract-render-data
+                            (buffer-substring-no-properties
+                             begin (match-end 0))))
+                          (id (plist-get (cdr parsed) :execution-id)))
+                (cl-pushnew id ids :test #'equal)))))
+        ids))))
+
+(defun mevedel-session-persistence--reconcile-lost-execution-file
+    (path &optional successor-execution-ids)
+  "Mark stale running execution rows in transcript PATH as lost."
+  (when (file-regular-p path)
+    (with-temp-buffer
+      (insert-file-contents path)
+      (require 'mevedel-pipeline)
+      (let ((count
+             (mevedel-pipeline-reconcile-lost-executions
+              (current-buffer) successor-execution-ids)))
+        (when (> count 0)
+          (mevedel-session-persistence--write-current-buffer-atomically path))
+        count))))
+
+(defun mevedel-session-persistence--reconcile-lost-execution-segments
+    (session &optional exclude-path)
+  "Repair stale execution rows in SESSION segments except EXCLUDE-PATH."
+  (let ((save-path (mevedel-session-save-path session))
+        (successor-ids
+         (and exclude-path
+              (mevedel-session-persistence--execution-successor-ids
+               exclude-path)))
+        (count 0))
+    (cl-loop for segment downfrom (mevedel-session-current-segment session) to 1
+             for path = (mevedel-session-persistence--segment-path
+                         save-path segment)
+             unless (and exclude-path
+                         (string= (expand-file-name path)
+                                  (expand-file-name exclude-path)))
+             when (file-exists-p path)
+             do (cl-incf
+                 count
+                 (or (mevedel-session-persistence--reconcile-lost-execution-file
+                      path successor-ids)
+                     0))
+             and do
+             (dolist (id
+                      (mevedel-session-persistence--execution-successor-ids
+                       path))
+               (cl-pushnew id successor-ids :test #'equal)))
+    count))
 
 ;;
 ;;; Sub-agent transcript helpers
@@ -2055,7 +2163,8 @@ user\\='s view, by contrast, sees a foldable block."
     t))
 
 (cl-defun mevedel-session-persistence-rotate-segment
-    (session buffer summary &key tail-text pending-text truncated-tail-p)
+    (session buffer summary &key tail-text pending-text archive-text
+             truncated-tail-p)
   "Finalize SESSION's current segment and start a new one with SUMMARY.
 
 Performs the split-on-compact rotation:
@@ -2064,14 +2173,16 @@ Performs the split-on-compact rotation:
   3. Re-points BUFFER's variable `buffer-file-name' at the new segment path.
   4. Erases BUFFER and re-builds it: per-segment org property drawer
      followed by SUMMARY wrapped in an `#+begin_summary' block, then
-     TAIL-TEXT and PENDING-TEXT when supplied.
+     TAIL-TEXT, ARCHIVE-TEXT, and PENDING-TEXT when supplied.
   5. Saves the new segment file without PENDING-TEXT, then restores
      PENDING-TEXT in the live buffer without marking it saved.
   6. Rewrites the sidecar.
   7. Sets `MEVEDEL_SEGMENT_FINALIZED_AT' on the predecessor segment.
 
 TAIL-TEXT is preserved recent transcript text, including text
-properties.  PENDING-TEXT is an inserted-but-unsent prompt region.
+properties.  ARCHIVE-TEXT contains durable hidden records replacing
+execution rows removed by compaction.  PENDING-TEXT is an
+inserted-but-unsent prompt region.
 TRUNCATED-TAIL-P is recorded as segment metadata when non-nil.
 
 Requires SESSION to have a `save-path' (i.e., to have been lazily
@@ -2137,6 +2248,8 @@ nil if SESSION is not yet materialized."
                 (when tail-text
                   (unless (bolp) (insert "\n"))
                   (insert tail-text))
+                (when archive-text
+                  (insert archive-text))
                 (when pending-text
                   (unless (bolp) (insert "\n"))
                   (setq pending-start-marker (copy-marker (point) nil))
@@ -2847,6 +2960,9 @@ mentions-shown reset to empty hash tables on load."
             (unless (and buf (buffer-live-p buf) (file-exists-p segment-path))
               (mevedel-session-persistence--maybe-prune-orphan
                session-dir segment-path))
+            (when (and acquired (not live))
+              (mevedel-session-persistence--reconcile-lost-execution-segments
+               session segment-path))
             (with-current-buffer buf
               ;; Ensure canonical name and file backing.
               (unless (equal (buffer-name) buf-name)
@@ -2875,6 +2991,13 @@ mentions-shown reset to empty hash tables on load."
                 (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
                   (mevedel--chat-buffer-disable-org-element-cache))
                 (mevedel-session-persistence--restore-gptel-state)
+                (when acquired
+                  (require 'mevedel-pipeline)
+                  (when (> (mevedel-pipeline-reconcile-lost-executions buf) 0)
+                    (mevedel-session-persistence--write-current-buffer-atomically
+                     buffer-file-name)
+                    (set-buffer-modified-p nil)
+                    (set-visited-file-modtime)))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
                 ;; rewrite running -> incomplete unless we
@@ -3478,6 +3601,9 @@ no-op."
       (user-error "Active buffer has no mevedel session"))
     (when (buffer-local-value 'mevedel--current-request buffer)
       (user-error "Abort the current request first"))
+    (require 'mevedel-execution)
+    (when (mevedel-execution-session-live-p session)
+      (user-error "Stop live executions with /ps or /stop before rewinding"))
     ;; Refresh the live segment before presenting the picker so it stays in
     ;; sync with manual data-buffer edits since the last save.
     (mevedel-session-persistence--update-prompt-index session buffer)
@@ -3677,8 +3803,13 @@ only through PICKED-CUM-TURN.  Entries with non-integer
           (mevedel-session-persistence--segment-path
            staging-path picked-segment)
           buffer-file-truename nil)
+    (require 'mevedel-pipeline)
+    (mevedel-pipeline-reconcile-lost-executions staging-buffer)
     (set-buffer-modified-p t)
     (save-buffer))
+  (mevedel-session-persistence--reconcile-lost-execution-segments
+   child (mevedel-session-persistence--segment-path
+          staging-path picked-segment))
   (when picked-cum-turn
     (dolist (entry
              (mevedel-session-persistence--state-at-turn
@@ -3748,6 +3879,9 @@ fork's save-path."
       (user-error "Buffer is not in rewind preview state"))
     (unless mevedel-session--rewind-context
       (user-error "Rewind context missing"))
+    (require 'mevedel-execution)
+    (when (mevedel-execution-session-live-p mevedel--session)
+      (user-error "Stop live executions with /ps or /stop before forking"))
     (let* ((ctx mevedel-session--rewind-context)
            (parent-id (plist-get ctx :parent-session-id))
            (parent-save-path (plist-get ctx :parent-save-path))
@@ -3836,6 +3970,8 @@ fork's save-path."
                     (mevedel-session-forked-from-session-id child)
                     (mevedel-session-forked-from-turn session)
                     (mevedel-session-forked-from-turn child))
+              (mevedel-execution-teardown-session session)
+              (mevedel-session--set-execution-state session nil)
               (setq mevedel-session--fork-pending nil
                     mevedel-session--rewind-context nil
                     committed t)))
@@ -3965,6 +4101,9 @@ Works from a chat buffer or a view buffer."
                                 (file-name-concat parent-dir new-id))))
           (rename-file (directory-file-name old-save-path)
                        (directory-file-name new-save-path))
+          (require 'mevedel-execution)
+          (mevedel-execution-relocate-artifacts
+           session old-save-path new-save-path)
           (setf (mevedel-session-save-path session) new-save-path)
           (setf (mevedel-session-session-id session) new-id)
           (with-current-buffer data-buf
@@ -4340,6 +4479,8 @@ the throttle has already fired."
 Runs unconditionally so that locks don't outlive the Emacs process
 that wrote them.  Best-effort: individual errors are swallowed so one
 bad buffer can't block exit."
+  (when (fboundp 'mevedel-execution-teardown-all)
+    (ignore-errors (mevedel-execution-teardown-all)))
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf

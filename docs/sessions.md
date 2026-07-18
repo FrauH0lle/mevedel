@@ -155,6 +155,14 @@ write-ahead boundary before dispatch and settle it after success or failure;
 pending tool calls themselves remain non-recoverable. Abort/error teardown is
 an explicit save boundary after prompts, agents, and the current request have
 been cleared, so resumed sessions do not resurrect aborted runtime state.
+Managed execution registries are likewise transient: resume never reattaches
+an operating-system process. After acquiring the session lock, resume
+atomically reconciles running Bash rows across the restored segment and its
+archived predecessors before rendering the view. The scan proceeds newest to
+oldest: a later `execution-archive` or `execution-completion` record marks an
+older copy as archived/superseded. Structured execution rows in later segments
+provide the same successor evidence, including rows retained in a compacted
+tail; a row with no successor becomes `lost`.
 
 An unfinished persisted Goal is always restored `paused`, with an explicit
 restoration reason; opening a session never dispatches a Goal phase. `/goal
@@ -177,6 +185,10 @@ original, optionally restores tracked files to their state at that turn
 (per-file plan with external-changes detection), and arms
 `mevedel-session--fork-pending`.
 
+Rewind refuses while the session has live executions and points the user to
+`/ps` and `/stop`; hiding a process behind older history would violate its
+session ownership boundary.
+
 ### Fork
 
 When the user sends in a buffer with `fork-pending` set,
@@ -186,7 +198,14 @@ truncated, file-history backups referenced by the target state copied,
 and referenced canonical agent transcript files copied — then the send
 proceeds onto the fork's segment file. Numbered agent compaction archives are
 unindexed recovery artifacts and are not copied. The parent session is never
-modified.
+modified. Fork staging receives an empty execution registry and reconciles
+running Bash rows across the installed segment and copied predecessors before
+the new directory is published, preserving later archive/completion successors
+and marking only otherwise-stale rows `lost`.
+
+Renaming a materialized session preserves live execution ownership. Retained
+artifact paths are retargeted immediately after the session directory moves,
+before process filters can append further output.
 
 ### Agent transcripts
 

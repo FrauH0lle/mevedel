@@ -82,7 +82,7 @@
                   (list "sh" "-c"
                         "cat \"$1\"; printf helper-output > \"$2\""
                         "mevedel-test-helper" input output)
-                  (list input) (list root) nil session)))
+                  (list input) (list root) :session session)))
             (should (= 0 (plist-get result :exit-code)))
             (should (equal "helper-input" (plist-get result :output)))
             (should (eq 'off
@@ -105,7 +105,36 @@
       (should (= -1 (plist-get result :exit-code)))
       (should (string-match-p "test unavailable"
                               (error-message-string
-                               (plist-get result :error)))))))
+                               (plist-get result :error))))))
+  :doc "owner teardown settles the caller and removes helper scratch"
+  (let* ((root (make-temp-file "mevedel-helper-teardown-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-execution-helper--workspace root)
+                   root))
+         (temporary-file-directory (file-name-as-directory root))
+         (mevedel-sandbox-mode 'off)
+         result)
+    (unwind-protect
+        (progn
+          (run-at-time
+           0.05 nil
+           (lambda ()
+             (mevedel-execution-stop-owner session "agent-a")))
+          (setq result
+                (mevedel-execution-run-helper
+                 "mevedel-test-helper-teardown"
+                 '("sh" "-c" "sleep 30") nil nil
+                 :session session :owner "agent-a"))
+          (should (= -1 (plist-get result :exit-code)))
+          (should (string-match-p
+                   "owner was torn down"
+                   (error-message-string (plist-get result :error))))
+          (should-not
+           (cl-find-if
+            (lambda (name) (string-prefix-p "mevedel-helper-" name))
+            (directory-files root nil directory-files-no-dot-files-regexp))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t))))
 
 (provide 'test-mevedel-execution-helper)
 ;;; test-mevedel-execution-helper.el ends here

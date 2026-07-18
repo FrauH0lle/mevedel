@@ -6,6 +6,7 @@
 
 (require 'mevedel-structs)
 (require 'ert)
+(require 'mevedel-agents)
 (require 'mevedel-file-state)
 (require 'mevedel-execution)
 (require 'mevedel-tool-registry)
@@ -46,9 +47,10 @@
                  "media-helper" '("helper" "--flag") '("/input")
                  '("/artifacts"))))))
     (should (equal '("media-helper" ("helper" "--flag") ("/input")
-                     ("/artifacts") nil)
+                     ("/artifacts") :session)
                    (seq-take captured 5)))
-    (should (eq session (nth 5 captured)))))
+    (should (eq session (nth 5 captured)))
+    (should (equal "main" (nth 7 captured)))))
 
 (mevedel-deftest mevedel-tools--generate-diff ()
   ,test
@@ -66,7 +68,8 @@
                         "old" "new" "file.el")))))
     (should (equal "diff" (car (nth 1 captured))))
     (should (= 2 (length (nth 2 captured))))
-    (should (eq session (nth 5 captured)))))
+    (should (eq session (nth 5 captured)))
+    (should (equal "main" (nth 7 captured)))))
 
 
 ;;

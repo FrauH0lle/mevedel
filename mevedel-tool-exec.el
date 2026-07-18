@@ -37,9 +37,6 @@
                   (context owner body))
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
@@ -134,7 +131,7 @@
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))
 
 ;; `mevedel-structs'
-(declare-function mevedel-request-origin "mevedel-structs" (cl-x) t)
+(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
@@ -169,20 +166,6 @@
 ;;
 ;;; Permission queue helpers
 
-(defun mevedel-tool-exec--current-origin ()
-  "Return the queue entry origin for the current call site.
-Uses the current request's scoped origin before resolving the canonical
-agent-id from `mevedel--agent-invocation'.  Falls back to \"main\" for
-ordinary main-thread dispatches."
-  (or (and (boundp 'mevedel--current-request)
-           (mevedel-request-p mevedel--current-request)
-           (mevedel-request-origin mevedel--current-request))
-      (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
-                           mevedel--agent-invocation))
-                 ((mevedel-agent-invocation-p inv)))
-        (mevedel-agent-invocation-agent-id inv))
-      "main"))
-
 (defun mevedel-tool-exec--permission-log-session ()
   "Return the session visible to a Bash/Eval permission adapter."
   (or (and (boundp 'mevedel--session) mevedel--session)
@@ -195,7 +178,7 @@ ordinary main-thread dispatches."
     (unless (plist-get context :origin)
       (setq context
             (plist-put context :origin
-                       (mevedel-tool-exec--current-origin))))
+                       (mevedel-current-origin))))
     (unless (plist-member context :session)
       (setq context
             (plist-put context :session
@@ -205,7 +188,7 @@ ordinary main-thread dispatches."
 (defun mevedel-tool-exec--permission-origin (permission-context)
   "Return the captured owner from PERMISSION-CONTEXT."
   (or (plist-get permission-context :origin)
-      (mevedel-tool-exec--current-origin)))
+      (mevedel-current-origin)))
 
 (defun mevedel-tool-exec--permission-decision-result
     (metadata-p outcome via &rest props)
@@ -2218,7 +2201,7 @@ and optional :timeout_seconds."
            (invocation
             (and (boundp 'mevedel--agent-invocation)
                  mevedel--agent-invocation))
-           (owner (mevedel-tool-exec--current-origin))
+           (owner (mevedel-current-origin))
            (timeout (mevedel-tool-exec--bash-timeout-seconds args))
            (yield-time-ms
             (unless (plist-get args :wait-for-completion-p)
@@ -2260,7 +2243,7 @@ and optional :timeout_seconds."
   (let* ((execution-id (plist-get args :execution_id))
          (chars (or (plist-get args :chars) ""))
          (session (mevedel-tool-exec--permission-log-session))
-         (owner (mevedel-tool-exec--current-origin))
+         (owner (mevedel-current-origin))
          (wait-ms (mevedel-tool-exec--write-wait-time-ms args chars)))
     (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
       (error "Parameter execution_id is required"))
@@ -2279,7 +2262,7 @@ and optional :timeout_seconds."
 (defun mevedel-tool-exec--list-executions (_args)
   "Return yielded executions visible to the current model owner."
   (let ((session (mevedel-tool-exec--permission-log-session))
-        (owner (mevedel-tool-exec--current-origin)))
+        (owner (mevedel-current-origin)))
     (unless session
       (error "ListExecutions requires an active session"))
     (require 'mevedel-execution)
@@ -2294,7 +2277,7 @@ and optional :timeout_seconds."
   "Stop one owner-scoped yielded execution named by ARGS."
   (let ((execution-id (plist-get args :execution_id))
         (session (mevedel-tool-exec--permission-log-session))
-        (owner (mevedel-tool-exec--current-origin)))
+        (owner (mevedel-current-origin)))
     (unless (and (stringp execution-id) (not (string-empty-p execution-id)))
       (error "Parameter execution_id is required"))
     (unless session
@@ -2448,10 +2431,18 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile.
 SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
   (let* ((workdir (mevedel-tool-exec--default-directory))
          (session (mevedel-tool-exec--permission-log-session))
+         (owner (mevedel-current-origin))
          (script-file (make-temp-file "mevedel-eval-batch-" nil ".el"))
          (result-file (make-temp-file "mevedel-eval-result-" nil ".el"))
          (script (mevedel-tool-exec--eval-batch-script
-                  expression result-file workdir load-path result-format)))
+                  expression result-file workdir load-path result-format))
+         cleaned
+         (cleanup
+          (lambda ()
+            (unless cleaned
+              (setq cleaned t)
+              (ignore-errors (delete-file script-file))
+              (ignore-errors (delete-file result-file))))))
     (condition-case err
         (progn
           (with-temp-file script-file
@@ -2488,8 +2479,7 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
                              ""
                            (format ":\n%s" diagnostics)))))
                       child-result)))
-                 (ignore-errors (delete-file script-file))
-                 (ignore-errors (delete-file result-file)))))
+                 (funcall cleanup))))
            :name "mevedel-eval-batch"
            :command
            (list (expand-file-name invocation-name invocation-directory)
@@ -2498,10 +2488,11 @@ SANDBOX-PERMISSIONS may be `require-escalated' after authorization."
            :writable-roots (mevedel-tool-exec--sandbox-writable-roots workdir)
            :additional-permissions additional-permissions
            :sandbox-permissions sandbox-permissions
-           :session session))
+           :session session
+           :owner owner
+           :teardown-function cleanup))
       (error
-       (ignore-errors (delete-file script-file))
-       (ignore-errors (delete-file result-file))
+       (funcall cleanup)
        (funcall callback
                 (list :result
                       (format "Failed to start Eval batch process: %s" err)))

@@ -76,6 +76,10 @@
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
 
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-spans
+                  "mevedel-transcript-audit" (text &optional type))
+
 ;; `mevedel-tool-media'
 (declare-function mevedel-tool-media-add-to-provider-result
                   "mevedel-tool-media" (backend parsed media-by-index))
@@ -1541,6 +1545,112 @@ persisted with the transcript while the provider scrubber keeps it model-hidden.
                 (mevedel-pipeline--format-render-data-block render-data)
                 'gptel (get-text-property beg 'gptel))))
             t))))))
+
+(defun mevedel-pipeline-tool-render-data (buffer tool-use-id)
+  "Return TOOL-USE-ID's hidden render data in BUFFER, or nil."
+  (when (and (buffer-live-p buffer) (stringp tool-use-id))
+    (with-current-buffer buffer
+      (save-restriction
+        (widen)
+        (when-let* ((segment
+                     (mevedel-pipeline--tool-segment-bounds tool-use-id))
+                    (block
+                     (mevedel-pipeline--render-data-block-bounds
+                      (car segment) (cdr segment))))
+          (cdr
+           (mevedel-pipeline-extract-render-data
+            (buffer-substring-no-properties (car block) (cdr block)))))))))
+
+(defun mevedel-pipeline-reconcile-lost-executions
+    (buffer &optional successor-execution-ids)
+  "Mark stale running Bash render records in BUFFER as lost.
+
+This repairs transcript state after resume or fork.  It never attempts to
+reattach an operating-system process.  Records named by
+SUCCESSOR-EXECUTION-IDS are marked archived because a newer segment owns their
+terminal truth.  Return the number of repaired records."
+  (let (records archived-records)
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (save-restriction
+          (widen)
+          (save-excursion
+            (goto-char (point-min))
+            (while (search-forward mevedel-pipeline--render-data-open nil t)
+              (let* ((open-begin (match-beginning 0))
+                     (begin
+                      (if (and (> open-begin (point-min))
+                               (eq (char-before open-begin) ?\n))
+                          (1- open-begin)
+                        open-begin)))
+                (when (search-forward mevedel-pipeline--render-data-close nil t)
+                  (let* ((close-end (match-end 0))
+                         (end
+                          (if (and (< close-end (point-max))
+                                   (eq (char-after close-end) ?\n))
+                              (1+ close-end)
+                            close-end))
+                         (parsed
+                          (mevedel-pipeline-extract-render-data
+                           (buffer-substring-no-properties begin end)))
+                         (data (cdr-safe parsed)))
+                    (when (and data
+                               (or (plist-get data :execution-id)
+                                   (plist-get data :live-execution-p))
+                               (or (eq (plist-get data :state) 'running)
+                                   (plist-get data :live-execution-p)))
+                      (push (list begin end data) records)))))))
+          (dolist (record records)
+            (pcase-let ((`(,begin ,end ,data) record))
+              (mevedel-pipeline--patch-render-data-block
+               begin end
+               (mevedel-pipeline--plist-merge
+                data
+                (if (member (plist-get data :execution-id)
+                            successor-execution-ids)
+                    '(:state archived :status nil :live-execution-p nil
+                      :termination compacted :outcome nil)
+                  '(:state lost :status error :live-execution-p nil
+                    :termination lost :outcome failure))))))
+          (require 'mevedel-transcript-audit)
+          (setq archived-records
+                (cl-remove-if-not
+                 (lambda (span)
+                   (let* ((record (plist-get span :record))
+                          (data (plist-get record :render-data)))
+                     (and (or (eq (plist-get data :state) 'running)
+                              (plist-get data :live-execution-p))
+                          data)))
+                 (mevedel-transcript-audit-spans
+                  (buffer-substring-no-properties (point-min) (point-max))
+                  'execution-archive)))
+          (dolist (span (reverse archived-records))
+            (let* ((record (plist-get span :record))
+                   (data (plist-get record :render-data))
+                   (successor-p
+                    (member (plist-get data :execution-id)
+                            successor-execution-ids))
+                   (begin (+ (point-min) (plist-get span :start)))
+                   (end (+ (point-min) (plist-get span :end))))
+              (setq record
+                    (plist-put
+                     record :type 'execution-completion))
+              (setq record
+                    (plist-put
+                     record :render-data
+                     (mevedel-pipeline--plist-merge
+                      data
+                      (if successor-p
+                          '(:state archived :status nil
+                            :live-execution-p nil
+                            :termination compacted :outcome nil)
+                        '(:state lost :status error
+                          :live-execution-p nil
+                          :termination lost :outcome failure)))))
+              (delete-region begin end)
+              (goto-char begin)
+              (insert (mevedel--format-hook-audit-record record))))))
+    (+ (length records) (length archived-records)))))
 
 (defun mevedel--parse-tool-results-scrub-advice (orig-fun backend tool-use)
   "Strip render-data blocks from TOOL-USE results for BACKEND via ORIG-FUN.

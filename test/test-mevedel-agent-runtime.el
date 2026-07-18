@@ -3254,6 +3254,32 @@
 		 ,test
 		 (test)
 
+		 :doc "stops every execution owned by the terminating agent"
+		 (let* ((session (mevedel-session--create :name "test"))
+			(agent-id "explorer--owned")
+			(inv (mevedel-agent-invocation--create
+			      :agent-id agent-id
+			      :parent-session session
+			      :transcript-status 'running))
+			stopped)
+		   (cl-letf (((symbol-function 'mevedel-execution-stop-owner)
+			      (lambda (owner-session owner)
+				(setq stopped (list owner-session owner))))
+			     ((symbol-function
+			       'mevedel-session-persistence--update-transcript-entry)
+			      #'ignore)
+			     ((symbol-function 'mevedel-agent-exec--flush-transcript-save)
+			      #'ignore)
+			     ((symbol-function 'mevedel-agent-exec--record-activity)
+			      #'ignore)
+			     ((symbol-function 'mevedel-agent-exec--handle-update) #'ignore)
+			     ((symbol-function 'mevedel-agent-exec--run-stop-hook) #'ignore)
+			     ((symbol-function
+			       'mevedel-view-agent-live-transcript-finalize)
+			      (lambda (_invocation) nil)))
+		     (mevedel-agent-runtime--finalize inv 'aborted))
+		   (should (equal (list session agent-id) stopped)))
+
 		 :doc "writes sidecar after terminal activity is promoted to full history"
 		 (let* ((parent-buf (generate-new-buffer " *mev-agent-finalize-parent*"))
 			(agent (mevedel-agent--create :name "explorer"))

@@ -524,9 +524,12 @@ only call sites that may invoke cancellers."
 ;;
 ;;; Request lifecycle
 
-(defun mevedel-request--current-origin ()
-  "Return the permission-queue owner for the current request."
-  (or (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
+(defun mevedel-current-origin ()
+  "Return the canonical owner for the current execution context."
+  (or (and (boundp 'mevedel--current-request)
+           (mevedel-request-p mevedel--current-request)
+           (mevedel-request-origin mevedel--current-request))
+      (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
                            mevedel--agent-invocation))
                  ((fboundp 'mevedel-agent-invocation-p))
                  ((mevedel-agent-invocation-p inv)))
@@ -547,7 +550,7 @@ the new request struct."
                   :file-snapshots (make-hash-table :test #'equal)
                   :directive-uuid directive-uuid
                   :started-at (current-time)
-                  :origin (mevedel-request--current-origin))))
+                  :origin (mevedel-current-origin))))
     (setq mevedel--current-request request)
     request))
 
