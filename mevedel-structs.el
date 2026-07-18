@@ -200,6 +200,8 @@ workspace."
   deferred-used     ; list of tool-name strings used during current turn
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
+  agent-registry    ; alist: canonical path -> retained `mevedel-agent-record'
+  (agent-turn-capacity 3) ; maximum active non-root turns in this session tree
   queued-user-messages ; transient FIFO of bound original prompts awaiting preparation
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
@@ -359,6 +361,10 @@ workspace root and is kept stable for the lifetime of the session."
 (defun mevedel-session-set-queued-user-messages (session queue)
   "Set SESSION's transient queued user message QUEUE."
   (setf (mevedel-session-queued-user-messages session) queue))
+
+(defun mevedel-session--set-agent-registry (session registry)
+  "Store retained agent REGISTRY on SESSION."
+  (setf (mevedel-session-agent-registry session) registry))
 
 (defun mevedel-session--set-execution-state (session state)
   "Store opaque execution-module STATE on SESSION."

@@ -13,21 +13,22 @@
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-spawn
+                  "mevedel-agent-control" t t)
+(declare-function mevedel-agent-record-conversation-location
+                  "mevedel-agent-control" (cl-x) t)
+(declare-function mevedel-agent-record-id
+                  "mevedel-agent-control" (cl-x) t)
+(declare-function mevedel-agent-record-path
+                  "mevedel-agent-control" (cl-x) t)
+
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime--stop-agent-result-string
                   "mevedel-agent-runtime" (result))
-(declare-function mevedel-agent-runtime-dispatch
-                  "mevedel-agent-runtime" t t)
 (declare-function mevedel-agent-runtime-stop
                   "mevedel-agent-runtime"
                   (agent-id &optional reason parent-buffer))
-
-;; `mevedel-agents'
-(declare-function mevedel-agent-get "mevedel-agents" (name))
-
-;; `mevedel-models'
-(declare-function mevedel-model-normalize-tier "mevedel-models" (value))
-(defvar mevedel-model-tiers)
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts
@@ -41,17 +42,11 @@
 ;; `mevedel-tool-ask'
 (declare-function mevedel-tool-ask-register "mevedel-tool-ask" ())
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-clear-verification-pending
-                  "mevedel-plan" (&optional session))
-
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-truthy-p
                   "mevedel-tool-registry" (value))
 
 ;; `mevedel-tools'
-(declare-function mevedel-tools--current-deferred-context
-                  "mevedel-tools" ())
 (declare-function mevedel-tools--handle-message-inject
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-terminal-mailbox
@@ -160,44 +155,32 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch the agent described by ARGS and report through CALLBACK."
-  (let ((agent-type (plist-get args :subagent_type))
-        (description (plist-get args :description))
-        (prompt (plist-get args :prompt))
-        (model (plist-get args :model))
-        (background (mevedel-tool-truthy-p
-                     (plist-get args :run_in_background))))
-    (unless (stringp agent-type)
-      (error "Parameter subagent_type is required"))
-    (unless (stringp description)
-      (error "Parameter description is required"))
-    (unless (stringp prompt)
-      (error "Parameter prompt is required"))
-    (when (and model (not (mevedel-model-normalize-tier model)))
+  (dolist (obsolete '(:subagent_type :description :prompt :run_in_background))
+    (when (plist-member args obsolete)
+      (error "Superseded Agent parameter: %s" obsolete)))
+  (let ((task-name (plist-get args :task_name))
+        (message (plist-get args :message)))
+    (require 'json)
+    (require 'mevedel-agent-control)
+    (let* ((record
+            (mevedel-agent-control-spawn
+             mevedel--session task-name message
+             :parent-fsm (and (boundp 'mevedel-tools--current-fsm)
+                              mevedel-tools--current-fsm)
+             :message-handler #'mevedel-tools--handle-message-inject
+             :terminal-handler #'mevedel-tools--handle-terminal-mailbox))
+           (path (mevedel-agent-record-path record)))
       (mevedel-tool-ui--deliver-result
        callback
-       (format "Error: Unknown model tier: %s. Available: %s"
-               model
-               (mapconcat (lambda (entry) (symbol-name (car entry)))
-                          mevedel-model-tiers ", ")))
-      (setq agent-type nil))
-    (when agent-type
-      (require 'mevedel-agent-runtime)
-      (when (equal agent-type "verifier")
-        (require 'mevedel-plan)
-        (mevedel-plan-clear-verification-pending))
-      (if-let* ((agent (mevedel-agent-get agent-type)))
-          (mevedel-agent-runtime-dispatch
-           (apply-partially #'mevedel-tool-ui--deliver-result callback)
-           agent description prompt
-           :background background
-           :parent-context (mevedel-tools--current-deferred-context)
-           :parent-fsm mevedel-tools--current-fsm
-           :message-handler #'mevedel-tools--handle-message-inject
-           :terminal-handler #'mevedel-tools--handle-terminal-mailbox
-           :model-tier (and model (mevedel-model-normalize-tier model)))
-        (mevedel-tool-ui--deliver-result
-         callback
-         (format "Error: Unknown agent type: %s" agent-type))))))
+       (list :result (json-serialize (list :path path))
+             :render-data
+             (list :kind 'collaboration-event
+                   :event 'started
+                   :path path
+                   :agent-id (mevedel-agent-record-id record)
+                   :transcript-relative-path
+                   (mevedel-agent-record-conversation-location record)
+                   :status 'running))))))
 
 (defun mevedel-tool-ui--stop-agent (args)
   "Stop the running sub-agent named by ARGS."
@@ -231,7 +214,16 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
 (defun mevedel-tool-ui--render-agent (name args result render-data)
   "Return rendering plist for Agent NAME, ARGS, RESULT, and RENDER-DATA."
   (when (stringp result)
-    (let* ((agent-id (and (consp render-data)
+    (if (plist-get args :task_name)
+        (let ((path (plist-get render-data :path)))
+          (list :header (format "Started %s" path)
+                :body result
+                :body-mode nil
+                :vtype 'agent-handle
+                :agent-id (plist-get render-data :agent-id)
+                :agent-status (plist-get render-data :status)
+                :initially-collapsed-p t))
+      (let* ((agent-id (and (consp render-data)
                           (plist-get render-data :agent-id)))
            (session (and (boundp 'mevedel--session) mevedel--session))
            (sidecar-entry
@@ -272,16 +264,16 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
                     compact-description)
                    ((string-empty-p compact-description) agent-type)
                    (t (format "%s -- %s" agent-type compact-description)))))
-      (list :header (format "%s: %s%s"
-                            (or name "Agent") shown badge-suffix)
-            :body result
-            :body-mode (mevedel-view-data-buffer-major-mode)
-            :vtype 'agent-handle
-            :agent-id agent-id
-            :agent-status (plist-get effective-render-data :status)
-            :agent-description description
-            :hook-audits (plist-get effective-render-data :hook-audits)
-            :initially-collapsed-p t))))
+        (list :header (format "%s: %s%s"
+                              (or name "Agent") shown badge-suffix)
+              :body result
+              :body-mode (mevedel-view-data-buffer-major-mode)
+              :vtype 'agent-handle
+              :agent-id agent-id
+              :agent-status (plist-get effective-render-data :status)
+              :agent-description description
+              :hook-audits (plist-get effective-render-data :hook-audits)
+              :initially-collapsed-p t)))))
 
 (defun mevedel-tool-ui--result-status (result)
   "Return a renderer status for RESULT."
@@ -336,24 +328,17 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
   (mevedel-tool-ask-register)
   (mevedel-define-tool
     :name "Agent"
-    :description "Launch a specialized agent to handle complex, multi-step tasks autonomously."
+    :description "Start a retained asynchronous child agent."
     :prompt-file "tools/agent.md"
     :handler #'mevedel-tool-ui--agent
-    :args ((subagent_type string :required
-                          "The type of specialized agent to use for this task.")
-           (description string :required
-                        "A short (3-5 word) description of the task.")
-           (prompt string :required
-                   "The detailed task for the agent to perform autonomously.")
-           (model string :optional
-                  "Optional model tier for this agent invocation."
-                  :enum ["fast" "balanced" "strong"])
-           (run_in_background boolean :optional
-                              "Set to true to run this agent in the background. The tool returns immediately with the agent ID; the agent's result is delivered to your mailbox when it finishes."))
+    :args ((task_name string :required
+                      "Lowercase ASCII name for the new child path segment.")
+           (message string :required
+                    "Complete non-empty task for the child agent."))
     :async-p t
     :max-result-size 50000
     :groups (util)
-    :get-name (lambda (args) (plist-get args :subagent_type))
+    :get-name (lambda (args) (plist-get args :task_name))
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-agent)
   (mevedel-define-tool

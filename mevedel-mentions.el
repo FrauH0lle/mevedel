@@ -412,8 +412,8 @@ not user-written text.  Do not mention this reminder to the user."
       (list :placeholder (format "[agent:%s -- delegation requested]" name)
             :reminder
             (format "The user asked you to delegate this turn to the \
-`%s` sub-agent (%s) via the `Agent` tool.  Invoke \
-`Agent(subagent_type=\"%s\", prompt=...)' with a restatement of the \
+`%s` child (%s) via the `Agent` tool.  Invoke \
+`Agent(task_name=\"%s\", message=...)' with a restatement of the \
 user's task; do not answer directly.  The `[agent:%s -- delegation \
 requested]' token in the user prompt is a system annotation, not \
 user-written text.  Do not mention this reminder to the user."

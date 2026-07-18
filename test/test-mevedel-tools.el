@@ -922,6 +922,19 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   ,test
   (test)
 
+  :doc "canonical RESULT records retain path, outcome, and payload"
+  (let ((block
+         (mevedel-tools--message-delivery-block
+          '(:type RESULT
+            :sender "/root/spec_review"
+            :recipient "/root"
+            :outcome completed
+            :payload "Review complete."))))
+    (should (string-match-p
+             "<agent-result sender=\"/root/spec_review\" recipient=\"/root\" outcome=\"completed\">"
+             block))
+    (should (string-match-p "Review complete\." block)))
+
   :doc "literal agent-message delimiters do not become nested mailbox markup"
   (let ((block (mevedel-tools--message-delivery-block
                 '(:from "worker"
@@ -977,7 +990,12 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (insert "* Agent Task: do work\nbody\n"))
           (setf (mevedel-agent-invocation-messages inv)
                 '((:from "worker" :body "one")
-                  (:from "worker" :body "two")))
+                  (:from "worker" :body "two")
+                  (:type RESULT
+                   :sender "/root/spec_review"
+                   :recipient "/root"
+                   :outcome completed
+                   :payload "Review complete.")))
           (mevedel-tools--handle-message-inject fsm)
           (should (null (mevedel-agent-invocation-messages inv)))
           (let ((msgs (plist-get data :messages)))
@@ -988,7 +1006,10 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (let ((content (plist-get (aref msgs 0) :content)))
               (should (string-match-p "<agent-message from=\"worker\">" content))
               (should (string-match-p "one" content))
-              (should (string-match-p "two" content)))
+              (should (string-match-p "two" content))
+              (should (string-match-p
+                       "<agent-result sender=\"/root/spec_review\"" content))
+              (should (string-match-p "Review complete" content)))
             (should (equal "first" (plist-get (aref msgs 1) :content))))
           (with-current-buffer agent-buf
             (let ((text (buffer-substring-no-properties

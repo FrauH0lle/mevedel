@@ -1,24 +1,9 @@
-Launch a specialized agent to handle complex, multi-step tasks
-autonomously.
+Start a retained asynchronous child agent.
 
-### Foreground (default)
+`task_name` is one lowercase ASCII path segment using letters, digits, and
+underscores. `message` is the child's complete task. A successful call returns
+only the child's canonical path, such as `/root/spec_review`.
 
-The tool blocks until the agent finishes and returns its result
-directly. Use for tasks whose output you need before continuing.
-
-### Background (`run_in_background: true`)
-
-The tool returns immediately with the agent's ID. The agent keeps
-running; its result is delivered to your mailbox as an
-`<agent-message>` when it finishes.
-
-Use background mode when you need to:
-- Run multiple agents in parallel and coordinate them
-- Continue working while an agent handles a long task
-- Send guidance to a running agent via `SendMessage`
-- Stop a stranded or no-longer-needed agent via `StopAgent`
-
-Background agents that you spawned can be addressed by their full ID
-in `SendMessage` and `StopAgent`.  Agents do not get a
-sibling-to-sibling channel; route sibling coordination through the
-parent that spawned them.
+The child runs independently. Its terminal RESULT is delivered to the spawn
+parent. The path remains reserved after the turn settles so the same agent can
+be inspected and continued later.

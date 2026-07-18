@@ -1387,10 +1387,11 @@ Returns the spawned FSM."
          (mevedel-agent-exec--force-initial-tool-use-p
           agent-type invocation))
         (agent-spec
-         (or (cdr (assoc agent-type mevedel-agent-exec--agents))
-             (and (mevedel-agent-invocation-agent invocation)
-                  (cdr (mevedel-agent-to-gptel-spec
-                        (mevedel-agent-invocation-agent invocation))))))
+         (unless (equal agent-type "default")
+           (or (cdr (assoc agent-type mevedel-agent-exec--agents))
+               (and (mevedel-agent-invocation-agent invocation)
+                    (cdr (mevedel-agent-to-gptel-spec
+                          (mevedel-agent-invocation-agent invocation)))))))
         (parent-include-reasoning gptel-include-reasoning))
     (gptel-with-preset
      (nconc (list :use-tools (if force-initial-tool-use 'force t)

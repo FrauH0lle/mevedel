@@ -182,6 +182,8 @@
     (should (hash-table-p (mevedel-session-touched-files session)))
     (should (= 0 (mevedel-session-turn-count session)))
     (should (null (mevedel-session-agents session)))
+    (should (null (mevedel-session-agent-registry session)))
+    (should (= 3 (mevedel-session-agent-turn-capacity session)))
     (should (null (mevedel-session-tasks session)))
     (should (null (mevedel-session-reminders session)))
     (should (null (mevedel-session-deferred-pending session)))
@@ -194,6 +196,15 @@
          (s2 (mevedel-session-create "refactor" ws)))
     (should (eq (mevedel-session-workspace s1)
                 (mevedel-session-workspace s2)))))
+
+(mevedel-deftest mevedel-session--set-agent-registry ()
+  ,test
+  (test)
+  :doc "stores the session-owned retained agent registry by identity"
+  (let* ((session (mevedel-session--create))
+         (registry (list (cons "/root/worker" (make-symbol "record")))))
+    (mevedel-session--set-agent-registry session registry)
+    (should (eq registry (mevedel-session-agent-registry session)))))
 
 (mevedel-deftest mevedel-session--set-execution-state ()
   ,test

@@ -2115,13 +2115,14 @@ defaults to the data buffer reachable from the current buffer."
              skill-permission-rules
              skill-model-override skill-effort-override
              skill-hook-rules
-             on-invocation)
+             on-invocation on-settle)
   "Dispatch AGENT with DESCRIPTION and PROMPT, delivering to MAIN-CB.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
 verified it is non-nil.  BACKGROUND, MODEL-TIER, SKILL-PERMISSION-RULES,
 SKILL-MODEL-OVERRIDE, SKILL-EFFORT-OVERRIDE, SKILL-HOOK-RULES, and
-ON-INVOCATION match `mevedel-agent-runtime-dispatch'.
+ON-INVOCATION seeds the invocation before request dispatch.  ON-SETTLE, when
+non-nil, owns background settlement instead of the default mailbox path.
 
 Dispatch order:
 
@@ -2221,10 +2222,16 @@ resolver and permission resolver pick them up."
             (unless saved
               (mevedel-agent-runtime-dispatch--abandon-persistence invocation)))))
       (when on-invocation
-        (condition-case err
+        (if on-settle
             (funcall on-invocation invocation)
-          (error
-           (message "mevedel: agent invocation callback failed: %S" err))))
+          (condition-case err
+              (funcall on-invocation invocation)
+            (error
+             (message "mevedel: agent invocation callback failed: %S" err)))))
+      (when (and on-settle
+                 (not (mevedel-agent-invocation-transcript-relative-path
+                       invocation)))
+        (error "Agent conversation could not be persisted"))
       ;; --- Build wrapped callbacks ---
       (let* ((wrapped-callback
               (cond
@@ -2235,10 +2242,21 @@ resolver and permission resolver pick them up."
                                (not (string-prefix-p "Error:" response))
                                (mevedel-agent-runtime--invocation-execution-live-p
                                 invocation))
-                    (mevedel-agent-runtime--complete-background-agent
-                     invocation
-                     (mevedel-agent-runtime--normalize-terminal-response
-                      invocation response)))))
+                    (let ((terminal
+                           (mevedel-agent-runtime--normalize-terminal-response
+                            invocation response)))
+                      (if on-settle
+                          (unless fired
+                            (setq fired t)
+                            (setf
+                             (mevedel-agent-invocation-background-result-reported-p
+                              invocation)
+                             t)
+                            (mevedel-agent-runtime--remove-agent-registry-entry
+                             invocation agent-id parent-data-buffer)
+                            (funcall on-settle invocation terminal response))
+                        (mevedel-agent-runtime--complete-background-agent
+                         invocation terminal))))))
                (t
                 ;; Foreground mode: fire main-cb once when no pending
                 ;; work remains on either axis.  Wrap success
@@ -2309,7 +2327,7 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
           (setf (mevedel-agent-invocation-parent-tool-callback invocation)
                 wrapped-callback))
         ;; Register background tracking BEFORE starting the child FSM.
-        (when (and background parent-ctx)
+        (when (and background parent-ctx (not on-settle))
           (mevedel-agent-runtime--ctx-push-background-agent parent-ctx agent-id))
         (let (agent-fsm success-p)
           (unwind-protect
@@ -2337,14 +2355,14 @@ err-prefix=%s bg=%S msgs=%d resp=%S"
                      invocation)
                 (mevedel-agent-runtime-dispatch--mark-start-blocked
                  invocation "SubagentStart hook blocked sub-agent"))
-              (when (and background parent-ctx)
+              (when (and background parent-ctx (not on-settle))
                 (mevedel-agent-runtime--ctx-remove-background-agent
                  parent-ctx agent-id))
               (setq mevedel-agent-runtime--fsms
                     (assoc-delete-all agent-id
                                       mevedel-agent-runtime--fsms))))
           (when (and agent-fsm background)
-            (when parent-ctx
+            (when (and parent-ctx (not on-settle))
               (mevedel-agent-runtime--queue-background-status-reminder
                parent-ctx agent-id agent-type description 'running
                (mevedel-agent-invocation-transcript-relative-path
@@ -2390,7 +2408,8 @@ Use SendMessage(to=\"%s\", ...) to send this agent guidance."
                                       :calls 0)
                                 (when hook-audits
                                   (list :hook-audits hook-audits)))))
-                        (t launch-result))))))))))
+                        (t launch-result)))))
+          agent-fsm)))))
 
 (defun mevedel-agent-runtime-dispatch--abandon-persistence (invocation)
   "Drop persistence state for INVOCATION after a fatal save failure.

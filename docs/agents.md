@@ -1,10 +1,16 @@
 # Multi-agent system
 
-Agents declared with `mevedel-define-agent`:
+The model-facing `Agent` tool starts a retained default child asynchronously.
+It accepts a lowercase `task_name` path segment and a complete `message`, then
+returns the committed canonical path immediately. The root session retains the
+child's storage identity, path, activity, and transcript location after the
+turn settles.
+
+Specialist definitions declared with `mevedel-define-agent` back dedicated
+commands and internal forked invocation paths:
 
 - **explorer**: read-only investigation, caller-specified thoroughness
-- **coordinator**: orchestrates workers via `Agent(run_in_background=true)`;
-  never implements
+- **coordinator**: internal orchestration role; never implements
 - **verifier**: adversarial read-only verification; per-turn
   `verifier-read-only` reminder attached at invocation. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
@@ -70,11 +76,11 @@ receiving environment context. Built-in policy currently gives explorer
 agents `Skill` and `ListSkills` plus the skills prompt section;
 coordinator, verifier, and reviewer agents remain skill-free.
 
-## Invocation flow
+## Specialist invocation flow
 
 ```mermaid
 flowchart TD
-    A[Parent calls Agent tool] --> B[Resolve agent definition and tools]
+    A[Dedicated command or fork dispatches specialist] --> B[Resolve agent definition and tools]
     B --> C[Build agent prompt]
     C --> D{Background?}
     D -- No --> E[Run foreground FSM]
@@ -86,9 +92,10 @@ flowchart TD
     I --> J[Parent mailbox or final callback]
 ```
 
-## Background spawning
+## Internal specialist background mode
 
-`run_in_background` makes `mevedel-agent-runtime-dispatch` call
+The runtime's internal `:background` dispatch keyword makes
+`mevedel-agent-runtime-dispatch` call
 `process-tool-result` immediately with a launch-status string,
 unblocking the parent FSM. The sub-agent completes fire-and-forget; its
 result is wrapped in `<agent-result>` and pushed to the parent's mailbox.
@@ -160,21 +167,6 @@ request; transient callback failures retry with bounded backoff from the
 durable mailbox, while persistent failure stops the agent. Ordinary
 mailbox messages still resume BWAIT through WAIT; execution-only contents
 neither start a paid continuation nor arm the agent watchdog.
-
-## Coordinator skill
-
-Bundled at `skills/coordinator/SKILL.md` (discovered by the skill core via
-`mevedel-skills--bundled-dir`). `context: fork` delegates to the
-coordinator agent. User/project skills in `.mevedel/skills/`,
-`.agents/skills/`, `~/.mevedel/skills/`, or `~/.agents/skills/` can
-coexist with bundled skills; collisions are exposed with generated
-visible names instead of overriding the bundled entry.
-
-The coordinator prompt includes a continue-vs-spawn table for deciding
-when to reuse a worker through `SendMessage` versus launching a fresh
-worker, and requires synthesis before handoff: follow-up prompts should
-name concrete files, constraints, and next actions rather than forwarding
-research with vague wording.
 
 ## Review and verify commands
 

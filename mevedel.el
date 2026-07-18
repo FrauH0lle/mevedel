@@ -57,6 +57,7 @@
 (require 'mevedel-tools-list)
 (require 'mevedel-system)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-turn)
 (require 'mevedel-presets)
 (require 'mevedel-transcript)

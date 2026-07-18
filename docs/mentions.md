@@ -97,7 +97,8 @@ schema, send-time binding, and dispatch branches.
   `mevedel-check-permission "Read"` first — any non-allow yields
   "permission denied". Missing and unreadable files are rejected.
 - **@agent:name** — asks main agent to delegate via
-  `Agent(subagent_type="NAME", ...)` (looked up in `mevedel-agent--registry`)
+  `Agent(task_name="NAME", message=...)` (the name is validated against
+  `mevedel-agent--registry` before the reminder is created)
 - **@mcp:server:uri** — attaches an MCP resource via mcp.el
   (`mcp-hub-get-servers`, `mcp-server-connections`, `mcp-read-resource`).
   Resource completion binds the selected server-name/URI pair immediately;

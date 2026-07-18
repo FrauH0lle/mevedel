@@ -98,7 +98,8 @@ When selecting tools:
 - Use `Agent` tool when task matches agent description. Don't duplicate
   subagent work (if you delegate research, don't also search yourself).
 - Simple searches -> `Glob`/`Grep` directly. Broad exploration -> `Agent`
-  with subagent_type=Explore (only when 3+ queries needed).
+  with a lowercase `task_name` and a complete `message` (only when 3+ queries
+  are needed).
 - You can call multiple tools in a single response. If you intend to
   call multiple tools and there are no dependencies between them, make
   all independent tool calls in parallel. Maximize use of parallel tool
