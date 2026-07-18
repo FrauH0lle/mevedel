@@ -1480,6 +1480,9 @@ Returns SESSION's `save-path' (allocated or existing)."
 ;;
 ;;; Transcript gptel metadata repair
 
+(defvar-local mevedel-session-persistence--source-shift-rerendered-p nil
+  "Non-nil when gptel metadata already refreshed this buffer's live view.")
+
 
 (defun mevedel-session-persistence--restore-gptel-state ()
   "Restore gptel state without dirtying the visited segment buffer.
@@ -1674,8 +1677,11 @@ buffers using presets with dynamic `:system' values, it removes any
 existing `GPTEL_SYSTEM' first and dynamically binds
 `gptel-system-prompt' to nil while gptel writes its Org metadata.
 After delegation, it rewrites `GPTEL_BOUNDS' until the saved absolute
-positions match the post-drawer-update buffer."
-  (let ((mevedel-org-buffer-p
+positions match the post-drawer-update buffer.  If the metadata changed
+the buffer size, it rerenders the bound view so disclosure source
+coordinates continue to address the intended transcript segments."
+  (let ((size-before (buffer-size))
+        (mevedel-org-buffer-p
          (and (bound-and-true-p mevedel--session)
               (derived-mode-p 'org-mode))))
     (prog1
@@ -1694,7 +1700,17 @@ positions match the post-drawer-update buffer."
                  (apply orig-fun args))))
           (apply orig-fun args))
       (when mevedel-org-buffer-p
-        (mevedel-session-persistence--stabilize-gptel-bounds)))))
+        (mevedel-session-persistence--stabilize-gptel-bounds)
+        (when (/= size-before (buffer-size))
+          (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                                 mevedel--view-buffer))
+                      ((buffer-live-p view)))
+            (when (eq (buffer-local-value 'mevedel--data-buffer view)
+                      (current-buffer))
+              (with-current-buffer view
+                (mevedel-view--full-rerender))
+              (setq mevedel-session-persistence--source-shift-rerendered-p
+                    t))))))))
 
 (defun mevedel-session-persistence--install-gptel-save-state-advice ()
   "Install mevedel's dynamic-system preservation advice for gptel save operations."
@@ -1789,6 +1805,8 @@ sidecar."
                       buffer)))
     (let ((had-save-path (mevedel-session-save-path session))
           (rerender-needed nil))
+      (with-current-buffer buffer
+        (setq mevedel-session-persistence--source-shift-rerendered-p nil))
       (when (mevedel-session-persistence-ensure-files session buffer)
         (unless had-save-path
           (setq rerender-needed t)))
@@ -1827,12 +1845,17 @@ sidecar."
       ;; after save-time shifts so expand/collapse does not read from the
       ;; drawer.
       (when rerender-needed
-        (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
-                    ((buffer-live-p vb)))
-          (with-current-buffer vb
-            (when (and (boundp 'mevedel--data-buffer)
-                       (eq mevedel--data-buffer buffer))
-              (mevedel-view--full-rerender)))))
+        (unless (buffer-local-value
+                 'mevedel-session-persistence--source-shift-rerendered-p
+                 buffer)
+          (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
+                      ((buffer-live-p vb)))
+            (with-current-buffer vb
+              (when (and (boundp 'mevedel--data-buffer)
+                         (eq mevedel--data-buffer buffer))
+                (mevedel-view--full-rerender))))))
+      (with-current-buffer buffer
+        (setq mevedel-session-persistence--source-shift-rerendered-p nil))
       (mevedel-session-save-path session))))
 
 
