@@ -24,6 +24,10 @@
 ;; `browse-url'
 (declare-function browse-url "browse-url" (url &optional new-window))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-teardown-session
+                  "mevedel-agent-control" (session))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
                   "mevedel-agents" (cl-x) t)
@@ -688,6 +692,9 @@ Kills the associated view buffer."
   (when (and mevedel--session
              (fboundp 'mevedel-execution-teardown-session))
     (mevedel-execution-teardown-session mevedel--session))
+  (when mevedel--session
+    (require 'mevedel-agent-control)
+    (mevedel-agent-control-teardown-session mevedel--session))
   (when (fboundp 'mevedel-permission-queue-abort-all)
     (mevedel-permission-queue-abort-all mevedel--session))
   (when (fboundp 'mevedel-plan-queue-abort-all)

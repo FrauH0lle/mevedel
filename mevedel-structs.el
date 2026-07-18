@@ -201,6 +201,7 @@ workspace."
   deferred-expired  ; list of tool-name strings expired on last turn
   messages          ; list of inbound-message plists queued for next turn
   agent-registry    ; alist: canonical path -> retained `mevedel-agent-record'
+  (agent-root-activity 'idle) ; root roster activity: running or idle
   (agent-turn-capacity 3) ; maximum active non-root turns in this session tree
   queued-user-messages ; transient FIFO of bound original prompts awaiting preparation
   dropped-file-grants ; pending exact-file read grants from drag/drop
@@ -551,13 +552,16 @@ the new request struct."
   (when mevedel--current-request
     (message "mevedel: stale request found, replacing")
     (mevedel-request-end t))
-  (let ((request (mevedel-request--create
-                  :session session
-                  :file-snapshots (make-hash-table :test #'equal)
-                  :directive-uuid directive-uuid
-                  :started-at (current-time)
-                  :origin (mevedel-current-origin))))
+  (let* ((origin (mevedel-current-origin))
+         (request (mevedel-request--create
+                   :session session
+                   :file-snapshots (make-hash-table :test #'equal)
+                   :directive-uuid directive-uuid
+                   :started-at (current-time)
+                   :origin origin)))
     (setq mevedel--current-request request)
+    (when (equal origin "main")
+      (setf (mevedel-session-agent-root-activity session) 'running))
     request))
 
 (defun mevedel-request-cancel (request &optional abort-plan-queue)
@@ -578,7 +582,12 @@ ABORT-PLAN-QUEUE is non-nil, abort them too."
 (defun mevedel-request-end (&optional abort-plan-queue)
   "Cancel the current request, then clear `mevedel--current-request'."
   (when mevedel--current-request
-    (mevedel-request-cancel mevedel--current-request abort-plan-queue)
+    (let ((request mevedel--current-request))
+      (mevedel-request-cancel request abort-plan-queue)
+      (when (equal (mevedel-request-origin request) "main")
+        (setf (mevedel-session-agent-root-activity
+               (mevedel-request-session request))
+              'idle)))
     (setq mevedel--current-request nil)))
 
 (provide 'mevedel-structs)

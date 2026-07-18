@@ -1433,6 +1433,72 @@
                      (:from "main" :body "pong"))
                    (nreverse (mevedel-agent-invocation-messages inv))))))
 
+(mevedel-deftest mevedel-agent-runtime-steer ()
+  ,test
+  (test)
+  :doc "queues steering and wakes an invocation parked at BWAIT"
+  (let* ((parent (generate-new-buffer " *agent-steer-parent*"))
+         (agent-buffer (generate-new-buffer " *agent-steer-agent*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "default--steer"
+           :buffer agent-buffer
+           :parent-data-buffer parent))
+         (fsm (gptel-make-fsm :state 'BWAIT :info nil))
+         transition)
+    (unwind-protect
+        (progn
+          (mevedel-agent-runtime-test--register-agent-fsm invocation fsm)
+          (cl-letf (((symbol-function 'gptel--fsm-transition)
+                     (lambda (seen-fsm state)
+                       (setq transition (list seen-fsm state)))))
+            (should
+             (mevedel-agent-runtime-steer
+              invocation "/root/reviewer" "Check the new evidence.")))
+          (let ((message
+                 (car (mevedel-agent-invocation-messages invocation))))
+            (should (equal "/root/reviewer" (plist-get message :from)))
+            (should (equal "Check the new evidence."
+                           (plist-get message :body))))
+          (should (equal (list fsm 'WAIT) transition)))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent)))
+
+  :doc "leaves in-flight work queued until its ordinary WAIT boundary"
+  (let* ((parent (generate-new-buffer " *agent-steer-in-flight*"))
+         (agent-buffer (generate-new-buffer " *agent-steer-active*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "default--in-flight"
+           :buffer agent-buffer
+           :parent-data-buffer parent))
+         (fsm (gptel-make-fsm :state 'TOOL :info nil))
+         transitioned)
+    (unwind-protect
+        (progn
+          (mevedel-agent-runtime-test--register-agent-fsm invocation fsm)
+          (cl-letf (((symbol-function 'gptel--fsm-transition)
+                     (lambda (&rest _)
+                       (setq transitioned t))))
+            (mevedel-agent-runtime-steer
+             invocation "/root" "Use this when safe."))
+          (should-not transitioned)
+          (should (= 1 (length
+                        (mevedel-agent-invocation-messages invocation)))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent)))
+
+  :doc "rejects a stale running record without a live request"
+  (let ((invocation
+         (mevedel-agent-invocation--create
+          :agent-id "default--stale"
+          :parent-data-buffer (generate-new-buffer " *agent-steer-stale*"))))
+    (unwind-protect
+        (should-error
+         (mevedel-agent-runtime-steer invocation "/root" "Too late."))
+      (kill-buffer
+       (mevedel-agent-invocation-parent-data-buffer invocation)))))
+
 (mevedel-deftest mevedel-agent-runtime-dispatch
   (:before-each (progn (mevedel-tool-clear-registry)
                        ;; Built-in agents reference tool groups (read,

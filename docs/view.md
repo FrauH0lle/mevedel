@@ -51,8 +51,12 @@ does not add multi-view window management.
 
 If the observed agent settles while its transcript view is open, the view
 renders the final content immediately and updates its header in place. It
-keeps the live data buffer until the user closes the view rather than swapping
-source buffers mid-display. Reopening after closure reads the saved transcript.
+keeps the live data buffer rather than swapping source buffers mid-display.
+Closing the inspection view preserves data buffers owned by retained agent
+records so a later `FollowupAgent` can continue them; parent-session teardown
+kills every retained conversation buffer from the session registry, whether
+or not it has an open inspection view. Reopening resolves the saved transcript
+normally.
 
 The live transcript header updates on the same stream and tool events as the
 body. It reflects running or blocked state, tool-call count, and elapsed time.
