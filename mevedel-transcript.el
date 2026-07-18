@@ -394,7 +394,8 @@ tool blocks.  Each result is `(TYPE START END VALUE...)'."
            "^</hook-context>[ \t]*\n?" start end)
           (mevedel-transcript--delimited-ranges
            'render-data "^<!-- mevedel-render-data -->[ \t]*$"
-           "^<!-- /mevedel-render-data -->[ \t]*\n?" start end)
+           "^<!-- /mevedel-render-data -->[ \t]*\\(?:\n\\(?:[ \t\r]*\n\\)*\\)?"
+           start end)
           (mevedel-transcript--delimited-ranges
            'prompt "^:PROMPT:[ \t]*$" "^:END:[ \t]*\n?" start end)
           (mevedel-transcript--delimited-ranges

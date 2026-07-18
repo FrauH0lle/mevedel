@@ -1148,6 +1148,30 @@ TOOL-PROP."
                tool-start tool-end '(tool . "call_read")))
       (should (mevedel-transcript-test--all-gptel-prop-p
                reasoning-tail-start reasoning-end 'ignore))))
+  :doc "keeps render-data separators out of tool-call property runs"
+  (with-temp-buffer
+    (org-mode)
+    (let (tool-start tool-end separator-start separator-end response-start)
+      (setq tool-start (point))
+      (insert "#+begin_tool (Bash :command \"date\")\n"
+              "(:name \"Bash\" :args (:command \"date\"))\n\n"
+              "Execution completed.\n"
+              "<!-- mevedel-render-data -->\n"
+              "(:kind bash-result :exit-code 0)\n"
+              "<!-- /mevedel-render-data -->\n")
+      (setq separator-start (point))
+      (insert "\n")
+      (setq separator-end (point))
+      (insert "#+end_tool\n")
+      (setq tool-end (point)
+            response-start (point))
+      (insert "The command completed.\n")
+      (put-text-property (+ tool-start 42) (- tool-end 12)
+                         'gptel '(tool . "call_date"))
+      (put-text-property response-start (point) 'gptel 'response)
+      (mevedel-transcript-normalize-properties)
+      (should (mevedel-transcript-test--all-gptel-prop-p
+               separator-start separator-end 'ignore))))
   :doc "returns and leaves unclosed structural openers unclassified"
   (dolist (snippet `("#+begin_reasoning\npartial thought"
                      ,(concat "#+begin_tool (Bash :command \"date\")\n"
