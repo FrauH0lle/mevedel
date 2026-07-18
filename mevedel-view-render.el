@@ -1569,7 +1569,8 @@ RAW is an optional precomputed expanded tool segment text."
                          'mevedel-view-stream--pending-execution-terminals
                          data-buf)))
                    (and (hash-table-p table)
-                        (gethash tool-use-id table)))))
+                        (plist-get (gethash tool-use-id table)
+                                   :render-data)))))
            (event-type (plist-get event :type))
            (call-render-data (plist-get call :render-data))
            (result

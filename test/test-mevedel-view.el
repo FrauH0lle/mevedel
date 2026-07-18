@@ -736,6 +736,18 @@
   ,test
   (test)
 
+  :doc "data teardown stops all executions in the session"
+  (let ((session (mevedel-session--create :name "kill"))
+        stopped)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-view--abort-data-buffer) #'ignore)
+                ((symbol-function 'mevedel-execution-teardown-session)
+                 (lambda (owner-session)
+                   (setq stopped owner-session))))
+        (mevedel-view--on-data-killed)))
+    (should (eq session stopped)))
+
   :doc "killing the data buffer aborts both queues and kills the view"
   (let ((data-buf (generate-new-buffer " *test-data-kill-data*"))
         (view-buf (generate-new-buffer " *test-view-kill-data*"))

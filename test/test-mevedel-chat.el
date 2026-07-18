@@ -75,7 +75,21 @@
 			     ((symbol-function 'mevedel-view-stream-uninstall)
 			      #'ignore))
 		     (mevedel-uninstall))
-		   (should called)))
+		   (should called))
+
+		 :doc "force-tears down executions"
+		 (let ((gptel--known-tools gptel--known-tools)
+		       (gptel--known-presets gptel--known-presets)
+		       (gptel-prompt-transform-functions gptel-prompt-transform-functions)
+		       torn-down)
+		   (cl-letf (((symbol-function 'mevedel-execution-teardown-all)
+			      (lambda () (setq torn-down t)))
+			     ((symbol-function 'mevedel-skills-uninstall-hot-reload) #'ignore)
+			     ((symbol-function 'mevedel-skills-uninstall-slash-commands) #'ignore)
+			     ((symbol-function 'mevedel-pipeline-uninstall-tool-result-scrubber) #'ignore)
+			     ((symbol-function 'mevedel-view-stream-uninstall) #'ignore))
+		     (mevedel-uninstall))
+		   (should torn-down)))
 
 
 (mevedel-deftest mevedel--chat-buffer-disable-org-element-cache ()

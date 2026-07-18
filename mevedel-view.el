@@ -34,6 +34,8 @@
 
 ;; `mevedel-execution'
 (declare-function mevedel-execution-count-user "mevedel-execution" (session))
+(declare-function mevedel-execution-teardown-session
+                  "mevedel-execution" (session))
 (defvar mevedel-execution-state-change-hook)
 
 ;; `mevedel-executions-list'
@@ -683,6 +685,9 @@ kill hook sees nil and exits without re-entering this function."
   "Hook run when the data buffer is killed.
 Kills the associated view buffer."
   (mevedel-view--abort-data-buffer (current-buffer))
+  (when (and mevedel--session
+             (fboundp 'mevedel-execution-teardown-session))
+    (mevedel-execution-teardown-session mevedel--session))
   (when (fboundp 'mevedel-permission-queue-abort-all)
     (mevedel-permission-queue-abort-all mevedel--session))
   (when (fboundp 'mevedel-plan-queue-abort-all)

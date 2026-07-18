@@ -145,6 +145,10 @@
 (declare-function mevedel--strip-hook-audit-blocks "mevedel-utilities"
                   (text))
 
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-records
+                  "mevedel-transcript-audit" (text &optional type))
+
 ;; `mevedel-view'
 (declare-function mevedel-view--full-rerender "mevedel-view" ())
 
@@ -154,6 +158,12 @@
 (declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
 (declare-function mevedel-view--update-spinner
                   "mevedel-view-stream" (status))
+(declare-function mevedel-view-stream-commit-execution-row-archive
+                  "mevedel-view-stream" (data-buffer plan))
+(declare-function mevedel-view-stream-execution-row-archive-text
+                  "mevedel-view-stream" (plan))
+(declare-function mevedel-view-stream-prepare-execution-row-archive
+                  "mevedel-view-stream" (data-buffer tool-use-ids))
 
 
 (defcustom mevedel-compact-context-limit nil
@@ -1069,10 +1079,10 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
      (t nil))))
 
 (defun mevedel--compact-apply
-    (summary &optional tail-text pending-text hook-audits)
+    (summary &optional tail-text pending-text hook-audits archive-text)
   "Rotate the current segment with SUMMARY, TAIL-TEXT, and PENDING-TEXT.
-HOOK-AUDITS are persisted as ignored side-channel records next to the
-summary."
+HOOK-AUDITS are persisted next to the summary.  ARCHIVE-TEXT contains
+hidden execution records replacing compacted tool rows."
   (let ((session (and (boundp 'mevedel--session) mevedel--session)))
     (unless (and session (mevedel--compact-current-persisted-p))
       (user-error "Session is not materialized on disk"))
@@ -1082,7 +1092,8 @@ summary."
            (mevedel-session-persistence-rotate-segment
             session (current-buffer) summary
             :tail-text tail-text
-            :pending-text pending-text)))
+            :pending-text pending-text
+            :archive-text archive-text)))
       (when (and path (mevedel-session-goal session))
         (mevedel-session-enqueue-pending-reminder
          session
@@ -1239,6 +1250,43 @@ PRESERVED-TAIL-TURNS is the actual count returned by
              for path = (format "%s.compact-%04d.chat.org" stem number)
              unless (file-exists-p path) return path)))
 
+(defun mevedel--compact-archived-tool-use-ids (begin end)
+  "Return live tool-use ids removed within BEGIN..END.
+This includes both concrete tool rows and durable execution archives carried
+forward by an earlier compaction."
+  (let ((position begin)
+        ids)
+    (while (< position end)
+      (let ((property (get-text-property position 'gptel)))
+        (when (and (consp property)
+                   (eq (car property) 'tool)
+                   (stringp (cdr property)))
+          (cl-pushnew (cdr property) ids :test #'equal)))
+      (setq position
+            (or (next-single-property-change position 'gptel nil end)
+                end)))
+    (require 'mevedel-transcript-audit)
+    (dolist (record
+             (mevedel-transcript-audit-records
+              (buffer-substring-no-properties begin end)
+              'execution-archive))
+      (when-let* ((tool-use-id (plist-get record :tool-use-id)))
+        (cl-pushnew tool-use-id ids :test #'equal)))
+    (nreverse ids)))
+
+(defun mevedel--compact-commit-execution-row-archive (target)
+  "Commit TARGET's prepared execution-row archive after compaction."
+  (when-let* ((plan (plist-get target :execution-archive-plan)))
+    (require 'mevedel-view-stream)
+    (mevedel-view-stream-commit-execution-row-archive
+     (plist-get target :buffer) plan)))
+
+(defun mevedel--compact-execution-row-archive-text (target)
+  "Return TARGET's durable execution-row replacement records."
+  (when-let* ((plan (plist-get target :execution-archive-plan)))
+    (require 'mevedel-view-stream)
+    (mevedel-view-stream-execution-row-archive-text plan)))
+
 (defun mevedel--compact-agent-apply
     (target summary tail-text pending-text hook-audits
             &optional _auto _preserved-tail-turns)
@@ -1247,7 +1295,9 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
   (let* ((invocation (plist-get target :invocation))
          (canonical-path (plist-get target :transcript-path))
          (archive-path (mevedel--compact-agent-archive-path canonical-path))
-         (summary (mevedel--compact-append-hook-audits summary hook-audits)))
+         (summary (mevedel--compact-append-hook-audits summary hook-audits))
+         (execution-archive-text
+          (mevedel--compact-execution-row-archive-text target)))
     (unless (mevedel-agent-exec--flush-transcript-save invocation)
       (error "Could not persist agent transcript before compaction"))
     (copy-file canonical-path archive-path nil)
@@ -1257,10 +1307,12 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
       (unless (bolp) (insert "\n"))
       (insert (mevedel-session-persistence--summary-block summary))
       (when tail-text (insert tail-text))
+      (when execution-archive-text (insert execution-archive-text))
       (when pending-text (insert pending-text))
       (set-buffer-modified-p t))
     (unless (mevedel-agent-exec--flush-transcript-save invocation)
       (error "Could not persist compacted agent transcript"))
+    (mevedel--compact-commit-execution-row-archive target)
     archive-path))
 
 (defun mevedel--compact-main-apply
@@ -1269,7 +1321,9 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
   "Apply main-session TARGET compaction and arrange its file reminder."
   (let ((session (plist-get target :session)))
     (mevedel--compact-apply
-     summary tail-text pending-text hook-audits)
+     summary tail-text pending-text hook-audits
+     (mevedel--compact-execution-row-archive-text target))
+    (mevedel--compact-commit-execution-row-archive target)
     (let ((reminder
            (mevedel--compact-file-reference-reminder-body
             session preserved-tail-turns)))
@@ -1386,6 +1440,9 @@ the active main-session segment."
                (tail-start (mevedel--compact-tail-start
                             limit aggressive body-start))
                (compact-end (max body-start tail-start))
+               (archived-tool-use-ids
+                (mevedel--compact-archived-tool-use-ids
+                 body-start compact-end))
                (preserved-tail-turns
                 (mevedel--compact-preserved-tail-turn-count
                  tail-start limit aggressive))
@@ -1457,6 +1514,14 @@ the active main-session segment."
                              (setq summary-applied t)
                              (condition-case apply-err
                                  (progn
+                                   (when archived-tool-use-ids
+                                     (require 'mevedel-view-stream)
+                                     (setq target
+                                           (plist-put
+                                            target :execution-archive-plan
+                                            (mevedel-view-stream-prepare-execution-row-archive
+                                             chat-buffer
+                                             archived-tool-use-ids))))
                                    (mevedel--compact-target-call
                                     target :apply summary tail-text pending-text
                                     pre-compact-hook-audits auto

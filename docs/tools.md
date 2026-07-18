@@ -458,6 +458,16 @@ or resource grants. Shell-native background operators are rejected because
 they would bypass this lifecycle. Remaining descendants are terminated when
 the managed shell exits.
 
+Execution lifetime follows ownership rather than transcript visibility. Agent
+termination synchronously discards only that canonical agent's Bash and native
+helper children; data-buffer teardown, package uninstall, and Emacs exit do the
+same for every child in the session, including queued scheduler work and
+process-group descendants. Record-owned teardown also releases helper scratch
+directories when normal callbacks are suppressed. Ordinary yielded completion
+still uses the captured owner mailbox and never launches an unsolicited model
+request. Bash, Eval, and filesystem helpers all resolve that owner through the
+same request-first execution-context resolver.
+
 ## Eval execution scope
 
 Eval has two execution modes.  `live` is the default and runs inside the

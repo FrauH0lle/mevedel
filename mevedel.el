@@ -605,6 +605,7 @@ always prompt for the session name."
 (defun mevedel-uninstall ()
   "Remove `mevedel' hooks and cleanup."
   (interactive)
+  (mevedel-execution-teardown-all)
   ;; Remove tools
   (setf (alist-get "mevedel" gptel--known-tools nil 'remove #'equal) nil)
   (remove-hook 'mevedel-execution-event-functions

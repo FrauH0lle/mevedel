@@ -108,6 +108,8 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-owner-live-p
                   "mevedel-execution" (session owner))
+(declare-function mevedel-execution-stop-owner
+                  "mevedel-execution" (session owner))
 
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--data-buffer
@@ -1884,6 +1886,9 @@ unobserved transcript buffer."
                (mevedel-agent-invocation-parent-data-buffer invocation))
               (now (format-time-string "%FT%H-%M-%S")))
           (when session
+            (require 'mevedel-execution)
+            (mevedel-execution-stop-owner
+             session (mevedel-agent-invocation-agent-id invocation))
             (require 'mevedel-session-persistence)
             (mevedel-session-persistence--update-transcript-entry
              session (mevedel-agent-invocation-agent-id invocation)

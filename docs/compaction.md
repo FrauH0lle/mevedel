@@ -321,6 +321,21 @@ rendering the visible transcript and shows a compacted-conversation
 separator in its place, while the summary remains model-visible for
 future requests.
 
+Compaction does not stop or replace managed executions. Completion updates the
+original Bash row when that row survives in the preserved tail. If rotation
+explicitly archives a completed row, the new segment receives a hidden durable
+`execution-completion` audit record. A running row is replaced before segment
+publication by a durable `execution-archive` record containing its structured
+render data; terminal settlement atomically changes that record to
+`execution-completion`, while resume changes a stale archive to `lost`. The
+captured owner mailbox continues to provide the model-visible notification.
+Archive intent comes from the concrete tool rows removed by compaction, not a
+session counter. On resume or fork, a completion/archive record in a newer
+segment also supersedes the historical running row left in its predecessor, so
+the two copies cannot produce contradictory terminal states. A live archive
+record removed by a later compaction is carried into the next segment again;
+it remains durable across any number of rotations until terminal settlement.
+
 Persisted summary blocks include a short model-facing handoff prefix
 before the anchored Markdown summary. The prefix tells the resumed model
 to build on the prior work and avoid duplicating it. When a later

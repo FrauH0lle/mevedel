@@ -224,6 +224,23 @@
 ;;
 ;;; Request lifecycle
 
+(mevedel-deftest mevedel-current-origin ()
+  ,test
+  (test)
+  :doc "prefers request ownership, then agent ownership, then main"
+  (let ((mevedel--current-request
+         (mevedel-request--create :origin "request-owner"))
+        (mevedel--agent-invocation
+         (mevedel-agent-invocation--create :agent-id "agent-owner")))
+    (should (equal "request-owner" (mevedel-current-origin))))
+  (let ((mevedel--current-request nil)
+        (mevedel--agent-invocation
+         (mevedel-agent-invocation--create :agent-id "agent-owner")))
+    (should (equal "agent-owner" (mevedel-current-origin))))
+  (let ((mevedel--current-request nil)
+        (mevedel--agent-invocation nil))
+    (should (equal "main" (mevedel-current-origin)))))
+
 (mevedel-deftest mevedel-request-active-p ()
   ,test
   (test)

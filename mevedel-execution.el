@@ -164,6 +164,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   stop-p
   termination
   timed-out-p
+  teardown-function
   timeout
   timeout-timer
   token
@@ -179,6 +180,10 @@ Values below 0.25 are clamped so the UI receives at most four per second."
 
 (defvar mevedel-execution--orphan-state nil
   "Private state for children that have no chat session owner.")
+
+(defvar mevedel-execution--sessions
+  (make-hash-table :test #'eq :weakness 'key)
+  "Weak set of sessions that have created execution state.")
 
 (defvar mevedel-execution-event-functions nil
   "Functions notified of immutable managed execution event plists.
@@ -220,10 +225,12 @@ separate from passive event hooks; the context is never published to them.")
 
 When SESSION is nil, use the module-owned state for direct non-session calls."
   (if session
-      (or (mevedel-session-execution-state session)
-          (let ((state (mevedel-execution--new-state)))
-            (mevedel-session--set-execution-state session state)
-            state))
+      (progn
+        (puthash session t mevedel-execution--sessions)
+        (or (mevedel-session-execution-state session)
+            (let ((state (mevedel-execution--new-state)))
+              (mevedel-session--set-execution-state session state)
+              state)))
     (or mevedel-execution--orphan-state
         (setq mevedel-execution--orphan-state
               (mevedel-execution--new-state)))))
@@ -483,14 +490,16 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
     (mevedel-execution--record-process record)))
 
 (defun mevedel-execution--start-process
-    (callback name command workdir timeout session)
+    (callback name command workdir timeout session owner teardown-function)
   "Start raw COMMAND and call CALLBACK with its bounded terminal result."
   (let* ((record
           (mevedel-execution--record-create
            :callback callback
-           :origin (mevedel-execution--origin-create :session session)
+           :origin (mevedel-execution--origin-create
+                    :owner (or owner "main") :session session)
            :spool-path (make-temp-file "mevedel-execution-output-")
            :started-at (float-time)
+           :teardown-function teardown-function
            :token (gensym "execution-process-")))
          (state (mevedel-execution--state-for-session session)))
     (puthash (mevedel-execution--record-token record) record
@@ -1368,20 +1377,120 @@ after WAIT-MS while the process remains live."
     (mevedel-execution--signal-record record 'INT)
     t))
 
+(defun mevedel-execution--state-record-list (state)
+  "Return a snapshot list of every private record in STATE."
+  (let (records)
+    (when state
+      (maphash (lambda (_key record) (push record records))
+               (mevedel-execution--state-records state)))
+    records))
+
 (defun mevedel-execution-owner-live-p (session owner)
   "Return non-nil when OWNER has an unsettled execution in SESSION."
   (when-let* ((state (and session
                           (mevedel-session-execution-state session))))
     (let (live-p)
-      (maphash
-       (lambda (_key record)
+      (dolist (record (mevedel-execution--state-record-list state))
          (when (and (not (mevedel-execution--record-delivery-state record))
                     (equal (mevedel-execution--origin-owner
                             (mevedel-execution--record-origin record))
                            owner))
            (setq live-p t)))
-       (mevedel-execution--state-records state))
       live-p)))
+
+(defun mevedel-execution-session-live-p (session)
+  "Return non-nil when SESSION owns any unsettled child process."
+  (when-let* ((state (and session
+                          (mevedel-session-execution-state session))))
+    (let (live-p)
+      (dolist (record (mevedel-execution--state-record-list state))
+         (unless (mevedel-execution--record-finished-p record)
+           (setq live-p t)))
+      live-p)))
+
+(defun mevedel-execution--discard-record (record reason)
+  "Immediately kill and forget RECORD because of lifecycle REASON."
+  (let ((managed-live-p (mevedel-execution--managed-live-p record)))
+    (unless (mevedel-execution--record-finished-p record)
+      (setf (mevedel-execution--record-finished-p record) t
+            (mevedel-execution--record-stop-p record) t
+            (mevedel-execution--record-termination record) reason)
+      (when-let* ((lease (mevedel-execution--record-scheduler-lease record)))
+        (mevedel-execution-scheduler-cancel lease))
+      (mevedel-execution--signal-record record 'KILL)
+      (when-let* ((preparation
+                  (mevedel-execution--record-sandbox-preparation record)))
+        (mevedel-sandbox-cleanup preparation)))
+    (when-let* ((function
+                (mevedel-execution--record-teardown-function record)))
+      (setf (mevedel-execution--record-teardown-function record) nil)
+      (ignore-errors (funcall function)))
+    (mevedel-execution--release-scheduler record)
+    (mevedel-execution--cleanup-record record)
+    (when managed-live-p
+      (mevedel-execution--notify-state-change record))))
+
+(defun mevedel-execution-stop-owner (session owner)
+  "Discard every execution record belonging to OWNER in SESSION.
+Return the number of executions selected."
+  (let ((state (and session (mevedel-session-execution-state session)))
+        records)
+    (when state
+      (dolist (record (mevedel-execution--state-record-list state))
+         (when (equal owner
+                      (mevedel-execution--origin-owner
+                       (mevedel-execution--record-origin record)))
+           (push record records)))
+      (dolist (record records)
+        (mevedel-execution--discard-record record 'owner-stopped)))
+    (length records)))
+
+(defun mevedel-execution-teardown-session (session)
+  "Synchronously discard all child records owned by SESSION.
+Return the number selected, including queued one-shot helpers."
+  (let ((state (and session (mevedel-session-execution-state session)))
+        records)
+    (when state
+      (setq records (mevedel-execution--state-record-list state))
+      (dolist (record records)
+        (mevedel-execution--discard-record record 'session-ended)))
+    (length records)))
+
+(defun mevedel-execution-teardown-all ()
+  "Synchronously discard all session and orphan child records."
+  (let ((count 0)
+        sessions)
+    (maphash (lambda (session _present) (push session sessions))
+             mevedel-execution--sessions)
+    (dolist (session sessions)
+      (cl-incf count (mevedel-execution-teardown-session session)))
+    (when mevedel-execution--orphan-state
+      (let ((records
+             (mevedel-execution--state-record-list
+              mevedel-execution--orphan-state)))
+        (dolist (record records)
+          (mevedel-execution--discard-record record 'session-ended))
+        (cl-incf count (length records))))
+    count))
+
+(defun mevedel-execution-relocate-artifacts (session old-root new-root)
+  "Retarget SESSION execution artifacts moved from OLD-ROOT to NEW-ROOT.
+Return the number of live or retained records updated."
+  (let ((state (and session (mevedel-session-execution-state session)))
+        (old-prefix (file-name-as-directory (expand-file-name old-root)))
+        (new-prefix (file-name-as-directory (expand-file-name new-root)))
+        (count 0))
+    (when state
+      (maphash
+       (lambda (_key record)
+         (when-let* ((path (mevedel-execution--record-spool-path record))
+                     (expanded (expand-file-name path))
+                     ((string-prefix-p old-prefix expanded)))
+           (setf (mevedel-execution--record-spool-path record)
+                 (concat new-prefix (substring expanded (length old-prefix))))
+           (cl-incf count)))
+       (mevedel-execution--state-records state)))
+    count))
 
 (defun mevedel-execution-stop (session owner execution-id callback)
   "Stop owner-scoped yielded EXECUTION-ID and call CALLBACK at settlement."
@@ -1421,14 +1530,16 @@ foreground state.  Yielded terminal output still goes to its owner mailbox."
 
 (cl-defun mevedel-execution-start-one-shot
     (callback &key name command workdir writable-roots timeout
-              additional-permissions sandbox-permissions session)
+              additional-permissions sandbox-permissions session owner
+              teardown-function)
   "Start one confined COMMAND and call CALLBACK with terminal facts.
 
 NAME identifies the operating-system process.  WORKDIR and WRITABLE-ROOTS
 describe its filesystem boundary.  TIMEOUT is nil or a positive number of
 seconds.  ADDITIONAL-PERMISSIONS and SANDBOX-PERMISSIONS are already-authorized
-confinement inputs.  SESSION owns the transient process state and visible
-sandbox boundary."
+confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
+TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
+discards the process without invoking CALLBACK."
   (require 'mevedel-sandbox)
   (let* ((active-token (and session (gensym "sandbox-child-")))
          (preparation
@@ -1444,7 +1555,13 @@ sandbox boundary."
              (mevedel-sandbox-track-active session active-token nil))
            (funcall callback
                     (plist-put (copy-sequence child-result)
-                               :sandbox-facts facts))))
+                               :sandbox-facts facts)))
+         (teardown ()
+           (when active-token
+             (mevedel-sandbox-track-active session active-token nil))
+           (mevedel-sandbox-cleanup preparation)
+           (when teardown-function
+             (funcall teardown-function))))
       (pcase (plist-get preparation :state)
         ('refused
          (funcall
@@ -1463,7 +1580,8 @@ sandbox boundary."
          (mevedel-execution--start-process
           (lambda (child-result)
             (finish child-result (plist-get preparation :facts)))
-          name (plist-get preparation :command) workdir timeout session))
+          name (plist-get preparation :command) workdir timeout session owner
+          #'teardown))
         ('confined
          (show-active (plist-get preparation :facts))
          (mevedel-execution--start-process
@@ -1479,7 +1597,7 @@ sandbox boundary."
                    (lambda (fallback-result)
                      (finish fallback-result facts))
                    name (plist-get preparation :original-command)
-                   workdir timeout session))
+                   workdir timeout session owner #'teardown))
               (let ((facts
                      (if (mevedel-sandbox-launch-failed-p
                           preparation child-result)
@@ -1489,14 +1607,21 @@ sandbox boundary."
                      (mevedel-sandbox-strip-marker preparation child-result)))
                 (mevedel-sandbox-cleanup preparation)
                 (finish clean-result facts))))
-          name (plist-get preparation :command) workdir timeout session))
+          name (plist-get preparation :command) workdir timeout session owner
+          #'teardown))
         (_ (error "Unknown sandbox preparation state: %s"
                   (plist-get preparation :state))))
       nil)))
 
+(defun mevedel-execution--owner-teardown-result ()
+  "Return structured settlement for a synchronously discarded child."
+  '(:exit-code -1 :output "" :output-bytes 0
+    :timed-out-p nil :output-limit-p nil :wall-time-seconds 0.0
+    :error (error "Execution owner was torn down")))
+
 (cl-defun mevedel-execution-run-one-shot
     (&key name command workdir writable-roots timeout
-          additional-permissions sandbox-permissions session)
+          additional-permissions sandbox-permissions session owner)
   "Run one confined COMMAND synchronously and return terminal facts.
 
 All keyword arguments follow `mevedel-execution-start-one-shot'."
@@ -1508,7 +1633,11 @@ All keyword arguments follow `mevedel-execution-start-one-shot'."
      :name name :command command :workdir workdir
      :writable-roots writable-roots :timeout timeout
      :additional-permissions additional-permissions
-     :sandbox-permissions sandbox-permissions :session session)
+     :sandbox-permissions sandbox-permissions :session session :owner owner
+     :teardown-function
+     (lambda ()
+       (setq result (mevedel-execution--owner-teardown-result)
+             done t)))
     (while (not done)
       (accept-process-output nil 0.05))
     result))
@@ -1517,8 +1646,9 @@ All keyword arguments follow `mevedel-execution-start-one-shot'."
 ;;
 ;;; External helper interface
 
-(defun mevedel-execution-start-helper
-    (callback name command read-paths writable-roots &optional timeout session)
+(cl-defun mevedel-execution-start-helper
+    (callback name command read-paths writable-roots
+              &key timeout session owner teardown-callback)
   "Start external helper COMMAND and call CALLBACK when it settles.
 
 READ-PATHS are mounted read-only.  WRITABLE-ROOTS are explicit artifact
@@ -1537,25 +1667,32 @@ directory and is removed before CALLBACK runs."
                                (list :path (expand-file-name path)
                                      :access 'read))
                              (delete-dups read-paths)))))
-         finished)
+         finished
+         (cleanup
+          (lambda ()
+            (unless finished
+              (setq finished t)
+              (ignore-errors (delete-directory scratch t)))))
+         (teardown
+          (lambda ()
+            (funcall cleanup)
+            (when teardown-callback
+              (funcall teardown-callback)))))
     (condition-case err
         (mevedel-execution-start-one-shot
          (lambda (child-result)
-           (unless finished
-             (setq finished t)
-             (ignore-errors (delete-directory scratch t))
-             (funcall callback child-result)))
+           (funcall cleanup)
+           (funcall callback child-result))
          :name name :command command :workdir scratch
          :writable-roots roots :timeout timeout
-         :additional-permissions permissions :session session)
+         :additional-permissions permissions :session session :owner owner
+         :teardown-function teardown)
       (error
-       (unless finished
-         (setq finished t)
-         (ignore-errors (delete-directory scratch t)))
+       (funcall cleanup)
        (signal (car err) (cdr err))))))
 
-(defun mevedel-execution-run-helper
-    (name command read-paths writable-roots &optional timeout session)
+(cl-defun mevedel-execution-run-helper
+    (name command read-paths writable-roots &key timeout session owner)
   "Run external helper COMMAND synchronously and return terminal facts.
 
 NAME, READ-PATHS, WRITABLE-ROOTS, TIMEOUT, and SESSION follow
@@ -1565,7 +1702,12 @@ NAME, READ-PATHS, WRITABLE-ROOTS, TIMEOUT, and SESSION follow
      (lambda (child-result)
        (setq result child-result
              done t))
-     name command read-paths writable-roots timeout session)
+     name command read-paths writable-roots
+     :timeout timeout :session session :owner owner
+     :teardown-callback
+     (lambda ()
+       (setq result (mevedel-execution--owner-teardown-result)
+             done t)))
     (while (not done)
       (accept-process-output nil 0.05))
     result))

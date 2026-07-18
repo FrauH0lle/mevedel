@@ -22,8 +22,22 @@
 (defvar mevedel--compaction-in-flight)
 
 ;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-tool-render-data
+                  "mevedel-pipeline" (buffer tool-use-id))
 (declare-function mevedel-pipeline-update-tool-render-data
                   "mevedel-pipeline" (buffer tool-use-id updates))
+
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--write-current-buffer-atomically
+                  "mevedel-session-persistence" (path))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-transcript-audit" (record))
+(declare-function mevedel-transcript-audit-records
+                  "mevedel-transcript-audit" (text &optional type))
+(declare-function mevedel-transcript-audit-spans
+                  "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
@@ -146,6 +160,9 @@ tools are in flight in parallel.")
 
 (defvar-local mevedel-view-stream--pending-execution-terminals nil
   "Terminal Bash render data waiting for its transcript row.")
+
+(defvar-local mevedel-view-stream--archived-execution-rows nil
+  "Execution tool-use ids whose rows were explicitly removed by compaction.")
 
 (defconst mevedel-view-stream--pending-execution-terminal-limit 64
   "Maximum terminal Bash updates retained while rows are unavailable.")
@@ -917,6 +934,164 @@ POSITION may be an integer or marker."
            :execution-output
            (copy-sequence (or (plist-get event :whole-output) ""))))))
 
+(defun mevedel-view-stream--replace-archived-execution-record
+    (tool-use-id replacement)
+  "Replace current buffer's archived TOOL-USE-ID with REPLACEMENT."
+  (require 'mevedel-transcript-audit)
+  (when-let* ((span
+               (cl-find-if
+                (lambda (candidate)
+                  (equal
+                   (plist-get (plist-get candidate :record) :tool-use-id)
+                   tool-use-id))
+                (mevedel-transcript-audit-spans
+                 (buffer-substring-no-properties (point-min) (point-max))
+                 'execution-archive))))
+    (let ((begin (+ (point-min) (plist-get span :start)))
+          (end (+ (point-min) (plist-get span :end))))
+      (delete-region begin end)
+      (goto-char begin)
+      (insert (mevedel--format-hook-audit-record replacement))
+      t)))
+
+(defun mevedel-view-stream--execution-completion-record-p
+    (tool-use-id &optional expected)
+  "Return non-nil when the current buffer completed TOOL-USE-ID.
+When EXPECTED is non-nil, require the durable record to equal it."
+  (require 'mevedel-transcript-audit)
+  (cl-some
+   (lambda (record)
+     (and (equal (plist-get record :tool-use-id) tool-use-id)
+          (or (null expected) (equal record expected))))
+   (mevedel-transcript-audit-records
+    (buffer-substring-no-properties (point-min) (point-max))
+    'execution-completion)))
+
+(defun mevedel-view-stream--record-archived-execution-terminal
+    (data-buffer event render-data)
+  "Record terminal EVENT in DATA-BUFFER after its original row was archived.
+RENDER-DATA is retained in the hidden transcript audit record."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (save-restriction
+        (widen)
+        (let* ((inhibit-read-only t)
+               (modified-p (buffer-modified-p))
+               (tool-use-id (plist-get event :tool-use-id))
+               (path buffer-file-name)
+               (replacement
+                (list :type 'execution-completion
+                      :tool-use-id tool-use-id
+                      :owner (plist-get event :owner)
+                      :render-data render-data))
+               (marker-table mevedel-view-stream--archived-execution-rows))
+          (when path
+            (with-temp-buffer
+              (insert-file-contents path)
+              (unless
+                  (or (mevedel-view-stream--replace-archived-execution-record
+                      tool-use-id replacement)
+                      (mevedel-view-stream--execution-completion-record-p
+                       tool-use-id replacement))
+                (error "Persisted execution record missing: %s" tool-use-id))
+              (require 'mevedel-session-persistence)
+              (mevedel-session-persistence--write-current-buffer-atomically
+               path))
+            ;; The atomic rename changed the visited file.  Refresh the
+            ;; buffer's baseline before applying the same replacement in
+            ;; memory, otherwise Emacs may report a spurious file-supersession
+            ;; conflict.
+            (set-visited-file-modtime))
+          (save-excursion
+            (unless
+                (or (mevedel-view-stream--replace-archived-execution-record
+                     tool-use-id replacement)
+                    (mevedel-view-stream--execution-completion-record-p
+                     tool-use-id replacement))
+              (error "Archived execution record missing: %s" tool-use-id)))
+          (set-buffer-modified-p modified-p)
+          (when (hash-table-p marker-table)
+            (remhash tool-use-id marker-table)))))))
+
+(defun mevedel-view-stream--archived-execution-render-data
+    (data-buffer tool-use-id)
+  "Return archived render data for TOOL-USE-ID in DATA-BUFFER."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (save-restriction
+        (widen)
+        (require 'mevedel-transcript-audit)
+        (when-let* ((record
+                     (cl-find-if
+                      (lambda (candidate)
+                        (equal (plist-get candidate :tool-use-id)
+                               tool-use-id))
+                      (mevedel-transcript-audit-records
+                       (buffer-substring-no-properties
+                        (point-min) (point-max))
+                       'execution-archive))))
+          (copy-tree (plist-get record :render-data)))))))
+
+(defun mevedel-view-stream-prepare-execution-row-archive
+    (data-buffer tool-use-ids)
+  "Return a compaction plan for TOOL-USE-IDS removed from DATA-BUFFER."
+  (let (live completed)
+    (dolist (tool-use-id tool-use-ids)
+      (when-let* ((render-data
+                   (or (mevedel-pipeline-tool-render-data
+                        data-buffer tool-use-id)
+                       (mevedel-view-stream--archived-execution-render-data
+                        data-buffer tool-use-id)))
+                  ((or (plist-get render-data :execution-id)
+                       (plist-get render-data :live-execution-p))))
+        (if (plist-get render-data :live-execution-p)
+            (push (cons tool-use-id render-data) live)
+          (push (cons tool-use-id render-data) completed))))
+    (list :live (nreverse live) :completed (nreverse completed))))
+
+(defun mevedel-view-stream-execution-row-archive-text (plan)
+  "Return durable hidden transcript records for archive PLAN."
+  (require 'mevedel-transcript-audit)
+  (concat
+   (mapconcat
+    (lambda (entry)
+      (mevedel--format-hook-audit-record
+       (list :type 'execution-archive
+             :tool-use-id (car entry)
+             :render-data (cdr entry))))
+    (plist-get plan :live)
+    "")
+   (mapconcat
+    (lambda (entry)
+      (mevedel--format-hook-audit-record
+       (list :type 'execution-completion
+             :tool-use-id (car entry)
+             :render-data (cdr entry))))
+    (plist-get plan :completed)
+    "")))
+
+(defun mevedel-view-stream-commit-execution-row-archive
+    (data-buffer plan)
+  "Commit execution row archive PLAN after DATA-BUFFER compaction succeeds."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (when-let* ((live (plist-get plan :live)))
+        (unless (hash-table-p mevedel-view-stream--archived-execution-rows)
+          (setq-local mevedel-view-stream--archived-execution-rows
+                      (make-hash-table :test #'equal)))
+        (dolist (entry live)
+          (puthash (car entry) t
+                   mevedel-view-stream--archived-execution-rows))))))
+
+(defun mevedel-view-stream--archived-execution-row-p
+    (data-buffer tool-use-id)
+  "Return non-nil when DATA-BUFFER archived TOOL-USE-ID."
+  (when (buffer-live-p data-buffer)
+    (with-current-buffer data-buffer
+      (and (hash-table-p mevedel-view-stream--archived-execution-rows)
+           (gethash tool-use-id
+                    mevedel-view-stream--archived-execution-rows)))))
+
 (defun mevedel-view-stream--pending-execution-table (data-buffer)
   "Return DATA-BUFFER's pending terminal table, creating it if needed."
   (when (buffer-live-p data-buffer)
@@ -927,24 +1102,27 @@ POSITION may be an integer or marker."
       mevedel-view-stream--pending-execution-terminals)))
 
 (defun mevedel-view-stream--store-pending-execution-terminal
-    (data-buffer tool-use-id render-data)
-  "Retain RENDER-DATA until TOOL-USE-ID appears in DATA-BUFFER."
+    (data-buffer event render-data)
+  "Retain terminal EVENT and RENDER-DATA until its durable row is ready."
   (when-let* ((table
                (mevedel-view-stream--pending-execution-table data-buffer)))
-    (when (and (not (gethash tool-use-id table))
-               (>= (hash-table-count table)
-                   mevedel-view-stream--pending-execution-terminal-limit))
-      (let (evicted)
-        (maphash (lambda (key _value)
-                   (unless evicted (setq evicted key)))
-                 table)
-        (when evicted
-          (remhash evicted table)
-          (display-warning
-           'mevedel
-           (format "Discarding stale terminal update for tool %s" evicted)
-           :warning))))
-    (puthash tool-use-id render-data table)))
+    (let ((tool-use-id (plist-get event :tool-use-id)))
+      (when (and (not (gethash tool-use-id table))
+                 (>= (hash-table-count table)
+                     mevedel-view-stream--pending-execution-terminal-limit))
+        (let (evicted)
+          (maphash (lambda (key _value)
+                     (unless evicted (setq evicted key)))
+                   table)
+          (when evicted
+            (remhash evicted table)
+            (display-warning
+             'mevedel
+             (format "Discarding stale terminal update for tool %s" evicted)
+             :warning))))
+      (puthash tool-use-id
+               (list :event event :render-data render-data)
+               table))))
 
 (defun mevedel-view-stream--retry-pending-execution-terminals (data-buffer)
   "Persist pending terminal Bash updates whose rows exist in DATA-BUFFER."
@@ -954,10 +1132,26 @@ POSITION may be an integer or marker."
         (require 'mevedel-pipeline)
         (let (settled)
           (maphash
-           (lambda (tool-use-id render-data)
-             (when (mevedel-pipeline-update-tool-render-data
-                    data-buffer tool-use-id render-data)
-               (push tool-use-id settled)))
+           (lambda (tool-use-id pending)
+             (let ((event (plist-get pending :event))
+                   (render-data (plist-get pending :render-data)))
+               (cond
+                ((mevedel-pipeline-update-tool-render-data
+                  data-buffer tool-use-id render-data)
+                 (push tool-use-id settled))
+                ((mevedel-view-stream--archived-execution-row-p
+                  data-buffer tool-use-id)
+                 (condition-case err
+                     (progn
+                       (mevedel-view-stream--record-archived-execution-terminal
+                        data-buffer event render-data)
+                       (push tool-use-id settled))
+                   (error
+                    (display-warning
+                     'mevedel
+                     (format "Could not persist archived execution %s: %s"
+                             tool-use-id (error-message-string err))
+                     :warning)))))))
            mevedel-view-stream--pending-execution-terminals)
           (dolist (tool-use-id settled)
             (remhash tool-use-id
@@ -1022,14 +1216,29 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
       (require 'mevedel-pipeline)
       (let ((render-data
              (mevedel-view-stream--terminal-render-data event)))
-        (if (mevedel-pipeline-update-tool-render-data
-             data-buffer tool-use-id render-data)
-            (when-let* ((table
-                         (mevedel-view-stream--pending-execution-table
-                          data-buffer)))
-              (remhash tool-use-id table))
+        (cond
+         ((mevedel-pipeline-update-tool-render-data
+           data-buffer tool-use-id render-data)
+          (when-let* ((table
+                       (mevedel-view-stream--pending-execution-table
+                        data-buffer)))
+            (remhash tool-use-id table)))
+         ((mevedel-view-stream--archived-execution-row-p
+           data-buffer tool-use-id)
+          (condition-case err
+              (mevedel-view-stream--record-archived-execution-terminal
+               data-buffer event render-data)
+            (error
+             (mevedel-view-stream--store-pending-execution-terminal
+              data-buffer event render-data)
+             (display-warning
+              'mevedel
+              (format "Could not persist archived execution %s: %s"
+                      tool-use-id (error-message-string err))
+              :warning))))
+         (t
           (mevedel-view-stream--store-pending-execution-terminal
-           data-buffer tool-use-id render-data))))
+           data-buffer event render-data)))))
     (when view-buffer
       (with-current-buffer view-buffer
         (pcase type

@@ -892,6 +892,40 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (should (equal "main" (plist-get readback :session-name)))))
       (when (file-exists-p tmp) (delete-file tmp)))))
 
+(mevedel-deftest mevedel-session-persistence--write-current-buffer-atomically ()
+  ,test
+  (test)
+  :doc "publishes current buffer contents through a same-directory rename"
+  (let ((path (make-temp-file "mevedel-transcript-atomic-")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "replacement")
+          (mevedel-session-persistence--write-current-buffer-atomically path)
+          (should
+           (equal "replacement"
+                  (with-temp-buffer
+                    (insert-file-contents path)
+                    (buffer-string)))))
+      (when (file-exists-p path) (delete-file path))))
+  :doc "preserves the original when publication fails"
+  (let ((path (make-temp-file "mevedel-transcript-atomic-")))
+    (unwind-protect
+        (progn
+          (write-region "original" nil path nil 'silent)
+          (with-temp-buffer
+            (insert "replacement")
+            (cl-letf (((symbol-function 'rename-file)
+                       (lambda (&rest _) (error "Publication failed"))))
+              (should-error
+               (mevedel-session-persistence--write-current-buffer-atomically
+                path))))
+          (should
+           (equal "original"
+                  (with-temp-buffer
+                    (insert-file-contents path)
+                    (buffer-string)))))
+      (when (file-exists-p path) (delete-file path)))))
+
 ;;
 ;;; Phase 2: ID generation, paths, lazy materialization
 
@@ -1455,6 +1489,12 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
 (mevedel-deftest mevedel-session-persistence--kill-emacs-hook ()
   ,test
   (test)
+  :doc "force-tears down executions before exit persistence"
+  (let (torn-down)
+    (cl-letf (((symbol-function 'mevedel-execution-teardown-all)
+               (lambda () (setq torn-down t))))
+      (mevedel-session-persistence--kill-emacs-hook))
+    (should torn-down))
   :doc "modified view buffers are persisted through data buffers on exit"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -2970,7 +3010,7 @@ workspace tree."
 (mevedel-deftest mevedel-session-persistence-restore ()
   ,test
   (test)
-  :doc "round-trips a single-segment session into a new buffer"
+  :doc "restores stale rows as lost but supersedes rows with newer facts"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -2982,6 +3022,33 @@ workspace tree."
                 (with-current-buffer buf
                   (org-mode)
                   (insert "First user prompt\n")
+                  (insert
+                   (mevedel-pipeline--format-render-data-block
+                    '(:execution-id "exec-stale" :state running
+                      :status success :live-execution-p t)))
+                  (insert
+                   (mevedel-pipeline--format-render-data-block
+                    '(:execution-id "exec-tail" :state running
+                      :status success :live-execution-p t)))
+                  (mevedel-session-persistence-save session buf)
+                  (mevedel-session-persistence-rotate-segment
+                   session buf "Earlier conversation")
+                  (insert "Second user prompt\n")
+                  (insert
+                   (mevedel-pipeline--format-render-data-block
+                    '(:execution-id "exec-current" :state running
+                      :status success :live-execution-p t)))
+                  (insert
+                   (mevedel-pipeline--format-render-data-block
+                    '(:execution-id "exec-tail" :state completed
+                      :status success :live-execution-p nil)))
+                  (insert
+                   (mevedel--format-hook-audit-record
+                    '(:type execution-completion
+                      :tool-use-id "archived-call"
+                      :render-data (:execution-id "exec-stale"
+                                    :state completed
+                                    :live-execution-p nil))))
                   (mevedel-session-persistence-save session buf))
                 (setq session-dir (mevedel-session-save-path session))
                 ;; Release the lock + kill the buffer (the test buffer didn't
@@ -3000,17 +3067,27 @@ workspace tree."
                   (should mevedel--session)
                   (should (equal "main"
                                  (mevedel-session-name mevedel--session)))
-                  (should (= 1 (mevedel-session-current-segment
+                  (should (= 2 (mevedel-session-current-segment
                                 mevedel--session)))
-                  (should (string-match-p "First user prompt"
-                                          (buffer-string)))))
+                  (should-not (mevedel-session-execution-state
+                               mevedel--session))
+                  (should (string-match-p "Second user prompt"
+                                          (buffer-string)))
+                  (should (string-match-p ":state lost"
+                                          (buffer-string))))
+                (with-temp-buffer
+                  (insert-file-contents
+                   (mevedel-session-persistence--segment-path
+                    session-dir 1))
+                  (goto-char (point-min))
+                  (should (= 2 (how-many ":state archived"))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)
             (test-mevedel-session-persistence--release-and-kill
              restored
              (and restored (buffer-local-value 'mevedel--session restored)))))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry)))
+      (mevedel-workspace-clear-registry))))
   :doc "retargets and persists a missing working directory"
   (cl-destructuring-bind
       (_workspace tempdir _missing-dir replacement-dir session-dir)
@@ -3930,6 +4007,18 @@ workspace tree."
   (with-temp-buffer
     (let ((mevedel--session nil))
       (should-error (mevedel-rewind) :type 'user-error)))
+  :doc "refuses before the picker while executions remain live"
+  (let ((buffer (generate-new-buffer " *execution-rewind*"))
+        (session (mevedel-session--create :name "rewind")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (cl-letf (((symbol-function 'mevedel-execution-session-live-p)
+                     (lambda (_session) t)))
+            (let ((err (should-error (mevedel-rewind) :type 'user-error)))
+              (should (string-match-p
+                       "/ps or /stop" (error-message-string err))))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))))
   :doc "errors when request in flight"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -4585,16 +4674,40 @@ The result is a plist whose :tempdir owns every created file."
         (let* ((session (plist-get fixture :session))
                (buf (plist-get fixture :buffer))
                (parent-path (plist-get fixture :parent-path))
+               (stale-block
+                (mevedel-pipeline--format-render-data-block
+                 '(:execution-id "exec-stale" :state running
+                   :live-execution-p t)))
+               (parent-segment-1
+                (mevedel-session-persistence--segment-path parent-path 1))
+               (_archived-stale
+                (with-temp-buffer
+                  (insert-file-contents parent-segment-1)
+                  (goto-char (point-max))
+                  (insert stale-block)
+                  (write-region (point-min) (point-max)
+                                parent-segment-1 nil 'silent)))
+               (parent-segment-1-text
+                (mevedel-session-persistence--file-text parent-segment-1))
+               (_current-stale
+                (with-current-buffer buf
+                  (goto-char (point-max))
+                  (insert stale-block)))
+               (_state (mevedel-execution--state-for-session session))
                (new-path (mevedel-session-persistence-fork-now buf))
                (sidecar
                 (mevedel-session-persistence-read
                  (mevedel-session-persistence--sidecar-path new-path))))
-          (should (equal (plist-get fixture :parent-segment-1-text)
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--segment-path
-                           new-path 1))))
+          (should (string-match-p
+                   ":state archived"
+                   (mevedel-session-persistence--file-text
+                    (mevedel-session-persistence--segment-path new-path 1))))
           (should (string-match-p
                    "Segment two prompt"
+                   (mevedel-session-persistence--file-text
+                    (mevedel-session-persistence--segment-path new-path 2))))
+          (should (string-match-p
+                   ":state lost"
                    (mevedel-session-persistence--file-text
                     (mevedel-session-persistence--segment-path new-path 2))))
           (should (equal "kept backup\n"
@@ -4638,11 +4751,12 @@ The result is a plist whose :tempdir owns every created file."
             (should-not mevedel-session--fork-pending)
             (should-not mevedel-session--rewind-context)
             (should (string-prefix-p new-path buffer-file-name)))
+          (should-not (mevedel-session-execution-state session))
           (should (equal (plist-get fixture :parent-sidecar-text)
                          (mevedel-session-persistence--file-text
                           (mevedel-session-persistence--sidecar-path
                            parent-path))))
-          (should (equal (plist-get fixture :parent-segment-1-text)
+          (should (equal parent-segment-1-text
                          (mevedel-session-persistence--file-text
                           (mevedel-session-persistence--segment-path
                            parent-path 1))))
@@ -4832,7 +4946,25 @@ The result is a plist whose :tempdir owns every created file."
                 (setq-local mevedel--session session)
                 (insert "Hi\n")
                 (mevedel-session-persistence-save session buf)
-                (let ((old-save-path (mevedel-session-save-path session)))
+                (let* ((old-save-path (mevedel-session-save-path session))
+                       (artifact-directory
+                        (file-name-concat old-save-path "tool-results"))
+                       (mevedel-sandbox-mode 'off)
+                       initial terminal execution-id)
+                  (mevedel-execution-start-bash
+                   (lambda (value) (setq initial value))
+                   :session session :data-buffer buf :owner "agent-a"
+                   :owner-context session
+                   :command
+                   '("sh" "-c" "printf before; sleep 1; printf after")
+                   :workdir tempdir :writable-roots (list tempdir)
+                   :artifact-directory artifact-directory
+                   :yield-time-ms 10)
+                  (with-timeout (2 (error "Execution did not yield"))
+                    (while (null initial)
+                      (accept-process-output nil 0.02)))
+                  (setq execution-id
+                        (plist-get (plist-get initial :facts) :execution-id))
                   (mevedel-rename-session "alt-permissions")
                   (should (equal "alt-permissions"
                                  (mevedel-session-name session)))
@@ -4849,7 +4981,27 @@ The result is a plist whose :tempdir owns every created file."
                   ;; Buffer renamed per convention.
                   (should (string-match-p
                            "\\`\\*mevedel:alt-permissions@"
-                           (buffer-name buf)))))
+                           (buffer-name buf)))
+                  (mevedel-execution-observe
+                   session "agent-a" execution-id
+                   (lambda (value) (setq terminal value))
+                   :wait-ms 5000)
+                  (with-timeout (6 (error "Renamed execution did not finish"))
+                    (while (null terminal)
+                      (accept-process-output nil 0.02)))
+                  (should (= 0
+                             (plist-get (plist-get terminal :facts)
+                                        :exit-code)))
+                  (let ((artifact
+                         (plist-get (plist-get terminal :facts) :output-path)))
+                    (should (string-prefix-p
+                             (mevedel-session-save-path session) artifact))
+                    (should (file-exists-p artifact))
+                    (should
+                     (equal "beforeafter"
+                            (with-temp-buffer
+                              (insert-file-contents artifact)
+                              (buffer-string)))))))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)

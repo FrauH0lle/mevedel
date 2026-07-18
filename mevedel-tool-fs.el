@@ -34,12 +34,10 @@
 ;; `mevedel-execution'
 (declare-function mevedel-execution-run-helper
                   "mevedel-execution"
-                  (name command read-paths writable-roots
-                        &optional timeout session))
+                  (name command read-paths writable-roots &rest keys))
 (declare-function mevedel-execution-start-helper
                   "mevedel-execution"
-                  (callback name command read-paths writable-roots
-                            &optional timeout session))
+                  (callback name command read-paths writable-roots &rest keys))
 
 ;; `mevedel-file-state'
 (declare-function mevedel-session-read-is-duplicate-p
@@ -55,6 +53,7 @@
 (declare-function mevedel-preview-mode-add-preview "mevedel-preview-mode" t t)
 
 ;; `mevedel-structs'
+(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -667,8 +666,9 @@ invalid forms or ranges over the per-request page limit."
 READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary."
   (require 'mevedel-execution)
   (let* ((result (mevedel-execution-run-helper
-                  name command read-paths writable-roots nil
-                  (or session (bound-and-true-p mevedel--session))))
+                  name command read-paths writable-roots
+                  :session (or session (bound-and-true-p mevedel--session))
+                  :owner (mevedel-current-origin)))
          (error-data (plist-get result :error)))
     (when error-data
       (signal (car error-data) (cdr error-data)))
@@ -1378,7 +1378,8 @@ and optional :path."
              (funcall callback
                       (mevedel-tool-fs--handler-result
                        (mevedel-tool-fs--finalize-glob-buffer))))))
-       "mevedel-glob" (cons "rg" rg-args) (list path) nil nil session))))
+       "mevedel-glob" (cons "rg" rg-args) (list path) nil
+       :session session :owner (mevedel-current-origin)))))
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
@@ -1495,7 +1496,8 @@ Narrow your search with :glob, :type, or a more specific :pattern."
               (mevedel-tool-fs--handler-result
                (replace-regexp-in-string "\r\n?" "\n"
                                          (buffer-string)))))))
-       "mevedel-grep" (cons "rg" rg-args) (list path) nil nil session))))
+       "mevedel-grep" (cons "rg" rg-args) (list path) nil
+       :session session :owner (mevedel-current-origin)))))
 
 
 ;;
