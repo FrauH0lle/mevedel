@@ -312,6 +312,18 @@
             (setq mevedel-cockpit-test--items '("b" "c"))
             (mevedel-cockpit-surface-refresh)
             (should (equal "b" (tabulated-list-get-id)))))
+      (mevedel-cockpit-test--cleanup view-buffer data-buffer)))
+  :doc "preserves the cursor column across live refresh"
+  (let ((view-buffer (generate-new-buffer " *cockpit-refresh-point-view*"))
+        (data-buffer (generate-new-buffer " *cockpit-refresh-point-data*")))
+    (unwind-protect
+        (let ((buffer (mevedel-cockpit-test--open view-buffer data-buffer)))
+          (with-current-buffer buffer
+            (mevedel-cockpit-goto-id "b")
+            (end-of-line)
+            (let ((column (current-column)))
+              (mevedel-cockpit-surface-refresh)
+              (should (= column (current-column))))))
       (mevedel-cockpit-test--cleanup view-buffer data-buffer))))
 
 (mevedel-deftest mevedel-cockpit-surface-selected ()
