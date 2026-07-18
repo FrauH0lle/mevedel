@@ -20,9 +20,10 @@ depended on it, so downstream tasks become unblocked.
 - `subject` — optional new subject line
 - `description` — optional new description (empty string clears it)
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
-- `owner` — optional new real owner id/bucket; empty string unassigns.
-  Prefer subjects/descriptions for workstream names, and avoid invented proxy
-  owners unless the label is a deliberate durable bucket.
+- `owner` — optional retained agent path such as `/root/worker_2`, or a
+  deliberate user-defined bucket; empty string assigns the task to Main.
+  Prefer subjects/descriptions for workstream names and avoid invented proxy
+  owners for background agents.
 - `blocks` — optional full replacement of the blocks list
 - `blockedBy` — optional full replacement of the blocked-by list
 - `metadata` — optional replacement of the metadata object
@@ -48,5 +49,5 @@ TaskUpdate(id=2, status="completed")
 </example>
 
 <example>
-TaskUpdate(id=3, owner="worker-2", blockedBy=[1, 2])
+TaskUpdate(id=3, owner="/root/worker_2", blockedBy=[1, 2])
 </example>

@@ -23,6 +23,9 @@
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-structs'
+(declare-function mevedel-current-origin "mevedel-structs" ())
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get "mevedel-tool-registry"
@@ -85,8 +88,6 @@
   "Non-nil while validating undecoded model-produced argument presence.")
 
 (autoload 'mevedel-tool-repair--current-session
-  "mevedel-tool-repair-diagnostics")
-(autoload 'mevedel-tool-repair--current-origin
   "mevedel-tool-repair-diagnostics")
 (autoload 'mevedel-tool-repair-record-result
   "mevedel-tool-repair-diagnostics")
@@ -734,7 +735,7 @@ Invalid outcomes intentionally omit tentative args and repair records."
         :backend (plist-get info :backend)
         :model (plist-get info :model)
         :session (mevedel-tool-repair--current-session)
-        :origin (mevedel-tool-repair--current-origin)
+        :origin (mevedel-current-origin)
         :repair-enabled (and mevedel-tool-input-repair-enabled t)
         :execution 'not-executed
         :failure-class failure-class

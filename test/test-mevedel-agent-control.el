@@ -170,17 +170,6 @@
           (set-buffer-modified-p nil))
         (kill-buffer buffer)))))
 
-(mevedel-deftest mevedel-agent-control--canonical-path-p ()
-  ,test
-  (test)
-  :doc "accepts root and lowercase ASCII descendant segments only"
-  (dolist (path '("/root" "/root/alpha" "/root/alpha/child_2"))
-    (should (mevedel-agent-control--canonical-path-p path)))
-  (dolist (path '(nil "" "root" "/root/" "/root/Upper"
-                  "/root/../peer" "/root/alpha//child"
-                  "default--opaque"))
-    (should-not (mevedel-agent-control--canonical-path-p path))))
-
 (mevedel-deftest mevedel-agent-control-current-path ()
   ,test
   (test)
@@ -194,6 +183,7 @@
                   :activity 'running))
          (buffer (generate-new-buffer " *agent-control-current*")))
     (setf (mevedel-agent-invocation-agent-id invocation) "default--opaque")
+    (setf (mevedel-agent-invocation-path invocation) "/root/worker")
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/worker" record)))
     (unwind-protect
@@ -209,6 +199,7 @@
                       (mevedel-agent-default))
           buffer (generate-new-buffer " *agent-control-unregistered*"))
     (setf (mevedel-agent-invocation-agent-id invocation) "default--missing")
+    (setf (mevedel-agent-invocation-path invocation) "/root/missing")
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--agent-invocation invocation)
@@ -323,7 +314,8 @@
   (test)
   :doc "maps root and retained invocation contexts to canonical paths"
   (let* ((session (mevedel-agent-control-test--session))
-         (invocation (mevedel-agent-invocation--create :agent-id "alpha-id")))
+         (invocation (mevedel-agent-invocation--create
+                      :agent-id "alpha-id" :path "/root/alpha")))
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (setf (mevedel-session-agent-registry session)
           (list
@@ -332,7 +324,9 @@
                   :id "alpha-id" :path "/root/alpha"))))
     (should (equal "/root" (mevedel-agent-control-context-path session)))
     (should (equal "/root/alpha"
-                   (mevedel-agent-control-context-path invocation)))))
+                   (mevedel-agent-control-context-path invocation)))
+    (setf (mevedel-session-agent-registry session) nil)
+    (should-error (mevedel-agent-control-context-path invocation))))
 
 (mevedel-deftest mevedel-agent-control-direct-children ()
   ,test
@@ -527,7 +521,8 @@
                   (let ((next
                          (mevedel-agent-invocation--create
                           :agent-id "parent-id" :parent-session session
-                          :buffer buffer)))
+                          :buffer buffer
+                          :path (plist-get keys :path))))
                     (funcall (plist-get keys :on-invocation) next)
                     t))))
             (mevedel-agent-control-followup
@@ -618,11 +613,12 @@
   ,test
   (test)
   :doc "records the stable opaque identity and persisted conversation location"
-  (let ((record (mevedel-agent-record--create))
+  (let ((record (mevedel-agent-record--create :path "/root/worker"))
         (invocation (mevedel-agent-invocation-create
                      (mevedel-agent-default)))
         (buffer (generate-new-buffer " *agent-control-record*")))
     (setf (mevedel-agent-invocation-agent-id invocation) "default--opaque")
+    (setf (mevedel-agent-invocation-path invocation) "/root/worker")
     (setf (mevedel-agent-invocation-buffer invocation) buffer)
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/default.chat.org")
@@ -680,6 +676,8 @@
          sender)
     (setf (mevedel-agent-invocation-agent-id peer-invocation)
           "default--peer")
+    (setf (mevedel-agent-invocation-path peer-invocation) "/root/peer")
+    (setf (mevedel-agent-invocation-path target-invocation) "/root/target")
     (setf (mevedel-agent-invocation-transcript-status target-invocation)
           'completed)
     (setf (mevedel-session-agent-registry session)
@@ -856,7 +854,8 @@
          (peer (mevedel-agent-record--create
                 :id "peer-id" :path "/root/peer" :activity 'idle))
          (mevedel--agent-invocation
-          (mevedel-agent-invocation--create :agent-id "sender-id")))
+          (mevedel-agent-invocation--create
+           :agent-id "sender-id" :path "/root/sender")))
     (setf (mevedel-session-agent-registry session)
           (list (cons "/root/sender" sender)
                 (cons "/root/peer" peer)))
@@ -945,7 +944,7 @@
        session (lambda (seen) (setq reason seen)) 10000)
       (should
        (mevedel-agent-runtime-queue-execution-completion
-        session "main" "root execution complete"))
+        session "/root" "root execution complete"))
       (should (eq 'mailbox reason))))
 
   :doc "yielded Bash completion wakes a retained non-root wait"
@@ -954,6 +953,7 @@
          (agent-id "worker-execution")
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/worker"
            :agent-id agent-id
            :parent-session session
            :parent-data-buffer parent-buffer))
@@ -976,7 +976,7 @@
                      (lambda (&rest _) 'fake-timer)))
             (should
              (mevedel-agent-runtime-queue-execution-completion
-              invocation agent-id "already complete"))
+              invocation "/root/worker" "already complete"))
             (let ((mevedel--agent-invocation invocation))
               (mevedel-agent-control-wait
                session (lambda (seen) (setq reason seen)) 10000))
@@ -988,7 +988,7 @@
                session (lambda (seen) (setq reason seen)) 10000))
             (should
              (mevedel-agent-runtime-queue-execution-completion
-              invocation agent-id "agent execution complete"))
+              invocation "/root/worker" "agent execution complete"))
             (should (eq 'mailbox reason))))
       (kill-buffer parent-buffer)))
 
@@ -996,7 +996,8 @@
   (let* ((session (mevedel-agent-control-test--session))
          (invocation
           (mevedel-agent-invocation--create
-           :agent-id "worker-id" :parent-session session))
+           :agent-id "worker-id" :path "/root/worker"
+           :parent-session session))
          (record
           (mevedel-agent-record--create
            :id "worker-id" :path "/root/worker" :activity 'running
@@ -1018,7 +1019,8 @@
   (let* ((session (mevedel-agent-control-test--session))
          (invocation
           (mevedel-agent-invocation--create
-           :agent-id "steered-id" :parent-session session))
+           :agent-id "steered-id" :path "/root/steered"
+           :parent-session session))
          (record
           (mevedel-agent-record--create
            :id "steered-id" :path "/root/steered" :activity 'running

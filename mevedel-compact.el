@@ -57,13 +57,13 @@
                   "mevedel-agent-exec" (invocation item &optional reserved))
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-require-path
+                  "mevedel-agents" (invocation))
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
 
@@ -1228,7 +1228,7 @@ PRESERVED-TAIL-TURNS is the actual count returned by
                 :session session
                 :workspace (mevedel-session-workspace session)
                 :transcript-path canonical-path
-                :origin (mevedel-agent-invocation-agent-id invocation)
+                :origin (mevedel-agent-invocation-require-path invocation)
                 :anchor-text (buffer-substring (point-min) anchor-end)
                 :body-start (or (plist-get summary-bounds :end) anchor-end)
                 :previous-summary previous-summary
@@ -1374,7 +1374,7 @@ AUTO is non-nil for automatic compaction."
           :workspace (and session (mevedel-session-workspace session))
           :invocation nil
           :transcript-path (and session (mevedel-session-save-path session))
-          :origin "main"
+          :origin "/root"
           :body-start (mevedel--compact-body-start)
           :previous-summary (mevedel--compact-previous-summary)
           :prompt-session session

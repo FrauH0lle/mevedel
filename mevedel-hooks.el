@@ -23,7 +23,7 @@
 (declare-function mevedel-agent-invocation-hook-rules
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-agent-id
+(declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-plugin-hooks "mevedel-plugins" (cl-x) t)
@@ -1044,7 +1044,7 @@ When ATTRIBUTE is non-nil, also escape double quotes."
                       :turn-id (and session
                                     (1+ (or (mevedel-session-turn-count session)
                                             0)))
-                      :origin "main")))
+                      :origin "/root")))
     (while extra
       (setq plist (plist-put plist (pop extra) (pop extra))))
     plist))
@@ -1062,9 +1062,9 @@ When ATTRIBUTE is non-nil, also escape double quotes."
                             (and invocation
                                  (fboundp 'mevedel-agent-invocation-p)
                                  (mevedel-agent-invocation-p invocation)
-                                 (mevedel-agent-invocation-agent-id
+                                 (mevedel-agent-invocation-path
                                   invocation))
-                            "main"))))
+                            "/root"))))
     (append
      base
      (list :tool-name (and tool (mevedel-tool-name tool))

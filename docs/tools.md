@@ -105,8 +105,8 @@ fails validation, its repair audit is marked abandoned and the handler is not
 called. Both audit states contain only rule IDs, schema paths, and before/after
 shape names.
 
-Every raw model call records a redacted event on its top-level session with
-the actual backend, model, tool, stable origin (`main` or agent ID), outcome
+Every raw model call records a redacted event on its root session with
+the actual backend, model, tool, canonical origin (`/root` or an agent path), outcome
 (`valid`, `repaired`, `invalid`, or `abandoned`), rule IDs, schema paths,
 execution state, and result classification. Argument values, paths, commands,
 prompts, schemas, validation messages, and results are excluded. The in-memory
@@ -149,7 +149,10 @@ All direct user interactions share the settlement and cancellation primitive in
 `mevedel-interaction-prompt.el`. Domain owners supply their own text, keymaps,
 outcome translation, and persistence effects; the shared primitive owns only
 overlay identity, exactly-once settlement, request-local cancellation, and the
-standard frame.
+standard frame. Ask and other child-originated interactions are attributed by
+canonical path and rendered only in the root session's interactive view; child
+transcript views remain inspection-only. Interrupting one agent request invokes
+that request's canceller and leaves sibling interactions queued.
 
 ## Native Tools Surface
 
@@ -431,7 +434,8 @@ authoritative data buffer.
 Users have a separate session-wide control surface. `/ps`, the view's live
 execution status row, and the session cockpit's `Processes` row open a
 tabulated list containing foreground and yielded work from every model owner.
-It shows the opaque execution ID, canonical owner, command, PTY mode, elapsed
+It shows the opaque execution ID, canonical owner (`/root` or a retained agent
+path), command, PTY mode, elapsed
 time, output bytes, and sandbox state. Details include the bounded live tail
 and current spool path. The user may send a PTY line, signal Ctrl-C, stop the
 process group, or open the spool. `/stop EXECUTION_ID` stops directly; bare

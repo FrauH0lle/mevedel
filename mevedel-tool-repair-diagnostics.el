@@ -14,7 +14,6 @@
 (declare-function gptel-backend-p "ext:gptel-request" (cl-x))
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
@@ -118,14 +117,6 @@
            (mevedel-agent-invocation-p mevedel--agent-invocation)
            (mevedel-agent-invocation-parent-session
             mevedel--agent-invocation))))
-
-(defun mevedel-tool-repair--current-origin ()
-  "Return the stable telemetry origin associated with the current buffer."
-  (or (and (boundp 'mevedel--agent-invocation)
-           (fboundp 'mevedel-agent-invocation-p)
-           (mevedel-agent-invocation-p mevedel--agent-invocation)
-           (mevedel-agent-invocation-agent-id mevedel--agent-invocation))
-      "main"))
 
 (defun mevedel-tool-repair--safe-dimension (value)
   "Return a bounded telemetry dimension for VALUE."

@@ -521,7 +521,7 @@ Eval approval is followed by the additive network prompt"
     (should (equal '(sandbox eval) kinds))
     (should (eq 'allow outcome)))
   :doc "Bash filesystem prompts retain one scoped request owner"
-  (let* ((origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  (let* ((origin "/root/worker")
          (request (mevedel-request--create :origin origin))
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
@@ -548,7 +548,7 @@ Eval approval is followed by the additive network prompt"
   :doc "filesystem callback logging retains its scoped session and owner"
   (let* ((dir (file-name-as-directory
                (make-temp-file "mevedel-scoped-permission-log-" t)))
-         (origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+         (origin "/root/worker")
          (session (mevedel-session--create
                    :name "main" :save-path dir :permission-mode 'ask))
          (request (mevedel-request--create
@@ -587,7 +587,7 @@ Eval approval is followed by the additive network prompt"
             (should (eq 'sandbox-filesystem (plist-get entry :via)))))
       (delete-directory dir t)))
   :doc "Eval and network prompts retain one scoped request owner"
-  (let* ((origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  (let* ((origin "/root/worker")
          (request (mevedel-request--create :origin origin))
          (mevedel-permission-mode 'ask)
          (mevedel-permission-rules nil)
@@ -1673,7 +1673,7 @@ default Bash keeps bare dot inspection automatic"
   :doc "request cancellation prevents a late full-auto guardian continuation"
   (let* ((request
           (mevedel-request--create
-           :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+           :origin "/root"))
          (mevedel-permission-mode 'full-auto)
          (mevedel-permission-rules nil)
          (mevedel-bash-dangerous-commands '("rm"))
@@ -2137,7 +2137,7 @@ default Bash keeps bare dot inspection automatic"
          (lambda (value) (setq result value))
          '(:execution_id "exec-1" :yield_time_ms 5000))))
     (should (eq session (nth 0 captured)))
-    (should (equal "main" (nth 1 captured)))
+    (should (equal "/root" (nth 1 captured)))
     (should (equal "exec-1" (nth 2 captured)))
     (should (string-prefix-p "delta" (plist-get result :result)))))
 
@@ -2159,7 +2159,7 @@ default Bash keeps bare dot inspection automatic"
         (let ((envelope (mevedel-tool-exec--list-executions nil)))
           (should (string-match-p "execution_id=\"exec-1\""
                                   (plist-get envelope :result))))))
-    (should (equal (list session "main") captured))))
+    (should (equal (list session "/root") captured))))
 
 (mevedel-deftest mevedel-tool-exec--stop-execution ()
   ,test
@@ -2184,7 +2184,7 @@ default Bash keeps bare dot inspection automatic"
         (mevedel-tool-exec--stop-execution
          (lambda (value) (setq result value))
          '(:execution_id "exec-1"))))
-    (should (equal (list session "main" "exec-1")
+    (should (equal (list session "/root" "exec-1")
                    (butlast captured)))
     (should (eq 'success (plist-get result :status)))))
 
@@ -2203,7 +2203,7 @@ default Bash keeps bare dot inspection automatic"
       (should
        (mevedel-tool-exec-handle-execution-event
         (list :type 'terminal :delivery 'mailbox
-              :session session :owner "main"
+              :session session :owner "/root"
               :tool-args '(:command "printf done")
               :observation
               '(:output "done"
@@ -2212,7 +2212,7 @@ default Bash keeps bare dot inspection automatic"
                         :wall-time-seconds 0.1 :output-bytes 4
                         :output-lines 1 :omitted-output-bytes 0 :tty nil)))
         session)))
-    (should (equal (list session "main") (butlast captured)))
+    (should (equal (list session "/root") (butlast captured)))
     (should (string-match-p "done" (car (last captured))))
     (should (string-match-p "execution_id=\\\"exec-1\\\""
                             (car (last captured)))))
@@ -3172,7 +3172,8 @@ default Bash keeps bare dot inspection automatic"
          (session (mevedel-session-create "main" workspace root))
          (mevedel--session session)
          (mevedel--current-request
-          (mevedel-request--create :origin "agent-eval" :session session))
+          (mevedel-request--create
+           :origin "/root/agent_eval" :session session))
          (mevedel-sandbox-mode 'off)
          callback-result record)
     (unwind-protect
@@ -3189,10 +3190,11 @@ default Bash keeps bare dot inspection automatic"
                           (mevedel-session-execution-state session))))
                   (null record))
               (accept-process-output nil 0.02)))
-          (should (equal "agent-eval"
+          (should (equal "/root/agent_eval"
                          (mevedel-execution--origin-owner
                           (mevedel-execution--record-origin record))))
-          (should (= 1 (mevedel-execution-stop-owner session "agent-eval")))
+          (should (= 1 (mevedel-execution-stop-owner
+                        session "/root/agent_eval")))
           (should-not callback-result)
           (should-not
            (directory-files root nil directory-files-no-dot-files-regexp)))

@@ -19,7 +19,12 @@
 (declare-function mevedel--prompt--register-canceller
                   "mevedel-interaction-prompt"
                   (&optional source-buffer overlay))
+(declare-function mevedel--prompt-attribution-line
+                  "mevedel-interaction-prompt" (origin))
 (defvar mevedel--prompt-overlays)
+
+;; `mevedel-structs'
+(declare-function mevedel-current-origin "mevedel-structs" ())
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -154,6 +159,7 @@ QUESTIONS is an array of question plists, each with :question and :options keys.
           (require 'mevedel-interaction-prompt)
 
           (let* ((source-buffer (current-buffer))
+                 (origin (mevedel-current-origin))
                  (questions-list (append questions nil)) ; Convert vector to list
                  (answers (make-vector (length questions-list) nil))
                  (chat-buffer
@@ -287,8 +293,12 @@ When CONFIRM is non-nil, bind submit/edit commands for the review screen."
                    (mevedel-view--interaction-register
                     (list :kind 'ask
                           :id interaction-id
+                          :origin origin
                           :count 0
-                          :body body
+                          :body
+                          (concat
+                           (mevedel--prompt-attribution-line origin)
+                           body)
                           :priority 150
                           :keymap keymap
                           :help-echo "Ask prompt")))

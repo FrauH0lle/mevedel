@@ -19,6 +19,21 @@
 
 
 ;;
+;;; Agent tree identity
+
+(mevedel-deftest mevedel-agent-path-p ()
+  ,test
+  (test)
+  :doc "accepts root and lowercase ASCII descendant segments only"
+  (dolist (path '("/root" "/root/alpha" "/root/alpha/child_2"))
+    (should (mevedel-agent-path-p path)))
+  (dolist (path '(nil "" "root" "/root/" "/root/Upper"
+                  "/root/../peer" "/root/alpha//child"
+                  "default--opaque"))
+    (should-not (mevedel-agent-path-p path))))
+
+
+;;
 ;;; Workspace struct
 
 (mevedel-deftest mevedel-workspace--create
@@ -239,19 +254,19 @@
 (mevedel-deftest mevedel-current-origin ()
   ,test
   (test)
-  :doc "prefers request ownership, then agent ownership, then main"
+  :doc "prefers request ownership, then agent path, then root"
   (let ((mevedel--current-request
-         (mevedel-request--create :origin "request-owner"))
+         (mevedel-request--create :origin "/root/request"))
         (mevedel--agent-invocation
-         (mevedel-agent-invocation--create :agent-id "agent-owner")))
-    (should (equal "request-owner" (mevedel-current-origin))))
+         (mevedel-agent-invocation--create :agent-id "agent-owner" :path "/root/agent_owner")))
+    (should (equal "/root/request" (mevedel-current-origin))))
   (let ((mevedel--current-request nil)
         (mevedel--agent-invocation
-         (mevedel-agent-invocation--create :agent-id "agent-owner")))
-    (should (equal "agent-owner" (mevedel-current-origin))))
+         (mevedel-agent-invocation--create :agent-id "agent-owner" :path "/root/agent_owner")))
+    (should (equal "/root/agent_owner" (mevedel-current-origin))))
   (let ((mevedel--current-request nil)
         (mevedel--agent-invocation nil))
-    (should (equal "main" (mevedel-current-origin)))))
+    (should (equal "/root" (mevedel-current-origin)))))
 
 (mevedel-deftest mevedel-request-active-p ()
   ,test
@@ -308,9 +323,10 @@
            (agent (mevedel-agent--create :name "verifier"))
            (inv (mevedel-agent-invocation-create agent)))
       (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+      (setf (mevedel-agent-invocation-path inv) "/root/verifier")
       (setq-local mevedel--agent-invocation inv)
       (let ((req (mevedel-request-begin session)))
-        (should (equal "verifier--abc"
+        (should (equal "/root/verifier"
                        (mevedel-request-origin req)))
         (should (eq 'idle
                     (mevedel-session-agent-root-activity session))))))
@@ -335,7 +351,7 @@
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
-                        :origin "main"
+                        :origin "/root"
                         :session session
                         :callback
                         (lambda (outcome)
@@ -432,7 +448,7 @@
          (request
           (mevedel-request--create
            :session session
-           :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+           :origin "/root/worker"))
          swept)
     (cl-letf (((symbol-function 'mevedel-permission-queue-sweep-origin)
                (lambda (origin actual-session &optional _no-render)
@@ -440,7 +456,7 @@
       (mevedel-request-cancel request))
     (should
      (equal
-      "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "/root/worker"
       (car swept)))
     (should (eq session (cadr swept))))
   :doc "drains registered cancellers without changing the ambient request"
@@ -507,7 +523,7 @@
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "main"
+                        :origin "/root"
                         :callback
                         (lambda (outcome)
                           (push (cons 'main-permission outcome)
@@ -515,7 +531,7 @@
                   (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "verifier--abc"
+                        :origin "/root/verifier"
                         :callback
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
@@ -531,7 +547,7 @@
                  #'ignore))
         (mevedel-request-end))
       (should (= 1 (length (mevedel-session-permission-queue session))))
-      (should (equal "verifier--abc"
+      (should (equal "/root/verifier"
                      (plist-get (car (mevedel-session-permission-queue session))
                                 :origin)))
       (should (mevedel-session-plan-queue session))
@@ -553,7 +569,7 @@
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "main"
+                        :origin "/root"
                         :callback
                         (lambda (outcome)
                           (push (cons 'main-permission outcome)
@@ -561,7 +577,7 @@
                   (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "verifier--abc"
+                        :origin "/root/verifier"
                         :callback
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
@@ -570,7 +586,7 @@
                  (lambda (entry)
                    (push (plist-get entry :origin) rendered))))
         (mevedel-request-end))
-      (should (equal '("verifier--abc") rendered))
+      (should (equal '("/root/verifier") rendered))
       (should (equal '((main-permission . aborted))
                      outcomes))))
 
@@ -583,13 +599,14 @@
            (inv (mevedel-agent-invocation-create agent))
            (outcomes nil))
       (setf (mevedel-agent-invocation-agent-id inv) "verifier--abc")
+      (setf (mevedel-agent-invocation-path inv) "/root/verifier")
       (setq-local mevedel--agent-invocation inv)
       (mevedel-request-begin session)
       (setf (mevedel-session-permission-queue session)
             (list (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "main"
+                        :origin "/root"
                         :callback
                         (lambda (outcome)
                           (push (cons 'main-permission outcome)
@@ -597,14 +614,14 @@
                   (list :kind 'generic
                         :tool-name "Read"
                         :session session
-                        :origin "verifier--abc"
+                        :origin "/root/verifier"
                         :callback
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
                                 outcomes)))))
       (mevedel-request-end)
       (should (= 1 (length (mevedel-session-permission-queue session))))
-      (should (equal "main"
+      (should (equal "/root"
                      (plist-get (car (mevedel-session-permission-queue session))
                                 :origin)))
       (should (equal '((agent-permission . aborted))

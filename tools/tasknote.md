@@ -10,8 +10,8 @@ overlay visible.
 
 - `note` — **required** short status note. Pass an empty string only
   when intentionally clearing the note.
-- `owner` — optional owner. Omit for the current caller, or pass an
-  empty string for Main.
+- `owner` — optional retained agent path or deliberate user-defined bucket.
+  Omit it for the current caller, or pass an empty string for Main.
 
 ### Examples
 
@@ -20,7 +20,7 @@ TaskNote(note="Finishing focused regressions")
 </example>
 
 <example>
-TaskNote(owner="worker-2", note="Waiting on #1 before continuing")
+TaskNote(owner="/root/worker_2", note="Waiting on #1 before continuing")
 </example>
 
 <example>

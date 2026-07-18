@@ -859,7 +859,7 @@
                (make-temp-file "mevedel-repair-log-" t)))
          (session (mevedel-session--create :name "main"))
          (mevedel-tool-repair-log-limit 2)
-         (event '(:time "now" :origin "main" :backend backend
+         (event '(:time "now" :origin "/root" :backend backend
                         :model model :tool "Read" :outcome valid
                         :repair-enabled t :rules nil :paths nil
                         :issue-kinds nil :execution executed :result success)))
@@ -893,7 +893,7 @@
           (should
            (mevedel-tool-repair-log-event
             session
-            '(:time "now" :origin "main" :backend backend
+            '(:time "now" :origin "/root" :backend backend
                     :model model :tool "Read" :outcome valid
                     :repair-enabled t :rules nil :paths nil
                     :issue-kinds nil :execution executed :result success)))
@@ -908,7 +908,7 @@
          (second (gptel-make-openai
                   "OpenRouter" :key "test" :models '(router-model)))
          (session (mevedel-session--create :name "main"))
-         (base '(:time "now" :origin "main" :model model :tool "Read"
+         (base '(:time "now" :origin "/root" :model model :tool "Read"
                        :outcome valid :repair-enabled t :rules nil :paths nil
                        :issue-kinds nil :execution executed :result success)))
     (mevedel-tool-repair-log-event
@@ -936,7 +936,7 @@
                   (make-list 20 'nested)))
     (let* ((session (mevedel-session--create :name "main"))
            (event
-            (list :time "now" :origin "main" :backend 'backend :model 'model
+            (list :time "now" :origin "/root" :backend 'backend :model 'model
                   :tool "Read" :outcome "sentinel-outcome"
                   :repair-enabled t :rules rules :paths paths
                   :issue-kinds issue-kinds :execution "sentinel-execution"
@@ -974,7 +974,7 @@
                          :paths ((file_path)) :before markdown-link :after path
                          :summary "Unwrapped a secret path."))
                 :issues nil :backend 'child-backend :model 'child-model
-                :session session :origin "explorer--stable"
+                :session session :origin "/root/explorer"
                 :repair-enabled t :execution 'executed
                 :telemetry-recorded nil)))
     (mevedel-tool-repair-record-result
@@ -984,7 +984,7 @@
            (event (car events))
            (printed (prin1-to-string event)))
       (should (= 1 (length events)))
-      (should (equal "explorer--stable" (plist-get event :origin)))
+      (should (equal "/root/explorer" (plist-get event :origin)))
       (should (eq 'child-backend (plist-get event :backend)))
       (should (eq 'child-model (plist-get event :model)))
       (should (eq 'repaired (plist-get event :outcome)))
@@ -1006,7 +1006,7 @@
                             :expected 'path :actual 'string
                             :schema '(:type path)))
                 :backend 'backend :model 'model :session session
-                :origin "main" :repair-enabled nil
+                :origin "/root" :repair-enabled nil
                 :execution 'not-executed :telemetry-recorded nil)))
     (mevedel-tool-repair-record-result entry "Error: private value")
     (let ((event (car (mevedel-session-repair-log session))))
@@ -1044,8 +1044,9 @@
                (make-temp-file "mevedel-child-repair-log-" t)))
          (session (mevedel-session--create :name "main" :save-path dir))
          (invocation
-          (mevedel-agent-invocation--create
-           :agent-id "reviewer--stable" :parent-session session))
+         (mevedel-agent-invocation--create
+           :agent-id "reviewer--stable" :path "/root/reviewer"
+           :parent-session session))
          (tool
           (mevedel-tool--create
            :name "Count" :category "mevedel"
@@ -1064,14 +1065,14 @@
                (append info (list :result (plist-get adapted :result))))))
           (let ((event (car (mevedel-session-repair-log session))))
             (should (eq 'invalid (plist-get event :outcome)))
-            (should (equal "reviewer--stable" (plist-get event :origin)))
+            (should (equal "/root/reviewer" (plist-get event :origin)))
             (should (eq 'child-backend (plist-get event :backend)))
             (should (eq 'child-model (plist-get event :model)))
             (should-not
              (string-match-p "sentinel-secret" (prin1-to-string event))))
           (with-temp-buffer
             (insert-file-contents (mevedel-tool-repair-log-path session))
-            (should (string-match-p "reviewer--stable" (buffer-string)))
+            (should (string-match-p "/root/reviewer" (buffer-string)))
             (should-not (string-match-p "sentinel-secret" (buffer-string)))))
       (delete-directory dir t))))
 

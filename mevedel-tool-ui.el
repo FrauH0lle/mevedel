@@ -149,16 +149,16 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
                      'font-lock-face 'mevedel-view-handle-error))
         (_ "")))))
 
-(defun mevedel-tool-ui--agent-blocked-reason (agent-id session)
-  "Return the visible blocked reason for AGENT-ID in SESSION, or nil."
-  (when (and agent-id session)
+(defun mevedel-tool-ui--agent-blocked-reason (path session)
+  "Return the visible blocked reason for canonical PATH in SESSION, or nil."
+  (when (and path session)
     (cond
      ((cl-some (lambda (entry)
-                 (equal (plist-get entry :origin) agent-id))
+                 (equal (plist-get entry :origin) path))
                (mevedel-session-permission-queue session))
       "permission")
      ((cl-some (lambda (entry)
-                 (equal (plist-get entry :origin) agent-id))
+                 (equal (plist-get entry :origin) path))
                (mevedel-session-plan-queue session))
       "plan"))))
 
@@ -325,9 +325,11 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
                               (plist-get sidecar-entry :path))
                         render-data)
               render-data))
+           (agent-path
+            (plist-get effective-render-data :path))
            (blocked-reason
             (and (eq (plist-get effective-render-data :status) 'running)
-                 (mevedel-tool-ui--agent-blocked-reason agent-id session)))
+                 (mevedel-tool-ui--agent-blocked-reason agent-path session)))
            (progress-p (plist-get effective-render-data :progress-handle))
            (agent-type (or (plist-get args :subagent_type) "?"))
            (badge (mevedel-tool-ui--handle-badge

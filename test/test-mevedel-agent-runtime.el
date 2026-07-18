@@ -91,7 +91,7 @@
                (lambda (&rest args) (push args requests))))
       (should
        (mevedel-agent-runtime-queue-execution-completion
-        session "main" "finished\n<bash-execution/>")))
+        session "/root" "finished\n<bash-execution/>")))
     (should-not transitions)
     (should-not requests)
     (should (= 1 (length (mevedel-session-messages session))))
@@ -104,6 +104,7 @@
          (agent-id "explorer--execution-owner")
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id agent-id
            :parent-session session
            :parent-data-buffer parent-buffer))
@@ -118,7 +119,7 @@
                         (list (cons agent-id fsm))))
           (should
            (mevedel-agent-runtime-queue-execution-completion
-            invocation agent-id "agent finished"))
+            invocation (mevedel-agent-invocation-path invocation) "agent finished"))
           (should-not (mevedel-session-messages session))
           (should (= 1 (length
                         (mevedel-agent-invocation-messages invocation))))
@@ -137,6 +138,7 @@
          (agent-id "explorer--execution-bwait")
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id agent-id
            :parent-session session
            :parent-data-buffer parent-buffer
@@ -173,7 +175,9 @@
                      (lambda (&rest args) (push args requests))))
             (should
              (mevedel-agent-runtime-queue-execution-completion
-              invocation agent-id "Bash completed with exit code 0.")))
+              invocation
+              (mevedel-agent-invocation-path invocation)
+              "Bash completed with exit code 0.")))
           (should-not requests)
           (should (eq 'DONE (gptel-fsm-state fsm)))
           (should (string-match-p "Agent answer" result))
@@ -188,6 +192,7 @@
          (agent-id "explorer--execution-latched")
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id agent-id :parent-session session
            :parent-data-buffer parent-buffer :buffer agent-buffer))
          result requests
@@ -212,7 +217,7 @@
                      (lambda (&rest args) (push args requests))))
             (should
              (mevedel-agent-runtime-queue-execution-completion
-              invocation agent-id "Latched Bash completion."))
+              invocation (mevedel-agent-invocation-path invocation) "Latched Bash completion."))
             (should-not result)
             (should (mevedel-agent-invocation-messages invocation))
             (setf (gptel-fsm-state fsm) 'BWAIT)
@@ -231,6 +236,7 @@
          (agent-id "explorer--execution-retry")
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id agent-id :parent-session session
            :parent-data-buffer parent-buffer :buffer agent-buffer))
          (attempts 0)
@@ -260,7 +266,7 @@
                      (lambda (&rest args) (push args requests))))
             (should
              (mevedel-agent-runtime-queue-execution-completion
-              invocation agent-id "Retry Bash completion."))
+              invocation (mevedel-agent-invocation-path invocation) "Retry Bash completion."))
             (with-timeout (2 (error "Timed out waiting for retry"))
               (while (not (eq (gptel-fsm-state fsm) 'DONE))
                 (accept-process-output nil 0.02))))
@@ -277,6 +283,7 @@
          (agent-id "explorer--execution-failed")
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id agent-id :parent-session session
            :parent-data-buffer parent-buffer :buffer agent-buffer))
          (attempts 0)
@@ -310,7 +317,7 @@
                          (setf (gptel-fsm-state fsm) 'ABRT))))
               (should
                (mevedel-agent-runtime-queue-execution-completion
-                invocation agent-id "Failed Bash completion."))
+                invocation (mevedel-agent-invocation-path invocation) "Failed Bash completion."))
               (with-timeout (2 (error "Timed out waiting for bounded retry"))
                 (while (not stopped)
                   (accept-process-output nil 0.02)))))
@@ -337,6 +344,7 @@
          (agent (mevedel-agent--create :name "explorer"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent agent
            :agent-id agent-id
            :description "Run a background command"
@@ -383,7 +391,9 @@
                     (funcall original-push context message))))
               (should
                (mevedel-agent-runtime-queue-execution-completion
-                invocation agent-id "Background Bash completion."))
+                invocation
+                (mevedel-agent-invocation-path invocation)
+                "Background Bash completion."))
               (with-timeout (2 (error "Timed out waiting for parent retry"))
                 (while (not (eq (gptel-fsm-state fsm) 'DONE))
                   (accept-process-output nil 0.02)))))
@@ -452,6 +462,7 @@
                    (mevedel-agent-runtime--bound-background-agent-result inv "small"))))
   :doc "bounds large responses and points to transcript when available"
   (let* ((inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :transcript-relative-path "agents/explorer--1.chat.org"))
          (response (make-string (* 2 mevedel-agent-runtime--background-agent-result-max-chars)
                                 ?x))
@@ -472,6 +483,7 @@
          (abs-path (expand-file-name rel-path tempdir))
          (agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "explorer--error-ui"
                :parent-session session
@@ -499,6 +511,7 @@
   :doc "error response inlines fallback partial when transcript is absent"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "explorer--partial-ui")))
     (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
@@ -514,6 +527,7 @@
   :doc "error response keeps explicit fallback when no partial exists"
   (let* ((agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "explorer--empty-ui")))
     (cl-letf (((symbol-function 'mevedel-agent-exec--final-response-text)
@@ -529,6 +543,7 @@
          (agent-id "explorer--bg-error-ui")
          (agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id agent-id
                :description "survey files"
@@ -564,6 +579,7 @@
   :doc "includes the interruption reason, useful partial work, and transcript"
   (let ((invocation
          (mevedel-agent-invocation--create
+          :path "/root/test_agent"
           :agent-id "worker--interrupt"
           :description "finish the implementation")))
     (cl-letf
@@ -589,6 +605,7 @@
           (generate-new-buffer " *mevedel-interrupt-wait-agent*"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id "worker--wait"
            :parent-data-buffer parent-buffer
            :buffer agent-buffer
@@ -644,6 +661,7 @@
           (generate-new-buffer " *mevedel-interrupt-run-agent*"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id "worker--run"
            :parent-data-buffer parent-buffer
            :buffer agent-buffer
@@ -703,6 +721,7 @@
           (generate-new-buffer " *mevedel-interrupt-fail-agent*"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id "worker--abort-fails"
            :parent-data-buffer parent-buffer
            :buffer agent-buffer
@@ -749,6 +768,7 @@
           (generate-new-buffer " *mevedel-interrupt-fallback-agent*"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id "worker--missing-fsm"
            :buffer agent-buffer
            :transcript-status 'running))
@@ -785,6 +805,7 @@
          (agent (mevedel-agent--create :name "reviewer"
                                        :description "Review"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "reviewer--735123142194f47363852069e3f42083"
                :description "review current diff"
@@ -894,6 +915,7 @@
          (agent-id "verifier--foreground1234567890abcdef123456")
          (agent (mevedel-agent--create :name "verifier"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id agent-id
                :description "verify current diff"
@@ -982,6 +1004,7 @@
          (agent-id "verifier--partial1234567890abcdef123456")
          (agent (mevedel-agent--create :name "verifier"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id agent-id
                :description "verify current diff"
@@ -1046,6 +1069,7 @@
          (agent-id "verifier--race1234567890abcdef1234567890")
          (agent (mevedel-agent--create :name "verifier"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id agent-id
                :description "verify current diff"
@@ -1135,6 +1159,7 @@
          (agent-buf (generate-new-buffer " *mev-stop-recover-agent*"))
          (agent (mevedel-agent--create :name "verifier"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "verifier--cf9dca9d45d108008685cd1c40a86a09"
                :description "verify current diff"
@@ -1199,11 +1224,13 @@
          (agent-buf-b (generate-new-buffer " *mev-stop-resolve-agent-b*"))
          (agent (mevedel-agent--create :name "reviewer"))
          (inv-a (mevedel-agent-invocation--create
+                 :path "/root/test_agent"
                  :agent agent
                  :agent-id "reviewer--aaaaaaaa111111111111111111111111"
                  :buffer agent-buf-a
                  :transcript-status 'running))
          (inv-b (mevedel-agent-invocation--create
+                 :path "/root/test_agent"
                  :agent agent
                  :agent-id "reviewer--aaaaaaaa222222222222222222222222"
                  :buffer agent-buf-b
@@ -1246,6 +1273,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent*"))
          (agent-id "verifier--fg-watchdog")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1283,6 +1311,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-progress*"))
          (agent-id "verifier--fg-progress")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1325,6 +1354,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-activity*"))
          (agent-id "verifier--fg-activity")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1364,6 +1394,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-early*"))
          (agent-id "verifier--fg-early")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1402,6 +1433,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-log*"))
          (agent-id "verifier--fg-log")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-session session
                :parent-data-buffer parent-buf
@@ -1459,6 +1491,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-child*"))
          (agent-id "coordinator--fg-child")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1497,6 +1530,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-stale-tool*"))
          (agent-id "verifier--fg-stale-tool")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1542,6 +1576,7 @@
          (agent-buf (generate-new-buffer " *mev-fg-watchdog-agent-tool*"))
          (agent-id "verifier--fg-tool")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :parent-data-buffer parent-buf
                :buffer agent-buf
@@ -1585,6 +1620,7 @@
          (agent-buf (generate-new-buffer " *mev-watchdog-agent*"))
          (agent (mevedel-agent--create :name "reviewer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "reviewer--WATCHDOG"
                :parent-context session
@@ -1656,6 +1692,7 @@
          (agent-buffer (generate-new-buffer " *agent-steer-agent*"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id "default--steer"
            :buffer agent-buffer
            :parent-data-buffer parent))
@@ -1684,6 +1721,7 @@
          (agent-buffer (generate-new-buffer " *agent-steer-active*"))
          (invocation
           (mevedel-agent-invocation--create
+           :path "/root/test_agent"
            :agent-id "default--in-flight"
            :buffer agent-buffer
            :parent-data-buffer parent))
@@ -1706,6 +1744,7 @@
   :doc "rejects a stale running record without a live request"
   (let ((invocation
          (mevedel-agent-invocation--create
+          :path "/root/test_agent"
           :agent-id "default--stale"
           :parent-data-buffer (generate-new-buffer " *agent-steer-stale*"))))
     (unwind-protect
@@ -1948,6 +1987,7 @@
   (require 'mevedel-tool-ui)
   (let* ((buf (generate-new-buffer " *mt-bwait3*"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent (mevedel-agent--create :name "coordinator")))
          (info (list :buffer buf :mevedel-agent-invocation inv)))
     (unwind-protect
@@ -1973,6 +2013,7 @@
   (let* ((session (mevedel-agent-runtime-test--make-session))
          (agent-id "explorer--bash-owner")
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent-id agent-id
                :agent (mevedel-agent--create :name "explorer")
                :parent-session session))
@@ -1983,7 +2024,7 @@
                  (setq captured (list seen-session seen-owner))
                  t)))
       (should (mevedel-agent-runtime--background-agents-pending-p info)))
-    (should (equal (list session agent-id) captured))))
+    (should (equal (list session "/root/test_agent") captured))))
 
 (mevedel-deftest mevedel-agent-runtime--bwait-injected-table
   ()
@@ -2255,6 +2296,7 @@
          (parent (generate-new-buffer " *mt-bwait-mixed*"))
          (agent-buf (generate-new-buffer " *mt-bwait-mixed-agent*"))
          (live-inv (mevedel-agent-invocation--create
+                    :path "/root/test_agent"
                     :buffer agent-buf
                     :background-p t))
          (live-fsm (gptel-make-fsm
@@ -2793,6 +2835,7 @@
           (setq-local mevedel-agent-runtime--fsms nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
+                       :path "/root/test_agent"
                        :agent agent
                        :agent-id "explorer--A"
                        :parent-session session
@@ -2849,6 +2892,7 @@
           (setq-local mevedel-agent-runtime--fsms nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
+                       :path "/root/test_agent"
                        :agent agent
                        :agent-id "explorer--A"
                        :parent-session session
@@ -2913,6 +2957,7 @@
           (setq-local mevedel-agent-runtime--fsms nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
+                       :path "/root/test_agent"
                        :agent agent
                        :agent-id "explorer--A"
                        :parent-session session
@@ -2966,6 +3011,7 @@
           (setq-local mevedel-agent-runtime--fsms nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
+                       :path "/root/test_agent"
                        :agent agent
                        :agent-id "explorer--A"
                        :parent-session session
@@ -3024,6 +3070,7 @@
           (setq-local mevedel-agent-runtime--fsms nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
+                       :path "/root/test_agent"
                        :agent agent
                        :agent-id "explorer--A"
                        :parent-session session
@@ -3076,6 +3123,7 @@
           (setq-local mevedel-agent-runtime--fsms nil)
           (let* ((agent (mevedel-agent--create :name "explorer"))
                  (inv (mevedel-agent-invocation--create
+                       :path "/root/test_agent"
                        :agent agent
                        :agent-id "explorer--A"
                        :description "stale child"
@@ -3445,6 +3493,7 @@
 		 (let* ((session (mevedel-session--create :name "test"))
 			(agent-id "explorer--owned")
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent-id agent-id
 			      :parent-session session
 			      :transcript-status 'running))
@@ -3465,7 +3514,7 @@
 			       'mevedel-view-agent-live-transcript-finalize)
 			      (lambda (_invocation) nil)))
 		     (mevedel-agent-runtime--finalize inv 'aborted))
-		   (should (equal (list session agent-id) stopped)))
+		   (should (equal (list session "/root/test_agent") stopped)))
 
 		 :doc "writes sidecar after terminal activity is promoted to full history"
 		 (let* ((parent-buf (generate-new-buffer " *mev-agent-finalize-parent*"))
@@ -3482,6 +3531,7 @@
 					      (list :status 'running
 						    :activity (last activity 5))))))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id agent-id
 			      :parent-session session
@@ -3532,12 +3582,12 @@
                    :tasks (list
                            (mevedel-task--create
                             :id 1 :subject "agent open"
-                            :status 'pending :owner agent-id)
+                            :status 'pending :owner "/root/test_agent")
                            (mevedel-task--create
                             :id 2 :subject "main open"
                             :status 'pending))
                    :task-status-notes
-                   (list (cons agent-id
+                   (list (cons "/root/test_agent"
                                '(:note "Inspecting"
                                  :updated-turn 1
                                  :updated-at "now")))
@@ -3545,6 +3595,7 @@
                    (list (cons agent-id
                                (list :status 'running)))))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id agent-id
                :parent-session session
@@ -3602,6 +3653,7 @@
                                              :reminders nil))
                (inv (mevedel-agent-invocation-create agent)))
           (setf (mevedel-agent-invocation-agent-id inv) "explorer--fin")
+          (setf (mevedel-agent-invocation-path inv) "/root/test_agent")
           (setf (mevedel-agent-invocation-parent-session inv) session)
           (setf (mevedel-agent-invocation-transcript-status inv) 'running)
           ;; Seed the session slot so finalize has somewhere to update.
@@ -3640,6 +3692,7 @@
                  (inv (mevedel-agent-invocation-create agent))
                  (agent-id "explorer--livefin"))
             (setf (mevedel-agent-invocation-agent-id inv) agent-id)
+            (setf (mevedel-agent-invocation-path inv) "/root/test_agent")
             (setf (mevedel-agent-invocation-parent-session inv) session)
             (setf (mevedel-agent-invocation-buffer inv) agent-buf)
             (setf (mevedel-agent-invocation-transcript-status inv) 'running)
@@ -3699,6 +3752,7 @@
                  (inv (mevedel-agent-invocation-create agent))
                  (agent-id "explorer--bgfin"))
             (setf (mevedel-agent-invocation-agent-id inv) agent-id)
+            (setf (mevedel-agent-invocation-path inv) "/root/test_agent")
             (setf (mevedel-agent-invocation-parent-session inv) session)
             (setf (mevedel-agent-invocation-parent-data-buffer inv) parent)
             (setf (mevedel-agent-invocation-transcript-status inv) 'running)
@@ -3760,6 +3814,7 @@
                (inv (mevedel-agent-invocation-create agent))
                (parent-buf (generate-new-buffer "*spec21-fin-parent*"))
                (agent-buf nil))
+          (setf (mevedel-agent-invocation-path inv) "/root/test_agent")
           (with-current-buffer parent-buf
             (setq-local mevedel--session session)
             (setq-local mevedel--workspace workspace))
@@ -3806,6 +3861,7 @@
                                        :reminders nil))
          (inv (mevedel-agent-invocation-create agent)))
     (setf (mevedel-agent-invocation-agent-id inv) "explorer--frw")
+    (setf (mevedel-agent-invocation-path inv) "/root/feature_review")
     (setf (mevedel-agent-invocation-transcript-relative-path inv)
           "agents/explorer--frw.chat.org")
     (setf (mevedel-agent-invocation-transcript-status inv) 'completed)
@@ -3817,6 +3873,7 @@
       (let ((rd (plist-get result :render-data)))
         (should (eq (plist-get rd :kind) 'agent-transcript))
         (should (equal (plist-get rd :agent-id) "explorer--frw"))
+        (should (equal (plist-get rd :path) "/root/feature_review"))
         (should (equal (plist-get rd :transcript-relative-path)
                        "agents/explorer--frw.chat.org")))))
 

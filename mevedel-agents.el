@@ -64,6 +64,7 @@
                   "mevedel-reminders" ())
 
 ;; `mevedel-structs'
+(declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
@@ -320,9 +321,10 @@ of the main chat's session state. The polymorphic accessors in
 `mevedel-tools.el' dispatch on struct type so the WAIT handler,
 pipeline, and reminders can share one code path for both contexts.
 
-Persistence slots. AGENT-ID is the stable identifier used as the join
-key in the parent session's `agent-transcripts' alist, in
-`mevedel-agent-runtime--fsms', and in the on-disk transcript filename.
+Persistence slots. AGENT-ID is the opaque provider-runtime identifier used as
+the join key in the parent session's `agent-transcripts' alist, in
+`mevedel-agent-runtime--fsms', and in the on-disk transcript filename.  PATH is
+the canonical address of this retained conversation in the session agent tree.
 PARENT-DATA-BUFFER points back at the parent chat (data) buffer;
 PARENT-SESSION points at the top-level session (transcripts always live
 under the top-level session's `agents/' subdirectory). PARENT-TURN is
@@ -348,6 +350,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   (specialist-nudge-state nil :type list)
   ;; Persistence
   (agent-id nil :type (or null string))
+  (path nil :type (or null string))
   (description nil :type (or null string))
   (parent-session nil)
   (parent-data-buffer nil)
@@ -405,6 +408,15 @@ and render-data markers are runtime-only caches for cheap live updates."
   (parent-tool-callback nil)
   (background-result-reported-p nil :type boolean)
   (foreground-result-reported-p nil :type boolean))
+
+(defun mevedel-agent-invocation-require-path (invocation)
+  "Return INVOCATION's canonical path, or signal an error."
+  (require 'mevedel-structs)
+  (let ((path (mevedel-agent-invocation-path invocation)))
+    (unless (mevedel-agent-path-p path)
+      (error "Agent invocation has no canonical path: %s"
+             (mevedel-agent-invocation-agent-id invocation)))
+    path))
 
 (defun mevedel-agent-invocation-set-specialist-nudge-state (invocation state)
   "Set INVOCATION's specialist nudge STATE."

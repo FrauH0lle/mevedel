@@ -89,6 +89,8 @@
              (make-directory (file-name-directory ,canonical-path) t)
              (setf (mevedel-agent-invocation-agent-id ,invocation)
                    "explorer--test")
+             (setf (mevedel-agent-invocation-path ,invocation)
+                   "/root/explorer")
              (setf (mevedel-agent-invocation-buffer ,invocation) ,buffer)
              (setf (mevedel-agent-invocation-parent-data-buffer ,invocation)
                    ,parent-buffer)
@@ -1573,10 +1575,10 @@
           (should (= 1 (length resumed-data)))
           (should (string-match-p "Continue the agent task"
                                   (car resumed-data)))
-          (should (equal (plist-get pre-event :origin) "explorer--test"))
+          (should (equal (plist-get pre-event :origin) "/root/explorer"))
           (should (equal (plist-get pre-event :transcript-path)
                          canonical-path))
-          (should (equal (plist-get post-event :origin) "explorer--test"))
+          (should (equal (plist-get post-event :origin) "/root/explorer"))
           (should (string-match-p "agent hook context" captured-system))
           (should (string-match-p "Old user two" captured-body))
           (should-not (string-match-p "Recent user four" captured-body))
@@ -2741,7 +2743,7 @@
                        (buffer-string) 'execution-archive))))
           (mevedel-view-stream-handle-execution-event
            (list :type 'terminal :session session :data-buffer buffer
-                 :owner "main" :tool-use-id "archived-call"
+                 :owner "/root" :tool-use-id "archived-call"
                  :facts '(:state completed :outcome success :exit-code 0)
                  :whole-output "done"))
           (should (= 1

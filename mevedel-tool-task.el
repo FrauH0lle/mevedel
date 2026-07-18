@@ -20,14 +20,10 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--fsm-last)
 
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime-display-label
-                  "mevedel-agent-runtime" (agent-id))
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-require-path
+                  "mevedel-agents" (invocation))
 
 ;; `mevedel-structs'
 (defvar mevedel--agent-invocation)
@@ -127,22 +123,34 @@ Accepts nil, a vector, or a list.  Signals an error on non-integers."
            for v = (plist-get plist key)
            when v return v))
 
-(defun mevedel-tool-task--normalize-owner (owner)
-  "Normalize OWNER to a non-empty string or nil."
-  (and (stringp owner)
-       (not (string-empty-p owner))
-       owner))
+(defun mevedel-tool-task--normalize-owner (owner &optional session)
+  "Normalize OWNER to a canonical path, bucket string, or nil.
+When SESSION is non-nil, require canonical non-root paths to name a retained
+agent in that session."
+  (when (and (stringp owner) (not (string-empty-p owner)))
+    (if (equal owner "/root")
+        nil
+      (let ((case-fold-search nil))
+        (when (string-match-p
+               "\\`[^[:space:]]+--[[:xdigit:]]\\{32\\}\\'" owner)
+          (error "Opaque agent IDs cannot own tasks: %s" owner)))
+      (when (and (string-prefix-p "/" owner)
+                 (not (mevedel-agent-path-p owner)))
+        (error "Invalid canonical task owner: %s" owner))
+      (when (and session
+                 (mevedel-agent-path-p owner)
+                 (not (assoc owner
+                             (mevedel-session-agent-registry session))))
+        (error "Unknown canonical task owner: %s" owner))
+      owner)))
 
-(defun mevedel-tool-task--current-agent-owner ()
-  "Return the current sub-agent owner label, or nil in the main session."
+(defun mevedel-tool-task--current-agent-owner (&optional session)
+  "Return the current agent's canonical task owner, or nil at root."
   (and (boundp 'mevedel--agent-invocation)
        (mevedel-agent-invocation-p mevedel--agent-invocation)
        (mevedel-tool-task--normalize-owner
-        (mevedel-agent-invocation-agent-id mevedel--agent-invocation))))
-
-(defun mevedel-tool-task--current-owner ()
-  "Return the current task owner, or nil for the main session."
-  (mevedel-tool-task--current-agent-owner))
+        (mevedel-agent-invocation-require-path mevedel--agent-invocation)
+        session)))
 
 (defun mevedel-tool-task--argument-value-present-p (args key)
   "Return non-nil when ARGS has KEY with a non-nil value.
@@ -152,8 +160,8 @@ those the same as omitted arguments."
        (let ((value (plist-get args key)))
          (not (or (null value) (eq value :json-false))))))
 
-(defun mevedel-tool-task--owner-from-args (args keys)
-  "Return a normalized owner from ARGS using KEYS.
+(defun mevedel-tool-task--owner-from-args (session args keys)
+  "Return a normalized owner in SESSION from ARGS using KEYS.
 When none of KEYS has a value, default to the current caller owner.
 An explicitly empty string targets the main session owner."
   (catch 'found
@@ -161,8 +169,8 @@ An explicitly empty string targets the main session owner."
       (when (mevedel-tool-task--argument-value-present-p args key)
         (throw 'found
                (mevedel-tool-task--normalize-owner
-                (plist-get args key)))))
-    (mevedel-tool-task--current-owner)))
+                (plist-get args key) session))))
+    (mevedel-tool-task--current-agent-owner session)))
 
 (defun mevedel-tool-task--normalize-note (note)
   "Normalize NOTE to a compact non-empty string, or nil to clear it."
@@ -253,7 +261,7 @@ Returns the new `mevedel-task' struct."
          (status-raw (mevedel-tool-task--plist-get-any p :status))
          (owner (if (plist-member p :owner)
                     (plist-get p :owner)
-                  (mevedel-tool-task--current-agent-owner)))
+                  (mevedel-tool-task--current-agent-owner session)))
          (blocks-raw (mevedel-tool-task--plist-get-any p :blocks))
          (blocked-by-raw (mevedel-tool-task--plist-get-any
                           p :blockedBy :blocked_by :blocked-by))
@@ -266,7 +274,7 @@ Returns the new `mevedel-task' struct."
                   :subject subject
                   :description (and (stringp description) description)
                   :status status
-                  :owner (mevedel-tool-task--normalize-owner owner)
+                  :owner (mevedel-tool-task--normalize-owner owner session)
                   :blocks (mevedel-tool-task--normalize-id-list blocks-raw)
                   :blocked-by (mevedel-tool-task--normalize-id-list
                                blocked-by-raw)
@@ -309,7 +317,7 @@ Returns the updated task.  Signals an error if ID is unknown."
                 status-p t)))
       (when (plist-member p :owner)
         (setq owner (mevedel-tool-task--normalize-owner
-                     (plist-get p :owner))
+                     (plist-get p :owner) session)
               owner-p t))
       (when (plist-member p :blocks)
         (setq blocks (mevedel-tool-task--normalize-id-list
@@ -358,18 +366,14 @@ dependencies no longer point back to it."
         (setf (mevedel-task-blocked-by other)
               (delq id (mevedel-task-blocked-by other)))))))
 
-(defun mevedel-tool-task--canonical-agent-owner-p (owner)
-  "Return non-nil when OWNER matches a concrete sub-agent id."
-  (and (stringp owner)
-       (string-match-p "\\`[[:alnum:]_-]+--[[:xdigit:]]\\{32\\}\\'" owner)))
-
 (defun mevedel-tool-task-finalize-owner (session owner status)
   "Reconcile SESSION tasks owned by OWNER for terminal agent STATUS.
-When STATUS is `completed' and OWNER is a concrete sub-agent id, mark all
+When STATUS is `completed' and OWNER is a canonical non-root path, mark all
 open tasks for that owner completed, propagate dependency unblocking, and
-clear that owner's task status note.  Return non-nil when SESSION changed."
+  clear that owner's task status note.  Return non-nil when SESSION changed."
   (when (and (eq status 'completed)
-             (mevedel-tool-task--canonical-agent-owner-p owner))
+             (mevedel-agent-path-p owner)
+             (not (equal owner "/root")))
     (let ((changed nil)
           (turn (mevedel-tool-task--write-turn session)))
       (dolist (task (mevedel-session-tasks session))
@@ -394,14 +398,7 @@ clear that owner's task status note.  Return non-nil when SESSION changed."
 (defun mevedel-tool-task--owner-label (owner)
   "Return the display label for OWNER."
   (if (and (stringp owner) (not (string-empty-p owner)))
-      (or (and (fboundp 'mevedel-agent-runtime-display-label)
-               (mevedel-agent-runtime-display-label owner))
-          (if-let* ((sep (string-search "--" owner)))
-              (let* ((type (substring owner 0 sep))
-                     (suffix (substring owner (+ sep 2)))
-                     (short (substring suffix 0 (min 8 (length suffix)))))
-                (concat type "--" short))
-            owner))
+      owner
     "Main"))
 
 (defun mevedel-tool-task--owner-sort-label (owner)
@@ -1131,7 +1128,8 @@ Accepts a vector, list, or single task object; always returns a list."
 OWNER-KEYS names the optional owner argument aliases.  Returns a
 feedback string when :note has a value, otherwise nil."
   (when (mevedel-tool-task--argument-value-present-p args :note)
-    (let* ((owner (mevedel-tool-task--owner-from-args args owner-keys))
+    (let* ((owner (mevedel-tool-task--owner-from-args
+                   session args owner-keys))
            (note (mevedel-tool-task--normalize-note (plist-get args :note)))
            stored)
       (if note
@@ -1375,7 +1373,7 @@ feedback string when :note has a value, otherwise nil."
     :prompt-file "tools/taskcreate.md"
     :handler #'mevedel-tool-task--handle-create
     :args ((tasks array :required
-                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (real owner id/bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
+                  "Array of task objects. Each object has: subject (string, required), description (string, optional), status (\"pending\"|\"in_progress\"|\"completed\", optional), owner (canonical agent path or bucket string, optional; use subjects/descriptions for workstream names), blockedBy (array of task IDs, optional), blocks (array of task IDs, optional), metadata (object, optional)."
                   :items (:type object)
                   :minItems 1)
            (note string :optional
@@ -1400,7 +1398,7 @@ feedback string when :note has a value, otherwise nil."
            (status string :optional
                    "New status: \"pending\", \"in_progress\", or \"completed\". When set to completed, the task is removed from the blocked-by lists of any dependent tasks.")
            (owner string :optional
-                  "New real owner id/bucket. Pass an empty string to unassign; prefer subjects/descriptions for workstream names.")
+                  "New canonical agent path or bucket. Pass an empty string to unassign; prefer subjects/descriptions for workstream names.")
            (blocks array :optional
                    "Array of task IDs this task blocks."
                    :items (:type integer))

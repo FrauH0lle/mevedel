@@ -76,13 +76,13 @@
                (lambda (entry) (push entry rendered))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "main" :callback #'ignore))
+             :origin "/root" :callback #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Edit"
-             :origin "main" :callback #'ignore))
+             :origin "/root" :callback #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Write"
-             :origin "main" :callback #'ignore)))
+             :origin "/root" :callback #'ignore)))
     ;; The visible head is re-rendered as siblings arrive so pending
     ;; counts stay current, but FIFO order is unchanged.
     (should (= 3 (length rendered)))
@@ -103,7 +103,7 @@
                #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "main" :callback #'ignore)))
+             :origin "/root" :callback #'ignore)))
     (let* ((q (mevedel-session-permission-queue session))
            (entry (car q)))
       (should (eq session (plist-get entry :session)))))
@@ -116,7 +116,7 @@
                (lambda (entry) (push entry rendered))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (setq outcome o)))))
     (should (null rendered))
     (should (eq 'aborted outcome)))
@@ -129,10 +129,10 @@
       session)
      :type 'error))
 
-  :doc "enqueue rejects malformed agent origins"
+  :doc "enqueue rejects malformed canonical paths"
   (let ((session (test-pq--make-session)))
-    (dolist (origin '(nil "" "explorer" "explorer--abc"
-                          "explorer--0123456789abcdef0123456789abcdeg"))
+    (dolist (origin '(nil "" "root" "/root/" "/root/Bad"
+                          "/root/explorer-agent" "explorer--abc"))
       (should-error
        (mevedel-permission--enqueue
         (list :kind 'generic :tool-name "Read"
@@ -172,7 +172,7 @@
                    :tool-name "Read"
                    :specifier-key :path
                    :specifier-value "/tmp/a.el"
-                   :origin "verifier--0123456789abcdef0123456789abcdef"
+                   :origin "/root/verifier"
                    :callback (lambda (o) (setq outcome o)))
              session))
           (let ((entry (car (mevedel-session-permission-queue session))))
@@ -185,7 +185,7 @@
             (should (eq 'permission-resolved
                         (plist-get (nth 1 entries) :event)))
             (should (equal "Read" (plist-get (nth 0 entries) :tool-name)))
-            (should (equal "verifier--0123456789abcdef0123456789abcdef"
+            (should (equal "/root/verifier"
                            (plist-get (nth 0 entries) :origin)))
             (should (eq 'deny-once
                         (plist-get (nth 1 entries) :outcome)))))
@@ -207,7 +207,7 @@
                    :command "printf SECRET_TOKEN"
                    :commands-summary "printf"
                    :command-class 'unknown
-                   :origin "main"
+                   :origin "/root"
                    :callback #'ignore)
              session))
           (let ((entry (car (test-pq--read-permission-log session))))
@@ -231,7 +231,7 @@
              (list :kind 'eval
                    :expression "(message \"SECRET_TOKEN\")"
                    :mode "live"
-                   :origin "main"
+                   :origin "/root"
                    :callback #'ignore)
              session))
           (let ((entry (car (test-pq--read-permission-log session))))
@@ -258,7 +258,7 @@
                    :sandbox-permissions 'additive
                    :additional-permissions '(:network t)
                    :justification "Download the requested page?"
-                   :origin "main"
+                   :origin "/root"
                    :callback #'ignore)
              session))
           (let ((entry (car (test-pq--read-permission-log session))))
@@ -293,13 +293,13 @@
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo/bar.el"
              :resource-access 'read
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "Read1" o) resolved-outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo/bar.el"
              :resource-access 'read
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "Read2" o) resolved-outcomes))))
       ;; User answers allow-session for the head.  Simulate the exact
       ;; resource grant written by the normal permission prompt.
@@ -325,12 +325,12 @@
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/x.el"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/x.el"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (push '("Read" :path "/x.el" :action deny)
             (mevedel-session-permission-rules session))
@@ -348,13 +348,13 @@
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/foo.el"
              :resource-access 'read
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "foo" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/bar.el"
              :resource-access 'read
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "bar" o) outcomes))))
       ;; Resource authority covers /foo.el only.
       (mevedel-permission-add-session-resource-grant
@@ -375,7 +375,7 @@
        (list :kind 'generic :tool-name "WebFetch"
              :specifier-key :domain
              :specifier-value "example.com"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (push '("WebFetch" :domain "example.com" :action allow)
             (mevedel-session-permission-rules session))
@@ -394,12 +394,12 @@
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value path
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value path
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (push `("Read" :path ,path :action allow)
             (mevedel-session-permission-rules session))
@@ -421,12 +421,12 @@
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/uncovered.el"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
              :specifier-value "/uncovered.el"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push o outcomes))))
       (mevedel-permission-queue--coalesce 'allow-session session))
     (should-not outcomes)
@@ -443,7 +443,7 @@
          (list :kind 'sandbox :tool-name "Bash"
                :resource-path "/tmp/secret"
                :resource-access 'read
-               :origin "main"
+               :origin "/root"
                :callback (lambda (outcome) (push outcome outcomes)))))
       (mevedel-permission-add-session-resource-grant
        session "/tmp/secret" 'read)
@@ -462,7 +462,7 @@
          (list :kind 'sandbox :tool-name "Bash"
                :resource-path "/tmp/secret"
                :resource-access 'read
-               :origin "main"
+               :origin "/root"
                :callback (lambda (outcome) (push outcome outcomes)))))
       (push '("Bash" :path "/tmp/secret" :action deny)
             (mevedel-session-permission-rules session))
@@ -481,7 +481,7 @@
          (list :kind 'sandbox :tool-name "Bash"
                :detail "emacs --batch -Q"
                :sandbox-permissions 'require-escalated
-               :origin "main"
+               :origin "/root"
                :callback (lambda (outcome) (push outcome outcomes)))))
       (push '("Bash" :pattern "emacs --batch -Q"
                      :sandbox-permissions require-escalated
@@ -502,7 +502,7 @@
          (list :kind 'sandbox :tool-name "Eval"
                :detail "(message \"hello\")"
                :sandbox-permissions 'require-escalated
-               :origin "main"
+               :origin "/root"
                :callback (lambda (outcome) (push outcome outcomes)))))
       (push '("Eval" :sandbox-permissions require-escalated :action deny)
             (mevedel-session-permission-rules session))
@@ -515,24 +515,17 @@
 ;;; Render dispatch
 
 (mevedel-deftest mevedel-permission-queue--attribution-origin
-  (:doc "attributes prompts only to verified session agents")
+  (:doc "attributes prompts to non-root canonical agent paths")
   ,test
   (test)
 
-  :doc "scoped non-agent request owners are not rendered as agents"
-  (let* ((session (test-pq--make-session))
-         (entry
-          (list :session session
-                :origin
-                "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
-    (should-not (mevedel-permission-queue--attribution-origin entry)))
+  :doc "the root path needs no attribution line"
+  (should-not
+   (mevedel-permission-queue--attribution-origin '(:origin "/root")))
 
-  :doc "registered agent request owners retain attribution"
-  (let* ((session (test-pq--make-session))
-         (origin "verifier--abcdef123456abcdef123456abcdef12")
-         (entry (list :session session :origin origin)))
-    (setf (mevedel-session-agent-transcripts session)
-          (list (cons origin '(:status running))))
+  :doc "nested canonical paths retain attribution"
+  (let* ((origin "/root/worker/verifier")
+         (entry (list :origin origin)))
     (should (equal origin
                    (mevedel-permission-queue--attribution-origin entry)))))
 
@@ -626,7 +619,7 @@
                      :protected-path nil
                      :include-always t
                      :workspace nil
-                     :origin "main"
+                     :origin "/root"
                      :callback #'ignore)
                session)
               (setq entry (car (mevedel-session-permission-queue session)))
@@ -667,7 +660,7 @@
                      :specifier-key :path
                      :specifier-value "/tmp/one.el"
                      :include-always t
-                     :origin "main"
+                     :origin "/root"
                      :callback
                      (lambda (outcome)
                        (push (cons "one" outcome) outcomes)))
@@ -678,7 +671,7 @@
                      :specifier-key :path
                      :specifier-value "/tmp/two.el"
                      :include-always t
-                     :origin "main"
+                     :origin "/root"
                      :callback
                      (lambda (outcome)
                        (push (cons "two" outcome) outcomes)))
@@ -919,7 +912,7 @@
         (agent-data (generate-new-buffer " *test-pq-agent-data*"))
         (session (test-pq--make-session)))
     (setf (mevedel-session-agent-transcripts session)
-          '(("verifier--abcdef123456abcdef123456abcdef12"
+          '(("/root/verifier"
              :status running)))
     (unwind-protect
         (progn
@@ -934,7 +927,7 @@
             (setq-local mevedel--agent-invocation
                         (mevedel-agent-invocation--create
                          :agent-id
-                         "verifier--abcdef123456abcdef123456abcdef12")))
+                         "/root/verifier")))
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
                      (lambda () 'ask)))
             (with-current-buffer agent-data
@@ -942,13 +935,13 @@
                (list :kind 'eval
                      :expression "(message \"hi\")"
                      :mode "batch"
-                     :origin "verifier--abcdef123456abcdef123456abcdef12"
+                     :origin "/root/verifier"
                      :callback #'ignore)
                session)))
           (with-current-buffer parent-view
             (should (string-match-p "The LLM is requesting permission to evaluate elisp"
                                     (buffer-string)))
-            (should (string-match-p "from verifier--abcdef"
+            (should (string-match-p "from /root/verifier"
                                     (buffer-string)))
             (should (string-match-p "Mode: batch"
                                     (buffer-string)))))
@@ -963,7 +956,7 @@
         (session (test-pq--make-session))
         outcomes)
     (setf (mevedel-session-agent-transcripts session)
-          '(("verifier--abcdef123456abcdef123456abcdef12"
+          '(("/root/verifier"
              :status running)))
     (unwind-protect
         (progn
@@ -978,13 +971,13 @@
             (setq-local mevedel--agent-invocation
                         (mevedel-agent-invocation--create
                          :agent-id
-                         "verifier--abcdef123456abcdef123456abcdef12")))
+                         "/root/verifier")))
           (cl-letf (((symbol-function 'gptel-agent--block-bg)
                      (lambda () 'ask))
                     ((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
                        (list (list :agent-id
-                                   "verifier--abcdef123456abcdef123456abcdef12"
+                                   "/root/verifier"
                                    :status 'blocked
                                    :agent-type "verifier"
                                    :description "Verify tracked diff"
@@ -998,7 +991,7 @@
                        :expression (format "(+ %d 1)" i)
                        :mode "batch"
                        :origin
-                       "verifier--abcdef123456abcdef123456abcdef12"
+                       "/root/verifier"
                        :callback (lambda (outcome)
                                    (push outcome outcomes)))
                  session)))
@@ -1031,7 +1024,7 @@
                               (get-text-property
                                (match-beginning 0)
                                'mevedel-view-zone-id))))
-                (should (string-search "from verifier--abcdef" text))
+                (should (string-search "from /root/verifier" text))
                 (should (string-search "Mode: batch" text))))))
       (when (buffer-live-p agent-data) (kill-buffer agent-data))
       (when (buffer-live-p parent-view) (kill-buffer parent-view))
@@ -1049,7 +1042,7 @@
                       :detail "curl https://example.test"
                       :justification "Download the requested page?"
                       :additional-permissions '(:network t)
-                      :origin "main"
+                      :origin "/root"
                       :session session
                       :callback #'ignore))
          captured)
@@ -1071,7 +1064,7 @@
                       :justification "Read the requested file?"
                       :resource-path "/tmp/secret"
                       :resource-access 'read
-                      :origin "main"
+                      :origin "/root"
                       :session session
                       :callback #'ignore))
          captured)
@@ -1138,11 +1131,11 @@
                #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "Read" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'bash :command "rm /tmp/x"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "Bash" o) outcomes))))
       (mevedel-permission-queue-abort-all session))
     (should (= 2 (length outcomes)))
@@ -1171,18 +1164,18 @@
                #'ignore))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "explorer--0123456789abcdef0123456789abcdef"
+             :origin "/root/explorer"
              :callback (lambda (o) (push (cons "explorer" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "main"
+             :origin "/root"
              :callback (lambda (o) (push (cons "main" o) outcomes))))
       (mevedel-permission--enqueue
        (list :kind 'generic :tool-name "Read"
-             :origin "explorer--0123456789abcdef0123456789abcdef"
+             :origin "/root/explorer"
              :callback (lambda (o) (push (cons "explore2" o) outcomes))))
       (mevedel-permission-queue-sweep-origin
-       "explorer--0123456789abcdef0123456789abcdef" session))
+       "/root/explorer" session))
     ;; explorer-owned entries fired 'aborted.
     (should (eq 'aborted (cdr (assoc "explorer" outcomes))))
     (should (eq 'aborted (cdr (assoc "explore2" outcomes))))
@@ -1190,7 +1183,7 @@
     (should-not (assoc "main" outcomes))
     (let ((q (mevedel-session-permission-queue session)))
       (should (= 1 (length q)))
-      (should (equal "main" (plist-get (car q) :origin)))))
+      (should (equal "/root" (plist-get (car q) :origin)))))
 
   :doc "sweeping the visible head removes its interaction overlay"
   (let ((data-buf (generate-new-buffer " *test-pq-sweep-data*"))
@@ -1212,7 +1205,7 @@
                      :tool-name "Read"
                      :specifier-value "/tmp/agent.txt"
                      :include-always nil
-                     :origin "explorer--0123456789abcdef0123456789abcdef"
+                     :origin "/root/explorer"
                      :callback (lambda (o) (push (cons "agent" o) outcomes))))
               (setq swept-id
                     (mevedel-queue--entry-metadata-get
@@ -1223,13 +1216,13 @@
                      :tool-name "Read"
                      :specifier-value "/tmp/main.txt"
                      :include-always nil
-                     :origin "main"
+                     :origin "/root"
                      :callback (lambda (o) (push (cons "main" o) outcomes))))
               (should swept-id)
               (with-current-buffer view-buf
                 (should (gethash swept-id mevedel-view--interaction-overlays)))
               (mevedel-permission-queue-sweep-origin
-               "explorer--0123456789abcdef0123456789abcdef" session)))
+               "/root/explorer" session)))
           (should (eq 'aborted (cdr (assoc "agent" outcomes))))
           (should-not (assoc "main" outcomes))
           (with-current-buffer view-buf
@@ -1238,7 +1231,7 @@
                           mevedel-view--interaction-overlays))))
           (let ((q (mevedel-session-permission-queue session)))
             (should (= 1 (length q)))
-            (should (equal "main" (plist-get (car q) :origin)))))
+            (should (equal "/root" (plist-get (car q) :origin)))))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
       (when (buffer-live-p data-buf) (kill-buffer data-buf)))))
 

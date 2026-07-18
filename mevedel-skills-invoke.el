@@ -91,6 +91,7 @@
                   (tool callback args))
 
 ;; `mevedel-structs'
+(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
 (declare-function mevedel-request-hook-rules
@@ -1345,12 +1346,14 @@ inline command that does not own policy records only the ignored field names."
 The returned function restores the previous request and calls CALLBACK with
 its outcome exactly once."
   (let ((origin-buffer (current-buffer))
+        (origin (mevedel-current-origin))
         (previous-request (and (boundp 'mevedel--current-request)
                                mevedel--current-request))
         settled)
     (setq-local mevedel--current-request
                 (mevedel-request--create
                  :session session
+                 :origin origin
                  :file-snapshots (make-hash-table :test #'equal)
                  :skill-permission-rules rules
                  :hook-rules hooks))

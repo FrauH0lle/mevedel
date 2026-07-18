@@ -16,6 +16,8 @@
 (require 'mevedel-structs)
 (require 'mevedel-agents)
 (require 'mevedel-agent-exec)
+(require 'mevedel-permissions)
+(require 'mevedel-sandbox)
 (require 'mevedel-session-persistence)
 (require 'mevedel-hooks)
 (require 'mevedel-skills-prompt)
@@ -47,6 +49,7 @@ fire-count and payload."
           (partial-cell (list ""))
           (default-invocation
            (mevedel-agent-invocation--create
+            :path "/root/test_agent"
             :agent (mevedel-agent--create :name "explorer")
             :agent-id "explorer--callback-test"))
           (raw-callback (mevedel-agent-exec--make-callback
@@ -88,6 +91,7 @@ fire-count and payload."
   (let* ((buf (generate-new-buffer " *mev-agent-inject-append*"))
          (agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "explorer--inject"
                :buffer buf))
@@ -113,6 +117,7 @@ fire-count and payload."
   (let* ((buf (generate-new-buffer " *mev-agent-inject-prepend*"))
          (agent (mevedel-agent--create :name "explorer"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :agent agent
                :agent-id "explorer--inject"
                :buffer buf))
@@ -163,6 +168,7 @@ fire-count and payload."
 		 (let* ((session (mevedel-session--create :name "execution-owner"))
 			(agent-id "explorer--live-execution")
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent-id agent-id :parent-session session))
 			(fired nil)
 			(live-p t)
@@ -174,7 +180,7 @@ fire-count and payload."
 		   (cl-letf (((symbol-function 'mevedel-execution-owner-live-p)
 			      (lambda (seen-session seen-owner)
 				(should (eq session seen-session))
-				(should (equal agent-id seen-owner))
+				(should (equal "/root/test_agent" seen-owner))
 				live-p)))
 		     (funcall cb "Agent answer." info)
 		     (funcall cb t info)
@@ -189,6 +195,7 @@ fire-count and payload."
 			(main-cb (lambda (&rest args) (push args fired)))
 			(partial-cell (list "prefix: "))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent (mevedel-agent--create :name "explorer")))
 			(cb (mevedel-agent-exec--make-callback
 			     main-cb "explorer" "Test task"
@@ -208,6 +215,7 @@ fire-count and payload."
 		   (unwind-protect
 		       (let* ((agent (mevedel-agent--create :name "explorer"))
 			      (inv (mevedel-agent-invocation--create
+				    :path "/root/test_agent"
 				    :agent agent
 				    :buffer buf)))
 			 (with-current-buffer buf
@@ -323,6 +331,7 @@ fire-count and payload."
 				(buf (generate-new-buffer " *mev-agent-error-transcript*"))
 				(agent (mevedel-agent--create :name "explorer"))
 				(inv (mevedel-agent-invocation--create
+				      :path "/root/test_agent"
 				      :agent agent
 				      :agent-id "explorer--error1234567890abcdef"
 				      :description "Test task"
@@ -373,6 +382,7 @@ fire-count and payload."
 			 (let* ((buf (generate-new-buffer " *mev-agent-error-partial*"))
 				(agent (mevedel-agent--create :name "explorer"))
 				(inv (mevedel-agent-invocation--create
+				      :path "/root/test_agent"
 				      :agent agent
 				      :agent-id "explorer--partial-error"
 				      :description "Test task"
@@ -430,6 +440,7 @@ fire-count and payload."
 		       (with-current-buffer buf
 			 (let* ((agent (mevedel-agent--create :name "explorer"))
 				(inv (mevedel-agent-invocation--create
+				      :path "/root/test_agent"
 				      :agent agent
 				      :background-agents '("explorer--child-1"))))
 			   (mevedel-agent-exec-test--with-callback cb
@@ -462,6 +473,7 @@ fire-count and payload."
 		       (with-current-buffer buf
 			 (let* ((agent (mevedel-agent--create :name "explorer"))
 				(inv (mevedel-agent-invocation--create
+				      :path "/root/test_agent"
 				      :agent agent
 				      :messages (list (list :from "child"
 							    :body "result")))))
@@ -498,6 +510,7 @@ fire-count and payload."
 				(parent-buf (generate-new-buffer " *mev-agent-parent*"))
 				(agent (mevedel-agent--create :name "explorer"))
 				(inv (mevedel-agent-invocation--create
+				      :path "/root/test_agent"
 				      :agent agent
 				      :agent-id "explorer--linear"))
 				agent-buf)
@@ -517,6 +530,80 @@ fire-count and payload."
 			     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 			     (delete-directory root t)))
 
+			 :doc "shares root policy by reference through nested agent buffers"
+			 (let* ((root (file-name-as-directory
+			               (make-temp-file "mevedel-agent-policy-" t)))
+			        (workspace (mevedel-workspace--create
+			                    :type 'project :id root :root root
+			                    :name "agent"))
+			        (session (mevedel-session-create "main" workspace root))
+			        (parent-buf
+			         (generate-new-buffer " *mev-agent-policy-parent*"))
+			        (worker-inv
+			         (mevedel-agent-invocation--create
+			          :path "/root/worker"
+			          :agent (mevedel-agent--create :name "worker")
+			          :agent-id "worker--policy"))
+			        (nested-inv
+			         (mevedel-agent-invocation--create
+			          :path "/root/worker/verifier"
+			          :agent (mevedel-agent--create :name "verifier")
+			          :agent-id "verifier--policy"))
+			        worker-buf
+			        nested-buf)
+			   (setf (mevedel-session-permission-mode session) 'full-auto)
+			   (setf (mevedel-session-permission-rules session)
+			         '(("Edit" :path "/tmp/protected/**" :action deny)))
+			   (setf (mevedel-session-resource-grants session)
+			         '((:path "/tmp/protected/read.txt" :access read)))
+			   (unwind-protect
+			       (let ((mevedel-protected-paths
+			              '(("/tmp/protected/**" . inaccessible)))
+			             (mevedel-sandbox-mode 'required))
+			         (with-current-buffer parent-buf
+			           (setq-local mevedel--session session)
+			           (setq-local mevedel--workspace workspace))
+			         (cl-letf (((symbol-function 'gptel-mode) #'ignore))
+			           (setq worker-buf
+			                 (mevedel-agent-exec--allocate-agent-buffer
+			                  worker-inv parent-buf))
+			           (setq nested-buf
+			                 (mevedel-agent-exec--allocate-agent-buffer
+			                  nested-inv worker-buf)))
+			         (dolist (buffer (list worker-buf nested-buf))
+			           (should
+			            (eq session
+			                (buffer-local-value 'mevedel--session buffer))))
+			         (with-current-buffer nested-buf
+			           (should (eq 'required mevedel-sandbox-mode))
+			           (should
+			            (eq 'deny
+			                (mevedel-check-permission
+			                 "Edit"
+			                 :path "/tmp/protected/write.txt"
+			                 :session-rules
+			                 (mevedel-session-permission-rules mevedel--session)
+			                 :mode
+			                 (mevedel-session-permission-mode mevedel--session)
+			                 :resource-grants
+			                 (mevedel-session-resource-grants mevedel--session))))
+			           (should
+			            (eq 'allow
+			                (mevedel-check-permission
+			                 "Read"
+			                 :path "/tmp/protected/read.txt"
+			                 :resource-access 'read
+			                 :session-rules
+			                 (mevedel-session-permission-rules mevedel--session)
+			                 :mode
+			                 (mevedel-session-permission-mode mevedel--session)
+			                 :resource-grants
+			                 (mevedel-session-resource-grants mevedel--session))))))
+			     (when (buffer-live-p nested-buf) (kill-buffer nested-buf))
+			     (when (buffer-live-p worker-buf) (kill-buffer worker-buf))
+			     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
+			     (delete-directory root t)))
+
                          :doc "installs path-scoped skill activation in agent buffers"
                          (let* ((root (file-name-as-directory
                                        (make-temp-file "mevedel-agent-parent-" t)))
@@ -532,6 +619,7 @@ fire-count and payload."
                                 (agent (mevedel-agent--create
                                         :name "explorer"))
                                 (inv (mevedel-agent-invocation--create
+                                      :path "/root/test_agent"
                                       :agent agent
                                       :agent-id "explorer--skills"))
                                 agent-buf)
@@ -577,6 +665,7 @@ fire-count and payload."
                                             :name "explorer"))
                                           (inv
                                            (mevedel-agent-invocation--create
+                                            :path "/root/test_agent"
                                             :agent agent
                                             :agent-id
                                             (if background
@@ -668,6 +757,7 @@ fire-count and payload."
   (test)
   :doc "passes explicit Agent model and skill effort over workload policy"
   (let* ((inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :model-tier-override '(:tier strong)
                :skill-model-override '(:tier fast)
                :skill-effort-override 'high))
@@ -689,6 +779,7 @@ fire-count and payload."
   :doc "marks persisted transcript buffers dirty and saves them"
   (let* ((buf (generate-new-buffer " *mev-agent-refresh-transcript*"))
          (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
                :buffer buf
                :transcript-relative-path "agents/verifier.chat.org"))
          saved)
@@ -741,6 +832,7 @@ fire-count and payload."
 			(agent (mevedel-agent--create :name "explorer"))
 			(parent-buffer (generate-new-buffer " *mev-agent-parent-hooks*"))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id "explorer-1"
 			      :description "inspect hooks"
@@ -795,6 +887,7 @@ fire-count and payload."
 		 (let ((parent-buf (generate-new-buffer " *mev-agent-parent*"))
 		       (agent-buf (generate-new-buffer " *mev-agent-child*"))
 		       (inv (mevedel-agent-invocation--create
+		             :path "/root/test_agent"
 		             :agent (mevedel-agent-default)))
 		       (parent-tiers '((custom)))
 		       (parent-workloads '((explorer :tier custom)))
@@ -925,6 +1018,7 @@ fire-count and payload."
 		 :doc "only first-turn coordinator invocations force initial tool use"
 		 (let* ((agent (mevedel-agent--create :name "coordinator"))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :turn-count 0)))
 		   (should (mevedel-agent-exec--force-initial-tool-use-p
@@ -1137,6 +1231,7 @@ fire-count and payload."
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id "explorer--activity"))
 			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
@@ -1170,6 +1265,7 @@ fire-count and payload."
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id "explorer--activity-types"))
 			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
@@ -1203,6 +1299,7 @@ fire-count and payload."
 		 (let* ((agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id "explorer--wait"))
 			(parent-buf (generate-new-buffer " *mev-agent-wait-parent*"))
@@ -1243,6 +1340,7 @@ fire-count and payload."
 			(agent (mevedel-agent--create :name "explorer"
 						      :description "Explore"))
 			(inv (mevedel-agent-invocation--create
+			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id "explorer--ERRS"
 			      :description "survey"

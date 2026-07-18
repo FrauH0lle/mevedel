@@ -112,17 +112,9 @@ SESSION defaults to the current session."
     (mevedel-queue--set mevedel-permission-queue--spec sess queue)))
 
 (defun mevedel-permission-queue--attribution-origin (entry)
-  "Return ENTRY's verified agent origin for prompt attribution."
-  (let ((origin (plist-get entry :origin))
-        (session (plist-get entry :session)))
-    (when (and session
-               (not (equal origin "main"))
-               (or (assoc origin
-                          (mevedel-session-agent-transcripts session))
-                   (assoc origin (mevedel-session-agents session))
-                   (member origin
-                           (mevedel-session-background-agents session))))
-      origin)))
+  "Return ENTRY's non-root canonical path for prompt attribution."
+  (let ((origin (plist-get entry :origin)))
+    (and (not (equal origin "/root")) origin)))
 
 (defun mevedel-permission-queue--log-props (entry &rest props)
   "Return sanitized permission diagnostic properties for ENTRY plus PROPS."
@@ -167,7 +159,7 @@ ENTRY plist keys:
   :resource-access       -- `read' / `write' for exact filesystem grants
   :include-always        -- boolean
   :workspace             -- workspace struct or nil
-  :origin                -- \"main\" or a scoped request/agent identity
+  :origin                -- canonical requesting agent path
   :command               -- string (`bash' only)
   :analysis              -- normalized Bash analysis (`bash' only)
   :command-class         -- Bash command class (`bash' only)
@@ -177,11 +169,7 @@ ENTRY plist keys:
   :justification         -- user-facing reason (`sandbox' only)
   :callback              -- function: (lambda (outcome) ...)"
   (let ((origin (plist-get entry :origin)))
-    (unless (and (stringp origin)
-                 (or (equal origin "main")
-                     (string-match-p
-                      "\\`[^[:space:]]+--[[:xdigit:]]\\{32\\}\\'"
-                      origin)))
+    (unless (mevedel-agent-path-p origin)
       (error "Invalid permission queue origin: %S" origin)))
   (let ((session (or session (mevedel-permission-queue--current-session))))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
