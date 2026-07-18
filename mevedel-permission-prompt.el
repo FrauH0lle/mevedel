@@ -19,21 +19,21 @@
                   "mevedel-interaction-prompt" (buffer overlay))
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay result))
+(declare-function mevedel--prompt-attribution-line
+                  "mevedel-interaction-prompt" (origin))
 (declare-function mevedel--prompt-framed-body
                   "mevedel-interaction-prompt" (body face))
 (declare-function mevedel--prompt-key
                   "mevedel-interaction-prompt" (key))
 (defvar mevedel--prompt-overlays)
 
+(autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
+
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get
                   "mevedel-queue" (entry key))
 (declare-function mevedel-queue--entry-metadata-put
                   "mevedel-queue" (entry key value))
-
-;; `mevedel-view-agent'
-(declare-function mevedel-view--insert-attribution
-                  "mevedel-view-agent" (agent-id))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -174,6 +174,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
               (mevedel-view--interaction-register
                (list :kind 'permission
                      :id interaction-id
+                     :origin (or (plist-get entry :origin) "/root")
                      :count (or count 1)
                      :body (mevedel-permission--prompt-body
                             content include-always
@@ -200,15 +201,6 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
 ;;
 ;;; Prompt rendering
 
-(defun mevedel-permission--build-attribution-line (origin)
-  "Return a ` from <type>--<idshort>\n' line for ORIGIN, or empty string."
-  (cond
-   ((null origin) "")
-   ((equal origin "main") "")
-   ((fboundp 'mevedel-view--insert-attribution)
-    (concat (mevedel-view--insert-attribution origin) "\n"))
-   (t "")))
-
 (defun mevedel-permission--prompt-async-attributed
     (tool-name path include-always origin cont &optional count entry)
   "Display an attributed permission prompt and call CONT with its outcome."
@@ -216,7 +208,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
          (concat
           (propertize "Permission Request\n"
                       'font-lock-face '(:inherit bold :inherit warning))
-          (mevedel-permission--build-attribution-line origin)
+          (mevedel--prompt-attribution-line origin)
           "\n"
           (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
           (propertize (format "%s\n" tool-name)
@@ -314,7 +306,7 @@ session allow.  ONCE-ONLY hides every session-scoped choice."
             (if dangerous
                 '(:inherit bold :inherit error)
               '(:inherit bold :inherit warning)))
-           (mevedel-permission--build-attribution-line origin)
+           (mevedel--prompt-attribution-line origin)
            "\n"
            (propertize "Command: " 'font-lock-face 'font-lock-escape-face)
            (propertize (format "%s\n" command)
@@ -386,7 +378,7 @@ ENTRY follow the shared permission prompt contract."
             (filesystem-p "Additional Filesystem Permission Request\n")
             (t "Additional Network Permission Request\n"))
                       'font-lock-face '(:inherit bold :inherit warning))
-          (mevedel-permission--build-attribution-line origin)
+          (mevedel--prompt-attribution-line origin)
           "\n"
           (propertize "Tool: " 'font-lock-face 'font-lock-escape-face)
           (format "%s\n" tool-name)

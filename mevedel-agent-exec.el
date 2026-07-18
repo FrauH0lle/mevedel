@@ -131,6 +131,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-render-data-start-marker
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-require-path
+                  "mevedel-agents" (invocation))
 (declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-model-override
@@ -1611,7 +1613,7 @@ bookkeeping."
                       (require 'mevedel-execution)
                       (mevedel-execution-owner-live-p
                        (mevedel-agent-invocation-parent-session inv)
-                       (mevedel-agent-invocation-agent-id inv))))))))
+                       (mevedel-agent-invocation-require-path inv))))))))
     (let ((fired nil)
           (partial-prefix (or (car partial-cell) ""))
           (partial-chunks nil)

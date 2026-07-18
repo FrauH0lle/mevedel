@@ -1239,14 +1239,7 @@ REVISION-NUMBER identifies the correction round."
            (planner-request
             (mevedel-request--create
              :session session
-             :origin
-             (format
-              "goal-plan-revision--%s"
-              (md5
-               (format "%s:%s:%s"
-                       (mevedel-goal-id goal)
-                       (float-time)
-                       (random))))))
+             :origin "/root"))
            request-fsm
            tool-confirmation-overlay
            timer
@@ -2706,7 +2699,7 @@ Return `(:buffer BUFFER :accepted ARTIFACT)' for the sole target owner."
   (list :body plan-markdown
         :chat-buffer chat-buffer
         :guardian-reason guardian-reason
-        :origin "main"
+        :origin "/root"
         :session session
         :callback
         (lambda (outcome)

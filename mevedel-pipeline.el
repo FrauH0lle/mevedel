@@ -61,7 +61,7 @@
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-agent-id
+(declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
@@ -569,7 +569,7 @@ the hook runner."
        event event-plist callback session workspace request invocation))))
 
 (defun mevedel-pipeline--permission-origin (context &optional explicit-origin)
-  "Return the diagnostic origin for permission CONTEXT.
+  "Return the canonical agent path for permission CONTEXT.
 EXPLICIT-ORIGIN takes precedence when non-nil."
   (or explicit-origin
       (plist-get context :origin)
@@ -579,8 +579,8 @@ EXPLICIT-ORIGIN takes precedence when non-nil."
       (and-let* ((inv (plist-get context :invocation))
                  ((fboundp 'mevedel-agent-invocation-p))
                  ((mevedel-agent-invocation-p inv)))
-        (mevedel-agent-invocation-agent-id inv))
-      "main"))
+        (mevedel-agent-invocation-path inv))
+      "/root"))
 
 (defun mevedel-pipeline--permission-sanitized-pattern (tool-name pattern)
   "Return log-safe PATTERN metadata for TOOL-NAME."
@@ -951,9 +951,7 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                      (plist-get permission-context :include-always)
                      :workspace workspace
                      :origin
-                     ;; Resolve the leaf agent's canonical id by looking
-                     ;; up the invocation captured at dispatch time;
-                     ;; falls back to "main" for main-thread dispatches.
+                     ;; Preserve the canonical path captured at dispatch time.
                      (mevedel-pipeline--permission-origin
                       context (plist-get prompt-context :origin))
                      :callback
@@ -2046,10 +2044,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                               "Tool input repair audit construction failed"
                               :warning))
                            nil))
-                        :origin
-                        (and (fboundp 'mevedel-agent-invocation-p)
-                             (mevedel-agent-invocation-p invocation)
-                             (mevedel-agent-invocation-agent-id invocation))
+                        :origin (mevedel-current-origin)
                         :buffer dispatch-buffer
                         :default-directory workdir))
          (called nil)

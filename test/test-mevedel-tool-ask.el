@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'mevedel-interaction-prompt)
+(require 'mevedel-agent-runtime)
 (require 'mevedel-tool-ask)
 (require 'mevedel-structs)
 (require 'mevedel-agents)
@@ -274,7 +275,7 @@
          (agent (mevedel-agent--create :name "verifier"))
          (inv (mevedel-agent-invocation--create
                :agent agent
-               :agent-id "verifier--abc"
+               :agent-id "verifier--abc" :path "/root/verifier"
                :parent-session session
                :parent-data-buffer data-buffer
                :buffer agent-buffer))
@@ -318,13 +319,13 @@
          (agent (mevedel-agent--create :name "verifier"))
          (inv-a (mevedel-agent-invocation--create
                  :agent agent
-                 :agent-id "verifier--a"
+                 :agent-id "verifier--a" :path "/root/worker/a"
                  :parent-session session
                  :parent-data-buffer data-buffer
                  :buffer agent-buffer-a))
          (inv-b (mevedel-agent-invocation--create
                  :agent agent
-                 :agent-id "verifier--b"
+                 :agent-id "verifier--b" :path "/root/worker/b"
                  :parent-session session
                  :parent-data-buffer data-buffer
                  :buffer agent-buffer-b))
@@ -352,13 +353,34 @@
              (lambda (value) (setq result-b value))
              [(:question "B?" :options ["Yes" "No"])]))
           (with-current-buffer view-buffer
-            (should (= 2 (length mevedel--prompt-overlays))))
-          (with-current-buffer agent-buffer-a
-            (mevedel-request-end))
+            (should (= 2 (length mevedel--prompt-overlays)))
+            (let ((origins
+                   (mapcar
+                    (lambda (overlay)
+                      (overlay-get overlay
+                                   'mevedel-view-interaction-origin))
+                    mevedel--prompt-overlays)))
+              (should (member "/root/worker/a" origins))
+              (should (member "/root/worker/b" origins))))
+          (cl-letf
+              (((symbol-function
+                 'mevedel-agent-runtime--interrupted-agent-response)
+                (lambda (_invocation _reason) "interrupted"))
+               ((symbol-function 'mevedel-agent-runtime--finalize)
+                (lambda (invocation status)
+                  (setf (mevedel-agent-invocation-transcript-status invocation)
+                        status))))
+            (mevedel-agent-runtime-interrupt
+             inv-a "interrupted by /root"))
           (should (eq 'aborted result-a))
           (should-not result-b)
           (with-current-buffer view-buffer
-            (should (= 1 (length mevedel--prompt-overlays))))
+            (should (= 1 (length mevedel--prompt-overlays)))
+            (should
+             (equal "/root/worker/b"
+                    (overlay-get
+                     (car mevedel--prompt-overlays)
+                     'mevedel-view-interaction-origin))))
           (with-current-buffer agent-buffer-b
             (mevedel-request-end))
           (should (eq 'aborted result-b))

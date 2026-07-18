@@ -30,19 +30,22 @@
 (declare-function mevedel-session-record-file-access
                   "mevedel-file-state" (session path kind))
 
+;; `mevedel-interaction-prompt'
+(declare-function mevedel--prompt-attribution-line
+                  "mevedel-interaction-prompt" (origin))
+
 ;; `mevedel-permissions'
-(defvar mevedel-permission-mode)
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permissions"
                   (mode &optional prompt display-text hook-context))
+(defvar mevedel-permission-mode)
 
 ;; `mevedel-structs'
-(defvar mevedel--session)
-(defvar mevedel--current-request)
-(defvar mevedel--view-buffer)
-(defvar mevedel--data-buffer)
 (declare-function mevedel-request-push-canceller "mevedel-structs" (request canceller))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
+(defvar mevedel--data-buffer)
+(defvar mevedel--session)
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tool-fs--setup-diff-buffer "mevedel-tool-fs"
@@ -58,6 +61,8 @@
                   "mevedel-view-interaction" ())
 (declare-function mevedel-view--interaction-register
                   "mevedel-view-interaction" (descriptor))
+(declare-function mevedel-view--interaction-target-buffer
+                  "mevedel-view-interaction" (&optional data-buffer))
 (declare-function mevedel-view--interaction-unregister
                   "mevedel-view-interaction" (id))
 
@@ -97,13 +102,6 @@ to the full chat window height."
   "List of pending inline preview overlays in the current chat buffer.
 Ordered oldest first.  Each entry is an overlay with the
 `mevedel-inline-preview' property.")
-
-(defvar-local mevedel-preview-mode--canceller-registered-for nil
-  "Request struct registered for preview dismiss cancellation.
-This is the `mevedel-request' struct we registered the dismiss canceller
-onto, or nil.  Used so only the first preview per request pushes a thunk
-onto the composable cancellers list; subsequent overlays in the same
-request do not double-register.")
 
 (defvar mevedel-preview-mode--interaction-id-counter 0
   "Monotonic id counter for preview interaction-zone descriptors.")
@@ -149,36 +147,41 @@ operations under the `\\[mevedel-preview-mode-next]' prefix.
 (defun mevedel-preview-mode--register (overlay)
   "Register OVERLAY as a pending preview in its chat buffer.
 Activates `mevedel-preview-mode' if not already active and pushes
-a dismiss thunk onto the active request's cancellers list the first
-time a preview is registered for that request."
+a dismiss thunk onto the active request's cancellers list."
   (with-current-buffer (overlay-buffer overlay)
     (unless mevedel-preview-mode
       (mevedel-preview-mode 1))
-    (setq mevedel-preview-mode--pending
-          (append mevedel-preview-mode--pending (list overlay)))
     ;; Access the request from the data buffer (where gptel runs),
     ;; not the view buffer (where overlays live).
-    (let* ((data-buf (or (and (boundp 'mevedel--data-buffer)
+    (let* ((data-buf (or (overlay-get overlay 'mevedel--data-buffer)
+                         (and (boundp 'mevedel--data-buffer)
                               mevedel--data-buffer
                               (buffer-live-p mevedel--data-buffer)
                               mevedel--data-buffer)
                          (current-buffer)))
            (request (buffer-local-value 'mevedel--current-request data-buf)))
-      (when (and request
-                 (not (eq request mevedel-preview-mode--canceller-registered-for)))
-        (let ((buf (current-buffer)))
+      (setq mevedel-preview-mode--pending
+            (append mevedel-preview-mode--pending (list overlay)))
+      (when request
+        (let ((buf (current-buffer))
+              (owned-overlay overlay))
           (mevedel-request-push-canceller
            request
            (lambda ()
-             (when (buffer-live-p buf)
+             (when (and (buffer-live-p buf)
+                        (overlay-buffer owned-overlay))
                (with-current-buffer buf
-                 (mevedel-preview-mode-dismiss-all))))))
-        (setq mevedel-preview-mode--canceller-registered-for request)))
+                 (let ((final-callback
+                        (overlay-get owned-overlay
+                                     'mevedel--final-callback)))
+                   (mevedel-preview-mode--cleanup-overlay owned-overlay)
+                   (when final-callback
+                     (funcall final-callback "Error: aborted")))))))))
     ;; Killing the chat buffer outside `mevedel-abort' must still
     ;; settle the pending callbacks.  Idempotent -- `add-hook' is a
     ;; no-op when the function is already installed.
     (add-hook 'kill-buffer-hook #'mevedel-preview-mode-dismiss-all nil t)
-    (force-mode-line-update)))
+    (force-mode-line-update))))
 
 (defun mevedel-preview-mode--unregister (overlay)
   "Unregister OVERLAY from the pending preview list.
@@ -284,11 +287,8 @@ inserts the inline overlay, and registers it with `mevedel-preview-mode'.
 CALLBACK is delivered the final plist after approve/reject; APPLY-FN and
 TOOL-NAME carry through to the overlay."
   (let* ((data-buffer (current-buffer))
-         (chat-buffer (or (and (boundp 'mevedel--view-buffer)
-                               mevedel--view-buffer
-                               (buffer-live-p mevedel--view-buffer)
-                               mevedel--view-buffer)
-                          data-buffer))
+         (origin (mevedel-current-origin))
+         (chat-buffer (mevedel-view--interaction-target-buffer data-buffer))
          (root (or (mevedel-workspace--file-in-allowed-roots-p path data-buffer)
                    (file-name-directory (expand-file-name path))))
          (workspace (mevedel-workspace data-buffer))
@@ -300,6 +300,8 @@ TOOL-NAME carry through to the overlay."
      diff temp-file path callback
      chat-buffer workspace root rel-path
      :tool-name tool-name
+     :data-buffer data-buffer
+     :origin origin
      :diff-buffer diff-buffer
      :apply-fn apply-fn
      :collapsed (mevedel-preview-mode--should-collapse-p diff chat-buffer))))
@@ -364,10 +366,12 @@ start expanded."
       (and chat-height
            (> diff-lines (* chat-height mevedel-inline-preview-threshold))))))
 
-(defun mevedel-preview-mode--body-string (diff-string rel-path &optional user-modified)
+(defun mevedel-preview-mode--body-string
+    (diff-string rel-path &optional user-modified origin)
   "Return propertized body for DIFF-STRING at REL-PATH.
 
-USER-MODIFIED adds the edited marker when non-nil."
+USER-MODIFIED adds the edited marker when non-nil.  ORIGIN is the canonical
+requesting agent path used for attribution."
   (with-temp-buffer
     (when user-modified
       (insert (propertize "[Modified via ediff]\n" 'face 'warning)))
@@ -375,7 +379,7 @@ USER-MODIFIED adds the edited marker when non-nil."
       (insert diff-string)
       (insert "\n")
       (gptel-agent--fontify-block 'diff-mode diff-start (point))
-      (insert (mevedel-preview-mode--controls-body rel-path))
+      (insert (mevedel-preview-mode--controls-body rel-path origin))
       (font-lock-append-text-property
        (point-min) (point) 'font-lock-face (gptel-agent--block-bg))
       (buffer-string))))
@@ -383,23 +387,24 @@ USER-MODIFIED adds the edited marker when non-nil."
 (defun mevedel-preview-mode--create-interaction-overlay
     (diff-string temp-file real-path final-callback chat-buffer workspace root
                  rel-path user-modified _position tool-name diff-buffer apply-fn
-                 collapsed)
+                 collapsed data-buffer origin)
   "Create preview overlay for DIFF-STRING in CHAT-BUFFER's interaction zone.
 
 TEMP-FILE, REAL-PATH, FINAL-CALLBACK, WORKSPACE, ROOT, REL-PATH,
-USER-MODIFIED, TOOL-NAME, DIFF-BUFFER, APPLY-FN, and COLLAPSED describe
-the preview and its callbacks."
+USER-MODIFIED, TOOL-NAME, DIFF-BUFFER, APPLY-FN, COLLAPSED, DATA-BUFFER, and
+ORIGIN describe the preview and its callbacks."
   (with-current-buffer chat-buffer
     (let* ((id (mevedel-preview-mode--next-interaction-id))
            (prefix (if user-modified (length "[Modified via ediff]\n") 0))
            (body (mevedel-preview-mode--body-string
-                  diff-string rel-path user-modified))
+                  diff-string rel-path user-modified origin))
            (diff-body-start prefix)
            (diff-body-end (min (length body) (+ prefix 1 (length diff-string))))
            (overlay
             (mevedel-view--interaction-register
              (list :kind 'preview
                    :id id
+                   :origin origin
                    :count 1
                    :body body
                    :priority 300
@@ -414,11 +419,7 @@ the preview and its callbacks."
       (overlay-put overlay 'mevedel--rel-path rel-path)
       (overlay-put overlay 'mevedel--final-callback final-callback)
       (overlay-put overlay 'mevedel--user-modified user-modified)
-      (overlay-put overlay 'mevedel--data-buffer
-                   (or (and (boundp 'mevedel--data-buffer)
-                            (buffer-local-value 'mevedel--data-buffer
-                                                chat-buffer))
-                       chat-buffer))
+      (overlay-put overlay 'mevedel--data-buffer data-buffer)
       (overlay-put overlay 'mevedel--workspace workspace)
       (overlay-put overlay 'mevedel--root root)
       (when tool-name
@@ -434,7 +435,8 @@ the preview and its callbacks."
                                                             final-callback chat-buffer
                                                             workspace root rel-path
                                                             &key user-modified position tool-name
-                                                            diff-buffer apply-fn collapsed)
+                                                            diff-buffer apply-fn collapsed
+                                                            data-buffer origin)
   "Create an inline preview overlay in CHAT-BUFFER at POSITION.
 
 Arguments:
@@ -451,12 +453,17 @@ Arguments:
 - TOOL-NAME: Optional tool name for display (e.g., \"Edit\", \"Write\",
   \"Insert\")
 - DIFF-BUFFER: Optional diff buffer to associate with the overlay
+- APPLY-FN: Optional function that applies the staged change
+- COLLAPSED: Non-nil starts the preview folded
+- DATA-BUFFER: Authoritative request and session buffer
+- ORIGIN: Canonical path of the requesting agent
 
 Returns the created overlay."
   (if (mevedel-preview-mode--view-interaction-buffer-p chat-buffer)
       (mevedel-preview-mode--create-interaction-overlay
        diff-string temp-file real-path final-callback chat-buffer workspace root
-       rel-path user-modified position tool-name diff-buffer apply-fn collapsed)
+       rel-path user-modified position tool-name diff-buffer apply-fn collapsed
+       data-buffer origin)
     (with-current-buffer chat-buffer
       (save-excursion
         (goto-char (or position
@@ -478,7 +485,7 @@ Returns the created overlay."
               (org-escape-code-in-region start (1- (point))))
             (setq diff-body-start-offset (- diff-start start)
                   diff-body-end-offset (- (point) start)))
-          (insert (mevedel-preview-mode--controls-body rel-path))
+          (insert (mevedel-preview-mode--controls-body rel-path origin))
           ;; Apply background color to the full preview region: diff body
           ;; plus the controls row.  Syntax fontification above remains
           ;; scoped to the actual diff.
@@ -500,10 +507,8 @@ Returns the created overlay."
             ;; Store the data buffer (where session and workspace live),
             ;; not the view buffer (where the overlay is displayed).
             (overlay-put ov 'mevedel--data-buffer
-                         (or (and (boundp 'mevedel--data-buffer)
-                                  (buffer-local-value 'mevedel--data-buffer
-                                                      chat-buffer))
-                             chat-buffer))
+                         (or data-buffer chat-buffer))
+            (overlay-put ov 'mevedel-view-interaction-origin origin)
             (overlay-put ov 'mevedel--workspace workspace)
             (overlay-put ov 'mevedel--root root)
             (when tool-name
@@ -542,12 +547,13 @@ Returns the created overlay."
           (propertize "Keys: C-c C-c approve  C-c C-k reject  C-c C-e edit  C-c C-f feedback  S trust-rest  TAB toggle\n"
                       'face 'help-key-binding)))
 
-(defun mevedel-preview-mode--controls-body (rel-path)
-  "Return the interaction-zone controls body for preview REL-PATH."
+(defun mevedel-preview-mode--controls-body (rel-path &optional origin)
+  "Return interaction controls for REL-PATH attributed to ORIGIN."
   (concat
    "\n"
    (propertize "\n" 'font-lock-face
                '(:inherit font-lock-string-face :underline t :extend t))
+   (mevedel--prompt-attribution-line origin)
    "Proposed changes to "
    (propertize (format "%s\n" rel-path)
                'font-lock-face 'font-lock-constant-face)
@@ -891,6 +897,9 @@ scratch for a clean, well-formed diff."
                        :user-modified t
                        :position overlay-start
                        :tool-name tool-name
+                       :data-buffer data-buffer
+                       :origin
+                       (overlay-get ov 'mevedel-view-interaction-origin)
                        :diff-buffer new-diff-buffer
                        :apply-fn apply-fn
                        :collapsed (mevedel-preview-mode--should-collapse-p
@@ -960,14 +969,13 @@ the last pending preview."
 (defun mevedel-preview-mode-dismiss-all ()
   "Settle every pending preview overlay with `Error: aborted'.
 
-Used as: (a) the canceller thunk pushed onto the request's cancellers
-list when the first preview is registered, (b) the buffer-local
-`kill-buffer-hook' entry installed alongside.  Each overlay's final
-callback IS the tool callback (preview-mode is the degenerate case
-where the UI/tool layers collapse), so firing it with a tool-result
-string is the only way to advance an FSM parked in TOOL on this
-preview.  Earlier behavior silently dropped the callback and stranded
-the FSM."
+Used by the buffer-local `kill-buffer-hook' and explicit batch dismissal.
+This command is deliberately buffer-wide for teardown and explicit batch
+dismissal.  Each overlay's final callback IS the tool callback (preview-mode
+is the degenerate case where the UI/tool layers collapse), so firing it with
+a tool-result string is the only way to advance an FSM parked in TOOL on this
+preview.  Earlier behavior silently dropped the callback and stranded the
+FSM."
   (interactive)
   (dolist (ov (copy-sequence mevedel-preview-mode--pending))
     (when (overlay-buffer ov)

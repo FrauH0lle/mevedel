@@ -60,14 +60,18 @@
                   "mevedel-execution"
                   (session owner execution-id callback))
 
+;; `mevedel-interaction-prompt'
+(declare-function mevedel--prompt-attribution-line
+                  "mevedel-interaction-prompt" (origin))
+
+(autoload 'mevedel--prompt-attribution-line "mevedel-interaction-prompt")
+
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
 ;; `mevedel-permission-prompt'
-(declare-function mevedel-permission--build-attribution-line
-                  "mevedel-permission-prompt" (origin))
 (declare-function mevedel-permission--prompt-async-eval
                   "mevedel-permission-prompt"
                   (content cont &optional count entry))
@@ -1473,10 +1477,7 @@ PRESERVE-UI describe the requested execution scope."
                          expression))
          (content (concat
                    "The LLM is requesting permission to evaluate elisp.\n\n"
-                   (when (and origin
-                              (not (equal origin "main"))
-                              (fboundp 'mevedel-permission--build-attribution-line))
-                     (mevedel-permission--build-attribution-line origin))
+                   (mevedel--prompt-attribution-line origin)
                    (propertize "Mode: " 'font-lock-face 'font-lock-escape-face)
                    (format "%s" (or mode "live"))
                    (when (equal (or mode "live") "live")

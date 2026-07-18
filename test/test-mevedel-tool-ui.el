@@ -797,7 +797,7 @@
   :doc "request cancellation removes the root waiter without a stale callback"
   (let* ((session (mevedel-tool-ui-test--session))
          (request (mevedel-request--create
-                   :session session :origin "main"))
+                   :session session :origin "/root"))
          delivered
          scheduled)
     (cl-letf (((symbol-function 'run-at-time)

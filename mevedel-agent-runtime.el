@@ -97,6 +97,10 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-turn
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-path
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-require-path
+                  "mevedel-agents" (invocation))
 (declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
@@ -140,6 +144,9 @@
 (defvar mevedel-session--read-only-mode)
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-cancel
+                  "mevedel-structs" (request &optional abort-plan-queue))
+(declare-function mevedel-request-p "mevedel-structs" (object))
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-background-agents
@@ -150,6 +157,7 @@
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
@@ -208,7 +216,7 @@ model request merely because a background process settled."
          (require 'mevedel-execution)
          (mevedel-execution-owner-live-p
           (mevedel-agent-invocation-parent-session invocation)
-          (mevedel-agent-invocation-agent-id invocation)))))
+          (mevedel-agent-invocation-require-path invocation)))))
 
 (defun mevedel-agent-runtime--ctx-push-message (ctx message)
   "Queue MESSAGE on CTX's inbound mailbox."
@@ -327,7 +335,9 @@ model request merely because a background process settled."
               ((not (mevedel-agent-runtime--ctx-background-agents invocation)))
               (session (mevedel-agent-invocation-parent-session invocation))
               (agent-id (mevedel-agent-invocation-agent-id invocation))
-              ((not (mevedel-execution-owner-live-p session agent-id)))
+              ((not (mevedel-execution-owner-live-p
+                     session
+                     (mevedel-agent-invocation-require-path invocation))))
               (parent-buffer
                (mevedel-agent-invocation-parent-data-buffer invocation))
               (fsm (or known-fsm
@@ -370,12 +380,12 @@ then settle directly in DONE, but this function never launches a request.
 Return non-nil only after the message is secured."
   (when (and (stringp body)
              (or (and (mevedel-session-p context)
-                      (equal owner "main"))
+                      (equal owner "/root"))
                  (and (mevedel-agent-invocation-p context)
                       (equal owner
-                             (mevedel-agent-invocation-agent-id context))
+                             (mevedel-agent-invocation-require-path context))
                       (mevedel-agent-runtime--background-agent-fsm
-                       owner
+                       (mevedel-agent-invocation-agent-id context)
                        (mevedel-agent-invocation-parent-data-buffer
                         context)))))
     (mevedel-agent-runtime--ctx-push-message
@@ -694,7 +704,7 @@ not be lost."
                       (require 'mevedel-execution)
                       (mevedel-execution-owner-live-p
                        (mevedel-agent-invocation-parent-session invocation)
-                       (mevedel-agent-invocation-agent-id invocation)))))))
+                       (mevedel-agent-invocation-require-path invocation)))))))
 
 (defun mevedel-agent-runtime--background-agent-fsm (agent-id parent-buffer)
   "Return AGENT-ID's child FSM from PARENT-BUFFER's registry."
@@ -1948,6 +1958,11 @@ Agent id: %s"
             (setf (gptel-fsm-info fsm)
                   (plist-put (gptel-fsm-info fsm)
                              :callback callback)))))
+      (when (buffer-live-p agent-buffer)
+        (with-current-buffer agent-buffer
+          (when (and (boundp 'mevedel--current-request)
+                     (mevedel-request-p mevedel--current-request))
+            (mevedel-request-cancel mevedel--current-request))))
       (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
       (when (and fsm
                  (not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))))
@@ -1974,7 +1989,7 @@ unobserved transcript buffer."
           (when session
             (require 'mevedel-execution)
             (mevedel-execution-stop-owner
-             session (mevedel-agent-invocation-agent-id invocation))
+             session (mevedel-agent-invocation-require-path invocation))
             (require 'mevedel-session-persistence)
             (mevedel-session-persistence--update-transcript-entry
              session (mevedel-agent-invocation-agent-id invocation)
@@ -1994,7 +2009,7 @@ unobserved transcript buffer."
           (when (and session (eq status 'completed))
             (require 'mevedel-tool-task)
             (when (mevedel-tool-task-finalize-owner
-                   session (mevedel-agent-invocation-agent-id invocation)
+                   session (mevedel-agent-invocation-require-path invocation)
                    status)
               (when (buffer-live-p parent-buf)
                 (with-current-buffer parent-buf
@@ -2203,13 +2218,16 @@ defaults to the data buffer reachable from the current buffer."
              skill-model-override skill-effort-override
              skill-hook-rules
              on-invocation on-settle
+             path
              retained-id retained-buffer retained-transcript)
   "Dispatch AGENT with DESCRIPTION and PROMPT, delivering to MAIN-CB.
 
 AGENT is the resolved `mevedel-agent' struct -- caller has already
 verified it is non-nil.  BACKGROUND, MODEL-TIER, SKILL-PERMISSION-RULES,
 SKILL-MODEL-OVERRIDE, SKILL-EFFORT-OVERRIDE, SKILL-HOOK-RULES, and
-ON-INVOCATION seeds the invocation before request dispatch.  ON-SETTLE, when
+ON-INVOCATION seeds the invocation before request dispatch.  PATH is the
+canonical session-tree address supplied by durable agent control; direct
+runtime callers receive a unique canonical path below root.  ON-SETTLE, when
 non-nil, owns background settlement instead of the default mailbox path.
 RETAINED-ID, RETAINED-BUFFER, and RETAINED-TRANSCRIPT continue an existing
 conversation identity rather than allocating a new one.
@@ -2251,6 +2269,12 @@ resolver and permission resolver pick them up."
                                (md5 (format "%s%s%s%s"
                                             (system-name) (emacs-pid)
                                             (current-time) (random))))))
+         (canonical-path
+          (or path
+              (format "/root/%s_%s"
+                      (replace-regexp-in-string
+                       "[^a-z0-9_]" "_" (downcase agent-type))
+                      (substring (md5 agent-id) 0 8))))
          (invocation (mevedel-agent-invocation-create agent))
          (parent-data-buffer (current-buffer))
          (parent-session (and (boundp 'mevedel--session) mevedel--session))
@@ -2259,6 +2283,7 @@ resolver and permission resolver pick them up."
          (fired nil))
     ;; --- Metadata setup ---
     (setf (mevedel-agent-invocation-agent-id invocation) agent-id)
+    (setf (mevedel-agent-invocation-path invocation) canonical-path)
     (setf (mevedel-agent-invocation-description invocation) description)
     (setf (mevedel-agent-invocation-parent-session invocation) parent-session)
     (setf (mevedel-agent-invocation-parent-data-buffer invocation)
@@ -2672,6 +2697,7 @@ affordance.  Field set:
 
   (:kind agent-transcript
    :agent-id ID
+   :path PATH
    :transcript-relative-path REL
    :status STATUS
    :calls N
@@ -2688,6 +2714,8 @@ path or the response is not a string."
                        invocation)))
          (id (and (mevedel-agent-invocation-p invocation)
                   (mevedel-agent-invocation-agent-id invocation)))
+         (path (and (mevedel-agent-invocation-p invocation)
+                    (mevedel-agent-invocation-path invocation)))
          (calls (and (mevedel-agent-invocation-p invocation)
                      (mevedel-agent-invocation-call-count invocation)))
          (started-at (and (mevedel-agent-invocation-p invocation)
@@ -2708,6 +2736,7 @@ path or the response is not a string."
               :render-data (append
                             (list :kind 'agent-transcript
                                   :agent-id id
+                                  :path path
                                   :transcript-relative-path rel
                                   :status status
                                   :calls (or calls 0))

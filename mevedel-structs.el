@@ -9,16 +9,27 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-require-path
+                  "mevedel-agents" (invocation))
+(defvar mevedel--agent-invocation)
+
+;; `mevedel-goal'
+(declare-function mevedel-plan-queue-abort-all
+                  "mevedel-goal" (&optional session))
+
+;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-origin
                   "mevedel-permission-queue"
                   (origin &optional session no-render))
-(declare-function mevedel-plan-queue-abort-all
-                  "mevedel-goal" (&optional session))
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
 
-(defvar mevedel--agent-invocation)
+(defun mevedel-agent-path-p (path)
+  "Return non-nil when PATH is a canonical address in an agent tree."
+  (and (stringp path)
+       (let ((case-fold-search nil))
+         (string-match-p
+          "\\`/root\\(?:/[a-z0-9_]+\\)*\\'" path))))
 
 
 ;;
@@ -241,7 +252,7 @@ workspace."
   invoked-skills
   ;; heterogeneous FIFO permission queue.  Entries are
   ;; plists with :kind (`generic' / `bash' / `eval'), :origin (the
-  ;; canonical agent-id or "main"), :callback (continuation
+  ;; canonical requesting agent path), :callback (continuation
   ;; receiving the queue's outcome vocabulary), and kind-specific
   ;; fields.  Transient runtime state -- never persisted to the
   ;; sidecar; empty at every completed-turn boundary because
@@ -296,7 +307,7 @@ workspace."
   subject           ; string: short one-line summary
   description       ; string or nil: detailed notes
   status            ; symbol: pending, in-progress, completed
-  owner             ; string or nil: agent name that owns this task
+  owner             ; string or nil: canonical agent path or user bucket
   blocks            ; list of task IDs this task blocks
   blocked-by        ; list of task IDs blocking this task
   completed-turn    ; integer or nil: turn when status changed to completed
@@ -453,7 +464,7 @@ Created at request start, cleared in the termination handler."
   pending-plan      ; pending plan action plist
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
-  origin            ; "main" or scoped request/agent identity
+  origin            ; canonical requesting agent path
   ;; Rules accumulated by an owning skill die with the request struct.
   skill-permission-rules
   hook-rules)
@@ -549,8 +560,8 @@ only call sites that may invoke cancellers."
                            mevedel--agent-invocation))
                  ((fboundp 'mevedel-agent-invocation-p))
                  ((mevedel-agent-invocation-p inv)))
-        (mevedel-agent-invocation-agent-id inv))
-      "main"))
+        (mevedel-agent-invocation-require-path inv))
+      "/root"))
 
 (defun mevedel-request-begin (session &optional directive-uuid)
   "Create a new request for SESSION, guarding against stale requests.
@@ -569,7 +580,7 @@ the new request struct."
                    :started-at (current-time)
                    :origin origin)))
     (setq mevedel--current-request request)
-    (when (equal origin "main")
+    (when (equal origin "/root")
       (setf (mevedel-session-agent-root-activity session) 'running))
     request))
 
@@ -580,7 +591,7 @@ approvals normally outlive the request that presented them; when
 ABORT-PLAN-QUEUE is non-nil, abort them too."
   (when request
     (let ((session (mevedel-request-session request))
-          (origin (or (mevedel-request-origin request) "main")))
+          (origin (or (mevedel-request-origin request) "/root")))
       (mevedel-request-drain-cancellers request)
       (when (fboundp 'mevedel-permission-queue-sweep-origin)
         (mevedel-permission-queue-sweep-origin origin session))
@@ -593,7 +604,7 @@ ABORT-PLAN-QUEUE is non-nil, abort them too."
   (when mevedel--current-request
     (let ((request mevedel--current-request))
       (mevedel-request-cancel request abort-plan-queue)
-      (when (equal (mevedel-request-origin request) "main")
+      (when (equal (mevedel-request-origin request) "/root")
         (setf (mevedel-session-agent-root-activity
                (mevedel-request-session request))
               'idle)))

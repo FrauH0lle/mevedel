@@ -39,6 +39,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-path
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
@@ -49,6 +51,7 @@
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 
 ;; `mevedel-structs'
+(declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session--set-agent-registry
                   "mevedel-structs" (session registry))
 (declare-function mevedel-session--set-agent-root-waiter
@@ -152,21 +155,12 @@
               (car entry))
              :warning)))))))
 
-(defun mevedel-agent-control--canonical-path-p (path)
-  "Return non-nil when PATH is a canonical agent path."
-  (and (stringp path)
-       (let ((case-fold-search nil))
-         (string-match-p
-          "\\`/root\\(?:/[a-z0-9_]+\\)*\\'" path))))
-
 (defun mevedel-agent-control--path-for-invocation (session invocation)
   "Return INVOCATION's retained canonical path in SESSION."
-  (let ((agent-id (mevedel-agent-invocation-agent-id invocation)))
-    (car (cl-find agent-id
-                  (mevedel-session-agent-registry session)
-                  :key (lambda (item)
-                         (mevedel-agent-record-id (cdr item)))
-                  :test #'equal))))
+  (let ((path (mevedel-agent-invocation-path invocation)))
+    (and (mevedel-agent-path-p path)
+         (assoc path (mevedel-session-agent-registry session))
+         path)))
 
 (defun mevedel-agent-control-current-path (session)
   "Return the current caller's canonical path in SESSION."
@@ -176,11 +170,11 @@
         "/root"
       (or (mevedel-agent-control--path-for-invocation session invocation)
           (error "Current agent is not registered: %s"
-                 (mevedel-agent-invocation-agent-id invocation))))))
+                 (mevedel-agent-invocation-path invocation))))))
 
 (defun mevedel-agent-control-resolve-path (session caller-path target)
   "Resolve TARGET from CALLER-PATH to an addressable path in SESSION."
-  (unless (mevedel-agent-control--canonical-path-p caller-path)
+  (unless (mevedel-agent-path-p caller-path)
     (error "Invalid caller agent path: %s" caller-path))
   (unless (and (stringp target) (not (string-empty-p target)))
     (user-error "Agent target must be a non-empty path"))
@@ -188,7 +182,7 @@
          (if (string-prefix-p "/" target)
              target
            (concat caller-path "/" target))))
-    (unless (mevedel-agent-control--canonical-path-p path)
+    (unless (mevedel-agent-path-p path)
       (user-error "Invalid agent target: %s" target))
     (unless (or (equal path "/root")
                 (assoc path (mevedel-session-agent-registry session)))
@@ -377,7 +371,7 @@ Return the resolved recipient path.  Sending never activates a turn."
 (defun mevedel-agent-control-list-agents (session &optional path-prefix)
   "Return SESSION's minimal roster, optionally below PATH-PREFIX."
   (when (and path-prefix
-             (not (mevedel-agent-control--canonical-path-p path-prefix)))
+             (not (mevedel-agent-path-p path-prefix)))
     (user-error "Invalid agent path prefix: %s" path-prefix))
   (let* ((records
           (mapcar
@@ -412,8 +406,11 @@ Return the resolved recipient path.  Sending never activates a turn."
   "Return CONTEXT's canonical path in its root session."
   (if (mevedel-session-p context)
       "/root"
-    (when-let* ((session (mevedel-agent-invocation-parent-session context)))
-      (mevedel-agent-control--path-for-invocation session context))))
+    (let ((session (mevedel-agent-invocation-parent-session context)))
+      (or (and session
+               (mevedel-agent-control--path-for-invocation session context))
+          (error "Agent invocation is not registered: %s"
+                 (mevedel-agent-invocation-agent-id context))))))
 
 (defun mevedel-agent-control-direct-children (session parent-path)
   "Return sorted path and role references below PARENT-PATH in SESSION."
@@ -526,6 +523,10 @@ Return the resolved recipient path.  Sending never activates a turn."
 
 (defun mevedel-agent-control--record-invocation (record invocation)
   "Attach INVOCATION and its conversation location to RECORD."
+  (unless (equal (mevedel-agent-invocation-path invocation)
+                 (mevedel-agent-record-path record))
+    (error "Agent invocation path mismatch: %s"
+           (mevedel-agent-invocation-path invocation)))
   (setf (mevedel-agent-record-id record)
         (mevedel-agent-invocation-agent-id invocation))
   (setf (mevedel-agent-record-invocation record) invocation)
@@ -554,6 +555,7 @@ Return the resolved recipient path.  Sending never activates a turn."
          :parent-fsm parent-fsm
          :message-handler message-handler
          :terminal-handler terminal-handler
+         :path (mevedel-agent-record-path record)
          :retained-id (mevedel-agent-record-id record)
          :retained-buffer buffer
          :retained-transcript
@@ -657,6 +659,7 @@ Return the committed retained record."
                :parent-fsm parent-fsm
                :message-handler message-handler
                :terminal-handler terminal-handler
+               :path (mevedel-agent-record-path record)
                :on-invocation
                (apply-partially
                 #'mevedel-agent-control--record-invocation record)

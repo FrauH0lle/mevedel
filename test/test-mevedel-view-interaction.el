@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'gptel-agent-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -25,6 +26,7 @@
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-view-zone)
 
@@ -422,7 +424,7 @@
                :specifier-key :path
                :specifier-value "/tmp/after-status.txt"
                :include-always nil
-               :origin "verifier--abcdef0123456789abcdef0123456789"
+               :origin "/root/verifier"
                :callback (lambda (outcome) (push outcome outcomes)))
          session))
       (with-current-buffer view-buf
@@ -470,7 +472,7 @@
                        :specifier-key :path
                        :specifier-value captured-path
                        :include-always nil
-                       :origin "main"
+                       :origin "/root"
                        :callback
                        (lambda (outcome)
                          (push (cons captured-path outcome) outcomes)))
@@ -769,7 +771,7 @@
             (should (memq 'plan kinds))
             (should (memq 'permission kinds)))))))
 
-  :doc "agent-owned permission prompt stays in parent view after parent request end"
+  :doc "nested permission stays root-owned and preserves the active composer"
   (mevedel-view-test--with-buffers
       (let* ((session (mevedel-session--create
                        :name "test"
@@ -781,11 +783,15 @@
              (agent (mevedel-agent--create :name "verifier"))
              (inv (mevedel-agent-invocation-create agent))
              (agent-buf (generate-new-buffer " *test-agent-perm*"))
+             (origin "/root/worker/verifier")
+             (draft "> first line\nsecond line")
+             (point-offset (length "> first"))
              (outcomes nil))
         (unwind-protect
             (progn
               (setf (mevedel-agent-invocation-agent-id inv)
                     "verifier--0123456789abcdef0123456789abcdef")
+              (setf (mevedel-agent-invocation-path inv) origin)
               (setf (mevedel-agent-invocation-parent-data-buffer inv)
                     data-buf)
               (setf (mevedel-agent-invocation-parent-session inv)
@@ -794,12 +800,25 @@
                 (setq-local mevedel--session session)
                 (mevedel-request-begin session))
               (with-current-buffer view-buf
-                (setq-local mevedel--session session))
+                (setq-local mevedel--session session)
+                (mevedel-view-test--insert-composer-draft
+                 draft point-offset))
+              (setf (mevedel-session-agent-registry session)
+                    (list
+                     (cons "/root/worker"
+                           (mevedel-agent-record--create
+                            :path "/root/worker" :parent-path "/root"
+                            :activity 'idle))
+                     (cons origin
+                           (mevedel-agent-record--create
+                            :path origin :parent-path "/root/worker"
+                            :activity 'running :invocation inv))))
               (with-current-buffer agent-buf
                 (org-mode)
                 (setq-local mevedel--session session)
                 (setq-local mevedel--agent-invocation inv)
-                (setq-local mevedel--view-buffer view-buf))
+                (setq-local mevedel--view-buffer view-buf)
+                (mevedel-request-begin session))
               (cl-letf (((symbol-function 'gptel-agent--block-bg)
                          (lambda () 'ask)))
                 (with-current-buffer agent-buf
@@ -809,7 +828,7 @@
                          :specifier-key :path
                          :specifier-value "/tmp/from-agent.txt"
                          :include-always nil
-                         :origin "verifier--0123456789abcdef0123456789abcdef"
+                         :origin (mevedel-current-origin)
                          :callback
                          (lambda (outcome)
                            (push outcome outcomes)))
@@ -819,13 +838,28 @@
                       (mevedel-queue--entry-metadata-get
                        entry :interaction-id)))
                 (should interaction-id)
+                (should (= 1 (mevedel-agent-control--active-count session)))
+                (should (equal origin (plist-get entry :origin)))
                 (with-current-buffer view-buf
-                  (should (gethash interaction-id
-                                   mevedel-view--interaction-overlays))
+                  (let ((overlay
+                         (gethash interaction-id
+                                  mevedel-view--interaction-overlays)))
+                    (should overlay)
+                    (should
+                     (equal origin
+                            (overlay-get
+                             overlay 'mevedel-view-interaction-origin))))
                   (should (string-match-p
                            "Permission Request"
                            (buffer-substring-no-properties
                             (point-min) (point-max))))
+                  (should (string-match-p
+                           (regexp-quote (format "from %s" origin))
+                           (buffer-substring-no-properties
+                            (point-min) (point-max))))
+                  (should (string= draft (mevedel-view--input-text)))
+                  (should (= (point)
+                             (+ (mevedel-view--input-start) point-offset)))
                   (should-not mevedel--prompt-overlays))
                 (with-current-buffer agent-buf
                   (should-not
@@ -836,6 +870,7 @@
                 (with-current-buffer data-buf
                   (mevedel-request-end))
                 (should-not outcomes)
+                (should (= 1 (mevedel-agent-control--active-count session)))
                 (should (= 1 (length
                               (mevedel-session-permission-queue session))))
                 (with-current-buffer view-buf
@@ -851,7 +886,13 @@
                   (should (string-match-p
                            "Permission Request"
                            (buffer-substring-no-properties
-                            (point-min) (point-max)))))))
+                            (point-min) (point-max))))
+                  (should (string= draft (mevedel-view--input-text)))
+                  (should (= (point)
+                             (+ (mevedel-view--input-start) point-offset))))
+                (with-current-buffer agent-buf
+                  (mevedel-request-end))
+                (should (equal '(aborted) outcomes))))
           (when (buffer-live-p agent-buf)
             (kill-buffer agent-buf)))))
 

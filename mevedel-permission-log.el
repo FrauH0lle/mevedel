@@ -11,18 +11,15 @@
 
 (eval-when-compile (require 'cl-lib))
 
-;; `mevedel-structs'
-(declare-function mevedel-session-permission-log-pending
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-agent-id
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 
+;; `mevedel-structs'
+(declare-function mevedel-session-permission-log-pending
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -61,20 +58,6 @@
                  (fboundp 'mevedel-agent-invocation-parent-session)
                  (mevedel-agent-invocation-parent-session
                   mevedel--agent-invocation)))))))
-
-(defun mevedel-permission-log-origin (&optional buffer)
-  "Return the prompt origin visible from BUFFER."
-  (let ((buf (or buffer (current-buffer))))
-    (or
-     (and (buffer-live-p buf)
-          (with-current-buffer buf
-            (and (boundp 'mevedel--agent-invocation)
-                 (fboundp 'mevedel-agent-invocation-p)
-                 (mevedel-agent-invocation-p mevedel--agent-invocation)
-                 (fboundp 'mevedel-agent-invocation-agent-id)
-                 (mevedel-agent-invocation-agent-id
-                  mevedel--agent-invocation))))
-     "main")))
 
 (defun mevedel-permission-log-path (session)
   "Return the persistent permission log path for SESSION, or nil."

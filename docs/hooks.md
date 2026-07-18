@@ -282,7 +282,7 @@ Every event plist should include:
 - `:workspace-root`
 - `:model`
 - `:turn-id`
-- `:origin` (`"main"` or agent id)
+- `:origin` (`/root` or a canonical retained agent path)
 
 Tool events add:
 

@@ -543,7 +543,7 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
           (mevedel-execution--record-create
            :callback callback
            :origin (mevedel-execution--origin-create
-                    :owner (or owner "main") :session session)
+                    :owner (or owner "/root") :session session)
            :spool-path (make-temp-file "mevedel-execution-output-")
            :started-at (float-time)
            :teardown-function teardown-function
@@ -1200,7 +1200,7 @@ terminal settlement."
              :origin
              (mevedel-execution--origin-create
               :data-buffer data-buffer
-              :owner (or owner "main")
+              :owner (or owner "/root")
               :owner-context owner-context
               :session session
               :tool-args tool-args
@@ -1256,7 +1256,7 @@ terminal settlement."
                  (mevedel-execution--record-yielded-p record)
                  (equal (mevedel-execution--origin-owner
                          (mevedel-execution--record-origin record))
-                        (or owner "main")))
+                        (or owner "/root")))
       (signal 'mevedel-execution-not-found
               (list "No yielded execution with that id")))
     record))
@@ -1332,7 +1332,7 @@ after WAIT-MS while the process remains live."
                   (not (mevedel-execution--record-finished-p record))
                   (equal (mevedel-execution--origin-owner
                           (mevedel-execution--record-origin record))
-                         (or owner "main")))
+                         (or owner "/root")))
          (push (mevedel-execution--facts record) facts)))
      (mevedel-execution--state-records state))
     (nreverse facts)))

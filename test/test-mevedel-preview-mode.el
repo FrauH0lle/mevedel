@@ -5,6 +5,8 @@
 ;;; Code:
 
 (require 'mevedel-preview-mode)
+(require 'mevedel-agent-runtime)
+(require 'mevedel-agents)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-tool-fs)
@@ -416,7 +418,6 @@ cleanup."
       (should-not (overlay-buffer a))
       (should-not (overlay-buffer b)))))
 
-
 ;;
 ;;; Ediff stub cleanup
 
@@ -551,7 +552,7 @@ cleanup."
                             mevedel--current-request))))
       (should (functionp (car (mevedel-request-cancellers
                                mevedel--current-request))))))
-  :doc "registering a second preview in the same request does not double-register"
+  :doc "each preview in one request receives its own canceller"
   (with-temp-buffer
     (setq-local mevedel--current-request
                 (mevedel-request--create
@@ -564,8 +565,70 @@ cleanup."
                 `((mevedel--real-path . "/tmp/b.txt")))))
       (mevedel-preview-mode--register ov1)
       (mevedel-preview-mode--register ov2)
-      (should (= 1 (length (mevedel-request-cancellers
+      (should (= 2 (length (mevedel-request-cancellers
                             mevedel--current-request))))))
+
+  :doc "interrupting one agent leaves a sibling request's preview intact"
+  (let* ((view (generate-new-buffer " *preview-shared-root-view*"))
+         (agent-a (generate-new-buffer " *preview-agent-a*"))
+         (agent-b (generate-new-buffer " *preview-agent-b*"))
+         (session (mevedel-session--create :name "preview"))
+         (request-a
+          (mevedel-request--create :session session :origin "/root/a"))
+         (request-b
+          (mevedel-request--create :session session :origin "/root/b"))
+         (invocation-a
+          (mevedel-agent-invocation--create
+           :agent-id "worker--a" :path "/root/a" :buffer agent-a
+           :parent-session session :parent-data-buffer view
+           :transcript-status 'running))
+         result-a result-b)
+    (unwind-protect
+        (progn
+          (with-current-buffer view
+            (setq-local mevedel--session session)
+            (setq-local mevedel-agent-runtime--fsms nil))
+          (with-current-buffer agent-a
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request-a))
+          (with-current-buffer agent-b
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request-b))
+          (let ((overlay-a
+                 (mevedel-preview-test--make-overlay
+                  view
+                  `((mevedel--data-buffer . ,agent-a)
+                    (mevedel--final-callback
+                     . ,(lambda (result) (setq result-a result))))))
+                (overlay-b
+                 (mevedel-preview-test--make-overlay
+                  view
+                  `((mevedel--data-buffer . ,agent-b)
+                    (mevedel--final-callback
+                     . ,(lambda (result) (setq result-b result)))))))
+            (mevedel-preview-mode--register overlay-a)
+            (mevedel-preview-mode--register overlay-b)
+            (cl-letf
+                (((symbol-function
+                   'mevedel-agent-runtime--interrupted-agent-response)
+                  (lambda (_invocation _reason) "interrupted"))
+                 ((symbol-function 'mevedel-agent-runtime--finalize)
+                  (lambda (invocation status)
+                    (setf
+                     (mevedel-agent-invocation-transcript-status invocation)
+                     status))))
+              (mevedel-agent-runtime-interrupt invocation-a "stop A"))
+            (should (equal "Error: aborted" result-a))
+            (should-not result-b)
+            (should-not (overlay-buffer overlay-a))
+            (should (overlay-buffer overlay-b))
+            (with-current-buffer view
+              (should (equal (list overlay-b)
+                             mevedel-preview-mode--pending)))))
+      (dolist (buffer (list view agent-a agent-b))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))))
+
   :doc "drained canceller fires every overlay's callback with Error: aborted"
   (let ((chat-buf (generate-new-buffer " *preview-test-chat*")))
     (unwind-protect

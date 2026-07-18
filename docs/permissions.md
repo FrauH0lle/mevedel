@@ -175,8 +175,9 @@ chain.
 
 ## Prompt queues
 
-Permission prompts are queued on the session, not displayed as
-independent blocking overlays. `mevedel-permission-queue.el` owns a
+Permission prompts from the complete agent tree are queued on the root
+session, not displayed as independent blocking overlays.
+`mevedel-permission-queue.el` owns a
 heterogeneous FIFO with four entry kinds:
 
 - `generic` for pipeline permission asks
@@ -190,7 +191,9 @@ callback overlays, and redraw. Rule-creating outcomes (`allow-session`,
 `deny-session`, `always-allow`) can coalesce
 queued siblings by re-running the decision chain. The queue is transient
 runtime state and is not written to the session sidecar; unfinished
-prompts are aborted on request/session teardown.
+prompts are aborted on their owning request or root-session teardown. A child
+turn awaiting one of these prompts remains active and continues to occupy one
+tree capacity slot.
 
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian
@@ -474,26 +477,29 @@ provenance.
 ## Sub-agent permission propagation
 
 Sub-agent buffers carry `mevedel--session` set buffer-locally to the
-**parent's session struct, by reference** (allocated in
+**root session struct, by reference** (allocated in
 `mevedel-agent-exec--allocate-agent-buffer`). The pipeline reads
 `mevedel--session` from the current buffer at tool-dispatch entry, so a
-tool dispatched inside a sub-agent observes the parent's
-`permission-rules` and `permission-mode` slots, and any
+tool dispatched at any nesting depth observes the root's permission mode,
+direct rules, explicit denies, protected resources, exact grants, and
+confinement policy. Any
 "allow-session" / "deny-session" outcome accepted inside the sub-agent's
 prompt is written via `setf` on the same struct -- so the new rule
-applies immediately to the main agent and to every other live sub-agent.
+applies immediately to the root and to every other live sub-agent.
 This is a deliberate sharing contract; agents that should not be able to
 mutate the shared state are constrained today by their tool list (e.g.
 the verifier ships read-only tools, so its calls never reach the prompt
 step).
 
-All queued permission prompts render in the parent session's interactive
+All queued permission prompts render in the root session's interactive
 view buffer, not inside the sub-agent transcript buffer or a read-only
-transcript inspection view. Queue entries carry an origin (`"main"` or
-the canonical agent id), and request teardown only aborts entries owned
+transcript inspection view. Queue entries carry a canonical origin (`/root`
+or a retained agent path such as `/root/worker/verifier`), and request teardown
+only aborts entries owned
 by the ending request. This keeps a background agent's visible prompt
-open across parent-view rerenders and parent request cleanup until the
-user explicitly resolves it or aborts the session/agent.
+open across root-view rerenders and unrelated request cleanup until the
+user explicitly resolves it or interrupts that agent turn. Redraws use the
+ordinary interaction-zone lifecycle and preserve the active composer draft.
 
 If the permission step ever runs without a session in context,
 `mevedel-pipeline--step-permission` emits a `display-warning`

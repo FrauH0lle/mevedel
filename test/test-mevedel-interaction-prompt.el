@@ -17,6 +17,20 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel--prompt-attribution-line
+  ()
+  ,test
+  (test)
+  :doc "suppresses root attribution and renders canonical child paths"
+  (progn
+    (should (equal "" (mevedel--prompt-attribution-line nil)))
+    (should (equal "" (mevedel--prompt-attribution-line "/root")))
+    (should
+     (equal "from /root/worker/verifier\n"
+            (substring-no-properties
+             (mevedel--prompt-attribution-line
+              "/root/worker/verifier"))))))
+
 (mevedel-deftest mevedel--prompt--settle ()
   ,test
   (test)

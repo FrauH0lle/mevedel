@@ -4050,10 +4050,7 @@ Each binding is (NAME KEYS)."
 		      (should (equal "planner-model" (plist-get result :provider)))
 		      (should (= 24 (mevedel-goal-token-usage goal)))
 		      (should (equal "PLANNER SYSTEM" captured-system))
-		      (should
-		       (string-match-p
-			"\\`goal-plan-revision--[[:xdigit:]]\\{32\\}\\'"
-			request-origin))
+		      (should (equal "/root" request-origin))
 		      (with-current-buffer chat-buffer
 			(should-not mevedel--current-request))
 		      (should (string-match-p "Add a restart test" captured-prompt))

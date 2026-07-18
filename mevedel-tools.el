@@ -89,6 +89,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-path
+                  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-goal'
 (declare-function mevedel-plan-queue-sweep-agent
@@ -944,14 +946,14 @@ Two cleanups:
                (fboundp 'mevedel-agent-invocation-p)
                (mevedel-agent-invocation-p ctx)
                (fboundp 'mevedel-permission-queue-sweep-origin))
-      (let ((agent-id (mevedel-agent-invocation-agent-id ctx))
+      (let ((agent-path (mevedel-agent-invocation-path ctx))
             (parent-session
              (mevedel-agent-invocation-parent-session ctx)))
-        (when (and agent-id parent-session)
-          (mevedel-permission-queue-sweep-origin agent-id parent-session))
-        (when (and agent-id parent-session
+        (when (and agent-path parent-session)
+          (mevedel-permission-queue-sweep-origin agent-path parent-session))
+        (when (and agent-path parent-session
                    (fboundp 'mevedel-plan-queue-sweep-agent))
-          (mevedel-plan-queue-sweep-agent agent-id parent-session))))))
+          (mevedel-plan-queue-sweep-agent agent-path parent-session))))))
 
 
 (provide 'mevedel-tools)

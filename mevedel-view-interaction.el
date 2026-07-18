@@ -278,10 +278,12 @@ OVERLAY is stored on the text as the descriptor's callback handle."
     (overlay descriptor)
   "Apply DESCRIPTOR metadata to interaction OVERLAY."
   (let ((kind (plist-get descriptor :kind))
-        (id (plist-get descriptor :id)))
+        (id (plist-get descriptor :id))
+        (origin (plist-get descriptor :origin)))
     (overlay-put overlay 'evaporate nil)
     (overlay-put overlay 'mevedel-view-interaction-kind kind)
     (overlay-put overlay 'mevedel-view-interaction-id id)
+    (overlay-put overlay 'mevedel-view-interaction-origin origin)
     (overlay-put overlay 'priority
                  (or (plist-get descriptor :priority)
                      (mevedel-view--interaction-kind-priority kind)))

@@ -6,9 +6,13 @@
 
 (require 'mevedel-structs)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'gptel-request)
 (require 'mevedel-tool-task)
 (require 'mevedel-view)
+(require 'mevedel-view-agent)
+(require 'mevedel-view-composer)
+(require 'mevedel-view-render)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -31,6 +35,14 @@
              :root "/tmp/tasktest/"
              :name "tasktest")))
     (mevedel-session-create "main" ws)))
+
+(defun test-mevedel-tool-task--register-agent (session path)
+  "Register a retained agent at PATH in SESSION."
+  (let ((record (mevedel-agent-record--create :path path)))
+    (setf (mevedel-session-agent-registry session)
+          (cons (cons path record)
+                (mevedel-session-agent-registry session)))
+    record))
 
 (defmacro test-mevedel-tool-task--with-session (session-var &rest body)
   "Bind SESSION-VAR to a fresh session, install it buffer-locally, run BODY."
@@ -58,6 +70,7 @@
            (let ((tracking (copy-marker (point) t)))
              (with-current-buffer ,view-var
                (setq-local mevedel--session ,session-var)
+               (setq-local mevedel-view--agent-transcript-p nil)
                (let ((inhibit-read-only t))
                  (erase-buffer)
                  (insert "header\n")
@@ -117,6 +130,32 @@
     (should-error (mevedel-tool-task--parse-status "done"))
     (should-error (mevedel-tool-task--parse-status 'blocked))
     (should-error (mevedel-tool-task--parse-status 42))))
+
+(mevedel-deftest mevedel-tool-task--normalize-owner
+  ()
+  ,test
+  (test)
+  :doc "accepts registered canonical paths and ordinary buckets"
+  (let ((session (test-mevedel-tool-task--make-session)))
+    (test-mevedel-tool-task--register-agent session "/root/worker")
+    (should (equal "/root/worker"
+                   (mevedel-tool-task--normalize-owner
+                    "/root/worker" session)))
+    (should (equal "backend"
+                   (mevedel-tool-task--normalize-owner
+                    "backend" session)))
+    (should-not (mevedel-tool-task--normalize-owner "" session))
+    (should-not (mevedel-tool-task--normalize-owner "/root" session)))
+
+  :doc "rejects opaque IDs, malformed paths, and unknown agent paths"
+  (let ((session (test-mevedel-tool-task--make-session)))
+    (should-error
+     (mevedel-tool-task--normalize-owner
+      "explorer--0123456789abcdef0123456789abcdef" session))
+    (should-error
+     (mevedel-tool-task--normalize-owner "/root/Upper" session))
+    (should-error
+     (mevedel-tool-task--normalize-owner "/root/ghost" session))))
 
 
 ;;
@@ -229,12 +268,14 @@
       (should (equal "worker-2" (mevedel-task-owner b)))
       (should (equal '(1) (mevedel-task-blocked-by b)))))
 
-  :doc "uses the current agent id as owner when owner is omitted"
+  :doc "uses the current canonical agent path when owner is omitted"
   (test-mevedel-tool-task--with-session session
     (mevedel-tool-task--handle-create
      (list :tasks (vector (list :subject "main task"))))
     (let ((inv (mevedel-agent-invocation--create
+                :path "/root/explorer"
                 :agent-id "explorer--0123456789abcdef0123456789abcdef")))
+      (test-mevedel-tool-task--register-agent session "/root/explorer")
       (let ((mevedel--agent-invocation inv))
         (mevedel-tool-task--handle-create
          (list :tasks (vector (list :subject "agent task"))))))
@@ -242,38 +283,45 @@
            (agent-task (cadr tasks))
            (display (substring-no-properties
                      (mevedel-tool-task--format-groups session))))
-	      (should (equal "explorer--0123456789abcdef0123456789abcdef"
+	      (should (equal "/root/explorer"
 	                     (mevedel-task-owner agent-task)))
 	      (should (string-match-p "Main · 1 open · 0 done" display))
 	      (should (string-match-p
-	               "explorer--01234567 · 1 open · 0 done"
+	               "/root/explorer · 1 open · 0 done"
 	               display))))
 
-  :doc "abbreviates long agent owner IDs in the display"
+  :doc "shows canonical agent paths without opaque-id abbreviation"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
                  :id 1 :subject "agent task" :status 'pending
-                 :owner "explorer--583db40e450f742e3bda29e88efbac03")))
+                 :owner "/root/worker/explorer")))
     (let ((display (substring-no-properties
                     (mevedel-tool-task--format-groups session))))
       (should (string-match-p
-               "explorer--583db40e · 1 open · 0 done"
-               display))
-      (should-not (string-match-p
-                   "explorer--583db40e450f742e3bda29e88efbac03"
-                   display))))
+               "/root/worker/explorer · 1 open · 0 done"
+               display))))
 
   :doc "explicit empty owner still creates a Main task in an agent"
   (test-mevedel-tool-task--with-session session
     (let ((inv (mevedel-agent-invocation--create
+                :path "/root/explorer"
                 :agent-id "explorer--0123456789abcdef0123456789abcdef")))
+      (test-mevedel-tool-task--register-agent session "/root/explorer")
       (let ((mevedel--agent-invocation inv))
         (mevedel-tool-task--handle-create
          (list :tasks (vector (list :subject "main task"
                                     :owner ""))))))
     (let ((task (car (mevedel-session-tasks session))))
       (should (null (mevedel-task-owner task)))))
+
+  :doc "rejects unknown canonical owners at the TaskCreate boundary"
+  (test-mevedel-tool-task--with-session session
+    (should-error
+     (mevedel-tool-task--handle-create
+      (list :tasks
+            (vector (list :subject "orphan" :owner "/root/ghost")))))
+    (should-not (mevedel-session-tasks session)))
 
   :doc "rejects tasks with a missing subject"
   (test-mevedel-tool-task--with-session session
@@ -428,7 +476,7 @@
   (:doc "`mevedel-tool-task-finalize-owner' reconciles completed sub-agent tasks")
   ,test
   (test)
-  :doc "completed agents complete only tasks owned by their canonical id"
+  :doc "completed agents complete only tasks owned by their canonical path"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-turn-count session) 8)
     (setf (mevedel-session-tasks session)
@@ -436,10 +484,10 @@
                  :id 1 :subject "main open" :status 'pending)
                 (mevedel-task--create
                  :id 2 :subject "agent open" :status 'in-progress
-                 :owner "explorer--0123456789abcdef0123456789abcdef")
+                 :owner "/root/worker/explorer")
                 (mevedel-task--create
                  :id 3 :subject "agent pending" :status 'pending
-                 :owner "explorer--0123456789abcdef0123456789abcdef")
+                 :owner "/root/worker/explorer")
                 (mevedel-task--create
                  :id 4 :subject "proxy owner" :status 'pending
                  :owner "explorer-mevedel")
@@ -447,9 +495,9 @@
                  :id 5 :subject "blocked" :status 'pending
                  :blocked-by '(2))))
     (mevedel-tool-task--set-status-note
-     session "explorer--0123456789abcdef0123456789abcdef" "Inspecting")
+     session "/root/worker/explorer" "Inspecting")
     (should (mevedel-tool-task-finalize-owner
-             session "explorer--0123456789abcdef0123456789abcdef" 'completed))
+             session "/root/worker/explorer" 'completed))
     (let ((tasks (mevedel-session-tasks session)))
       (should (eq 'pending (mevedel-task-status (nth 0 tasks))))
       (should (eq 'completed (mevedel-task-status (nth 1 tasks))))
@@ -460,16 +508,16 @@
       (should (null (mevedel-task-blocked-by (nth 4 tasks)))))
     (should (= 9 (mevedel-session-last-task-write-turn session)))
     (should-not (mevedel-tool-task--status-note
-                 session "explorer--0123456789abcdef0123456789abcdef")))
+                 session "/root/worker/explorer")))
 
   :doc "non-completed terminal statuses leave owned tasks open"
   (test-mevedel-tool-task--with-session session
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
                  :id 1 :subject "agent open" :status 'pending
-                 :owner "explorer--0123456789abcdef0123456789abcdef")))
+                 :owner "/root/worker/explorer")))
     (should-not (mevedel-tool-task-finalize-owner
-                 session "explorer--0123456789abcdef0123456789abcdef" 'error))
+                 session "/root/worker/explorer" 'error))
     (should (eq 'pending (mevedel-task-status
                           (car (mevedel-session-tasks session))))))
 
@@ -1315,7 +1363,9 @@
   (test-mevedel-tool-task--with-session session
     (mevedel-tool-task--handle-create
      (list :tasks (vector (list :subject "main active"))))
+    (test-mevedel-tool-task--register-agent session "/root/explorer")
     (let ((inv (mevedel-agent-invocation--create
+                :path "/root/explorer"
                 :agent-id "explorer--0123456789abcdef0123456789abcdef")))
       (let ((mevedel--agent-invocation inv))
         (mevedel-tool-task--handle-create
@@ -1330,7 +1380,7 @@
                "Main · 1 open · 0 done\n  └ Checking the main path"
                text))
       (should (string-match-p
-               "explorer--01234567 · 1 open · 0 done\n  └ Checking the agent-owned path"
+               "/root/explorer · 1 open · 0 done\n  └ Checking the agent-owned path"
                text))))
 
   :doc "can target another owner explicitly"

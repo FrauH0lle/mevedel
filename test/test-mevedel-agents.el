@@ -36,6 +36,22 @@
     (load-file (locate-library "mevedel-agents")))
   (mevedel-tools-register))
 
+(mevedel-deftest mevedel-agent-invocation-require-path
+  ()
+  ,test
+  (test)
+  :doc "returns canonical invocation paths and rejects missing or malformed paths"
+  (let ((invocation
+         (mevedel-agent-invocation--create
+          :agent-id "default--opaque"
+          :path "/root/worker")))
+    (should (equal "/root/worker"
+                   (mevedel-agent-invocation-require-path invocation)))
+    (setf (mevedel-agent-invocation-path invocation) nil)
+    (should-error (mevedel-agent-invocation-require-path invocation))
+    (setf (mevedel-agent-invocation-path invocation) "/root/Upper")
+    (should-error (mevedel-agent-invocation-require-path invocation))))
+
 (mevedel-deftest mevedel-agent--effective-specs/test
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test

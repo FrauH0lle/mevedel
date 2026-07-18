@@ -287,11 +287,14 @@ zone.
 
 ## Permission and confinement propagation
 
-Sub-agents use the parent session's permission mode, direct rules, and exact
-resource grants by reference. Their Bash and Eval calls therefore follow the
-same command policy, protected-path checks, and optional child confinement as
-the main agent. Any required user decision is attributed to the originating
-agent but rendered in the parent view's shared permission queue.
+Every nested agent shares the root session's permission mode, direct rules,
+explicit denies, protected resources, exact grants, and confinement policy by
+reference. Its Bash and Eval calls therefore follow the same authority state as
+the root. Required decisions and direct interactions are attributed with the
+requester's canonical path and rendered in the root view's shared queues; child
+transcript views remain inspection-only. A turn blocked on either queue remains
+active and consumes tree capacity. Interrupting that turn cancels only its own
+queued entries.
 
 Delegated invocation/request rules may narrow authority and may allow ordinary
 known-safe commands, but they cannot authorize dangerous or complex Bash, live
@@ -306,7 +309,12 @@ call.
 
 ## Task status
 
-Tasks tracked per caller (main chat and each sub-agent separately).
+Tasks are tracked per caller (`/root` and each retained agent path). Agent-owned
+tasks and status notes use the retained agent's canonical path for automatic
+assignment, grouping, rendering, and terminal finalization; opaque storage IDs
+never enter the task surface. Explicit canonical owners must name a retained
+agent in the session, while `/root` normalizes to the main owner. Explicit
+non-path owner strings remain available as user-defined task buckets.
 `blockedBy` propagates completion. `mevedel-agent-runtime--fsms`
 (buffer-local on chat buffer) maps agent-id → sub-agent FSM for
 SendMessage resolution.

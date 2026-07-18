@@ -15,6 +15,7 @@
 (declare-function gptel-agent--block-bg "ext:gptel-agent-tools" ())
 
 ;; `mevedel-structs'
+(declare-function mevedel-current-origin "mevedel-structs" ())
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
 
@@ -206,6 +207,15 @@ FACE is inherited by the top and bottom rule lines."
   "Return propertized KEY for prompt key-help rows."
   (propertize key 'font-lock-face 'help-key-binding))
 
+(defun mevedel--prompt-attribution-line (origin)
+  "Return a standard attribution line for canonical ORIGIN."
+  (if (or (null origin) (equal origin "/root"))
+      ""
+    (concat
+     (propertize (format "from %s" origin)
+                 'font-lock-face 'mevedel-view-attribution)
+     "\n")))
+
 (defun mevedel--prompt-user-with-overlay
     (title content question help-echo-text callback)
   "Display a confirmation overlay and settle CALLBACK exactly once.
@@ -215,6 +225,7 @@ CALLBACK receives `approve', `deny', `(feedback . TEXT)', or
 request, QUESTION is the final question, and HELP-ECHO-TEXT is
 optional hover text."
   (let* ((source-buffer (current-buffer))
+         (origin (mevedel-current-origin))
          (target-buffer
           (if (fboundp 'mevedel-view--interaction-target-buffer)
               (mevedel-view--interaction-target-buffer
@@ -226,6 +237,7 @@ optional hover text."
            (concat
             (propertize (format "%s\n" title)
                         'font-lock-face '(:inherit bold :inherit warning))
+            (mevedel--prompt-attribution-line origin)
             "\n"
             content
             "\n\n"
@@ -257,6 +269,7 @@ optional hover text."
             (mevedel-view--interaction-register
              (list :kind 'request
                    :id id
+                   :origin origin
                    :count 0
                    :body body
                    :priority 150

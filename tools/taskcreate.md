@@ -29,9 +29,10 @@ Pass `tasks` as an array. Each task object may contain:
 - `description` — optional longer notes
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
   (defaults to `"pending"`)
-- `owner` — optional real owner id/bucket. Omit for your own tasks. Use
-  subjects/descriptions for workstream names; do not invent owner labels just
-  to mirror background agents unless the label is a deliberate durable bucket.
+- `owner` — optional retained agent path such as `/root/worker_1`, or a
+  deliberate user-defined bucket. Omit it for your own tasks. Use
+  subjects/descriptions for workstream names; do not invent proxy owners for
+  background agents.
 - `blockedBy` — optional array of task IDs that must complete first
 - `blocks` — optional array of task IDs this one blocks
 - `metadata` — optional free-form object for extra data
@@ -57,7 +58,7 @@ TaskCreate(tasks=[
 
 <example>
 TaskCreate(tasks=[
-  {"subject": "Implement module A", "owner": "worker-1"},
-  {"subject": "Implement module B", "owner": "worker-2", "blockedBy": [1]}
-], note="Module B waits for module A", noteOwner="worker-2")
+  {"subject": "Implement module A", "owner": "/root/worker_1"},
+  {"subject": "Implement module B", "owner": "/root/worker_2", "blockedBy": [1]}
+], note="Module B waits for module A", noteOwner="/root/worker_2")
 </example>

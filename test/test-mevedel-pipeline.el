@@ -1049,22 +1049,22 @@
   (test)
   :doc "prefers an explicit prompt origin over request and invocation owners"
   (let ((request
-         (mevedel-request--create :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+         (mevedel-request--create :origin "/root/worker")))
     (should
      (equal
-      "explicit--bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      "/root/worker/verifier"
       (mevedel-pipeline--permission-origin
        (list :request request)
-       "explicit--bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))))
-  :doc "uses the scoped request owner before an agent or main fallback"
+       "/root/worker/verifier"))))
+  :doc "uses the request path before an agent or root fallback"
   (let ((request
-         (mevedel-request--create :origin "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
+         (mevedel-request--create :origin "/root/worker")))
     (should
      (equal
-      "goal-plan-revision--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      "/root/worker"
       (mevedel-pipeline--permission-origin (list :request request)))))
-  :doc "falls back to main without a scoped owner"
-  (should (equal "main" (mevedel-pipeline--permission-origin nil))))
+  :doc "falls back to root without a scoped owner"
+  (should (equal "/root" (mevedel-pipeline--permission-origin nil))))
 
 (mevedel-deftest mevedel-pipeline--step-permission ()
 		 ,test
@@ -2076,7 +2076,7 @@
 		     (mevedel-tool-clear-registry))
 		   (let ((event (car (mevedel-session-repair-log session))))
 		     (should (eq 'valid (plist-get event :outcome)))
-		     (should (equal "main" (plist-get event :origin)))
+		     (should (equal "/root" (plist-get event :origin)))
 		     (should (eq 'main-backend (plist-get event :backend)))
 		     (should (eq 'main-model (plist-get event :model)))
 		     (should (eq 'executed (plist-get event :execution)))
