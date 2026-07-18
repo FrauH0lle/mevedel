@@ -370,6 +370,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
   (mevedel-define-preset mevedel-discuss
     :description "Read-only tools for code analysis and discussion"
     :tools (read util (:tool "Bash")
+            (:tool "WriteStdin") (:tool "ListExecutions")
+            (:tool "StopExecution")
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web)
@@ -385,6 +387,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :description "Full editing capabilities with patch review workflow"
     :parents (mevedel-discuss)
     :tools (read util edit (:tool "Bash")
+            (:tool "WriteStdin") (:tool "ListExecutions")
+            (:tool "StopExecution")
             (:deferred (:tool "Eval"))
             (:deferred code)
             (:deferred web)
@@ -406,6 +410,8 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
     :description "Tutoring preset - guides through hints, never provides solutions"
     :parents (mevedel-discuss)
     :tools (read util (:tool "Bash")
+            (:tool "WriteStdin") (:tool "ListExecutions")
+            (:tool "StopExecution")
             (:tool "GetHints") (:tool "RecordHint")
             (:deferred (:tool "Eval"))
             (:deferred code)
