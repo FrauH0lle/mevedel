@@ -3,7 +3,7 @@
 ;;; Commentary:
 
 ;; Assembles the user-interaction tool surface and owns the small adapters for
-;; Agent, FollowupAgent, ListAgents, StopAgent, ToolSearch, SendMessage, and
+;; Agent, FollowupAgent, InterruptAgent, ListAgents, ToolSearch, SendMessage, and
 ;; WaitAgent.
 ;; Ask lives in a focused tool module; generic, Bash, and Eval prompts live in
 ;; the permission-prompt module.
@@ -20,6 +20,8 @@
                   "mevedel-agent-control" (session path))
 (declare-function mevedel-agent-control-followup
                   "mevedel-agent-control" t t)
+(declare-function mevedel-agent-control-interrupt
+                  "mevedel-agent-control" (session target))
 (declare-function mevedel-agent-control-list-agents
                   "mevedel-agent-control" (session &optional path-prefix))
 (declare-function mevedel-agent-control-send-message
@@ -34,13 +36,6 @@
                   "mevedel-agent-control" (cl-x) t)
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
-
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--stop-agent-result-string
-                  "mevedel-agent-runtime" (result))
-(declare-function mevedel-agent-runtime-stop
-                  "mevedel-agent-runtime"
-                  (agent-id &optional reason parent-buffer))
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
@@ -225,16 +220,22 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
           (mevedel-agent-control-list-agents
            mevedel--session (plist-get args :path_prefix))))))
 
-(defun mevedel-tool-ui--stop-agent (args)
-  "Stop the running sub-agent named by ARGS."
-  (require 'mevedel-agent-runtime)
-  (let ((agent-id (plist-get args :agent_id))
-        (reason (plist-get args :reason)))
-    (unless (stringp agent-id)
-      (error "Parameter agent_id is required"))
+(defun mevedel-tool-ui--interrupt-agent (args)
+  "Interrupt the retained agent turn described by ARGS."
+  (require 'json)
+  (require 'mevedel-agent-control)
+  (let* ((result
+          (mevedel-agent-control-interrupt
+           mevedel--session (plist-get args :target)))
+         (path (plist-get result :path)))
     (list :result
-          (mevedel-agent-runtime--stop-agent-result-string
-           (mevedel-agent-runtime-stop agent-id reason)))))
+          (json-serialize
+           (list :previous_activity
+                 (symbol-name (plist-get result :previous-activity))))
+          :render-data
+          (list :kind 'collaboration-event
+                :event 'interrupted
+                :path path))))
 
 (defun mevedel-tool-ui--tool-search (callback args)
   "Search for deferred tools described by ARGS and call CALLBACK."
@@ -381,13 +382,15 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
       (length (split-string result "\n" t))
     0))
 
-(defun mevedel-tool-ui--render-stop-agent (name args result _render-data)
-  "Return compact rendering plist for StopAgent NAME, ARGS, and RESULT."
-  (when (stringp result)
-    (let ((agent-id (or (plist-get args :agent_id) "?")))
-      (list :header (format "%s: %s" (or name "StopAgent") agent-id)
-            :status (mevedel-tool-ui--result-status result)
-            :expandable-p nil))))
+(defun mevedel-tool-ui--render-interrupt-agent
+    (_name _args result render-data)
+  "Render an interrupted-agent RESULT from RENDER-DATA."
+  (when (and (stringp result)
+             (eq (plist-get render-data :event) 'interrupted)
+             (stringp (plist-get render-data :path)))
+    (list :header (format "Interrupted %s"
+                          (plist-get render-data :path))
+          :expandable-p nil)))
 
 (defun mevedel-tool-ui--render-tool-search (name args result _render-data)
   "Return rendering plist for ToolSearch NAME, ARGS, and RESULT."
@@ -458,17 +461,15 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     :groups (util)
     :read-only-p t)
   (mevedel-define-tool
-    :name "StopAgent"
-    :description "Stop a running sub-agent owned by the current session."
-    :prompt-file "tools/stopagent.md"
-    :handler #'mevedel-tool-ui--stop-agent
-    :args ((agent_id string :required
-                     "Full agent id, or an unambiguous displayed short id such as reviewer--73512314.")
-           (reason string :optional
-                   "Short reason for stopping the agent."))
+    :name "InterruptAgent"
+    :description "Interrupt one retained agent's current turn."
+    :prompt-file "tools/interruptagent.md"
+    :handler #'mevedel-tool-ui--interrupt-agent
+    :args ((target string :required
+                   "Canonical path or relative descendant path."))
     :groups (util)
     :read-only-p t
-    :renderer #'mevedel-tool-ui--render-stop-agent)
+    :renderer #'mevedel-tool-ui--render-interrupt-agent)
   (mevedel-define-tool
     :name "ToolSearch"
     :description "Search for and load deferred tools before using them."

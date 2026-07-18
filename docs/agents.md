@@ -11,6 +11,9 @@ later terminal results still go to the original spawn parent. `SendMessage`
 queues plain-text mail for `/root` or any retained path without activating a
 turn. `WaitAgent` suspends its ordinary asynchronous tool callback until mail,
 user steering, follow-up steering, or its bounded successful timeout wakes it.
+`InterruptAgent` aborts one retained non-root agent's current turn by canonical
+path, returns its previous activity, and leaves its identity, conversation,
+mailbox, descendants, and future follow-up capability intact.
 
 Specialist definitions declared with `mevedel-define-agent` back dedicated
 commands and internal forked invocation paths:
@@ -120,24 +123,30 @@ by `mevedel-agent-no-progress-timeout` (default 600 seconds, nil
 disables). It compares transcript buffer size, tool-call count, and
 recorded activity from the last observed progress point. If no progress
 is observed for the full grace period, the agent is stopped through the
-same path as `mevedel-stop-agent`; foreground stops complete the parent
-Agent tool, and background stops deliver a stopped `<agent-result>` so
-BWAIT can resume. Ordinary runtime errors use the same recovery contract:
+runtime's internal watchdog path; foreground stops complete the parent Agent
+tool, and background stops deliver a stopped `<agent-result>` so BWAIT can
+resume. Ordinary runtime errors use the same recovery contract:
 when possible the parent receives the safe transcript path, otherwise a
 bounded recovered partial response from the live agent buffer.
 
-## Stopping background agents
+## Interrupting retained agent turns
 
-`StopAgent(agent_id, reason?)` stops a running background agent owned by
-the current session or sub-agent invocation. It accepts the full agent id
-or an unambiguous displayed short id, marks the transcript `aborted`,
-delivers an `<agent-result>` to the parent mailbox with a Read-able
-transcript path when persistence is available, removes the id from
-`background-agents`, and resumes a parent parked in BWAIT. Without a
-saved transcript, the stopped result falls back to a bounded recovered
-partial response from the live agent buffer. Runtime error results follow
-the same transcript-first, partial-second recovery rule. Stopping is
-recursive through a stopped agent's live child registry.
+`InterruptAgent(target)` resolves only canonical or relative retained paths. It
+rejects `/root`, the caller itself, malformed paths, unknown paths, and opaque
+storage ids. An idle target is a successful no-op. An active target's provider
+request or requestless wait is aborted, its transcript is finalized as
+`aborted`, its active-turn slot is released, and exactly one canonical RESULT
+with outcome `interrupted` goes to the stable spawn parent. The payload includes
+the interruption reason, bounded useful partial work when available, and the
+saved transcript path when available.
+
+Interruption never recurses. Descendant turns continue, and the target's path,
+conversation buffer, mailbox, and registry record remain retained. A later
+`FollowupAgent` therefore continues the same conversation. Interrupt-versus-
+settlement races use the ordinary exactly-once settlement gate: whichever
+terminal event wins is the only RESULT. The tool result itself contains only
+the target's activity observed before the request and renders `Interrupted
+PATH` from the canonical event.
 
 The BWAIT watchdog uses the same recovery contract for stranded
 background agents whose live FSM disappeared before normal completion.
@@ -148,11 +157,6 @@ when possible. Live background agents are not killed on the first BWAIT
 watchdog reminder if the child was not visible when BWAIT was entered;
 otherwise the shared no-progress grace period starts as soon as the
 parent parks in BWAIT. Later activity resets the grace timer.
-
-`M-x mevedel-stop-agent` uses the same stop path as an interactive
-escape hatch for cases where the parent FSM is already parked in BWAIT
-and cannot call another tool. The BWAIT watchdog warning includes both
-the tool and command names when it is still waiting on live agents.
 
 ## Inter-agent messaging (SendMessage)
 

@@ -866,7 +866,7 @@ agents stay tracked and keep the parent parked in BWAIT."
       (when (eq (gptel-fsm-state fsm) 'BWAIT)
         (cond
          (live
-          (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S; use StopAgent(agent_id=\"...\") or M-x mevedel-stop-agent to stop one"
+          (message "mevedel: BWAIT watchdog still waiting after %ss; running agents: %S; use ListAgents, then InterruptAgent(target=\"/root/...\") to interrupt one turn"
                    mevedel-agent-background-timeout live)
           (when-let* ((delay (mevedel-agent-runtime--bwait-watchdog-delay
                               live-remaining)))
@@ -1168,7 +1168,7 @@ Returns the parsed verdict symbol, or nil."
 
 (defun mevedel-agent-runtime--intentional-stop-abort-response-p
     (invocation response)
-  "Return non-nil when INVOCATION RESPONSE is superseded by StopAgent output."
+  "Return non-nil when INVOCATION's internal stop supersedes RESPONSE."
   (and (mevedel-agent-invocation-terminal-reason invocation)
        (eq (mevedel-agent-invocation-transcript-status invocation) 'aborted)
        (or (not (stringp response))
@@ -1899,6 +1899,64 @@ Error details: %S
 Agent id: %s"
            agent-type description error-details agent-id)
    (mevedel-agent-runtime--agent-recovery-text invocation fallback-partial)))
+
+(defun mevedel-agent-runtime--interrupted-agent-response (invocation reason)
+  "Return INVOCATION's interrupted-turn result with REASON and useful work."
+  (let ((agent-id (or (mevedel-agent-invocation-agent-id invocation)
+                      "unknown"))
+        (description (or (mevedel-agent-invocation-description invocation)
+                         ""))
+        (partial (mevedel-agent-runtime--agent-partial-text invocation))
+        (transcript
+         (mevedel-agent-runtime--stopped-agent-transcript-path invocation)))
+    (concat
+     (format "Agent turn interrupted before finishing task \"%s\".\n\nReason: %s\nAgent id: %s"
+             description reason agent-id)
+     (if partial
+         (format "\n\nPartial response:\n\n%s" partial)
+       "\n\nNo partial response was available.")
+     (if transcript
+         (format "\n\nTranscript: %s\nRead it with: Read(file_path=%S)"
+                 transcript transcript)
+       ""))))
+
+(defun mevedel-agent-runtime-interrupt (invocation reason)
+  "Abort INVOCATION's current turn for REASON and return its response."
+  (unless (mevedel-agent-invocation-p invocation)
+    (error "Interrupt target has no live invocation"))
+  (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
+         (parent-buffer
+          (mevedel-agent-invocation-parent-data-buffer invocation))
+         (agent-buffer (mevedel-agent-invocation-buffer invocation))
+         (fsm (mevedel-agent-runtime--background-agent-fsm
+               agent-id parent-buffer))
+         (response
+          (mevedel-agent-runtime--interrupted-agent-response
+           invocation reason)))
+    (unless (mevedel-agent-runtime--agent-terminal-status-p
+             (mevedel-agent-invocation-transcript-status invocation))
+      (when (and fsm
+                 (mevedel-agent-runtime--agent-request-live-p agent-buffer))
+        (let* ((inhibit-message t)
+               (info (gptel-fsm-info fsm))
+               (callback (plist-get info :callback)))
+          (unwind-protect
+              (progn
+                (setf (gptel-fsm-info fsm)
+                      (plist-put info :callback #'ignore))
+                (gptel-abort agent-buffer))
+            (setf (gptel-fsm-info fsm)
+                  (plist-put (gptel-fsm-info fsm)
+                             :callback callback)))))
+      (setf (mevedel-agent-invocation-terminal-reason invocation) reason)
+      (when (and fsm
+                 (not (memq (gptel-fsm-state fsm) '(DONE ERRS ABRT))))
+        (gptel--fsm-transition fsm 'ABRT))
+      (let ((mevedel-agent-runtime--retain-buffer t))
+        (mevedel-agent-runtime--finalize invocation 'aborted)))
+    (mevedel-agent-runtime--remove-agent-registry-entry
+     invocation agent-id parent-buffer)
+    response))
 
 (defun mevedel-agent-runtime--finalize (invocation status)
   "Commit terminal STATUS for INVOCATION exactly once.

@@ -502,10 +502,11 @@ structured task list with statuses, dependencies, owner status notes, and an
 optional task status fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the
 fragment to show or hide completed tasks)
 
-**Sub-agents:** `Agent` (start a retained asynchronous child), `SendMessage`
-(post a message to a running specialist invocation), `StopAgent` (stop a
-running specialist invocation), `ToolSearch` (look up deferred tool schemas on
-demand)
+**Sub-agents:** `Agent` (start a retained asynchronous child), `FollowupAgent`
+(continue or steer a retained child), `ListAgents` (inspect retained paths),
+`SendMessage` (queue mail without starting a turn), `WaitAgent` (wait for mail,
+steering, or timeout), `InterruptAgent` (abort one current turn without removing
+the agent), and `ToolSearch` (look up deferred tool schemas on demand)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
 evaluation, confirmed in `ask` and `auto`, automatic in `full-auto`; supports
@@ -550,9 +551,10 @@ has materialized it. `mevedel-view-close-agent-transcript` closes the selected
 transcript side window. Each asynchronous child sends one bounded terminal
 RESULT to its spawn parent and then releases its active-turn slot.
 
-For specialist invocations that use the existing stop surface, if an agent is
-no longer relevant or appears stuck, the model can use `StopAgent`, and the user
-can run `mevedel-stop-agent`.
+If one retained agent's current turn is no longer relevant or appears stuck,
+the model can use `InterruptAgent` with its canonical path. The turn settles as
+interrupted while the path, conversation, descendants, and future follow-up
+capability remain intact.
 
 Named model tiers and workload assignments live in the current session preset.
 The global `mevedel-model-tiers` and `mevedel-model-workloads` values are the
