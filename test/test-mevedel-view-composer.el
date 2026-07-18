@@ -31,11 +31,13 @@
 (require 'mevedel-file-state)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-ui)
+(require 'mevedel-tools)
 (require 'mevedel-permission-queue)
 (require 'mevedel-persistence)
 (require 'mevedel-review)
 (require 'mevedel-goal)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-hooks)
 (require 'mevedel-view-zone)
@@ -1043,6 +1045,34 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should-not mevedel-view--pending-skill-submission)
       (should (equal "mevedel: skill $alpha failed: failed" notice)))))
 
+(mevedel-deftest mevedel-view--prepared-plan-outcome ()
+  ,test
+  (test)
+  :doc "returns every prepared model, transcript, policy, and audit component"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA BODY"))
+    (let* ((input "Use $alpha")
+           (plan (mevedel-skills-plan-user-input input session))
+           prepared)
+      (with-current-buffer data-buf
+        (mevedel-skills-plan-prepare plan (lambda (value) (setq prepared value))))
+      (let ((outcome
+             (mevedel-view--prepared-plan-outcome
+              (list :input input :plan plan)
+              prepared
+              (plist-get prepared :model-input)
+              "hook context"
+              '((:type prompt-rewrite)))))
+        (should (string-match-p "ALPHA BODY"
+                                (plist-get outcome :model-input)))
+        (should (string-match-p "hook context"
+                                (plist-get outcome :transcript-input)))
+        (should (plist-get outcome :request-context))
+        (should (plist-get outcome :render-data))
+        (should (equal '((:type prompt-rewrite))
+                       (plist-get outcome :hook-audits)))
+        (should-not (plist-get outcome :fork-outcome))))))
+
 (mevedel-deftest mevedel-view--dispatch-prepared-plan ()
   ,test
   (test)
@@ -1122,6 +1152,23 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (string-match-p "ALPHA BODY" sent))
       (should (string-match-p
                (regexp-quote "[skill:alpha -- attached]") sent)))))
+
+(mevedel-deftest mevedel-view--steering-request-context-supported-p ()
+  ,test
+  (test)
+  :doc "allows bookkeeping-only skill context and rejects request policy"
+  (should
+   (mevedel-view--steering-request-context-supported-p
+    '(:permission-rules nil :hook-rules nil :invoked-skills (alpha))))
+  (dolist (context '((:permission-rules (rule))
+                     (:hook-rules (rule))
+                     (:model model)
+                     (:effort high)))
+    (should-not
+     (mevedel-view--steering-request-context-supported-p context)))
+  (should-not
+   (mevedel-view--steering-request-context-supported-p
+    '(:future-policy nil))))
 
 (mevedel-deftest mevedel-view-send/skill-inline ()
   ,test
@@ -2268,7 +2315,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   ,test
   (test)
 
-  :doc "plain input during an active request queues instead of sending"
+  :doc "plain input during WaitAgent is injected before its resumed sample"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
                 :type 'test :id "vq" :root "/tmp/vq" :name "vq"
@@ -2276,13 +2323,18 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
            (session (mevedel-session-create "main" ws))
-           send-called)
+           send-called
+           wake-reason)
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
                     (mevedel-request--create :session session)))
       (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq send-called t))))
+                 (lambda (&rest _) (setq send-called t)))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest _) 'fake-timer)))
+        (mevedel-agent-control-wait
+         session (lambda (reason) (setq wake-reason reason)) 10000)
         (with-current-buffer view-buf
           (goto-char (mevedel-view--input-start))
           (insert "follow up")
@@ -2291,17 +2343,91 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (string-empty-p (mevedel-view--input-text)))
           (should (equal '("follow up")
                          (mevedel-view-history--entries)))
-          (should (equal "1 queued message pending"
-                         (mevedel-view--interaction-count-label)))
-          (should (string-match-p "follow up"
-                                  (buffer-substring-no-properties
-                                   (point-min) (point-max)))))
-      (should (equal "follow up"
-                     (plist-get
-                      (car (mevedel-session-queued-user-messages session))
-                      :input)))
+          (should-not (mevedel-view--interaction-count-label)))
+      (should (eq 'user wake-reason))
+      (should-not (mevedel-session-queued-user-messages session))
+      (let* ((data (list :messages []))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer data-buf :backend nil :data data))))
+        (mevedel-tools--handle-message-inject fsm)
+        (should (equal 1 (length (plist-get data :messages))))
+        (should (equal "follow up"
+                       (plist-get (aref (plist-get data :messages) 0)
+                                  :content)))
+        (should-not (mevedel-session-messages session))
+        (with-current-buffer data-buf
+          (should (string-match-p "follow up" (buffer-string))))))))
+
+  :doc "WaitAgent steering honors UserPromptSubmit rewrites and context"
+  (let* ((root (make-temp-file "mevedel-wait-steering-hook-" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "wait-steering-hook" root "wait-steering-hook"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks
+                        ((:type elisp
+                                :function
+                                mevedel-view-test--rewrite-prompt-hook-with-context)))))))
+         wake-reason)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (&rest _) 'fake-timer)))
+            (mevedel-agent-control-wait
+             session (lambda (reason) (setq wake-reason reason)) 10000)
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "original steering")
+              (mevedel-view-send)
+              (should (string-empty-p (mevedel-view--input-text)))))
+          (should (eq 'user wake-reason))
+          (should (equal "original steering"
+                         mevedel-view-test--seen-prompt))
+          (let ((payload (plist-get (car (mevedel-session-messages session))
+                                    :payload)))
+            (should (string-match-p "rewritten prompt" payload))
+            (should (string-match-p "model-only context" payload))
+            (should-not (string-match-p "original steering" payload))
+            (should (plist-get (car (mevedel-session-messages session))
+                               :hook-audits))))
+      (delete-directory root t)))
+
+  :doc "WaitAgent steering consumes inline skill text and transcript metadata"
+  (mevedel-view-test--with-source-skills
+      '(("alpha" "inline" "ALPHA STEERING BODY"))
+    (let (wake-reason)
       (with-current-buffer data-buf
-        (should (string-empty-p (buffer-string)))))))
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (&rest _) 'fake-timer))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _)
+                   (error "WaitAgent steering must not start a request"))))
+        (mevedel-agent-control-wait
+         session (lambda (reason) (setq wake-reason reason)) 10000)
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "Use $alpha")
+          (mevedel-view-send)))
+      (should (eq 'user wake-reason))
+      (let ((message (car (mevedel-session-messages session))))
+        (should (string-match-p "ALPHA STEERING BODY"
+                                (plist-get message :payload)))
+        (should (string-match-p "Use \\$alpha"
+                                (plist-get message :transcript-payload)))
+        (should (string-match-p "mevedel-render-data"
+                                (plist-get message :transcript-payload))))
+      (should (equal '("alpha")
+                     (mapcar #'mevedel-skill-invocation-record-name
+                             (mevedel-session-invoked-skills session))))))
 
   :doc "queued direct reference keeps its UUID when the number is reused"
   (let* ((root (make-temp-file "mevedel-ref-queue-" t))

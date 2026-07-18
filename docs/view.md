@@ -502,6 +502,17 @@ the original atomically bound text and any dropped-file grants; queueing does
 not prepare skills or run prompt hooks. Slash commands are not queued and
 remain rejected until the active request finishes.
 
+Root `WaitAgent` is the exception. Plain input submitted while the root is
+explicitly waiting is prepared as steering for that same turn: inline skills
+are planned, `UserPromptSubmit` runs, bound mentions expand, and the resulting
+model input is delivered as a `USER` mailbox record before the wait resumes.
+Dropped-file grants activate at that boundary. If the wait ends while
+asynchronous preparation is still running, the unchanged bound input falls
+back to the ordinary FIFO instead of starting another request or being lost.
+Preparation that requires a fork, request-policy change, or new media context
+cannot modify the already active request and is blocked explicitly. Any blocked
+preparation leaves the composer unchanged.
+
 After a successful turn, the next entry drains as its own normal user turn. It
 is planned and prepared at that point, then passes through `UserPromptSubmit`
 once before request or fork dispatch. The entry leaves the FIFO only at that
@@ -510,8 +521,9 @@ editable. Each successful queued turn schedules the next entry; aborted and
 errored turns leave the remaining FIFO pending for review. There is no `WAIT`
 injection or synthetic queued-message transcript format.
 
-`@` mentions and dropped-file grants therefore follow the same ordinary send
-path as direct composer input and are expanded or activated for their own turn.
+Outside root WaitAgent steering, `@` mentions and dropped-file grants therefore
+follow the same ordinary send path as direct composer input and are expanded or
+activated for their own turn.
 
 Editing queued prompts removes the whole uncommitted FIFO
 and restores a combined draft to the composer, so it cannot be

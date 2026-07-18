@@ -13,8 +13,10 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-reminders)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
 (require 'mevedel-session-persistence)
+(require 'mevedel-transcript-audit)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-ui)
@@ -935,6 +937,30 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
              block))
     (should (string-match-p "Review complete\." block)))
 
+  :doc "canonical MAIL records retain type, paths, and payload"
+  (let ((block
+         (mevedel-tools--message-delivery-block
+          '(:type MAIL
+            :sender "/root/explorer"
+            :recipient "/root/reviewer"
+            :payload "Inspect this."))))
+    (should (string-prefix-p
+             "<agent-message type=\"MAIL\" sender=\"/root/explorer\" recipient=\"/root/reviewer\">"
+             block))
+    (should (string-match-p "Inspect this\." block)))
+
+  :doc "canonical MAIL payloads are not truncated by the legacy mailbox cap"
+  (let* ((mevedel-agent-message-max-size 8)
+         (payload "complete message body")
+         (block
+          (mevedel-tools--message-delivery-block
+           (list :type 'MAIL
+                 :sender "/root/explorer"
+                 :recipient "/root/reviewer"
+                 :payload payload))))
+    (should (string-match-p (regexp-quote payload) block))
+    (should-not (string-match-p "truncated" block)))
+
   :doc "literal agent-message delimiters do not become nested mailbox markup"
   (let ((block (mevedel-tools--message-delivery-block
                 '(:from "worker"
@@ -966,13 +992,25 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
   ,test
   (test)
 
-  :doc "drains invocation mailbox and prepends a user-role block on first turn"
+  :doc "injects retained unread mail separately in FIFO order exactly once"
   (let* ((_ (mevedel-define-agent mi-a :description "a" :tools nil))
          (agent (mevedel-agent-get "mi-a"))
          (inv (mevedel-agent-invocation-create agent))
+         (session (mevedel-tools-test--make-session))
+         (path "/root/mi_a")
+         (record
+          (mevedel-agent-record--create
+           :id (mevedel-agent-invocation-agent-id inv)
+           :path path
+           :parent-path "/root"
+           :activity 'running
+           :invocation inv))
          (ov-buf (generate-new-buffer " *mt-mi-ov*"))
          (agent-buf (generate-new-buffer " *mt-mi-agent*")))
     (setf (mevedel-agent-invocation-buffer inv) agent-buf)
+    (setf (mevedel-agent-invocation-parent-session inv) session)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons path record)))
     (unwind-protect
         (let* ((ov (with-current-buffer ov-buf
                      (insert "x")
@@ -988,34 +1026,38 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                            :mevedel-agent-invocation inv))
           (with-current-buffer agent-buf
             (insert "* Agent Task: do work\nbody\n"))
+          (mevedel-agent-control-send-message session path "one")
+          (mevedel-agent-control-send-message session path "two")
           (setf (mevedel-agent-invocation-messages inv)
-                '((:from "worker" :body "one")
-                  (:from "worker" :body "two")
-                  (:type RESULT
-                   :sender "/root/spec_review"
-                   :recipient "/root"
-                   :outcome completed
-                   :payload "Review complete.")))
+                (list (list :from "/root/peer" :body "zero"
+                            :timestamp (seconds-to-time 0))))
           (mevedel-tools--handle-message-inject fsm)
           (should (null (mevedel-agent-invocation-messages inv)))
+          (should (null (mevedel-agent-record-mailbox record)))
           (let ((msgs (plist-get data :messages)))
-            (should (equal 2 (length msgs)))
-            ;; First turn (turn-count=0): mailbox block is injected
-            ;; AHEAD of the user task prompt so the API request matches
-            ;; the audit-log ordering.
-            (let ((content (plist-get (aref msgs 0) :content)))
-              (should (string-match-p "<agent-message from=\"worker\">" content))
-              (should (string-match-p "one" content))
-              (should (string-match-p "two" content))
-              (should (string-match-p
-                       "<agent-result sender=\"/root/spec_review\"" content))
-              (should (string-match-p "Review complete" content)))
-            (should (equal "first" (plist-get (aref msgs 1) :content))))
+            (should (equal 4 (length msgs)))
+            (should (string-match-p
+                     "zero" (plist-get (aref msgs 0) :content)))
+            (should
+             (string-prefix-p
+              "<agent-message type=\"MAIL\" sender=\"/root\" recipient=\"/root/mi_a\">\none"
+              (plist-get (aref msgs 1) :content)))
+            (should (string-match-p "two"
+                                    (plist-get (aref msgs 2) :content)))
+            (should-not (string-match-p "one"
+                                        (plist-get (aref msgs 2) :content)))
+            (should (equal "first" (plist-get (aref msgs 3) :content))))
+          (mevedel-tools--handle-message-inject fsm)
+          (should (= 4 (length (plist-get data :messages))))
           (with-current-buffer agent-buf
             (let ((text (buffer-substring-no-properties
                          (point-min) (point-max))))
               (should (< (string-match-p "<agent-message" text)
-                         (string-match-p "^\\* Agent Task:" text))))))
+                         (string-match-p "^\\* Agent Task:" text)))
+              (should (< (string-match-p "zero" text)
+                         (string-match-p "one" text)))
+              (should (< (string-match-p "one" text)
+                         (string-match-p "two" text))))))
       (kill-buffer ov-buf)
       (kill-buffer agent-buf)))
 
@@ -1093,6 +1135,37 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (should (null (get-text-property (match-beginning 0) 'gptel)))))
       (kill-buffer buf)))
 
+  :doc "keeps USER model payload separate from transcript text and audits"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf (generate-new-buffer " *mt-mi-user-metadata*"))
+         (audit '(:type prompt-rewrite :event "UserPromptSubmit"
+                        :original "original user"
+                        :submitted "rewritten model")))
+    (unwind-protect
+        (let* ((data (list :messages (vector)))
+               (fsm (gptel-make-fsm
+                     :info (list :buffer buf :backend nil :data data))))
+          (with-current-buffer buf
+            (setq-local mevedel--session session))
+          (setf (mevedel-session-messages session)
+                (list (list :type 'USER
+                            :sender "user"
+                            :recipient "/root"
+                            :payload "rewritten model"
+                            :transcript-payload "original user"
+                            :hook-audits (list audit))))
+          (mevedel-tools--handle-message-inject fsm)
+          (should (equal "rewritten model"
+                         (plist-get (aref (plist-get data :messages) 0)
+                                    :content)))
+          (with-current-buffer buf
+            (let ((text (buffer-substring (point-min) (point-max))))
+              (should (string-match-p "original user" text))
+              (should-not (string-match-p "rewritten model" text))
+              (should (equal (list audit)
+                             (mevedel-transcript-audit-records text))))))
+      (kill-buffer buf)))
+
   :doc "does not drain the parent session mailbox from agent buffers"
   (let* ((_ (mevedel-define-agent mi-agent-main :description "a" :tools nil))
          (agent (mevedel-agent-get "mi-agent-main"))
@@ -1138,7 +1211,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             (setq-local mevedel--agent-invocation inv)
             (insert "* Agent Task: verify\n"))
           (mevedel-tools--insert-session-injected-prompt
-           session fsm result-block)
+           session fsm (list :payload result-block) result-block)
           (with-current-buffer agent-buf
             (goto-char (point-min))
             (should-not (search-forward "<agent-result" nil t))))

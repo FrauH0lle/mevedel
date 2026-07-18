@@ -853,10 +853,12 @@ Kills the associated view buffer."
 
 (defun mevedel-view--tool-status-string (tool-name args)
   "Build a short status string for TOOL-NAME with ARGS."
-  (let ((primary-arg (mevedel-tool-display-string tool-name args)))
-    (if primary-arg
-        (format "Calling %s: %s..." tool-name primary-arg)
-      (format "Calling %s..." tool-name))))
+  (if (equal tool-name "WaitAgent")
+      "Waiting for agents"
+    (let ((primary-arg (mevedel-tool-display-string tool-name args)))
+      (if primary-arg
+          (format "Calling %s: %s..." tool-name primary-arg)
+        (format "Calling %s..." tool-name)))))
 
 
 ;;

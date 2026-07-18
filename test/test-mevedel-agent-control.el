@@ -527,6 +527,234 @@
         (kill-buffer parent))
       (delete-directory root t))))
 
+(mevedel-deftest mevedel-agent-control-send-message ()
+  ,test
+  (test)
+  :doc "queues canonical MAIL records in FIFO order without activating recipients"
+  (let* ((session (mevedel-agent-control-test--session))
+         (idle (mevedel-agent-record--create
+                :id "idle-id" :path "/root/idle" :activity 'idle))
+         (running (mevedel-agent-record--create
+                   :id "running-id" :path "/root/running"
+                   :activity 'running)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/idle" idle)
+                (cons "/root/running" running)))
+    (should (equal "/root/idle"
+                   (mevedel-agent-control-send-message
+                    session "/root/idle" "first")))
+    (mevedel-agent-control-send-message session "/root/idle" "second")
+    (mevedel-agent-control-send-message session "/root/running" "active")
+    (should (eq 'idle (mevedel-agent-record-activity idle)))
+    (should (eq 'running (mevedel-agent-record-activity running)))
+    (should
+     (equal
+      '((:type MAIL :sender "/root" :recipient "/root/idle"
+         :payload "first")
+        (:type MAIL :sender "/root" :recipient "/root/idle"
+         :payload "second"))
+      (mapcar
+       (lambda (record)
+         (cl-loop for (key value) on record by #'cddr
+                  unless (eq key :timestamp)
+                  append (list key value)))
+       (mevedel-agent-control--mailbox session "/root/idle"))))
+    (should (= 1 (length
+                  (mevedel-agent-control--mailbox
+                   session "/root/running")))))
+
+  :doc "accepts tree-wide peer paths and rejects empty or unknown targets"
+  (let* ((session (mevedel-agent-control-test--session))
+         (sender (mevedel-agent-record--create
+                  :id "sender-id" :path "/root/sender" :activity 'running))
+         (peer (mevedel-agent-record--create
+                :id "peer-id" :path "/root/peer" :activity 'idle))
+         (mevedel--agent-invocation
+          (mevedel-agent-invocation--create :agent-id "sender-id")))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/sender" sender)
+                (cons "/root/peer" peer)))
+    (mevedel-agent-control-send-message session "/root/peer" "hello")
+    (let ((record (car (mevedel-agent-control--mailbox
+                        session "/root/peer"))))
+      (should (equal "/root/sender" (plist-get record :sender))))
+    (dolist (args '(("/root/peer" "") ("" "body")
+                    ("/root/missing" "body")))
+      (should-error
+       (mevedel-agent-control-send-message
+        session (car args) (cadr args))))))
+
+(mevedel-deftest mevedel-agent-control-wait ()
+  ,test
+  (test)
+  :doc "releases immediately when mail was queued before the wait"
+  (let ((session (mevedel-agent-control-test--session))
+        reasons)
+    (mevedel-agent-control-send-message session "/root" "ready")
+    (mevedel-agent-control-wait
+     session (lambda (reason) (push reason reasons)) nil)
+    (should (equal '(mailbox) reasons))
+    (should-not (mevedel-session-agent-root-waiter session)))
+
+  :doc "releases exactly once when mail arrives after the wait starts"
+  (let ((session (mevedel-agent-control-test--session))
+        reasons scheduled)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_delay _repeat function &rest args)
+                 (setq scheduled (cons function args))
+                 'fake-timer)))
+      (mevedel-agent-control-wait
+       session (lambda (reason) (push reason reasons)) 10000)
+      (should (mevedel-session-agent-root-waiter session))
+      (mevedel-agent-control-send-message session "/root" "arrived")
+      (should (equal '(mailbox) reasons))
+      (apply (car scheduled) (cdr scheduled))
+      (should (equal '(mailbox) reasons))))
+
+  :doc "times out successfully and validates the inclusive millisecond bounds"
+  (let ((session (mevedel-agent-control-test--session))
+        reasons scheduled delay)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (seen-delay _repeat function &rest args)
+                 (setq delay seen-delay
+                       scheduled (cons function args))
+                 'fake-timer)))
+      (mevedel-agent-control-wait
+       session (lambda (reason) (push reason reasons)) nil)
+      (should (= 30 delay))
+      (apply (car scheduled) (cdr scheduled))
+      (should (equal '(timeout) reasons)))
+    (dolist (timeout '(9999 3600001 10000.0 "10000"))
+      (should-error
+       (mevedel-agent-control-wait session #'ignore timeout)))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (mevedel-agent-control-wait session #'ignore 10000)
+      (mevedel-agent-control-cancel-wait session "/root")
+      (mevedel-agent-control-wait session #'ignore 3600000)
+      (mevedel-agent-control-cancel-wait session "/root")))
+
+  :doc "new root user steering is queued for injection and interrupts the wait"
+  (let ((session (mevedel-agent-control-test--session))
+        reasons)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (mevedel-agent-control-wait
+       session (lambda (reason) (push reason reasons)) 10000)
+      (should (mevedel-agent-control-steer-user session "new direction"))
+      (should (equal '(user) reasons))
+      (let ((message (car (mevedel-agent-control--mailbox
+                           session "/root"))))
+        (should (eq 'USER (plist-get message :type)))
+        (should (equal "new direction" (plist-get message :payload))))
+      (should-not
+       (mevedel-agent-control-steer-user session "too late"))))
+
+  :doc "yielded Bash completion wakes a root wait through mailbox notification"
+  (let ((session (mevedel-agent-control-test--session))
+        reason)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (mevedel-agent-control-wait
+       session (lambda (seen) (setq reason seen)) 10000)
+      (should
+       (mevedel-agent-runtime-queue-execution-completion
+        session "main" "root execution complete"))
+      (should (eq 'mailbox reason))))
+
+  :doc "yielded Bash completion wakes a retained non-root wait"
+  (let* ((session (mevedel-agent-control-test--session))
+         (parent-buffer (generate-new-buffer " *agent-control-execution*"))
+         (agent-id "worker-execution")
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id agent-id
+           :parent-session session
+           :parent-data-buffer parent-buffer))
+         (record
+          (mevedel-agent-record--create
+           :id agent-id :path "/root/worker" :activity 'running
+           :invocation invocation))
+         (fsm (gptel-make-fsm
+               :state 'WAIT
+               :info (list :mevedel-agent-invocation invocation)))
+         reason)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-agent-registry session)
+                (list (cons "/root/worker" record)))
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-agent-runtime--fsms
+                        (list (cons agent-id fsm))))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (&rest _) 'fake-timer)))
+            (should
+             (mevedel-agent-runtime-queue-execution-completion
+              invocation agent-id "already complete"))
+            (let ((mevedel--agent-invocation invocation))
+              (mevedel-agent-control-wait
+               session (lambda (seen) (setq reason seen)) 10000))
+            (should (eq 'mailbox reason))
+            (setf (mevedel-agent-invocation-messages invocation) nil)
+            (setq reason nil)
+            (let ((mevedel--agent-invocation invocation))
+              (mevedel-agent-control-wait
+               session (lambda (seen) (setq reason seen)) 10000))
+            (should
+             (mevedel-agent-runtime-queue-execution-completion
+              invocation agent-id "agent execution complete"))
+            (should (eq 'mailbox reason))))
+      (kill-buffer parent-buffer)))
+
+  :doc "a suspended non-root caller retains its active-turn slot"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "worker-id" :parent-session session))
+         (record
+          (mevedel-agent-record--create
+           :id "worker-id" :path "/root/worker" :activity 'running
+           :invocation invocation))
+         reason)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (let ((mevedel--agent-invocation invocation))
+        (mevedel-agent-control-wait
+         session (lambda (seen) (setq reason seen)) 10000))
+      (should (= 1 (mevedel-agent-control--active-count session)))
+      (mevedel-agent-control-send-message session "/root/worker" "wake")
+      (should (eq 'mailbox reason))
+      (should (= 1 (mevedel-agent-control--active-count session)))))
+
+  :doc "follow-up steering wakes a non-root wait without an FSM wait state"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "steered-id" :parent-session session))
+         (record
+          (mevedel-agent-record--create
+           :id "steered-id" :path "/root/steered" :activity 'running
+           :invocation invocation))
+         reason)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/steered" record)))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer))
+              ((symbol-function 'mevedel-agent-runtime-steer)
+               (lambda (seen-invocation _sender _message)
+                 (mevedel-agent-control-notify-context-mailbox
+                  seen-invocation 'steering)
+                 t)))
+      (let ((mevedel--agent-invocation invocation))
+        (mevedel-agent-control-wait
+         session (lambda (seen) (setq reason seen)) 10000))
+      (mevedel-agent-control-followup
+       session "/root/steered" "new direction")
+      (should (eq 'steering reason))
+      (should (eq 'running (mevedel-agent-record-activity record))))))
+
 (provide 'test-mevedel-agent-control)
 
 ;;; test-mevedel-agent-control.el ends here

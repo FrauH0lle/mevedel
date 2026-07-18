@@ -3,7 +3,8 @@
 ;;; Commentary:
 
 ;; Assembles the user-interaction tool surface and owns the small adapters for
-;; Agent, FollowupAgent, ListAgents, StopAgent, ToolSearch, and SendMessage.
+;; Agent, FollowupAgent, ListAgents, StopAgent, ToolSearch, SendMessage, and
+;; WaitAgent.
 ;; Ask lives in a focused tool module; generic, Bash, and Eval prompts live in
 ;; the permission-prompt module.
 
@@ -15,12 +16,18 @@
   (require 'subr-x))
 
 ;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-cancel-wait
+                  "mevedel-agent-control" (session path))
 (declare-function mevedel-agent-control-followup
                   "mevedel-agent-control" t t)
 (declare-function mevedel-agent-control-list-agents
                   "mevedel-agent-control" (session &optional path-prefix))
+(declare-function mevedel-agent-control-send-message
+                  "mevedel-agent-control" (session target message))
 (declare-function mevedel-agent-control-spawn
                   "mevedel-agent-control" t t)
+(declare-function mevedel-agent-control-wait
+                  "mevedel-agent-control" (session callback &optional timeout-ms))
 (declare-function mevedel-agent-record-conversation-location
                   "mevedel-agent-control" (cl-x) t)
 (declare-function mevedel-agent-record-id
@@ -36,12 +43,15 @@
                   (agent-id &optional reason parent-buffer))
 
 ;; `mevedel-structs'
+(declare-function mevedel-request-push-canceller
+                  "mevedel-structs" (request canceller))
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue
                   "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-ask'
@@ -56,7 +66,6 @@
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-terminal-mailbox
                   "mevedel-tools" (fsm))
-(declare-function mevedel-tools--send-message "mevedel-tools" (args))
 (declare-function mevedel-tools--tool-search
                   "mevedel-tools" (callback query &optional load))
 (defvar mevedel-tools--current-fsm)
@@ -238,8 +247,50 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
      query load)))
 
 (defun mevedel-tool-ui--send-message (args)
-  "Dispatch the SendMessage ARGS to the tools coordinator."
-  (list :result (mevedel-tools--send-message args)))
+  "Queue the SendMessage described by ARGS."
+  (require 'mevedel-agent-control)
+  (let ((path
+         (mevedel-agent-control-send-message
+          mevedel--session
+          (plist-get args :target)
+          (plist-get args :message))))
+    (list :result ""
+          :render-data
+          (list :kind 'collaboration-event
+                :event 'interacted
+                :path path))))
+
+(defun mevedel-tool-ui--wait-summary (reason)
+  "Return the model-visible WaitAgent summary for REASON."
+  (pcase reason
+    ('mailbox "Mailbox activity")
+    ('steering "Follow-up steering received")
+    ('user "User steering received")
+    ('timeout "Timeout elapsed")
+    (_ "Wait finished")))
+
+(defun mevedel-tool-ui--wait-agent (callback args)
+  "Suspend WaitAgent ARGS and report the wake reason through CALLBACK."
+  (require 'mevedel-agent-control)
+  (when-let* ((path
+               (mevedel-agent-control-wait
+                mevedel--session
+                (lambda (reason)
+                  (mevedel-tool-ui--deliver-result
+                   callback
+                   (list :result (mevedel-tool-ui--wait-summary reason)
+                         :render-data
+                         (list :kind 'collaboration-event
+                               :event 'finished-waiting
+                               :reason reason))))
+                (plist-get args :timeout_ms))))
+    (when (and (equal path "/root")
+               (boundp 'mevedel--current-request)
+               mevedel--current-request)
+      (mevedel-request-push-canceller
+       mevedel--current-request
+       (apply-partially
+        #'mevedel-agent-control-cancel-wait mevedel--session path)))))
 
 
 ;;
@@ -353,13 +404,13 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
             :status (mevedel-tool-ui--result-status result)
             :initially-collapsed-p t))))
 
-(defun mevedel-tool-ui--render-send-message (name args result _render-data)
-  "Return compact rendering plist for SendMessage NAME, ARGS, and RESULT."
-  (when (stringp result)
-    (let ((to (or (plist-get args :to) "?")))
-      (list :header (format "%s: %s" (or name "SendMessage") to)
-            :status (mevedel-tool-ui--result-status result)
-            :expandable-p nil))))
+(defun mevedel-tool-ui--render-wait-agent
+    (_name _args result render-data)
+  "Render completed WaitAgent RESULT from RENDER-DATA."
+  (when (and (stringp result)
+             (eq (plist-get render-data :event) 'finished-waiting))
+    (list :header "Finished waiting"
+          :expandable-p nil)))
 
 
 ;;
@@ -433,16 +484,27 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     :renderer #'mevedel-tool-ui--render-tool-search)
   (mevedel-define-tool
     :name "SendMessage"
-    :description "Send an asynchronous message to a running agent or back to the main chat."
+    :description "Queue a message for any retained agent without starting a turn."
     :prompt-file "tools/sendmessage.md"
     :handler #'mevedel-tool-ui--send-message
-    :args ((to string :required
-               "Recipient: exact agent id, \"main\", or \"coordinator\".")
+    :args ((target string :required
+                   "Canonical path or relative descendant path.")
            (message string :required
                     "Message body to deliver."))
     :read-only-p t
     :groups (util)
-    :renderer #'mevedel-tool-ui--render-send-message))
+    :renderer #'mevedel-tool-ui--render-agent-interaction)
+  (mevedel-define-tool
+    :name "WaitAgent"
+    :description "Wait for mailbox activity, user steering, or timeout."
+    :prompt-file "tools/waitagent.md"
+    :handler #'mevedel-tool-ui--wait-agent
+    :args ((timeout_ms integer :optional
+                       "Timeout in milliseconds; defaults to 30000."))
+    :async-p t
+    :read-only-p t
+    :groups (util)
+    :renderer #'mevedel-tool-ui--render-wait-agent))
 
 (provide 'mevedel-tool-ui)
 

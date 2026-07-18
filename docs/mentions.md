@@ -8,6 +8,16 @@ Expansion runs as a gptel prompt transform (priority -90) via
 `[kind:KEY -- STATUS]` placeholder with full content injected as a
 `<system-reminder>` block above the user prompt.
 
+Root `WaitAgent` steering has no new gptel request on which that transform can
+run. At its final delivery boundary, `mevedel-mentions-expand-user-input`
+therefore applies the same transformer to the prepared steering text before
+the `USER` mailbox record wakes the suspended request. The original bound text
+remains in the composer, history, or fallback queue; only the model-ready copy
+contains placeholders and reminders. Expansion returns media contexts and
+deduplication updates explicitly: ordinary request transforms apply both,
+while WaitAgent steering rejects new media and commits deduplication only when
+the text-only steering record is accepted.
+
 Inline `$skill` attachment scanning lives next to this transform and reuses
 the same placeholder plus `<system-reminder>` output path, but keeps a
 separate parser because `$skill` quote, escape, and Markdown-code rules differ

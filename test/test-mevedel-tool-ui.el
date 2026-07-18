@@ -48,6 +48,16 @@
 (declare-function mevedel-session-persistence-lock-release
                   "mevedel-session-persistence" (path))
 
+(defun mevedel-tool-ui-test--session ()
+  "Return a fresh in-memory session for tool UI tests."
+  (mevedel-session-create
+   "main"
+   (mevedel-workspace--create
+    :type 'project
+    :id "tool-ui"
+    :root temporary-file-directory
+    :name "tool-ui")))
+
 (mevedel-deftest mevedel-tool-ui--deliver-result ()
   ,test
   (test)
@@ -76,8 +86,9 @@
   (progn
     (mevedel-tool-ui--register)
     (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
-                    "StopAgent" "ToolSearch" "SendMessage"))
+                    "StopAgent" "ToolSearch" "SendMessage" "WaitAgent"))
       (should (mevedel-tool-get name)))
+    (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should-not (mevedel-tool-get "RequestAccess"))))
 
 (mevedel-deftest mevedel-tool-ui--agent
@@ -675,6 +686,85 @@
        (mevedel-tool-ui--render-agent-interaction
         "FollowupAgent" '(:target "/root/missing")
         "Error: Unknown agent target" nil))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (should (string= draft (mevedel-view--input-text)))))))
+
+(mevedel-deftest mevedel-tool-ui--send-message ()
+  ,test
+  (test)
+  :doc "returns empty success with canonical interaction render data"
+  (let* ((session (mevedel-tool-ui-test--session))
+         (record (mevedel-agent-record--create
+                  :id "peer-id" :path "/root/peer" :activity 'idle))
+         result)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/peer" record)))
+    (let ((mevedel--session session))
+      (setq result
+            (mevedel-tool-ui--send-message
+             '(:target "/root/peer" :message "hello"))))
+    (should (equal "" (plist-get result :result)))
+    (should (equal "/root/peer"
+                   (plist-get (plist-get result :render-data) :path)))))
+
+(mevedel-deftest mevedel-tool-ui--wait-agent ()
+  ,test
+  (test)
+  :doc "uses the ordinary async callback and returns only a wake summary"
+  (let ((session (mevedel-tool-ui-test--session))
+        delivered)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest _) 'fake-timer)))
+      (let ((mevedel--session session))
+        (mevedel-tool-ui--wait-agent
+         (lambda (value) (setq delivered value))
+         '(:timeout_ms 10000)))
+      (mevedel-agent-control-send-message session "/root" "secret body")
+      (should (equal "Mailbox activity"
+                     (plist-get delivered :result)))
+      (should-not (string-match-p
+                   "secret body" (plist-get delivered :result)))
+      (should (equal 'finished-waiting
+                     (plist-get (plist-get delivered :render-data) :event)))))
+
+  :doc "request cancellation removes the root waiter without a stale callback"
+  (let* ((session (mevedel-tool-ui-test--session))
+         (request (mevedel-request--create
+                   :session session :origin "main"))
+         delivered
+         scheduled)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_delay _repeat function &rest args)
+                 (setq scheduled (cons function args))
+                 'fake-timer)))
+      (let ((mevedel--session session)
+            (mevedel--current-request request))
+        (mevedel-tool-ui--wait-agent
+         (lambda (value) (setq delivered value))
+         '(:timeout_ms 10000)))
+      (should (mevedel-session-agent-root-waiter session))
+      (mevedel-request-cancel request)
+      (should-not (mevedel-session-agent-root-waiter session))
+      (apply (car scheduled) (cdr scheduled))
+      (should-not delivered)))
+
+  :doc "renders pending and completed wait text while preserving a leading-> draft"
+  (mevedel-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (rendering
+            (mevedel-tool-ui--render-wait-agent
+             "WaitAgent" nil "Timeout elapsed"
+             '(:kind collaboration-event :event finished-waiting))))
+      (should (equal "Waiting for agents"
+                     (mevedel-view--tool-status-string "WaitAgent" nil)))
+      (should (equal "Finished waiting" (plist-get rendering :header)))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (let ((inhibit-read-only t))

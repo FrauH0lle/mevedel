@@ -1507,6 +1507,91 @@ Returns (buffer . overlay)."
 ;;
 ;;; Transform
 
+(mevedel-deftest mevedel-mentions--expand-buffer ()
+  ,test
+  (test)
+  :doc "uses explicit insertion and media callbacks and defers dedup changes"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "expand-buffer" :root "/tmp"
+                     :name "expand-buffer"))
+         (session (mevedel-session-create "main" workspace))
+         (mevedel-mention-handlers
+          (list
+           (list "@asset" nil
+                 (lambda (_info)
+                   '(:placeholder "[asset -- attached]"
+                     :media-context ("/tmp/asset.png" "image/png")
+                     :key (asset . "/tmp/asset.png")
+                     :hash "asset-hash")))))
+         expansion)
+    (with-temp-buffer
+      (insert "Use @asset")
+      (setq expansion
+            (mevedel-mentions--expand-buffer
+             session nil (point-min)))
+      (should (equal "Use [asset -- attached]" (buffer-string))))
+    (should (equal '(("/tmp/asset.png" "image/png"))
+                   (plist-get expansion :media-contexts)))
+    (should (equal '(((asset . "/tmp/asset.png") . "asset-hash"))
+                   (plist-get expansion :dedup-updates)))
+    (should-not
+     (gethash '(asset . "/tmp/asset.png")
+              (mevedel-session-mentions-shown session)))))
+
+(mevedel-deftest mevedel-mentions--commit-expansion ()
+  ,test
+  (test)
+  :doc "records accepted expansion hashes at the current session turn"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "commit-expansion" :root "/tmp"
+                     :name "commit-expansion"))
+         (session (mevedel-session-create "main" workspace))
+         (key (cons 'ref "uuid")))
+    (mevedel-mentions--commit-expansion
+     session (list :dedup-updates (list (cons key "hash"))))
+    (should (equal (cons (mevedel-session-turn-count session) "hash")
+                   (gethash key (mevedel-session-mentions-shown session))))))
+
+(mevedel-deftest mevedel-mentions-expand-user-input
+  (:before-each
+   (mevedel-test--reset-instructions)
+   :after-each
+   (mevedel-test--reset-instructions))
+  ,test
+  (test)
+  :doc "expands a bound reference into one model-ready steering prompt"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "steering-mention" :root "/tmp"
+                     :name "steering-mention"))
+         (cell (mevedel-test--make-ref-buffer
+                "steering reference body\n"
+                "steering reference body"
+                workspace))
+         (buffer (car cell))
+         (reference (cdr cell))
+         (id (mevedel--instruction-id reference))
+         (session (mevedel-session-create "main" workspace))
+         (input (mevedel-mentions-prepare-user-input
+                 (format "Use @ref:%d" id) session)))
+    (unwind-protect
+        (let* ((expansion
+                (mevedel-mentions-expand-user-input input session))
+               (expanded (plist-get expansion :text)))
+          (should-not (string-match-p (format "@ref:%d" id) expanded))
+          (should (string-match-p
+                   (format "\\[ref:%d -- contents attached above\\]" id)
+                   expanded))
+          (should (string-match-p "steering reference body" expanded))
+          (should (string-match-p "<system-reminder>" expanded))
+          (should-not (plist-get expansion :media-contexts))
+          (should (plist-get expansion :dedup-updates)))
+      (let ((file (buffer-file-name buffer)))
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer)
+        (when (file-exists-p file)
+          (delete-file file))))))
+
 (mevedel-deftest mevedel--transform-expand-mentions
   (:before-each
    (mevedel-test--reset-instructions)

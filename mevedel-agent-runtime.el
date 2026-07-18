@@ -29,6 +29,10 @@
 (declare-function gptel-fsm-state "ext:gptel-request" (cl-x) t)
 (declare-function gptel-fsm-table "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-notify-context-mailbox
+                  "mevedel-agent-control" (context &optional reason))
+
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec--allocate-agent-buffer
                   "mevedel-agent-exec" (invocation parent-data-buffer))
@@ -210,7 +214,10 @@ model request merely because a background process settled."
   "Queue MESSAGE on CTX's inbound mailbox."
   (if (mevedel-agent-invocation-p ctx)
       (push message (mevedel-agent-invocation-messages ctx))
-    (push message (mevedel-session-messages ctx))))
+    (push message (mevedel-session-messages ctx)))
+  (when (fboundp 'mevedel-agent-control-notify-context-mailbox)
+    (mevedel-agent-control-notify-context-mailbox
+     ctx (and (plist-get message :steering-p) 'steering))))
 
 (defun mevedel-agent-runtime-steer (invocation sender message)
   "Queue a follow-up from SENDER for INVOCATION's next safe boundary."
@@ -224,7 +231,8 @@ model request merely because a background process settled."
       (error "Running agent has no live request"))
     (mevedel-agent-runtime--ctx-push-message
      invocation
-     (list :from sender :body message :timestamp (current-time)))
+     (list :from sender :body message :steering-p t
+           :timestamp (current-time)))
     (when (eq (gptel-fsm-state fsm) 'BWAIT)
       (gptel--fsm-transition fsm 'WAIT))
     t))

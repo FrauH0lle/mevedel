@@ -157,6 +157,12 @@
           (append (mevedel-request-hook-rules request)
                   hooks))))
 
+(defun mevedel-skills-commit-invoked-records (session records)
+  "Append skill invocation RECORDS to SESSION for compaction and replay."
+  (when (and session records)
+    (setf (mevedel-session-invoked-skills session)
+          (append (mevedel-session-invoked-skills session) records))))
+
 (defvar-local mevedel-skills--pending-request-context nil
   "Buffer-local pending request context for the next mevedel-request.
 
@@ -219,8 +225,7 @@ The stash plist keys map onto request/session state:
       (setf (mevedel-request-hook-rules request) hooks))
     (when-let* ((skills (plist-get ctx :invoked-skills))
                 (session mevedel--session))
-      (setf (mevedel-session-invoked-skills session)
-            (append (mevedel-session-invoked-skills session) skills)))
+      (mevedel-skills-commit-invoked-records session skills))
     (setq-local mevedel-skills--pending-request-context nil)))
 
 (defun mevedel-skills--transform-apply-model-override (fsm)
@@ -1252,9 +1257,8 @@ compaction/replay."
       ;; Record on the session.
       (when invoked-skill
         (when-let* ((session (and (boundp 'mevedel--session) mevedel--session)))
-          (setf (mevedel-session-invoked-skills session)
-                (append (mevedel-session-invoked-skills session)
-                        (list invoked-skill)))))))))
+          (mevedel-skills-commit-invoked-records
+           session (list invoked-skill))))))))
 
 (cl-defun mevedel-skills--invoke-inline
     (skill arguments callback &key origin display-callback)
@@ -1574,11 +1578,8 @@ DISPLAY-CALLBACK retain the normal fork dispatch meanings."
                skill-name (mevedel-skill-agent skill))
        callback display-callback))
      (t
-      (let ((records (plist-get context :invoked-skills)))
-        (when (and session records)
-          (setf (mevedel-session-invoked-skills session)
-                (append (mevedel-session-invoked-skills session)
-                        records))))
+      (mevedel-skills-commit-invoked-records
+       session (plist-get context :invoked-skills))
       (unless (fboundp 'mevedel-agent-runtime-dispatch)
         (require 'mevedel-agent-runtime))
       (condition-case err

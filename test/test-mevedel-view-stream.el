@@ -2040,6 +2040,24 @@
                            (mevedel-view--input-text)))
             (should (looking-at-p "oted")))))))
 
+  :doc "WaitAgent pending redraw shows waiting text and preserves a leading-> draft"
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (setq mevedel-view--in-flight-turn-start
+            (copy-marker mevedel-view--input-marker nil))
+      (setq mevedel-view--data-turn-start
+            (with-current-buffer data-buf (copy-marker (point-min))))
+      (mevedel-view-stream-test--insert-composer-draft
+       "> quoted\nsecond line" 4))
+    (with-current-buffer data-buf
+      (mevedel-view-stream-pre-tool
+       '(:id "wait-1" :name "WaitAgent" :args (:timeout_ms 10000))))
+    (with-current-buffer view-buf
+      (should (equal "> quoted\nsecond line" (mevedel-view--input-text)))
+      (should (string-match-p
+               "Waiting for agents"
+               (buffer-substring-no-properties (point-min) (point-max))))))
+
   :doc "pending tool refresh keeps ordinary calling rows and adds a fragment"
   (mevedel-view-stream-test--with-buffers
     (with-current-buffer view-buf

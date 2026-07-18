@@ -28,6 +28,13 @@
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-root-waiting-p
+                  "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-steer-user
+                  "mevedel-agent-control"
+                  (session message &optional before-wake metadata))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 
@@ -64,6 +71,10 @@
                   "mevedel-mention-bindings" (start end binding &optional object))
 
 ;; `mevedel-mentions'
+(declare-function mevedel-mentions--commit-expansion
+                  "mevedel-mentions" (session expansion))
+(declare-function mevedel-mentions-expand-user-input
+                  "mevedel-mentions" (text session))
 (declare-function mevedel-mentions-file-paths-in-text
                   "mevedel-mentions" (text))
 (declare-function mevedel-mentions-file-token "mevedel-mentions" (path))
@@ -108,6 +119,8 @@
                   "mevedel-skills-invoke" (outcome))
 (declare-function mevedel-skills--parse-skill-line
                   "mevedel-skills-invoke" (text))
+(declare-function mevedel-skills-commit-invoked-records
+                  "mevedel-skills-invoke" (session records))
 (declare-function mevedel-skills-dispatch-prepared-fork
                   "mevedel-skills-invoke" t t)
 (declare-function mevedel-skills-prepare-user-input
@@ -1071,29 +1084,39 @@ means a failed attempt leaves the exact source attached for a retry."
            :body (mevedel-view--queued-user-messages-body queue)
            :help-echo "Queued user messages"))))
 
-(defun mevedel-view--queue-user-message (input)
-  "Queue atomically bound INPUT without preparing or running prompt hooks."
+(defun mevedel-view--queue-user-message (input &optional force-queue)
+  "Queue INPUT, or prepare steering for a root WaitAgent.
+When FORCE-QUEUE is non-nil, skip steering even if root is waiting."
   (setq input (mevedel--normalize-message-text input))
   (let ((session (mevedel-view--session)))
     (unless session
       (user-error "No active session for queued message"))
-    (let* ((dropped-file-grants
-            (mevedel-view--pop-dropped-file-grants-for-input input session))
-           (entry
-            (list :input input
-                  :dropped-file-grants dropped-file-grants
-                  :queued-at-turn
-                  (or (mevedel-session-turn-count session) 0))))
-      (mevedel-view--set-queued-user-messages
-       (append (mevedel-view--queued-user-messages session) (list entry))
-       session)
-      (mevedel-view-history-add input)
-      (when (equal-including-properties (mevedel-view--input-text) input)
-        (mevedel-view--clear-input))
-      (mevedel-view--interaction-rebuild)
-      (message "mevedel: queued message for the next turn")
-      (mevedel-view--schedule-late-queued-user-message-drain)
-      entry)))
+    (require 'mevedel-agent-control)
+    (if (and (not force-queue)
+             (mevedel-agent-control-root-waiting-p session))
+        (mevedel-view--submit-planned-input
+         input
+         nil
+         #'ignore
+         (lambda (outcome)
+           (mevedel-view--deliver-prepared-steering input outcome)))
+      (let* ((dropped-file-grants
+              (mevedel-view--pop-dropped-file-grants-for-input input session))
+             (entry
+              (list :input input
+                    :dropped-file-grants dropped-file-grants
+                    :queued-at-turn
+                    (or (mevedel-session-turn-count session) 0))))
+        (mevedel-view--set-queued-user-messages
+         (append (mevedel-view--queued-user-messages session) (list entry))
+         session)
+        (mevedel-view-history-add input)
+        (when (equal-including-properties (mevedel-view--input-text) input)
+          (mevedel-view--clear-input))
+        (mevedel-view--interaction-rebuild)
+        (message "mevedel: queued message for the next turn")
+        (mevedel-view--schedule-late-queued-user-message-drain)
+        entry))))
 
 (defun mevedel-view-edit-last-queued-message ()
   "Move all queued user messages back to the composer."
@@ -1310,6 +1333,38 @@ in the view when present."
     (when on-block
       (funcall on-block))))
 
+(defun mevedel-view--prepared-plan-outcome
+    (submission prepared hook-input hook-context hook-audits)
+  "Return the structured prepared outcome for SUBMISSION.
+PREPARED is the skill planner result.  HOOK-INPUT, HOOK-CONTEXT, and
+HOOK-AUDITS are the accepted `UserPromptSubmit' result."
+  (let* ((plan (plist-get submission :plan))
+         (input (plist-get submission :input))
+         (prepared-input (plist-get prepared :model-input))
+         (rewrite-preserves-plan-p
+          (string-search prepared-input hook-input))
+         (hook-input (if rewrite-preserves-plan-p
+                         hook-input
+                       prepared-input))
+         (hook-audits (and rewrite-preserves-plan-p hook-audits)))
+    (list :model-input
+          (if hook-context
+              (concat hook-input "\n\n" hook-context)
+            hook-input)
+          :transcript-input
+          (if hook-context
+              (concat input "\n\n" hook-context)
+            input)
+          :hook-input hook-input
+          :hook-context hook-context
+          :hook-audits
+          (append (plist-get prepared :hook-audits) hook-audits)
+          :request-context (plist-get prepared :request-context)
+          :render-data (mevedel-skills-plan-render-data plan)
+          :fork-outcome
+          (and (mevedel-skill-invocation-plan-fork-p plan)
+               (mevedel-view--prepared-fork-outcome prepared)))))
+
 (defun mevedel-view--dispatch-prepared-plan
     (submission prepared hook-input hook-context hook-audits)
   "Dispatch PREPARED plan for SUBMISSION after the prompt hook completes."
@@ -1320,34 +1375,26 @@ in the view when present."
            token view-buffer data-buffer)
       (with-current-buffer view-buffer
         (mevedel-view--finish-skill-submission token)
-        (let* ((plan (plist-get submission :plan))
-               (input (plist-get submission :input))
-               (prepared-input (plist-get prepared :model-input))
-               (rewrite-preserves-plan-p
-                (string-search prepared-input hook-input))
-               (hook-input (if rewrite-preserves-plan-p
-                               hook-input
-                             prepared-input))
-               (hook-audits (and rewrite-preserves-plan-p hook-audits))
-               (model-input (if hook-context
-                                (concat hook-input "\n\n" hook-context)
-                              hook-input))
-               (transcript-input
-                (if hook-context
-                    (concat input "\n\n" hook-context)
-                  input))
+        (let* ((input (plist-get submission :input))
+               (outcome
+                (mevedel-view--prepared-plan-outcome
+                 submission prepared hook-input hook-context hook-audits))
+               (model-input (plist-get outcome :model-input))
+               (transcript-input (plist-get outcome :transcript-input))
+               (hook-input (plist-get outcome :hook-input))
+               (hook-context (plist-get outcome :hook-context))
+               (all-audits (plist-get outcome :hook-audits))
+               (request-context (plist-get outcome :request-context))
+               (render-data (plist-get outcome :render-data))
+               (fork-outcome (plist-get outcome :fork-outcome))
+               (dispatch (plist-get submission :dispatch))
                (view-context
-                (mevedel-view--join-hook-contexts
-                 (mevedel-hooks-format-context
-                  (mevedel-view--hook-context-events-from-text hook-input))
-                 hook-context))
-               (all-audits
-                (append (plist-get prepared :hook-audits) hook-audits))
-               (request-context (plist-get prepared :request-context))
-               (render-data (mevedel-skills-plan-render-data plan))
-               (fork-outcome
-                (and (mevedel-skill-invocation-plan-fork-p plan)
-                     (mevedel-view--prepared-fork-outcome prepared)))
+                (and (not dispatch)
+                     (mevedel-view--join-hook-contexts
+                      (mevedel-hooks-format-context
+                       (mevedel-view--hook-context-events-from-text
+                        hook-input))
+                      hook-context)))
                (before-send (plist-get submission :before-send))
                (on-block (plist-get submission :on-block)))
           (condition-case err
@@ -1356,28 +1403,32 @@ in the view when present."
                   (funcall before-send))
                 (when-let* ((warnings (plist-get prepared :warnings)))
                   (message "mevedel: %s" (string-join warnings "; ")))
-                (if fork-outcome
-                    (let* ((skill (plist-get fork-outcome :skill))
-                           (name (mevedel-skill-name skill)))
-                      (mevedel-view--start-fork-skill-turn
-                       (concat transcript-input render-data)
-                       input view-context)
-                      (with-current-buffer data-buffer
-                        (mevedel-skills-dispatch-prepared-fork
-                         fork-outcome
-                         (lambda (outcome)
-                           (mevedel-view--finish-fork-skill-outcome
-                            name outcome view-buffer data-buffer skill))
-                         :prompt model-input
-                         :request-context request-context
-                         :hook-audits all-audits)))
+                (cond
+                 (dispatch
+                  (funcall dispatch outcome))
+                 (fork-outcome
+                  (let* ((skill (plist-get fork-outcome :skill))
+                         (name (mevedel-skill-name skill)))
+                    (mevedel-view--start-fork-skill-turn
+                     (concat transcript-input render-data)
+                     input view-context)
+                    (with-current-buffer data-buffer
+                      (mevedel-skills-dispatch-prepared-fork
+                       fork-outcome
+                       (lambda (outcome)
+                         (mevedel-view--finish-fork-skill-outcome
+                          name outcome view-buffer data-buffer skill))
+                       :prompt model-input
+                       :request-context request-context
+                       :hook-audits all-audits))))
+                 (t
                   (with-current-buffer data-buffer
                     (setq-local mevedel-skills--pending-request-context
                                 request-context))
                   (mevedel-view--forward-input
                    (concat transcript-input render-data)
                    input nil t nil view-context all-audits
-                   (concat model-input render-data))))
+                   (concat model-input render-data)))))
             (error
              (when (buffer-live-p data-buffer)
                (with-current-buffer data-buffer
@@ -1410,12 +1461,14 @@ in the view when present."
                  (mevedel-view--block-planned-submission submission))))))))))
 
 (defun mevedel-view--submit-planned-input
-    (input &optional before-send on-block)
+    (input &optional before-send on-block dispatch)
   "Plan, prepare, and submit atomically bound user INPUT.
 
 BEFORE-SEND runs exactly once at the dispatch boundary.  ON-BLOCK runs when
 planning, preparation, or `UserPromptSubmit' rejects the submission.  Derived
-skill bodies and hook output are never scanned for additional invocations."
+skill bodies and hook output are never scanned for additional invocations.
+When DISPATCH is non-nil, call it with a structured preparation outcome instead
+of starting a new request."
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session)))
@@ -1425,7 +1478,22 @@ skill bodies and hook output are never scanned for additional invocations."
               (mevedel-skills-refresh-bound-input input session)
               (mevedel-skills-plan-user-input input session))))
       (if (null (mevedel-skill-invocation-plan-occurrences plan))
-          (mevedel-view--forward-input input nil before-send nil on-block)
+          (if dispatch
+              (mevedel-view--run-prompt-submit-hook
+               input input
+               (lambda (hook-input hook-context hook-audits)
+                 (when before-send
+                   (funcall before-send))
+                 (let ((prepared-input
+                        (if hook-context
+                            (concat hook-input "\n\n" hook-context)
+                          hook-input)))
+                   (funcall dispatch
+                            (list :model-input prepared-input
+                                  :transcript-input prepared-input
+                                  :hook-audits hook-audits))))
+               on-block)
+            (mevedel-view--forward-input input nil before-send nil on-block))
         (let* ((token (list :cancelled nil))
                (submission
                 (list :token token
@@ -1434,6 +1502,7 @@ skill bodies and hook output are never scanned for additional invocations."
                       :view-buffer view-buffer
                       :data-buffer data-buffer
                       :before-send before-send
+                      :dispatch dispatch
                       :on-block on-block)))
           (setq mevedel-view--pending-skill-submission token)
           (with-current-buffer data-buffer
@@ -1444,6 +1513,60 @@ skill bodies and hook output are never scanned for additional invocations."
              (lambda ()
                (not (mevedel-view--skill-submission-active-p
                      token view-buffer data-buffer))))))))))
+
+(defun mevedel-view--steering-request-context-supported-p (context)
+  "Return non-nil when prepared skill CONTEXT can steer an active request."
+  (cl-loop for (key value) on context by #'cddr
+           always
+           (pcase key
+             (:invoked-skills t)
+             ((or :permission-rules :hook-rules :model :effort)
+              (null value))
+             (_ nil))))
+
+(defun mevedel-view--deliver-prepared-steering (input outcome)
+  "Deliver prepared OUTCOME as steering for bound composer INPUT."
+  (let ((session (mevedel-view--session))
+        (request-context (plist-get outcome :request-context)))
+    (cond
+     ((not (mevedel-agent-control-root-waiting-p session))
+      (mevedel-view--queue-user-message input t))
+     ((plist-get outcome :fork-outcome)
+      (message "mevedel: fork skills cannot steer a waiting turn"))
+     ((not (mevedel-view--steering-request-context-supported-p
+            request-context))
+      (message "mevedel: skill policy cannot steer an active request"))
+     (t
+      (let ((expansion
+             (with-current-buffer mevedel--data-buffer
+               (require 'mevedel-mentions)
+               (mevedel-mentions-expand-user-input
+                (plist-get outcome :model-input) session))))
+        (if (plist-get expansion :media-contexts)
+            (message "mevedel: media mentions cannot steer an active request")
+          (let ((dropped-file-grants
+                 (mevedel-view--pop-dropped-file-grants-for-input
+                  input session)))
+            (when
+                (mevedel-agent-control-steer-user
+                 session (plist-get expansion :text)
+                 (lambda ()
+                   (mevedel-mentions--commit-expansion session expansion)
+                   (mevedel-skills-commit-invoked-records
+                    session (plist-get request-context :invoked-skills))
+                   (mevedel-view--activate-dropped-file-grants
+                    dropped-file-grants session))
+                 (list
+                  :transcript-payload
+                  (concat (plist-get outcome :transcript-input)
+                          (plist-get outcome :render-data))
+                  :hook-audits (plist-get outcome :hook-audits)))
+              (mevedel-view-history-add input)
+              (when (equal-including-properties
+                     (mevedel-view--input-text) input)
+                (mevedel-view--clear-input))
+              (mevedel-view--interaction-rebuild)
+              (message "mevedel: steered the waiting turn")))))))))
 
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
