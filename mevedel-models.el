@@ -208,6 +208,18 @@ string.  Returns either (:tier TIER) or (:backend BACKEND :model MODEL)."
      "Model must be a configured tier or BACKEND:MODEL: %S"
      value))))
 
+(defun mevedel-model-parse-effort (value)
+  "Parse optional model-facing reasoning effort VALUE.
+
+Model-specific support is validated later by
+`mevedel-model-resolve-workload'."
+  (cond
+   ((null value) nil)
+   ((and (stringp value) (not (equal value "")))
+    (or (intern value)
+        (user-error "Reasoning effort must not be nil")))
+   (t (user-error "Reasoning effort must be a non-empty string: %S" value))))
+
 (defun mevedel-model-resolve-selector (selector &optional noerror)
   "Resolve SELECTOR to a provider plist, or nil for inherit.
 

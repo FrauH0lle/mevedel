@@ -11,6 +11,7 @@
 (require 'json)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-exec)
+(require 'mevedel-compact)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-registry)
 (require 'mevedel-tool-ui)
@@ -92,16 +93,15 @@
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should-not (mevedel-tool-get "RequestAccess")))
 
-  :doc "Agent exposes role as an optional configuration overlay"
+  :doc "Agent exposes every optional fork and configuration control"
   (progn
     (mevedel-tool-ui--register)
     (let* ((tool (mevedel-tool-get "Agent"))
-           (role (cl-find-if
-                  (lambda (arg)
-                    (eq (car arg) 'role))
-                  (mevedel-tool-args tool))))
-      (should role)
-      (should (eq :optional (nth 2 role))))))
+           (args (mevedel-tool-args tool)))
+      (dolist (name '(role fork_turns model effort))
+        (let ((arg (assq name args)))
+          (should arg)
+          (should (eq :optional (nth 2 arg))))))))
 
 (mevedel-deftest mevedel-tool-ui--agent
   (:after-each (mevedel-workspace-clear-registry))
@@ -174,8 +174,10 @@
                              (mevedel-agent-record-parent-path record)))
               (should (equal "default"
                              (mevedel-agent-record-role record)))
-              (should (equal '(:role "default")
-                             (mevedel-agent-record-configuration record)))
+              (should (equal "default"
+                             (mevedel-agent-name
+                              (mevedel-agent-configuration-agent
+                               (mevedel-agent-record-configuration record)))))
               (should (eq 'running
                           (mevedel-agent-record-activity record)))
               (should (stringp
@@ -239,6 +241,20 @@
               #'ignore
               '(:task_name "task_0" :message "Paths remain reserved."))
              :type 'user-error)
+            (dolist
+                (args '((:task_name "bad_fork" :message "bad"
+                         :fork_turns "0")
+                        (:task_name "bad_model" :message "bad"
+                         :model "not-a-model")
+                        (:task_name "bad_effort" :message "bad"
+                         :effort "")
+                        (:task_name "nil_effort" :message "bad"
+                         :effort "nil")))
+              (should-error (mevedel-tool-ui--agent #'ignore args)
+                            :type 'user-error)
+              (should-not
+               (assoc (concat "/root/" (plist-get args :task_name))
+                      (mevedel-session-agent-registry session))))
             (dolist (args '((:task_name "Upper" :message "bad")
                             (:task_name "two/parts" :message "bad")
                             (:task_name "legacy" :message "ok"
@@ -262,6 +278,306 @@
       (when (buffer-live-p parent)
         (kill-buffer parent))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-ui--agent/frozen-conversation
+  (:before-each (mevedel-tools-register)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "covers every context fork, independent compaction, and frozen follow-ups"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-agent-frozen-" t)))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "agent-frozen" root "agent-frozen"))
+         (session (mevedel-session-create "main" workspace))
+         (parent (generate-new-buffer " *mevedel-agent-frozen-parent*"))
+         (role
+          (mevedel-agent--create
+           :name "freeze_test"
+           :description "Freeze conversation"
+           :tools nil
+           :system-prompt "Initial frozen instructions."))
+         callbacks
+         invocations
+         record
+         configuration
+         child-buffer
+         frozen-buffer
+         initial-invocation)
+    (push (cons "freeze_test" role) mevedel-agent--registry)
+    (unwind-protect
+        (with-current-buffer parent
+          (org-mode)
+          (setq-local mevedel--session session)
+          (setq-local mevedel--workspace workspace)
+          (insert "#+begin_summary\nArchived work summarized.\n#+end_summary\n"
+                  "First live prompt.\n")
+          (let ((response-start (point)))
+            (insert "First live response.\n")
+            (put-text-property response-start (point) 'gptel 'response))
+          (insert "Second live prompt.\n")
+          (let ((response-start (point)))
+            (insert "Second live response.\n")
+            (put-text-property response-start (point) 'gptel 'response))
+          (let ((mevedel-agent-exec--agents nil))
+            (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+                       (lambda (callback _role _description _message invocation
+                                         buffer &optional _configure)
+                         (push callback callbacks)
+                         (push invocation invocations)
+                         (setq child-buffer buffer)
+                         'provider-request)))
+              (mevedel-tool-ui--agent
+               #'ignore
+               '(:task_name "frozen"
+                 :message "Initial child task."
+                 :role "freeze_test"
+                 :fork_turns "1"))
+              (setq record
+                    (cdr (assoc "/root/frozen"
+                                (mevedel-session-agent-registry session))))
+              (setq configuration
+                    (mevedel-agent-record-configuration record))
+              (setq frozen-buffer child-buffer
+                    initial-invocation (car invocations))
+              (with-current-buffer child-buffer
+                (let ((text (buffer-string)))
+                  (should (string-match-p "Archived work summarized" text))
+                  (should-not (string-match-p "First live prompt" text))
+                  (should (string-match-p "Second live prompt" text))
+                  (should (string-match-p "Initial child task" text))))
+              (with-current-buffer frozen-buffer
+                (goto-char (point-max))
+                (let ((start (point)))
+                  (insert "Initial child result.\n")
+                  (put-text-property start (point) 'gptel 'response)))
+              (funcall (car callbacks) "Initial child result.")
+              (with-current-buffer frozen-buffer
+                (let* ((target
+                        (mevedel--compact-agent-target initial-invocation))
+                       (archive
+                        (mevedel--compact-agent-apply
+                         target "Child work compacted." nil nil nil)))
+                  (should (file-exists-p archive))
+                  (should (string-match-p "Child work compacted"
+                                          (buffer-string)))
+                  (should (string-match-p "Initial child task"
+                                          (buffer-string)))
+                  (should-not (string-match-p "Archived work summarized"
+                                              (buffer-string)))
+                  (should-not (string-match-p "Second live prompt"
+                                              (buffer-string)))))
+              (should (eq record
+                          (cdr (assoc
+                                "/root/frozen"
+                                (mevedel-session-agent-registry session)))))
+              (cl-labels
+                  ((fork-text (task-name fork)
+                     (mevedel-tool-ui--agent
+                      #'ignore
+                      (append
+                       (list :task_name task-name
+                             :message (format "Task for %s." task-name))
+                       fork))
+                     (prog1
+                         (with-current-buffer child-buffer (buffer-string))
+                       (funcall (car callbacks) "Context fork complete."))))
+                (let ((text (fork-text "explicit_all"
+                                       '(:fork_turns "all"))))
+                  (should (string-match-p "Archived work summarized" text))
+                  (should (string-match-p "First live prompt" text))
+                  (should (string-match-p "Second live prompt" text)))
+                (let ((text (fork-text "default_all" nil)))
+                  (should (string-match-p "Archived work summarized" text))
+                  (should (string-match-p "First live prompt" text))
+                  (should (string-match-p "Second live prompt" text)))
+                (let ((text (fork-text "without_context"
+                                       '(:fork_turns "none"))))
+                  (should-not
+                   (string-match-p "Archived work summarized" text))
+                  (should-not (string-match-p "First live prompt" text))
+                  (should-not (string-match-p "Second live prompt" text))
+                  (should (string-match-p "Task for without_context" text))))
+              (insert "Parent text added after spawn.\n")
+              (setf (alist-get "freeze_test" mevedel-agent--registry
+                               nil nil #'equal)
+                    (mevedel-agent--create
+                     :name "freeze_test"
+                     :description "Mutated role"
+                     :tools '((:tool "Eval"))
+                     :system-prompt "Mutated instructions."))
+              (mevedel-tool-ui--followup-agent
+               '(:target "/root/frozen" :message "Follow-up child task."))
+              (let* ((followup (car invocations))
+                     (frozen-agent
+                      (mevedel-agent-invocation-agent followup)))
+                (should (eq configuration
+                            (mevedel-agent-invocation-frozen-configuration
+                             followup)))
+                (should (equal "Initial frozen instructions."
+                               (mevedel-agent-system-prompt frozen-agent)))
+                (should-not (member '(:tool "Eval")
+                                    (mevedel-agent-tools frozen-agent)))
+                (with-current-buffer frozen-buffer
+                  (let ((text (buffer-string)))
+                    (should (string-match-p "Follow-up child task" text))
+                    (should-not
+                     (string-match-p "Parent text added after spawn" text))
+                    (should
+                     (= 1 (how-many
+                           (format "^:%s:"
+                                   mevedel-agent-task-path-property)
+                           (point-min) (point-max)))))
+                  (goto-char (point-max))
+                  (let ((start (point)))
+                    (insert "Follow-up child result.\n")
+                    (put-text-property start (point) 'gptel 'response)))
+                (funcall (car callbacks) "Follow-up child result.")
+                (with-current-buffer frozen-buffer
+                  (let ((snapshot (mevedel-compact-context-snapshot 1)))
+                    (should (string-match-p "\\* Agent Task: frozen" snapshot))
+                    (should (string-match-p "Child work compacted" snapshot))
+                    (should (string-match-p "Follow-up child task" snapshot))
+                    (should (string-match-p "Follow-up child result" snapshot)))
+                  (let* ((target (mevedel--compact-agent-target followup))
+                         (archive
+                          (mevedel--compact-agent-apply
+                           target "Follow-up work compacted." nil nil nil)))
+                    (should (file-exists-p archive))
+                    (should (string-match-p "Initial child task"
+                                            (buffer-string)))
+                    (should (string-match-p "Follow-up work compacted"
+                                            (buffer-string)))
+                    (should-not (string-match-p "Follow-up child task"
+                                                (buffer-string)))))))))
+      (setq mevedel-agent--registry
+            (assoc-delete-all "freeze_test" mevedel-agent--registry))
+      (dolist (invocation invocations)
+        (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (mevedel-session-save-path session)
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session)))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-ui--agent/model-policy
+  (:before-each (mevedel-tools-register)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "freezes parent, role, and explicit model policy through the public tool"
+  (let* ((root (file-name-as-directory
+                (make-temp-file "mevedel-agent-model-policy-" t)))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "agent-model-policy" root "agent-model-policy"))
+         (session (mevedel-session-create "main" workspace))
+         (parent (generate-new-buffer " *mevedel-agent-model-policy*"))
+         (role (mevedel-agent--create
+                :name "model_test"
+                :description "Model policy test"
+                :system-prompt "Use the frozen model policy."))
+         (old-custom (get 'gptel-reasoning-effort 'custom-type))
+         (old-parent (get 'parent-model :reasoning-effort))
+         (old-role (get 'role-model :reasoning-effort))
+         (old-explicit (get 'explicit-model :reasoning-effort))
+         invocations
+         callbacks)
+    (push (cons "model_test" role) mevedel-agent--registry)
+    (unwind-protect
+        (let ((gptel--known-backends nil))
+          (gptel-make-openai "Parent" :key "test" :models '(parent-model))
+          (gptel-make-openai "Role" :key "test" :models '(role-model))
+          (gptel-make-openai "Explicit" :key "test" :models '(explicit-model))
+          (put 'gptel-reasoning-effort 'custom-type '(choice symbol integer))
+          (dolist (model '(parent-model role-model explicit-model))
+            (put model :reasoning-effort '(member low medium high)))
+          (with-current-buffer parent
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace workspace)
+            (setq-local gptel-backend (gptel-get-backend "Parent"))
+            (setq-local gptel-model 'parent-model)
+            (setq-local gptel-reasoning-effort 'low)
+            (let ((gptel-agent-preset nil)
+                  (mevedel-agent-exec--agents nil)
+                  (mevedel-model-tiers
+                   '((role-tier :provider "Role:role-model" :effort medium)
+                     (explicit-tier :provider "Explicit:explicit-model")))
+                  (mevedel-model-workloads '((model_test :tier role-tier))))
+              (should (eq 'low gptel-reasoning-effort))
+              (should (eq 'low
+                          (plist-get
+                           (mevedel-model-resolve-workload 'default)
+                           :effort)))
+              (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+                         (lambda (callback _role _description _message invocation
+                                           _buffer &optional _configure)
+                           (push callback callbacks)
+                           (push invocation invocations)
+                           'provider-request)))
+                (cl-labels
+                    ((launch-policy (task role-name &rest controls)
+                       (mevedel-tool-ui--agent
+                        #'ignore
+                        (append (list :task_name task
+                                      :message "Inspect model policy.")
+                                (and role-name (list :role role-name))
+                                controls))
+                       (let* ((invocation (car invocations))
+                              (configuration
+                               (mevedel-agent-invocation-frozen-configuration
+                                invocation))
+                              (snapshot
+                               (mevedel-agent-configuration-request-locals
+                                configuration)))
+                         (funcall (car callbacks) "Model policy inspected.")
+                         snapshot)))
+                  (let ((snapshot (launch-policy "parent_policy" nil)))
+                    (should (equal "Parent"
+                                   (gptel-backend-name
+                                    (alist-get 'gptel-backend snapshot))))
+                    (should (eq 'parent-model
+                                (alist-get 'gptel-model snapshot)))
+                    (should (eq 'low
+                                (alist-get 'gptel-reasoning-effort snapshot))))
+                  (let ((snapshot
+                         (launch-policy "role_policy" "model_test")))
+                    (should (equal "Role"
+                                   (gptel-backend-name
+                                    (alist-get 'gptel-backend snapshot))))
+                    (should (eq 'role-model
+                                (alist-get 'gptel-model snapshot)))
+                    (should (eq 'medium
+                                (alist-get 'gptel-reasoning-effort snapshot))))
+                  (let ((snapshot
+                         (launch-policy
+                          "explicit_policy" "model_test"
+                          :model "explicit-tier" :effort "high")))
+                    (should (equal "Explicit"
+                                   (gptel-backend-name
+                                    (alist-get 'gptel-backend snapshot))))
+                    (should (eq 'explicit-model
+                                (alist-get 'gptel-model snapshot)))
+                    (should (eq 'high
+                                (alist-get 'gptel-reasoning-effort snapshot))))))))
+      (setq mevedel-agent--registry
+            (assoc-delete-all "model_test" mevedel-agent--registry))
+      (put 'gptel-reasoning-effort 'custom-type old-custom)
+      (put 'parent-model :reasoning-effort old-parent)
+      (put 'role-model :reasoning-effort old-role)
+      (put 'explicit-model :reasoning-effort old-explicit)
+      (dolist (invocation invocations)
+        (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
+                    ((buffer-live-p buffer)))
+          (with-current-buffer buffer (set-buffer-modified-p nil))
+          (kill-buffer buffer)))
+      (when (mevedel-session-save-path session)
+        (mevedel-session-persistence-lock-release
+         (mevedel-session-save-path session)))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (delete-directory root t)))))
 
 (mevedel-deftest mevedel-tool-ui--list-agents
   (:after-each (mevedel-workspace-clear-registry))

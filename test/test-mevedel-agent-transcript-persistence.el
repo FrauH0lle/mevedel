@@ -36,6 +36,8 @@
                byte-compile-current-file))
           "helpers"))
 
+(mevedel-tools-register)
+
 (defvar gptel-org-ignore-elements)
 (defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
@@ -1083,6 +1085,14 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                         (lambda (&rest _args)
                           (setq request-buffer (current-buffer))
                           (throw 'spec21-cb-done t))))
+              (setf
+               (mevedel-agent-invocation-frozen-configuration inv)
+               (mevedel-agent-exec-freeze-configuration
+                "explorer" inv
+                (list :backend gptel-backend
+                      :model gptel-model
+                      :effort (and (boundp 'gptel-reasoning-effort)
+                                   gptel-reasoning-effort))))
               (with-current-buffer parent-buf
                 (catch 'spec21-cb-done
                   (mevedel-agent-exec--run
@@ -1168,6 +1178,14 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                           (setq request-fsm (plist-get (cdr args) :fsm))
                           (setq request-use-tools gptel-use-tools)
                           (throw 'spec21-first-done t))))
+              (setf
+               (mevedel-agent-invocation-frozen-configuration inv)
+               (mevedel-agent-exec-freeze-configuration
+                "coordinator" inv
+                (list :backend gptel-backend
+                      :model gptel-model
+                      :effort (and (boundp 'gptel-reasoning-effort)
+                                   gptel-reasoning-effort))))
               (with-current-buffer parent-buf
                 (catch 'spec21-first-done
                   (mevedel-agent-exec--run

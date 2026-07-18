@@ -473,6 +473,10 @@
           (mevedel-agent-record--create
            :id "parent-id" :path "/root/parent" :parent-path "/root"
            :activity 'running :invocation invocation
+           :configuration
+           (mevedel-agent-configuration--create
+            :agent (mevedel-agent--create
+                    :name "default" :frozen-p t))
            :conversation-buffer buffer))
          (descendant
           (mevedel-agent-record--create
@@ -523,6 +527,8 @@
                           :agent-id "parent-id" :parent-session session
                           :buffer buffer
                           :path (plist-get keys :path))))
+                    (setf (mevedel-agent-invocation-frozen-configuration next)
+                          (plist-get keys :frozen-configuration))
                     (funcall (plist-get keys :on-invocation) next)
                     t))))
             (mevedel-agent-control-followup
@@ -698,6 +704,61 @@
     (let ((result (car (mevedel-session-messages session))))
       (should (equal "/root/target" (plist-get result :sender)))
       (should (equal "/root" (plist-get result :recipient))))))
+
+(mevedel-deftest mevedel-agent-control--dispatch-followup
+  ()
+  ,test
+  (test)
+  :doc "reuses frozen configuration without resolving the current role"
+  (let* ((session (mevedel-agent-control-test--session))
+         (buffer (generate-new-buffer " *agent-control-frozen-followup*"))
+         (agent (mevedel-agent--create
+                 :name "worker" :system-prompt "Frozen." :frozen-p t))
+         (configuration
+          (mevedel-agent-configuration--create :agent agent))
+         (record
+          (mevedel-agent-record--create
+           :id "worker--retained"
+           :path "/root/worker"
+           :parent-path "/root"
+           :role "worker"
+           :configuration configuration
+           :activity 'starting
+           :conversation-buffer buffer
+           :conversation-location "agents/worker.chat.org"))
+         captured-agent
+         captured-configuration)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-resolve-role)
+                   (lambda (&rest _)
+                     (error "Follow-up re-resolved the mutable role")))
+                  ((symbol-function 'mevedel-agent-runtime-dispatch)
+                   (lambda (_callback seen-agent _description _message
+                                      &rest keys)
+                     (setq captured-agent seen-agent
+                           captured-configuration
+                           (plist-get keys :frozen-configuration))
+                     t)))
+          (mevedel-agent-control--dispatch-followup
+           session record "Continue."))
+      (kill-buffer buffer))
+    (should-not captured-agent)
+    (should (eq configuration captured-configuration))))
+
+(mevedel-deftest mevedel-agent-control--normalize-fork-turns
+  ()
+  ,test
+  (test)
+  :doc "normalizes supported context fork modes before reserving a path"
+  (progn
+    (should (eq 'all (mevedel-agent-control--normalize-fork-turns nil)))
+    (should (eq 'all (mevedel-agent-control--normalize-fork-turns "all")))
+    (should (eq 'none (mevedel-agent-control--normalize-fork-turns "none")))
+    (should (= 12 (mevedel-agent-control--normalize-fork-turns "12")))
+    (dolist (value '("" "0" "-1" "+1" "1.0" "ALL" 1))
+      (should-error
+       (mevedel-agent-control--normalize-fork-turns value)
+       :type 'user-error))))
 
 (mevedel-deftest mevedel-agent-control-spawn
   (:after-each (mevedel-workspace-clear-registry))

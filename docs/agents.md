@@ -1,13 +1,33 @@
 # Multi-agent system
 
 The model-facing `Agent` tool starts a retained child asynchronously. It
-accepts a lowercase `task_name` path segment, a complete `message`, and an
-optional named `role`, then returns the committed canonical path immediately.
+accepts a lowercase `task_name` path segment, a complete `message`, and
+optional `role`, `fork_turns`, `model`, and `effort` controls, then returns the
+committed canonical path immediately.
 An omitted role selects `default` and inherits the delegator's effective
 instructions, tools, model policy, and delegation capability. A named role
 supplies its own configuration rather than intersecting its tools with the
 delegator's. Children are created below the caller, so recursive delegation
 forms paths such as `/root/implementation/tests`.
+
+`fork_turns` defaults to `all`. `all` copies the complete effective parent
+conversation, `none` starts without parent history, and a positive decimal
+string such as `"3"` copies the anchored summary plus the three most recent
+live turns. The copy retains gptel's user/response/tool span properties and is
+taken from the current post-compaction buffer only. Archived raw segments are
+never reconstructed. The initial task is appended after this immutable
+snapshot; parent turns added later are not synchronized into the child.
+
+At spawn, mevedel materializes the role's dynamic instructions and effective
+tools, then captures the exact request backend, model, reasoning effort,
+system prompt, tools, context settings, request parameters, and model policy
+maps. Resolution starts with the delegator's current request defaults, applies
+the role workload, and finally applies explicit `model` and `effort` values.
+`model` accepts either a configured tier or `BACKEND:MODEL`; gptel validates
+the selected model's effort support. Follow-ups reuse this frozen
+configuration even if presets, role definitions, or parent settings change.
+Root-session permission decisions and confinement remain live shared policy,
+not part of the frozen request configuration.
 
 The root session retains every child's storage identity, path, activity, and
 transcript location after the turn settles. `ListAgents` returns the full
@@ -263,7 +283,9 @@ recent tail remain visible, and later compactions update the existing anchored
 summary instead of stacking summaries.  Each rewrite first creates the next
 numbered `compact-NNNN` sibling as a recovery artifact.  Those siblings are not
 agent handles or sidecar entries; they belong only to the original session and
-are not copied by rewind forks.
+are not copied by rewind forks. Each retained conversation owns this lifecycle
+independently; compacting one agent does not change its registry path or any
+other conversation.
 
 `mevedel-view-agent.el` owns transcript lookup and inspection views plus the
 aggregate live-agent status and targeted handle refresh. The main view renders
@@ -341,7 +363,7 @@ workload map. A tier can select a concrete gptel provider and reasoning effort;
 a workload can select a tier or exact provider and override effort. Resolution
 starts from the session backend/model/effort, then applies tier and workload
 values, followed by explicit Agent policy or the policy of a skill that owns
-the child request. Skill-specific preset entries use `$skill-name` symbols in
-the same workload map; they do not add an Agent-tool effort argument. Agent
-buffers receive a deep-copied snapshot of the maps, so nested agents keep the
-policy in effect when they were launched.
+the child request. Explicit Agent `model` and `effort` values have final
+precedence. Skill-specific preset entries use `$skill-name` symbols in the
+same workload map. Agent buffers receive a deep-copied snapshot of the maps,
+so nested agents keep the policy in effect when they were launched.

@@ -169,6 +169,14 @@ once.  Activity temporarily reports `Compacting...` and then returns to the
 ordinary continuation status.  Agent compaction emits neither the main-session
 file reminder nor the long-thread accuracy warning.
 
+A forked transcript can contain ancestor `* Agent Task:` headings before the
+child's own task. The child's initial heading carries its canonical path in an
+ignored Org property drawer; follow-up headings do not. This identifies the
+stable initial task without confusing later work for a replacement anchor. On
+the child's first compaction, inherited live context is included in the summary
+input but removed from the rewritten transcript; only the child's own task
+block, the new summary, and its configured recent tail remain verbatim.
+
 Later continuation compactions update the existing anchored summary in place:
 the previous summary is supplied as authoritative retained context, the latest
 complete turns are merged into a replacement summary, and the original task
@@ -320,6 +328,13 @@ Old segment files remain on disk and stay available through
 rendering the visible transcript and shows a compacted-conversation
 separator in its place, while the summary remains model-visible for
 future requests.
+
+Agent context forks read this effective live representation rather than the
+segment archive. `all` copies the complete current buffer. A positive
+last-N fork copies the leading summary anchor, including an agent transcript's
+original task anchor, plus N recent live turns. `none` copies no conversation
+context. Because the snapshot never reads finalized segments, summarized raw
+turns cannot reappear in a child conversation.
 
 Compaction does not stop or replace managed executions. Completion updates the
 original Bash row when that row survives in the preserved tail. If rotation

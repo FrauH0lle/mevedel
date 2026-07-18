@@ -79,19 +79,24 @@
                   (&optional prompt &rest args))
 (declare-function gptel-tool-name "ext:gptel-request" (cl-x) t)
 (declare-function gptel-tool-p "ext:gptel-request" (cl-x))
+(defvar gptel--num-messages-to-send)
 (defvar gptel--request-params)
-(defvar gptel-system-prompt)
+(defvar gptel--schema)
 (defvar gptel-backend)
 (defvar gptel-cache)
 (defvar gptel-context)
 (defvar gptel-include-reasoning)
 (defvar gptel-max-tokens)
+(defvar gptel-mode)
 (defvar gptel-model)
 (defvar gptel-org-convert-response)
 (defvar gptel-reasoning-effort)
 (defvar gptel-stream)
+(defvar gptel-system-prompt)
 (defvar gptel-temperature)
 (defvar gptel-tools)
+(defvar gptel-track-media)
+(defvar gptel-track-response)
 (defvar gptel-use-context)
 (defvar gptel-use-curl)
 (defvar gptel-use-tools)
@@ -102,23 +107,32 @@
 (defvar gptel-agent-preset)
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-configuration--create
+                  "mevedel-agents" (&rest args))
+(declare-function mevedel-agent-configuration-agent
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-configuration-p
+                  "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-configuration-request-locals
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-freeze "mevedel-agents" (agent))
 (declare-function mevedel-agent-invocation-activity
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-background-p
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-background-agents
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-background-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-call-count
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-hook-audits
+(declare-function mevedel-agent-invocation-frozen-configuration
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-model-tier-override
+(declare-function mevedel-agent-invocation-hook-audits
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-messages
                   "mevedel-agents" (cl-x) t)
@@ -1215,13 +1229,11 @@ not a per-agent decision."
           (setq-local gptel-tools (append gptel-tools (list tool))))))))
 
 (defun mevedel-agent-exec--apply-request-locals (buffer values)
-  "Apply gptel request-local VALUES to BUFFER.
+  "Apply frozen request-local VALUES to BUFFER.
 
 VALUES is an alist of `(SYMBOL . VALUE)' captured while the agent
-preset is dynamically active.  `gptel-request' builds its prompt
-buffer by copying these variables from the request buffer, so an
-agent-specific buffer must carry the preset values buffer-locally
-before dispatch."
+preset is dynamically active.  It includes the gptel variables copied from
+the request buffer into its prompt buffer and mevedel's model-policy maps."
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (dolist (entry values)
@@ -1240,17 +1252,89 @@ before dispatch."
 (defun mevedel-agent-exec--policy-for-invocation (agent-type invocation)
   "Return resolved model policy for AGENT-TYPE and INVOCATION.
 
-An explicit Agent-tool tier wins over a skill selector.  Skill effort remains
-the final effort override."
+Skill-scoped model and effort policy applies to direct skill dispatches."
   (let ((selector
-         (or (and invocation
-                  (mevedel-agent-invocation-model-tier-override invocation))
-             (and invocation
-                  (mevedel-agent-invocation-skill-model-override invocation))))
-        (effort (and invocation
-                     (mevedel-agent-invocation-skill-effort-override
-                      invocation))))
+         (and invocation
+              (mevedel-agent-invocation-skill-model-override invocation)))
+        (effort
+         (and invocation
+              (mevedel-agent-invocation-skill-effort-override invocation))))
     (mevedel-model-resolve-workload agent-type selector effort)))
+
+(defun mevedel-agent-exec--request-preset (agent-type invocation)
+  "Return the effective request preset for AGENT-TYPE and INVOCATION."
+  (let ((force-initial-tool-use
+         (mevedel-agent-exec--force-initial-tool-use-p
+          agent-type invocation))
+        (agent-spec
+         (unless (equal agent-type "default")
+           (when-let* ((agent (mevedel-agent-invocation-agent invocation)))
+             (cdr (mevedel-agent-to-gptel-spec agent))))))
+    (nconc (list :use-tools (if force-initial-tool-use 'force t)
+                 :context nil)
+           (and gptel-agent-preset
+                (copy-sequence
+                 (cond
+                  ((symbolp gptel-agent-preset)
+                   (gptel-get-preset gptel-agent-preset))
+                  ((listp gptel-agent-preset) gptel-agent-preset)
+                  (t (error "Invalid `gptel-agent-preset': %S"
+                            gptel-agent-preset)))))
+           agent-spec
+           (list :include-reasoning gptel-include-reasoning))))
+
+(defconst mevedel-agent-exec--request-local-symbols
+  '(gptel--num-messages-to-send
+    gptel--request-params
+    gptel--schema
+    gptel-backend
+    gptel-cache
+    gptel-context
+    gptel-include-reasoning
+    gptel-max-tokens
+    gptel-mode
+    gptel-model
+    gptel-reasoning-effort
+    gptel-stream
+    gptel-system-prompt
+    gptel-temperature
+    gptel-tools
+    gptel-track-media
+    gptel-track-response
+    gptel-use-context
+    gptel-use-curl
+    gptel-use-tools
+    mevedel-model-tiers
+    mevedel-model-workloads)
+  "Frozen request state installed buffer-locally for retained agent turns.")
+
+(defun mevedel-agent-exec--request-snapshot (policy)
+  "Return one frozen request-local snapshot with model POLICY applied."
+  (cl-loop
+   for symbol in mevedel-agent-exec--request-local-symbols
+   for value = (pcase symbol
+                 ('gptel-backend (plist-get policy :backend))
+                 ('gptel-model (plist-get policy :model))
+                 ('gptel-reasoning-effort (plist-get policy :effort))
+                 (_ (and (boundp symbol) (symbol-value symbol))))
+   collect (cons symbol (copy-tree value))))
+
+(defun mevedel-agent-exec-freeze-configuration
+    (agent-type invocation &optional model-policy)
+  "Freeze AGENT-TYPE's effective request configuration for INVOCATION.
+MODEL-POLICY may supply a tuple already validated before spawn admission."
+  (let ((agent (mevedel-agent-freeze
+                (mevedel-agent-invocation-agent invocation))))
+    (setf (mevedel-agent-invocation-agent invocation) agent)
+    (gptel-with-preset
+     (mevedel-agent-exec--request-preset agent-type invocation)
+     (let ((policy
+            (or model-policy
+                (mevedel-agent-exec--policy-for-invocation
+                 agent-type invocation))))
+       (mevedel-agent-configuration--create
+        :agent agent
+        :request-locals (mevedel-agent-exec--request-snapshot policy))))))
 
 
 ;;
@@ -1391,128 +1475,80 @@ Returns the spawned FSM."
           (unless (bolp) (insert "\n"))
           (insert "\n" context "\n")))
       (mevedel-agent-exec--flush-transcript-save invocation)))
-  (let ((force-initial-tool-use
-         (mevedel-agent-exec--force-initial-tool-use-p
-          agent-type invocation))
-        (agent-spec
-         (unless (equal agent-type "default")
-           (or (cdr (assoc agent-type mevedel-agent-exec--agents))
-               (and (mevedel-agent-invocation-agent invocation)
-                    (cdr (mevedel-agent-to-gptel-spec
-                          (mevedel-agent-invocation-agent invocation)))))))
-        (parent-include-reasoning gptel-include-reasoning))
-    (gptel-with-preset
-     (nconc (list :use-tools (if force-initial-tool-use 'force t)
-                  :context nil)
-            (and gptel-agent-preset
-                 (copy-sequence
-                  (cond
-                   ((symbolp gptel-agent-preset)
-                    (gptel-get-preset gptel-agent-preset))
-                   ((listp gptel-agent-preset)
-                    gptel-agent-preset)
-                   (t (error "Invalid `gptel-agent-preset': %S"
-                             gptel-agent-preset)))))
-            agent-spec
-            (list :include-reasoning parent-include-reasoning))
-     (let* ((policy (mevedel-agent-exec--policy-for-invocation
-                     agent-type invocation))
-            (effective-backend (plist-get policy :backend))
-            (effective-model (plist-get policy :model))
-            (effective-effort (plist-get policy :effort))
-            (info (and (boundp 'gptel--fsm-last)
-                       gptel--fsm-last
-                       (gptel-fsm-info gptel--fsm-last)))
-            (where (or (plist-get info :tracking-marker)
-                       (plist-get info :position)
-                       (copy-marker (point-max) nil)))
-            (partial (format "%s result for task: %s\n\n"
-                             (capitalize agent-type) description))
-            (handlers (copy-tree mevedel-agent-exec--handlers))
-            (_ (when force-initial-tool-use
-                 (when-let* ((entry (assq 'TPRE handlers)))
-                   (setcdr entry
-                           (cons #'mevedel-agent-exec--clear-forced-tool-choice
-                                 (cdr entry))))))
-            (fsm (gptel-make-fsm :table gptel-send--transitions
-                                 :handlers handlers))
-            (mevedel-cb (mevedel-agent-exec--make-callback
-                         main-cb agent-type description where (list partial)))
-            (request-locals
-             `((gptel-backend . ,effective-backend)
-               (gptel-model . ,effective-model)
-               (gptel-reasoning-effort . ,effective-effort)
-               (gptel-system-prompt . ,gptel-system-prompt)
-               (gptel-use-tools . ,gptel-use-tools)
-               (gptel-tools . ,gptel-tools)
-               (gptel-use-context . ,gptel-use-context)
-               (gptel-context . ,gptel-context)
-               (gptel-stream . ,gptel-stream)
-               (gptel-use-curl . ,gptel-use-curl)
-               (gptel-include-reasoning . ,gptel-include-reasoning)
-               (gptel-temperature . ,gptel-temperature)
-               (gptel-max-tokens . ,gptel-max-tokens)
-               (gptel-cache . ,gptel-cache)
-               (gptel--request-params . ,gptel--request-params)
-               (mevedel-model-tiers . ,(copy-tree mevedel-model-tiers))
-               (mevedel-model-workloads .
-                                        ,(copy-tree mevedel-model-workloads)))))
-       (when configure-fsm
-         (funcall configure-fsm fsm invocation))
-       (setf (gptel-fsm-info fsm)
-             (plist-put
-              (plist-put (gptel-fsm-info fsm)
-                         :mevedel-agent-invocation invocation)
-              :mevedel-agent-terminal-callback main-cb))
-       (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
-       ;; Dispatch into the per-invocation agent buffer and wrap
-       ;; gptel's stock :callback so insertion happens through
-       ;; gptel's normal dispatch.  `gptel-request' computes its
-       ;; default `:position' marker from `(point-marker)' in the
-       ;; current buffer when no explicit `:position' is supplied.
-         (mevedel-agent-exec--apply-request-locals
-          agent-buffer request-locals)
-         (mevedel-agent-exec--refresh-initial-transcript-state
-          invocation)
-         ;; Background sub-agents run concurrently with their caller,
-         ;; so SendMessage is meaningful: live mailbox routing reaches
-         ;; main, parent coordinator, or the sender's own children on
-         ;; their next WAIT, according to `mevedel-tools--resolve-recipient'.
-         ;; For
-         ;; foreground sub-agents the caller's FSM parks in TOOL until
-         ;; the sub-agent terminates -- live messaging would queue
-         ;; messages that only drain at end-of-sub-agent, alongside
-         ;; the terminal `<agent-result>'.  Inject the SendMessage
-         ;; tool only when background; idempotent when the agent's
-         ;; static `:tools' already includes it (e.g. coordinator).
-         (when (mevedel-agent-invocation-background-p invocation)
-           (mevedel-agent-exec--inject-sendmessage agent-buffer))
-         (with-current-buffer agent-buffer
-           (goto-char (point-max))
-           (gptel-request nil
-			  :buffer agent-buffer
-			  :fsm fsm
-			  :stream gptel-stream
-			  :system gptel-system-prompt
-			  :transforms (list #'gptel--transform-add-context)))
-         (let* ((req-info (gptel-fsm-info fsm))
-		(gptel-cb (plist-get req-info :callback))
-		(wrapped
-                 (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
-           (setq req-info
-                 (plist-put req-info :mevedel-agent-invocation invocation))
-           (setq req-info
-                 (plist-put
-                  req-info :mevedel-compaction-target-policy
-                  (list :backend effective-backend
-                        :model effective-model
-                        :max-tokens
-                        (alist-get 'gptel-max-tokens request-locals)
-                        :request-params
-                        (alist-get 'gptel--request-params request-locals))))
-           (setf (gptel-fsm-info fsm)
-                 (plist-put req-info :callback wrapped)))
-         fsm))))
+  (let* ((force-initial-tool-use
+          (mevedel-agent-exec--force-initial-tool-use-p
+           agent-type invocation))
+         (frozen
+          (mevedel-agent-invocation-frozen-configuration invocation)))
+    (unless (mevedel-agent-configuration-p frozen)
+      (error "Agent request configuration is not frozen"))
+    (let* ((request-locals
+            (copy-tree
+             (mevedel-agent-configuration-request-locals frozen)))
+           (effective-backend (alist-get 'gptel-backend request-locals))
+           (effective-model (alist-get 'gptel-model request-locals))
+           (info (and (boundp 'gptel--fsm-last)
+                      gptel--fsm-last
+                      (gptel-fsm-info gptel--fsm-last)))
+           (where (or (plist-get info :tracking-marker)
+                      (plist-get info :position)
+                      (copy-marker (point-max) nil)))
+           (partial (format "%s result for task: %s\n\n"
+                            (capitalize agent-type) description))
+           (handlers (copy-tree mevedel-agent-exec--handlers))
+           (_ (when force-initial-tool-use
+                (when-let* ((entry (assq 'TPRE handlers)))
+                  (setcdr entry
+                          (cons #'mevedel-agent-exec--clear-forced-tool-choice
+                                (cdr entry))))))
+           (fsm (gptel-make-fsm :table gptel-send--transitions
+                                :handlers handlers))
+           (mevedel-cb
+            (mevedel-agent-exec--make-callback
+             main-cb agent-type description where (list partial))))
+      (when configure-fsm
+        (funcall configure-fsm fsm invocation))
+      (setf (gptel-fsm-info fsm)
+            (plist-put
+             (plist-put (gptel-fsm-info fsm)
+                        :mevedel-agent-invocation invocation)
+             :mevedel-agent-terminal-callback main-cb))
+      (gptel--update-status " Calling Agent..." 'font-lock-escape-face)
+      ;; Install one dispatch-local copy of the frozen request state before
+      ;; gptel reads it from the agent buffer or copies it to a prompt buffer.
+      (mevedel-agent-exec--apply-request-locals agent-buffer request-locals)
+      (mevedel-agent-exec--refresh-initial-transcript-state invocation)
+      ;; Background sub-agents run concurrently with their caller, so
+      ;; SendMessage is meaningful.  Foreground callers remain parked until
+      ;; termination, so their mailbox cannot drain during the turn.
+      (when (mevedel-agent-invocation-background-p invocation)
+        (mevedel-agent-exec--inject-sendmessage agent-buffer))
+      (with-current-buffer agent-buffer
+        (goto-char (point-max))
+        (gptel-request nil
+          :buffer agent-buffer
+          :fsm fsm
+          :stream gptel-stream
+          :system gptel-system-prompt
+          :transforms (list #'gptel--transform-add-context)))
+      (let* ((req-info (gptel-fsm-info fsm))
+             (gptel-cb (plist-get req-info :callback))
+             (wrapped
+              (mevedel-agent-exec--wrap-callback gptel-cb mevedel-cb)))
+        (setq req-info
+              (plist-put req-info :mevedel-agent-invocation invocation))
+        (setq req-info
+              (plist-put
+               req-info :mevedel-compaction-target-policy
+               (list :backend effective-backend
+                     :model effective-model
+                     :max-tokens
+                     (alist-get 'gptel-max-tokens request-locals)
+                     :request-params
+                     (alist-get 'gptel--request-params request-locals))))
+        (setf (gptel-fsm-info fsm)
+              (plist-put req-info :callback wrapped)))
+      fsm)))
 
 (defun mevedel-agent-exec--wrap-callback (gptel-cb mevedel-cb)
   "Build the wrap-and-chain callback for the agent-buffer dispatch path.

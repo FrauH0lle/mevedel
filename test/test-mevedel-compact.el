@@ -7,6 +7,7 @@
 (require 'cl-lib)
 (require 'gptel-request)
 (require 'mevedel)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-compact)
 (require 'mevedel-models)
@@ -116,6 +117,18 @@
            (kill-buffer candidate)))
        (mevedel-workspace-clear-registry)
        (delete-directory tempdir t))))
+
+(defun test-mevedel-compact--insert-agent-task
+    (invocation description prompt)
+  "Insert INVOCATION's persisted task heading, DESCRIPTION, and PROMPT."
+  (let ((text
+         (format "* Agent Task: %s\n:PROPERTIES:\n:%s: %s\n:END:\n\n%s\n"
+                 description
+                 mevedel-agent-task-path-property
+                 (mevedel-agent-invocation-require-path invocation)
+                 prompt)))
+    (insert text)
+    text))
 
 (mevedel-deftest mevedel--compact-previous-summary ()
   ,test
@@ -1026,22 +1039,80 @@
           (should (= sent 1)))
       (kill-buffer chat-buf))))
 
+(mevedel-deftest mevedel--compact-agent-task-heading ()
+  ,test
+  (test)
+  :doc "finds the first initial-task marker for the exact agent path"
+  (with-temp-buffer
+    (org-mode)
+    (let ((other
+           (mevedel-agent-invocation--create :path "/root/other"))
+          (invocation
+           (mevedel-agent-invocation--create :path "/root/inspect")))
+      (test-mevedel-compact--insert-agent-task
+       other "other" "Other task.")
+      (insert "* Agent Task: unmarked\n\nUnmarked task.\n")
+      (let ((initial-heading (point)))
+        (test-mevedel-compact--insert-agent-task
+         invocation "inspect" "Initial task.")
+        (test-mevedel-compact--insert-agent-task
+         invocation "follow-up" "Later task.")
+        (should (= initial-heading
+                   (mevedel--compact-agent-task-heading invocation))))))
+
+  :doc "returns nil when no task marker matches the agent path"
+  (with-temp-buffer
+    (org-mode)
+    (let ((other
+           (mevedel-agent-invocation--create :path "/root/other"))
+          (invocation
+           (mevedel-agent-invocation--create :path "/root/missing")))
+      (test-mevedel-compact--insert-agent-task
+       other "other" "Other task.")
+      (insert "* Agent Task: unmarked\n\nUnmarked task.\n")
+      (should-not (mevedel--compact-agent-task-heading invocation)))))
+
 (mevedel-deftest mevedel--compact-agent-summary-bounds ()
   ,test
   (test)
   :doc "finds the anchored summary body in an agent transcript"
   (with-temp-buffer
-    (insert "* Agent Task: inspect\n\nKeep this task.\n"
-            "#+begin_summary\n## Goal\n- Continue\n#+end_summary\n"
-            "Recent tail.\n")
-    (let ((bounds (mevedel--compact-agent-summary-bounds)))
+    (org-mode)
+    (let ((invocation
+           (mevedel-agent-invocation--create :path "/root/inspect")))
+      (setq-local mevedel--agent-invocation invocation)
+      (test-mevedel-compact--insert-agent-task
+       invocation "inspect" "Keep this task.")
+      (insert "#+begin_summary\n## Goal\n- Continue\n#+end_summary\n"
+              "Recent tail.\n")
+      (let ((bounds (mevedel--compact-agent-summary-bounds invocation)))
       (should (equal "#+begin_summary\n## Goal\n- Continue\n#+end_summary"
                      (buffer-substring-no-properties
                       (plist-get bounds :begin) (plist-get bounds :end))))
       (should (equal "## Goal\n- Continue\n"
                      (buffer-substring-no-properties
                       (plist-get bounds :body-begin)
-                      (plist-get bounds :body-end)))))))
+                        (plist-get bounds :body-end)))))))
+
+  :doc "uses the path marker to ignore inherited task headings and summaries"
+  (with-temp-buffer
+    (org-mode)
+    (let ((parent
+           (mevedel-agent-invocation--create :path "/root/parent"))
+          (child
+           (mevedel-agent-invocation--create :path "/root/parent/child")))
+      (test-mevedel-compact--insert-agent-task
+       parent "parent" "Parent task.")
+      (insert "#+begin_summary\nParent summary.\n#+end_summary\n")
+      (setq-local mevedel--agent-invocation child)
+      (test-mevedel-compact--insert-agent-task
+       child "child" "Child task.")
+      (insert "#+begin_summary\nAgent summary.\n#+end_summary\n")
+      (let ((bounds (mevedel--compact-agent-summary-bounds child)))
+        (should (equal "Agent summary.\n"
+                       (buffer-substring-no-properties
+                        (plist-get bounds :body-begin)
+                        (plist-get bounds :body-end))))))))
 
 (mevedel-deftest mevedel--compact-agent-target ()
   ,test
@@ -1049,7 +1120,8 @@
   :doc "builds a complete adapter only for the live canonical transcript"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
     (let ((start (point)))
       (insert "Agent response.\n")
       (put-text-property start (point) 'gptel 'response))
@@ -1063,7 +1135,36 @@
         (should (functionp (plist-get target operation)))))
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/other.chat.org")
-    (should-not (mevedel--compact-agent-target invocation))))
+    (should-not (mevedel--compact-agent-target invocation)))
+
+  :doc "anchors the marked child task after inherited nested-agent context"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (let ((parent
+           (mevedel-agent-invocation--create :path "/root/parent")))
+      (test-mevedel-compact--insert-agent-task
+       parent "parent" "Inherited prompt."))
+    (let ((start (point)))
+      (insert "Inherited response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (let ((start (point)))
+      (insert "Agent response.\n")
+      (put-text-property start (point) 'gptel 'response))
+    (basic-save-buffer)
+    (let ((target (mevedel--compact-agent-target invocation)))
+      (should target)
+      (should (string-match-p "Inherited prompt"
+                              (buffer-substring-no-properties
+                               (caar (plist-get
+                                      target :history-prefix-regions))
+                               (cdar (plist-get
+                                      target :history-prefix-regions)))))
+      (should-not (string-match-p "Inherited prompt"
+                                  (plist-get target :anchor-text)))
+      (should (string-match-p "Keep this task"
+                              (plist-get target :anchor-text))))))
 
 (mevedel-deftest mevedel--compact-agent-archive-path ()
   ,test
@@ -1108,12 +1209,25 @@
   :doc "archives the full canonical transcript before rewriting it"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
     (let ((start (point)))
       (insert "Old response.\n")
       (put-text-property start (point) 'gptel 'response))
     (basic-save-buffer)
-    (let* ((original (buffer-string))
+    (let* ((record
+            (mevedel-agent-record--create
+             :id (mevedel-agent-invocation-agent-id invocation)
+             :path "/root/explorer"
+             :parent-path "/root"
+             :activity 'running
+             :conversation-buffer agent-buffer
+             :conversation-location
+             (mevedel-agent-invocation-transcript-relative-path invocation)
+             :invocation invocation))
+           (_ (setf (mevedel-session-agent-registry session)
+                    (list (cons "/root/explorer" record))))
+           (original (buffer-string))
            (target (mevedel--compact-agent-target invocation))
            (archive
             (mevedel--compact-agent-apply
@@ -1128,6 +1242,11 @@
       (should (string-match-p "Continue" (buffer-string)))
       (should (string-match-p "Recent tail" (buffer-string)))
       (should (string-match-p "Pending result" (buffer-string)))
+      (should (eq record
+                  (cdr (assoc "/root/explorer"
+                              (mevedel-session-agent-registry session)))))
+      (should (eq agent-buffer
+                  (mevedel-agent-record-conversation-buffer record)))
       (should (equal (buffer-string)
                      (with-temp-buffer
                        (insert-file-contents canonical-path)
@@ -1136,7 +1255,8 @@
   :doc "leaves live and canonical transcripts unchanged on archive failure"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
     (let ((start (point)))
       (insert "Old response.\n")
       (put-text-property start (point) 'gptel 'response))
@@ -1167,7 +1287,8 @@
   :doc "retains the full archive when canonical application later fails"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
     (let ((start (point)))
       (insert "Old response.\n")
       (put-text-property start (point) 'gptel 'response))
@@ -1457,7 +1578,8 @@
   :doc "archives, compacts, rebuilds, and resumes one persisted continuation"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (let ((task "* Agent Task: inspect\n\nKeep this exact task.\n")
+    (let ((task (test-mevedel-compact--insert-agent-task
+                 invocation "inspect" "Keep this exact task."))
           pre-event post-event captured-system captured-body
           resumed-data statuses messages)
       (setf (mevedel-session-goal session) "PARENT-GOAL-ONLY")
@@ -1470,7 +1592,6 @@
               :turn 1)))
       (setf (mevedel-session-touched-files session)
             '(("/tmp/PARENT-FILE-ONLY" . 1)))
-      (insert task)
       (dolist (turn '(("Old response one.\n" . "Old user two.\n")
                       ("Old response two.\n" . "Old user three.\n")
                       ("Old response three.\n" . "Recent user four.\n")))
@@ -1597,14 +1718,14 @@
   :doc "updates the anchored summary and archives each persisted continuation"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (let ((task "* Agent Task: inspect\n\nKeep this exact task.\n")
+    (let ((task (test-mevedel-compact--insert-agent-task
+                 invocation "inspect" "Keep this exact task."))
           (request-data
            (list :messages
                  (vector
                   (list :role "user" :content (make-string 1000 ?x)))))
           systems bodies (resumed 0)
           first-canonical before-second)
-      (insert task)
       (dolist (turn '(("Old response one.\n" . "Old user two.\n")
                       ("Old response two.\n" . "Old user three.\n")
                       ("Old response three.\n" . "Recent user four.\n")))
@@ -1822,7 +1943,8 @@
   :doc "lets a prefixless persisted agent proceed only below target pressure"
   (test-mevedel-compact--with-persisted-agent
       (agent-buffer invocation session canonical-path parent-buffer)
-    (insert "* Agent Task: inspect\n\nKeep this task.\n")
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
     (let ((start (point)))
       (insert "First recent response.\n")
       (put-text-property start (point) 'gptel 'response))
@@ -1901,7 +2023,8 @@
   (dolist (failure '(request preflight abort hook-stop hook-error application))
     (test-mevedel-compact--with-persisted-agent
         (agent-buffer invocation session canonical-path parent-buffer)
-      (insert "* Agent Task: inspect\n\nKeep this task.\n")
+      (test-mevedel-compact--insert-agent-task
+       invocation "inspect" "Keep this task.")
       (let ((start (point)))
         (insert "Old response one.\n")
         (put-text-property start (point) 'gptel 'response))
@@ -2181,6 +2304,41 @@
       (should (< (length captured-prompt) 200))
       (should (equal result "Compaction aborted"))
       (should (= mevedel--compact-failure-count 1))))
+
+  :doc "summarizes a forked history prefix while excluding the stable task anchor"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (captured-prompt result)
+      (insert "Inherited live context.\n")
+      (let ((history-prefix-end (point)))
+        (insert "Stable child task anchor.\n")
+        (let ((body-start (point)))
+          (insert "Child conversation body.\n")
+          (let ((pending-start (point))
+                (target (mevedel--compact-main-target)))
+            (insert "Pending continuation.\n")
+            (setq target
+                  (plist-put target :history-prefix-regions
+                             (list (cons (point-min) history-prefix-end))))
+            (setq target (plist-put target :body-start body-start))
+            (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                       (lambda (&rest _) "system prompt"))
+                      ((symbol-function 'mevedel-hooks-run-event)
+                       (lambda (_event _plist callback &rest _)
+                         (funcall callback nil)))
+                      ((symbol-function 'display-warning) #'ignore)
+                      ((symbol-function 'gptel-request)
+                       (lambda (prompt &rest args)
+                         (setq captured-prompt prompt)
+                         (funcall (plist-get args :callback) 'abort nil))))
+              (mevedel--compact-run
+               :target target
+               :aggressive t
+               :pending-start pending-start
+               :callback (lambda (err) (setq result err)))))))
+      (should (string-match-p "Inherited live context" captured-prompt))
+      (should (string-match-p "Child conversation body" captured-prompt))
+      (should-not (string-match-p "Stable child task anchor" captured-prompt))
+      (should (equal result "Compaction aborted"))))
 
   :doc "request failures retain three identical attempts"
   (test-mevedel-compact--with-persisted-buffer (chat-buf session)
@@ -2936,6 +3094,62 @@
           (put-text-property a2-start (point) 'gptel 'response))
         (should (equal (mevedel--compact-turn-starts-before (point-max))
                        (list u1-start u2-start)))))))
+
+(mevedel-deftest mevedel-compact-context-snapshot ()
+  ,test
+  (test)
+
+  :doc "forks all effective live context with text properties"
+  (with-temp-buffer
+    (insert "#+begin_summary\nOld turns summarized.\n#+end_summary\n")
+    (insert "Recent prompt.\n")
+    (let ((response-start (point)))
+      (insert "Recent response.\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (let ((snapshot (mevedel-compact-context-snapshot 'all)))
+      (should (equal (buffer-string) snapshot))
+      (should (eq 'response
+                  (get-text-property
+                   (string-match "Recent response" snapshot) 'gptel snapshot)))))
+
+  :doc "forks no context"
+  (with-temp-buffer
+    (insert "Parent history.\n")
+    (should (equal "" (mevedel-compact-context-snapshot 'none))))
+
+  :doc "forks an anchored summary and only the requested recent turns"
+  (with-temp-buffer
+    (insert "#+begin_summary\nArchived raw text summarized.\n#+end_summary\n")
+    (insert "First live prompt.\n")
+    (let ((response-start (point)))
+      (insert "First live response.\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (insert "Second live prompt.\n")
+    (let ((response-start (point)))
+      (insert "Second live response.\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (let ((snapshot (mevedel-compact-context-snapshot 1)))
+      (should (string-match-p "Archived raw text summarized" snapshot))
+      (should-not (string-match-p "First live prompt" snapshot))
+      (should (string-match-p "Second live prompt" snapshot))))
+
+  :doc "keeps an agent task anchor with its summary"
+  (with-temp-buffer
+    (org-mode)
+    (let ((invocation
+           (mevedel-agent-invocation--create :path "/root/parent")))
+      (setq-local mevedel--agent-invocation invocation)
+      (test-mevedel-compact--insert-agent-task
+       invocation "parent" "Original task.")
+      (insert "#+begin_summary\nEarlier work summarized.\n#+end_summary\n"
+              "Recent prompt.\n"))
+    (let ((response-start (point)))
+      (insert "Recent response.\n")
+      (put-text-property response-start (point) 'gptel 'response))
+    (let ((snapshot (mevedel-compact-context-snapshot 1)))
+      (should (string-prefix-p "* Agent Task: parent" snapshot))
+      (should (string-match-p "Earlier work summarized" snapshot))
+      (should (string-match-p "Recent prompt" snapshot)))))
 
 (mevedel-deftest mevedel--compact-tail-start ()
   ,test

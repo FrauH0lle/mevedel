@@ -169,13 +169,19 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
       (error "Superseded Agent parameter: %s" obsolete)))
   (let ((task-name (plist-get args :task_name))
         (message (plist-get args :message))
-        (role (plist-get args :role)))
+        (role (plist-get args :role))
+        (fork-turns (plist-get args :fork_turns))
+        (model (plist-get args :model))
+        (effort (plist-get args :effort)))
     (require 'json)
     (require 'mevedel-agent-control)
     (let* ((record
             (mevedel-agent-control-spawn
              mevedel--session task-name message
              :role role
+             :fork-turns fork-turns
+             :model model
+             :effort effort
              :parent-fsm (and (boundp 'mevedel-tools--current-fsm)
                               mevedel-tools--current-fsm)
              :message-handler #'mevedel-tools--handle-message-inject
@@ -438,7 +444,13 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
                     "Complete non-empty task for the child agent.")
            (role string :optional
                  "Named role overlay. Omit to inherit the delegator."
-                 :enum []))
+                 :enum [])
+           (fork_turns string :optional
+                       "Parent context to copy: all, none, or positive last-N.")
+           (model string :optional
+                  "Configured tier or exact BACKEND:MODEL override.")
+           (effort string :optional
+                   "Reasoning-effort override validated for the model."))
     :async-p t
     :max-result-size 50000
     :groups (util)
