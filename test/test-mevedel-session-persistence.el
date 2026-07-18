@@ -2207,7 +2207,29 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
             (should (equal "Frozen prompt"
                            (org-entry-get (point-min) "GPTEL_SYSTEM")))))
       (when (file-directory-p root)
-        (delete-directory root t)))))
+        (delete-directory root t))))
+  :doc "rerenders a live view when gptel metadata shifts transcript positions"
+  (let ((view (generate-new-buffer " *mevedel-save-state-view*"))
+        (rerenders 0))
+    (unwind-protect
+        (with-temp-buffer
+          (org-mode)
+          (setq-local mevedel--session t)
+          (setq-local mevedel--view-buffer view)
+          (let ((data (current-buffer)))
+            (with-current-buffer view
+              (setq-local mevedel--data-buffer data))
+            (insert "Transcript body\n")
+            (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
+                       (lambda () nil))
+                      ((symbol-function 'mevedel-view--full-rerender)
+                       (lambda () (cl-incf rerenders))))
+              (mevedel-session-persistence--save-gptel-state-around
+               (lambda ()
+                 (org-entry-put (point-min) "GPTEL_MODEL" "fake-model"))))
+            (should (= rerenders 1))))
+      (when (buffer-live-p view)
+        (kill-buffer view)))))
 
 (mevedel-deftest mevedel-session-persistence--refresh-restored-buffers ()
   ,test

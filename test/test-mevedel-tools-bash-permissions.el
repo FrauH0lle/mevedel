@@ -3231,7 +3231,16 @@ default Bash keeps bare dot inspection automatic"
                 "Bash" '(:command "sleep 5")
                 "partial output"
                 '(:status error :termination timed-out))))
-    (should (eq 'error (plist-get plist :status)))))
+    (should (eq 'error (plist-get plist :status))))
+
+  :doc "hides the model-only execution envelope from expanded bodies"
+  (let ((plist
+         (mevedel-tool-exec--render-bash
+          "WriteStdin" nil
+          (concat "Hello, Ada\n\n"
+                  "<bash-execution execution_id=\"exec-1\" state=\"completed\"/>")
+          '(:status success :state completed))))
+    (should (equal "Hello, Ada" (plist-get plist :body)))))
 
 (provide 'test-mevedel-tools-bash-permissions)
 ;;; test-mevedel-tools-bash-permissions.el ends here

@@ -2530,6 +2530,9 @@ Header shows a truncated first line of the command; body fontifies as
   (when (stringp result)
     (let* ((cmd (or (plist-get args :command) ""))
            (first-line (car (split-string cmd "\n")))
+           (body
+            (replace-regexp-in-string
+             "\n*<bash-execution [^\n]*/>[ \t\r\n]*\\'" "" result))
            (status (plist-get render-data :status))
            (state (plist-get render-data :state))
            (metadata
@@ -2538,7 +2541,7 @@ Header shows a truncated first line of the command; body fontifies as
                   render-data (plist-get render-data :timeout-seconds)))))
       (list :header (concat (format "%s: %s" (or name "Bash") first-line)
                             (and metadata (format " (%s)" metadata)))
-            :body result
+            :body body
             :body-mode 'sh-mode
             :status status
             :force-expanded-p
