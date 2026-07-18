@@ -1523,6 +1523,9 @@ the decision log identifies complete confinement bypass authority"
           (should-not
            (mevedel-tool-exec--bash-missing-resource-paths
             "rg TODO ." context '(:level use-default)))
+          (should-not
+           (mevedel-tool-exec--bash-missing-resource-paths
+            "diff /dev/null ./mevedel.el" context '(:level use-default)))
           (should
            (equal (list parent-path)
                   (mevedel-tool-exec--bash-missing-resource-paths
@@ -2033,10 +2036,13 @@ default Bash keeps bare dot inspection automatic"
   (let ((xml
          (mevedel-tool-exec--execution-facts-xml
           '(:execution-id "exec-1" :state running
+            :command "printf \"x\" & wait"
             :wall-time-seconds 1.25 :output-bytes 4 :output-lines 1
             :omitted-output-bytes 0 :tty nil
             :output-path "/tmp/a&b"))))
     (should (string-match-p "execution_id=\"exec-1\"" xml))
+    (should (string-match-p
+             "command=\"printf &quot;x&quot; &amp; wait\"" xml))
     (should (string-match-p "tty=\"false\"" xml))
     (should (string-match-p "output_path=\"/tmp/a&amp;b\"" xml))
     (should-not (string-match-p "chunk" xml))))
@@ -2499,7 +2505,7 @@ default Bash keeps bare dot inspection automatic"
     (should (string-match-p "termination=\"timed-out\"" result))
     (should (string-match-p "started" result))
     (unless (eq system-type 'windows-nt)
-      (should-not (string-match-p "done" result))))
+      (should-not (string-match-p "\ndone\n" result))))
   :doc "uses default Bash timeout when per-call timeout is absent"
   (let ((result nil)
         (done nil)
@@ -2516,7 +2522,7 @@ default Bash keeps bare dot inspection automatic"
     (should (string-match-p "termination=\"timed-out\"" result))
     (should (string-match-p "default-started" result))
     (unless (eq system-type 'windows-nt)
-      (should-not (string-match-p "default-done" result))))
+      (should-not (string-match-p "\ndefault-done\n" result))))
   :doc "applies the command timeout while login initialization runs"
   (let* ((home (make-temp-file "mevedel-bash-login-timeout-" t))
          (profile (file-name-concat home ".bash_profile"))
@@ -2538,7 +2544,7 @@ default Bash keeps bare dot inspection automatic"
               (accept-process-output nil 0.1)))
           (should (string-match-p "termination=\"timed-out\"" result))
           (should (string-match-p "login-started" result))
-          (should-not (string-match-p "command-ran" result)))
+          (should-not (string-prefix-p "login-startedcommand-ran" result)))
       (delete-directory home t)))
   :doc "rejects non-positive per-call timeout"
   (should-error

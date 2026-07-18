@@ -67,6 +67,9 @@ directly and visibly disables confinement."
 (define-error 'mevedel-sandbox-policy-error
   "Invalid child-confinement authority")
 
+(defconst mevedel-sandbox-intrinsic-paths '("/dev/null")
+  "Paths supplied by the private child environment without host authority.")
+
 
 ;;
 ;;; Bubblewrap profile
@@ -714,10 +717,17 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
            (protected
             (mevedel-sandbox--protected-restrictions
              canonical-workdir roots))
-           (network-access-p
-            (eq t (plist-get additional-permissions :network)))
            (filesystem-permissions
-            (plist-get additional-permissions :file-system))
+            (cl-remove-if
+             (lambda (grant)
+               (member (expand-file-name (plist-get grant :path))
+                       mevedel-sandbox-intrinsic-paths))
+             (plist-get additional-permissions :file-system)))
+           (effective-permissions
+            (plist-put (copy-sequence additional-permissions)
+                       :file-system filesystem-permissions))
+           (network-access-p
+            (eq t (plist-get effective-permissions :network)))
            (filesystem-read-count
             (cl-count 'read filesystem-permissions
                       :key (lambda (grant) (plist-get grant :access))))
@@ -726,7 +736,7 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
                       :key (lambda (grant) (plist-get grant :access))))
            (filesystem-mounts
             (mevedel-sandbox--additional-filesystem-mounts
-             additional-permissions))
+             effective-permissions))
            (facts (list :sandbox 'bubblewrap
                         :filesystem 'workspace-write
                         :proc (if mount-proc-p 'fresh 'host)
@@ -750,11 +760,11 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
               roots)
              (mevedel-sandbox--open-granted-parent-traversal
               (plist-get protected :arguments)
-              additional-permissions)
+              effective-permissions)
              (plist-get filesystem-mounts :arguments)
              (mevedel-sandbox--protected-remounts
               (plist-get protected :post-arguments)
-              additional-permissions)
+              effective-permissions)
              (list "--unshare-user"
                    "--unshare-pid")
              (unless network-access-p

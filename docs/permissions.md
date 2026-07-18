@@ -250,8 +250,10 @@ view; pending and execution facts record `proc: host` instead of treating the
 whole backend as unavailable. A full successful profile mounts `/` read-only,
 rebinds the workspace, temporary directory, memory roots, manually configured
 roots, and session working directory writable, installs a fresh `/proc`, and
-changes to the canonical working directory. The default profile also isolates
-the network. A justified additive network request prompts in `ask` and `auto`,
+changes to the canonical working directory. Its private `/dev` supplies
+`/dev/null` without host authority; redundant additive grants for that device
+are ignored rather than remounted. The default profile also isolates the
+network. A justified additive network request prompts in `ask` and `auto`,
 proceeds automatically in `full-auto` after command authorization, and changes
 only network isolation for that invocation. The namespace and mount boundary
 is inherited by descendants.
