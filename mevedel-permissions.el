@@ -99,7 +99,7 @@ rule matches against.  At most one specifier is allowed per rule:
   :domain  GLOB  - host name (supports *)
                    Used by WebFetch, WebSearch, YouTube.
   :name    GLOB  - match name (supports *)
-                   Used by Agent (subagent_type).
+                   Used by Agent (task_name).
 
 Rules without a specifier match the tool regardless of context.
 
@@ -430,7 +430,7 @@ nil when TOOL-NAME is unknown or declares no getter.
 Note: specifier keyword semantics are per-tool, not per-keyword.
 Both `Skill' and `Agent' use `:name', but `Skill :name' matches the
 skill name (invocation identifier) while `Agent :name' matches the
-subagent_type.  The keyword is a syntactic slot; the matching
+task_name.  The keyword is a syntactic slot; the matching
 semantics are owned by the tool's `get-name' getter.  Authors of
 permission rules should consult each tool's documentation rather
 than assume cross-tool uniformity for the same keyword."
@@ -454,7 +454,7 @@ Recognised forms:
 - `\"Bash(git status)\"'  qualified by exact pattern
 - `\"Bash(git status *)\"' qualified by glob pattern
 - `\"WebFetch(example.com)\"' qualified by domain
-- `\"Agent(verifier)\"'   qualified by sub-agent name
+- `\"Agent(spec_review)\"' qualified by child task name
 
 Specifier inference is registry-driven via
 `mevedel-permission--tool-specifier-key', so a new tool that ships

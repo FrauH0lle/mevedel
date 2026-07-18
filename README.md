@@ -34,9 +34,9 @@ Key features:
 - Can categorize your references with tags, and use complex query expressions to
   determine what to send to the model in directives.
 - Can easily cycle through between instruction overlays across all buffers.
-- Specialized sub-agents (explorer, coordinator, verifier, reviewer)
-  for focused tasks via [gptel-agent](https://github.com/karthink/gptel-agent),
-  with background dispatch and inter-agent messaging.
+- Retained asynchronous child agents plus focused explorer, verifier, and
+  reviewer workflows via
+  [gptel-agent](https://github.com/karthink/gptel-agent).
 - Supervised Goals (`/goal <objective>`) for read-only planning, explicit
   approval, implementation, and read-only review in one session-owned cycle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
@@ -502,10 +502,10 @@ structured task list with statuses, dependencies, owner status notes, and an
 optional task status fragment; use `mevedel-toggle-tasks` or `TAB`/`RET` on the
 fragment to show or hide completed tasks)
 
-**Sub-agents:** `Agent` (dispatch a registered sub-agent, foreground or
-background), `SendMessage` (post a message to another agent's mailbox),
-`StopAgent` (stop a running sub-agent), `ToolSearch` (look up deferred tool
-schemas on demand)
+**Sub-agents:** `Agent` (start a retained asynchronous child), `SendMessage`
+(post a message to a running specialist invocation), `StopAgent` (stop a
+running specialist invocation), `ToolSearch` (look up deferred tool schemas on
+demand)
 
 **Execution:** `Bash` (with permission system, see below), `Eval` (Emacs Lisp
 evaluation, confirmed in `ask` and `auto`, automatic in `full-auto`; supports
@@ -526,9 +526,13 @@ short.
 ### Agents
 
 A set of sub-agents (powered by
-[gptel-agent](https://github.com/karthink/gptel-agent)) are dispatched via the
-`Agent` tool, with optional `run_in_background = true` for fire-and-forget
-workers. Each agent has its own tool list, prompt, and default model tier.
+[gptel-agent](https://github.com/karthink/gptel-agent)) support delegated work.
+The model-facing `Agent` tool takes a lowercase `task_name` and a complete
+`message`, starts one retained default child asynchronously, and immediately
+returns its canonical path (for example `/root/spec_review`). The child becomes
+idle when its turn settles, while its path and conversation remain retained.
+Dedicated commands and forked workflows also use specialist definitions with
+their own tool lists, prompts, and default model tiers.
 
 - `explorer`: read-only investigation of the codebase. The caller specifies
   thoroughness; the explorer returns findings without making changes.
@@ -541,12 +545,12 @@ workers. Each agent has its own tool list, prompt, and default model tier.
   surrounding code, then returns prioritized JSON findings.
 
 Agent handles in the view are clickable. Running agents can open a live
-transcript; finished background agents open their saved transcript when session
-persistence has materialized it. `mevedel-view-close-agent-transcript` closes the
-selected transcript side window.
+transcript; settled agents open their saved transcript when session persistence
+has materialized it. `mevedel-view-close-agent-transcript` closes the selected
+transcript side window. Each asynchronous child sends one bounded terminal
+RESULT to its spawn parent and then releases its active-turn slot.
 
-Background agents complete fire-and-forget; their results land in the parent
-agent's mailbox and the FSM parks until all live workers finish. If an agent is
+For specialist invocations that use the existing stop surface, if an agent is
 no longer relevant or appears stuck, the model can use `StopAgent`, and the user
 can run `mevedel-stop-agent`.
 
@@ -656,7 +660,7 @@ commands, web fetches, sub-agent spawns. Permission rules live on the unified
 | `:path`    | path (glob, `~` exp.)  | `Read`, `Edit`, `Write`, `Glob`, … |
 | `:pattern` | command string (glob)  | `Bash`                             |
 | `:domain`  | host name (glob)       | `WebFetch`, `YouTube`              |
-| `:name`    | free-form name (glob)  | `Agent` (subagent_type)            |
+| `:name`    | free-form name (glob)  | `Agent` (`task_name`)              |
 
 Precedence: specifier rules outrank generic; within a group `deny > ask >
 allow`. `mevedel-protected-paths` maps globs to `read-only` or `inaccessible`.
@@ -964,8 +968,7 @@ A skill is a reusable prompt package described by a `SKILL.md` file. Skills are
 discovered from `.mevedel/skills/`, `.agents/skills/`,
 `~/.mevedel/skills/`, `~/.agents/skills/`, and from the directories listed in
 `mevedel-skill-dirs`. mevedel ships a few bundled skills under `skills/`
-(for example `coordinator`,
-`review`, `analyze-log`, and `remember`); name conflicts are exposed with
+(for example `review`, `analyze-log`, and `remember`); name conflicts are exposed with
 deterministic visible prefixes.
 
 A skill can:
@@ -1077,7 +1080,8 @@ above the user prompt.
   gitignore-filtered recursive listings, and supported media files are attached
   through gptel media when the backend supports them. Goes through the `Read`
   permission check.
-- `@agent:name` — asks the main agent to delegate via `Agent(subagent_type=…)`.
+- `@agent:name` — asks the main agent to start a child via
+  `Agent(task_name="name", message=…)`.
 - `@mcp:server:uri` — attaches an MCP resource via mcp.el.
 
 Completion at point is provided for valid IDs, file paths, agent names, and

@@ -1045,7 +1045,7 @@ Returns (buffer . overlay)."
     (should (equal "[agent:explorer -- delegation requested]"
                    (plist-get result :placeholder)))
     (should (stringp (plist-get result :reminder)))
-    (should (string-match-p "subagent_type=\"explorer\""
+    (should (string-match-p "task_name=\"explorer\""
                             (plist-get result :reminder)))
     (should (string-match-p "Do not mention this reminder"
                             (plist-get result :reminder)))

@@ -670,14 +670,21 @@ asynchronously on the recipient's next FSM turn via
 
 (defun mevedel-tools--message-delivery-block (msg)
   "Return the user-role delivery block for mailbox MSG."
-  (let ((body (or (plist-get msg :body) "")))
-    (if (and (plist-get msg :agent-result-p)
-             (mevedel-tools--agent-result-block-p body))
-        body
-      (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
-              (or (plist-get msg :from) "unknown")
+  (if (eq (plist-get msg :type) 'RESULT)
+      (format "<agent-result sender=\"%s\" recipient=\"%s\" outcome=\"%s\">\n%s\n</agent-result>"
+              (plist-get msg :sender)
+              (plist-get msg :recipient)
+              (plist-get msg :outcome)
               (mevedel-tools--mailbox-body-escape
-               (mevedel-tools--truncate-message-body body))))))
+               (or (plist-get msg :payload) "")))
+    (let ((body (or (plist-get msg :body) "")))
+      (if (and (plist-get msg :agent-result-p)
+               (mevedel-tools--agent-result-block-p body))
+          body
+        (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
+                (or (plist-get msg :from) "unknown")
+                (mevedel-tools--mailbox-body-escape
+                 (mevedel-tools--truncate-message-body body)))))))
 
 (defun mevedel-tools--live-buffer-marker-p (marker buffer)
   "Return non-nil when MARKER points into BUFFER."
@@ -769,7 +776,7 @@ sync with what the model actually saw."
 Runs before `gptel--handle-wait' fires the HTTP request.  For the
 context that owns FSM (session or agent invocation), reads the
 `messages' mailbox, wraps each queued message in an
-`<agent-message from=\"...\">' block, and appends a single user-role
+canonical delivery block, and appends a single user-role
 message to `info :data :messages' via `gptel--inject-prompt'.  Each
 body is truncated via `mevedel-tools--truncate-message-body' to keep
 fan-out bounded.  The mailbox is cleared after draining so each

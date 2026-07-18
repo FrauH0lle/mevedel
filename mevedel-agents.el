@@ -93,6 +93,16 @@
 (defvar mevedel-agent--registry nil
   "Alist mapping agent name strings to `mevedel-agent' structs.")
 
+(defvar mevedel-agent--default
+  (mevedel-agent--create
+   :name "default"
+   :description "Agent inheriting its delegator's effective configuration.")
+  "Default retained-agent role configuration.")
+
+(defun mevedel-agent-default ()
+  "Return the default inherited agent role."
+  mevedel-agent--default)
+
 (defcustom mevedel-agent-extra-tool-specs nil
   "Alist mapping agent names to extra tool specs.
 
