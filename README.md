@@ -528,15 +528,20 @@ short.
 
 A set of sub-agents (powered by
 [gptel-agent](https://github.com/karthink/gptel-agent)) support delegated work.
-The model-facing `Agent` tool takes a lowercase `task_name` and a complete
-`message`, starts one retained default child asynchronously, and immediately
-returns its canonical path (for example `/root/spec_review`). The child becomes
-idle when its turn settles, while its path and conversation remain retained.
-Dedicated commands and forked workflows also use specialist definitions with
-their own tool lists, prompts, and default model tiers.
+The model-facing `Agent` tool takes a lowercase `task_name`, a complete
+`message`, and an optional named `role`. It starts one retained child
+asynchronously and immediately returns its canonical path (for example
+`/root/spec_review`). Omit the role to inherit the delegator's effective
+configuration. Agents with delegation authority can create arbitrarily deep
+nested paths, while the complete session tree shares three active non-root
+turns by default. The child becomes idle when its turn settles, while its path
+and conversation remain retained.
 
+- `worker`: broad repository implementation with reading, editing, execution,
+  navigation, skill, task, and recursive collaboration tools.
 - `explorer`: read-only investigation of the codebase. The caller specifies
-  thoroughness; the explorer returns findings without making changes.
+  thoroughness; the explorer returns findings without making direct changes
+  but may delegate implementation to a worker.
 - `coordinator`: orchestrates work by dispatching workers (foreground or
   background) and routing results via `SendMessage` mailboxes. Never
   implements directly.
@@ -544,6 +549,11 @@ their own tool lists, prompts, and default model tiers.
   through edge cases, tests, and code review.
 - `reviewer`: structured code review used by `/review`. Inspects diffs and
   surrounding code, then returns prioritized JSON findings.
+
+Every named role can use `SendMessage` and `ListAgents`. Roles that possess
+`Agent` receive the complete follow-up, wait, and interruption control bundle;
+reviewer and verifier remain leaf roles. Prompts show only direct child path
+and role references, while `ListAgents` discovers the complete retained tree.
 
 Agent handles in the view are clickable. Running agents can open a live
 transcript; settled agents open their saved transcript when session persistence

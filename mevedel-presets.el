@@ -99,6 +99,8 @@
 (declare-function mevedel-tool-summary "mevedel-tool-registry" (cl-x) t)
 
 ;; `mevedel-tools'
+(declare-function mevedel-tools--handle-agent-roster-inject
+                  "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-deferred-inject
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject
@@ -376,7 +378,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (explorer coordinator verifier)
+    :agents (worker explorer coordinator reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                mevedel-system--base-prompt nil nil
@@ -393,7 +395,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (explorer coordinator verifier)
+    :agents (worker explorer coordinator reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                mevedel-system--base-prompt nil nil
@@ -417,7 +419,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (explorer coordinator verifier)
+    :agents (worker explorer coordinator reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                mevedel-system--tutor-base-prompt nil nil
@@ -519,27 +521,24 @@ Has no effect when no extras are registered for PRESET-NAME."
 HANDLERS is an alist like `gptel-send--handlers'.  Returns a new
 alist with mevedel-specific handlers added:
 
-  1.  Deferred tool injection (WAIT state handler)
+  1.  Direct-child roster refresh (WAIT state handler)
   1a.  Inbound agent-message delivery (WAIT state handler)
+  1b.  Deferred tool injection (WAIT state handler)
   2.  Final patch generation (terminal state handler)
   3.  Request callback invocation (terminal state handler)
   4.  Canonical successful-turn transaction (DONE state handler only)
   5.  Failure and abort cleanup
   6.  BWAIT parking"
-  ;; 1. Deferred tool injection: add to WAIT state
+  ;; 1. Add the pre-sample WAIT handlers in execution order.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
       (setcdr wait-entry
-              (cons #'mevedel-tools--handle-deferred-inject
-                    (cdr wait-entry)))))
-  ;; 1a. Inbound message delivery: drain session mailbox into
-  ;; the next request's messages.
-  (let ((wait-entry (assq 'WAIT handlers)))
-    (when wait-entry
-      (setcdr wait-entry
-              (cons #'mevedel-tools--handle-message-inject
-                    (cdr wait-entry)))))
-  ;; 1b. Begin the mevedel-request on the first WAIT entry.  WAIT is
+              (append
+               (list #'mevedel-tools--handle-agent-roster-inject
+                     #'mevedel-tools--handle-message-inject
+                     #'mevedel-tools--handle-deferred-inject)
+               (cdr wait-entry)))))
+  ;; 1c. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on
   ;; `:mevedel-request-begun' keeps request-begin idempotent per FSM.
   ;; Materialize a fork-pending rewind preview before `request-begin'

@@ -23,9 +23,12 @@ Most exploration is local. Start here unless the task explicitly calls for onlin
   `ToolSearch`; activate xref for definitions, callers, call graphs, and
   impact analysis, and activate Imenu for a known file's function, class,
   and variable outline
-- `Bash` for read-only inspection only: `ls`, `git log`, `git diff`, `git blame`, `cat`, `head`, `tail`. Never mutate state.
+- Delegate implementation or shell-dependent investigation to a `worker`
+  child. Your own direct tools remain read-only.
 
-**Parallelize aggressively.** When you have several independent searches or reads, issue them in one turn.
+**Parallelize aggressively.** When you have several independent searches or
+reads, issue them in one turn. When useful, create nested workers with `Agent`
+and coordinate them with the agent-control tools.
 
 ## Secondary Mode: Web Research
 

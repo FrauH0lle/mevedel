@@ -18,6 +18,7 @@
 (declare-function mevedel-agent-exec--flush-transcript-save
                   "mevedel-agent-exec" (invocation))
 (defvar mevedel--agent-invocation)
+(defvar mevedel-agent-exec--agents)
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-dispatch
@@ -30,7 +31,6 @@
                   "mevedel-agent-runtime" (invocation sender message))
 
 ;; `mevedel-agents'
-(declare-function mevedel-agent-default "mevedel-agents" ())
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
@@ -45,6 +45,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session--set-agent-registry
@@ -406,6 +408,24 @@ Return the resolved recipient path.  Sending never activates a turn."
           (lambda (a b)
             (string-lessp (plist-get a :path) (plist-get b :path))))))
 
+(defun mevedel-agent-control-context-path (context)
+  "Return CONTEXT's canonical path in its root session."
+  (if (mevedel-session-p context)
+      "/root"
+    (when-let* ((session (mevedel-agent-invocation-parent-session context)))
+      (mevedel-agent-control--path-for-invocation session context))))
+
+(defun mevedel-agent-control-direct-children (session parent-path)
+  "Return sorted path and role references below PARENT-PATH in SESSION."
+  (sort
+   (cl-loop for (_path . record) in (mevedel-session-agent-registry session)
+            when (equal parent-path
+                        (mevedel-agent-record-parent-path record))
+            collect (list :path (mevedel-agent-record-path record)
+                          :role (mevedel-agent-record-role record)))
+   (lambda (a b)
+     (string-lessp (plist-get a :path) (plist-get b :path)))))
+
 (defun mevedel-agent-control--validate-spawn (session task-name message)
   "Validate SESSION, TASK-NAME, and MESSAGE for a new child."
   (unless (mevedel-session-p session)
@@ -419,9 +439,10 @@ Return the resolved recipient path.  Sending never activates a turn."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "Agent message must be non-empty plain text")))
 
-(defun mevedel-agent-control--reserve (session task-name)
-  "Atomically reserve TASK-NAME and one active slot in SESSION."
-  (let* ((path (concat "/root/" task-name))
+(defun mevedel-agent-control--reserve
+    (session parent-path task-name role)
+  "Atomically reserve TASK-NAME below PARENT-PATH in SESSION for ROLE."
+  (let* ((path (concat parent-path "/" task-name))
          (registry (mevedel-session-agent-registry session)))
     (when (assoc path registry)
       (user-error "Agent path is already reserved: %s" path))
@@ -431,9 +452,9 @@ Return the resolved recipient path.  Sending never activates a turn."
     (let ((record
            (mevedel-agent-record--create
             :path path
-            :parent-path "/root"
-            :role "default"
-            :configuration '(:role "default")
+            :parent-path parent-path
+            :role role
+            :configuration (list :role role)
             :activity 'starting)))
       (mevedel-session--set-agent-registry
        session (cons (cons path record) registry))
@@ -523,7 +544,10 @@ Return the resolved recipient path.  Sending never activates a turn."
              (mevedel-agent-record-path record)))
     (unless
         (mevedel-agent-runtime-dispatch
-         #'ignore (mevedel-agent-default)
+         #'ignore
+         (mevedel-agent-resolve-role
+          (unless (equal (mevedel-agent-record-role record) "default")
+            (mevedel-agent-record-role record)))
          (file-name-nondirectory (mevedel-agent-record-path record)) message
          :background t
          :parent-context session
@@ -602,20 +626,34 @@ Return the resolved recipient path.  Sending never activates a turn."
 
 (cl-defun mevedel-agent-control-spawn
     (session task-name message
-             &key parent-fsm message-handler terminal-handler)
-  "Spawn TASK-NAME with MESSAGE in SESSION and return its retained record."
+             &key role parent-fsm message-handler terminal-handler)
+  "Spawn TASK-NAME with MESSAGE and optional ROLE in SESSION.
+Return the committed retained record."
   (mevedel-agent-control--validate-spawn session task-name message)
-  (let ((record (mevedel-agent-control--reserve session task-name))
-        committed)
+  (require 'mevedel-agents)
+  (when (and role
+             (boundp 'mevedel-agent-exec--agents)
+             mevedel-agent-exec--agents
+             (not (assoc-string role mevedel-agent-exec--agents)))
+    (user-error "Agent role is not available to this session: %s" role))
+  (let* ((agent (mevedel-agent-resolve-role role))
+         (role-name (mevedel-agent-name agent))
+         (caller-path (mevedel-agent-control-current-path session))
+         (parent-context
+          (if (equal caller-path "/root")
+              session
+            mevedel--agent-invocation))
+         (record (mevedel-agent-control--reserve
+                  session caller-path task-name role-name))
+         committed)
     (unwind-protect
         (progn
-          (require 'mevedel-agents)
           (require 'mevedel-agent-runtime)
           (unless
               (mevedel-agent-runtime-dispatch
-               #'ignore (mevedel-agent-default) task-name message
+               #'ignore agent task-name message
                :background t
-               :parent-context session
+               :parent-context parent-context
                :parent-fsm parent-fsm
                :message-handler message-handler
                :terminal-handler terminal-handler

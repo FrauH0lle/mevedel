@@ -3,11 +3,11 @@
 ;;; Commentary:
 
 ;; Declarative definitions for the specialised sub-agents that mevedel spawns
-;; through the Agent tool: `explorer' (read-only investigation), `verifier'
-;; (adversarial read-only verification), `reviewer' (structured code review),
-;; and `coordinator' (orchestration agent that dispatches background workers).
-;; Uses the `mevedel-define-agent' macro to bundle tool groups, prompt files,
-;; turn limits, and reminders.
+;; through the Agent tool: `worker' (implementation), `explorer' (read-only
+;; investigation), `coordinator' (legacy orchestration), `verifier'
+;; (adversarial read-only verification), and `reviewer' (structured code
+;; review).  Uses the `mevedel-define-agent' macro to bundle tool groups,
+;; prompt files, turn limits, and reminders.
 ;;
 ;; Per-invocation state (cloned reminders, deferred-tool lifecycle, mailbox)
 ;; lives on `mevedel-agent-invocation' structs created at dispatch time rather
@@ -16,7 +16,8 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib))
+  (require 'cl-lib)
+  (require 'subr-x))
 
 (require 'mevedel-tool-registry)
 (require 'mevedel-models)
@@ -117,6 +118,29 @@ agent can discover them."
   :group 'mevedel
   :type '(alist :key-type symbol :value-type (repeat sexp)))
 
+(defconst mevedel-agent--communication-tool-specs
+  '((:tool "SendMessage") (:tool "ListAgents"))
+  "Tools available to every named role.")
+
+(defconst mevedel-agent--control-tool-specs
+  '((:tool "FollowupAgent") (:tool "WaitAgent")
+    (:tool "InterruptAgent"))
+  "Tools added to every named role that possesses Agent.")
+
+(defun mevedel-agent--specs-contain-tool-p (specs name)
+  "Return non-nil when resolved SPECS contain a tool named NAME."
+  (when-let* ((resolved (ignore-errors (mevedel-tool-resolve specs))))
+    (cl-some (lambda (tool)
+               (equal name (mevedel-tool-name tool)))
+             (plist-get resolved :active))))
+
+(defun mevedel-agent--declared-specs (agent)
+  "Return AGENT's declared tool specs with user extras appended."
+  (let* ((name (mevedel-agent-name agent))
+         (extras
+          (alist-get (intern name) mevedel-agent-extra-tool-specs)))
+    (append (mevedel-agent-tools agent) extras)))
+
 (defun mevedel-agent--effective-specs (agent)
   "Return AGENT's tool specs merged with user-declared extras.
 
@@ -124,21 +148,34 @@ Combines `mevedel-agent-tools' with any matching entry in
 `mevedel-agent-extra-tool-specs'.  The agent's own specs come first so
 the built-in set stays stable; user extras are appended."
   (let* ((name (mevedel-agent-name agent))
-         (sym (intern name))
-         (extras (alist-get sym mevedel-agent-extra-tool-specs)))
-    (if extras
-        (append (mevedel-agent-tools agent) extras)
-      (mevedel-agent-tools agent))))
+         (base (mevedel-agent--declared-specs agent)))
+    (if (equal name "default")
+        base
+      (cl-delete-duplicates
+       (append base
+               mevedel-agent--communication-tool-specs
+               (when (mevedel-agent--specs-contain-tool-p base "Agent")
+                 mevedel-agent--control-tool-specs))
+       :test #'equal))))
 
 (defun mevedel-agent-get (name)
   "Get the `mevedel-agent' struct for NAME (symbol or string)."
   (alist-get (if (symbolp name) (symbol-name name) name)
              mevedel-agent--registry nil nil #'equal))
 
+(defun mevedel-agent-resolve-role (role)
+  "Resolve optional ROLE to an agent definition or signal a user error."
+  (cond
+   ((null role) (mevedel-agent-default))
+   ((not (and (stringp role) (not (string-empty-p role))))
+    (user-error "Agent role must be a non-empty string when provided"))
+   ((mevedel-agent-get role))
+   (t (user-error "Unknown agent role: %s" role))))
+
 (defun mevedel-agent-skill-tool-capable-p (agent)
   "Return non-nil when AGENT's resolved active tools include skills."
   (when agent
-    (let* ((specs (mevedel-agent--effective-specs agent))
+    (let* ((specs (mevedel-agent--declared-specs agent))
            (resolved
             (ignore-errors (mevedel-tool-resolve specs))))
       (cl-some (lambda (tool)
@@ -398,7 +435,7 @@ the sub-agent learns which tools it can activate without polluting the
 main session's reminder list."
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
-         (resolved (mevedel-tool-resolve (mevedel-agent--effective-specs agent)))
+         (resolved (mevedel-tool-resolve (mevedel-agent--declared-specs agent)))
          (deferred-tools (plist-get resolved :deferred))
          (deferred-set
           (mapcar (lambda (tool)
@@ -462,17 +499,33 @@ Returns a cons (NAME . PLIST) suitable for `mevedel-agent-exec--agents'."
 ;;
 ;;; Agent definitions
 
-(mevedel-define-agent explorer
-  :description "Read-only exploration agent for codebase investigation and, when
-needed, web research.  Caller specifies the thoroughness level
-(quick/moderate/thorough) in the prompt.  Returns a structured report -- never
-modifies files."
-  :tools (read (:tool "Bash")
+(mevedel-define-agent worker
+  :description "Implementation agent with broad repository tools and recursive
+delegation authority."
+  :tools (read edit code eval
           (:tool "Ask")
           (:tool "Skill") (:tool "ListSkills")
           (:tool "ToolSearch")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
+          (:tool "Agent")
+          (:deferred web)
+          (:deferred elisp))
+  :prompt-file "agents/worker.md"
+  :max-turns 50)
+
+(mevedel-define-agent explorer
+  :description "Read-only exploration agent for codebase investigation and, when
+needed, web research.  Caller specifies the thoroughness level
+(quick/moderate/thorough) in the prompt.  Returns a structured report -- never
+modifies files."
+  :tools (read
+          (:tool "Ask")
+          (:tool "Skill") (:tool "ListSkills")
+          (:tool "ToolSearch")
+          (:tool "TaskCreate") (:tool "TaskUpdate")
+          (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
+          (:tool "Agent")
           (:deferred code)
           (:deferred web)
           (:deferred elisp))
@@ -551,7 +604,7 @@ If PRESET-NAME is non-nil and has an `:agents' entry in
 all agents in `mevedel-agent--registry' are registered.
 
 Populates the buffer-local `mevedel-agent-exec--agents' and updates the
-Agent tool's `:enum' slot.  Must be called in the chat buffer."
+Agent tool's role and model enums.  Must be called in the chat buffer."
   (let* ((meta (and preset-name
                     (mevedel-preset--resolved-metadata preset-name)))
          (allowed (plist-get meta :agents))
@@ -565,12 +618,15 @@ Agent tool's `:enum' slot.  Must be called in the chat buffer."
                        mevedel-agent--registry)
                     mevedel-agent--registry))))
     (setq-local mevedel-agent-exec--agents mevedel-specs))
-  ;; Update Agent tool enum to list available agent names
+  ;; Update Agent tool enums to list available role and model names.
   (when-let* ((agent-tool (gptel-get-tool '("mevedel" "Agent")))
-              (args (gptel-tool-args agent-tool))
-              (first-arg (car args)))
-    (setf (plist-get first-arg :enum)
-          (vconcat (mapcar #'car mevedel-agent-exec--agents)))
+              (args (gptel-tool-args agent-tool)))
+    (when-let* ((role-arg
+                 (cl-find-if (lambda (arg)
+                               (equal (plist-get arg :name) "role"))
+                             args)))
+      (setf (plist-get role-arg :enum)
+            (vconcat (mapcar #'car mevedel-agent-exec--agents))))
     (when-let* ((model-arg
                  (cl-find-if (lambda (arg)
                                (equal (plist-get arg :name) "model"))

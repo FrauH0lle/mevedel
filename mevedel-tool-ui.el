@@ -168,12 +168,14 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     (when (plist-member args obsolete)
       (error "Superseded Agent parameter: %s" obsolete)))
   (let ((task-name (plist-get args :task_name))
-        (message (plist-get args :message)))
+        (message (plist-get args :message))
+        (role (plist-get args :role)))
     (require 'json)
     (require 'mevedel-agent-control)
     (let* ((record
             (mevedel-agent-control-spawn
              mevedel--session task-name message
+             :role role
              :parent-fsm (and (boundp 'mevedel-tools--current-fsm)
                               mevedel-tools--current-fsm)
              :message-handler #'mevedel-tools--handle-message-inject
@@ -431,7 +433,10 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
     :args ((task_name string :required
                       "Lowercase ASCII name for the new child path segment.")
            (message string :required
-                    "Complete non-empty task for the child agent."))
+                    "Complete non-empty task for the child agent.")
+           (role string :optional
+                 "Named role overlay. Omit to inherit the delegator."
+                 :enum []))
     :async-p t
     :max-result-size 50000
     :groups (util)
