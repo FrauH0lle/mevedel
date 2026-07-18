@@ -491,7 +491,7 @@ all code changes to worker agents and verifies results before reporting."
   ;; is included alongside Create/Update/List so the coordinator can inspect a
   ;; single task's state without a TaskList round-trip.
   :tools ((:tool "Ask")
-          (:tool "Agent") (:tool "StopAgent") (:tool "SendMessage")
+          (:tool "Agent") (:tool "InterruptAgent") (:tool "SendMessage")
           (:tool "TaskCreate") (:tool "TaskUpdate")
           (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
           (:tool "ToolSearch"))

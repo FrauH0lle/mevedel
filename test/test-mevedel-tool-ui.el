@@ -86,8 +86,9 @@
   (progn
     (mevedel-tool-ui--register)
     (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
-                    "StopAgent" "ToolSearch" "SendMessage" "WaitAgent"))
+                    "InterruptAgent" "ToolSearch" "SendMessage" "WaitAgent"))
       (should (mevedel-tool-get name)))
+    (should-not (mevedel-tool-get "StopAgent"))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should-not (mevedel-tool-get "RequestAccess"))))
 
@@ -686,6 +687,54 @@
        (mevedel-tool-ui--render-agent-interaction
         "FollowupAgent" '(:target "/root/missing")
         "Error: Unknown agent target" nil))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (should (string= draft (mevedel-view--input-text)))))))
+
+(mevedel-deftest mevedel-tool-ui--interrupt-agent
+  (:doc "Interrupts retained turns through canonical path events")
+  ,test
+  (test)
+  :doc "returns the previous activity as JSON with canonical render data"
+  (let* ((session (mevedel-tool-ui-test--session))
+         (record
+          (mevedel-agent-record--create
+           :id "idle-id" :path "/root/idle" :activity 'idle))
+         result)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/idle" record)))
+    (let ((mevedel--session session))
+      (setq result
+            (mevedel-tool-ui--interrupt-agent
+             '(:target "/root/idle"))))
+    (should
+     (equal "idle"
+            (gethash
+             "previous_activity"
+             (json-parse-string (plist-get result :result)))))
+    (should (equal 'interrupted
+                   (plist-get (plist-get result :render-data) :event)))
+    (should (equal "/root/idle"
+                   (plist-get (plist-get result :render-data) :path))))
+
+  :doc "renders Interrupted PATH without changing a leading-> draft"
+  (mevedel-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (rendering
+            (mevedel-tool-ui--render-interrupt-agent
+             "InterruptAgent" '(:target "/root/spec_review")
+             "{\"previous_activity\":\"running\"}"
+             '(:kind collaboration-event
+               :event interrupted
+               :path "/root/spec_review"))))
+      (should (equal "Interrupted /root/spec_review"
+                     (plist-get rendering :header)))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4)
         (let ((inhibit-read-only t))

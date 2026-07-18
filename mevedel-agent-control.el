@@ -6,7 +6,7 @@
 ;; settlement transaction for asynchronous agent turns.  Provider execution
 ;; remains in `mevedel-agent-runtime'; this module gives it durable identities,
 ;; tree-wide capacity, canonical RESULT/MAIL/USER records, retained mailboxes,
-;; and the WaitAgent suspension and wake lifecycle.
+;; turn-local interruption, and the WaitAgent suspension and wake lifecycle.
 
 ;;; Code:
 
@@ -24,6 +24,8 @@
                   "mevedel-agent-runtime" t t)
 (declare-function mevedel-agent-runtime-dispatch--abandon-persistence
                   "mevedel-agent-runtime" (invocation))
+(declare-function mevedel-agent-runtime-interrupt
+                  "mevedel-agent-runtime" (invocation reason))
 (declare-function mevedel-agent-runtime-steer
                   "mevedel-agent-runtime" (invocation sender message))
 
@@ -576,6 +578,27 @@ Return the resolved recipient path.  Sending never activates a turn."
            (setf (mevedel-agent-record-invocation record) nil)
            (signal (car err) (cdr err)))))
       record)))
+
+(defun mevedel-agent-control-interrupt (session target)
+  "Interrupt TARGET's current turn in SESSION and return its prior activity."
+  (let* ((caller-path (mevedel-agent-control-current-path session))
+         (path (mevedel-agent-control-resolve-path
+                session caller-path target)))
+    (when (equal path "/root")
+      (user-error "InterruptAgent cannot target /root"))
+    (when (equal path caller-path)
+      (user-error "InterruptAgent cannot target the caller"))
+    (let* ((record (mevedel-agent-control--record-at-path session path))
+           (activity (mevedel-agent-record-activity record)))
+      (when (mevedel-agent-control--active-p record)
+        (let ((invocation (mevedel-agent-record-invocation record)))
+          (require 'mevedel-agent-runtime)
+          (let ((response
+                 (mevedel-agent-runtime-interrupt
+                  invocation (format "interrupted by %s" caller-path))))
+            (mevedel-agent-control--settle
+             session record invocation response))))
+      (list :path path :previous-activity activity))))
 
 (cl-defun mevedel-agent-control-spawn
     (session task-name message

@@ -146,7 +146,7 @@ Prompt / presets / agents
   mevedel-specialist-nudges.el  generic-tool specialist prompting policy
   mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
-  mevedel-agent-runtime.el    Agent lifecycle, BWAIT, watchdogs, completion, stopping
+  mevedel-agent-runtime.el    Agent lifecycle, BWAIT, watchdogs, completion, interruption
   mevedel-goal.el             supervised Goal controller and plan approval queue
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
@@ -158,7 +158,7 @@ Tools (each dispatches through mevedel-pipeline)
   mevedel-interaction-prompt.el  shared interaction overlay lifecycle
   mevedel-permission-prompt.el   generic, Bash, Eval, and execution-authority prompt UI
   mevedel-tool-ask.el         Ask questionnaire, handler, renderer
-  mevedel-tool-ui.el          Agent/StopAgent/ToolSearch/SendMessage assembly
+  mevedel-tool-ui.el          Agent/InterruptAgent/ToolSearch/SendMessage assembly
   mevedel-tool-task.el        TaskCreate/Update/List/Get + overlay
   mevedel-tool-skills.el      Skill and ListSkills tool schemas
   mevedel-tool-tutor.el       GetHints, RecordHint

@@ -372,6 +372,195 @@
       (should (eq 'errored (plist-get result :outcome)))
       (should (equal "Provider failed" (plist-get result :payload))))))
 
+(mevedel-deftest mevedel-agent-control-interrupt ()
+  ,test
+  (test)
+  :doc "rejects root, self, malformed, unknown, and opaque-id targets"
+  (let* ((session (mevedel-agent-control-test--session))
+         (caller-invocation
+          (mevedel-agent-invocation--create :agent-id "caller-id"))
+         (caller
+          (mevedel-agent-record--create
+           :id "caller-id" :path "/root/caller" :activity 'running
+           :invocation caller-invocation))
+         (peer
+          (mevedel-agent-record--create
+           :id "peer-id" :path "/root/peer" :activity 'idle)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/caller" caller)
+                (cons "/root/peer" peer)))
+    (let ((mevedel--agent-invocation caller-invocation))
+      (dolist (target '("/root" "/root/caller" "/root/missing"
+                        "peer-id" "../peer"))
+        (should-error
+         (mevedel-agent-control-interrupt session target)))))
+
+  :doc "idle interruption is a successful no-op preserving retained state"
+  (let* ((session (mevedel-agent-control-test--session))
+         (mail '((:type MAIL :sender "/root" :recipient "/root/idle"
+                  :payload "remember")))
+         (record
+          (mevedel-agent-record--create
+           :id "idle-id" :path "/root/idle" :parent-path "/root"
+           :activity 'idle :mailbox mail
+           :configuration '(:role "default"))))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/idle" record)))
+    (let ((result
+           (mevedel-agent-control-interrupt session "/root/idle")))
+      (should (equal "/root/idle" (plist-get result :path)))
+      (should (eq 'idle (plist-get result :previous-activity)))
+      (should (eq 'idle (mevedel-agent-record-activity record)))
+      (should (eq mail (mevedel-agent-record-mailbox record)))
+      (should (assoc "/root/idle"
+                     (mevedel-session-agent-registry session)))
+      (should-not (mevedel-session-messages session))))
+
+  :doc "active interruption settles once, retains descendants, and permits follow-up"
+  (let* ((session (mevedel-agent-control-test--session))
+         (buffer (generate-new-buffer " *agent-control-interrupt*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "parent-id" :parent-session session))
+         (record
+          (mevedel-agent-record--create
+           :id "parent-id" :path "/root/parent" :parent-path "/root"
+           :activity 'running :invocation invocation
+           :conversation-buffer buffer))
+         (descendant
+          (mevedel-agent-record--create
+           :id "child-id" :path "/root/parent/child"
+           :parent-path "/root/parent" :activity 'running))
+         interrupted)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-agent-registry session)
+                (list (cons "/root/parent" record)
+                      (cons "/root/parent/child" descendant)))
+          (cl-letf
+              (((symbol-function 'mevedel-agent-runtime-interrupt)
+                (lambda (seen-invocation reason)
+                  (setq interrupted (list seen-invocation reason))
+                  (setf (mevedel-agent-invocation-terminal-reason
+                         seen-invocation)
+                        reason)
+                  (setf (mevedel-agent-invocation-transcript-status
+                         seen-invocation)
+                        'aborted)
+                  "Agent turn interrupted.\n\nReason: interrupted by /root\n\nPartial response: useful work")))
+            (let ((result
+                   (mevedel-agent-control-interrupt
+                    session "/root/parent")))
+              (should (eq 'running (plist-get result :previous-activity)))
+              (should (eq invocation (car interrupted)))
+              (should (string-match-p "/root" (cadr interrupted)))))
+          (let ((result (car (mevedel-session-messages session))))
+            (should (= 1 (length (mevedel-session-messages session))))
+            (should (eq 'RESULT (plist-get result :type)))
+            (should (eq 'interrupted (plist-get result :outcome)))
+            (should (string-match-p "useful work"
+                                    (plist-get result :payload))))
+          (should (eq 'idle (mevedel-agent-record-activity record)))
+          (should-not (mevedel-agent-record-invocation record))
+          (should (eq 'running
+                      (mevedel-agent-record-activity descendant)))
+          (should (assoc "/root/parent"
+                         (mevedel-session-agent-registry session)))
+          (should (assoc "/root/parent/child"
+                         (mevedel-session-agent-registry session)))
+          (cl-letf
+              (((symbol-function 'mevedel-agent-runtime-dispatch)
+                (lambda (_callback _agent _description _message &rest keys)
+                  (let ((next
+                         (mevedel-agent-invocation--create
+                          :agent-id "parent-id" :parent-session session
+                          :buffer buffer)))
+                    (funcall (plist-get keys :on-invocation) next)
+                    t))))
+            (mevedel-agent-control-followup
+             session "/root/parent" "continue"))
+          (should (eq 'running (mevedel-agent-record-activity record))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer))))
+
+  :doc "provider abort failure leaves the retained turn active"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "abort-fails-id" :parent-session session))
+         (record
+          (mevedel-agent-record--create
+           :id "abort-fails-id" :path "/root/abort_fails"
+           :parent-path "/root" :activity 'running
+           :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/abort_fails" record)))
+    (cl-letf
+        (((symbol-function 'mevedel-agent-runtime-interrupt)
+          (lambda (_invocation _reason)
+            (error "Backend abort failed"))))
+      (should-error
+       (mevedel-agent-control-interrupt
+        session "/root/abort_fails")))
+    (should (eq 'running (mevedel-agent-record-activity record)))
+    (should (eq invocation (mevedel-agent-record-invocation record)))
+    (should-not (mevedel-session-messages session)))
+
+  :doc "interrupt-versus-settlement races emit exactly one RESULT"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "race-id" :parent-session session))
+         (record
+          (mevedel-agent-record--create
+           :id "race-id" :path "/root/race" :parent-path "/root"
+           :activity 'running :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/race" record)))
+    (cl-letf
+        (((symbol-function 'mevedel-agent-runtime-interrupt)
+          (lambda (seen-invocation _reason)
+            (setf (mevedel-agent-invocation-transcript-status
+                   seen-invocation)
+                  'aborted)
+            "interrupted first")))
+      (mevedel-agent-control-interrupt session "/root/race"))
+    (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
+    (mevedel-agent-control--settle
+     session record invocation "late completion")
+    (should (= 1 (length (mevedel-session-messages session))))
+    (should (eq 'interrupted
+                (plist-get (car (mevedel-session-messages session))
+                           :outcome))))
+
+  :doc "a completion that wins the race remains the only settlement"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "winner-id" :parent-session session))
+         (record
+          (mevedel-agent-record--create
+           :id "winner-id" :path "/root/winner" :parent-path "/root"
+           :activity 'running :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/winner" record)))
+    (cl-letf
+        (((symbol-function 'mevedel-agent-runtime-interrupt)
+          (lambda (seen-invocation _reason)
+            (setf (mevedel-agent-invocation-transcript-status
+                   seen-invocation)
+                  'completed)
+            (mevedel-agent-control--settle
+             session record seen-invocation "completed first")
+            "too late")))
+      (let ((result
+             (mevedel-agent-control-interrupt session "/root/winner")))
+        (should (eq 'running (plist-get result :previous-activity)))))
+    (should (= 1 (length (mevedel-session-messages session))))
+    (should (eq 'completed
+                (plist-get (car (mevedel-session-messages session))
+                           :outcome)))))
+
 (mevedel-deftest mevedel-agent-control--record-invocation ()
   ,test
   (test)

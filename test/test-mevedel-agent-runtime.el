@@ -558,6 +558,221 @@
             (should (string-match-p "partial background result" body))))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
+(mevedel-deftest mevedel-agent-runtime--interrupted-agent-response ()
+  ,test
+  (test)
+  :doc "includes the interruption reason, useful partial work, and transcript"
+  (let ((invocation
+         (mevedel-agent-invocation--create
+          :agent-id "worker--interrupt"
+          :description "finish the implementation")))
+    (cl-letf
+        (((symbol-function 'mevedel-agent-runtime--agent-partial-text)
+          (lambda (_invocation &optional _fallback) "useful partial work"))
+         ((symbol-function
+           'mevedel-agent-runtime--stopped-agent-transcript-path)
+          (lambda (_invocation) "/tmp/worker.chat.org")))
+      (let ((response
+             (mevedel-agent-runtime--interrupted-agent-response
+              invocation "interrupted by /root")))
+        (should (string-match-p "interrupted by /root" response))
+        (should (string-match-p "useful partial work" response))
+        (should (string-match-p "/tmp/worker.chat.org" response))))))
+
+(mevedel-deftest mevedel-agent-runtime-interrupt ()
+  ,test
+  (test)
+  :doc "settles a requestless waiting turn without replaying a callback"
+  (let* ((parent-buffer
+          (generate-new-buffer " *mevedel-interrupt-wait-parent*"))
+         (agent-buffer
+          (generate-new-buffer " *mevedel-interrupt-wait-agent*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "worker--wait"
+           :parent-data-buffer parent-buffer
+           :buffer agent-buffer
+           :transcript-status 'running))
+         finalized
+         retained
+         (fsm
+         (gptel-make-fsm
+           :state 'WAIT
+           :info (list :buffer agent-buffer))))
+    (unwind-protect
+        (progn
+          (mevedel-agent-runtime-test--register-agent-fsm invocation fsm)
+          (cl-letf
+              (((symbol-function 'mevedel-agent-runtime--agent-request-live-p)
+                (lambda (_buffer) nil))
+               ((symbol-function
+                 'mevedel-agent-runtime--interrupted-agent-response)
+                (lambda (_invocation _reason) "interrupted partial"))
+               ((symbol-function 'mevedel-agent-runtime--finalize)
+                (lambda (seen-invocation status)
+                  (setq finalized (1+ (or finalized 0))
+                        retained mevedel-agent-runtime--retain-buffer)
+                  (setf (mevedel-agent-invocation-transcript-status
+                         seen-invocation)
+                        status)))
+               ((symbol-function 'gptel--fsm-transition)
+                (lambda (seen-fsm state)
+                  (setf (gptel-fsm-state seen-fsm) state))))
+            (should
+             (equal "interrupted partial"
+                    (mevedel-agent-runtime-interrupt
+                     invocation "interrupted by /root"))))
+          (should (eq 'ABRT (gptel-fsm-state fsm)))
+          (should (= 1 finalized))
+          (should retained)
+          (should (eq 'aborted
+                      (mevedel-agent-invocation-transcript-status
+                       invocation)))
+          (should (equal "interrupted by /root"
+                         (mevedel-agent-invocation-terminal-reason
+                          invocation)))
+          (with-current-buffer parent-buffer
+            (should-not (assoc "worker--wait"
+                               mevedel-agent-runtime--fsms))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+
+  :doc "aborts an active provider request without firing its generic callback"
+  (let* ((parent-buffer
+          (generate-new-buffer " *mevedel-interrupt-run-parent*"))
+         (agent-buffer
+          (generate-new-buffer " *mevedel-interrupt-run-agent*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "worker--run"
+           :parent-data-buffer parent-buffer
+           :buffer agent-buffer
+           :transcript-status 'running))
+         provider-calls
+         finalized
+         retained
+         aborted-buffer
+         (provider-callback
+          (lambda (&rest _) (setq provider-calls (1+ (or provider-calls 0)))))
+         (fsm
+          (gptel-make-fsm
+           :state 'WAIT
+           :info
+           (list :buffer agent-buffer
+                 :callback provider-callback))))
+    (unwind-protect
+        (progn
+          (mevedel-agent-runtime-test--register-agent-fsm invocation fsm)
+          (cl-letf
+              (((symbol-function 'mevedel-agent-runtime--agent-request-live-p)
+                (lambda (_buffer) t))
+               ((symbol-function
+                 'mevedel-agent-runtime--interrupted-agent-response)
+                (lambda (_invocation _reason) "active partial"))
+               ((symbol-function 'mevedel-agent-runtime--finalize)
+                (lambda (seen-invocation status)
+                  (setq finalized (1+ (or finalized 0))
+                        retained mevedel-agent-runtime--retain-buffer)
+                  (setf (mevedel-agent-invocation-transcript-status
+                         seen-invocation)
+                        status)))
+               ((symbol-function 'gptel-abort)
+                (lambda (buffer)
+                  (setq aborted-buffer buffer)
+                  (funcall (plist-get (gptel-fsm-info fsm) :callback)
+                           'abort (gptel-fsm-info fsm))
+                  (setf (gptel-fsm-state fsm) 'ABRT))))
+            (mevedel-agent-runtime-interrupt
+             invocation "interrupted by /root"))
+          (should (eq agent-buffer aborted-buffer))
+          (should-not provider-calls)
+          (should (= 1 finalized))
+          (should retained)
+          (should (eq provider-callback
+                      (plist-get (gptel-fsm-info fsm) :callback)))
+          (with-current-buffer parent-buffer
+            (should-not (assoc "worker--run"
+                               mevedel-agent-runtime--fsms))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+
+  :doc "provider abort failure leaves the active turn and registry untouched"
+  (let* ((parent-buffer
+          (generate-new-buffer " *mevedel-interrupt-fail-parent*"))
+         (agent-buffer
+          (generate-new-buffer " *mevedel-interrupt-fail-agent*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "worker--abort-fails"
+           :parent-data-buffer parent-buffer
+           :buffer agent-buffer
+           :transcript-status 'running))
+         (provider-callback #'ignore)
+         (fsm
+          (gptel-make-fsm
+           :state 'WAIT
+           :info (list :buffer agent-buffer
+                       :callback provider-callback)))
+         finalized)
+    (unwind-protect
+        (progn
+          (mevedel-agent-runtime-test--register-agent-fsm invocation fsm)
+          (cl-letf
+              (((symbol-function 'mevedel-agent-runtime--agent-request-live-p)
+                (lambda (_buffer) t))
+               ((symbol-function
+                 'mevedel-agent-runtime--interrupted-agent-response)
+                (lambda (_invocation _reason) "must not settle"))
+               ((symbol-function 'mevedel-agent-runtime--finalize)
+                (lambda (&rest _) (setq finalized t)))
+               ((symbol-function 'gptel-abort)
+                (lambda (_buffer) (error "Backend abort failed"))))
+            (should-error
+             (mevedel-agent-runtime-interrupt
+              invocation "interrupted by /root")))
+          (should-not finalized)
+          (should (eq 'running
+                      (mevedel-agent-invocation-transcript-status
+                       invocation)))
+          (should-not
+           (mevedel-agent-invocation-terminal-reason invocation))
+          (should (eq provider-callback
+                      (plist-get (gptel-fsm-info fsm) :callback)))
+          (with-current-buffer parent-buffer
+            (should (assoc "worker--abort-fails"
+                           mevedel-agent-runtime--fsms))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent-buffer)))
+
+  :doc "fallback settlement retains the conversation when no FSM remains"
+  (let* ((agent-buffer
+          (generate-new-buffer " *mevedel-interrupt-fallback-agent*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "worker--missing-fsm"
+           :buffer agent-buffer
+           :transcript-status 'running))
+         retained)
+    (unwind-protect
+        (cl-letf
+            (((symbol-function
+               'mevedel-agent-runtime--interrupted-agent-response)
+              (lambda (_invocation _reason) "fallback partial"))
+             ((symbol-function 'mevedel-agent-runtime--finalize)
+              (lambda (seen-invocation status)
+                (setq retained mevedel-agent-runtime--retain-buffer)
+                (setf (mevedel-agent-invocation-transcript-status
+                       seen-invocation)
+                      status))))
+          (should (equal "fallback partial"
+                         (mevedel-agent-runtime-interrupt
+                          invocation "interrupted by /root")))
+          (should retained)
+          (should (eq 'aborted
+                      (mevedel-agent-invocation-transcript-status
+                       invocation))))
+      (kill-buffer agent-buffer))))
+
 (mevedel-deftest mevedel-agent-runtime-stop
   (:doc "stops a running background agent and resumes parent BWAIT")
   (let* ((session (mevedel-session--create :name "main"))
@@ -1364,7 +1579,7 @@
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 (mevedel-deftest mevedel-agent-runtime--bwait-watchdog-expire
-  (:doc "running-agent warning advertises StopAgent recovery")
+  (:doc "running-agent warning advertises path-addressed interruption")
   (let* ((session (mevedel-session--create :name "main"))
          (parent-buf (generate-new-buffer " *mev-watchdog-parent*"))
          (agent-buf (generate-new-buffer " *mev-watchdog-agent*"))
@@ -1400,8 +1615,8 @@
                      (lambda (&rest _args) nil)))
             (let ((mevedel-agent-background-timeout 600))
               (mevedel-agent-runtime--bwait-watchdog-expire parent-fsm)))
-          (should (string-match-p "StopAgent" logged))
-          (should (string-match-p "mevedel-stop-agent" logged)))
+          (should (string-match-p "ListAgents" logged))
+          (should (string-match-p "InterruptAgent" logged)))
       (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
       (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
