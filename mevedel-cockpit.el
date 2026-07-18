@@ -237,7 +237,8 @@ LABEL is used in the owner error."
              (mevedel-cockpit--row-entry surface item context))
            mevedel-cockpit--items))
     (tabulated-list-print t)
-    (mevedel-cockpit-goto-id selected)
+    (unless (equal selected (tabulated-list-get-id))
+      (mevedel-cockpit-goto-id selected))
     (force-mode-line-update t)
     mevedel-cockpit--items))
 
