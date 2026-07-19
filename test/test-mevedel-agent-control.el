@@ -520,7 +520,7 @@
 (mevedel-deftest mevedel-agent-control--rollback ()
   ,test
   (test)
-  :doc "removes the reserved identity and legacy transcript index entry"
+  :doc "removes the reserved identity and associated transcript index entry"
   (let* ((session (mevedel-agent-control-test--session))
          (invocation (mevedel-agent-invocation-create
                       (mevedel-agent-default)))
@@ -619,7 +619,7 @@
                   :blockers '((permission-blocked stale)))))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'error)
     (mevedel-agent-control--settle
-     session record invocation "legacy details"
+     session record invocation "fallback details"
      '(:error-details "Provider failed"))
     (mevedel-agent-control--settle session record invocation "duplicate")
     (let ((result (car (mevedel-session-messages session))))
