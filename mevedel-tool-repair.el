@@ -264,7 +264,8 @@
         (list (mevedel-tool-repair--issue
                path 'wrong-type type
                (mevedel-tool-repair--actual-type value) schema))
-      (when (and enum (not (member value (append enum nil))))
+      (when (and enum (> (length enum) 0)
+                 (not (member value (append enum nil))))
         (push (mevedel-tool-repair--issue
                path 'invalid-enum enum
                (mevedel-tool-repair--actual-type value) schema)

@@ -12,6 +12,7 @@
 (require 'mevedel-tool-fs)
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)
+(require 'mevedel-tool-repair)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-task)
 (require 'mevedel-tool-introspect)
@@ -196,13 +197,20 @@
     (with-temp-buffer
       (mevedel-agents--setup-for-request 'mevedel-implement)
       (let* ((tool (gptel-get-tool '("mevedel" "Agent")))
+             (validation-tool (mevedel-tool-get "Agent"))
              (role-arg
               (cl-find-if
                (lambda (arg) (equal (plist-get arg :name) "role"))
                (gptel-tool-args tool)))
              (roles (append (plist-get role-arg :enum) nil)))
         (dolist (role '("worker" "explorer" "reviewer" "verifier"))
-          (should (member role roles)))))))
+          (should (member role roles))
+          (should-not
+           (mevedel-tool-repair-validate
+            validation-tool
+            (list :task_name "role_probe"
+                  :message "Inspect only."
+                  :role role))))))))
 
 (mevedel-deftest mevedel-preset--variable-for-key
   ()
