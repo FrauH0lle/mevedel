@@ -119,6 +119,8 @@
                   "mevedel-transcript-restore" ())
 
 ;; `mevedel-utilities'
+(declare-function mevedel--insert-user-role-block-at-marker
+                  "mevedel-utilities" (block &optional marker))
 (declare-function mevedel--optimize-transcript-buffer
                   "mevedel-utilities" ())
 (declare-function mevedel--same-file-p
@@ -331,52 +333,24 @@ BUFFER defaults to INVOCATION's retained conversation buffer."
 ;;
 ;;; User-role injections
 
-(defun mevedel-agent-conversation--prompt-heading-position ()
-  "Return the buffer position of the `* Agent Task:' heading, or nil."
-  (save-excursion
-    (goto-char (point-min))
-    (when (re-search-forward "^\\* Agent Task:" nil t)
-      (line-beginning-position))))
-
 (defun mevedel-agent-conversation-insert-user-block
-    (invocation block &optional position)
+    (invocation block &optional marker)
   "Insert BLOCK as a user-role region in INVOCATION's conversation.
 
-When POSITION is `prepend', insert just above the `* Agent Task:' heading;
-otherwise append at point-max.  Clear inherited assistant-response properties
-and save the transcript before the next provider request.  Buffer-write errors
-are logged and ignored because the provider payload remains authoritative."
+Insert at live MARKER or append at point-max.  Clear inherited
+assistant-response properties and save the transcript before the next provider
+request.  Buffer-write errors are logged and ignored because the provider
+payload remains authoritative."
   (when (and (mevedel-agent-invocation-p invocation)
              (stringp block)
              (not (string-empty-p block)))
+    (require 'mevedel-utilities)
     (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
                 ((buffer-live-p buffer)))
       (condition-case err
           (with-current-buffer buffer
-            (let ((inhibit-read-only t)
-                  start)
-              (save-excursion
-                (cond
-                 ((and (eq position 'prepend)
-                       (mevedel-agent-conversation--prompt-heading-position))
-                  (goto-char
-                   (mevedel-agent-conversation--prompt-heading-position))
-                  (unless (bolp) (insert "\n"))
-                  (setq start (point))
-                  (insert block)
-                  (unless (bolp) (insert "\n"))
-                  (insert "\n"))
-                 (t
-                  (goto-char (point-max))
-                  (unless (bolp) (insert "\n"))
-                  (unless (looking-back "\n\n" 2) (insert "\n"))
-                  (setq start (point))
-                  (insert block)
-                  (unless (bolp) (insert "\n"))))
-                (when start
-                  (remove-text-properties
-                   start (point)
-                   '(gptel nil response nil invisible nil front-sticky nil))))
+            (let ((inhibit-read-only t))
+              (mevedel--insert-user-role-block-at-marker block marker)
               (mevedel-agent-conversation-save invocation)))
         (error
          (message "mevedel: conversation user-block insert failed: %S" err))))))
