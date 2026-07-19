@@ -47,6 +47,10 @@
 
 (require 'mevedel-transcript)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-active-turn-p
+                  "mevedel-agent-control" (session))
+
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-deserialize-registry
                   "mevedel-agent-persistence" (raw))
@@ -67,8 +71,6 @@
                   "mevedel-execution" (session))
 (declare-function mevedel-execution-teardown-all
                   "mevedel-execution" ())
-(declare-function mevedel-execution-teardown-session
-                  "mevedel-execution" (session))
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-context-fragment
@@ -143,8 +145,6 @@
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-session--set-execution-state
-                  "mevedel-structs" (session state))
 (declare-function mevedel-task-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task-description "mevedel-structs" (cl-x) t)
@@ -166,6 +166,10 @@
 ;; `mevedel-permission-log'
 (declare-function mevedel-permission-log--persist
                   "mevedel-permission-log" (session entry))
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-clone-list
+                  "mevedel-reminders" (reminders))
 
 ;; `mevedel-tool-repair'
 (declare-function mevedel-tool-repair--persist-event
@@ -1130,13 +1134,14 @@ and will be picked up by that autosave."
               (buffer
                (cl-find-if
                 (lambda (candidate)
-                  (with-current-buffer candidate
-                    (and (boundp 'mevedel--session)
-                         (eq mevedel--session session)
-                         (not (bound-and-true-p mevedel--agent-invocation))
-                         buffer-file-name
-                         (equal (expand-file-name buffer-file-name)
-                                segment-path))))
+                  (and
+                   (mevedel-session-persistence--root-data-buffer-p candidate)
+                   (with-current-buffer candidate
+                     (and (boundp 'mevedel--session)
+                          (eq mevedel--session session)
+                          buffer-file-name
+                          (equal (expand-file-name buffer-file-name)
+                                 segment-path)))))
                 (buffer-list))))
     (mevedel-session-persistence--write-sidecar-now session buffer)))
 
@@ -1378,6 +1383,16 @@ non-empty line, truncated to 120 characters."
 ;;
 ;;; Buffer selection
 
+(defun mevedel-session-persistence--root-data-buffer-p (buffer)
+  "Return non-nil when BUFFER is a root session data buffer.
+
+Agent conversations and both ordinary and agent-transcript view projections
+belong to different buffer roles even when they share the root session."
+  (and (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (and (not (bound-and-true-p mevedel--agent-invocation))
+              (not (bound-and-true-p mevedel--data-buffer))))))
+
 (defun mevedel-session-persistence--authoritative-buffer (buffer)
   "Return the authoritative session data buffer for BUFFER.
 View buffers are reconstructable UI projections and must never become
@@ -1391,10 +1406,10 @@ transcript buffers and return nil."
         (let ((data-buf (and (boundp 'mevedel--data-buffer)
                              mevedel--data-buffer)))
           (and (not (bound-and-true-p mevedel-view--agent-transcript-p))
-               data-buf
-               (buffer-live-p data-buf)
+               (mevedel-session-persistence--root-data-buffer-p data-buf)
                data-buf)))
-       (t buffer)))))
+       ((mevedel-session-persistence--root-data-buffer-p buffer)
+        buffer)))))
 
 
 ;;
@@ -2861,14 +2876,14 @@ WORKSPACE is the current workspace (resolved by the caller)."
      :permission-mode 'ask)))
 
 (defun mevedel-session-persistence--find-live-buffer (session-id buf-name)
-  "Return live buffer for SESSION-ID and BUF-NAME, or nil.
-Prefers a buffer whose `mevedel--session' has a matching session-id
-so same-named sessions in one workspace do not collide.  Falls back
-to a lookup by buffer name for buffers that never materialized a
-session-id."
+  "Return live root data buffer for SESSION-ID and BUF-NAME, or nil.
+Prefers a root buffer whose `mevedel--session' has a matching session-id so
+same-named sessions in one workspace do not collide. Agent and view buffers
+are never roots. Falls back to a lookup by buffer name for root buffers that
+never materialized a session-id."
   (or (cl-find-if
        (lambda (b)
-         (and (buffer-live-p b)
+         (and (mevedel-session-persistence--root-data-buffer-p b)
               (with-current-buffer b
                 (and (bound-and-true-p mevedel--session)
                      (equal (mevedel-session-session-id mevedel--session)
@@ -2878,8 +2893,7 @@ session-id."
       ;; id yet (e.g. not yet materialized).  If a buffer exists by name
       ;; but its session has a different id, do not return it.
       (let ((candidate (get-buffer buf-name)))
-        (when (and candidate
-                   (buffer-live-p candidate)
+        (when (and (mevedel-session-persistence--root-data-buffer-p candidate)
                    (with-current-buffer candidate
                      (or (not (bound-and-true-p mevedel--session))
                          (null (mevedel-session-session-id
@@ -3638,6 +3652,9 @@ no-op."
     (require 'mevedel-execution)
     (when (mevedel-execution-session-live-p session)
       (user-error "Stop live executions with /ps or /stop before rewinding"))
+    (require 'mevedel-agent-control)
+    (when (mevedel-agent-control-active-turn-p session)
+      (user-error "Interrupt active agent turns before rewinding"))
     ;; Refresh the live segment before presenting the picker so it stays in
     ;; sync with manual data-buffer edits since the last save.
     (mevedel-session-persistence--update-prompt-index session buffer)
@@ -3784,31 +3801,114 @@ only through PICKED-CUM-TURN.  Entries with non-integer
 
 (defun mevedel-session-persistence--fork-candidate
     (session staging-path new-id parent-id picked-segment picked-cum-turn now)
-  "Return a staged fork copy of SESSION reduced to the picked turn."
-  (let ((child (copy-mevedel-session session)))
-    (setf (mevedel-session-preset-settings child)
-          (copy-tree (mevedel-session-preset-settings session))
-          (mevedel-session-goal child) nil
-          (mevedel-session-goal-handoff child) nil
-          (mevedel-session-prompt-index child)
-          (mevedel-session-persistence--reduce-prompt-index
-           (mevedel-session-prompt-index session)
-           picked-segment picked-cum-turn)
-          (mevedel-session-file-snapshots child)
-          (mevedel-session-persistence--reduce-file-snapshots
-           (mevedel-session-file-snapshots session)
-           picked-cum-turn))
+  "Return a staged fork copy of SESSION reduced to the picked turn.
+
+Historical transcript metadata is retained, but addressable agent state and
+mail are deliberately absent from the returned session."
+  (require 'mevedel-reminders)
+  ;; This constructor is the fork policy for every session slot.  Workspace
+  ;; identity and its cache are deliberately shared.  Conversation and policy
+  ;; values needed by the next send are copied into independent containers;
+  ;; process, callback, interaction, task, Goal, and addressable-agent state
+  ;; starts empty.  Adding a session slot therefore defaults it to absent from
+  ;; forks until its ownership is decided here, instead of silently sharing it.
+  (let ((child
+         (mevedel-session--create
+          :name (mevedel-session-name session)
+          :workspace (mevedel-session-workspace session)
+          :working-directory (mevedel-session-working-directory session)
+          :agents nil
+          :tasks nil
+          :task-status-notes nil
+          :last-task-write-turn nil
+          :touched-files (make-hash-table :test #'equal)
+          :permission-rules
+          (copy-tree (mevedel-session-permission-rules session) t)
+          :resource-grants
+          (copy-tree (mevedel-session-resource-grants session) t)
+          :permission-mode (mevedel-session-permission-mode session)
+          :preset-name (mevedel-session-preset-name session)
+          :preset-settings
+          (copy-tree (mevedel-session-preset-settings session) t)
+          :turn-count (mevedel-session-turn-count session)
+          :reminders
+          (mevedel-reminders-clone-list
+           (mevedel-session-reminders session))
+          :last-observed-date (mevedel-session-last-observed-date session)
+          :agent-types-snapshot
+          (copy-tree (mevedel-session-agent-types-snapshot session) t)
+          :skills-snapshot
+          (copy-tree (mevedel-session-skills-snapshot session) t)
+          :pending-reminders
+          (copy-tree (mevedel-session-pending-reminders session) t)
+          :specialist-nudge-state
+          (copy-tree (mevedel-session-specialist-nudge-state session) t)
+          :deferred-set
+          (copy-tree (mevedel-session-deferred-set session) t)
+          :deferred-pending
+          (copy-tree (mevedel-session-deferred-pending session) t)
+          :deferred-injected
+          (copy-tree (mevedel-session-deferred-injected session) t)
+          :deferred-used
+          (copy-tree (mevedel-session-deferred-used session) t)
+          :deferred-expired
+          (copy-tree (mevedel-session-deferred-expired session) t)
+          :messages nil
+          :agent-registry nil
+          :agent-root-activity 'idle
+          :agent-root-waiter nil
+          :agent-turn-capacity
+          (mevedel-session-agent-turn-capacity session)
+          :queued-user-messages
+          (copy-tree (mevedel-session-queued-user-messages session) t)
+          :dropped-file-grants
+          (copy-tree (mevedel-session-dropped-file-grants session) t)
+          :active-dropped-file-grants
+          (copy-tree (mevedel-session-active-dropped-file-grants session) t)
+          :background-agents nil
+          :mentions-shown (make-hash-table :test #'equal)
+          :skills (copy-tree (mevedel-session-skills session) t)
+          :hook-rules
+          (copy-tree (mevedel-session-hook-rules session) t)
+          :hook-log nil
+          :repair-log nil
+          :permission-log-pending nil
+          :hook-context-pending
+          (copy-tree (mevedel-session-hook-context-pending session) t)
+          :execution-state nil
+          :save-path staging-path
+          :session-id new-id
+          :created-at now
+          :updated-at now
+          :current-segment picked-segment
+          :forked-from-session-id parent-id
+          :forked-from-turn picked-cum-turn
+          :prompt-index
+          (copy-tree
+           (mevedel-session-persistence--reduce-prompt-index
+            (mevedel-session-prompt-index session)
+            picked-segment picked-cum-turn)
+           t)
+          :file-snapshots
+          (copy-tree
+           (mevedel-session-persistence--reduce-file-snapshots
+            (mevedel-session-file-snapshots session)
+            picked-cum-turn)
+           t)
+          :agent-transcripts
+          (copy-tree (mevedel-session-agent-transcripts session) t)
+          :invoked-skills
+          (copy-tree (mevedel-session-invoked-skills session) t)
+          :permission-queue nil
+          :plan-queue nil
+          :plan-metadata
+          (copy-tree (mevedel-session-plan-metadata session) t)
+          :goal nil
+          :goal-handoff nil)))
     (when picked-cum-turn
       (mevedel-session-persistence--prune-agent-transcripts-after-fork
        child picked-cum-turn)
       (setf (mevedel-session-turn-count child) picked-cum-turn))
-    (setf (mevedel-session-session-id child) new-id
-          (mevedel-session-save-path child) staging-path
-          (mevedel-session-created-at child) now
-          (mevedel-session-updated-at child) now
-          (mevedel-session-current-segment child) picked-segment
-          (mevedel-session-forked-from-session-id child) parent-id
-          (mevedel-session-forked-from-turn child) picked-cum-turn)
     child))
 
 (defun mevedel-session-persistence--stage-fork
@@ -3899,13 +3999,14 @@ the parent.  Predecessor segments (1..picked-segment-1) are copied
 verbatim; the picked segment becomes the fork's truncated current
 segment file (saved from BUFFER's content).  File-history backups
 referenced by the target state are copied into the fork's file-history
-directory.
+directory.  Eligible agent transcripts remain historical artifacts; the fork
+starts with an empty addressable agent registry and mailbox.
 
-The session struct on BUFFER is mutated in place: `:session-id',
-`:save-path', `:created-at', `:updated-at', `:current-segment', and
-`:forked-from-*' are updated; `:fork-pending' and the rewind context
-are cleared.  Variable `buffer-file-name' is repointed at the fork's segment.
-The new session's lock is acquired.
+BUFFER and its view atomically switch from the source session object to the
+new child session; the source object and retained tree are not mutated.
+Variable `buffer-file-name' is repointed at the fork's segment,
+`:fork-pending' and the rewind context are cleared, and the new session's lock
+is acquired.
 
 Errors when BUFFER is not in rewind preview state.  Returns the
 fork's save-path."
@@ -3917,6 +4018,9 @@ fork's save-path."
     (require 'mevedel-execution)
     (when (mevedel-execution-session-live-p mevedel--session)
       (user-error "Stop live executions with /ps or /stop before forking"))
+    (require 'mevedel-agent-control)
+    (when (mevedel-agent-control-active-turn-p mevedel--session)
+      (user-error "Interrupt active agent turns before forking"))
     (let* ((ctx mevedel-session--rewind-context)
            (parent-id (plist-get ctx :parent-session-id))
            (parent-save-path (plist-get ctx :parent-save-path))
@@ -3942,6 +4046,8 @@ fork's save-path."
            (old-modified-p (buffer-modified-p))
            (old-file-name buffer-file-name)
            (old-file-truename buffer-file-truename)
+           (view-buffer (and (buffer-live-p mevedel--view-buffer)
+                             mevedel--view-buffer))
            staging-path
            child
            staging-buffer
@@ -3984,29 +4090,11 @@ fork's save-path."
               (set-visited-file-modtime)
               (when parent-save-path
                 (mevedel-session-persistence-lock-release parent-save-path))
-              (setf (mevedel-session-prompt-index session)
-                    (mevedel-session-prompt-index child)
-                    (mevedel-session-file-snapshots session)
-                    (mevedel-session-file-snapshots child)
-                    (mevedel-session-agent-transcripts session)
-                    (mevedel-session-agent-transcripts child)
-                    (mevedel-session-turn-count session)
-                    (mevedel-session-turn-count child)
-                    (mevedel-session-session-id session)
-                    (mevedel-session-session-id child)
-                    (mevedel-session-save-path session) new-save-path
-                    (mevedel-session-created-at session)
-                    (mevedel-session-created-at child)
-                    (mevedel-session-updated-at session)
-                    (mevedel-session-updated-at child)
-                    (mevedel-session-current-segment session)
-                    (mevedel-session-current-segment child)
-                    (mevedel-session-forked-from-session-id session)
-                    (mevedel-session-forked-from-session-id child)
-                    (mevedel-session-forked-from-turn session)
-                    (mevedel-session-forked-from-turn child))
-              (mevedel-execution-teardown-session session)
-              (mevedel-session--set-execution-state session nil)
+              (setf (mevedel-session-save-path child) new-save-path)
+              (setq-local mevedel--session child)
+              (when (buffer-live-p view-buffer)
+                (with-current-buffer view-buffer
+                  (setq-local mevedel--session child)))
               (setq mevedel-session--fork-pending nil
                     mevedel-session--rewind-context nil
                     committed t)))
