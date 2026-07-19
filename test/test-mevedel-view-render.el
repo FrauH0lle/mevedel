@@ -617,7 +617,14 @@
         (should (string-match-p "CRITICAL: verify only" text))
         (should (string-match-p "Report findings" text))
         (should-not (string-match-p "<system-reminder>" text))
-        (should-not (string-match-p "</system-reminder>" text)))))
+        (should-not (string-match-p "</system-reminder>" text)))
+      (goto-char (point-min))
+      (search-forward "CRITICAL: verify only")
+      (let ((body-start (match-beginning 0)))
+        (should (equal "    " (get-text-property body-start 'line-prefix)))
+        (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+        (goto-char body-start)
+        (should (looking-at-p "CRITICAL: verify only")))))
   :doc "keeps generated system reminders separate from real thinking"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Answer first.\n" 'response)
@@ -812,6 +819,13 @@
         (mevedel-view-toggle-section)
         (should-not (get-text-property (point) 'mevedel-view-collapsed))
         (goto-char (point-min))
+        (search-forward "thinking")
+        (let ((body-start (match-beginning 0)))
+          (should (equal "    " (get-text-property body-start 'line-prefix)))
+          (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+          (goto-char body-start)
+          (should (looking-at-p "thinking")))
+        (goto-char (point-min))
         (search-forward "input.pdf")
         (mevedel-view-toggle-section)
         (should-not (get-text-property (point) 'mevedel-view-collapsed)))
@@ -858,6 +872,9 @@
       (mevedel-view-toggle-section)
       (should (search-forward "full rerender agent body"
                               mevedel-view--input-marker t))
+      (let ((body-start (match-beginning 0)))
+        (should (equal "    " (get-text-property body-start 'line-prefix)))
+        (should (equal "    " (get-text-property body-start 'wrap-prefix))))
       (mevedel-view--full-rerender)
       (goto-char (point-min))
       (search-forward "Agent: verifier -- full state")
@@ -1326,7 +1343,13 @@
         ;; Expand
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "full content here" text))))))
+          (should (string-match-p "full content here" text)))
+        (search-forward "full content here")
+        (let ((body-start (match-beginning 0)))
+          (should (equal "    " (get-text-property body-start 'line-prefix)))
+          (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+          (goto-char body-start)
+          (should (looking-at-p "full content here"))))))
 
   :doc "non-expandable tool events remain non-toggleable and untracked"
   (mevedel-view-test--with-buffers
@@ -2892,6 +2915,35 @@ state of its inner sections"
     (should-not (mevedel-view--segment-rendering
                  (current-buffer) (point-min) (point-max)))))
 
+(mevedel-deftest mevedel-view--render-expanded-body ()
+  ,test
+  (test)
+  :doc "adds a display-only body inset inherited by source panels"
+  (with-temp-buffer
+    (mevedel-view-mode)
+    (let ((inhibit-read-only t))
+      (mevedel-view--render-expanded-body
+       '(:header "Read: file.el"
+         :body "body text\n```elisp\n(+ 1 2)\n```\n"
+         :body-mode markdown-mode)
+       (cons 1 10)))
+    (goto-char (point-min))
+    (should (looking-at-p "  ✓ Read: file\\.el"))
+    (search-forward "body text")
+    (let ((body-start (match-beginning 0)))
+      (should (equal "    " (get-text-property body-start 'line-prefix)))
+      (should (equal "    " (get-text-property body-start 'wrap-prefix)))
+      (should (equal '(line-prefix wrap-prefix)
+                     (get-text-property body-start 'rear-nonsticky)))
+      (goto-char body-start)
+      (should (looking-at-p "body text")))
+    (search-forward "elisp ⧉")
+    (should (equal "    "
+                   (get-text-property (match-beginning 0) 'line-prefix)))
+    (search-forward "(+ 1 2)")
+    (should (equal "    "
+                   (get-text-property (match-beginning 0) 'line-prefix)))))
+
 (mevedel-deftest mevedel-view--insert-rendered-tool/non-expandable ()
   ,test
   (test)
@@ -3681,7 +3733,7 @@ state of its inner sections"
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✉ message from /root/explorer" text))
+        (should (string-match-p "^  ✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
 
@@ -3695,11 +3747,17 @@ state of its inner sections"
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✓ finished /root/worker" text))
+        (should (string-match-p "^  ✓ finished /root/worker" text))
         (should (string-match-p "│ result" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))
+      (goto-char (point-min))
+      (search-forward "  ✓ finished")
+      (let ((header-start (match-beginning 0)))
+        (should-not (get-text-property header-start 'font-lock-face))
+        (should (eq (get-text-property (+ header-start 2) 'font-lock-face)
+                    'mevedel-view-attribution)))
       (goto-char (point-min))
       (search-forward "│")
       (should (eq (get-text-property
@@ -3758,7 +3816,7 @@ state of its inner sections"
                       (point-min) mevedel-view--input-marker))
                (finished-count
                 (cl-count-if (lambda (line)
-                               (string-prefix-p "✓ finished" line))
+                               (string-prefix-p "  ✓ finished" line))
                              (split-string text "\n"))))
           (should (= 2 finished-count))
           (should (string-match-p "✓ finished /root/reviewer" text))

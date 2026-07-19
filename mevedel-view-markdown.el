@@ -757,16 +757,6 @@ file.el#L12."
                (mevedel-view--source-block-font-lock-face face)))
             (setq pos next)))))))
 
-(defun mevedel-view--add-source-block-line-properties (start end)
-  "Add source panel line wrapping properties to START..END."
-  (let ((prefix (propertize "    " 'font-lock-face
-                            'mevedel-view-source-block)))
-    (add-text-properties
-     start end
-     `(line-prefix ,prefix
-       wrap-prefix ,prefix
-       rear-nonsticky (line-prefix wrap-prefix)))))
-
 (defun mevedel-view--decorate-code-blocks-in-range (start end)
   "Render fenced Markdown code blocks as source panels in START..END."
   (let ((inhibit-read-only t))
@@ -811,8 +801,6 @@ file.el#L12."
           (when carried
             (add-text-properties panel-start (marker-position body-start)
                                  carried))
-          (mevedel-view--add-source-block-line-properties
-           panel-start (marker-position body-start))
           (goto-char panel-start)
           (make-text-button
            (point) (+ (point) (length label))
@@ -829,10 +817,7 @@ file.el#L12."
             (mevedel-view--fontify-source-block-body
              (marker-position body-start)
              (marker-position body-end)
-             language)
-            (mevedel-view--add-source-block-line-properties
-             (marker-position body-start)
-             (marker-position body-end)))
+             language))
           (when (< (marker-position body-start)
                    (marker-position content-end))
             (put-text-property (marker-position body-start)
@@ -842,9 +827,7 @@ file.el#L12."
           (let ((pad-start (point)))
             (insert panel-padding-line)
             (when carried
-              (add-text-properties pad-start (point) carried))
-            (mevedel-view--add-source-block-line-properties
-             pad-start (point))))
+              (add-text-properties pad-start (point) carried))))
         (set-marker body-start nil)
         (set-marker body-end nil)
         (set-marker content-end nil)))))

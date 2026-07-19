@@ -29,9 +29,12 @@
       (should (string-match-p (regexp-quote "(+ 1 2)") text)))
     (goto-char (point-min))
     (search-forward "elisp ⧉")
-    (let ((button (button-at (match-beginning 0)))
+    (let ((label-start (match-beginning 0))
+          (button (button-at (match-beginning 0)))
           copied)
       (should button)
+      (should-not (get-text-property label-start 'line-prefix))
+      (should-not (get-text-property label-start 'wrap-prefix))
       (cl-letf (((symbol-function 'kill-new)
                  (lambda (text &optional _replace)
                    (setq copied text))))
@@ -39,8 +42,11 @@
       (should (equal "(+ 1 2)" copied)))
     (goto-char (point-min))
     (search-forward "(+ 1 2)")
-    (should (get-text-property (match-beginning 0)
-                               'mevedel-view-code-block-body)))
+    (let ((body-start (match-beginning 0)))
+      (should (get-text-property body-start
+                                 'mevedel-view-code-block-body))
+      (should-not (get-text-property body-start 'line-prefix))
+      (should-not (get-text-property body-start 'wrap-prefix))))
 
   :doc "leaves incomplete fenced blocks unrendered"
   (let ((text "before\n```elisp\n(+ 1 2)\n"))
