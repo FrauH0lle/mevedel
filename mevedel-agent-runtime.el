@@ -61,6 +61,10 @@
 (defvar mevedel-agent-exec--suppress-activity-rerender)
 (defvar mevedel-agent-exec-debug)
 
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-transcript-path-p
+                  "mevedel-agent-persistence" (path save-path))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-configuration-agent
                   "mevedel-agents" (cl-x) t)
@@ -142,8 +146,6 @@
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence--update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
-(declare-function mevedel-session-persistence--validate-transcript-path
-                  "mevedel-session-persistence" (path save-path))
 (declare-function mevedel-session-persistence--write-sidecar-now
                   "mevedel-session-persistence" (session buffer))
 (defvar mevedel-session--read-only-mode)
@@ -1726,15 +1728,10 @@ Returns the list of descendant result plists."
               (save-path (mevedel-session-save-path session)))
     (condition-case err
         (progn
-          (require 'mevedel-session-persistence)
-          (let* ((path (expand-file-name rel-path save-path))
-                 (real-save (file-truename save-path))
-                 (real-path (and (file-exists-p path)
-                                 (file-truename path))))
-            (when (and (mevedel-session-persistence--validate-transcript-path
+          (require 'mevedel-agent-persistence)
+          (let ((path (expand-file-name rel-path save-path)))
+            (when (and (mevedel-agent-persistence-transcript-path-p
                         rel-path save-path)
-                       real-path
-                       (file-in-directory-p real-path real-save)
                        (not (file-symlink-p path))
                        (file-regular-p path)
                        (file-readable-p path))

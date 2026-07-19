@@ -21,7 +21,29 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+;; `gptel'
+(defvar gptel-backend)
+
 (mevedel-tools-register)
+
+(defun mevedel-agent-control-test--configuration (&optional context)
+  "Return a small frozen configuration with optional gptel CONTEXT."
+  (mevedel-agent-configuration--create
+   :agent
+   (mevedel-agent--create
+    :name "default"
+    :description "Persisted default agent"
+    :tools '((:tool "Read"))
+    :system-prompt "Frozen instructions"
+    :max-turns 12
+    :hook-rules nil
+    :frozen-p t)
+   :request-locals
+   (list (cons 'gptel-backend gptel-backend)
+         (cons 'gptel-model 'test-model)
+         (cons 'gptel-tools
+               (list (gptel-get-tool '("mevedel" "Read"))))
+         (cons 'gptel-context context))))
 
 (defun mevedel-agent-control-test--session ()
   "Return a fresh in-memory session for agent-control tests."
@@ -33,11 +55,23 @@
     :root temporary-file-directory
     :name "agent-control")))
 
+(mevedel-deftest mevedel-agent-control-active-activity-p ()
+  ,test
+  (test)
+  :doc "recognizes every activity that owns one tree-wide capacity slot"
+  (dolist (case '((starting . t) (running . t) (waiting . t)
+                  (permission-blocked . t) (interaction-blocked . t)
+                  (idle)))
+    (should (eq (cdr case)
+                (and (mevedel-agent-control-active-activity-p (car case))
+                     t)))))
+
 (mevedel-deftest mevedel-agent-control--active-p ()
   ,test
   (test)
-  :doc "starting and running records own capacity while idle records do not"
-  (dolist (case '((starting . t) (running . t) (idle)))
+  :doc "every persisted in-flight activity owns capacity while idle does not"
+  (dolist (case '((starting . t) (running . t) (waiting . t)
+                  (permission-blocked . t) (interaction-blocked . t) (idle)))
     (should (eq (cdr case)
                 (and (mevedel-agent-control--active-p
                       (mevedel-agent-record--create :activity (car case)))
@@ -57,6 +91,50 @@
            (cons "/root/c"
                  (mevedel-agent-record--create :activity 'idle))))
     (should (= 2 (mevedel-agent-control--active-count session)))))
+
+(mevedel-deftest mevedel-agent-control-block-turn ()
+  ,test
+  (test)
+  :doc "composes overlapping blockers and ignores stale or duplicate releases"
+  (let* ((session (mevedel-agent-control-test--session))
+         (first (mevedel-agent-invocation--create :path "/root/worker"))
+         (second (mevedel-agent-invocation--create :path "/root/worker"))
+         (record
+          (mevedel-agent-record--create
+           :activity 'running :invocation first))
+         release-wait release-permission stale-release)
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (let ((mevedel-agent-control--suppress-persistence t))
+      (setq release-wait
+            (mevedel-agent-control-block-turn
+             session "/root/worker" 'waiting)
+            release-permission
+            (mevedel-agent-control-block-turn
+             session "/root/worker" 'permission-blocked))
+      (should (eq 'permission-blocked
+                  (mevedel-agent-record-activity record)))
+      (should (= 2 (length (mevedel-agent-record-blockers record))))
+      (funcall release-wait)
+      (funcall release-wait)
+      (should (eq 'permission-blocked
+                  (mevedel-agent-record-activity record)))
+      (funcall release-permission)
+      (should (eq 'running (mevedel-agent-record-activity record)))
+      (should-not (mevedel-agent-record-blockers record))
+      (setq stale-release
+            (mevedel-agent-control-block-turn
+             session "/root/worker" 'interaction-blocked))
+      (setf (mevedel-agent-record-invocation record) second
+            (mevedel-agent-record-blockers record) nil
+            (mevedel-agent-record-activity record) 'running)
+      (funcall stale-release)
+      (should (eq 'running (mevedel-agent-record-activity record)))
+      (should-not
+       (mevedel-agent-control-block-turn session "/root" 'waiting))
+      (should-error
+       (mevedel-agent-control-block-turn
+        session "/root/worker" 'invalid)))))
 
 (mevedel-deftest mevedel-agent-control-retained-buffer-p ()
   ,test
@@ -271,6 +349,77 @@
     (should-not
      (mevedel-agent-control-list-agents session "/root/missing"))))
 
+(mevedel-deftest mevedel-agent-control--persist-session ()
+  ,test
+  (test)
+  :doc "delegates materialized state to the session persistence boundary"
+  (let ((session (mevedel-agent-control-test--session))
+        seen)
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (cl-letf (((symbol-function
+                'mevedel-session-persistence-save-agent-state)
+               (lambda (value) (setq seen value) t)))
+      (should (mevedel-agent-control--persist-session session)))
+    (should (eq session seen)))
+  :doc "does nothing before session materialization or while suppressed"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should-not (mevedel-agent-control--persist-session session))
+    (setf (mevedel-session-save-path session) temporary-file-directory)
+    (let ((mevedel-agent-control--suppress-persistence t))
+      (should-not (mevedel-agent-control--persist-session session)))))
+
+
+(mevedel-deftest mevedel-agent-control-recover-interrupted ()
+  ,test
+  (test)
+  :doc "idles every active shape and enqueues one ordinary parent RESULT"
+  (let ((session (mevedel-agent-control-test--session)))
+    (setf (mevedel-session-agent-registry session)
+          (cl-loop for activity in mevedel-agent-control--active-activities
+                   for index from 1
+                   for path = (format "/root/task%d" index)
+                   collect
+                   (cons path
+                         (mevedel-agent-record--create
+                          :path path :parent-path "/root"
+                          :activity activity))))
+    (should (= 5 (mevedel-agent-control-recover-interrupted session)))
+    (should (cl-every
+             (lambda (entry)
+               (eq 'idle (mevedel-agent-record-activity (cdr entry))))
+             (mevedel-session-agent-registry session)))
+    (should (= 5 (length (mevedel-session-messages session))))
+    (should (cl-every
+             (lambda (message)
+               (and (eq 'RESULT (plist-get message :type))
+                    (eq 'interrupted (plist-get message :outcome))))
+             (mevedel-session-messages session)))
+    (should (zerop (mevedel-agent-control-recover-interrupted session)))
+    (should (= 5 (length (mevedel-session-messages session))))))
+
+(mevedel-deftest mevedel-agent-control--recovery-result ()
+  ,test
+  (test)
+  :doc "includes useful restored partial output and transcript location"
+  (let* ((buffer (generate-new-buffer " *agent-recovery-partial*"))
+         (invocation (mevedel-agent-invocation-create
+                      (mevedel-agent-default)))
+         (record
+          (mevedel-agent-record--create
+           :path "/root/partial" :parent-path "/root" :activity 'running
+           :conversation-buffer buffer
+           :conversation-location "agents/partial.chat.org")))
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-buffer invocation) buffer)
+          (with-current-buffer buffer
+            (setq-local mevedel--agent-invocation invocation)
+            (insert (propertize "Useful restored work." 'gptel 'response)))
+          (let ((payload (mevedel-agent-control--recovery-result record)))
+            (should (string-match-p "Useful restored work" payload))
+            (should (string-match-p "agents/partial.chat.org" payload))))
+      (kill-buffer buffer))))
+
 (mevedel-deftest mevedel-agent-control--validate-spawn ()
   ,test
   (test)
@@ -406,7 +555,8 @@
                   :path "/root/work"
                   :parent-path "/root"
                   :activity 'running
-                  :invocation invocation)))
+                  :invocation invocation
+                  :blockers '((permission-blocked stale)))))
     (setf (mevedel-agent-invocation-transcript-status invocation) 'error)
     (mevedel-agent-control--settle
      session record invocation "legacy details"
@@ -415,6 +565,7 @@
     (let ((result (car (mevedel-session-messages session))))
       (should (= 1 (length (mevedel-session-messages session))))
       (should (eq 'idle (mevedel-agent-record-activity record)))
+      (should-not (mevedel-agent-record-blockers record))
       (should (eq 'RESULT (plist-get result :type)))
       (should (eq 'errored (plist-get result :outcome)))
       (should (equal "Provider failed" (plist-get result :payload))))))
@@ -1071,9 +1222,11 @@
       (let ((mevedel--agent-invocation invocation))
         (mevedel-agent-control-wait
          session (lambda (seen) (setq reason seen)) 10000))
+      (should (eq 'waiting (mevedel-agent-record-activity record)))
       (should (= 1 (mevedel-agent-control--active-count session)))
       (mevedel-agent-control-send-message session "/root/worker" "wake")
       (should (eq 'mailbox reason))
+      (should (eq 'running (mevedel-agent-record-activity record)))
       (should (= 1 (mevedel-agent-control--active-count session)))))
 
   :doc "follow-up steering wakes a non-root wait without an FSM wait state"

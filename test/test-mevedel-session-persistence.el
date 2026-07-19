@@ -19,6 +19,7 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-session-persistence)
 (require 'mevedel-tool-repair)
+(require 'mevedel-tools)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -27,16 +28,42 @@
                byte-compile-current-file))
           "helpers"))
 
+;; `gptel'
 (defvar gptel--preset)
 (defvar gptel-system-prompt)
-(defvar so-long-predicate)
+
+;; `gptel-request'
+(declare-function gptel--make-backend "ext:gptel-request" (&rest slots))
+(declare-function gptel-get-backend "ext:gptel-request" (name))
+(declare-function gptel-get-tool "ext:gptel-request" (path))
+(declare-function gptel-make-fsm "ext:gptel-request" (&rest slots))
+
+;; `mevedel-tools'
+(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
+
+;; `org'
 (declare-function org-entry-delete "org" (pom property))
 (declare-function org-entry-get "org" (pom property &optional inherit literal-nil))
 (declare-function org-entry-put "org" (pom property value))
 
+;; `so-long'
+(defvar so-long-predicate)
+
+(mevedel-tools-register)
+
 
 ;;
 ;;; Helpers
+
+(defun test-mevedel-session-persistence--agent-backend ()
+  "Return the registered backend used by retained-agent fixtures."
+  (let ((name "Session Persistence Agent Test"))
+    (condition-case nil
+        (gptel-get-backend name)
+      (user-error
+       (let ((backend (gptel--make-backend :name name)))
+         (setf (gptel-get-backend name) backend)
+         backend)))))
 
 (defun test-mevedel-session-persistence--make-workspace (root)
   "Build a workspace struct registered in the global registry.
@@ -100,6 +127,27 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                  :metadata '(:priority high))))
     session))
 
+(defun test-mevedel-session-persistence--agent-configuration ()
+  "Return a compact frozen configuration for persistence tests."
+  (mevedel-agent-configuration--create
+   :agent
+   (mevedel-agent--create
+    :name "default"
+    :description "Persisted default agent"
+    :tools '((:tool "Read"))
+    :system-prompt "Frozen persistence instructions"
+    :max-turns 10
+    :hook-rules nil
+    :frozen-p t)
+   :request-locals
+   (list (cons 'gptel-backend
+               (or gptel-backend
+                   (test-mevedel-session-persistence--agent-backend)))
+         (cons 'gptel-model 'test-model)
+         (cons 'gptel-tools
+               (list (gptel-get-tool '("mevedel" "Read"))))
+         (cons 'gptel-context '(("/tmp/persisted-context.el"))))))
+
 (defun test-mevedel-session-persistence--complete-sidecar (plist)
   "Return a current complete sidecar with PLIST values overriding defaults."
   (let ((sidecar
@@ -131,6 +179,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :prompt-index nil
                :file-snapshots nil
                :agent-transcripts nil
+               :agent-registry nil
+               :agent-turn-capacity 3
                :plan-metadata nil
                :goal nil
                :goal-handoff nil
@@ -1169,6 +1219,254 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
 
+(defun test-mevedel-session-persistence--cold-agent-tree-round-trip ()
+  "Exercise one durable agent-tree cold resume and its recovery boundary."
+  (cl-destructuring-bind (workspace . tempdir)
+      (test-mevedel-session-persistence--make-tempdir-workspace)
+    (let* ((session (mevedel-session-create "main" workspace))
+           (root (generate-new-buffer "*test-agent-tree-root*"))
+           (configuration
+            (test-mevedel-session-persistence--agent-configuration))
+           session-dir restored restored-session)
+      (unwind-protect
+          (progn
+            (with-current-buffer root
+              (org-mode)
+              (insert "Root conversation\n")
+              (mevedel-session-persistence-save session root))
+            (setq session-dir (mevedel-session-save-path session))
+            (let* ((agents-dir (file-name-concat session-dir "agents"))
+                   (idle-relative "agents/idle.chat.org")
+                   (active-relative "agents/active.chat.org")
+                   (idle-file (expand-file-name idle-relative session-dir))
+                   (active-file (expand-file-name active-relative session-dir))
+                   (idle
+                    (mevedel-agent-record--create
+                     :id "opaque-idle" :path "/root/idle"
+                     :parent-path "/root" :role "default"
+                     :configuration configuration :activity 'idle
+                     :conversation-location idle-relative
+                     :mailbox
+                     (list
+                      (list :type 'MAIL :sender "/root"
+                            :recipient "/root/idle" :payload "child mail"
+                            :timestamp '(1 0 0 0)))))
+                   (active
+                    (let ((invocation
+                           (mevedel-agent-invocation--create
+                            :path "/root/active" :parent-session session)))
+                      (mevedel-agent-record--create
+                       :id "opaque-active" :path "/root/active"
+                       :parent-path "/root" :role "default"
+                       :configuration configuration
+                       :activity 'running :invocation invocation
+                       :conversation-location active-relative)))
+                   (bad
+                    (mevedel-agent-record--create
+                     :id "opaque-bad" :path "/root/bad"
+                     :parent-path "/root" :role "default"
+                     :configuration configuration :activity 'idle
+                     :conversation-location "agents/bad.chat.org")))
+              (make-directory agents-dir t)
+              (write-region
+               "* Conversation Summary\nIndependent compacted history.\n\n* Agent Task: idle\nOld answer.\n"
+               nil idle-file nil 'silent)
+              (with-temp-buffer
+                (org-mode)
+                (insert "* Agent Task: active\n")
+                (insert (propertize "Partial abandoned response.\n"
+                                    'gptel 'response))
+                (mevedel-session-persistence--stabilize-gptel-bounds)
+                (write-region (point-min) (point-max)
+                              active-file nil 'silent))
+              (setf (mevedel-session-agent-turn-capacity session) 7
+                    (mevedel-session-agent-registry session)
+                    (list (cons "/root/idle" idle)
+                          (cons "/root/active" active)
+                          (cons "/root/bad" bad))
+                    (mevedel-session-messages session)
+                    (list
+                     (list :type 'MAIL :sender "/root/idle"
+                           :recipient "/root" :payload "root mail"
+                           :timestamp '(1 0 0 0))))
+              (should
+               (mevedel-agent-control-block-turn
+                session "/root/active" 'permission-blocked))
+              (with-current-buffer root
+                (mevedel-session-persistence-save session root))
+              (let* ((sidecar (file-name-concat session-dir
+                                                 "session.meta.el"))
+                     (persisted (mevedel-session-persistence-read sidecar))
+                     (bad-entry
+                      (cl-find-if
+                       (lambda (entry)
+                         (equal "/root/bad" (plist-get entry :path)))
+                       (plist-get persisted :agent-registry))))
+                (setf (plist-get bad-entry :conversation-location)
+                      "../escape.chat.org")
+                (mevedel-session-persistence-write sidecar persisted)))
+            (test-mevedel-session-persistence--release-and-kill root session)
+            (setq root nil)
+            (let ((dispatches 0))
+              (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+                         (lambda (&rest _)
+                           (cl-incf dispatches)
+                           (error "Restore replayed an abandoned request"))))
+                (setq restored
+                      (mevedel-session-persistence-restore session-dir)))
+              (should (zerop dispatches)))
+            (setq restored-session
+                  (buffer-local-value 'mevedel--session restored))
+            (should (= 7 (mevedel-session-agent-turn-capacity
+                          restored-session)))
+            (should
+             (equal '("/root" "/root/active" "/root/idle")
+                    (mapcar
+                     (lambda (item) (plist-get item :path))
+                     (mevedel-agent-control-list-agents restored-session))))
+            (let* ((idle
+                    (cdr (assoc "/root/idle"
+                                (mevedel-session-agent-registry
+                                 restored-session))))
+                   (active
+                    (cdr (assoc "/root/active"
+                                (mevedel-session-agent-registry
+                                 restored-session))))
+                   (idle-buffer
+                    (mevedel-agent-record-conversation-buffer idle)))
+              (should (equal "opaque-idle" (mevedel-agent-record-id idle)))
+              (should (eq 'idle (mevedel-agent-record-activity active)))
+              (should (buffer-live-p idle-buffer))
+              (with-current-buffer idle-buffer
+                (should (string-match-p "Independent compacted history"
+                                        (buffer-string))))
+              (should (equal "child mail"
+                             (plist-get
+                              (car (mevedel-agent-record-mailbox idle))
+                              :payload))))
+            (should (= 2 (length (mevedel-session-messages
+                                  restored-session))))
+            (should (= 1
+                       (cl-count-if
+                        (lambda (message)
+                          (eq 'interrupted (plist-get message :outcome)))
+                        (mevedel-session-messages restored-session))))
+            (let* ((idle
+                    (cdr (assoc "/root/idle"
+                                (mevedel-session-agent-registry
+                                 restored-session))))
+                   (idle-buffer
+                    (mevedel-agent-record-conversation-buffer idle))
+                   (identity
+                    (buffer-local-value 'mevedel--agent-invocation
+                                        idle-buffer))
+                   (root-data (list :messages (vector)))
+                   (root-fsm
+                    (gptel-make-fsm
+                     :info (list :buffer restored :backend nil
+                                 :data root-data)))
+                   (idle-data (list :messages (vector)))
+                   (idle-fsm
+                    (gptel-make-fsm
+                     :info (list :buffer idle-buffer :backend nil
+                                 :data idle-data
+                                 :mevedel-agent-invocation identity))))
+              (require 'mevedel-tools)
+              (mevedel-tools--handle-message-inject root-fsm)
+              (mevedel-tools--handle-message-inject idle-fsm)
+              (should-not (mevedel-session-messages restored-session))
+              (should-not (mevedel-agent-record-mailbox idle))
+              (should (= 2 (length (plist-get root-data :messages))))
+              (should (= 1 (length (plist-get idle-data :messages))))
+              (should
+               (cl-find-if
+                (lambda (message)
+                  (string-match-p
+                   "Partial abandoned response\\."
+                   (plist-get message :content)))
+                (append (plist-get root-data :messages) nil)))
+              (should
+               (string-match-p
+                "child mail"
+                (plist-get (aref (plist-get idle-data :messages) 0)
+                           :content)))
+              (mevedel-tools--handle-message-inject root-fsm)
+              (mevedel-tools--handle-message-inject idle-fsm)
+              (should (= 2 (length (plist-get root-data :messages))))
+              (should (= 1 (length (plist-get idle-data :messages))))
+              (with-current-buffer restored
+                (should (= 1 (how-many "root mail" (point-min) (point-max))))
+                (should (= 1 (how-many
+                              "Agent turn was interrupted by session recovery"
+                              (point-min) (point-max)))))
+              (with-current-buffer idle-buffer
+                (should (= 1 (how-many "child mail"
+                                       (point-min) (point-max)))))
+              (with-current-buffer restored
+                (mevedel-session-persistence-save
+                 restored-session restored)))
+            ;; A second cold resume keeps the injected transcript history but
+            ;; neither restores consumed mail nor enqueues another recovery
+            ;; RESULT for the already-idle turn.
+            (test-mevedel-session-persistence--release-and-kill
+             restored restored-session)
+            (setq restored nil restored-session nil)
+            (setq restored
+                  (mevedel-session-persistence-restore session-dir)
+                  restored-session
+                  (buffer-local-value 'mevedel--session restored))
+            (should-not (mevedel-session-messages restored-session))
+            (let* ((idle
+                    (cdr (assoc "/root/idle"
+                                (mevedel-session-agent-registry
+                                 restored-session))))
+                   (idle-buffer
+                    (mevedel-agent-record-conversation-buffer idle))
+                   captured-buffer)
+              (should-not (mevedel-agent-record-mailbox idle))
+              (with-current-buffer restored
+                (should (= 1 (how-many "root mail" (point-min) (point-max))))
+                (should (= 1 (how-many
+                              "Agent turn was interrupted by session recovery"
+                              (point-min) (point-max)))))
+              (with-current-buffer idle-buffer
+                (should (= 1 (how-many "child mail"
+                                       (point-min) (point-max))))
+                (should (string-match-p "Independent compacted history"
+                                        (buffer-string))))
+              (with-current-buffer restored
+                (cl-letf
+                    (((symbol-function 'mevedel-agent-runtime-dispatch)
+                      (lambda (_callback _agent _description _message
+                               &rest keys)
+                        (setq captured-buffer
+                              (plist-get keys :retained-buffer))
+                        t)))
+                  (mevedel-agent-control-followup
+                   restored-session "/root/idle" "Continue after resume.")))
+              (should (eq idle-buffer captured-buffer))
+              (should (eq 'running (mevedel-agent-record-activity idle)))
+              (setf (mevedel-agent-record-activity idle) 'idle
+                    (mevedel-agent-record-invocation idle) nil)
+              (let* ((saved
+                      (mevedel-session-persistence-load-sidecar
+                       (mevedel-session-persistence--sidecar-path
+                        session-dir)))
+                     (saved-idle
+                      (cl-find "/root/idle"
+                               (plist-get saved :agent-registry)
+                               :key (lambda (entry)
+                                      (plist-get entry :path))
+                               :test #'equal)))
+                (should-not (plist-get saved :messages))
+                (should-not (plist-get saved-idle :mailbox)))))
+        (test-mevedel-session-persistence--release-and-kill
+         root session)
+        (test-mevedel-session-persistence--release-and-kill
+         restored restored-session)
+        (when (file-directory-p tempdir) (delete-directory tempdir t))
+        (mevedel-workspace-clear-registry)))))
+
 (mevedel-deftest mevedel--instruction-workspace-state ()
   ,test
   (test)
@@ -1954,45 +2252,6 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
         (test-mevedel-session-persistence--reset-instructions)
         (mevedel-workspace-clear-registry)))))
 
-(mevedel-deftest mevedel-session-persistence--restore-gptel-state ()
-  ,test
-  (test)
-  :doc "does not dirty resumed buffers while repairing bounds and properties"
-  (with-temp-buffer
-    (org-mode)
-    (insert ":PROPERTIES:\n"
-            ":GPTEL_BOUNDS: ((response (2 999)))\n"
-            ":END:\n"
-            "#+begin_tool\n"
-            "(:name \"Bash\" :args (:command \"true\"))\n"
-            "ok\n"
-            "#+end_tool\n"
-            "Focused tests passed\n")
-    (setq-local gptel-mode nil)
-    (set-buffer-modified-p nil)
-    (cl-letf (((symbol-function 'gptel-mode)
-               (lambda (&optional _arg)
-                 (setq-local gptel-mode t)
-                 (save-excursion
-                   (goto-char (point-min))
-                   (search-forward "#+begin_tool")
-                   (let ((tool-start (match-beginning 0)))
-                     (search-forward "sed tests")
-                     (add-text-properties
-                      tool-start (match-beginning 0)
-                      '(gptel (tool . "stale"))))
-                   (goto-char (point-min))
-                   (search-forward "sed tests")
-                   (add-text-properties
-                    (match-beginning 0) (point-max)
-                    '(gptel response))))))
-      (mevedel-session-persistence--restore-gptel-state))
-    (should-not (buffer-modified-p))
-    (save-excursion
-      (goto-char (point-min))
-      (search-forward "Focused tests")
-      (should (eq (get-text-property (match-beginning 0) 'gptel)
-                  'response)))))
 
 (mevedel-deftest mevedel-session-persistence--dynamic-system-preset-p ()
   ,test
@@ -3340,7 +3599,9 @@ workspace tree."
             (test-mevedel-session-persistence--release-and-kill
              buf session)))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "cold-restores the durable tree, mailboxes, recovery, and follow-up"
+  (test-mevedel-session-persistence--cold-agent-tree-round-trip))
 
 
 ;;
@@ -6220,6 +6481,45 @@ The result is a plist whose :tempdir owns every created file."
                buf session))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-session-persistence-save-agent-state ()
+  ,test
+  (test)
+  :doc "writes through the exact root segment buffer and ignores agent buffers"
+  (let* ((tempdir (file-name-as-directory
+                   (make-temp-file "mevedel-agent-state-" t)))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id "agent-state" :root tempdir
+           :name "agent-state"))
+         (session (mevedel-session-create "main" workspace))
+         (root (generate-new-buffer " *agent-state-root*"))
+         (agent (generate-new-buffer " *agent-state-child*"))
+         calls)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-save-path session) tempdir)
+          (with-current-buffer root
+            (setq-local mevedel--session session)
+            (setq-local buffer-file-name
+                        (file-name-concat tempdir
+                                          "segment-0001.chat.org")))
+          (with-current-buffer agent
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create)))
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     (lambda (seen-session seen-buffer)
+                       (setq calls (list seen-session seen-buffer))
+                       t)))
+            (should
+             (mevedel-session-persistence-save-agent-state session)))
+          (should (eq session (car calls)))
+          (should (eq root (cadr calls))))
+      (when (buffer-live-p root) (kill-buffer root))
+      (when (buffer-live-p agent) (kill-buffer agent))
+      (delete-directory tempdir t))))
 
 
 (provide 'test-mevedel-session-persistence)

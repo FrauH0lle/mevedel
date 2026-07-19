@@ -13,6 +13,8 @@
 
 ;; `gptel'
 (declare-function gptel--restore-props "ext:gptel" (bounds-alist))
+(declare-function gptel-mode "ext:gptel" (&optional arg))
+(defvar gptel-mode)
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-normalize-properties
@@ -140,6 +142,17 @@ still runs whenever transcript properties are present."
       (when (mevedel-transcript-restore-properties-present-p
              scan-start (point-max))
         (mevedel-transcript-normalize-properties)))))
+
+(defun mevedel-transcript-restore-gptel-state ()
+  "Restore gptel state without dirtying the current transcript buffer."
+  (let ((was-modified (buffer-modified-p)))
+    (unwind-protect
+        (progn
+          (mevedel-transcript-restore-sanitize-bounds)
+          (unless (bound-and-true-p gptel-mode)
+            (gptel-mode +1))
+          (mevedel-transcript-restore-properties t))
+      (set-buffer-modified-p was-modified))))
 
 (provide 'mevedel-transcript-restore)
 ;;; mevedel-transcript-restore.el ends here

@@ -56,6 +56,22 @@
 
 
 ;;
+;;; Plain data
+
+(defun mevedel--plain-data-p (value)
+  "Return non-nil when VALUE contains only read-safe data."
+  (cond
+   ((or (null value) (stringp value) (numberp value) (symbolp value)) t)
+   ((functionp value) nil)
+   ((consp value)
+    (and (mevedel--plain-data-p (car value))
+         (mevedel--plain-data-p (cdr value))))
+   ((vectorp value)
+   (cl-every #'mevedel--plain-data-p value))
+   (t nil)))
+
+
+;;
 ;;; Transcript buffers
 
 (defcustom mevedel-transcript-disabled-minor-modes

@@ -23,6 +23,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-agent-control)
 (require 'mevedel-structs)
 (require 'mevedel-permissions)
 (require 'mevedel-permission-log)
@@ -138,7 +139,37 @@
         (list :kind 'generic :tool-name "Read"
               :origin origin :callback #'ignore)
         session)
-       :type 'error))))
+       :type 'error)))
+
+  :doc "marks retained requesters blocked until their final queued permission settles"
+  (let* ((session (test-pq--make-session))
+         (mevedel--session session)
+         (invocation
+          (mevedel-agent-invocation--create :path "/root/worker"))
+         (record
+          (mevedel-agent-record--create
+           :path "/root/worker" :activity 'running
+           :invocation invocation)))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (require 'mevedel-permission-prompt)
+    (cl-letf (((symbol-function 'mevedel-permission--prompt-async-attributed)
+               (lambda (&rest _args) nil)))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "Read"
+             :origin "/root/worker" :callback #'ignore))
+      (mevedel-permission--enqueue
+       (list :kind 'generic :tool-name "Edit"
+             :origin "/root/worker" :callback #'ignore))
+      (should (eq 'permission-blocked
+                  (mevedel-agent-record-activity record)))
+      (mevedel-permission-queue--on-head-outcome
+       (car (mevedel-session-permission-queue session)) 'allow-once)
+      (should (eq 'permission-blocked
+                  (mevedel-agent-record-activity record)))
+      (mevedel-permission-queue--on-head-outcome
+       (car (mevedel-session-permission-queue session)) 'allow-once)
+      (should (eq 'running (mevedel-agent-record-activity record))))))
 
 
 ;;

@@ -20,6 +20,10 @@
 ;; `mevedel-agent-exec'
 (defvar mevedel--agent-invocation)
 
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-transcript-path-p
+                  "mevedel-agent-persistence" (path save-path))
+
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime--agent-invocation-at "mevedel-agent-runtime" (fsm))
 (declare-function mevedel-agent-runtime--prune-stale-agents-fsm "mevedel-agent-runtime" ())
@@ -43,7 +47,6 @@
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--find-file-noselect "mevedel-session-persistence" (file))
-(declare-function mevedel-session-persistence--validate-transcript-path "mevedel-session-persistence" (path save-path))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-agent-transcripts "mevedel-structs" (cl-x) t)
@@ -589,6 +592,7 @@ See `mevedel-view--lookup-transcript-pair' for accepted id forms."
 Terminal agents resolve through their saved transcript file.  Running
 agents resolve through their live invocation buffer when available.
 Signals `user-error' when no transcript source can be opened."
+  (require 'mevedel-agent-persistence)
   (let* ((data-buf (and (boundp 'mevedel--data-buffer)
                         mevedel--data-buffer))
          (session (and data-buf (buffer-live-p data-buf)
@@ -629,7 +633,7 @@ Signals `user-error' when no transcript source can be opened."
                 entry)
       (unless save-path
         (user-error "Parent session has no save-path"))
-      (unless (mevedel-session-persistence--validate-transcript-path
+      (unless (mevedel-agent-persistence-transcript-path-p
                rel-path save-path)
         (user-error "Transcript path failed validation: %s" rel-path))
       (let ((abs (expand-file-name rel-path save-path)))
@@ -748,6 +752,7 @@ PARENT-VIEW is the session view that opened the transcript."
 CALLS is the optional number of tool calls to mention in fallback messages.
 
 This is the click/RET path for attribution fragments."
+  (require 'mevedel-agent-persistence)
   (let* ((entry (mevedel-view--lookup-transcript-entry agent-id))
          (inv (mevedel-view--agent-invocation agent-id))
          (status (mevedel-view--agent-effective-status inv entry))
@@ -759,7 +764,7 @@ This is the click/RET path for attribution fragments."
          (save-path (and session (mevedel-session-save-path session)))
          (rel-path (and entry (plist-get entry :path)))
          (path-ok (and entry save-path
-                       (mevedel-session-persistence--validate-transcript-path
+                       (mevedel-agent-persistence-transcript-path-p
                         rel-path save-path)))
          (terminal-p (memq status '(completed error aborted incomplete)))
          (display-label (mevedel-view--display-label-for-agent agent-id))
@@ -787,7 +792,7 @@ This is the click/RET path for attribution fragments."
 
 Looks up the entry in the parent session's `agent-transcripts'
 slot and validates the path through
-`mevedel-session-persistence--validate-transcript-path' before opening
+`mevedel-agent-persistence-transcript-path-p' before opening
 completed transcripts.  Running agents open from their live invocation
 buffer."
   (interactive
@@ -1476,6 +1481,7 @@ transcript is not openable yet.
 
 Running transcripts open from the live invocation buffer when present.
 CALLS, when non-nil, is used in the running-state echo-area message."
+  (require 'mevedel-agent-persistence)
   (let* ((display-label (mevedel-view--display-label-for-agent agent-id))
          (entry (mevedel-view--lookup-transcript-entry agent-id))
          (inv (mevedel-view--agent-invocation agent-id))
@@ -1488,7 +1494,7 @@ CALLS, when non-nil, is used in the running-state echo-area message."
          (save-path (and session (mevedel-session-save-path session)))
          (rel-path (and entry (plist-get entry :path)))
          (path-ok (and entry save-path
-                       (mevedel-session-persistence--validate-transcript-path
+                       (mevedel-agent-persistence-transcript-path-p
                         rel-path save-path)))
          (terminal-p (memq status
                            '(completed error aborted incomplete)))

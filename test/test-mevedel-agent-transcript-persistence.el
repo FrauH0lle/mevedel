@@ -106,59 +106,6 @@ Returns nil; callers may pass the result to the shared cleanup helper."
             fsm))
     nil))
 
-
-;;
-;;; Path validation
-
-(mevedel-deftest mevedel-session-persistence--validate-transcript-path ()
-  ,test
-  (test)
-
-  :doc "accepts well-formed relative paths under agents/"
-  (let* ((tmp (file-name-as-directory (make-temp-file "spec21-" t))))
-    (unwind-protect
-        (should (mevedel-session-persistence--validate-transcript-path
-                 "agents/explorer--2026-04-25T14-18-32--abcd1234.chat.org"
-                 tmp))
-      (delete-directory tmp t)))
-
-  :doc "rejects absolute paths"
-  (let* ((tmp (file-name-as-directory (make-temp-file "spec21-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-session-persistence--validate-transcript-path
-          "/etc/passwd.chat.org" tmp))
-      (delete-directory tmp t)))
-
-  :doc "rejects paths with .. segments"
-  (let* ((tmp (file-name-as-directory (make-temp-file "spec21-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-session-persistence--validate-transcript-path
-          "agents/../escape.chat.org" tmp))
-      (delete-directory tmp t)))
-
-  :doc "rejects non-.chat.org suffix"
-  (let* ((tmp (file-name-as-directory (make-temp-file "spec21-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-session-persistence--validate-transcript-path
-          "agents/transcript.txt" tmp))
-      (delete-directory tmp t)))
-
-  :doc "rejects paths that resolve outside agents/"
-  (let* ((tmp (file-name-as-directory (make-temp-file "spec21-" t))))
-    (unwind-protect
-        (should-not
-         (mevedel-session-persistence--validate-transcript-path
-          "outside/file.chat.org" tmp))
-      (delete-directory tmp t)))
-
-  :doc "rejects nil and empty"
-  (should-not (mevedel-session-persistence--validate-transcript-path nil "/tmp/"))
-  (should-not (mevedel-session-persistence--validate-transcript-path "" "/tmp/")))
-
-
 ;;
 ;;; Sidecar sanitization
 
@@ -1250,9 +1197,11 @@ Returns nil; callers may pass the result to the shared cleanup helper."
       (test-mevedel-spec21--make-workspace)
     (unwind-protect
         (let* ((session (mevedel-session-create "main" workspace))
-               (msg1 '(:from "explorer--abc" :body "<agent-result>one</agent-result>"
-                       :timestamp (12345 67890 0 0)))
-               (msg2 '(:from "explorer--xyz" :body "<agent-result>two</agent-result>"
+               (msg1 '(:type RESULT :sender "/root/explorer"
+                       :recipient "/root" :outcome completed
+                       :payload "one" :timestamp (12345 67890 0 0)))
+               (msg2 '(:type MAIL :sender "/root/reviewer"
+                       :recipient "/root" :payload "two"
                        :timestamp (12345 67891 0 0))))
           (setf (mevedel-session-messages session) (list msg1 msg2))
           (let* ((sidecar (mevedel-session-persistence-serialize
@@ -1264,41 +1213,13 @@ Returns nil; callers may pass the result to the shared cleanup helper."
                             :session))
                  (msgs (mevedel-session-messages restored)))
             (should (equal (length msgs) 2))
-            (should (equal (plist-get (car msgs) :from) "explorer--abc"))
-            (should (string-match-p "one" (plist-get (car msgs) :body)))
-            (should (equal (plist-get (cadr msgs) :from) "explorer--xyz"))))
+            (should (equal (plist-get (car msgs) :sender)
+                           "/root/explorer"))
+            (should (equal "one" (plist-get (car msgs) :payload)))
+            (should (equal (plist-get (cadr msgs) :sender)
+                           "/root/reviewer"))))
       (delete-directory tempdir t)
       (mevedel-workspace-clear-registry))))
-
-
-;;
-;;; Mailbox sanitization drops malformed entries
-
-(mevedel-deftest mevedel-session-persistence--sanitize-messages ()
-  ,test
-  (test)
-
-  :doc "drops entries without :from or :body"
-  (let ((raw '((:from "ok" :body "ok-body")
-               (:from "missing-body")
-               (:body "missing-from")
-               (:from 42 :body "non-string-from")
-               nil
-               "not-a-plist")))
-    (let ((out (mevedel-session-persistence--sanitize-messages raw)))
-      (should (equal (length out) 1))
-      (should (equal (plist-get (car out) :from) "ok"))))
-
-  :doc "preserves arrival order"
-  (let ((raw '((:from "a" :body "first")
-               (:from "b" :body "second")
-               (:from "c" :body "third"))))
-    (let ((out (mevedel-session-persistence--sanitize-messages raw)))
-      (should (equal (mapcar (lambda (m) (plist-get m :from)) out)
-                     '("a" "b" "c")))))
-
-  :doc "tolerates nil"
-  (should (null (mevedel-session-persistence--sanitize-messages nil))))
 
 
 ;;

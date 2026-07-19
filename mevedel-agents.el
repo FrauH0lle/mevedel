@@ -62,6 +62,8 @@
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-verifier-read-only
                   "mevedel-reminders" ())
+(declare-function mevedel-reminders-serialize-agent-templates
+                  "mevedel-reminders" (reminders))
 
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
@@ -192,11 +194,15 @@ the built-in set stays stable; user extras are appended."
 
 Dynamic system instructions and user tool augmentation are materialized in
 the caller's current session context.  Reminders and hooks remain templates,
-but are copied so later role redefinition cannot alter retained follow-ups."
+but are copied so later role redefinition cannot alter retained follow-ups.
+Every reminder must have a durable recipe because retained agents survive a
+cold session resume."
   (if (mevedel-agent-frozen-p agent)
       agent
     (let ((frozen (copy-mevedel-agent agent))
           (system-prompt (mevedel-agent-system-prompt agent)))
+      (mevedel-reminders-serialize-agent-templates
+       (mevedel-agent-reminders agent))
       (setf (mevedel-agent-tools frozen)
             (copy-tree (mevedel-agent--effective-specs agent))
             (mevedel-agent-system-prompt frozen)

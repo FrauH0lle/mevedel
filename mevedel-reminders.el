@@ -99,6 +99,9 @@
 (declare-function mevedel-transcript-prompt-transform-start
                   "mevedel-transcript" ())
 
+;; `mevedel-utilities'
+(declare-function mevedel--plain-data-p "mevedel-utilities" (value))
+
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace-root "mevedel-workspace" (workspace) t)
 
@@ -137,20 +140,104 @@ INTERVAL controls firing frequency:
   - `one-shot' - fire at most once per reminder lifetime
 
 LAST-FIRED is the turn count when this reminder last fired, or nil if
-it has never fired."
+it has never fired.  RECIPE is a read-safe declarative constructor form used
+only when a frozen agent template must survive a cold session resume."
   type
   trigger
   content
   interval
-  last-fired)
+  last-fired
+  recipe)
 
-(cl-defun mevedel-reminder-create (&key type trigger content interval)
-  "Create a new `mevedel-reminder' with TYPE, TRIGGER, CONTENT, and INTERVAL.
+(defvar mevedel-reminders--recipe-schemas
+  '((mode-constraints mevedel-reminders-make-mode-constraints interval)
+    (full-auto-mode mevedel-reminders-make-full-auto-mode interval)
+    (full-auto-mode-exit mevedel-reminders-make-full-auto-mode-exit no-args)
+    (plan-reference mevedel-reminders-make-plan-reference no-args)
+    (pending-events mevedel-reminders-make-pending-events no-args)
+    (date-change mevedel-reminders-make-date-change no-args)
+    (compaction-available
+     mevedel-reminders-make-compaction-available ratio)
+    (token-usage mevedel-reminders-make-token-usage token-usage)
+    (agent-listing-delta
+     mevedel-reminders-make-agent-listing-delta no-args)
+    (max-turns-warning mevedel-reminders-make-max-turns-warning ratio)
+    (edited-file mevedel-reminders-make-edited-file count)
+    (diagnostics mevedel-reminders-make-diagnostics interval)
+    (xref-available mevedel-reminders-make-xref-available no-args)
+    (imenu-available mevedel-reminders-make-imenu-available no-args)
+    (treesitter-available
+     mevedel-reminders-make-treesitter-available no-args)
+    (elisp-introspection-available
+     mevedel-reminders-make-elisp-introspection-available no-args)
+    (deferred-tools-roster
+     mevedel-reminders-make-deferred-tools-roster no-args)
+    (deferred-tools-expired
+     mevedel-reminders-make-deferred-tools-expired no-args)
+    (agent-deferred-tools-roster
+     mevedel-reminders-make-agent-deferred-tools-roster no-args)
+    (agent-deferred-tools-expired
+     mevedel-reminders-make-agent-deferred-tools-expired no-args)
+    (verifier-read-only
+     mevedel-reminders-make-verifier-read-only no-args)
+    (reviewer-read-only mevedel-reminders-make-reviewer-read-only no-args)
+    (task-nudge mevedel-reminders-make-task-nudge interval)
+    (verification-suggestion
+     mevedel-reminders-make-verification-suggestion no-args)
+    (agent-background-channels
+     mevedel-reminders-make-agent-background-channels no-args)
+    (background-agents-pending
+     mevedel-reminders-make-background-agents-pending no-args))
+  "Trusted constructor and argument contracts for durable reminder recipes.")
+
+(defun mevedel-reminders--recipe-arguments-p (contract arguments)
+  "Return non-nil when ARGUMENTS satisfy recipe argument CONTRACT."
+  (and
+   (proper-list-p arguments)
+   (pcase contract
+     ('no-args (null arguments))
+     ('interval
+      (and (= (length arguments) 1)
+           (or (null (car arguments))
+               (and (integerp (car arguments)) (>= (car arguments) 0)))))
+     ('ratio
+      (and (= (length arguments) 1)
+           (numberp (car arguments))
+           (<= 0.0 (car arguments) 1.0)))
+     ('count
+      (and (= (length arguments) 1)
+           (integerp (car arguments))
+           (>= (car arguments) 0)))
+     ('token-usage
+      (and (= (length arguments) 2)
+           (numberp (car arguments))
+           (<= 0.0 (car arguments) 1.0)
+           (or (null (cadr arguments))
+               (and (integerp (cadr arguments))
+                    (>= (cadr arguments) 0)))))
+     (_ nil))))
+
+(defun mevedel-reminders--recipe-p (recipe)
+  "Return non-nil when RECIPE names a trusted read-safe constructor."
+  (require 'mevedel-utilities)
+  (when (and (proper-list-p recipe)
+             (symbolp (car recipe))
+             (mevedel--plain-data-p recipe))
+    (when-let* ((schema (assq (car recipe)
+                              mevedel-reminders--recipe-schemas)))
+      (mevedel-reminders--recipe-arguments-p
+       (nth 2 schema) (cdr recipe)))))
+
+(cl-defun mevedel-reminder-create
+    (&key type trigger content interval recipe)
+  "Create a reminder with TYPE, TRIGGER, CONTENT, INTERVAL, and RECIPE.
 
 TYPE is a symbol identifying the reminder kind.  TRIGGER and CONTENT
 are functions of one argument (the firing context).  INTERVAL controls
 firing frequency: nil for every-turn, an integer for throttled firing,
-or the symbol `one-shot' for fire-at-most-once."
+or the symbol `one-shot' for fire-at-most-once.  RECIPE is an optional
+read-safe list whose first element names a trusted constructor in
+`mevedel-reminders--recipe-schemas'."
   (unless (symbolp type)
     (error "Reminder :type must be a symbol, got %S" type))
   (unless (functionp trigger)
@@ -162,12 +249,16 @@ or the symbol `one-shot' for fire-at-most-once."
              (not (eq interval 'one-shot)))
     (error "Reminder :interval must be an integer, `one-shot', or nil, got %S"
            interval))
+  (when (and recipe (not (mevedel-reminders--recipe-p recipe)))
+    (error "Reminder :recipe must name a trusted reminder constructor, got %S"
+           recipe))
   (mevedel-reminder--create
    :type type
    :trigger trigger
    :content content
    :interval interval
-   :last-fired nil))
+   :last-fired nil
+   :recipe (copy-tree recipe)))
 
 (defun mevedel-reminder-clone (reminder)
   "Return a shallow copy of REMINDER with LAST-FIRED reset to nil.
@@ -180,7 +271,8 @@ their own firing history."
    :trigger (mevedel-reminder-trigger reminder)
    :content (mevedel-reminder-content reminder)
    :interval (mevedel-reminder-interval reminder)
-   :last-fired nil))
+   :last-fired nil
+   :recipe (copy-tree (mevedel-reminder-recipe reminder))))
 
 (defun mevedel-reminders-clone-list (reminders)
   "Return a fresh list of cloned REMINDERS.
@@ -188,6 +280,45 @@ their own firing history."
 Each element is copied via `mevedel-reminder-clone' so the returned
 list tracks its own LAST-FIRED state independently of REMINDERS."
   (mapcar #'mevedel-reminder-clone reminders))
+
+(defun mevedel-reminders-serialize-agent-templates (reminders)
+  "Return durable recipes for frozen agent REMINDERS.
+
+A reminder without a trusted recipe is rejected rather than silently changing
+a retained agent's frozen identity after resume."
+  (mapcar
+   (lambda (reminder)
+     (unless (mevedel-reminder-p reminder)
+       (error "Invalid frozen agent reminder: %S" reminder))
+     (let ((recipe (mevedel-reminder-recipe reminder)))
+       (unless (and recipe (mevedel-reminders--recipe-p recipe))
+         (error "Agent reminder has no durable recipe: %S"
+                (mevedel-reminder-type reminder)))
+       (copy-tree recipe)))
+   reminders))
+
+(defun mevedel-reminders-restore-agent-templates (recipes)
+  "Restore frozen agent reminder RECIPES through trusted constructors.
+
+Executable or opaque sidecar values are rejected before any trusted constructor
+is called."
+  (unless (proper-list-p recipes)
+    (error "Invalid persisted agent reminder recipes"))
+  (mapcar
+   (lambda (recipe)
+     (unless (mevedel-reminders--recipe-p recipe)
+       (error "Invalid persisted agent reminder recipe"))
+     (let* ((schema (assq (car recipe) mevedel-reminders--recipe-schemas))
+            (factory (nth 1 schema)))
+       (unless (and factory (fboundp factory))
+         (error "Unknown persisted agent reminder recipe: %S"
+                (car recipe)))
+       (let ((reminder (apply factory (cdr recipe))))
+         (unless (and (mevedel-reminder-p reminder)
+                      (equal recipe (mevedel-reminder-recipe reminder)))
+           (error "Invalid restored agent reminder recipe: %S" recipe))
+         reminder)))
+   recipes))
 
 
 ;;
@@ -383,6 +514,7 @@ defaults to 5 turns so the reminder repeats sparsely across long
 sessions rather than spamming every turn."
   (mevedel-reminder-create
    :type 'mode-constraints
+   :recipe (list 'mode-constraints interval)
    :trigger (lambda (session)
               (not (eq (mevedel-reminders--session-mode session) 'ask)))
    :content (lambda (session)
@@ -397,6 +529,7 @@ Fires immediately after entering full-auto mode, then repeats
 sparsely while that mode remains active."
   (mevedel-reminder-create
    :type 'full-auto-mode
+   :recipe (list 'full-auto-mode interval)
    :trigger (lambda (session)
               (eq (mevedel-reminders--session-mode session) 'full-auto))
    :content (lambda (_session)
@@ -407,6 +540,7 @@ sparsely while that mode remains active."
   "Create the one-shot `full-auto-mode-exit' reminder."
   (mevedel-reminder-create
    :type 'full-auto-mode-exit
+   :recipe '(full-auto-mode-exit)
    :trigger (lambda (session)
               (not (eq (mevedel-reminders--session-mode session) 'full-auto)))
    :content (lambda (_session)
@@ -439,6 +573,7 @@ sparsely while that mode remains active."
   "Create the one-shot `plan-reference' reminder."
   (mevedel-reminder-create
    :type 'plan-reference
+   :recipe '(plan-reference)
    :trigger (lambda (session)
               (let ((metadata (mevedel-session-plan-metadata session)))
                 (and metadata
@@ -477,6 +612,7 @@ SESSION.  The pending FIFO is consumed by the content function so each
 event is shown once."
   (mevedel-reminder-create
    :type 'pending-events
+   :recipe '(pending-events)
    :trigger (lambda (session)
               (and (mevedel-session-p session)
                    (mevedel-session-pending-reminders session)))
@@ -493,6 +629,7 @@ Fires when the local calendar date changes during a session and updates
 SESSION's observed date after emitting the reminder."
   (mevedel-reminder-create
    :type 'date-change
+   :recipe '(date-change)
    :trigger (lambda (session)
               (let ((current (format-time-string "%F"))
                     (previous (mevedel-session-last-observed-date session)))
@@ -513,6 +650,7 @@ has crossed THRESHOLD of usable context.  THRESHOLD defaults to 0.70."
   (let ((threshold (or threshold 0.70)))
     (mevedel-reminder-create
      :type 'compaction-available
+     :recipe (list 'compaction-available threshold)
      :trigger (lambda (_session)
                 (let ((state (mevedel-reminders--compact-token-state)))
                   (and state
@@ -537,6 +675,7 @@ context and INTERVAL defaults to 4 turns."
   (let ((threshold (or threshold 0.90)))
     (mevedel-reminder-create
      :type 'token-usage
+     :recipe (list 'token-usage threshold interval)
      :trigger (lambda (_session)
                 (let ((state (mevedel-reminders--compact-token-state)))
                   (and state
@@ -563,6 +702,7 @@ types are reported once and become the new snapshot."
   (let (delta)
     (mevedel-reminder-create
      :type 'agent-listing-delta
+     :recipe '(agent-listing-delta)
      :trigger (lambda (session)
                 (setq delta nil)
                 (let* ((current (mevedel-reminders--agent-snapshot))
@@ -603,6 +743,7 @@ nothing for agents without a configured max-turns cap."
   (let ((threshold (or threshold 0.8)))
     (mevedel-reminder-create
      :type 'max-turns-warning
+     :recipe (list 'max-turns-warning threshold)
      :trigger (lambda (inv)
                 (when-let* ((agent (mevedel-agent-invocation-agent inv))
                             (max-turns (mevedel-agent-max-turns agent))
@@ -689,6 +830,7 @@ enough to surface immediately rather than throttle."
         (memo nil))
     (mevedel-reminder-create
      :type 'edited-file
+     :recipe (list 'edited-file max-diff-lines)
      :trigger
      (lambda (session)
        (setq memo nil)
@@ -794,6 +936,7 @@ the reminder fires every turn there is something to report; pass an
 integer to throttle."
   (mevedel-reminder-create
    :type 'diagnostics
+   :recipe (list 'diagnostics interval)
    :trigger (lambda (session)
               (mevedel-reminders--collect-diagnostics session))
    :content (lambda (session)
@@ -931,6 +1074,7 @@ files solely to probe editor integrations."
   "Create the one-shot `xref-available' reminder."
   (mevedel-reminder-create
    :type 'xref-available
+   :recipe '(xref-available)
    :trigger (lambda (session)
               (plist-get (mevedel-reminders-specialist-capabilities session)
                          :xref))
@@ -946,6 +1090,7 @@ files solely to probe editor integrations."
   "Create the one-shot `imenu-available' reminder."
   (mevedel-reminder-create
    :type 'imenu-available
+   :recipe '(imenu-available)
    :trigger (lambda (session)
               (plist-get (mevedel-reminders-specialist-capabilities session)
                          :imenu))
@@ -961,6 +1106,7 @@ files solely to probe editor integrations."
   "Create the one-shot `treesitter-available' reminder."
   (mevedel-reminder-create
    :type 'treesitter-available
+   :recipe '(treesitter-available)
    :trigger (lambda (session)
               (plist-get (mevedel-reminders-specialist-capabilities session)
                          :treesitter))
@@ -977,6 +1123,7 @@ files solely to probe editor integrations."
   "Create the one-shot `elisp-introspection-available' reminder."
   (mevedel-reminder-create
    :type 'elisp-introspection-available
+   :recipe '(elisp-introspection-available)
    :trigger (lambda (session)
               (plist-get (mevedel-reminders-specialist-capabilities session)
                          :elisp-introspection))
@@ -1026,6 +1173,7 @@ declared as deferred, along with a usage hint for ToolSearch, so the
 model learns which capabilities it can lazily load."
   (mevedel-reminder-create
    :type 'deferred-tools-roster
+   :recipe '(deferred-tools-roster)
    :trigger (lambda (session)
               (and (mevedel-session-deferred-set session) t))
    :content (lambda (session)
@@ -1052,6 +1200,7 @@ is something to report; consumes `deferred-expired' as a side effect
 so the same names are not re-reported."
   (mevedel-reminder-create
    :type 'deferred-tools-expired
+   :recipe '(deferred-tools-expired)
    :trigger (lambda (session)
               (and (mevedel-session-deferred-expired session) t))
    :content (lambda (session)
@@ -1069,6 +1218,7 @@ Added by `mevedel-agent-invocation-create' to any agent whose
 resolved `:tools' include deferred entries."
   (mevedel-reminder-create
    :type 'deferred-tools-roster
+   :recipe '(agent-deferred-tools-roster)
    :trigger (lambda (inv)
               (and (mevedel-agent-invocation-deferred-set inv) t))
    :content (lambda (inv)
@@ -1084,6 +1234,7 @@ from a `mevedel-agent-invocation' context.  Consumes the invocation's
 `deferred-expired' slot so the same names are not re-reported."
   (mevedel-reminder-create
    :type 'deferred-tools-expired
+   :recipe '(agent-deferred-tools-expired)
    :trigger (lambda (inv)
               (and (mevedel-agent-invocation-deferred-expired inv) t))
    :content (lambda (inv)
@@ -1100,6 +1251,7 @@ that its only deliverable is a report.  Fires every turn so the
 model cannot drift into implementation mode between messages."
   (mevedel-reminder-create
    :type 'verifier-read-only
+   :recipe '(verifier-read-only)
    :trigger (lambda (_ctx) t)
    :content (lambda (_ctx)
               "CRITICAL: This is a VERIFICATION-ONLY task. You CANNOT edit, \
@@ -1118,6 +1270,7 @@ turn so the model cannot drift into implementation mode between
 messages."
   (mevedel-reminder-create
    :type 'reviewer-read-only
+   :recipe '(reviewer-read-only)
    :trigger (lambda (_ctx) t)
    :content (lambda (_ctx)
               "CRITICAL: This is a REVIEW-ONLY task. You CANNOT edit, \
@@ -1133,6 +1286,7 @@ Fires when the session has non-completed tasks and task status has not
 been written for INTERVAL turns.  INTERVAL defaults to 8 turns."
   (mevedel-reminder-create
    :type 'task-nudge
+   :recipe (list 'task-nudge interval)
    :trigger (lambda (session)
               (let ((stale-after (or interval 8)))
                 (and (mevedel-session-p session)
@@ -1162,6 +1316,7 @@ the assistant to consider spawning the verifier before declaring
 non-trivial work complete."
   (mevedel-reminder-create
    :type 'verification-suggestion
+   :recipe '(verification-suggestion)
    :trigger (lambda (session)
               (and (mevedel-session-p session)
                    (mevedel-session-touched-files session)
@@ -1204,6 +1359,7 @@ sense of when to use it (the static prompt-file does not assume
 the caller is running concurrently)."
   (mevedel-reminder-create
    :type 'agent-background-channels
+   :recipe '(agent-background-channels)
    :trigger (lambda (inv)
               (and (mevedel-agent-invocation-p inv)
                    (mevedel-agent-invocation-background-p inv)))
@@ -1279,6 +1435,7 @@ LLM can match them against `<agent-result>' deliveries it has
 received."
   (mevedel-reminder-create
    :type 'background-agents-pending
+   :recipe '(background-agents-pending)
    :trigger (lambda (ctx)
               (and (mevedel-session-p ctx)
                    (mevedel-session-background-agents ctx)))
