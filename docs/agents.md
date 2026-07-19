@@ -53,7 +53,7 @@ The built-in role configurations are:
   `verifier-read-only` reminder attached at invocation. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
   parsed verdict is stored in transcript render-data for the handle badge.
-- **reviewer**: foreground code-review agent used by `/review`; per-turn
+- **reviewer**: retained leaf code-review agent used by `/review`; per-turn
   `reviewer-read-only` reminder attached at invocation. Reads diffs and
   surrounding code, then returns prioritized findings as JSON.
 
@@ -243,13 +243,23 @@ watchdog.
 ## Review and verify commands
 
 `mevedel-review` / `/review` and `mevedel-verify` / `/verify` run
-dedicated foreground validation tasks. They share a target picker for
+dedicated asynchronous leaf-agent turns. They share a target picker for
 uncommitted changes, diff against a base branch merge-base, a specific
 commit, the last commit, or custom instructions. Unlike ordinary user
 skills, this path is first-class: it ignores user/project skills named
-`review`, routes foreground execution through the shared fork skill
-dispatch path, and shares target CAPF for explicit target forms such as
-`current`, `HEAD`, `branch:<name>`, and `commit:<rev>`.
+`review`, creates a context-isolated retained agent at a unique path such as
+`/root/review` or `/root/verify_2`, and shares target CAPF for explicit target
+forms such as `current`, `HEAD`, `branch:<name>`, and `commit:<rev>`.
+
+The owning workflow attaches a one-shot consumer before provider dispatch and
+awaits that leaf's ordinary terminal `RESULT`. Settlement first queues the
+canonical envelope in parent mail; after successful workflow delivery, the
+consumer removes that exact envelope so a later model turn cannot receive a
+duplicate. Handler failure leaves the queued result recoverable. Completion
+therefore uses the same settlement and active-turn accounting as every other
+asynchronous agent. Cancellation interrupts only the active turn: the
+canonical agent path and conversation remain retained for inspection or
+follow-up.
 
 `/review` dispatches the `reviewer` agent and parses its Codex-style JSON
 finding shape: `findings`, `overall_correctness`, `overall_explanation`,
