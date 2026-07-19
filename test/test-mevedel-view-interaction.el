@@ -434,9 +434,9 @@
                :activate #'ignore))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
-                     (list (list :agent-id "verifier--abcdef0123456789abcdef0123456789"
+                     (list (list :path "/root/verifier"
                                  :status 'blocked
-                                 :agent-type "verifier"
+                                 :role "verifier"
                                  :description "Verify tracked diff"
                                  :calls 19))))
                   ((symbol-function 'gptel-agent--block-bg)
@@ -445,7 +445,7 @@
         (let (agent-pos separator-pos prompt-pos)
           (save-excursion
             (goto-char (point-min))
-            (search-forward "Agent: verifier -- Verify tracked diff")
+            (search-forward "Blocked /root/verifier")
             (setq agent-pos (match-beginning 0))
             (search-forward "1 permission pending")
             (setq separator-pos (match-beginning 0))
@@ -483,14 +483,14 @@
         (setq-local mevedel--session session)
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda ()
-                     (list (list :agent-id "verifier--abcdef0123456789abcdef0123456789"
+                     (list (list :path "/root/verifier"
                                  :status 'blocked
-                                 :agent-type "verifier"
+                                 :role "verifier"
                                  :description "Verify tracked diff"
                                  :calls 19)))))
           (mevedel-view--render-agent-status))
         (should (string-match-p
-                 "Agent: verifier -- Verify tracked diff"
+                 "Blocked /root/verifier"
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker))))
       (with-current-buffer data-buf
@@ -508,7 +508,7 @@
         (let* ((text (buffer-substring-no-properties
                       (point-min) mevedel-view--input-marker))
                (agent-pos (string-search
-                           "Agent: verifier -- Verify tracked diff" text))
+                           "Blocked /root/verifier" text))
                (permission-pos (string-search "Permission Request" text)))
           (should agent-pos)
           (should permission-pos)

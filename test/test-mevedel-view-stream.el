@@ -403,7 +403,6 @@
           (with-current-buffer agent-view
             (setq-local mevedel--data-buffer agent-data)
             (setq-local mevedel-view--agent-transcript-p t)
-            (setq-local mevedel-view--agent-id "explorer--owned")
             (setq-local mevedel-view--pending-tool-calls nil))
           (cl-letf (((symbol-function 'mevedel-view-rerender)
                      (lambda (&optional buffer) (push buffer targets))))
@@ -1360,11 +1359,7 @@
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data data-buf "assistant text\n" 'response)
     (with-current-buffer view-buf
-      (let ((row '(:agent-id "verifier--abc123"
-                   :status running
-                   :agent-type "verifier"
-                   :description "verify"
-                   :calls 1)))
+      (let ((row '(:path "/root/verifier" :status running)))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda () (list row))))
           (mevedel-view--render-agent-status)
@@ -1385,7 +1380,7 @@
           (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
-                 (status (string-match-p "Agent: verifier" text))
+                 (status (string-match-p "Running /root/verifier" text))
                  (prompt (string-match-p "^> " text)))
             (should-not old)
             (should (numberp response))
@@ -1398,11 +1393,7 @@
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data data-buf "assistant text\n" 'response)
     (with-current-buffer view-buf
-      (let ((row '(:agent-id "verifier--abc123"
-                   :status running
-                   :agent-type "verifier"
-                   :description "verify"
-                   :calls 1)))
+      (let ((row '(:path "/root/verifier" :status running)))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda () (list row))))
           (let ((inhibit-read-only t))
@@ -1427,7 +1418,7 @@
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
                  (calling (string-match-p "Calling Read: a" text))
-                 (status (string-match-p "Agent: verifier" text)))
+                 (status (string-match-p "Running /root/verifier" text)))
             (should-not old)
             (should (numberp response))
             (should (numberp calling))
@@ -1439,11 +1430,7 @@
   (mevedel-view-stream-test--with-buffers
     (mevedel-view-stream-test--insert-data data-buf "assistant text\n" 'response)
     (with-current-buffer view-buf
-      (let ((row '(:agent-id "verifier--abc123"
-                   :status running
-                   :agent-type "verifier"
-                   :description "verify"
-                   :calls 1)))
+      (let ((row '(:path "/root/verifier" :status running)))
         (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                    (lambda () (list row))))
           (let ((inhibit-read-only t))
@@ -1467,7 +1454,7 @@
                  (header (string-match-p "mevedel" text))
                  (old (string-match-p "old text" text))
                  (response (string-match-p "assistant text" text))
-                 (status (string-match-p "Agent: verifier" text)))
+                 (status (string-match-p "Running /root/verifier" text)))
             (should (numberp header))
             (should-not old)
             (should (numberp response))
@@ -1547,7 +1534,8 @@
           (should-not
            (mevedel-view-stream-pre-tool
             '(:id "call-1" :name "Agent"
-              :args (:subagent_type "explorer"))))))
+              :args (:task_name "explore"
+                     :message "Inspect the repository."))))))
       (with-current-buffer view-buf
         (should-not mevedel-view--pending-tool-calls)
         (should (= 1 render-count)))))
@@ -1666,7 +1654,8 @@
                                (point-min) (point-max)))))
     (with-current-buffer data-buf
       (mevedel-view-stream-post-tool
-       '(:id "call-1" :name "Agent" :args (:subagent_type "explorer"))))
+       '(:id "call-1" :name "Agent"
+         :args (:task_name "explore" :message "Inspect."))))
     (with-current-buffer view-buf
       (let ((text (buffer-substring-no-properties
                    (point-min) (point-max))))
@@ -2123,9 +2112,11 @@
                        :name "spinner-agents"))
            (session (mevedel-session-create "main" workspace))
            (started (time-subtract (current-time) (seconds-to-time 12))))
-      (setf (mevedel-session-agent-transcripts session)
-            (list (cons "coordinator--spin"
-                        '(:status running :calls 1))))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/spin"
+                        (mevedel-agent-record--create
+                         :id "worker--spin" :path "/root/spin"
+                         :parent-path "/root" :activity 'running))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
@@ -2153,9 +2144,11 @@
                        :name "spinner-no-pileup"))
            (session (mevedel-session-create "main" workspace))
            (started (time-subtract (current-time) (seconds-to-time 12))))
-      (setf (mevedel-session-agent-transcripts session)
-            (list (cons "coordinator--spin"
-                        '(:status running :calls 1))))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/spin"
+                        (mevedel-agent-record--create
+                         :id "worker--spin" :path "/root/spin"
+                         :parent-path "/root" :activity 'running))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
         (setq-local mevedel--current-request
@@ -2409,7 +2402,8 @@
             (with-current-buffer data-buf (copy-marker (point-min)))))
     (with-current-buffer data-buf
       (mevedel-view-stream-spinner-hook
-       '(:name "Agent" :args (:subagent_type "explorer"))))
+       '(:name "Agent"
+         :args (:task_name "explore" :message "Inspect."))))
     (with-current-buffer view-buf
       (should-not (mevedel-view--request-progress-visible-p))
       (should-not (string-match-p "Calling Agent"
@@ -2427,10 +2421,11 @@
               (with-current-buffer data-buf (copy-marker (point-min)))))
       (with-current-buffer data-buf
         (mevedel-view-stream-spinner-hook
-         '(:name "Agent" :args (:subagent_type "verifier")))
+         '(:name "Agent"
+           :args (:task_name "verify" :message "Verify.")))
         (mevedel-view-stream-pre-tool
          '(:id "agent-1" :name "Agent"
-                :args (:subagent_type "verifier"))))
+           :args (:task_name "verify" :message "Verify."))))
       (with-current-buffer view-buf
         (should (mevedel-view--request-progress-visible-p))
         (should-not mevedel-view--pending-tool-calls)
@@ -2656,7 +2651,7 @@
     (mevedel-view-stream-test--insert-data
      data-buf
      (concat "Review update.\n"
-             "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\">\n"
+             "<agent-result sender=\"/root/reviewer\" recipient=\"/root\" outcome=\"completed\">\n"
              "{\"findings\":[]}\n"
              "</agent-result>\n"
              "Final answer.\n")
@@ -2667,7 +2662,7 @@
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Review update" text))
-        (should (string-match-p "✓ finished reviewer--abc" text))
+        (should (string-match-p "✓ finished /root/reviewer" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should (string-match-p "Final answer" text))
         (should-not (string-match-p "<agent-result" text)))
@@ -2681,7 +2676,7 @@
       (mevedel-view-toggle-section)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✓ finished reviewer--abc" text))
+        (should (string-match-p "✓ finished /root/reviewer" text))
         (should (string-match-p "{\"findings\":\\[\\]}" text))
         (should-not (string-match-p "<agent-result" text)))))
 

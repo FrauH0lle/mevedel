@@ -50,7 +50,8 @@
                      ("/artifacts") :session)
                    (seq-take captured 5)))
     (should (eq session (nth 5 captured)))
-    (should (equal "main" (nth 7 captured)))))
+    (should (eq :owner (nth 6 captured)))
+    (should (equal "/root" (nth 7 captured)))))
 
 (mevedel-deftest mevedel-tools--generate-diff ()
   ,test
@@ -69,7 +70,8 @@
     (should (equal "diff" (car (nth 1 captured))))
     (should (= 2 (length (nth 2 captured))))
     (should (eq session (nth 5 captured)))
-    (should (equal "main" (nth 7 captured)))))
+    (should (eq :owner (nth 6 captured)))
+    (should (equal "/root" (nth 7 captured)))))
 
 
 ;;

@@ -15,7 +15,6 @@
        '("prompts/permissions" "prompts/permissions/*.md")
        '("prompts/system" "prompts/system/*.md")
        '("skills/analyze-log" "skills/analyze-log/SKILL.md")
-       '("skills/coordinator" "skills/coordinator/SKILL.md")
        '("skills/remember" "skills/remember/SKILL.md")
        '("skills/review" "skills/review/SKILL.md")
        '("tools" "tools/*.md"))

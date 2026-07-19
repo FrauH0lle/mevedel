@@ -937,14 +937,14 @@ LIMIT bounds the search when non-nil."
 
 (defconst mevedel-transcript--mailbox-block-specs
   '((agent-result
-     :open "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
+     :open "<agent-result\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>"
      :close "</agent-result>")
     (agent-message
-     :open "<agent-message\\s-+[^>]*from=\"\\([^\"]+\\)\"[^>]*>"
+     :open "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>"
      :close "</agent-message>"))
   "Structural mailbox block regexes.
 
-The open regex captures the agent id in match group 1.")
+The open regex captures the canonical sender path in match group 1.")
 
 (defun mevedel-transcript--mailbox-spec (kind key)
   "Return mailbox KIND spec value for KEY."

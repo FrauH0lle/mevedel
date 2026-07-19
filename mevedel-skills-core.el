@@ -61,7 +61,7 @@ mevedel resources, then global shared agent resources."
 
 (defcustom mevedel-skills-include-bundled t
   "When non-nil, `mevedel-skills-scan' also scans the bundled directory.
-Bundled skills (e.g. the coordinator skill) ship with mevedel and are
+Bundled skills ship with mevedel and are
 discovered alongside user skills by default.  Set to nil to exclude
 them from skill enumeration; tests also let-bind this to nil to assert
 on exact user-skill contents without bundled skills leaking in."

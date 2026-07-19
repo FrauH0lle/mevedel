@@ -5,8 +5,10 @@
 ;;; Code:
 
 (require 'mevedel-preview-mode)
-(require 'mevedel-agent-runtime)
 (require 'mevedel-agents)
+(require 'mevedel-agent-exec)
+(require 'mevedel-agent-runtime)
+(require 'mevedel-interaction-prompt)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
 (require 'mevedel-tool-fs)
@@ -586,8 +588,7 @@ cleanup."
     (unwind-protect
         (progn
           (with-current-buffer view
-            (setq-local mevedel--session session)
-            (setq-local mevedel-agent-runtime--fsms nil))
+            (setq-local mevedel--session session))
           (with-current-buffer agent-a
             (setq-local mevedel--session session)
             (setq-local mevedel--current-request request-a))
@@ -608,16 +609,7 @@ cleanup."
                      . ,(lambda (result) (setq result-b result)))))))
             (mevedel-preview-mode--register overlay-a)
             (mevedel-preview-mode--register overlay-b)
-            (cl-letf
-                (((symbol-function
-                   'mevedel-agent-runtime--interrupted-agent-response)
-                  (lambda (_invocation _reason) "interrupted"))
-                 ((symbol-function 'mevedel-agent-runtime--finalize)
-                  (lambda (invocation status)
-                    (setf
-                     (mevedel-agent-invocation-transcript-status invocation)
-                     status))))
-              (mevedel-agent-runtime-interrupt invocation-a "stop A"))
+            (mevedel-agent-runtime-interrupt invocation-a "stop A")
             (should (equal "Error: aborted" result-a))
             (should-not result-b)
             (should-not (overlay-buffer overlay-a))

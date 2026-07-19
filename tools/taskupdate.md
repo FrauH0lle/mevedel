@@ -22,8 +22,8 @@ depended on it, so downstream tasks become unblocked.
 - `status` — optional `"pending"`, `"in_progress"`, or `"completed"`
 - `owner` — optional retained agent path such as `/root/worker_2`, or a
   deliberate user-defined bucket; empty string assigns the task to Main.
-  Prefer subjects/descriptions for workstream names and avoid invented proxy
-  owners for background agents.
+  Prefer subjects/descriptions for workstream names and use the actual retained
+  path instead of inventing a proxy owner for an agent.
 - `blocks` — optional full replacement of the blocks list
 - `blockedBy` — optional full replacement of the blocked-by list
 - `metadata` — optional replacement of the metadata object

@@ -93,7 +93,6 @@ the same `<workspace>/.mevedel/plugin-data/<plugin-name>` directory.
 
 Bundled skills currently include:
 
-- `coordinator` — forked orchestration skill for multi-agent work.
 - `review` — bundled forked code-review skill. The first-class
   `/review` command uses the same reviewer contract but dispatches its
   task directly so user/project skills named `review` cannot override the
@@ -336,9 +335,9 @@ only at the request or fork dispatch boundary.
 The transcript and input history keep the exact original user text. An ignored
 render-data block connects that text to the prepared model prompt without
 exposing the control metadata to the model. `$skill` preparation may block chat
-input while asynchronous injections run, and a foreground fork blocks until
-its child settles. Cancellation or buffer death invalidates the preparation
-token so late callbacks cannot dispatch.
+input while asynchronous injections run, and an awaited fork keeps its owning
+workflow open until its child settles. Cancellation or buffer death invalidates
+the preparation token so late callbacks cannot dispatch.
 
 The model-side `Skill` tool and internal callers use the same normalized
 preparation outcomes. Model failures remain ordinary tool errors, and fork
@@ -355,30 +354,31 @@ commit, or custom instructions. Inline `/review` and `/verify` arguments
 can name explicit target forms such as `current`, `HEAD`, `branch:<name>`, and
 `commit:<rev>`; other non-empty arguments remain custom instructions.
 
-`/review` runs a dedicated foreground reviewer task with the registered
-`reviewer` agent. The command ignores user/project skills named `review`,
-but keeps the bundled review skill metadata so its `UserPromptExpansion` hook
-policy still runs. The reviewer prompt asks for strict JSON with prioritized
-findings. The parent turn stores a synthetic `<user_action>` block
+`/review` starts a context-isolated retained `reviewer` leaf and awaits its
+ordinary asynchronous `RESULT`. The command ignores user/project skills named
+`review`; the generic bundled review skill remains separately invocable. The
+reviewer prompt asks for strict JSON with prioritized findings. The parent turn
+stores a synthetic `<user_action>` block
 containing the rendered review results before the assistant summary, so
 follow-up prompts like "fix finding 2" have the findings in model context.
 The normal view hides that synthetic block and shows only the readable
 review summary.
 
-`/verify` runs a dedicated foreground verifier task with the registered
-`verifier` agent. It uses the same target text but asks for adversarial
+`/verify` starts and awaits a context-isolated retained `verifier` leaf. It
+uses the same target text but asks for adversarial
 validation, relevant checks when allowed, and the verifier prompt's final
 `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL` line. Verifier
 output is inserted as-is rather than parsed as review JSON.
 
 The parent view displays a live inline `Review` or `Verify` handle while
-the agent runs. This handle is sourced from hidden agent-transcript
-render-data, updates as the agent calls tools, and remains separate from
-the final summary.
+the agent runs. This handle is sourced from a hidden canonical collaboration
+event, updates as the agent calls tools, and remains separate from the final
+summary.
 
-At dispatch time, `mevedel-review.el` keeps target/result semantics local
-and routes foreground agent execution through `mevedel-skills-invoke`.
-For concrete Git targets it writes a package under
+At dispatch time, `mevedel-review.el` keeps target/result semantics local,
+creates a unique path such as `/root/review` or `/root/verify_2`, and attaches
+the workflow result consumer before provider dispatch. For concrete Git
+targets it writes a package under
 `.mevedel/review-packages/` and tells the reviewer or verifier to read
 that file before rerunning broad repository inspection. It supplies
 skill-scoped allow rules for read-only `git` Bash commands
@@ -412,7 +412,7 @@ ignore their declared hooks; non-skill hook layers may still observe and
 rewrite or block instruction body preparation. For fork commands, a
 frontmatter `Stop` declaration is scoped to that child invocation and is
 normalized to `SubagentStop`; top-level `Stop` remains a main-turn event.
-Successful foreground fork user skills also complete the parent turn and
+Successful awaited fork user skills also complete the parent turn and
 use the same successful-turn transaction as an ordinary model response.  The
 top-level `Stop` hook runs before request-scoped layers are cleared; queued
 follow-ups and other terminal cleanup run through that shared boundary.

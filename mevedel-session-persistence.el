@@ -196,19 +196,12 @@
                   "mevedel-chat" ())
 (declare-function mevedel--normalize-session-directory
                   "mevedel-chat" (directory workspace))
-(declare-function mevedel-agent-invocation-activity
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-set-activity
-                  "mevedel-agents" (invocation activity))
-(declare-function mevedel-agent-runtime--agent-invocation-at
-                  "mevedel-agent-runtime" (fsm))
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
 (defvar mevedel-permission-mode)
 (defvar mevedel-workspace-additional-roots)
-(defvar mevedel-agent-runtime--fsms)
 (defvar gptel-mode)
 (defvar gptel-display-buffer-action)
 (defvar gptel--preset)
@@ -976,24 +969,6 @@ render time."
             (puthash id plist seen)
             (setf (alist-get id out nil nil #'equal) plist))))))
     (nreverse out)))
-
-(defun mevedel-session-persistence--mark-running-incomplete-on-resume
-    (session readonly-p)
-  "Rewrite `running' transcript entries on SESSION to `incomplete'.
-
-Skips the rewrite when READONLY-P is non-nil -- another live writer
-holds the lock and rewriting would corrupt its audit log."
-  (unless readonly-p
-    (let ((entries (mevedel-session-agent-transcripts session))
-          changed)
-      (dolist (entry entries)
-        (when (and (consp entry)
-                   (eq (plist-get (cdr entry) :status) 'running))
-          (setf (cdr entry)
-                (plist-put (cdr entry) :status 'incomplete))
-          (setq changed t)))
-      (when changed
-        (setf (mevedel-session-agent-transcripts session) entries)))))
 
 (defun mevedel-session-persistence--prune-agent-transcripts-after-fork
     (session fork-turn)
@@ -3040,12 +3015,6 @@ mentions-shown reset to empty hash tables on load."
                     (set-visited-file-modtime)))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
-                ;; rewrite running -> incomplete unless we
-                ;; opened in read-only attach mode (another Emacs is
-                ;; the live writer; rewriting would corrupt its log).
-                (mevedel-session-persistence--mark-running-incomplete-on-resume
-                 session
-                 (bound-and-true-p mevedel-session--read-only-mode))
                 (mevedel--chat-buffer-init-common buf workspace)
                 (require 'mevedel-agent-persistence)
                 (setq agent-repairs
@@ -3658,20 +3627,6 @@ no-op."
     ;; Refresh the live segment before presenting the picker so it stays in
     ;; sync with manual data-buffer edits since the last save.
     (mevedel-session-persistence--update-prompt-index session buffer)
-    ;; Live sub-agents would race against the rewind's truncation and
-    ;; fork materialization -- abort them first.  Their ABRT handlers
-    ;; finalize transcripts and remove themselves from the registry,
-    ;; so a quick poll suffices to wait for the teardown to settle.
-    (when (and (buffer-local-value 'mevedel-agent-runtime--fsms buffer)
-               (fboundp 'mevedel-abort))
-      (let ((deadline (+ (float-time) 5.0)))
-        (mevedel-abort buffer)
-        (while (and (buffer-local-value 'mevedel-agent-runtime--fsms buffer)
-                    (< (float-time) deadline))
-          (sit-for 0.05))
-        (when (buffer-local-value 'mevedel-agent-runtime--fsms buffer)
-          (user-error "Sub-agents did not finalize within 5s; \
-retry rewind"))))
     (let* ((candidates
             (mevedel-session-persistence--prompt-candidates session)))
       (unless candidates
@@ -3817,7 +3772,6 @@ mail are deliberately absent from the returned session."
           :name (mevedel-session-name session)
           :workspace (mevedel-session-workspace session)
           :working-directory (mevedel-session-working-directory session)
-          :agents nil
           :tasks nil
           :task-status-notes nil
           :last-task-write-turn nil
@@ -3865,7 +3819,6 @@ mail are deliberately absent from the returned session."
           (copy-tree (mevedel-session-dropped-file-grants session) t)
           :active-dropped-file-grants
           (copy-tree (mevedel-session-active-dropped-file-grants session) t)
-          :background-agents nil
           :mentions-shown (make-hash-table :test #'equal)
           :skills (copy-tree (mevedel-session-skills session) t)
           :hook-rules
@@ -4124,13 +4077,6 @@ fork's save-path."
             (kill-buffer internal-buffer))))
       ;; UI-only branch state cannot invalidate a committed fork.
       (ignore-errors
-        (when (boundp 'mevedel-agent-runtime--fsms)
-          (dolist (pair mevedel-agent-runtime--fsms)
-            (when-let* ((inv
-                         (and (fboundp 'mevedel-agent-runtime--agent-invocation-at)
-                              (mevedel-agent-runtime--agent-invocation-at
-                               (cdr pair)))))
-              (mevedel-agent-invocation-set-activity inv nil))))
         (when-let* ((view-buffer
                      (and (boundp 'mevedel--view-buffer)
                           mevedel--view-buffer))
@@ -4409,23 +4355,10 @@ To rename the current session in place, use `mevedel-rename-session'."
          (session (buffer-local-value 'mevedel--session data-buf)))
     (unless session
       (user-error "Active buffer has no mevedel session"))
-    (when (and arg
-               (with-current-buffer data-buf
-                 (and (boundp 'mevedel-agent-runtime--fsms)
-                      mevedel-agent-runtime--fsms))
-               (fboundp 'mevedel-abort))
-      ;; Save-as copies the session directory; a live sub-agent
-      ;; would still be writing into the source dir mid-copy.
-      ;; Auto-abort and wait briefly for finalization.
-      (with-current-buffer data-buf
-        (let ((deadline (+ (float-time) 5.0)))
-          (mevedel-abort data-buf)
-          (while (and mevedel-agent-runtime--fsms
-                      (< (float-time) deadline))
-            (sit-for 0.05))
-          (when mevedel-agent-runtime--fsms
-            (user-error "Sub-agents did not finalize within 5s; \
-retry save-as")))))
+    (when arg
+      (require 'mevedel-agent-control)
+      (when (mevedel-agent-control-active-turn-p session)
+        (user-error "Interrupt active agent turns before save-as")))
     (cond
      (arg
       (mevedel-session-persistence--save-as session data-buf))

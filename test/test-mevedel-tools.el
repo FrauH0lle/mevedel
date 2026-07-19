@@ -59,18 +59,6 @@
   "Register the built-in tool surface needed by bundled agents."
   (mevedel-tools-register))
 
-(defun mevedel-tools-test--register-agent-fsm (invocation fsm)
-  "Register FSM like the canonical agent runner for INVOCATION."
-  (setf (gptel-fsm-info fsm)
-        (plist-put (gptel-fsm-info fsm)
-                   :mevedel-agent-invocation invocation))
-  (with-current-buffer
-      (mevedel-agent-invocation-parent-data-buffer invocation)
-    (setf (alist-get (mevedel-agent-invocation-agent-id invocation)
-                     mevedel-agent-runtime--fsms nil nil #'equal)
-          fsm))
-  fsm)
-
 ;;
 ;;; Tool registration
 
@@ -788,143 +776,14 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 ;;
 ;;; Messages — SendMessage tool handler
 
-(mevedel-deftest mevedel-tools--send-message
-  (:after-each (progn (mevedel-workspace-clear-registry)
-                      (setq mevedel-agent--registry nil)))
-  ,test
-  (test)
-
-  :doc "delivers to main session via alias \"main\""
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-sm*")))
-    (unwind-protect
-        (with-current-buffer buf
-          (setq-local mevedel--session session)
-          (let ((result (mevedel-tools--send-message
-                         (list :to "main" :message "hello"))))
-            (should (stringp result))
-            (should (string-match-p "main" result)))
-          (let ((inbox (mevedel-session-messages session)))
-            (should (= 1 (length inbox)))
-            (should (equal "hello" (plist-get (car inbox) :body)))
-            (should (equal "main" (plist-get (car inbox) :from)))))
-      (kill-buffer buf)))
-
-  :doc "delivers to an agent invocation by exact agent-id"
-  (let* ((_ (mevedel-define-agent sm-a :description "a" :tools nil))
-         (agent (mevedel-agent-get "sm-a"))
-         (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-sm-ov*"))
-         (buf (generate-new-buffer " *mt-sm-chat*")))
-    (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (fsm (gptel-make-fsm :info (list :context ov))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :mevedel-agent-invocation inv))
-          (setf (mevedel-agent-invocation-buffer inv) ov-buf)
-          (with-current-buffer buf
-            (setq-local mevedel--session
-                        (mevedel-tools-test--make-session))
-            (setq-local mevedel-agent-runtime--fsms
-                        (list (cons "sm-a--abc" fsm)))
-            (mevedel-tools--send-message
-             (list :to "sm-a--abc" :message "run")))
-          (should (equal "run"
-                         (plist-get (car (mevedel-agent-invocation-messages inv))
-                                    :body))))
-      (kill-buffer ov-buf)
-      (kill-buffer buf)))
-
-  :doc "does not deliver to a child invocation whose buffer is killed"
-  (let* ((_ (mevedel-define-agent sm-dead :description "a" :tools nil))
-         (agent (mevedel-agent-get "sm-dead"))
-         (child-buf (generate-new-buffer " *mt-sm-dead-child*"))
-         (inv (mevedel-agent-invocation--create
-               :agent agent
-               :agent-id "sm-dead--abc"
-               :buffer child-buf
-               :transcript-status 'running))
-         (buf (generate-new-buffer " *mt-sm-dead-chat*")))
-    (unwind-protect
-        (with-current-buffer buf
-          (setq-local mevedel--session
-                      (mevedel-tools-test--make-session))
-          (setq-local mevedel-agent-runtime--fsms
-                      (list (cons "sm-dead--abc"
-                                  (gptel-make-fsm
-                                   :info (list :mevedel-agent-invocation inv)
-                                   :handlers nil :state 'WAIT))))
-          (kill-buffer child-buf)
-          (should-error
-           (mevedel-tools--send-message
-            (list :to "sm-dead--abc" :message "run")))
-          (should-not (mevedel-agent-invocation-messages inv))
-          (should-not (assoc "sm-dead--abc" mevedel-agent-runtime--fsms)))
-      (when (buffer-live-p child-buf) (kill-buffer child-buf))
-      (kill-buffer buf)))
-
-  :doc "does not deliver to an agent invocation by agent-type prefix"
-  (let* ((_ (mevedel-define-agent sm-b :description "a" :tools nil))
-         (agent (mevedel-agent-get "sm-b"))
-         (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-sm-ov2*"))
-         (buf (generate-new-buffer " *mt-sm-chat2*")))
-    (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (fsm (gptel-make-fsm :info (list :context ov))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :mevedel-agent-invocation inv))
-          (setf (mevedel-agent-invocation-buffer inv) ov-buf)
-          (with-current-buffer buf
-            (setq-local mevedel--session
-                        (mevedel-tools-test--make-session))
-            (setq-local mevedel-agent-runtime--fsms
-                        (list (cons "sm-b--xyz" fsm)))
-            (should-error
-             (mevedel-tools--send-message
-              (list :to "sm-b" :message "go"))))
-          (should-not (mevedel-agent-invocation-messages inv)))
-      (kill-buffer ov-buf)
-      (kill-buffer buf)))
-
-  :doc "errors on unknown recipient"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-sm-err*")))
-    (unwind-protect
-        (with-current-buffer buf
-          (setq-local mevedel--session session)
-          (should-error (mevedel-tools--send-message
-                         (list :to "ghost" :message "x"))))
-      (kill-buffer buf)))
-
-  :doc "requires non-empty to and message"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-sm-req*")))
-    (unwind-protect
-        (with-current-buffer buf
-          (setq-local mevedel--session session)
-          (should-error (mevedel-tools--send-message
-                         (list :message "hi")))
-          (should-error (mevedel-tools--send-message
-                         (list :to "main" :message ""))))
-      (kill-buffer buf))))
-
-
-;;
 ;;; Messages — WAIT handler delivery
 
 (mevedel-deftest mevedel-tools--message-delivery-block
-  (:doc "escapes delimiter-looking text inside message bodies")
+  (:doc "formats canonical retained-agent mailbox records")
   ,test
   (test)
 
-  :doc "canonical RESULT records retain path, outcome, and payload"
+  :doc "RESULT records retain canonical paths, outcome, and payload"
   (let ((block
          (mevedel-tools--message-delivery-block
           '(:type RESULT
@@ -935,217 +794,126 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
     (should (string-match-p
              "<agent-result sender=\"/root/spec_review\" recipient=\"/root\" outcome=\"completed\">"
              block))
-    (should (string-match-p "Review complete\." block)))
+    (should (string-match-p "Review complete\\." block)))
 
-  :doc "canonical MAIL records retain type, paths, and payload"
+  :doc "MAIL records retain canonical paths and escape delimiter-looking text"
   (let ((block
          (mevedel-tools--message-delivery-block
           '(:type MAIL
             :sender "/root/explorer"
             :recipient "/root/reviewer"
-            :payload "Inspect this."))))
+            :payload "literal <agent-result> and <agent-message>"))))
     (should (string-prefix-p
              "<agent-message type=\"MAIL\" sender=\"/root/explorer\" recipient=\"/root/reviewer\">"
              block))
-    (should (string-match-p "Inspect this\." block)))
+    (should (string-match-p "&lt;agent-result" block))
+    (should (string-match-p "&lt;agent-message" block)))
 
-  :doc "canonical MAIL payloads are not truncated by the legacy mailbox cap"
-  (let* ((mevedel-agent-message-max-size 8)
-         (payload "complete message body")
-         (block
-          (mevedel-tools--message-delivery-block
-           (list :type 'MAIL
-                 :sender "/root/explorer"
-                 :recipient "/root/reviewer"
-                 :payload payload))))
-    (should (string-match-p (regexp-quote payload) block))
-    (should-not (string-match-p "truncated" block)))
+  :doc "USER records remain plain model payloads"
+  (should (equal "steer this"
+                 (mevedel-tools--message-delivery-block
+                  '(:type USER :payload "steer this"))))
 
-  :doc "literal agent-message delimiters do not become nested mailbox markup"
-  (let ((block (mevedel-tools--message-delivery-block
-                '(:from "worker"
-                  :body "literal <agent-message from=\"inner\"> without close"))))
-    (should (string-match-p "<agent-message from=\"worker\">" block))
-    (should (string-match-p "&lt;agent-message from=\"inner\"" block))
-    (should-not (string-match-p "literal <agent-message" block)))
+  :doc "unknown record types fail closed"
+  (should-error
+   (mevedel-tools--message-delivery-block '(:type UNKNOWN :payload "x"))))
 
-  :doc "literal agent-result block in a message body is escaped"
-  (let* ((body "<agent-result agent-id=\"example\">\nnot a result\n</agent-result>")
-         (block (mevedel-tools--message-delivery-block
-                 (list :from "worker" :body body))))
-    (should (string-match-p "<agent-message from=\"worker\">" block))
-    (should (string-match-p "&lt;agent-result agent-id=\"example\"" block))
-    (should (string-match-p "&lt;/agent-result&gt;" block))
-    (should-not (string-match-p "\n<agent-result" block)))
-
-  :doc "generated agent-result deliveries are preserved structurally"
-  (let ((block (mevedel-tools--message-delivery-block
-                '(:from "worker"
-                  :agent-result-p t
-                  :body "<agent-result agent-id=\"worker\">\nresult\n</agent-result>"))))
-    (should (string-prefix-p "<agent-result agent-id=\"worker\">" block))
-    (should-not (string-match-p "<agent-message" block))))
 
 (mevedel-deftest mevedel-tools--handle-message-inject
-  (:after-each (progn (mevedel-workspace-clear-registry)
-                      (setq mevedel-agent--registry nil)))
+  (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
-  :doc "injects retained unread mail separately in FIFO order exactly once"
-  (let* ((_ (mevedel-define-agent mi-a :description "a" :tools nil))
-         (agent (mevedel-agent-get "mi-a"))
-         (inv (mevedel-agent-invocation-create agent))
-         (session (mevedel-tools-test--make-session))
-         (path "/root/mi_a")
+  :doc "drains a root canonical MAIL exactly once and records it in transcript"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buffer (generate-new-buffer " *mt-root-mail*"))
+         (data (list :messages (vector)))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :backend nil :data data))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (setf (mevedel-session-messages session)
+                (list '(:type MAIL
+                        :sender "/root/worker"
+                        :recipient "/root"
+                        :payload "hello root")))
+          (mevedel-tools--handle-message-inject fsm)
+          (should-not (mevedel-session-messages session))
+          (should (= 1 (length (plist-get data :messages))))
+          (should
+           (string-match-p
+            "sender=\"/root/worker\" recipient=\"/root\""
+            (plist-get (aref (plist-get data :messages) 0) :content)))
+          (with-current-buffer buffer
+            (should (string-match-p "hello root" (buffer-string))))
+          (mevedel-tools--handle-message-inject fsm)
+          (should (= 1 (length (plist-get data :messages)))))
+      (kill-buffer buffer)))
+
+  :doc "drains a retained child's canonical FIFO into its own transcript"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buffer (generate-new-buffer " *mt-agent-mail*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :path "/root/worker"
+           :parent-session session
+           :buffer buffer
+           :turn-count 0))
          (record
           (mevedel-agent-record--create
-           :id (mevedel-agent-invocation-agent-id inv)
-           :path path
+           :path "/root/worker"
            :parent-path "/root"
            :activity 'running
-           :invocation inv))
-         (ov-buf (generate-new-buffer " *mt-mi-ov*"))
-         (agent-buf (generate-new-buffer " *mt-mi-agent*")))
-    (setf (mevedel-agent-invocation-buffer inv) agent-buf)
-    (setf (mevedel-agent-invocation-parent-session inv) session)
+           :invocation invocation))
+         (data (list :messages
+                     (vector (list :role "user" :content "task"))))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer
+                           :backend nil
+                           :data data
+                           :mevedel-agent-invocation invocation))))
     (setf (mevedel-session-agent-registry session)
-          (list (cons path record)))
+          (list (cons "/root/worker" record)))
     (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (data (list :messages (vector (list :role "user"
-                                                   :content "first"))))
-               (fsm (gptel-make-fsm
-                     :info (list :context ov
-                                 :backend nil
-                                 :data data))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :mevedel-agent-invocation inv))
-          (with-current-buffer agent-buf
-            (insert "* Agent Task: do work\nbody\n"))
-          (mevedel-agent-control-send-message session path "one")
-          (mevedel-agent-control-send-message session path "two")
-          (setf (mevedel-agent-invocation-messages inv)
-                (list (list :from "/root/peer" :body "zero"
-                            :timestamp (seconds-to-time 0))))
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation invocation)
+            (insert "* Agent Task: work\n"))
+          (let ((mevedel--agent-invocation nil))
+            (mevedel-agent-control-send-message
+             session "/root/worker" "one")
+            (mevedel-agent-control-send-message
+             session "/root/worker" "two"))
           (mevedel-tools--handle-message-inject fsm)
-          (should (null (mevedel-agent-invocation-messages inv)))
-          (should (null (mevedel-agent-record-mailbox record)))
-          (let ((msgs (plist-get data :messages)))
-            (should (equal 4 (length msgs)))
-            (should (string-match-p
-                     "zero" (plist-get (aref msgs 0) :content)))
-            (should
-             (string-prefix-p
-              "<agent-message type=\"MAIL\" sender=\"/root\" recipient=\"/root/mi_a\">\none"
-              (plist-get (aref msgs 1) :content)))
-            (should (string-match-p "two"
-                                    (plist-get (aref msgs 2) :content)))
-            (should-not (string-match-p "one"
-                                        (plist-get (aref msgs 2) :content)))
-            (should (equal "first" (plist-get (aref msgs 3) :content))))
-          (mevedel-tools--handle-message-inject fsm)
-          (should (= 4 (length (plist-get data :messages))))
-          (with-current-buffer agent-buf
-            (let ((text (buffer-substring-no-properties
-                         (point-min) (point-max))))
-              (should (< (string-match-p "<agent-message" text)
-                         (string-match-p "^\\* Agent Task:" text)))
-              (should (< (string-match-p "zero" text)
-                         (string-match-p "one" text)))
+          (should-not (mevedel-agent-record-mailbox record))
+          (let* ((messages (append (plist-get data :messages) nil))
+                 (text (mapconcat
+                        (lambda (message) (plist-get message :content))
+                        messages "\n")))
+            (should (= 3 (length messages)))
+            (should (< (string-match-p "one" text)
+                       (string-match-p "two" text))))
+          (with-current-buffer buffer
+            (let ((text (buffer-string)))
               (should (< (string-match-p "one" text)
                          (string-match-p "two" text))))))
-      (kill-buffer ov-buf)
-      (kill-buffer agent-buf)))
-
-  :doc "appends after the prior turn on subsequent WAIT cycles"
-  (let* ((_ (mevedel-define-agent mi-b :description "b" :tools nil))
-         (agent (mevedel-agent-get "mi-b"))
-         (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-mi-ov2*"))
-         (agent-buf (generate-new-buffer " *mt-mi-agent2*")))
-    (setf (mevedel-agent-invocation-buffer inv) agent-buf)
-    (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (data (list :messages
-                           (vector (list :role "user" :content "task")
-                                   (list :role "assistant"
-                                         :content "thinking"))))
-               (fsm (gptel-make-fsm
-                     :info (list :context ov
-                                 :backend nil
-                                 :data data))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :mevedel-agent-invocation inv))
-          (with-current-buffer agent-buf
-            (insert "* Agent Task: do work\nbody\n"))
-          (setf (mevedel-agent-invocation-turn-count inv) 1)
-          (setf (mevedel-agent-invocation-messages inv)
-                '((:from "worker" :body "follow-up")))
-          (mevedel-tools--handle-message-inject fsm)
-          (let ((msgs (plist-get data :messages)))
-            (should (equal 3 (length msgs)))
-            ;; Subsequent turn: appended at the end.
-            (let ((content (plist-get (aref msgs 2) :content)))
-              (should (string-match-p "follow-up" content))))
-          (with-current-buffer agent-buf
-            (let ((text (buffer-substring-no-properties
-                         (point-min) (point-max))))
-              (should (> (string-match-p "<agent-message" text)
-                         (string-match-p "^\\* Agent Task:" text))))))
-      (kill-buffer ov-buf)
-      (kill-buffer agent-buf)))
-
-  :doc "writes main-session mailbox deliveries into the data buffer"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-mi-main*")))
-    (unwind-protect
-        (let* ((data (list :messages
-                           (vector (list :role "user"
-                                         :content "original prompt"))))
-               (fsm (gptel-make-fsm
-                     :info (list :buffer buf
-                                 :backend nil
-                                 :data data))))
-          (with-current-buffer buf
-            (setq-local mevedel--session session)
-            (insert (propertize "assistant response\n" 'gptel 'response)))
-          (setf (mevedel-session-messages session)
-                '((:from "explorer--abc" :body "hello main")))
-          (mevedel-tools--handle-message-inject fsm)
-          (should (null (mevedel-session-messages session)))
-          (let ((msgs (plist-get data :messages)))
-            (should (equal 2 (length msgs)))
-            (should (string-match-p
-                     "<agent-message from=\"explorer--abc\">"
-                     (plist-get (aref msgs 1) :content)))
-            (should (string-match-p
-                     "hello main"
-                     (plist-get (aref msgs 1) :content))))
-          (with-current-buffer buf
-            (goto-char (point-min))
-            (should (search-forward "<agent-message from=\"explorer--abc\">"
-                                    nil t))
-            (should (null (get-text-property (match-beginning 0) 'gptel)))))
-      (kill-buffer buf)))
+      (kill-buffer buffer)))
 
   :doc "keeps USER model payload separate from transcript text and audits"
   (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-mi-user-metadata*"))
+         (buffer (generate-new-buffer " *mt-user-mail*"))
          (audit '(:type prompt-rewrite :event "UserPromptSubmit"
                         :original "original user"
-                        :submitted "rewritten model")))
+                        :submitted "rewritten model"))
+         (data (list :messages (vector)))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :backend nil :data data))))
     (unwind-protect
-        (let* ((data (list :messages (vector)))
-               (fsm (gptel-make-fsm
-                     :info (list :buffer buf :backend nil :data data))))
-          (with-current-buffer buf
+        (progn
+          (with-current-buffer buffer
             (setq-local mevedel--session session))
           (setf (mevedel-session-messages session)
                 (list (list :type 'USER
@@ -1158,187 +926,20 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (should (equal "rewritten model"
                          (plist-get (aref (plist-get data :messages) 0)
                                     :content)))
-          (with-current-buffer buf
+          (with-current-buffer buffer
             (let ((text (buffer-substring (point-min) (point-max))))
               (should (string-match-p "original user" text))
               (should-not (string-match-p "rewritten model" text))
               (should (equal (list audit)
                              (mevedel-transcript-audit-records text))))))
-      (kill-buffer buf)))
+      (kill-buffer buffer)))
 
-  :doc "does not drain the parent session mailbox from agent buffers"
-  (let* ((_ (mevedel-define-agent mi-agent-main :description "a" :tools nil))
-         (agent (mevedel-agent-get "mi-agent-main"))
-         (inv (mevedel-agent-invocation-create agent))
-         (session (mevedel-tools-test--make-session))
-         (agent-buf (generate-new-buffer " *mt-mi-agent-main*"))
-         (result-block
-          "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\">\nreview\n</agent-result>"))
-    (unwind-protect
-        (let* ((data (list :messages (vector)))
-               (fsm (gptel-make-fsm
-                     :info (list :buffer agent-buf
-                                 :backend nil
-                                 :data data))))
-          (with-current-buffer agent-buf
-            (setq-local mevedel--session session)
-            (setq-local mevedel--agent-invocation inv)
-            (insert "* Agent Task: verify\n"))
-          (setf (mevedel-session-messages session)
-                (list (list :from "reviewer--abc"
-                            :body result-block)))
-          (mevedel-tools--handle-message-inject fsm)
-          (should (equal 1 (length (mevedel-session-messages session))))
-          (should (= 0 (length (plist-get data :messages))))
-          (with-current-buffer agent-buf
-            (goto-char (point-min))
-            (should-not (search-forward "<agent-result" nil t))))
-      (kill-buffer agent-buf)))
-
-  :doc "refuses direct session transcript insertion into agent buffers"
-  (let* ((_ (mevedel-define-agent mi-agent-write :description "a" :tools nil))
-         (agent (mevedel-agent-get "mi-agent-write"))
-         (inv (mevedel-agent-invocation-create agent))
-         (session (mevedel-tools-test--make-session))
-         (agent-buf (generate-new-buffer " *mt-mi-agent-write*"))
-         (fsm (gptel-make-fsm :info (list :buffer agent-buf)))
-         (result-block
-          "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\">\nreview\n</agent-result>"))
-    (unwind-protect
-        (progn
-          (with-current-buffer agent-buf
-            (setq-local mevedel--session session)
-            (setq-local mevedel--agent-invocation inv)
-            (insert "* Agent Task: verify\n"))
-          (mevedel-tools--insert-session-injected-prompt
-           session fsm (list :payload result-block) result-block)
-          (with-current-buffer agent-buf
-            (goto-char (point-min))
-            (should-not (search-forward "<agent-result" nil t))))
-      (kill-buffer agent-buf)))
-
-  :doc "advances the response marker after main-session mailbox insertion"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-mi-main-marker*")))
-    (unwind-protect
-        (let* ((data (list :messages
-                           (vector (list :role "user"
-                                         :content "active turn"))))
-               (position nil)
-               (fsm nil))
-          (with-current-buffer buf
-            (setq-local mevedel--session session)
-            (insert "active turn\n")
-            (setq position (copy-marker (point) nil)))
-          (setq fsm
-                (gptel-make-fsm
-                 :info (list :buffer buf
-                             :backend nil
-                             :data data
-                             :position position)))
-          (setf (mevedel-session-messages session)
-                '((:from "explorer--abc" :body "hello main")))
-          (mevedel-tools--handle-message-inject fsm)
-          (with-current-buffer buf
-            (goto-char position)
-            (insert (propertize "assistant response\n" 'gptel 'response))
-            (let ((text (buffer-substring-no-properties
-                         (point-min) (point-max))))
-              (should (< (string-match-p "<agent-message" text)
-                         (string-match-p "assistant response" text)))
-              (should (string-match-p "hello main" text)))))
-      (kill-buffer buf)))
-
-  :doc "preserves background agent-result blocks without message wrapping"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-mi-result*"))
-         (result-block
-          "<agent-result agent-id=\"explorer--abc\" type=\"explorer\">\nfound it\n</agent-result>"))
-    (unwind-protect
-        (let* ((data (list :messages (vector)))
-               (fsm (gptel-make-fsm
-                     :info (list :buffer buf
-                                 :backend nil
-                                 :data data))))
-          (with-current-buffer buf
-            (setq-local mevedel--session session))
-          (setf (mevedel-session-messages session)
-                (list (list :from "explorer--abc"
-                            :body result-block
-                            :agent-result-p t)))
-          (mevedel-tools--handle-message-inject fsm)
-          (let* ((msgs (plist-get data :messages))
-                 (content (plist-get (aref msgs 0) :content)))
-            (should (string-match-p
-                     "\\`<agent-result agent-id=\"explorer--abc\""
-                     content))
-            (should-not (string-match-p "<agent-message" content)))
-          (with-current-buffer buf
-            (goto-char (point-min))
-            (should (search-forward
-                     "<agent-result agent-id=\"explorer--abc\""
-                     nil t))
-            (should-not (get-text-property (match-beginning 0) 'gptel))
-            (should (search-forward "</agent-result>" nil t))
-            (should-not (get-text-property (1- (match-end 0)) 'gptel))))
-      (kill-buffer buf)))
-
-  :doc "drops duplicate background agent-result deliveries"
-  (let* ((session (mevedel-tools-test--make-session))
-         (buf (generate-new-buffer " *mt-mi-result-dupe*"))
-         (agent-id "explorer--abc123")
-         (result-block
-          (format
-           "<agent-result agent-id=\"%s\" type=\"explorer\">\nfound it\n</agent-result>"
-           agent-id)))
-    (unwind-protect
-        (let* ((data (list :messages (vector)))
-               (fsm (gptel-make-fsm
-                     :info (list :buffer buf
-                                 :backend nil
-                                 :data data))))
-          (with-current-buffer buf
-            (setq-local mevedel--session session)
-            (insert result-block "\n"))
-          (setf (mevedel-session-messages session)
-                (list (list :from agent-id
-                            :body result-block
-                            :agent-result-p t)))
-          (mevedel-tools--handle-message-inject fsm)
-          (should-not (mevedel-session-messages session))
-          (should (= 0 (length (plist-get data :messages))))
-          (with-current-buffer buf
-            (goto-char (point-min))
-            (should (search-forward agent-id nil t))
-            (should-not (search-forward agent-id nil t))))
-      (kill-buffer buf)))
-
-  :doc "is a no-op when the mailbox is empty"
-  (let* ((_ (mevedel-define-agent mi-b :description "a" :tools nil))
-         (agent (mevedel-agent-get "mi-b"))
-         (inv (mevedel-agent-invocation-create agent))
-         (ov-buf (generate-new-buffer " *mt-mi-ov2*")))
-    (unwind-protect
-        (let* ((ov (with-current-buffer ov-buf
-                     (insert "x")
-                     (make-overlay (point-min) (point-max))))
-               (data (list :messages (vector)))
-               (fsm (gptel-make-fsm
-                     :info (list :context ov
-                                 :backend nil
-                                 :data data))))
-          (setf (gptel-fsm-info fsm)
-                (plist-put (gptel-fsm-info fsm)
-                           :mevedel-agent-invocation inv))
-          (mevedel-tools--handle-message-inject fsm)
-          (should (equal 0 (length (plist-get data :messages)))))
-      (kill-buffer ov-buf)))
-
-  :doc "is a no-op when FSM has no context"
+  :doc "does nothing when the FSM has no owning context"
   (let* ((data (list :messages (vector (list :role "user" :content "x"))))
          (fsm (gptel-make-fsm :info (list :data data))))
     (mevedel-tools--handle-message-inject fsm)
-    (should (equal 1 (length (plist-get data :messages))))))
+    (should (= 1 (length (plist-get data :messages))))))
+
 
 (mevedel-deftest mevedel-tools--handle-agent-roster-inject ()
   ,test
@@ -1390,30 +991,12 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             "New direct child agents:"
             (plist-get (aref (plist-get data :messages) 1) :content))))
       (kill-buffer buffer))))
-
-
-;;
-;;; Background agent spawning
-
-
-
-
-;;
-;;; BWAIT (background wait) mechanism
-
-
-
-
-
-
-
-
 (mevedel-deftest mevedel-agent-exec--record-activity
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
 
-  :doc "syncs running background activity into transcript metadata"
+  :doc "syncs running activity into transcript metadata"
   (let* ((session (mevedel-tools-test--make-session))
          (parent (generate-new-buffer " *mt-activity-parent*"))
          (agent-id "explorer--activity-sync")
@@ -1422,7 +1005,6 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                :parent-session session
                :parent-data-buffer parent
                :transcript-status 'running
-               :background-p t
                :call-count 20
                :activity (list (list :type 'waiting
                                      :summary "waiting")))))

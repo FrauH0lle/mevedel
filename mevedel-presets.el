@@ -10,9 +10,8 @@
 ;;
 ;; Each preset assembles tool lists and registers sub-agents buffer-locally at
 ;; request time.  This module builds the request FSM handler chain around the
-;; neutral terminal transaction in `mevedel-turn'.  Deferred-tool wiring (BWAIT
-;; state and handler-table injection) also lives here because it piggy-backs on
-;; preset setup.
+;; neutral terminal transaction in `mevedel-turn'.  Deferred-tool handler
+;; wiring also lives here because it piggy-backs on preset setup.
 
 ;;; Code:
 
@@ -34,10 +33,6 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel-request--transitions)
 (defvar gptel-tools)
-
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--handle-bwait
-                  "mevedel-agent-runtime" (fsm))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agents--setup-for-request
@@ -378,7 +373,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (worker explorer coordinator reviewer verifier)
+    :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                mevedel-system--base-prompt nil nil
@@ -395,7 +390,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (worker explorer coordinator reviewer verifier)
+    :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                mevedel-system--base-prompt nil nil
@@ -419,7 +414,7 @@ semantics.  Ordinary keys prefer `mevedel-KEY' and `mevedel--KEY', then
             (:deferred code)
             (:deferred web)
             (:deferred elisp))
-    :agents (worker explorer coordinator reviewer verifier)
+    :agents (worker explorer reviewer verifier)
     :system (lambda ()
               (mevedel-system-build-prompt
                mevedel-system--tutor-base-prompt nil nil
@@ -527,8 +522,7 @@ alist with mevedel-specific handlers added:
   2.  Final patch generation (terminal state handler)
   3.  Request callback invocation (terminal state handler)
   4.  Canonical successful-turn transaction (DONE state handler only)
-  5.  Failure and abort cleanup
-  6.  BWAIT parking"
+  5.  Failure and abort cleanup"
   ;; 1. Add the pre-sample WAIT handlers in execution order.
   (let ((wait-entry (assq 'WAIT handlers)))
     (when wait-entry
@@ -628,13 +622,6 @@ alist with mevedel-specific handlers added:
       (if entry
           (setcdr entry (append (cdr entry) (list failure-handler)))
         (push (list state failure-handler) handlers))))
-  ;; The BWAIT handler parks the FSM when background agents are running.
-  (let ((bwait-entry (assq 'BWAIT handlers)))
-    (if bwait-entry
-        (setcdr bwait-entry
-                (append (cdr bwait-entry)
-                        (list #'mevedel-agent-runtime--handle-bwait)))
-      (push (list 'BWAIT #'mevedel-agent-runtime--handle-bwait) handlers)))
   (setq handlers (mevedel--wrap-terminal-handlers handlers))
   ;; Install the internally isolated successful transaction after the
   ;; ordinary terminal handlers have been wrapped.  Keeping the named

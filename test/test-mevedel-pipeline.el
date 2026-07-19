@@ -4190,7 +4190,7 @@
 			   (insert mevedel-pipeline--render-data-open "\n")
 			   (dotimes (_ 10000)
 			     (insert "\n"))
-			   (insert "(:kind agent-transcript :agent-id \"target\" :status running)\n")
+			   (insert "(:kind collaboration-event :event started :agent-id \"target\" :status running)\n")
 			   (insert mevedel-pipeline--render-data-close "\n")
 			   (insert "trailing text\n")
 			   (let ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
@@ -4206,7 +4206,7 @@
 		 (test)
 		 :doc "patch updates the block in place and round-trips through extract"
 		 (let ((b1 (mevedel-pipeline--format-render-data-block
-			    '(:kind agent-transcript :agent-id "a--1" :status running))))
+			    '(:kind collaboration-event :event started :agent-id "a--1" :status running))))
 		   (with-temp-buffer
 		     (insert "leading text\n")
 		     (insert b1)
@@ -4216,7 +4216,7 @@
 		       (should bounds)
 		       (mevedel-pipeline--patch-render-data-block
 			(car bounds) (cdr bounds)
-			'(:kind agent-transcript :agent-id "a--1" :status completed
+			'(:kind collaboration-event :event started :agent-id "a--1" :status completed
 				:elapsed 1.5)))
 		     (let* ((bounds (mevedel-pipeline--find-render-data-block-by-agent-id
 				     "a--1"))
@@ -4233,7 +4233,7 @@
 		 ;; two and the LLM-invisible render-data block would render visibly
 		 ;; in the user-facing tool body.
 		 (let* ((b1 (mevedel-pipeline--format-render-data-block
-			     '(:kind agent-transcript :agent-id "a--1" :status running))))
+			     '(:kind collaboration-event :event started :agent-id "a--1" :status running))))
 		   (with-temp-buffer
 		     (let ((tool-prop '(tool . "tool-id-42")))
 		       (insert (propertize "(:name \"Agent\" :args nil)\nlaunch text\n"
@@ -4243,7 +4243,7 @@
 				    "a--1")))
 		       (mevedel-pipeline--patch-render-data-block
 			(car bounds) (cdr bounds)
-			'(:kind agent-transcript :agent-id "a--1" :status completed)))
+			'(:kind collaboration-event :event started :agent-id "a--1" :status completed)))
 		     (let ((seen (cl-remove-duplicates
 				  (let ((acc nil)
 					(pos (point-min)))
@@ -4258,7 +4258,7 @@
 
 		 :doc "patch is a no-op on the surrounding text"
 		 (let ((b1 (mevedel-pipeline--format-render-data-block
-			    '(:kind agent-transcript :agent-id "a--1" :status running))))
+			    '(:kind collaboration-event :event started :agent-id "a--1" :status running))))
 		   (with-temp-buffer
 		     (insert "before\n")
 		     (insert b1)
@@ -4267,7 +4267,7 @@
 				    "a--1")))
 		       (mevedel-pipeline--patch-render-data-block
 			(car bounds) (cdr bounds)
-			'(:kind agent-transcript :agent-id "a--1" :status completed)))
+			'(:kind collaboration-event :event started :agent-id "a--1" :status completed)))
 		     (should (string-match-p "\\`before\n" (buffer-string)))
 		     (should (string-match-p "after\n\\'" (buffer-string))))))
 

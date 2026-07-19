@@ -286,9 +286,13 @@ permission mode requires user confirmation.  Sets up the diff buffer,
 inserts the inline overlay, and registers it with `mevedel-preview-mode'.
 CALLBACK is delivered the final plist after approve/reject; APPLY-FN and
 TOOL-NAME carry through to the overlay."
+  (require 'mevedel-view-interaction)
   (let* ((data-buffer (current-buffer))
          (origin (mevedel-current-origin))
-         (chat-buffer (mevedel-view--interaction-target-buffer data-buffer))
+         (chat-buffer
+          (condition-case nil
+              (mevedel-view--interaction-target-buffer data-buffer)
+            (error data-buffer)))
          (root (or (mevedel-workspace--file-in-allowed-roots-p path data-buffer)
                    (file-name-directory (expand-file-name path))))
          (workspace (mevedel-workspace data-buffer))

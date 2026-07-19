@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-chat)
+(require 'mevedel-agent-control)
 (require 'mevedel)
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
@@ -184,9 +185,6 @@
 				    #'ignore)
 				   ((symbol-function
 				     'mevedel-preset--build-handlers)
-				    #'identity)
-				   ((symbol-function
-				     'mevedel-agent-runtime--bwait-injected-table)
 				    #'identity)
 				   ((symbol-function
 				     'mevedel-session-persistence--install-gptel-save-state-advice)
@@ -920,7 +918,7 @@
 			     (should (equal "Waiting for review"
 			                    (mevedel-goal-reason goal)))))
 
-				 :doc "stops registered agents with no live request process"
+				 :doc "root abort leaves retained agent turns independent"
 			 (with-temp-buffer
 			   (let* ((workspace (mevedel-workspace--create
 					      :type 'project
@@ -929,32 +927,24 @@
 					      :name "abort-agents"))
 				  (session (mevedel-session-create "main" workspace))
 				  (invocation (mevedel-agent-invocation--create
-					       :agent-id "explorer--parked"
-					       :description "parked"
+					       :path "/root/explorer"
+					       :description "retained"
 					       :transcript-status 'running))
-				  (stopped nil)
+				  (record (mevedel-agent-record--create
+					   :path "/root/explorer"
+					   :activity 'running
+					   :invocation invocation))
+				  interrupted
 				  (gptel--request-alist nil))
 			     (setq-local mevedel--session session)
-			     (setq-local mevedel-agent-runtime--fsms
-					 (list (cons "explorer--parked"
-						     (gptel-make-fsm
-						      :info
-						      (list
-						       :mevedel-agent-invocation
-						       invocation)))))
-			     (cl-letf (((symbol-function 'mevedel-agent-runtime-stop)
-					(lambda (agent-id reason parent-buffer)
-					  (push (list agent-id reason parent-buffer)
-						stopped)
-					  (setq mevedel-agent-runtime--fsms
-						(assoc-delete-all
-						 agent-id
-						 mevedel-agent-runtime--fsms)))))
+			     (setf (mevedel-session-agent-registry session)
+				   (list (cons "/root/explorer" record)))
+			     (cl-letf (((symbol-function 'mevedel-agent-runtime-interrupt)
+					(lambda (&rest _) (setq interrupted t))))
 			       (mevedel-abort (current-buffer)))
-			     (should (equal "explorer--parked" (caar stopped)))
-			     (should (equal "parent request aborted" (cadar stopped)))
-			     (should (eq (caddar stopped) (current-buffer)))
-			     (should (null mevedel-agent-runtime--fsms)))))
+			     (should-not interrupted)
+			     (should (eq 'running
+					 (mevedel-agent-record-activity record))))))
 
 
 ;;

@@ -42,6 +42,8 @@
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-path
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
@@ -945,6 +947,8 @@ permission policy decides whether verifier validation commands may run."
                      (mevedel-agent-invocation-agent invocation)))
          (agent-id (and (mevedel-agent-invocation-p invocation)
                         (mevedel-agent-invocation-agent-id invocation)))
+         (path (and (mevedel-agent-invocation-p invocation)
+                    (mevedel-agent-invocation-path invocation)))
          (rel (and (mevedel-agent-invocation-p invocation)
                    (mevedel-agent-invocation-transcript-relative-path
                     invocation)))
@@ -960,10 +964,12 @@ permission policy decides whether verifier validation commands may run."
               hint
               (mevedel-review--command-description command))))
     (append
-     (list :kind 'agent-transcript
+     (list :kind 'collaboration-event
+           :event 'started
+           :path path
            :agent-id agent-id
-           :agent-type (or (and agent (mevedel-agent-name agent))
-                           (mevedel-review--command-agent-name command))
+           :role (or (and agent (mevedel-agent-name agent))
+                     (mevedel-review--command-agent-name command))
            :name (mevedel-review--command-label command)
            :description description
            :progress-handle (mevedel-review--command-handle command)
@@ -977,7 +983,7 @@ permission policy decides whether verifier validation commands may run."
 (defun mevedel-review--insert-progress-handle (invocation hint &optional command)
   "Insert hidden progress handle for INVOCATION, HINT, and COMMAND."
   (when-let* (((mevedel-agent-invocation-p invocation))
-              (agent-id (mevedel-agent-invocation-agent-id invocation)))
+              (path (mevedel-agent-invocation-path invocation)))
     (require 'mevedel-pipeline)
     (let* ((render-data
             (mevedel-review--progress-render-data invocation hint command))

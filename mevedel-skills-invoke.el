@@ -36,10 +36,17 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel-agent-exec--agents)
 
-;; `mevedel-agent-runtime'
-;; Use `t' for the arglist: cl-defun with &key keywords confuses the
-;; byte-compiler's arity check.
-(declare-function mevedel-agent-runtime-dispatch "mevedel-agent-runtime" t t)
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-current-path
+                  "mevedel-agent-control" (session))
+(declare-function mevedel-agent-control-spawn
+                  "mevedel-agent-control" t t)
+(declare-function mevedel-agent-record-conversation-location
+                  "mevedel-agent-control" (cl-x) t)
+(declare-function mevedel-agent-record-id
+                  "mevedel-agent-control" (cl-x) t)
+(declare-function mevedel-agent-record-role
+                  "mevedel-agent-control" (cl-x) t)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent--create "mevedel-agents" (&rest args))
@@ -100,6 +107,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-invoked-skills
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-agent-registry
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-directive-uuid)
@@ -112,12 +121,6 @@
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get "mevedel-tool-registry"
                   (name &optional category))
-
-;; `mevedel-tools'
-(declare-function mevedel-tools--current-deferred-context "mevedel-tools" ())
-(declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
-(declare-function mevedel-tools--handle-terminal-mailbox "mevedel-tools" (fsm))
-(defvar mevedel-tools--current-fsm)
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -1552,6 +1555,67 @@ tools propagate through the spawn path's request-locals capture."
      (t
       (mevedel-skills--build-parent-inherited-agent skill)))))
 
+(defun mevedel-skills--fork-task-name (session skill-name)
+  "Return an unused retained-agent task name for SKILL-NAME in SESSION."
+  (require 'mevedel-agent-control)
+  (let* ((base
+          (concat
+           "skill_"
+           (replace-regexp-in-string
+            "[^a-z0-9_]+" "_" (downcase skill-name))))
+         (parent (mevedel-agent-control-current-path session))
+         (candidate base)
+         (suffix 2))
+    (while (assoc (concat parent "/" candidate)
+                  (mevedel-session-agent-registry session))
+      (setq candidate (format "%s_%d" base suffix)
+            suffix (1+ suffix)))
+    candidate))
+
+(defun mevedel-skills--fork-result-render-data (session envelope skill description)
+  "Return transcript render data for retained result ENVELOPE in SESSION."
+  (let* ((path (plist-get envelope :sender))
+         (record (cdr (assoc path (mevedel-session-agent-registry session)))))
+    (when record
+      (list :kind 'collaboration-event
+            :event 'started
+            :path path
+            :agent-id (mevedel-agent-record-id record)
+            :role (mevedel-agent-record-role record)
+            :name (mevedel-skill-name skill)
+            :description description
+            :status 'completed
+            :calls 0
+            :body ""
+            :transcript-relative-path
+            (mevedel-agent-record-conversation-location record)))))
+
+(defun mevedel-skills--handle-fork-result
+    (session skill prepared hook-audits description callback display-callback
+             envelope)
+  "Deliver retained fork ENVELOPE through the ordinary skill callbacks."
+  (let ((outcome (plist-get envelope :outcome))
+        (payload (plist-get envelope :payload))
+        (path (plist-get envelope :sender)))
+    (if (eq outcome 'completed)
+        (mevedel-skills--invoke-done
+         skill
+         (list :status 'ok
+               :kind 'fork
+               :result payload
+               :agent-path path
+               :hook-audits (or hook-audits
+                                (plist-get prepared :hook-audits))
+               :render-data
+               (mevedel-skills--fork-result-render-data
+                session envelope skill description))
+         callback display-callback)
+      (mevedel-skills--invoke-error
+       skill
+       (intern (format "agent-%s" outcome))
+       (if (stringp payload) payload (format "%S" payload))
+       callback display-callback))))
+
 (cl-defun mevedel-skills-dispatch-prepared-fork
     (prepared callback &key prompt request-context hook-audits
               description on-invocation display-callback)
@@ -1566,7 +1630,11 @@ DISPLAY-CALLBACK retain the normal fork dispatch meanings."
          (agent (and skill (mevedel-skills--build-fork-agent skill)))
          (context (or request-context
                       (plist-get prepared :request-context)))
-         (session (and (boundp 'mevedel--session) mevedel--session)))
+         (session (and (boundp 'mevedel--session) mevedel--session))
+         (task-description
+          (or description
+              (and skill (mevedel-skill-description skill))
+              skill-name)))
     (cond
      ((not (and (eq (plist-get prepared :status) 'ok)
                 (eq (plist-get prepared :kind) 'fork)
@@ -1580,46 +1648,32 @@ DISPLAY-CALLBACK retain the normal fork dispatch meanings."
        (format "Skill '%s' references unknown agent '%s'"
                skill-name (mevedel-skill-agent skill))
        callback display-callback))
+     ((null session)
+      (mevedel-skills--invoke-error
+       skill 'missing-session "Fork skills require an active session"
+       callback display-callback))
      (t
       (mevedel-skills-commit-invoked-records
        session (plist-get context :invoked-skills))
-      (unless (fboundp 'mevedel-agent-runtime-dispatch)
-        (require 'mevedel-agent-runtime))
+      (require 'mevedel-agent-control)
       (condition-case err
-          (mevedel-agent-runtime-dispatch
-           (lambda (response)
-             (let* ((wrapped-p
-                     (and (listp response)
-                          (plist-member response :result)))
-                    (result (if wrapped-p
-                                (plist-get response :result)
-                              response))
-                    (render-data
-                     (and wrapped-p (plist-get response :render-data)))
-                    (transcript-agent-id
-                     (and wrapped-p (plist-get render-data :agent-id))))
-               (mevedel-skills--invoke-done
-                skill
-                `(:status ok :kind fork
-                          :result ,result
-                          :agent-id ,(or transcript-agent-id
-                                         (mevedel-agent-name agent))
-                          :hook-audits ,(or hook-audits
-                                            (plist-get prepared :hook-audits))
-                          :render-data ,render-data)
-                callback display-callback)))
-           agent
-           (or description (mevedel-skill-description skill) skill-name)
+          (mevedel-agent-control-spawn
+           session
+           (mevedel-skills--fork-task-name session skill-name)
            (or prompt (plist-get prepared :body) "")
-           :parent-context (mevedel-tools--current-deferred-context)
-           :parent-fsm mevedel-tools--current-fsm
-           :message-handler #'mevedel-tools--handle-message-inject
-           :terminal-handler #'mevedel-tools--handle-terminal-mailbox
+           :agent agent
+           :fork-turns "none"
+           :model (plist-get context :model)
+           :effort (plist-get context :effort)
+           :description task-description
            :skill-permission-rules (plist-get context :permission-rules)
-           :skill-model-override (plist-get context :model)
-           :skill-effort-override (plist-get context :effort)
            :skill-hook-rules (plist-get context :hook-rules)
-           :on-invocation on-invocation)
+           :on-invocation on-invocation
+           :result-handler
+           (apply-partially
+            #'mevedel-skills--handle-fork-result
+            session skill prepared hook-audits task-description
+            callback display-callback))
         (error
          (mevedel-skills--invoke-error
           skill 'agent-dispatch-failed (error-message-string err)
@@ -1661,7 +1715,7 @@ CALLBACK retain the public invocation lifecycle semantics."
 CALLBACK is invoked with a normalized invocation outcome plist:
 
   (:status ok    :kind inline :body BODY :request-context CTX)
-  (:status ok    :kind fork   :result RESULT :agent-id ID
+  (:status ok    :kind fork   :result RESULT :agent-path PATH
                   :render-data DATA)
   (:status error :reason REASON :message MESSAGE)
 
@@ -1677,13 +1731,13 @@ ADDITIONAL-CONTEXT is appended to fork-skill agent prompts after body
 injections have prepared the prompt.
 
 DESCRIPTION overrides the task description for fork skills.
-ON-INVOCATION is forwarded to `mevedel-agent-runtime-dispatch' for fork skills.
+ON-INVOCATION receives the retained invocation for fork skills.
 SKIP-GATES bypasses user-disabled/user-invocable/model-invocable gates
 for first-class local commands that own their dispatch semantics.
 
 Inline and fork contexts are callback-driven.  Inline invocation
-calls CALLBACK with a prepared body; fork invocation dispatches a
-foreground agent and calls CALLBACK when that agent returns."
+calls CALLBACK with a prepared body; fork invocation spawns a retained
+asynchronous agent and calls CALLBACK when that turn settles."
   (let ((skill-name (and skill (mevedel-skill-name skill))))
     (cond
      ((not (mevedel-skill-p skill))
@@ -2218,8 +2272,8 @@ should inline with it."
   "Insert fork skill OUTCOME as an assistant response in the data buffer.
 
 The current buffer must be the data buffer.  This path is used when a
-fork skill suppresses the main `gptel-send'; it records the
-foreground agent's final result as the assistant side of that turn and
+fork skill suppresses the main `gptel-send'; it records the retained
+agent's final result as the assistant side of that turn and
 runs the normal post-response hooks so the view and persistence layers
 observe the completed response."
   (require 'mevedel-utilities)
@@ -2301,7 +2355,7 @@ the prompt prefix.
 
 CONTINUE-FN, when non-nil, resumes the original `gptel-send' after an
 inline body has been inserted.  Fork outcomes suppress that send and
-insert their result when the foreground agent finishes."
+insert their result when the retained agent finishes."
   (pcase (plist-get outcome :status)
     ('ok
      (pcase (plist-get outcome :kind)

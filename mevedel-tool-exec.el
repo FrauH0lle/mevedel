@@ -31,6 +31,10 @@
 (defvar gptel-use-tools)
 (defvar read-eval)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-enqueue-execution-result
+                  "mevedel-agent-control" (session owner body))
+
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-queue-execution-completion
                   "mevedel-agent-runtime"
@@ -142,6 +146,7 @@
                   "mevedel-structs" (request canceller))
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
@@ -2182,11 +2187,18 @@ stopped command's outcome."
             (mevedel-tool-exec--observation-envelope
              observation
              (plist-get args :suppress-sandbox-disclosure-p))))
-      (require 'mevedel-agent-runtime)
-      (mevedel-agent-runtime-queue-execution-completion
-       owner-context
-       (plist-get event :owner)
-       (plist-get envelope :result)))))
+      (if (mevedel-session-p owner-context)
+          (progn
+            (require 'mevedel-agent-control)
+            (mevedel-agent-control-enqueue-execution-result
+             owner-context
+             (plist-get event :owner)
+             (plist-get envelope :result)))
+        (require 'mevedel-agent-runtime)
+        (mevedel-agent-runtime-queue-execution-completion
+         owner-context
+         (plist-get event :owner)
+         (plist-get envelope :result))))))
 
 (defun mevedel-tool-exec--bash (callback args)
   "Execute a Bash command and return its output.

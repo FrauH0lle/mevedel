@@ -44,7 +44,6 @@ session backend, model, and reasoning effort."
     (implementation :tier fast)
     (review :tier strong)
     (explorer :tier fast)
-    (coordinator :tier strong)
     (verifier :tier balanced)
     (reviewer :tier strong)
     (guardian :tier fast)

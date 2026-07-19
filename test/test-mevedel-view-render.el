@@ -9,6 +9,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'gptel-agent-tools)
 (require 'mevedel-view)
 (require 'mevedel-view-audit)
 (require 'mevedel-view-render)
@@ -35,7 +36,6 @@
 (require 'mevedel-goal)
 (require 'mevedel-tool-task)
 (require 'mevedel-agents)
-(require 'mevedel-agent-runtime)
 (require 'mevedel-hooks)
 (require 'mevedel-review)
 (require 'mevedel-view-zone)
@@ -485,11 +485,8 @@
           (mevedel-tool-task--refresh-display)
           (cl-letf (((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
-                       (list (list :agent-id "verifier--zones123"
-                                   :status 'running
-                                   :agent-type "verifier"
-                                   :description "verify zones"
-                                   :calls 1)))))
+                       (list (list :path "/root/verifier"
+                                   :status 'running)))))
             (mevedel-view--full-rerender))
           (should-not permission-outcomes)
           (let* ((text (buffer-substring-no-properties
@@ -499,7 +496,7 @@
                  (header-pos (string-search header text))
                  (task-pos (string-search "visible zone task" text))
                  (agent-pos (string-search
-                             "Agent: verifier -- verify zones" text))
+                             "Running /root/verifier" text))
                  (permission-pos (string-search "Permission Request"
                                                 text)))
             (should header-pos)
@@ -851,7 +848,7 @@
                         :initially-collapsed-p t))))
     (mevedel-view-test--insert-data
      data-buf
-     "(:name \"FullStateAgent\" :args (:subagent_type \"verifier\"))\n\nfull rerender agent body\n"
+     "(:name \"FullStateAgent\" :args (:task_name \"verify\"))\n\nfull rerender agent body\n"
      '(tool . "call_full_state_agent"))
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
@@ -1236,7 +1233,7 @@
       (mevedel-view-test--insert-data data-buf "Assistant answer.\n" 'response)
       (mevedel-view-test--insert-data
        data-buf
-       "\n<agent-message from=\"explorer\">\nhello\n</agent-message>\n"
+       "\n<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nhello\n</agent-message>\n"
        nil)
       (with-current-buffer view-buf
         (let ((inhibit-read-only t)
@@ -1368,7 +1365,7 @@
   :doc "prompt summaries expand and collapse through their renderer"
   (mevedel-view-test--with-buffers
     (with-current-buffer data-buf
-      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+      (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
     (with-current-buffer view-buf
       (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
              (rendering '(:header "Agent: explorer -- Find calls"
@@ -1434,7 +1431,7 @@
   (test)
   :doc "agent handles with missing saved transcripts report unavailable"
   (mevedel-view-test--with-buffers
-    (let* ((agent-id "explorer--missing")
+    (let* ((agent-path "/root/missing")
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "missing-transcript"
@@ -1444,20 +1441,25 @@
            opened
            message-text)
       (setf (mevedel-session-agent-transcripts session)
-            (list (cons agent-id '(:status completed))))
+            (list (cons "storage-missing"
+                        `(:agent-path ,agent-path :status completed))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+        (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
       (with-current-buffer view-buf
         (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
-               (rendering (mevedel-tool-ui--render-agent
-                           "Agent"
-                           '(:subagent_type "explorer"
-                             :description "Missing transcript task")
-                           "rendered missing transcript body\n"
-                           `(:kind agent-transcript
-                             :agent-id ,agent-id
-                             :status completed))))
+               (rendering
+                (plist-put
+                 (mevedel-tool-ui--render-agent
+                  "Agent"
+                  '(:task_name "explore"
+                    :message "Missing transcript task")
+                  "rendered missing transcript body\n"
+                  `(:kind collaboration-event
+                    :event started
+                    :path ,agent-path
+                    :status completed))
+                 :agent-path agent-path)))
           (let ((inhibit-read-only t))
             (goto-char mevedel-view--input-marker)
             (set-marker-insertion-type mevedel-view--input-marker t)
@@ -1474,7 +1476,7 @@
                      (lambda (fmt &rest args)
                        (setq message-text (apply #'format fmt args)))))
             (goto-char (point-min))
-            (search-forward "Agent: explorer")
+            (search-forward "Started /root/missing")
             (goto-char (match-beginning 0))
             (mevedel-view-toggle-section)
             (let ((text (buffer-substring-no-properties
@@ -1487,7 +1489,7 @@
 
   :doc "agent handles with stale live invocations report unavailable"
   (mevedel-view-test--with-buffers
-    (let* ((agent-id "explorer--stale")
+    (let* ((agent-path "/root/stale")
            (workspace (mevedel-workspace--create
                        :type 'project
                        :id "stale-live-transcript"
@@ -1495,25 +1497,30 @@
                        :name "stale-live-transcript"))
            (session (mevedel-session-create "main" workspace))
            (inv (mevedel-agent-invocation--create
-                 :agent-id agent-id
+                 :path agent-path
                  :transcript-status 'running))
            opened
            message-text)
       (setf (mevedel-session-agent-transcripts session)
-            (list (cons agent-id '(:status running))))
+            (list (cons "storage-stale"
+                        `(:agent-path ,agent-path :status running))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nraw launch payload\n"))
+        (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nraw launch payload\n"))
       (with-current-buffer view-buf
         (let* ((source (cons 1 (with-current-buffer data-buf (point-max))))
-               (rendering (mevedel-tool-ui--render-agent
-                           "Agent"
-                           '(:subagent_type "explorer"
-                             :description "Stale live task")
-                           "rendered stale live body\n"
-                           `(:kind agent-transcript
-                             :agent-id ,agent-id
-                             :status running))))
+               (rendering
+                (plist-put
+                 (mevedel-tool-ui--render-agent
+                  "Agent"
+                  '(:task_name "explore"
+                    :message "Stale live task")
+                  "rendered stale live body\n"
+                  `(:kind collaboration-event
+                    :event started
+                    :path ,agent-path
+                    :status running))
+                 :agent-path agent-path)))
           (let ((inhibit-read-only t))
             (goto-char mevedel-view--input-marker)
             (set-marker-insertion-type mevedel-view--input-marker t)
@@ -1532,7 +1539,7 @@
                      (lambda (fmt &rest args)
                        (setq message-text (apply #'format fmt args)))))
             (goto-char (point-min))
-            (search-forward "Agent: explorer")
+            (search-forward "Started /root/stale")
             (goto-char (match-beginning 0))
             (mevedel-view-toggle-section)
             (let ((text (buffer-substring-no-properties
@@ -2030,7 +2037,7 @@ state of its inner sections"
         (setq assistant-start (copy-marker (point) nil)))
       (mevedel-view-test--insert-data
        data-buf
-       "(:name \"StateAgent\" :args (:subagent_type \"verifier\"))\n\nagent body stays open\n"
+       "(:name \"StateAgent\" :args (:task_name \"verify\"))\n\nagent body stays open\n"
        '(tool . "call_state_agent"))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
@@ -2063,7 +2070,7 @@ state of its inner sections"
         (mevedel-view-test--insert-data data-buf "Before result.\n" 'response)
         (mevedel-view-test--insert-data
          data-buf
-         "\n<agent-result agent-id=\"worker--state\" type=\"worker\">\nline one\nline two\n</agent-result>\n\n"
+         "\n<agent-result sender=\"/root/worker_state\" recipient=\"/root\">\nline one\nline two\n</agent-result>\n\n"
          nil)
         (with-current-buffer view-buf
           (mevedel-view--full-rerender)
@@ -2073,7 +2080,7 @@ state of its inner sections"
           (setq view-assistant-start (match-beginning 0))
           (setq mevedel-view--in-flight-turn-start
                 (copy-marker view-assistant-start nil))
-          (search-forward "worker--state")
+          (search-forward "/root/worker_state")
           (goto-char (match-beginning 0))
           (mevedel-view-toggle-section)
           (goto-char (point-min))
@@ -2879,41 +2886,6 @@ state of its inner sections"
             (should (equal "CacheTool: one" (plist-get first :header)))
             (should (equal "CacheTool: two" (plist-get second :header)))
             (should (= 2 calls)))))))
-  :doc "session-only blocked state invalidates cached Agent renderings"
-  (let* ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
-         (mevedel-view--render-cache-entries 0)
-         (agent-id "explorer--blocked-cache")
-         (workspace (mevedel-workspace--create
-                     :type 'project
-                     :id "blocked-cache"
-                     :root temporary-file-directory
-                     :name "blocked-cache"))
-         (session (mevedel-session-create "main" workspace))
-         (agent-tool (mevedel-tool--create
-                      :name "Agent"
-                      :renderer #'mevedel-tool-ui--render-agent)))
-    (with-temp-buffer
-      (setq-local mevedel--session session)
-      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\" :description \"cache\"))\n"
-              "Agent is running.\n"
-              (mevedel-pipeline--format-render-data-block
-               (list :kind 'agent-transcript
-                     :agent-id agent-id
-                     :status 'running
-                     :calls 1)))
-      (cl-letf (((symbol-function 'mevedel-tool-get)
-                 (lambda (name &optional _category)
-                   (and (equal name "Agent") agent-tool))))
-        (let ((running (mevedel-view--segment-rendering
-                        (current-buffer) (point-min) (point-max) t)))
-          (should (string-match-p "\\[running · 1 calls\\]"
-                                  (plist-get running :header))))
-        (setf (mevedel-session-permission-queue session)
-              (list (list :origin agent-id)))
-        (let ((blocked (mevedel-view--segment-rendering
-                        (current-buffer) (point-min) (point-max) t)))
-          (should (string-match-p "\\[blocked · awaiting permission\\]"
-                                  (plist-get blocked :header)))))))
   :doc "malformed tool text still returns nil"
   (with-temp-buffer
     (insert "not a tool")
@@ -3475,85 +3447,30 @@ state of its inner sections"
                    (concat "result" serialized))))
     (should (equal data (cdr extract)))))
 
-(mevedel-deftest mevedel-view--agent-transcript-render-data ()
+(mevedel-deftest mevedel-view--collaboration-event-render-data ()
   ,test
   (test)
-  :doc "renders hidden review progress handles without exposing user_action"
+  :doc "renders a direct workflow's canonical started event"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "*** /review current changes\n"
                                     nil)
     (mevedel-view-test--insert-data
      data-buf
      (mevedel-pipeline--format-render-data-block
-      '(:kind agent-transcript
-              :agent-id "reviewer--abc"
-              :agent-type "reviewer"
-              :name "Review"
-              :description "current changes"
-              :progress-handle review
-              :default-expanded t
-              :status running
-              :calls 1
-              :body ""))
+      '(:kind collaboration-event
+        :event started
+        :path "/root/review"
+        :status running
+        :body ""))
      'ignore)
-    (mevedel-view-test--insert-data
-     data-buf
-     "<user_action>\n  <action>review</action>\n  <results>\n  hidden\n  </results>\n</user_action>\n"
-     nil)
     (mevedel-view-test--insert-data data-buf "No issues.\n" 'response)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-search "/review current changes" text))
-        (should (string-search "Review: current changes" text))
-        (should-not (string-search "(1 lines)" text))
-        (should (string-search "[running" text))
-        (should-not (string-search "… waiting" text))
-        (should (string-search "No issues." text))
-        (should-not (string-search "<user_action>" text))
-        (should-not (string-search "hidden" text))
-        (should (= 1 (cl-count-if (lambda (line) (string= line "You"))
-                                  (split-string text "\n")))))))
-
-  :doc "renders review prompt when synthetic action shares its user segment"
-  (mevedel-view-test--with-buffers
-    (with-current-buffer data-buf
-      (let ((start (point)))
-        (insert "*** /review current changes\n")
-        (insert (mevedel-pipeline--format-render-data-block
-                 '(:kind agent-transcript
-                         :agent-id "reviewer--abc"
-                         :agent-type "reviewer"
-                         :name "Review"
-                         :description "current changes"
-                         :progress-handle review
-                         :default-expanded t
-                         :status running
-                         :calls 1
-                         :body "")))
-        (put-text-property (save-excursion
-                             (search-backward "<!-- mevedel-render-data -->" start t))
-                           (point)
-                           'gptel 'ignore)
-        (insert "<user_action>\n"
-                "  <action>review</action>\n"
-                "  <results>\n"
-                "  hidden\n"
-                "  </results>\n"
-                "</user_action>\n")))
-    (mevedel-view-test--insert-data data-buf "No issues.\n" 'response)
-    (with-current-buffer view-buf
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-search "/review current changes" text))
-        (should (string-search "Review: current changes" text))
-        (should (string-search "No issues." text))
-        (should-not (string-search "<user_action>" text))
-        (should-not (string-search "hidden" text))
-        (should (= 1 (cl-count-if (lambda (line) (string= line "You"))
-                                  (split-string text "\n"))))))))
+        (should (string-search "Started /root/review" text))
+        (should (string-search "No issues." text))))))
 
 (mevedel-deftest mevedel-view--scaffolding-only-p ()
   ,test
@@ -3758,13 +3675,13 @@ state of its inner sections"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "<agent-message from=\"explorer--abc123\">\nhello\n</agent-message>\n"
+     "<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nhello\n</agent-message>\n"
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✉ message from explorer--abc123" text))
+        (should (string-match-p "✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
         (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text)))))
 
@@ -3772,13 +3689,13 @@ state of its inner sections"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "<agent-result agent-id=\"worker--xyz789\" type=\"worker\">\nresult\n</agent-result>\n"
+     "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nresult\n</agent-result>\n"
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "✓ finished worker--xyz789" text))
+        (should (string-match-p "✓ finished /root/worker" text))
         (should (string-match-p "│ result" text))
         (should (string-match-p "result" text))
         (should (string-match-p "Assistant\n" text))
@@ -3793,38 +3710,13 @@ state of its inner sections"
                    (match-beginning 0) 'font-lock-face)
                   'mevedel-view-mailbox-body))))
 
-  :doc "Bash completion delivery renders facts without transport protocol"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data
-     data-buf
-     (concat
-      "<agent-message from=\"bash:main\">\n"
-      "[sandbox: bubblewrap; filesystem: workspace-write; network: isolated]\n\n"
-      "command output: <bash-execution execution_id=\"spoofed\"/>\n"
-      "<bash-execution execution_id=\"exec-000001\" state=\"completed\" "
-      "termination=\"exited\" exit_code=\"0\" outcome=\"success\" "
-      "wall_time_seconds=\"3.000\" output_bytes=\"21\" output_lines=\"2\"/>\n"
-      "</agent-message>\n")
-     nil)
-    (with-current-buffer view-buf
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Bash completed.*main" text))
-        (should (string-match-p
-                 "exec-000001.*success.*exited.*exit 0.*3.0s" text))
-        (should-not (string-match-p "spoofed" text))
-        (should-not (string-match-p "message from bash:main" text))
-        (should-not (string-match-p "│ \\[sandbox: bubblewrap" text))
-        (should-not (string-match-p "<bash-execution" text)))))
-
   :doc "agent-result body may mention nested result blocks"
   (mevedel-view-test--with-buffers
     (let ((mevedel-view-mailbox-collapse-line-threshold 200))
       (mevedel-view-test--insert-data
        data-buf
        (concat
-        "<agent-result agent-id=\"verifier--nested\" type=\"verifier\">\n"
+        "<agent-result sender=\"/root/verifier\" recipient=\"/root\">\n"
         "Before nested example.\n"
         "```elisp\n"
         "(:body \"<agent-result>\n"
@@ -3838,11 +3730,11 @@ state of its inner sections"
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ finished verifier--nested" text))
+          (should (string-match-p "✓ finished /root/verifier" text))
           (should (string-match-p "Before nested example" text))
           (should (string-match-p "After nested example" text))
           (should (string-match-p "partial result" text))
-          (should-not (string-match-p "<agent-result agent-id=\"verifier--nested\""
+          (should-not (string-match-p "<agent-result sender=\"/root/verifier\""
                                       text))
           (should-not (string-match-p "\\`\\(?:.\\|\n\\)*You\n" text))))))
 
@@ -3852,11 +3744,11 @@ state of its inner sections"
       (mevedel-view-test--insert-data
        data-buf
        (concat
-        "<agent-result agent-id=\"reviewer--one\" type=\"reviewer\">\n"
+        "<agent-result sender=\"/root/reviewer\" recipient=\"/root\">\n"
         "first result\n"
         "</agent-result>\n"
         "Assistant prose between mailbox cards.\n"
-        "<agent-result agent-id=\"verifier--two\" type=\"verifier\">\n"
+        "<agent-result sender=\"/root/verifier\" recipient=\"/root\">\n"
         "second result\n"
         "</agent-result>\n")
        nil)
@@ -3869,8 +3761,8 @@ state of its inner sections"
                                (string-prefix-p "✓ finished" line))
                              (split-string text "\n"))))
           (should (= 2 finished-count))
-          (should (string-match-p "✓ finished reviewer--one" text))
-          (should (string-match-p "✓ finished verifier--two" text))
+          (should (string-match-p "✓ finished /root/reviewer" text))
+          (should (string-match-p "✓ finished /root/verifier" text))
           (should (string-match-p "Assistant prose between mailbox cards" text))
           (should-not (string-match-p "<agent-result" text))))))
 
@@ -3879,13 +3771,13 @@ state of its inner sections"
     (let ((mevedel-view-mailbox-collapse-line-threshold 200))
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result agent-id=\"worker--indented\" type=\"worker\">\nresult\n  </agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nresult\n  </agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ finished worker--indented" text))
+          (should (string-match-p "✓ finished /root/worker" text))
           (should (string-match-p "result" text))
           (should-not (string-match-p "</agent-result>" text))))))
 
@@ -3893,14 +3785,14 @@ state of its inner sections"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data
      data-buf
-     "<agent-result agent-id=\"worker--blank\" type=\"worker\">\nfirst\n\nsecond\n</agent-result>\n"
+     "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nfirst\n\nsecond\n</agent-result>\n"
      nil)
     (with-current-buffer view-buf
       (mevedel-view--full-rerender)
       (let ((text (buffer-substring-no-properties
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p
-                 "✓ finished worker--blank\n\n    │ first"
+                 "✓ finished /root/worker\n\n    │ first"
                  text))
         (should (string-match-p "│ first\n    │ \n    │ second" text)))))
 
@@ -3918,42 +3810,43 @@ state of its inner sections"
              (file-name-concat temporary-file-directory
                                "mevedel-mailbox-long-session")))
       (setf (mevedel-session-agent-transcripts session)
-            '(("worker--long" . (:path "agents/worker--long.chat.org"
-                                :status completed))))
+            '(("storage-long" . (:agent-path "/root/worker"
+                                  :path "agents/worker.chat.org"
+                                  :status completed))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result agent-id=\"worker--long\" type=\"worker\">\nline one\nline two\n</agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nline one\nline two\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✓ finished worker--long" text))
+          (should (string-match-p "✓ finished /root/worker" text))
           (should (string-match-p
-                   "✓ finished worker--long \\[[0-9]+ lines collapsed\\]"
+                   "✓ finished /root/worker \\[[0-9]+ lines collapsed\\]"
                    text))
           (should-not (string-match-p
-                       "✓ finished worker--long\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
+                       "✓ finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
                        text))
           (goto-char (point-min))
           (search-forward "line two")
           (should (eq (get-text-property (match-beginning 0) 'invisible)
                       'mevedel-view-mailbox-collapsed)))
         (goto-char (point-min))
-        (search-forward "✓ finished worker--long")
+        (search-forward "✓ finished /root/worker")
         (goto-char (match-beginning 0))
-        (search-forward "worker--long")
+        (search-forward "/root/worker")
         (goto-char (match-beginning 0))
         (let (opened)
           (cl-letf (((symbol-function
-                      'mevedel-view--open-agent-transcript-or-message)
+                      'mevedel-view-open-agent-transcript)
                      (lambda (id &rest _) (setq opened id))))
             (mevedel-view-open-agent-transcript-at-point))
-          (should (equal "worker--long" opened)))
+          (should (equal "/root/worker" opened)))
         (goto-char (point-min))
-        (search-forward "✓ finished worker--long")
+        (search-forward "✓ finished /root/worker")
         (goto-char (match-beginning 0))
         (mevedel-view-toggle-section)
         (goto-char (point-min))
@@ -3963,10 +3856,10 @@ state of its inner sections"
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "✓ finished worker--long \\[[0-9]+ lines collapsed\\]"
+                   "✓ finished /root/worker \\[[0-9]+ lines collapsed\\]"
                    text))
           (should-not (string-match-p
-                       "✓ finished worker--long\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
+                       "✓ finished /root/worker\n[[:space:]]+\\[[0-9]+ lines collapsed\\]"
                        text))))))
 
   :doc "collapsed agent-result counts non-empty payload lines"
@@ -3974,14 +3867,14 @@ state of its inner sections"
     (let ((mevedel-view-mailbox-collapse-line-threshold 0))
       (mevedel-view-test--insert-data
        data-buf
-       "<agent-result agent-id=\"worker--one\" type=\"worker\">\nresult\n</agent-result>\n"
+       "<agent-result sender=\"/root/worker\" recipient=\"/root\">\nresult\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p
-                   "✓ finished worker--one \\[1 line collapsed\\]"
+                   "✓ finished /root/worker \\[1 line collapsed\\]"
                    text))
           (should-not (string-match-p "2 lines collapsed" text))))))
 
@@ -3998,12 +3891,13 @@ state of its inner sections"
              (file-name-concat temporary-file-directory
                                "mevedel-mailbox-stale-session")))
       (setf (mevedel-session-agent-transcripts session)
-            '(("explorer--stale" . (:path "agents/explorer--stale.chat.org"
-                                  :status completed))))
+            '(("storage-stale" . (:agent-path "/root/explorer"
+                                   :path "agents/explorer.chat.org"
+                                   :status completed))))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)))
     (with-current-buffer data-buf
-      (insert "(:name \"Agent\" :args (:subagent_type \"explorer\"))\n\nlaunch\n"))
+      (insert "(:name \"Agent\" :args (:task_name \"explore\" :message \"Inspect.\"))\n\nlaunch\n"))
     (with-current-buffer view-buf
       (let* ((stale-source (cons 1 (with-current-buffer data-buf (point-max))))
              (start nil))
@@ -4013,35 +3907,35 @@ state of its inner sections"
           (unwind-protect
               (progn
                 (setq start (point))
-                (insert "<agent-result agent-id=\"explorer--stale\" type=\"explorer\">\nfinal body\n</agent-result>\n")
+                (insert "<agent-result sender=\"/root/explorer\" recipient=\"/root\">\nfinal body\n</agent-result>\n")
                 (add-text-properties
                  start (point)
                  `(mevedel-view-source ,stale-source
                    mevedel-view-type agent-handle
-                   mevedel-view-agent-id "explorer--stale"
+                   mevedel-view-agent-path "/root/explorer"
                    mevedel-view-agent-handle-p t
                    mevedel-view-agent-status completed))
                 (mevedel-view--decorate-agent-result-blocks start (point)))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (goto-char start)
-        (search-forward "✓ finished explorer--stale")
-        (search-backward "explorer--stale")
+        (search-forward "✓ finished /root/explorer")
+        (search-backward "/root/explorer")
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'mailbox-delivery))
         (should-not (get-text-property (point) 'mevedel-view-source))
         (should-not (get-text-property (point) 'mevedel-view-agent-handle-p))
-        (should (equal "explorer--stale"
-                       (get-text-property (point) 'mevedel-view-agent-id)))
+        (should (equal "/root/explorer"
+                       (get-text-property (point) 'mevedel-view-agent-path)))
         (search-forward "final body")
         (should-not (get-text-property (match-beginning 0)
-                                       'mevedel-view-agent-id)))))
+                                       'mevedel-view-agent-path)))))
 
   :doc "mailbox delivery between response chunks stays in one assistant turn"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Before mailbox.\n" 'response)
     (mevedel-view-test--insert-data
      data-buf
-     "\n<agent-message from=\"explorer\">\nhello\n</agent-message>\n\n"
+     "\n<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nhello\n</agent-message>\n\n"
      nil)
     (mevedel-view-test--insert-data data-buf "After mailbox.\n" 'response)
     (with-current-buffer view-buf
@@ -4053,7 +3947,7 @@ state of its inner sections"
                            (split-string text "\n"))))
         (should (= 1 assistant-count))
         (should (string-match-p "Before mailbox" text))
-        (should (string-match-p "✉ message from explorer" text))
+        (should (string-match-p "✉ message from /root/explorer" text))
         (should (string-match-p "hello" text))
         (should (string-match-p "After mailbox" text)))))
 
@@ -4067,10 +3961,10 @@ state of its inner sections"
       (mevedel-view-test--insert-data
        data-buf
        (concat
-        "<agent-result agent-id=\"verifier--ar\" type=\"verifier\">\n"
+        "<agent-result sender=\"/root/verifier\" recipient=\"/root\">\n"
         "Output observed:\n"
         "```elisp\n"
-        "(:body \"<agent-result agent-id=\\\"explorer--A\\\">\n"
+        "(:body \"<agent-result sender=\\\"/root/explorer\\\">\n"
         "partial\n"
         "</agent-result>\")\n"
         "```\n"
@@ -4082,10 +3976,10 @@ state of its inner sections"
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should (string-match-p "Reviewer returned clean" text))
-          (should (string-match-p "✓ finished verifier--ar" text))
+          (should (string-match-p "✓ finished /root/verifier" text))
           (should (string-match-p "VERDICT: FAIL" text))
           (should-not (string-match-p
-                       "You\n✓ finished verifier--ar"
+                       "You\n✓ finished /root/verifier"
                        text))))))
 
   :doc "mailbox toggle does not expand a preceding Agent source"
@@ -4093,7 +3987,7 @@ state of its inner sections"
     (let ((mevedel-view-mailbox-collapse-line-threshold 1))
       (mevedel-view-test--insert-data
        data-buf
-       "(:name \"Agent\" :args (:subagent_type \"explorer\" :description \"Skim mevedel-queue.el\"))\n\nAgent launched in background\n"
+       "(:name \"Agent\" :args (:task_name \"explorer\" :message \"Skim mevedel-queue.el\"))\n\n{\"path\":\"/root/explorer\"}\n"
        '(tool . "call_agent"))
       (mevedel-view-test--insert-data
        data-buf
@@ -4101,12 +3995,12 @@ state of its inner sections"
        'response)
       (mevedel-view-test--insert-data
        data-buf
-       "\n<agent-message from=\"explorer\">\nHello from your Explorer Agent :)\n</agent-message>\n\n<agent-result agent-id=\"explorer--33d949f0\" type=\"explorer\">\nfinal line one\nfinal line two\n</agent-result>\n"
+       "\n<agent-message sender=\"/root/explorer\" recipient=\"/root\">\nHello from your Explorer Agent :)\n</agent-message>\n\n<agent-result sender=\"/root/explorer\" recipient=\"/root\">\nfinal line one\nfinal line two\n</agent-result>\n"
        nil)
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (goto-char (point-min))
-        (search-forward "✓ finished explorer--33d949f0")
+        (search-forward "✓ finished /root/explorer")
         (goto-char (match-beginning 0))
         (should (eq (get-text-property (point) 'mevedel-view-type)
                     'mailbox-delivery))
@@ -4114,9 +4008,9 @@ state of its inner sections"
         (mevedel-view-toggle-section)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "✉ message from explorer" text))
+          (should (string-match-p "✉ message from /root/explorer" text))
           (should (string-match-p "Hello from your Explorer Agent :)" text))
-          (should (string-match-p "✓ finished explorer--33d949f0" text))
+          (should (string-match-p "✓ finished /root/explorer" text))
           (should (string-match-p "final line two" text))
           (should-not (string-match-p "Skim mevedel-queue.el (370 lines)"
                                       text)))))))

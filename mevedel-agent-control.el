@@ -29,20 +29,18 @@
                   "mevedel-agent-runtime" (invocation))
 (declare-function mevedel-agent-runtime-interrupt
                   "mevedel-agent-runtime" (invocation reason))
-(declare-function mevedel-agent-runtime-steer
-                  "mevedel-agent-runtime" (invocation sender message))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-configuration-p
                   "mevedel-agents" (cl-x))
+(declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-hook-rules "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-freeze "mevedel-agents" (agent))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-frozen-configuration
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-messages
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
@@ -374,11 +372,7 @@ Return the caller path when suspended, and nil after an immediate release."
                   mevedel-agent-control--wait-max-ms))
     (let ((path (mevedel-agent-control-current-path session)))
       (cond
-       ((or (mevedel-agent-control--mailbox-queue session path)
-            (and (boundp 'mevedel--agent-invocation)
-                 mevedel--agent-invocation
-                 (mevedel-agent-invocation-messages
-                  mevedel--agent-invocation)))
+       ((mevedel-agent-control--mailbox-queue session path)
         (funcall callback 'mailbox)
         nil)
        ((mevedel-agent-control--waiter session path)
@@ -462,6 +456,18 @@ Return the resolved recipient path.  Sending never activates a turn."
            :payload message
            :timestamp (current-time)))
     recipient))
+
+(defun mevedel-agent-control-enqueue-execution-result (session owner body)
+  "Queue yielded execution BODY for root OWNER in SESSION."
+  (unless (and (equal owner "/root") (stringp body))
+    (error "Invalid root execution result"))
+  (mevedel-agent-control--enqueue
+   session "/root"
+   (list :type 'MAIL
+         :sender "/root"
+         :recipient "/root"
+         :payload body
+         :timestamp (current-time))))
 
 (defun mevedel-agent-control-list-agents (session &optional path-prefix)
   "Return SESSION's minimal roster, optionally below PATH-PREFIX."
@@ -657,30 +663,27 @@ positive decimal strings."
   "Publish RECORD's canonical RESULT in SESSION.
 
 Ordinary turns enqueue RESULT for the spawn parent.  A workflow may install a
-one-shot result handler when it owns the parent interaction; that handler
-consumes the queued envelope after successful delivery so later model turns do
-not receive a duplicate.  If the handler fails, RESULT remains ordinary parent
-mail."
+one-shot result handler when it owns the parent interaction.  Successful
+workflow delivery persists the settled record without queueing duplicate mail;
+a failed handler falls back to ordinary parent mail."
   (let* ((recipient (mevedel-agent-record-parent-path record))
          (handler (mevedel-agent-record-result-handler record)))
-    (mevedel-agent-control--enqueue session recipient result)
-    (when handler
-      (setf (mevedel-agent-record-result-handler record) nil)
-      (condition-case err
-          (progn
-            (funcall handler result)
-            (mevedel-agent-control--set-mailbox-queue
-             session recipient
-             (delq result
-                   (mevedel-agent-control--mailbox-queue session recipient)))
-            (mevedel-agent-control--persist-session session))
-        (error
-         (display-warning
-          'mevedel
-          (format "Agent result handler failed for %s: %s"
-                  (mevedel-agent-record-path record)
-                  (error-message-string err))
-          :warning))))))
+    (if handler
+        (progn
+          (setf (mevedel-agent-record-result-handler record) nil)
+          (condition-case err
+              (progn
+                (funcall handler result)
+                (mevedel-agent-control--persist-session session))
+            (error
+             (display-warning
+              'mevedel
+              (format "Agent result handler failed for %s: %s"
+                      (mevedel-agent-record-path record)
+                      (error-message-string err))
+              :warning)
+             (mevedel-agent-control--enqueue session recipient result))))
+      (mevedel-agent-control--enqueue session recipient result))))
 
 (defun mevedel-agent-control--settle
     (session record invocation response &optional event)
@@ -732,9 +735,7 @@ mail."
   (setf (mevedel-agent-record-configuration record)
         (mevedel-agent-invocation-frozen-configuration invocation)))
 
-(cl-defun mevedel-agent-control--dispatch-followup
-    (session record message
-             &key parent-fsm message-handler terminal-handler)
+(defun mevedel-agent-control--dispatch-followup (session record message)
   "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
   (let ((buffer (mevedel-agent-record-conversation-buffer record)))
     (unless (buffer-live-p buffer)
@@ -746,13 +747,8 @@ mail."
                (mevedel-agent-record-path record)))
       (unless
           (mevedel-agent-runtime-dispatch
-           #'ignore nil
-           (file-name-nondirectory (mevedel-agent-record-path record)) message
-           :background t
-           :parent-context session
-           :parent-fsm parent-fsm
-           :message-handler message-handler
-           :terminal-handler terminal-handler
+           nil (file-name-nondirectory (mevedel-agent-record-path record))
+           message
            :path (mevedel-agent-record-path record)
            :frozen-configuration configuration
            :retained-id (mevedel-agent-record-id record)
@@ -771,9 +767,7 @@ mail."
     (mevedel-agent-control--persist-session session)
     record))
 
-(cl-defun mevedel-agent-control-followup
-    (session target message
-             &key parent-fsm message-handler terminal-handler)
+(defun mevedel-agent-control-followup (session target message)
   "Start or steer TARGET with MESSAGE in SESSION and return its record."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "FollowupAgent message must be non-empty plain text"))
@@ -785,20 +779,20 @@ mail."
     (let ((record (cdr (assoc path
                               (mevedel-session-agent-registry session)))))
       (if (mevedel-agent-control--active-p record)
-          (progn
-            (mevedel-agent-runtime-steer
-             (mevedel-agent-record-invocation record)
-             caller-path message))
+          (mevedel-agent-control--enqueue
+           session path
+           (list :type 'MAIL
+                 :sender caller-path
+                 :recipient path
+                 :payload message
+                 :timestamp (current-time))
+           'steering)
         (when (>= (mevedel-agent-control--active-count session)
                   (mevedel-session-agent-turn-capacity session))
           (user-error "Agent tree is at its active-turn capacity"))
         (setf (mevedel-agent-record-activity record) 'starting)
         (condition-case err
-            (mevedel-agent-control--dispatch-followup
-             session record message
-             :parent-fsm parent-fsm
-             :message-handler message-handler
-             :terminal-handler terminal-handler)
+            (mevedel-agent-control--dispatch-followup session record message)
           (error
            (setf (mevedel-agent-record-activity record) 'idle)
            (setf (mevedel-agent-record-invocation record) nil)
@@ -817,33 +811,38 @@ mail."
     (let* ((record (mevedel-agent-control--record-at-path session path))
            (activity (mevedel-agent-record-activity record)))
       (when (mevedel-agent-control--active-p record)
-        (let ((invocation (mevedel-agent-record-invocation record)))
-          (require 'mevedel-agent-runtime)
-          (let ((response
-                 (mevedel-agent-runtime-interrupt
-                  invocation (format "interrupted by %s" caller-path))))
-            (mevedel-agent-control--settle
-             session record invocation response))))
+        (require 'mevedel-agent-runtime)
+        (mevedel-agent-runtime-interrupt
+         (mevedel-agent-record-invocation record)
+         (format "interrupted by %s" caller-path)))
       (list :path path :previous-activity activity))))
 
 (cl-defun mevedel-agent-control-spawn
     (session task-name message
-             &key role fork-turns model effort
-             parent-fsm message-handler terminal-handler
+             &key role agent fork-turns model effort model-policy
              description on-invocation result-handler
-             skill-permission-rules)
+             skill-permission-rules skill-hook-rules)
   "Spawn TASK-NAME with MESSAGE and optional controls in SESSION.
 Return the committed retained record."
   (mevedel-agent-control--validate-spawn session task-name message)
   (require 'mevedel-agents)
-  (when (and role
+  (when (and role (null agent)
              (boundp 'mevedel-agent-exec--agents)
              mevedel-agent-exec--agents
              (not (assoc-string role mevedel-agent-exec--agents)))
     (user-error "Agent role is not available to this session: %s" role))
-  (let* ((agent (mevedel-agent-freeze
-                 (mevedel-agent-resolve-role role)))
-         (role-name (mevedel-agent-name agent))
+  (let* ((resolved-agent
+          (or agent (mevedel-agent-resolve-role role)))
+         (resolved-agent
+          (if skill-hook-rules
+              (let ((copy (copy-mevedel-agent resolved-agent)))
+                (setf (mevedel-agent-hook-rules copy)
+                      (append (mevedel-agent-hook-rules copy)
+                              skill-hook-rules))
+                copy)
+            resolved-agent))
+         (resolved-agent (mevedel-agent-freeze resolved-agent))
+         (role-name (mevedel-agent-name resolved-agent))
          (fork-turns (mevedel-agent-control--normalize-fork-turns fork-turns))
          (model-selector
           (progn
@@ -851,17 +850,14 @@ Return the committed retained record."
             (mevedel-model-parse-selector model)))
          (effort (mevedel-model-parse-effort effort))
          (model-policy
-          (mevedel-model-resolve-workload
-           (intern role-name) model-selector effort))
+          (or model-policy
+              (mevedel-model-resolve-workload
+               (intern role-name) model-selector effort)))
          (context-snapshot
           (progn
             (require 'mevedel-compact)
             (mevedel-compact-context-snapshot fork-turns)))
          (caller-path (mevedel-agent-control-current-path session))
-         (parent-context
-          (if (equal caller-path "/root")
-              session
-            mevedel--agent-invocation))
          (record (mevedel-agent-control--reserve
                   session caller-path task-name role-name))
          committed)
@@ -871,12 +867,7 @@ Return the committed retained record."
           (require 'mevedel-agent-runtime)
           (unless
               (mevedel-agent-runtime-dispatch
-               #'ignore agent (or description task-name) message
-               :background t
-               :parent-context parent-context
-               :parent-fsm parent-fsm
-               :message-handler message-handler
-               :terminal-handler terminal-handler
+               resolved-agent (or description task-name) message
                :context-snapshot context-snapshot
                :model-policy model-policy
                :skill-permission-rules skill-permission-rules

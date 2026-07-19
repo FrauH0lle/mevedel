@@ -188,7 +188,6 @@ workspace."
   name              ; string: "main", "refactor", "tutor", etc.
   workspace         ; mevedel-workspace struct (shared by reference)
   working-directory ; absolute directory used for relative tools/prompts
-  agents            ; alist: agent-id -> FSM
   tasks             ; list of mevedel-task structs
   task-status-notes ; alist: owner -> plist with :note/:updated-turn/:updated-at
   last-task-write-turn ; integer or nil: turn of last task tool write
@@ -218,7 +217,6 @@ workspace."
   queued-user-messages ; transient FIFO of bound original prompts awaiting preparation
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
-  background-agents ; list of agent-id strings for running background children
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
   skills            ; list of mevedel-skill structs available to this session
   hook-rules         ; transient session-scoped declarative hook rules
@@ -553,11 +551,10 @@ only call sites that may invoke cancellers."
 
 (defun mevedel-current-origin ()
   "Return the canonical owner for the current execution context."
-  (or (and (boundp 'mevedel--current-request)
+  (or (and (bound-and-true-p mevedel--current-request)
            (mevedel-request-p mevedel--current-request)
            (mevedel-request-origin mevedel--current-request))
-      (and-let* ((inv (and (boundp 'mevedel--agent-invocation)
-                           mevedel--agent-invocation))
+      (and-let* ((inv (bound-and-true-p mevedel--agent-invocation))
                  ((fboundp 'mevedel-agent-invocation-p))
                  ((mevedel-agent-invocation-p inv)))
         (mevedel-agent-invocation-require-path inv))

@@ -9,6 +9,7 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-persistence)
 (require 'mevedel-agents)
+(require 'mevedel-reminders)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
 (require 'mevedel-tools)
@@ -561,6 +562,47 @@
           (should
            (buffer-live-p
             (mevedel-agent-record-conversation-buffer valid))))
+      (mevedel-agent-control-teardown-session session)
+      (when (buffer-live-p root-buffer)
+        (kill-buffer root-buffer))
+      (delete-directory root-dir t)))
+
+  :doc "normalizes read-only persisted activity without a live invocation"
+  (let* ((root-dir (make-temp-file "mevedel-agent-readonly-tree-" t))
+         (session (mevedel-agent-persistence-test--session root-dir))
+         (root-buffer (generate-new-buffer " *agent-readonly-root*"))
+         (relative "agents/active.chat.org")
+         (conversation (expand-file-name relative root-dir))
+         (record
+          (mevedel-agent-record--create
+           :id "active" :path "/root/active" :parent-path "/root"
+           :role "default"
+           :configuration (mevedel-agent-persistence-test--configuration)
+           :activity 'running
+           :blockers (list 'persisted)
+           :conversation-location relative)))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory conversation) t)
+          (write-region "* Agent Task: active\nDurable context.\n"
+                        nil conversation nil 'silent)
+          (setf (mevedel-session-save-path session) root-dir
+                (mevedel-session-agent-registry session)
+                (list (cons "/root/active" record)))
+          (with-current-buffer root-buffer
+            (org-mode)
+            (setq-local mevedel--session session)
+            (setq-local mevedel--workspace
+                        (mevedel-session-workspace session)))
+          (should (= 0 (mevedel-agent-persistence-restore-tree
+                        session root-buffer t)))
+          (should (eq 'idle (mevedel-agent-record-activity record)))
+          (should-not (mevedel-agent-record-invocation record))
+          (should-not (mevedel-agent-record-blockers record))
+          (should-not (mevedel-agent-control-active-turn-p session))
+          (should (equal '(:path "/root/active" :previous-activity idle)
+                         (mevedel-agent-control-interrupt
+                          session "/root/active"))))
       (mevedel-agent-control-teardown-session session)
       (when (buffer-live-p root-buffer)
         (kill-buffer root-buffer))

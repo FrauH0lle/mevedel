@@ -212,15 +212,13 @@
                        (push (list 'drain
                                    (with-current-buffer chat-buf
                                      (null mevedel--current-request)))
-                             events)))
-                    ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
-                     (lambda (_fsm) (push 'mailbox events))))
+                             events))))
             (mevedel--complete-turn
              (gptel-make-fsm :info (list :buffer chat-buf)))))
           (should (equal (nreverse events)
                          '(turn baseline save
                            (Stop completed live)
-                           restore request-end (drain t) mailbox)))
+                           restore request-end (drain t))))
           (with-current-buffer chat-buf
             (should-not mevedel--current-request)))
       (kill-buffer chat-buf)))
@@ -253,19 +251,16 @@
                (lambda (_fsm) (push 'request-end events)))
               ((symbol-function
                 'mevedel-view--schedule-queued-user-message-drain)
-               (lambda (_fsm) (setq drained t)))
-              ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
-               (lambda (_fsm) (push 'mailbox events))))
+               (lambda (_fsm) (setq drained t))))
       (dolist (case '((error) (aborted)))
         (setq events nil)
         (mevedel--fail-turn 'fsm (car case))
         (should (equal (nreverse events)
                        `(turn baseline goal-failure
                                 (StopFailure ,(car case))
-                                restore request-end goal-save goal-retry
-                                mailbox)))))
+                                restore request-end goal-save goal-retry))))
     (should-not saved)
-    (should-not drained)))
+    (should-not drained))))
 
 (mevedel-deftest mevedel--handler-name ()
   ,test

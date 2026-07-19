@@ -747,11 +747,11 @@
         (mevedel-protected-paths nil)
         (mock-tool (mevedel-tool--create
                     :name "Agent"
-                    :get-name (lambda (input) (plist-get input :subagent_type))
+                    :get-name (lambda (input) (plist-get input :task_name))
                     :read-only-p nil)))
     (should (eq (mevedel-check-permission "Agent"
                   :tool-struct mock-tool
-                  :content '(:subagent_type "explorer")
+                  :content '(:task_name "explorer")
                   :mode 'ask)
                 'allow))))
 

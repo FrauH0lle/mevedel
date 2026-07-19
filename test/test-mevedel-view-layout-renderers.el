@@ -89,44 +89,24 @@
 
 
 (mevedel-deftest mevedel-tool-ui--render-agent
-  (:doc "renders effective agent handle state from render-data and queues")
+  (:doc "renders a canonical asynchronous Agent start event")
   ,test
   (test)
 
-  :doc "permission queue entry for running agent renders blocked badge"
-  (let* ((agent-id "explorer--abc12345deadbeefcafefeed")
-         (mevedel--session
-          (mevedel-session--create
-           :permission-queue (list (list :origin agent-id)))))
-    (let ((rendering
-           (mevedel-tool-ui--render-agent
-            "Agent"
-            '(:subagent_type "explorer" :description "check")
-            "launch status"
-            (list :kind 'agent-transcript
-                  :agent-id agent-id
-                  :status 'running
-                  :calls 2))))
-      (should (string-match-p "blocked" (plist-get rendering :header)))
-      (should (string-match-p "permission" (plist-get rendering :header)))
-      (should-not (string-match-p "\\[running" (plist-get rendering :header)))))
-
-  :doc "plan queue entry for running agent renders blocked plan badge"
-  (let* ((agent-id "verifier--abc12345deadbeefcafefeed")
-         (mevedel--session
-          (mevedel-session--create
-           :plan-queue (list (list :origin agent-id)))))
-    (let ((rendering
-           (mevedel-tool-ui--render-agent
-            "Agent"
-            '(:subagent_type "verifier" :description "check plan")
-            "launch status"
-            (list :kind 'agent-transcript
-                  :agent-id agent-id
-                  :status 'running
-                  :calls 1))))
-      (should (string-match-p "blocked" (plist-get rendering :header)))
-      (should (string-match-p "plan" (plist-get rendering :header))))))
+  :doc "uses the canonical path supplied by render-data"
+  (let ((rendering
+         (mevedel-tool-ui--render-agent
+          "Agent"
+          '(:task_name "explore")
+          "launch status"
+          '(:kind collaboration-event
+            :event started
+            :path "/root/explore"
+            :status running))))
+    (should (equal "Started /root/explore"
+                   (plist-get rendering :header)))
+    (should (equal "/root/explore"
+                   (plist-get rendering :agent-path)))))
 
 
 ;;

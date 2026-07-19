@@ -55,9 +55,9 @@ agent's resolved tool set includes `Skill` or `ListSkills`. Agents without skill
 tools should not receive a model-facing skill roster. Separately assess which
 agents should intentionally receive skill tools.
 
-Initial built-in agent policy: explorer should receive `Skill` and `ListSkills`;
-verifier, reviewer, and coordinator should not receive skill tools or a skill
-roster. Discovery-only skill access is avoided because a sub-agent that cannot
+Initial built-in agent policy: worker and explorer should receive `Skill` and
+`ListSkills`; verifier and reviewer should not receive skill tools or a skill
+roster. Discovery-only skill access is avoided because an agent that cannot
 invoke skills has no useful reason to inspect them.
 
 Main presets should expose skill tools for `discuss`, `implement`, and `tutor`.

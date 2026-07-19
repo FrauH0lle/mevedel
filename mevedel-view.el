@@ -938,7 +938,7 @@ the editable composer signal instead of settling queued interactions."
     (cond
      ((mevedel-view--position-in-input-region-p pos)
       (user-error "No actionable fragment at point"))
-     ((get-text-property pos 'mevedel-view-agent-id)
+     ((get-text-property pos 'mevedel-view-agent-path)
       (mevedel-view-open-agent-transcript-at-point event))
      ((and activate
            (not (get-text-property pos 'mevedel-view-interaction-overlay)))

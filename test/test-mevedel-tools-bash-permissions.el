@@ -2192,11 +2192,11 @@ default Bash keeps bare dot inspection automatic"
   ,test
   (test)
   :doc "queues unread output and final facts for an independent completion"
-  (require 'mevedel-agent-runtime)
+  (require 'mevedel-agent-control)
   (let ((session (mevedel-session--create :name "test"))
         captured)
     (cl-letf (((symbol-function
-                'mevedel-agent-runtime-queue-execution-completion)
+                'mevedel-agent-control-enqueue-execution-result)
                (lambda (&rest args)
                  (setq captured args)
                  t)))

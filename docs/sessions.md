@@ -29,7 +29,7 @@ flowchart TD
 
 Sessions auto-save lazily and per-completed-turn under
 `<workspace-root>/.mevedel/sessions/<name>-<timestamp>-<short-uuid>/`.
-Ordinary model turns and direct foreground fork-skill turns share one
+Ordinary model turns and awaited fork-skill turns share one
 successful-turn transaction.  It advances the turn, records the token
 baseline, saves before request teardown, runs `Stop`, restores temporary
 permission state, ends the request, and schedules queued follow-up delivery.
@@ -62,7 +62,9 @@ permission rules, exact session resource grants, tasks, prompt-index (driving
 the rewind picker and latest resume preview), `:file-snapshots` (per-turn map
 of tracked files to backup names), workspace identity, `:working-directory`,
 fork lineage (`:forked-from-session-id` / `:forked-from-turn`), and
-`:agent-transcripts` metadata. It also records `:preset-name` and the resolved
+`:agent-transcripts` presentation metadata and the explicit `:agent-registry`
+containing retained paths, frozen configurations, activity, mailboxes, and
+conversation locations. It also records `:preset-name` and the resolved
 buffer-local mevedel variables in `:preset-settings`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
 gptel's own buffer-local settings continue to use its Org persistence.
@@ -88,7 +90,7 @@ paused Goal, never a completion verdict.
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree
 create`. The old session remains live; the new session does not inherit
-active requests, permission queues, tasks, background agents, or transcript
+active requests, permission queues, tasks, retained agents, or transcript
 history. Unless `--clean` is used, the new data buffer starts with a
 visible setup-context user turn explaining the source session, source
 directory, worktree directory, branch, purpose, and warnings. That turn is
@@ -220,14 +222,18 @@ before process filters can append further output.
 
 ### Agent transcripts
 
-Sub-agent transcript files live under `agents/`. The sidecar's
-`:agent-transcripts` alist records each agent's id, type, description,
-relative path, status, timestamps, parent turn, and call count. The
-view uses this metadata to render handles and open terminal transcripts.
+Retained-agent transcript files live under `agents/`. The sidecar's
+`:agent-transcripts` alist records presentation metadata for handles and
+terminal transcript inspection. The separate `:agent-registry` is the
+addressability source of truth; it persists canonical and parent paths, role
+and frozen configuration, activity, unread mailbox, conversation location,
+and internal storage identity.
 
-Running transcripts are coerced to `incomplete` on normal resume because
-mid-flight sub-agent requests are not recoverable. Read-only attach
-observes the on-disk state without rewriting it.
+On normal resume, a persisted active turn has no surviving provider request.
+Recovery settles it once as interrupted, releases its capacity slot, preserves
+the retained identity, conversation, and unread mail, and queues a canonical
+`RESULT` for its spawn parent. Read-only attach observes the on-disk state
+without rewriting it.
 
 Live transcript views render directly from the running agent buffer. They
 do not restore or normalize saved `GPTEL_BOUNDS` while the agent is

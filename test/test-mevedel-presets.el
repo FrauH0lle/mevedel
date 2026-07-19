@@ -201,8 +201,7 @@
                (lambda (arg) (equal (plist-get arg :name) "role"))
                (gptel-tool-args tool)))
              (roles (append (plist-get role-arg :enum) nil)))
-        (dolist (role '("worker" "explorer" "coordinator"
-                        "reviewer" "verifier"))
+        (dolist (role '("worker" "explorer" "reviewer" "verifier"))
           (should (member role roles)))))))
 
 (mevedel-deftest mevedel-preset--variable-for-key
@@ -645,7 +644,7 @@
   (should (mevedel-agent-get "explorer"))
 
   :doc "task-capable agents include the standalone task note tool"
-  (dolist (name '("explorer" "coordinator"))
+  (dolist (name '("worker" "explorer"))
     (let ((agent (mevedel-agent-get name)))
       (should (member '(:tool "TaskNote")
                       (mevedel-agent-tools agent)))))

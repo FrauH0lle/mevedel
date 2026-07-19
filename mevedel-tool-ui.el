@@ -40,8 +40,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
-(declare-function mevedel-session-agent-transcripts
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue
@@ -57,25 +55,12 @@
                   "mevedel-tool-registry" (value))
 
 ;; `mevedel-tools'
-(declare-function mevedel-tools--handle-message-inject
-                  "mevedel-tools" (fsm))
-(declare-function mevedel-tools--handle-terminal-mailbox
-                  "mevedel-tools" (fsm))
 (declare-function mevedel-tools--tool-search
                   "mevedel-tools" (callback query &optional load))
-(defvar mevedel-tools--current-fsm)
-
-;; `mevedel-view'
-(declare-function mevedel-view-data-buffer-major-mode "mevedel-view" ())
 
 
 ;;
 ;;; Agent tool
-
-(defcustom mevedel-tool-ui-agent-description-width 96
-  "Maximum display width for task text in Agent handle headers."
-  :type 'integer
-  :group 'mevedel)
 
 (defun mevedel-tool-ui--deliver-result (callback value &rest args)
   "Deliver VALUE to CALLBACK as a canonical tool result."
@@ -84,20 +69,6 @@
              value
            (list :result value))
          args))
-
-(defun mevedel-tool-ui--compact-agent-description (description &optional width)
-  "Return DESCRIPTION normalized to one truncated display line.
-WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
-  (let ((text (string-trim
-               (replace-regexp-in-string
-                "[\n\r\t ]+" " " (or description ""))))
-        (width (or width mevedel-tool-ui-agent-description-width)))
-    (cond
-     ((<= width 0) "")
-     ((<= width (string-width "..."))
-      (truncate-string-to-width "..." width))
-     (t
-      (truncate-string-to-width text width nil nil "...")))))
 
 (defun mevedel-tool-ui--handle-badge (render-data)
   "Return a propertized state badge for RENDER-DATA, or an empty string."
@@ -164,9 +135,6 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch the agent described by ARGS and report through CALLBACK."
-  (dolist (obsolete '(:subagent_type :description :prompt :run_in_background))
-    (when (plist-member args obsolete)
-      (error "Superseded Agent parameter: %s" obsolete)))
   (let ((task-name (plist-get args :task_name))
         (message (plist-get args :message))
         (role (plist-get args :role))
@@ -181,11 +149,7 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
              :role role
              :fork-turns fork-turns
              :model model
-             :effort effort
-             :parent-fsm (and (boundp 'mevedel-tools--current-fsm)
-                              mevedel-tools--current-fsm)
-             :message-handler #'mevedel-tools--handle-message-inject
-             :terminal-handler #'mevedel-tools--handle-terminal-mailbox))
+             :effort effort))
            (path (mevedel-agent-record-path record)))
       (mevedel-tool-ui--deliver-result
        callback
@@ -206,11 +170,7 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
           (mevedel-agent-control-followup
            mevedel--session
            (plist-get args :target)
-           (plist-get args :message)
-           :parent-fsm (and (boundp 'mevedel-tools--current-fsm)
-                            mevedel-tools--current-fsm)
-           :message-handler #'mevedel-tools--handle-message-inject
-           :terminal-handler #'mevedel-tools--handle-terminal-mailbox))
+           (plist-get args :message)))
          (path (mevedel-agent-record-path record)))
     (list :result ""
           :render-data
@@ -305,71 +265,21 @@ WIDTH defaults to `mevedel-tool-ui-agent-description-width'."
 ;;
 ;;; Renderers
 
-(defun mevedel-tool-ui--render-agent (name args result render-data)
-  "Return rendering plist for Agent NAME, ARGS, RESULT, and RENDER-DATA."
-  (when (stringp result)
-    (if (plist-get args :task_name)
-        (let ((path (plist-get render-data :path)))
-          (list :header (format "Started %s" path)
-                :body result
-                :body-mode nil
-                :vtype 'agent-handle
-                :agent-id (plist-get render-data :agent-id)
-                :agent-status (plist-get render-data :status)
-                :initially-collapsed-p t))
-      (let* ((agent-id (and (consp render-data)
-                          (plist-get render-data :agent-id)))
-           (session (and (boundp 'mevedel--session) mevedel--session))
-           (sidecar-entry
-            (and agent-id session
-                 (cdr (assoc agent-id
-                             (mevedel-session-agent-transcripts session)))))
-           (effective-render-data
-            (if sidecar-entry
-                (append (list :status (plist-get sidecar-entry :status)
-                              :transcript-relative-path
-                              (plist-get sidecar-entry :path))
-                        render-data)
-              render-data))
-           (agent-path
-            (plist-get effective-render-data :path))
-           (blocked-reason
-            (and (eq (plist-get effective-render-data :status) 'running)
-                 (mevedel-tool-ui--agent-blocked-reason agent-path session)))
-           (progress-p (plist-get effective-render-data :progress-handle))
-           (agent-type (or (plist-get args :subagent_type) "?"))
-           (badge (mevedel-tool-ui--handle-badge
-                   (if blocked-reason
-                       (plist-put (copy-sequence effective-render-data)
-                                  :blocked-reason blocked-reason)
-                     effective-render-data)))
-           (badge-suffix (if (string-empty-p badge) "" (concat "  " badge)))
-           (description (or (plist-get args :description) ""))
-           (header-width (plist-get effective-render-data :header-width))
-           (description-width
-            (when header-width
-              (let* ((base (if progress-p "" (format "%s -- " agent-type)))
-                     (fixed (format "%s: %s%s"
-                                    (or name "Agent") base badge-suffix)))
-                (max 0 (- header-width (string-width fixed))))))
-           (compact-description
-            (mevedel-tool-ui--compact-agent-description
-             description description-width))
-           (shown (cond
-                   ((and progress-p (not (string-empty-p compact-description)))
-                    compact-description)
-                   ((string-empty-p compact-description) agent-type)
-                   (t (format "%s -- %s" agent-type compact-description)))))
-        (list :header (format "%s: %s%s"
-                              (or name "Agent") shown badge-suffix)
-              :body result
-              :body-mode (mevedel-view-data-buffer-major-mode)
-              :vtype 'agent-handle
-              :agent-id agent-id
-              :agent-status (plist-get effective-render-data :status)
-              :agent-description description
-              :hook-audits (plist-get effective-render-data :hook-audits)
-              :initially-collapsed-p t)))))
+(defun mevedel-tool-ui--render-agent (_name _args result render-data)
+  "Return Agent rendering for RESULT and RENDER-DATA."
+  (when (and (stringp result)
+             (eq 'collaboration-event (plist-get render-data :kind))
+             (eq 'started (plist-get render-data :event))
+             (stringp (plist-get render-data :path)))
+    (let ((path (plist-get render-data :path)))
+      (list :header (format "Started %s" path)
+            :body result
+            :body-mode nil
+            :vtype 'agent-handle
+            :agent-path path
+            :agent-id (plist-get render-data :agent-id)
+            :agent-status (plist-get render-data :status)
+            :initially-collapsed-p t))))
 
 (defun mevedel-tool-ui--render-agent-interaction
     (_name _args result render-data)

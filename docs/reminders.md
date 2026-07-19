@@ -108,7 +108,7 @@ guidance in the rejection reminder.
   repeat firing.
 - **Agent listing delta:**
   `mevedel-reminders-make-agent-listing-delta` compares the current
-  visible agent roster to the session's `agent-types-snapshot`.
+  visible named-role roster to the session's prior snapshot.
 - **Skill listing delta:**
   `mevedel-reminders-make-skills-delta` compares the current active,
   enabled, model-invocable skill roster to the session's
@@ -127,11 +127,6 @@ guidance in the rejection reminder.
   `mevedel-hooks-record-session-reminder`, consumed by `pending-events`;
   standalone `:system-message` remains a transient notification and hook-log
   entry. Additional hook context still uses `<hook-context>`.
-- **Background task status delta:** background agent transitions queue
-  status reminders with agent id, type, description, reason,
-  transcript path, and optional summary; `background-agents-pending`
-  separately reminds the parent when children are still running.
-
 Default session reminders are installed idempotently through
 `mevedel-reminders-install-defaults`. Event-shaped reminders use the
 session pending-reminder FIFO and the `pending-events` reminder unless

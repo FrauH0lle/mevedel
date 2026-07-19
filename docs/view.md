@@ -424,7 +424,7 @@ Ask
   Which validation should run next?
   [focused view tests] [compile] [full suite]
 
-Permission request from verifier--a1b2c3
+Permission request from /root/verifier
 Allow Bash?
   npx @emacs-eask/cli test ert test/test-mevedel-view.el
 
@@ -534,6 +534,11 @@ auto-submitted while being edited.
 `mevedel-view-agent.el` owns transcript lookup and inspection views, live
 rows and badges, and status/handle refresh. Transcript turn rendering remains
 in `mevedel-view-render.el`.
+
+Agent activity rows are projections of canonical tool and lifecycle events:
+`Started PATH`, `Interacted with PATH`, `Interrupted PATH`, `Waiting for
+agents`, and `Finished waiting`. The view does not infer a second activity
+state from internal storage identities or runtime tables.
 
 Agent handles and attribution fragments are clickable when a transcript
 entry is available. Running agents show status/activity in the main view

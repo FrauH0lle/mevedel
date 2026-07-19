@@ -368,6 +368,11 @@
                 (lambda (_invocation _reason) "interrupted"))
                ((symbol-function 'mevedel-agent-runtime--finalize)
                 (lambda (invocation status)
+                  (when-let* ((buffer (mevedel-agent-invocation-buffer
+                                      invocation))
+                              ((buffer-live-p buffer)))
+                    (with-current-buffer buffer
+                      (mevedel-request-end)))
                   (setf (mevedel-agent-invocation-transcript-status invocation)
                         status))))
             (mevedel-agent-runtime-interrupt

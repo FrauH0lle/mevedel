@@ -164,32 +164,6 @@ fire-count and payload."
 							   (should (equal "Found 2 defcustoms with :set"
 									  (car (car fired))))))
 
-		 :doc "terminal text waits while the invocation owns a live execution"
-		 (let* ((session (mevedel-session--create :name "execution-owner"))
-			(agent-id "explorer--live-execution")
-			(inv (mevedel-agent-invocation--create
-			      :path "/root/test_agent"
-			      :agent-id agent-id :parent-session session))
-			(fired nil)
-			(live-p t)
-			(cb (mevedel-agent-exec--make-callback
-			     (lambda (&rest args) (push args fired))
-			     "explorer" "Wait for Bash" (point-min-marker)
-			     (list "")))
-			(info (list :stream t :mevedel-agent-invocation inv)))
-		   (cl-letf (((symbol-function 'mevedel-execution-owner-live-p)
-			      (lambda (seen-session seen-owner)
-				(should (eq session seen-session))
-				(should (equal "/root/test_agent" seen-owner))
-				live-p)))
-		     (funcall cb "Agent answer." info)
-		     (funcall cb t info)
-		     (should-not fired)
-		     (setq live-p nil)
-		     (funcall cb t info)
-		     (should (= 1 (length fired)))
-		     (should (equal "Agent answer." (car (car fired))))))
-
 		 :doc "streaming: chunks do not rebuild partial text before terminal"
 		 (let* ((fired nil)
 			(main-cb (lambda (&rest args) (push args fired)))
@@ -312,181 +286,29 @@ fire-count and payload."
 							 (should (equal "intermediate chunk continuation"
 									(car (car fired)))))
 
-		 :doc "error (`nil'): runtime formats the emitted terminal event once"
+		 :doc "error (`nil') emits one structured terminal event"
 		 (mevedel-agent-exec-test--with-callback cb
 							 (funcall cb nil (list :error "boom"))
 							 (should (= 1 (length fired)))
-							 (should
-							  (string-match-p
-							   "could not finish"
-							   (mevedel-agent-runtime--terminal-event-response
-							    default-invocation (car (car fired))))))
+							 (let ((event (car (car fired))))
+							   (should (eq 'error
+							               (plist-get event
+							                          :mevedel-agent-terminal-status)))
+							   (should (equal "boom"
+							                  (plist-get event :error-details)))))
 
-		 :doc "error (`nil'): foreground error includes safe transcript path"
-			 (let* ((session (mevedel-session--create :name "main"))
-				(tempdir (file-name-as-directory
-					  (make-temp-file "mevedel-agent-error" t)))
-				(rel-path "agents/explorer--error.chat.org")
-				(abs-path (expand-file-name rel-path tempdir))
-				(buf (generate-new-buffer " *mev-agent-error-transcript*"))
-				(agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create
-				      :path "/root/test_agent"
-				      :agent agent
-				      :agent-id "explorer--error1234567890abcdef"
-				      :description "Test task"
-				      :parent-session session
-				      :buffer buf
-				      :transcript-relative-path rel-path
-				      :transcript-status 'running))
-				(fired nil)
-				(main-cb (lambda (&rest args) (push args fired)))
-				(cb (mevedel-agent-exec--make-callback
-				     main-cb "explorer" "Test task"
-				     (point-min-marker)
-				     (list "Explorer result for task: Test task\n\n"))))
-			   (unwind-protect
-			       (progn
-				 (setf (mevedel-session-save-path session) tempdir)
-				 (make-directory (file-name-directory abs-path) t)
-				 (with-temp-file abs-path
-				   (insert "saved transcript"))
-				 (cl-letf (((symbol-function
-					      'mevedel-agent-exec--save-transcript-buffer)
-					     (lambda (_invocation) t))
-					   ((symbol-function
-					      'mevedel-agent-exec--handle-update)
-					     (lambda (_invocation) nil))
-					   ((symbol-function
-					      'mevedel-agent-exec--run-stop-hook)
-					     (lambda (_invocation _status) nil))
-					   ((symbol-function
-					      'mevedel-session-persistence--update-transcript-entry)
-					     (lambda (_session _agent-id _updates) nil)))
-				   (funcall cb nil (list :error "Malformed JSON in response."
-							 :mevedel-agent-invocation inv)))
-				 (should (= 1 (length fired)))
-				 (let ((body (mevedel-agent-runtime--terminal-event-response
-				              inv (car (car fired)))))
-				   (should (string-match-p "Malformed JSON in response" body))
-				   (should (string-match-p
-					    (regexp-quote (format "Transcript: %s" abs-path))
-					    body))
-					   (should (string-match-p
-					    (regexp-quote (format "Read(file_path=%S)" abs-path))
-					    body))))
-				     (when (file-directory-p tempdir) (delete-directory tempdir t))
-				     (when (buffer-live-p buf) (kill-buffer buf))))
-
-			 :doc "error (`nil'): fallback partial is inlined without scaffold"
-			 (let* ((buf (generate-new-buffer " *mev-agent-error-partial*"))
-				(agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create
-				      :path "/root/test_agent"
-				      :agent agent
-				      :agent-id "explorer--partial-error"
-				      :description "Test task"
-				      :buffer buf
-				      :transcript-status 'running))
-				(fired nil)
-				(main-cb (lambda (&rest args) (push args fired)))
-				(cb (mevedel-agent-exec--make-callback
-				     main-cb "explorer" "Test task"
-				     (point-min-marker)
-				     (list "Explorer result for task: Test task\n\n"))))
-			   (unwind-protect
-			       (cl-letf (((symbol-function
-					  'mevedel-agent-exec--save-transcript-buffer)
-					 (lambda (_invocation) t))
-					((symbol-function
-					  'mevedel-agent-exec--handle-update)
-					 (lambda (_invocation) nil))
-					((symbol-function
-					  'mevedel-agent-exec--run-stop-hook)
-					 (lambda (_invocation _status) nil)))
-				 (funcall cb "partial analysis before parser failure"
-					  (list :stream t :mevedel-agent-invocation inv))
-				 (funcall cb nil (list :error "boom"
-						       :mevedel-agent-invocation inv))
-				 (should (= 1 (length fired)))
-				 (let ((body (mevedel-agent-runtime--terminal-event-response
-				              inv (car (car fired)))))
-				   (should (string-match-p "Partial response recovered" body))
-				   (should (string-match-p
-					    "partial analysis before parser failure" body))
-				   (should-not (string-match-p
-						"Explorer result for task" body))))
-			     (when (buffer-live-p buf) (kill-buffer buf))))
-
-			 :doc "abort (`'abort'): runtime formats emitted abort event once"
+		 :doc "abort (`'abort') emits one structured terminal event"
 		 (mevedel-agent-exec-test--with-callback cb
 							 (funcall cb 'abort nil)
 							 (should (= 1 (length fired)))
-							 (should
-							  (string-match-p
-							   "aborted by the user"
-							   (mevedel-agent-runtime--terminal-event-response
-							    default-invocation (car (car fired))))))
+							 (let ((event (car (car fired))))
+							   (should (eq 'aborted
+							               (plist-get event
+							                          :mevedel-agent-terminal-status)))
+							   (should (string-match-p
+							            "aborted by the user"
+							            (plist-get event :response)))))
 
-		 :doc "terminal-ready-p: text-only `t' with pending bg-agents does not fire MAIN-CB"
-		 ;; Regression for the foreground-stash hang.  When the sub-agent
-		 ;; produces an intermediate text turn ("Waiting for the third
-		 ;; explorer...") while background children are still running, the
-		 ;; FSM parks in BWAIT and resumes later for the real synthesis turn.
-		 ;; Without `terminal-ready-p' the `fired' latch committed on the
-		 ;; intermediate turn and prevented finalize on the synthesis turn.
-		 (let ((buf (generate-new-buffer " *mev-agent-exec-tready*")))
-		   (unwind-protect
-		       (with-current-buffer buf
-			 (let* ((agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create
-				      :path "/root/test_agent"
-				      :agent agent
-				      :background-agents '("explorer--child-1"))))
-			   (mevedel-agent-exec-test--with-callback cb
-								   (let ((info (list :stream t
-										     :mevedel-agent-invocation inv)))
-								     ;; Intermediate text turn: bg-agents non-empty,
-								     ;; finalize must NOT fire.
-								     (funcall cb "Waiting for child... " info)
-								     (funcall cb t info)
-								     (should (null fired))
-								     ;; Drain bg-agents, simulate BWAIT-RESUME final turn.
-								     (setf (mevedel-agent-invocation-background-agents inv)
-									   nil)
-								     (funcall cb "final synthesis text" info)
-								     (funcall cb t info)
-								     ;; Now finalize should fire exactly once with the
-								     ;; full accumulated partial.
-								     (should (= 1 (length fired)))
-								     (should (equal "Waiting for child... final synthesis text"
-										    (car (car fired))))))))
-		     (when (buffer-live-p buf) (kill-buffer buf))))
-
-		 :doc "terminal-ready-p: pending mailbox messages also defer finalize"
-		 ;; Same gate covers the case where a bg child has finished and pushed
-		 ;; its result into the mailbox but the WAIT message-inject handler
-		 ;; has not yet drained it.  An intermediate `t' during that window
-		 ;; would have fired the latch under the old implementation.
-		 (let ((buf (generate-new-buffer " *mev-agent-exec-tready-msg*")))
-		   (unwind-protect
-		       (with-current-buffer buf
-			 (let* ((agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create
-				      :path "/root/test_agent"
-				      :agent agent
-				      :messages (list (list :from "child"
-							    :body "result")))))
-			   (mevedel-agent-exec-test--with-callback cb
-								   (let ((info (list :stream t
-										     :mevedel-agent-invocation inv)))
-								     (funcall cb "intermediate" info)
-								     (funcall cb t info)
-								     (should (null fired))
-								     (setf (mevedel-agent-invocation-messages inv) nil)
-								     (funcall cb t info)
-								     (should (= 1 (length fired)))))))
-		     (when (buffer-live-p buf) (kill-buffer buf))))
 
 		 )
 
@@ -643,7 +465,7 @@ fire-count and payload."
                                (kill-buffer parent-buf))
                              (delete-directory root t)))
 
-                         :doc "installs independent repair hooks in foreground and background buffers"
+                         :doc "installs independent repair hooks in retained agent buffers"
                          (let* ((root (file-name-as-directory
                                       (make-temp-file "mevedel-agent-repair-" t)))
                                 (workspace (mevedel-workspace--create
@@ -659,7 +481,7 @@ fire-count and payload."
                                  (with-current-buffer parent-buf
                                    (setq-local mevedel--session session)
                                    (setq-local mevedel--workspace workspace))
-                                 (dolist (background '(nil t))
+                                 (dotimes (index 2)
                                    (let* ((agent
                                            (mevedel-agent--create
                                             :name "explorer"))
@@ -668,10 +490,7 @@ fire-count and payload."
                                             :path "/root/test_agent"
                                             :agent agent
                                             :agent-id
-                                            (if background
-                                                "explorer--background"
-                                              "explorer--foreground")
-                                            :background-p background))
+                                            (format "explorer--%d" index)))
                                           buffer)
                                      (cl-letf (((symbol-function 'gptel-mode)
                                                 #'ignore))
@@ -990,8 +809,9 @@ fire-count and payload."
 			   (let ((decision
 				  (mevedel-agent-exec--run-start-hook-sync
 				   "explorer" "inspect hooks" "prompt body" inv)))
-			     (should (equal (plist-get start-event :agent-type) "explorer"))
-			     (should (equal (plist-get start-event :agent-id) "explorer-1"))
+			     (should (equal (plist-get start-event :role) "explorer"))
+			     (should (equal (plist-get start-event :agent-path)
+			                    "/root/test_agent"))
 			     (should (equal (plist-get start-event :prompt) "prompt body"))
 			     (should (equal (plist-get decision :additional-context)
 					    '("extra start context")))
@@ -1005,8 +825,9 @@ fire-count and payload."
 			 (setf (mevedel-agent-invocation-terminal-reason inv) "done")
 			 (with-temp-buffer
 			   (mevedel-agent-exec--run-stop-hook inv 'completed))
-			 (should (equal (plist-get stop-event :agent-type) "explorer"))
-			 (should (equal (plist-get stop-event :agent-id) "explorer-1"))
+			 (should (equal (plist-get stop-event :role) "explorer"))
+			 (should (equal (plist-get stop-event :agent-path)
+			                "/root/test_agent"))
 			 (should (eq (plist-get stop-event :status) 'completed))
 			 (should (equal (plist-get stop-event :terminal-reason) "done")))
 			     (delete-directory root t)
@@ -1161,55 +982,6 @@ fire-count and payload."
 							 captured-tools))))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
 		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))))
-
-
-(mevedel-deftest mevedel-agent-exec--force-initial-tool-use-p ()
-		 ,test
-		 (test)
-		 :doc "only first-turn coordinator invocations force initial tool use"
-		 (let* ((agent (mevedel-agent--create :name "coordinator"))
-			(inv (mevedel-agent-invocation--create
-			      :path "/root/test_agent"
-			      :agent agent
-			      :turn-count 0)))
-		   (should (mevedel-agent-exec--force-initial-tool-use-p
-			    "coordinator" inv))
-		   (setf (mevedel-agent-invocation-turn-count inv) 1)
-		   (should-not (mevedel-agent-exec--force-initial-tool-use-p
-				"coordinator" inv))
-		   (setf (mevedel-agent-invocation-turn-count inv) 0)
-		   (should-not (mevedel-agent-exec--force-initial-tool-use-p
-				"explorer" inv))
-		   (should-not (mevedel-agent-exec--force-initial-tool-use-p
-				"coordinator" nil))))
-
-
-(mevedel-deftest mevedel-agent-exec--clear-forced-tool-choice ()
-		 ,test
-		 (test)
-		 :doc "clears provider-specific forced-tool-choice fields"
-		 (let* ((data (list :input "x"
-				    :tool_choice "required"
-				    :tools [openai-tools]
-				    :toolConfig (list :toolChoice '(:any ())
-						      :tools [bedrock-tools])))
-			(fsm (gptel-make-fsm :info (list :data data))))
-		   (mevedel-agent-exec--clear-forced-tool-choice fsm)
-		   (let* ((updated (plist-get (gptel-fsm-info fsm) :data))
-			  (tool-config (plist-get updated :toolConfig)))
-		     (should-not (plist-member updated :tool_choice))
-		     (should (equal (plist-get updated :tools) [openai-tools]))
-		     (should-not (plist-member tool-config :toolChoice))
-		     (should (equal (plist-get tool-config :tools) [bedrock-tools]))))
-
-		 :doc "removes empty Gemini toolConfig after dropping force config"
-		 (let* ((data (list :contents []
-				    :toolConfig
-				    (list :functionCallingConfig '(:mode "ANY"))))
-			(fsm (gptel-make-fsm :info (list :data data))))
-		   (mevedel-agent-exec--clear-forced-tool-choice fsm)
-		   (should-not (plist-member (plist-get (gptel-fsm-info fsm) :data)
-					     :toolConfig))))
 
 
 (mevedel-deftest mevedel-agent-exec--invocation-from-info ()
@@ -1473,91 +1245,6 @@ fire-count and payload."
 				      (car (mevedel-agent-invocation-activity inv))
 				      :type))))
 		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
-		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
-
-
-(mevedel-deftest mevedel-agent-exec--handle-errs-save
-		 (:before-each (mevedel-workspace-clear-registry)
-			       :after-each (mevedel-workspace-clear-registry))
-		 ,test
-		 (test)
-
-		 :doc "background ERRS emits through runtime, reports, and resumes BWAIT"
-		 (let* ((ws (mevedel-workspace-get-or-create
-			     'project "/tmp/mae/" "/tmp/mae/" "mae"))
-			(session (mevedel-session-create "main" ws))
-			(parent-buf (generate-new-buffer " *mev-agent-errs-parent*"))
-			(agent-buf (generate-new-buffer " *mev-agent-errs-child*"))
-			(agent (mevedel-agent--create :name "explorer"
-						      :description "Explore"))
-			(inv (mevedel-agent-invocation--create
-			      :path "/root/test_agent"
-			      :agent agent
-			      :agent-id "explorer--ERRS"
-			      :description "survey"
-			      :parent-context session
-			      :parent-data-buffer parent-buf
-			      :buffer agent-buf
-			      :background-p t))
-			(parent-fsm (gptel-make-fsm
-				     :info (list :buffer parent-buf)
-				     :handlers nil
-				     :state 'BWAIT))
-			(child-fsm (gptel-make-fsm
-				    :info (list :buffer agent-buf
-						:mevedel-agent-invocation inv
-						:status "429"
-						:error '(:type rate_limit_error
-							       :message "too many requests"))
-				    :handlers nil
-				    :state 'ERRS)))
-		   (unwind-protect
-		       (progn
-			 (setf (mevedel-agent-invocation-parent-fsm inv) parent-fsm)
-			 (setf (gptel-fsm-info child-fsm)
-			       (plist-put
-			        (gptel-fsm-info child-fsm)
-			        :mevedel-agent-terminal-callback
-			        (lambda (event)
-			          (mevedel-agent-runtime--complete-background-agent
-			           inv
-			           (mevedel-agent-runtime--terminal-event-response
-			            inv event)))))
-			 (setf (mevedel-session-background-agents session)
-			       '("explorer--ERRS"))
-			 (with-current-buffer agent-buf
-			   (let ((start (point)))
-			     (insert "partial ERRS analysis")
-			     (put-text-property start (point) 'gptel 'response)))
-			 (with-current-buffer parent-buf
-			   (setq-local mevedel-agent-runtime--fsms
-				       `(("explorer--ERRS" . ,child-fsm))))
-			 (cl-letf (((symbol-function 'gptel--handle-error)
-				    (lambda (_fsm) nil))
-				   ((symbol-function
-				     'mevedel-agent-exec--save-transcript-buffer)
-				    (lambda (_invocation) t))
-				   ((symbol-function 'mevedel-agent-exec--handle-update)
-				    (lambda (_invocation) nil)))
-			   (mevedel-agent-exec--handle-errs-save child-fsm))
-			 (should (eq 'error
-				     (mevedel-agent-invocation-transcript-status inv)))
-			 (should (mevedel-agent-invocation-background-result-reported-p inv))
-			 (should (null (mevedel-session-background-agents session)))
-			 (should (= 1 (length (mevedel-session-messages session))))
-			 (let ((body (plist-get (car (mevedel-session-messages session))
-						:body)))
-			   (should (string-match-p
-				    "<agent-result agent-id=\"explorer--ERRS\"" body))
-			   (should (string-match-p "could not finish" body))
-			   (should (string-match-p "rate_limit_error" body))
-			   (should (string-match-p "Partial response recovered" body))
-			   (should (string-match-p "partial ERRS analysis" body)))
-			 (with-current-buffer parent-buf
-			   (should-not (assoc "explorer--ERRS"
-					      mevedel-agent-runtime--fsms)))
-			 (should (eq 'WAIT (gptel-fsm-state parent-fsm))))
-		     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
 		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 

@@ -196,7 +196,6 @@
     (should (eq ws (mevedel-session-workspace session)))
     (should (hash-table-p (mevedel-session-touched-files session)))
     (should (= 0 (mevedel-session-turn-count session)))
-    (should (null (mevedel-session-agents session)))
     (should (null (mevedel-session-agent-registry session)))
     (should (eq 'idle (mevedel-session-agent-root-activity session)))
     (should (= 3 (mevedel-session-agent-turn-capacity session)))

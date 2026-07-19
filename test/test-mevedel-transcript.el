@@ -167,7 +167,7 @@
     (with-current-buffer data-buf
       (let (block-start prefix-start response-start)
         (setq block-start (point))
-        (insert "<agent-result agent-id=\"verifier--1\" type=\"verifier\" description=\"Verify\">\n"
+        (insert "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
                 "VERDICT: PASS\n"
                 "</agent-result>\n")
         (setq prefix-start (point))
@@ -365,14 +365,14 @@
     (with-current-buffer data-buf
       (let (first-start first-end second-start second-end)
         (setq first-start (point))
-        (insert "#+begin_tool (Agent :subagent_type \"reviewer\")\n"
-                "(:name \"Agent\" :args (:subagent_type \"reviewer\"))\n\n"
+        (insert "#+begin_tool (Agent :task_name \"review\")\n"
+                "(:name \"Agent\" :args (:task_name \"review\" :message \"Review.\"))\n\n"
                 "reviewer body\n"
                 "#+end_tool\n")
         (setq first-end (point))
         (setq second-start (point))
-        (insert "#+begin_tool (Agent :subagent_type \"verifier\")\n"
-                "(:name \"Agent\" :args (:subagent_type \"verifier\"))\n\n"
+        (insert "#+begin_tool (Agent :task_name \"verify\")\n"
+                "(:name \"Agent\" :args (:task_name \"verify\" :message \"Verify.\"))\n\n"
                 "verifier body\n"
                 "#+end_tool\n")
         (setq second-end (point))
@@ -395,7 +395,7 @@
                 "tasks\n"
                 "#+end_tool\n"
                 "Waiting on verifier result.\n"
-                "<agent-result agent-id=\"verifier--tool-gap\" type=\"verifier\">\n"
+                "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
                 "VERDICT: FAIL\n"
                 "</agent-result>\n")
         (setq second-start (point))
@@ -421,7 +421,7 @@
           (should (= second-start (cadr (cadddr segs))))
           (should (= second-end (caddr (cadddr segs))))
           (should (string-match-p
-                   "verifier--tool-gap"
+                   "/root/verifier"
                    (buffer-substring-no-properties
                     (cadr (caddr segs)) (caddr (caddr segs)))))))))
   :doc "does not cross a blank unpropertized gap after a literal close"
@@ -655,7 +655,7 @@
               "#+end_tool\n")
       (put-text-property tool-start (point) 'gptel '(tool . "call-1")))
     (insert "#+begin_reasoning\nthinking\n#+end_reasoning\n"
-            "<agent-result agent-id=\"agent-1\">\ndone\n</agent-result>\n"
+            "<agent-result sender=\"/root/agent_1\" recipient=\"/root\" outcome=\"completed\">\ndone\n</agent-result>\n"
             "<system-reminder>\nremember\n</system-reminder>\n"
             "<hook-context>\n<hook-event name=\"UserPromptSubmit\">ctx</hook-event>\n"
             "</hook-context>\n"
@@ -845,8 +845,8 @@ TOOL-PROP."
       (insert "Waiting for the reviewer and verifier results.\n\n")
       (setq waiting-end (point))
       (setq mailbox-start (point))
-      (insert "<agent-result agent-id=\"reviewer--abc\" type=\"reviewer\" "
-              "description=\"Review current diff\">\n"
+      (insert "<agent-result sender=\"/root/reviewer\" recipient=\"/root\" "
+              "outcome=\"completed\">\n"
               "{\"overall_correctness\":\"patch is incorrect\"}\n"
               "</agent-result>\n")
       (setq mailbox-end (point))
@@ -1023,7 +1023,7 @@ TOOL-PROP."
       (setq tool-response-end (point))
       (insert "\n")
       (setq agent-start (point))
-      (insert "<agent-result agent-id=\"verifier--1\" type=\"verifier\" description=\"Verify\">\n"
+      (insert "<agent-result sender=\"/root/verifier\" recipient=\"/root\" outcome=\"completed\">\n"
               "VERDICT: PASS\n"
               "</agent-result>\n")
       (setq agent-end (point))
@@ -1179,7 +1179,7 @@ TOOL-PROP."
                               "partial output")
                      "<system-reminder>\npartial reminder"
                      "<hook-context>\npartial hook"
-                     "<!-- mevedel-render-data -->\n(:kind agent-transcript)"
+                     "<!-- mevedel-render-data -->\n(:kind collaboration-event)"
                      ":PROMPT:\npartial prompt"))
     (with-temp-buffer
       (org-mode)

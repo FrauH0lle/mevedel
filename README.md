@@ -542,9 +542,6 @@ and conversation remain retained.
 - `explorer`: read-only investigation of the codebase. The caller specifies
   thoroughness; the explorer returns findings without making direct changes
   but may delegate implementation to a worker.
-- `coordinator`: orchestrates work by dispatching workers (foreground or
-  background) and routing results via `SendMessage` mailboxes. Never
-  implements directly.
 - `verifier`: adversarial, read-only review. Tries to break implementations
   through edge cases, tests, and code review.
 - `reviewer`: structured code review used by `/review`. Inspects diffs and
@@ -575,13 +572,9 @@ keys are `$skill-name` symbols.
 
 | Custom Variable                         | Variable Description                                                |
 |-----------------------------------------|---------------------------------------------------------------------|
-| `mevedel-agent-extra-tool-specs`        | Add active or deferred tool specs to built-in agent definitions.    |
-| `mevedel-agent-background-timeout`      | Watchdog interval for stale background-agent BWAIT states.          |
-| `mevedel-agent-no-progress-timeout`     | Shared foreground/background no-progress auto-stop grace period.    |
-| `mevedel-agent-message-max-size`        | Maximum queued inter-agent message/result body before truncation.   |
-| `mevedel-agent-view-display-action`     | Display action used for rendered agent transcript views.            |
-| `mevedel-tool-ui-agent-description-width` | Maximum one-line task text width in agent handle headers.        |
-| `mevedel-agent-runtime-debug`              | Log sub-agent dispatch handoffs to `*Messages*` when non-nil.       |
+| `mevedel-agent-extra-tool-specs`          | Add active or deferred tool specs to built-in agent definitions.  |
+| `mevedel-agent-transcript-save-debounce`  | Delay before a changed retained transcript is flushed to disk.    |
+| `mevedel-agent-view-display-action`       | Display action used for rendered agent transcript views.          |
 
 ### Goals
 
@@ -604,7 +597,7 @@ changes.
 ### Review and Verify Commands
 
 `M-x mevedel-review` / `/review` and `M-x mevedel-verify` / `/verify` run
-dedicated foreground validation tasks. The commands share a target picker:
+dedicated awaited asynchronous validation tasks. The commands share a target picker:
 uncommitted changes, a base branch, a specific commit, the last commit, or
 custom instructions. Base-branch targets pre-resolve the merge-base SHA and pass
 that concrete diff target to the agent. The path is first-class rather than
@@ -795,8 +788,8 @@ Available events:
 | `PostToolUseFailure`  | after an `Error:` tool result                 | tool name         | add recovery hints or replace result  |
 | `PreCompact`          | before manual or automatic compaction         | `manual` / `auto` | block or add summary instructions     |
 | `PostCompact`         | after compaction completes                    | `manual` / `auto` | log or notify                         |
-| `SubagentStart`       | before an `Agent` request starts              | agent type        | block or add agent context            |
-| `SubagentStop`        | after an agent reaches terminal status        | agent type        | log or notify                         |
+| `SubagentStart`       | before an `Agent` request starts              | role              | block or add agent context            |
+| `SubagentStop`        | after an agent reaches terminal status        | role              | log or notify                         |
 | `Stop`                | after a successful top-level assistant turn   | none              | log, cleanup, or notify               |
 | `StopFailure`         | after an errored or aborted top-level turn    | none              | log, cleanup, or notify               |
 | `SessionEnd`          | buffer kill or session teardown               | reason            | cleanup or notify                     |
@@ -995,8 +988,8 @@ A skill can:
   command stacks, instruction mentions, and model-side inline calls retain the
   active request policy.
 
-User skill invocations may block chat input while async preparation or a foreground
-fork completes.
+User skill invocations may block chat input while asynchronous preparation or an
+awaited fork completes.
 
 Built-in local slash commands include `/help`, `/clear`, `/tokens`, `/model`,
 `/compact`, `/mode`, `/auto`, `/goal`, `/init`, `/review`, and `/verify`.
@@ -1136,7 +1129,7 @@ The maintained detail docs live in [`docs/`](docs/):
   oversized-result persistence.
 - [`docs/permissions.md`](docs/permissions.md) — permission decision chain,
   bucket precedence, Bash/Eval handling, and sub-agent propagation.
-- [`docs/agents.md`](docs/agents.md) — built-in agents, background execution,
+- [`docs/agents.md`](docs/agents.md) — built-in agents, retained asynchronous execution,
   mailboxes, task status, and review flow.
 - [`docs/preview.md`](docs/preview.md) — inline diff preview behavior and
   keybindings.
