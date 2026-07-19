@@ -2,7 +2,7 @@ Create one or more tasks in the session task list.
 
 Tasks are the unified tracking system for planning and progress: they
 work as a flat checklist for simple sessions, and as a dependency
-graph for coordinator sessions. Each task gets an auto-assigned
+graph for agent trees. Each task gets an auto-assigned
 integer ID that you can reference later from `TaskUpdate`, `TaskGet`,
 or from other tasks via `blockedBy` / `blocks`.
 
@@ -31,8 +31,8 @@ Pass `tasks` as an array. Each task object may contain:
   (defaults to `"pending"`)
 - `owner` — optional retained agent path such as `/root/worker_1`, or a
   deliberate user-defined bucket. Omit it for your own tasks. Use
-  subjects/descriptions for workstream names; do not invent proxy owners for
-  background agents.
+  subjects/descriptions for workstream names; use the actual retained path
+  instead of inventing a proxy owner for an agent.
 - `blockedBy` — optional array of task IDs that must complete first
 - `blocks` — optional array of task IDs this one blocks
 - `metadata` — optional free-form object for extra data

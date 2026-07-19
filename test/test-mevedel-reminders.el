@@ -490,10 +490,6 @@
   (test)
 
   :doc "creates an invocation with independent reminder clones"
-  ;; Every invocation also carries the dormant
-  ;; `agent-background-channels' reminder (one-shot, fires only when
-  ;; background-p), so we look up the agent's custom reminder by
-  ;; type rather than asserting a fixed length.
   (let* ((r (mevedel-reminder-create
              :type 'a
              :trigger (lambda (_) t)

@@ -108,8 +108,8 @@ boundaries:
 | `PostToolUseFailure` | after a tool result beginning with `Error:` | tool name | add context, replace result |
 | `PreCompact` | before manual/automatic compaction | trigger (`manual`, `auto`) | block, add context |
 | `PostCompact` | after compaction completes | trigger | notification/logging |
-| `SubagentStart` | before an Agent request is launched | agent type | block, add context |
-| `SubagentStop` | after an Agent reaches terminal status | agent type | notification/logging |
+| `SubagentStart` | before an Agent request is launched | agent role | block, add context |
+| `SubagentStop` | after an Agent reaches terminal status | agent role | notification/logging |
 | `Stop` | after a successful top-level assistant turn | none | notification/logging |
 | `StopFailure` | after an errored or aborted top-level assistant turn | none | notification/logging |
 | `SessionEnd` | buffer kill/session teardown | reason | notification only |
@@ -208,7 +208,7 @@ JSON shape:
 
 `matcher` is event-specific.  For tool events it matches the mevedel tool
 name (`Bash`, `Read`, `Edit`, `Write`, `Agent`, MCP names when wrapped).
-For agent events it matches agent type.  For compaction it matches
+For agent events it matches agent role.  For compaction it matches
 `manual` or `auto`.
 
 Matcher rules:
@@ -315,10 +315,9 @@ Compaction events add:
 
 Sub-agent events add:
 
-- `:agent-type`
-- `:agent-id`
+- `:agent-path`
+- `:role`
 - `:description`
-- `:background`
 - `:transcript-relative-path`
 - `:prompt` for `SubagentStart`
 - `:status` and `:terminal-reason` for `SubagentStop`
@@ -478,12 +477,12 @@ estimates.  Decisions are currently logged but not injected anywhere; this
 keeps post-compaction hooks observational and avoids mutating a summary
 after it has already been persisted.
 
-`SubagentStart` runs before the sub-agent request is launched.  A blocking
-decision stops the Agent tool before the child FSM is created.
+`SubagentStart` runs before the retained agent request is launched. A blocking
+decision stops the Agent tool before the child turn is published.
 `:additional-context` is appended to the sub-agent prompt inside a
-`<hook-context>` block.  This hook is waited on synchronously because the
-Agent tool must return the spawned FSM immediately for abort and background
-tracking.  Its hook audit surface is split across parent and child:
+`<hook-context>` block. This hook is awaited before the atomic spawn commits;
+after commit the Agent tool returns the retained canonical path immediately.
+Its hook audit surface is split across parent and child:
 the parent Agent tool row records that the spawned agent received hook
 context, while the child transcript attaches the full hook context to the
 child's initial prompt.
@@ -494,8 +493,8 @@ Decisions are currently logged but do not change terminal status or parent
 feedback.
 
 `Stop` runs after a successful top-level assistant turn, before the
-request-scoped hook layers are cleared.  This includes direct foreground
-fork user skill completions, which finalize the parent turn without a
+request-scoped hook layers are cleared. This includes awaited fork user skill
+completions, which finalize the parent turn without a
 normal gptel DONE transition.  `StopFailure` runs for top-level error and
 abort terminals and includes `:terminal-reason` when available.  Both
 events are observational: blocking decisions are logged but do not change

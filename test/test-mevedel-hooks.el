@@ -658,18 +658,18 @@
 		 (let* ((payload (json-parse-string
 				  (mevedel-hooks--event-json
 				   '(:hook-event-name SubagentStart
-		     :background nil
+		     :read-only nil
 		     :aggressive t
-		     :agent-id nil
+		     :agent-path nil
 		     :tool-input (:command "true"
 				   :dry-run :json-false)))
 		  :object-type 'alist
 		  :array-type 'list
 		  :null-object :null
 		  :false-object :false)))
-		   (should (eq (alist-get 'background payload) :false))
+		   (should (eq (alist-get 'read_only payload) :false))
 		   (should (eq (alist-get 'aggressive payload) t))
-		   (should (eq (alist-get 'agent_id payload) :null))
+		   (should (eq (alist-get 'agent_path payload) :null))
 		   (should (eq (alist-get 'dry_run
 					  (alist-get 'tool_input payload))
 			       :false)))
@@ -874,7 +874,7 @@
                 (mevedel-hooks-test--await
                  (lambda (cb)
                    (mevedel-hooks-run-event
-                    'SubagentStart '(:agent-type "explorer") cb session))))
+                    'SubagentStart '(:role "explorer") cb session))))
                (audits (mevedel-hooks-context-audit-records
                         decision 'SubagentStart 'subagent-context t))
                (handlers (plist-get (car audits) :handlers)))

@@ -177,15 +177,6 @@
 (declare-function mevedel-goal-restore-pending-approval
                   "mevedel-goal" (&optional session chat-buffer))
 
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--bwait-injected-table
-                  "mevedel-agent-runtime" (source))
-(declare-function mevedel-agent-runtime--agent-invocation-at
-                  "mevedel-agent-runtime" (fsm))
-(declare-function mevedel-agent-runtime-stop
-                  "mevedel-agent-runtime"
-                  (agent-id &optional reason parent-buffer))
-
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
                   "mevedel-utilities" (start end))
@@ -203,7 +194,6 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
-(defvar mevedel-agent-runtime--fsms)
 
 ;; `mevedel-view-stream'
 (declare-function mevedel-view-stream-post-tool "mevedel-view-stream" (args))
@@ -410,14 +400,6 @@ session struct."
     (setq-local gptel-send--handlers
                 (mevedel-preset--build-handlers
                  (copy-tree (default-value 'gptel-send--handlers))))
-    ;; Install a buffer-local transition table with BWAIT so the main
-    ;; FSM parks when background agents are still running.  The
-    ;; injected table is cached by `mevedel-agent-runtime--bwait-injected-table'
-    ;; keyed on source identity; passing the default value directly
-    ;; lets every chat buffer share a single cached copy.
-    (setq-local gptel-send--transitions
-                (mevedel-agent-runtime--bwait-injected-table
-                 (default-value 'gptel-send--transitions)))
     ;; Wrap lines
     (visual-line-mode +1)
     ;; Auto-scroll when at end of buffer
@@ -1212,34 +1194,15 @@ BUF defaults to the current buffer if not specified."
           (mevedel-permission-queue-abort-all))
         (when (fboundp 'mevedel-plan-queue-abort-all)
           (mevedel-plan-queue-abort-all)))
-      ;; Phase 2: loop `gptel-abort'.  It only cancels ONE request per
-      ;; call, and with background sub-agents running several requests
-      ;; share the same chat buffer; loop until no more match.
-      ;;
-      ;; sub-agent requests run with `:buffer agent-buffer'.
-      ;; Match those too via the parent's `mevedel-agent-runtime--fsms'
-      ;; registry so a parent abort tears down sub-agent FSMs.
+      ;; Phase 2: loop `gptel-abort'.  It only cancels one request per
+      ;; call, so continue until no request owned by this root buffer remains.
+      ;; Retained agent turns own separate buffers and continue independently.
       (let* ((inhibit-message t)
-             (agent-buffers
-              (when-let* ((registry
-                           (buffer-local-value 'mevedel-agent-runtime--fsms
-                                               chat-buffer)))
-                (delq nil
-                      (mapcar
-                       (lambda (entry)
-                         (let* ((info (and (cdr entry)
-                                           (ignore-errors
-                                             (gptel-fsm-info
-                                              (cdr entry)))))
-                                (buf (and info (plist-get info :buffer))))
-                           (and (buffer-live-p buf) buf)))
-                       registry))))
              (request-matches-p
               (lambda (entry)
                 (let ((buf (plist-get (gptel-fsm-info (cadr entry))
                                       :buffer)))
-                  (or (eq buf chat-buffer)
-                      (memq buf agent-buffers))))))
+                  (eq buf chat-buffer)))))
         (while (and (boundp 'gptel--request-alist)
                     gptel--request-alist
                     (cl-some request-matches-p gptel--request-alist))
@@ -1251,29 +1214,6 @@ BUF defaults to the current buffer if not specified."
                                     :buffer)))
             (gptel-abort (or target chat-buffer)))))
       (with-current-buffer chat-buffer
-        ;; Agents can be parked without a live process (for example in
-        ;; BWAIT while waiting on their own children).  `gptel-abort'
-        ;; only sees active request processes, so explicitly stop any
-        ;; registry entries that remain after the request-alist drain.
-        (when (and (bound-and-true-p mevedel-agent-runtime--fsms)
-                   (fboundp 'mevedel-agent-runtime-stop))
-          (dolist (entry (copy-sequence mevedel-agent-runtime--fsms))
-            (when (and (stringp (car entry))
-                       (assoc (car entry) mevedel-agent-runtime--fsms)
-                       (ignore-errors
-                         (mevedel-agent-runtime--agent-invocation-at
-                          (cdr entry))))
-              (condition-case err
-                  (mevedel-agent-runtime-stop
-                   (car entry) "parent request aborted" chat-buffer)
-                (error
-                 (message "mevedel: agent abort cleanup failed for %s: %S"
-                          (car entry) err))))))
-        ;; Drop any leftover agent-FSM registry entries.  Their
-        ;; callbacks have been fired with 'abort by `gptel-abort',
-        ;; but entries can linger if a callback errored.
-        (when (bound-and-true-p mevedel-agent-runtime--fsms)
-          (setq mevedel-agent-runtime--fsms nil))
         (when-let* ((goal (and (bound-and-true-p mevedel--session)
                                (mevedel-session-goal mevedel--session)))
                     ((eq (mevedel-goal-status goal) 'active)))

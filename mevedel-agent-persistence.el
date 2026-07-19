@@ -518,16 +518,15 @@ dropped or recovered records."
                       session
                       (mevedel-agent-invocation-parent-data-buffer invocation)
                       root-buffer
-                      (mevedel-agent-invocation-parent-context invocation)
-                      session
                       (mevedel-agent-invocation-transcript-relative-path
                        invocation)
                       relative
                       (mevedel-agent-invocation-transcript-status invocation)
-                      (if (eq (mevedel-agent-record-activity record) 'idle)
-                          'completed
-                        'running)
-                      (mevedel-agent-invocation-background-p invocation) t
+                      (cond
+                       ((eq (mevedel-agent-record-activity record) 'idle)
+                        'completed)
+                       (readonly-p 'running)
+                       (t 'aborted))
                       (mevedel-agent-invocation-frozen-configuration invocation)
                       configuration)
                 (setq buffer
@@ -549,8 +548,23 @@ dropped or recovered records."
                     configuration))
                   (set-buffer-modified-p nil)
                   (set-visited-file-modtime))
+                (when (and (not readonly-p)
+                           (not (eq (mevedel-agent-record-activity record)
+                                    'idle)))
+                  (when-let* ((entry
+                               (assoc
+                                (mevedel-agent-record-id record)
+                                (mevedel-session-agent-transcripts session))))
+                    (let ((metadata (copy-sequence (cdr entry))))
+                      (setf (plist-get metadata :status) 'aborted
+                            (plist-get metadata :reason)
+                            "Interrupted during session recovery")
+                      (setcdr entry metadata))))
                 (setf (mevedel-agent-record-conversation-buffer record) buffer
                       (mevedel-agent-record-invocation record) nil)
+                (when readonly-p
+                  (setf (mevedel-agent-record-activity record) 'idle
+                        (mevedel-agent-record-blockers record) nil))
                 (push entry accepted)))
           ((mevedel-agent-persistence-invalid-data file-error)
            (when (buffer-live-p buffer)

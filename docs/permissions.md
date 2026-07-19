@@ -111,7 +111,7 @@ One specifier per rule:
 | `:path`    | path (glob, `~` exp.)  | Read, Edit, Write, Glob, Grep, ...|
 | `:pattern` | command/expression glob | Bash; full-escalation Eval rules |
 | `:domain`  | host name (glob)       | WebFetch, YouTube                 |
-| `:name`    | free-form name (glob)  | Agent (subagent_type)             |
+| `:name`    | free-form name (glob)  | Agent (`role`)                    |
 
 Precedence: specifier rules outrank generic; within a group
 `deny > ask > allow`. Protected paths prompt unless an exact resource grant
@@ -496,7 +496,7 @@ view buffer, not inside the sub-agent transcript buffer or a read-only
 transcript inspection view. Queue entries carry a canonical origin (`/root`
 or a retained agent path such as `/root/worker/verifier`), and request teardown
 only aborts entries owned
-by the ending request. This keeps a background agent's visible prompt
+by the ending request. This keeps a retained agent's visible prompt
 open across root-view rerenders and unrelated request cleanup until the
 user explicitly resolves it or interrupts that agent turn. Redraws use the
 ordinary interaction-zone lifecycle and preserve the active composer draft.

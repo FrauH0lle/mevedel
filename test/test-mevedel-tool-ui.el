@@ -89,7 +89,6 @@
     (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
                     "InterruptAgent" "ToolSearch" "SendMessage" "WaitAgent"))
       (should (mevedel-tool-get name)))
-    (should-not (mevedel-tool-get "StopAgent"))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should-not (mevedel-tool-get "RequestAccess")))
 
@@ -256,15 +255,7 @@
                (assoc (concat "/root/" (plist-get args :task_name))
                       (mevedel-session-agent-registry session))))
             (dolist (args '((:task_name "Upper" :message "bad")
-                            (:task_name "two/parts" :message "bad")
-                            (:task_name "legacy" :message "ok"
-                             :subagent_type "explorer")
-                            (:task_name "legacy_2" :message "ok"
-                             :description "old")
-                            (:task_name "legacy_3" :message "ok"
-                             :prompt "old")
-                            (:task_name "legacy_4" :message "ok"
-                             :run_in_background t)))
+                            (:task_name "two/parts" :message "bad")))
               (should-error (mevedel-tool-ui--agent #'ignore args)))))
       (dolist (invocation invocations)
         (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
@@ -755,19 +746,6 @@
           (cl-letf (((symbol-function 'mevedel-agent-exec--run)
                      (lambda (callback _role _description message invocation
                                        buffer &optional _configure)
-                       (let ((fsm
-                              (gptel-make-fsm
-                               :state 'TOOL
-                               :info
-                               (list :mevedel-agent-invocation invocation))))
-                         (with-current-buffer
-                             (mevedel-agent-invocation-parent-data-buffer
-                              invocation)
-                           (setf
-                            (alist-get
-                             (mevedel-agent-invocation-agent-id invocation)
-                             mevedel-agent-runtime--fsms nil nil #'equal)
-                            fsm)))
                        (setq launches
                              (append launches
                                      (list (list :callback callback
@@ -789,14 +767,18 @@
             (should-not (mevedel-session-messages session))
             (let* ((first (car launches))
                    (invocation (plist-get first :invocation))
-                   (message (car (mevedel-agent-invocation-messages
-                                  invocation))))
-              (should (equal "/root" (plist-get message :from)))
+                   (record (cdr (assoc "/root/one"
+                                       (mevedel-session-agent-registry
+                                        session))))
+                   (message (car (mevedel-agent-record-mailbox record))))
+              (should (eq 'MAIL (plist-get message :type)))
+              (should (equal "/root" (plist-get message :sender)))
+              (should (equal "/root/one" (plist-get message :recipient)))
               (should (equal "Incorporate this steering."
-                             (plist-get message :body)))
+                             (plist-get message :payload)))
               ;; The ordinary WAIT handler drains the follow-up before the
               ;; provider's next safe request boundary.
-              (setf (mevedel-agent-invocation-messages invocation) nil)
+              (mevedel-agent-control-clear-context-mailbox invocation)
               (funcall (plist-get first :callback)
                        "Steered task finished."))
             (should (= 3 (length launches)))
@@ -819,9 +801,27 @@
 ;;; Expand/collapse
 
 (mevedel-deftest mevedel-tool-ui--render-agent-body
-  (:doc "selects the correct Agent expanded body for foreground and background rows")
+  (:doc "renders canonical asynchronous Agent start events")
   ,test
   (test)
+
+  :doc "returns one canonical Started row keyed by path"
+  (let ((rendering
+         (mevedel-tool-ui--render-agent
+          "Agent" '(:task_name "spec_review")
+          "{\"path\":\"/root/spec_review\"}"
+          '(:kind collaboration-event
+            :event started
+            :path "/root/spec_review"
+            :agent-id "default--internal"
+            :status running))))
+    (should (equal "Started /root/spec_review"
+                   (plist-get rendering :header)))
+    (should (equal "/root/spec_review"
+                   (plist-get rendering :agent-path)))
+    (should (equal "default--internal"
+                   (plist-get rendering :agent-id)))
+    (should (eq 'agent-handle (plist-get rendering :vtype))))
 
   :doc "Started rows preserve a multiline leading-> composer draft"
   (mevedel-view-test--with-buffers
@@ -845,153 +845,43 @@
               (set-marker-insertion-type mevedel-view--input-marker nil)))
           (should (string= draft (mevedel-view--input-text)))))))
 
-  :doc "agent description truncation never exceeds narrow widths"
-  (progn
-    (should (equal "" (mevedel-tool-ui--compact-agent-description
-                       "long task" 0)))
-    (should (equal "." (mevedel-tool-ui--compact-agent-description
-                       "long task" 1)))
-    (should (equal ".." (mevedel-tool-ui--compact-agent-description
-                        "long task" 2)))
-    (should (equal "..." (mevedel-tool-ui--compact-agent-description
-                         "long task" 3)))
-    (should (<= (string-width
-                 (mevedel-tool-ui--compact-agent-description
-                  "long task" 2))
-                2)))
-
-  :doc "foreground Agent rows still render the final response"
+  :doc "Started paths activate their retained transcript"
   (mevedel-view-test--with-buffers
-    (let* ((args '(:subagent_type "explorer" :description "Task"))
-           (rd '(:kind agent-transcript
-                 :agent-id "explorer--fg"
-                 :status completed
-                 :activity ((:type tool-start :tool-name "Read"))))
-           (rendering (mevedel-tool-ui--render-agent
-                       "Agent" args "final response body" rd)))
-      (with-current-buffer view-buf
+    (with-current-buffer view-buf
+      (let ((rendering
+             (mevedel-tool-ui--render-agent
+              "Agent" '(:task_name "spec_review")
+              "{\"path\":\"/root/spec_review\"}"
+              '(:kind collaboration-event
+                :event started
+                :path "/root/spec_review"
+                :status running)))
+            opened)
         (let ((inhibit-read-only t))
           (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--render-expanded-body rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "final response body" text))
-          (should-not (string-match-p "Read" text)))))))
-
-  :doc "Agent rows group SubagentStart context handlers in execution order"
-  (mevedel-view-test--with-buffers
-    (let* ((args '(:subagent_type "explorer" :description "Task"))
-           (rd '(:kind agent-transcript
-                 :agent-id "explorer--hook"
-                 :status running
-                 :hook-audits
-                 ((:type subagent-context
-                   :event "SubagentStart"
-                   :handlers
-                   ((:function ponytail-subagent
-                     :source plugin
-                     :plugin-name "ponytail"
-                     :reason "PONYTAIL:FULL")
-                    (:description "Inject project conventions"
-                     :source project-file))))))
-           (rendering (mevedel-tool-ui--render-agent
-                       "Agent" args "launch body" rd)))
-      (with-current-buffer view-buf
-        (let ((inhibit-read-only t))
-          (goto-char mevedel-view--input-marker)
-          (set-marker-insertion-type mevedel-view--input-marker t)
-          (unwind-protect
-              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-            (set-marker-insertion-type mevedel-view--input-marker nil)))
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p
-                   "SubagentStart hook added context · 2 handlers" text))
-          (should-not (string-match-p "ponytail plugin" text)))
+          (mevedel-view--insert-rendered-tool rendering (cons 1 1)))
         (goto-char (point-min))
-        (search-forward "SubagentStart hook added context")
-        (mevedel-view-toggle-section)
-        (let* ((text (buffer-substring-no-properties
-                      (point-min) mevedel-view--input-marker))
-               (first (string-match "1\\. ponytail plugin" text))
-               (second (string-match "2\\. project hook" text)))
-          (should first)
-          (should second)
-          (should (< first second))
-          (should (string-match-p "Handler: ponytail-subagent" text))
-          (should (string-match-p "Reason: PONYTAIL:FULL" text))
-          (should (string-match-p
-                   "Handler: Inject project conventions" text))
-          (should-not (string-match-p "extra start context" text))))))
+        (search-forward "/root/spec_review")
+        (goto-char (match-beginning 0))
+        (cl-letf (((symbol-function 'mevedel-view-open-agent-transcript)
+                   (lambda (path) (setq opened path))))
+          (mevedel-view-activate-at-point))
+        (should (equal "/root/spec_review" opened)))))
 
-  :doc "Agent handle transcript click target is the visible type label"
-  (mevedel-view-test--with-buffers
-    (let* ((agent-id "explorer--abcdef1234567890")
-           (workspace (mevedel-workspace--create
-                       :type 'project
-                       :id "agent-target"
-                       :root temporary-file-directory
-                       :name "agent-target"))
-           (session (mevedel-session-create "main" workspace))
-           (save-path (file-name-as-directory
-                       (file-name-concat temporary-file-directory
-                                         "mevedel-agent-target-session")))
-           (args '(:subagent_type "explorer" :description "Task"))
-           (rd `(:kind agent-transcript
-                 :agent-id ,agent-id
-                 :status completed))
-           rendering)
-      (setf (mevedel-session-save-path session) save-path)
-      (setf (mevedel-session-agent-transcripts session)
-            (list (cons agent-id
-                        '(:path "agents/explorer--abcdef12.chat.org"
-                          :status completed))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq rendering (mevedel-tool-ui--render-agent
-                         "Agent" args "final response body" rd))
-        (let ((inhibit-read-only t)
-              start)
-          (goto-char mevedel-view--input-marker)
-          (setq start (point))
-          (mevedel-view--insert-rendered-tool rendering (cons 1 1))
-          (mevedel-view--add-display-region-properties
-           start (point) 'agent-handle)
-          (should
-           (string-search
-            "Agent: explorer -- Task"
-            (buffer-substring-no-properties start (point))))
-          (goto-char start)
-          (search-forward "Agent: explorer")
-          (search-backward "explorer")
-          (should (eq (get-text-property (point) 'keymap)
-                      mevedel-view--agent-label-map))
-          (should (equal agent-id
-                         (get-text-property
-                          (point) 'mevedel-view-agent-id)))
-          (should
-           (lookup-key (get-text-property (point) 'keymap) [mouse-1])))))
+  :doc "rejects missing and malformed collaboration event data"
+  (dolist (render-data
+           '(nil
+             (:kind collaboration-event :event started)
+             (:kind collaboration-event :event started :path 7)
+             (:kind collaboration-event :event interacted
+              :path "/root/spec_review")
+             (:kind unrelated :event started :path "/root/spec_review")))
+    (should-not
+     (mevedel-tool-ui--render-agent
+      "Agent" '(:task_name "spec_review") "Error: launch failed"
+      render-data)))
+)
 
-  :doc "Agent handle header normalizes long task text to one line"
-  (let* ((args '(:subagent_type "coordinator"
-                 :description "Run validation.\nThen repeat until green."))
-         (rd '(:kind agent-transcript
-               :agent-id "coordinator--abcdef123456"
-               :status running
-               :calls 9))
-         (mevedel-tool-ui-agent-description-width 30)
-         (rendering (mevedel-tool-ui--render-agent
-                     "Agent" args "launch status" rd))
-         (header (plist-get rendering :header)))
-    (should (string-match-p
-             "Agent: coordinator -- Run validation\\. Then repeat\\.\\.\\."
-             header))
-    (should-not (string-match-p "\n" header))
-    (should (string-match-p "\\[running · 9 calls\\]" header))))
 
 (mevedel-deftest mevedel-tool-ui--render-agent-interaction
   (:doc "Renders retained-agent interaction events")

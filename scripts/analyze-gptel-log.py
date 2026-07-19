@@ -4,7 +4,7 @@
 Parses the JSON request/response pairs logged by gptel and reconstructs
 the conversation flow across agents, showing:
 
-- Which agent each request belongs to (main, coordinator, explorer, etc.)
+- Which agent role each request belongs to (root, worker, explorer, etc.)
 - Message count and last user message summary
 - Tool calls made per turn
 - Agent-message / agent-result delivery
@@ -23,8 +23,8 @@ from typing import Optional
 def identify_agent(system_content: str) -> str:
     """Identify the agent type from the system prompt content."""
     s = system_content.lower()[:500]
-    if "coordinator" in s:
-        return "coordinator"
+    if "implementation worker" in s or "repository worker" in s:
+        return "worker"
     if "read-only exploration" in s or "exploration agent" in s:
         return "explorer"
     if ("planner" in s
@@ -32,11 +32,13 @@ def identify_agent(system_content: str) -> str:
         return "planner"
     if "verifier" in s or "adversarial verification" in s:
         return "verifier"
+    if "review guidelines" in s or "acting as a reviewer" in s:
+        return "reviewer"
     if "introspect" in s:
         return "introspector"
     if "tutor" in s and "socratic" in s:
         return "tutor"
-    return "main"
+    return "root"
 
 
 def extract_tool_calls(msg: dict) -> list:
@@ -54,14 +56,11 @@ def extract_tool_calls(msg: dict) -> list:
         detail = ""
         if isinstance(args, dict):
             if name == "Agent":
-                agent_type = (args.get("subagent_type")
-                              or args.get("agent_type")
-                              or args.get("type", "?"))
-                bg = args.get("run_in_background", False)
-                detail = f" type={agent_type}" + (" bg=true" if bg else "")
+                task = args.get("task_name", "?")
+                role = args.get("role")
+                detail = f" task={task}" + (f" role={role}" if role else "")
             elif name == "SendMessage":
-                to = args.get("to", "?")
-                detail = f" to={to}"
+                detail = f" target={args.get('target', '?')}"
             elif name == "TaskCreate":
                 title = args.get("title", "?")
                 detail = f' "{title[:40]}"'
@@ -150,13 +149,11 @@ def _extract_responses_api_calls(items: list) -> list:
         detail = ""
         if isinstance(args, dict):
             if name == "Agent":
-                atype = (args.get("subagent_type")
-                         or args.get("agent_type")
-                         or args.get("type", "?"))
-                bg = args.get("run_in_background", False)
-                detail = f" type={atype}" + (" bg=true" if bg else " bg=false")
+                task = args.get("task_name", "?")
+                role = args.get("role")
+                detail = f" task={task}" + (f" role={role}" if role else "")
             elif name == "SendMessage":
-                detail = f" to={args.get('to', '?')}"
+                detail = f" target={args.get('target', '?')}"
             elif name == "TaskCreate":
                 detail = f' "{str(args.get("title", "?"))[:40]}"'
             elif name == "TaskUpdate":
@@ -443,9 +440,9 @@ def format_trace(events: list, verbose: bool = False) -> str:
 
             flags = []
             if evt.get("has_agent_result"):
-                flags.append("BWAIT-RESUME")
+                flags.append("RESULT")
             elif evt.get("has_agent_message"):
-                flags.append("MSG-INJECT")
+                flags.append("MAIL")
 
             flag_str = f"  [{', '.join(flags)}]" if flags else ""
 
@@ -513,8 +510,8 @@ def format_trace(events: list, verbose: bool = False) -> str:
     for agent, count in sorted(agent_turns.items()):
         output.append(f"  {agent}: {count} requests")
 
-    # BWAIT indicators
-    bwait_events = [
+    # Retained-agent delivery indicators
+    result_events = [
         e for e in events
         if e["type"] == "request" and e.get("has_agent_result")
     ]
@@ -523,15 +520,15 @@ def format_trace(events: list, verbose: bool = False) -> str:
         if e["type"] == "request" and e.get("has_agent_message") and not e.get("has_agent_result")
     ]
 
-    if bwait_events:
+    if result_events:
         output.append("")
-        output.append("Agent-result delivery (BWAIT -> WAIT resume):")
-        for e in bwait_events:
+        output.append("Agent RESULT delivery:")
+        for e in result_events:
             output.append(f"  {e['agent']} at {e['timestamp']}")
 
     if msg_events:
         output.append("")
-        output.append("Agent-message injection (SendMessage delivery):")
+        output.append("Agent MAIL delivery:")
         for e in msg_events:
             output.append(f"  {e['agent']} at {e['timestamp']}")
 

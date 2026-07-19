@@ -1261,6 +1261,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
 
 (defun test-mevedel-session-persistence--cold-agent-tree-round-trip ()
   "Exercise one durable agent-tree cold resume and its recovery boundary."
+  (mevedel-tools-register)
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
@@ -1320,6 +1321,11 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                 (write-region (point-min) (point-max)
                               active-file nil 'silent))
               (setf (mevedel-session-agent-turn-capacity session) 7
+                    (mevedel-session-agent-transcripts session)
+                    `(("opaque-idle" :agent-path "/root/idle"
+                       :status completed :path ,idle-relative)
+                      ("opaque-active" :agent-path "/root/active"
+                       :status running :path ,active-relative))
                     (mevedel-session-agent-registry session)
                     (list (cons "/root/idle" idle)
                           (cons "/root/active" active)
@@ -1373,10 +1379,26 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                                 (mevedel-session-agent-registry
                                  restored-session))))
                    (idle-buffer
-                    (mevedel-agent-record-conversation-buffer idle)))
+                    (mevedel-agent-record-conversation-buffer idle))
+                   (active-buffer
+                    (mevedel-agent-record-conversation-buffer active)))
               (should (equal "opaque-idle" (mevedel-agent-record-id idle)))
               (should (eq 'idle (mevedel-agent-record-activity active)))
               (should (buffer-live-p idle-buffer))
+              (should (buffer-live-p active-buffer))
+              (should
+               (eq 'aborted
+                   (plist-get
+                    (cdr (assoc
+                          "opaque-active"
+                          (mevedel-session-agent-transcripts
+                           restored-session)))
+                    :status)))
+              (should
+               (eq 'aborted
+                   (mevedel-agent-invocation-transcript-status
+                    (buffer-local-value 'mevedel--agent-invocation
+                                        active-buffer))))
               (with-current-buffer idle-buffer
                 (should (string-match-p "Independent compacted history"
                                         (buffer-string))))
@@ -1456,6 +1478,13 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                   restored-session
                   (buffer-local-value 'mevedel--session restored))
             (should-not (mevedel-session-messages restored-session))
+            (should
+             (eq 'aborted
+                 (plist-get
+                  (cdr (assoc
+                        "opaque-active"
+                        (mevedel-session-agent-transcripts restored-session)))
+                  :status)))
             (let* ((idle
                     (cdr (assoc "/root/idle"
                                 (mevedel-session-agent-registry
@@ -1477,8 +1506,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
               (with-current-buffer restored
                 (cl-letf
                     (((symbol-function 'mevedel-agent-runtime-dispatch)
-                      (lambda (_callback _agent _description _message
-                               &rest keys)
+                      (lambda (_agent _description _message &rest keys)
                         (setq captured-buffer
                               (plist-get keys :retained-buffer))
                         t)))
@@ -4747,9 +4775,31 @@ workspace tree."
 ;;
 ;;; Phase 9: fork-on-send + rename-session
 
+(mevedel-deftest mevedel-save-session ()
+  ,test
+  (test)
+  :doc "refuses save-as without changing a tree that has an active turn"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "save-as"))
+           (record
+            (mevedel-agent-record--create :activity 'running)))
+      (setq-local mevedel--session session)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (let ((err (should-error (mevedel-save-session t)
+                               :type 'user-error)))
+        (should (string-match-p
+                 "Interrupt active agent turns"
+                 (error-message-string err))))
+      (should (eq record
+                  (cdr (assoc
+                        "/root/worker"
+                        (mevedel-session-agent-registry session))))))))
+
 (defun test-mevedel-session-persistence--make-fork-ready ()
   "Return a real saved session rewound and ready to fork.
 The result is a plist whose :tempdir owns every created file."
+  (mevedel-tools-register)
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
@@ -4763,7 +4813,6 @@ The result is a plist whose :tempdir owns every created file."
              :agent-id "eligible--1"
              :path "/root/eligible"
              :parent-session session
-             :parent-context session
              :buffer source-agent-buffer))
            (eligible-transcript
             (concat "* Agent Task: inspect\n\n"
@@ -4826,12 +4875,13 @@ The result is a plist whose :tempdir owns every created file."
                 (3 . (("/tmp/future.el"
                        . (:backup-name "future@v2" :version 2))))))
         (setf (mevedel-session-agent-transcripts session)
-              '(("eligible--1" :parent-turn 2 :type "default"
+              '(("eligible--1" :agent-path "/root/eligible"
+                 :parent-turn 2 :type "default"
                  :description "Historical eligible agent"
                  :status completed :path "agents/eligible.chat.org")
-                ("future--2" :parent-turn 3
+                ("future--2" :agent-path "/root/future" :parent-turn 3
                  :path "agents/future.chat.org")
-                ("poison--3" :parent-turn 2
+                ("poison--3" :agent-path "/root/poison" :parent-turn 2
                  :path "../poison.chat.org")))
         (setf (mevedel-session-agent-registry session)
               (list
@@ -5273,14 +5323,14 @@ The result is a plist whose :tempdir owns every created file."
                   (setq-local mevedel--data-buffer buf)
                   (let ((info
                          (mevedel-view--resolve-agent-transcript
-                          "eligible--1")))
+                          "/root/eligible")))
                     (should (equal
                              (file-name-concat
                               new-path "agents/eligible.chat.org")
                              (plist-get info :absolute-path)))
                     (setq historical-view
                           (mevedel-view--ensure-agent-transcript-view
-                           "eligible--1" info parent-view)))
+                           "/root/eligible" info parent-view)))
                   (with-current-buffer historical-view
                     (setq historical-data mevedel--data-buffer)
                     (should buffer-read-only))

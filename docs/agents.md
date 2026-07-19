@@ -48,7 +48,6 @@ The built-in role configurations are:
   collaboration tools, with explicit concurrent-edit guidance
 - **explorer**: directly read-only investigation with authority to delegate to
   workers
-- **coordinator**: internal orchestration role; never implements
 - **verifier**: adversarial read-only verification; per-turn
   `verifier-read-only` reminder attached at invocation. Final reports must
   end with `VERDICT: PASS`, `VERDICT: FAIL`, or `VERDICT: PARTIAL`; the
@@ -125,52 +124,30 @@ derived from the resolved agent tool set: agents with `Skill` or
 `ListSkills` receive the model-facing active skill roster. Utility agents
 can therefore avoid inheriting main-agent boilerplate while still
 receiving environment context. Built-in policy gives worker and explorer
-agents `Skill` and `ListSkills` plus the skills prompt section; coordinator,
-verifier, and reviewer agents remain skill-free.
+agents `Skill` and `ListSkills` plus the skills prompt section; verifier and
+reviewer agents remain skill-free.
 
-## Specialist invocation flow
+## Asynchronous agent lifecycle
 
 ```mermaid
 flowchart TD
-    A[Dedicated command or fork dispatches specialist] --> B[Resolve agent definition and tools]
-    B --> C[Build agent prompt]
-    C --> D{Background?}
-    D -- No --> E[Run foreground FSM]
-    D -- Yes --> F[Register background child]
-    F --> G[Parent returns to WAIT or BWAIT]
-    E --> H[Persist transcript]
-    F --> H
-    H --> I[Deliver result or handle]
-    I --> J[Parent mailbox or final callback]
+    A[Agent reserves path and capacity] --> B[Freeze configuration]
+    B --> C[Persist retained record and conversation]
+    C --> D[Return canonical path]
+    D --> E[Run child turn asynchronously]
+    E --> F[Settle exactly once]
+    F --> G[Release capacity and persist idle record]
+    G --> H[Queue RESULT for spawn parent]
+    H --> I{Parent needs result now?}
+    I -- Yes --> J[WaitAgent wakes]
+    I -- No --> K[Parent continues independently]
 ```
 
-## Internal specialist background mode
-
-The runtime's internal `:background` dispatch keyword makes
-`mevedel-agent-runtime-dispatch` call
-`process-tool-result` immediately with a launch-status string,
-unblocking the parent FSM. The sub-agent completes fire-and-forget; its
-result is wrapped in `<agent-result>` and pushed to the parent's mailbox.
-When the LLM produces no tool calls but background agents are still
-running, the FSM parks in **BWAIT** instead of terminating. Completion
-resumes BWAIT→WAIT. `mevedel-agent-runtime--bwait-injected-table` injects the
-transition table for main and sub-agent FSMs. `background-agents` slot
-on session/invocation tracks running children.
-
-Foreground-callback suppression: when a foreground agent has background
-children, `mevedel-agent-runtime-dispatch` stashes the result on the invocation's
-`stashed-result` slot; `main-cb` is called once all children finish.
-
-Foreground and background agents share a no-progress watchdog controlled
-by `mevedel-agent-no-progress-timeout` (default 600 seconds, nil
-disables). It compares transcript buffer size, tool-call count, and
-recorded activity from the last observed progress point. If no progress
-is observed for the full grace period, the agent is stopped through the
-runtime's internal watchdog path; foreground stops complete the parent Agent
-tool, and background stops deliver a stopped `<agent-result>` so BWAIT can
-resume. Ordinary runtime errors use the same recovery contract:
-when possible the parent receives the safe transcript path, otherwise a
-bounded recovered partial response from the live agent buffer.
+Every agent turn uses this path. A caller that needs the result explicitly
+invokes `WaitAgent`; a caller that does not may finish while descendants keep
+running. `/review`, `/verify`, and fork-skill workflows may keep their owning
+interaction open until a leaf result arrives, but that awaiting behavior does
+not create another agent execution mode.
 
 ## Interrupting retained agent turns
 
@@ -191,16 +168,6 @@ terminal event wins is the only RESULT. The tool result itself contains only
 the target's activity observed before the request and renders `Interrupted
 PATH` from the canonical event.
 
-The BWAIT watchdog uses the same recovery contract for stranded
-background agents whose live FSM disappeared before normal completion.
-It removes the stranded id from `background-agents`, marks the transcript
-`incomplete` when sidecar metadata is available, and injects a synthetic
-`<agent-result>` pointing at the saved transcript or a recovered partial
-when possible. Live background agents are not killed on the first BWAIT
-watchdog reminder if the child was not visible when BWAIT was entered;
-otherwise the shared no-progress grace period starts as soon as the
-parent parks in BWAIT. Later activity resets the grace timer.
-
 ## Inter-agent messaging (SendMessage)
 
 `SendMessage(target, message)` resolves canonical or relative retained paths
@@ -220,8 +187,8 @@ WAIT boundary. The tool result never duplicates the message body.
 `WaitAgent(timeout_ms?)` is a wake primitive over the caller's mailbox, not a
 message transport. Its ordinary asynchronous callback stays pending without a
 model sample and without releasing the caller's active-turn slot. Existing or
-new mail releases it immediately; follow-up steering and yielded Bash
-completion also release it. New root user input becomes a separate user-role
+new mail releases it immediately, as does follow-up steering. New root user
+input becomes a separate user-role
 steering message in the same resumed request, so no intermediate model sample
 can run before the input is visible. The default timeout is 30,000 ms, the
 inclusive bounds are
@@ -229,16 +196,12 @@ inclusive bounds are
 contains only the wake reason. The view renders `Waiting for agents` while the
 tool is pending and `Finished waiting` after it settles.
 
-Independently completed yielded Bash executions use the same mailbox storage
-through the session or invocation object captured for their fixed owner when
-Bash starts. The invocation remains parked while an owned execution is
-unsettled. Once the agent has produced its answer, completion is latched across
-the BWAIT boundary in either arrival order. The runtime drains execution-only
-messages into that final answer and settles the agent directly without a model
-request; transient callback failures retry with bounded backoff from the
-durable mailbox, while persistent failure stops the agent. Legacy
-execution-only contents neither start a paid continuation nor arm the agent
-watchdog.
+Independently completed yielded Bash executions use the session or invocation
+object captured for their fixed owner when Bash starts. A retained invocation
+holds its terminal response while an owned execution is live. Completion is
+captured across that boundary in either arrival order, appended to the final
+answer, and settled directly without a model request. Bash completion does not
+wake `WaitAgent`; execution-only contents never start a paid continuation.
 
 ## Review and verify commands
 
@@ -281,11 +244,12 @@ handles, without exposing the hidden bookkeeping block to the model.
 
 ## Transcript persistence and views
 
-Each sub-agent invocation runs in its own gptel buffer. That buffer is
-the transcript file under the parent session's `agents/` directory. The
-parent session mirrors an
-`agent-transcripts` alist into the sidecar with agent id, type,
-description, path, status, timestamps, parent turn, and call count.
+Each retained agent runs in its own gptel conversation buffer backed by a
+canonical transcript under the root session's `agents/` directory. The
+sidecar persists an explicit registry record for its canonical and parent
+paths, role and frozen configuration, activity, unread mailbox, conversation
+location, and internal storage identity. The canonical path is the only
+model-facing address; storage identities never enter collaboration tools.
 
 Persisted agents may compact older history immediately before a continuation
 request.  The canonical transcript path remains stable, the original task and
@@ -307,7 +271,7 @@ available to the fork.
 `mevedel-view-agent.el` owns transcript lookup and inspection views plus the
 aggregate live-agent status and targeted handle refresh. The main view renders
 compact one-line agent handles from tool render-data and sidecar state.
-Handles show type, shortened task, status, call count, and transcript
+Handles show canonical path, role, status, call count, and transcript
 attribution; recent ephemeral
 activity is kept out of the default view to avoid churn. Terminal
 handles open a rendered read-only transcript view from the saved
@@ -354,9 +318,8 @@ assignment, grouping, rendering, and terminal finalization; opaque storage IDs
 never enter the task surface. Explicit canonical owners must name a retained
 agent in the session, while `/root` normalizes to the main owner. Explicit
 non-path owner strings remain available as user-defined task buckets.
-`blockedBy` propagates completion. `mevedel-agent-runtime--fsms`
-(buffer-local on chat buffer) maps agent-id → sub-agent FSM for
-SendMessage resolution.
+`blockedBy` propagates completion. Tasks therefore remain stable across
+follow-ups and cold session resume.
 
 The task status fragment is compact and appears only while at least one
 task is open. Group headers keep open/done counts visible, open tasks

@@ -22,10 +22,9 @@ After seeing the trace output, provide a brief interpretation covering:
 
 1. **Flow correctness**: Did requests flow in the expected order?
    Did each agent get the right number of turns?
-2. **BWAIT events**: Were there any BWAIT-RESUME markers? If so,
-   which agent received agent-results and when?
-3. **Message injection**: Were any SendMessage deliveries visible
-   (MSG-INJECT markers)?
+2. **Result deliveries**: Which agents received terminal RESULT envelopes,
+   and when?
+3. **Message delivery**: Were any SendMessage MAIL envelopes visible?
 4. **Anomalies**: Any missing responses, unexpected agent counts,
    or mismatched token counts?
 5. **Timing**: How long did the full flow take? Any suspiciously

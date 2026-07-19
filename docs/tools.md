@@ -313,9 +313,12 @@ Wrapped tools (gptel/MCP) have `render-data` = nil unless they declare a
 `:render-transform`; their renderer can use transform metadata when
 present or parse the result string directly.
 
-Agent tool calls use `:kind agent-transcript` render-data so the view
-can render a handle, patch it as the sub-agent changes state, and open
-the persisted transcript after the invocation reaches a terminal state.
+Agent tool calls and direct asynchronous workflows use `:kind
+collaboration-event` render-data. A `started` event renders the retained
+transcript handle; the registry-backed aggregate status uses distinct
+`Running`, `Waiting`, and `Blocked` rows. Canonical tool and lifecycle events
+are the only sources for `Started PATH`, `Interacted with PATH`, `Interrupted
+PATH`, `Waiting for agents`, and `Finished waiting`.
 Render-data lookup/patching scans literal open/close delimiters rather
 than matching the whole hidden block with one regexp; live agent metadata
 and multiline payloads can be large enough to overflow Emacs regexp
@@ -336,11 +339,10 @@ remains complete. Bash and Eval do not apply an earlier prefix-only cap. No
 workspace → no persistence.
 
 Per-tool limits match Claude Code's approach: Grep 20k, Bash/Eval 30k,
-Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k, Agent 50k,
+Glob 30k, Ask 30k, Xref*/Imenu 20k, Treesitter 30k,
 WebFetch/YouTube 50k. Read/Write/Edit/MkDir: nil (self-bounded or
-short). Background agent mailbox deliveries inline at most a 32 KiB
-preview of the final response and point to the persisted transcript when
-available.
+short). Agent `RESULT` mailbox records inline at most a 32 KiB preview of the
+final response and point to the persisted transcript when available.
 
 ## External helper confinement
 
@@ -420,18 +422,13 @@ open.
 Terminal delivery has one claimant. A model observation that sees completion
 claims the final result and retires the handle without a mailbox duplicate. If
 a yielded process exits independently, or the user stops it outside the model
-tool, its unread output and final facts are queued synchronously in the fixed
-main or sub-agent owner mailbox without starting a model request. For a
-sub-agent already parked in BWAIT, acceptance may settle
-the agent directly in DONE by appending the Bash result to its final response;
-completion arriving just before BWAIT is latched and settled on BWAIT entry.
-Transient direct-settlement failures use an invocation-owned bounded backoff
-from the durable mailbox; persistent failure stops the agent. This also starts
-no model request. The handle retires only after a mailbox
-consumer acknowledges the message. Rejected delivery remains explicitly
-unsettled and owner-reachable. Passive progress/view subscribers cannot
-acknowledge durable delivery. Finished records never appear in live execution
-listings.
+tool, root-owned output is queued synchronously in the root mailbox without
+starting a model request. Agent-owned completion is captured by the retained
+invocation instead: it does not wake `WaitAgent`, and once the provider has
+produced its terminal response the runtime appends every captured completion
+and settles the turn directly in either arrival order. This starts no model
+request. Passive progress/view subscribers cannot acknowledge delivery, and
+finished records never appear in live execution listings.
 
 The transcript view renders execution-only mailbox deliveries as compact Bash
 completion cards while retaining their full model-facing disclosure in the
@@ -483,7 +480,7 @@ helper children; data-buffer teardown, package uninstall, and Emacs exit do the
 same for every child in the session, including queued scheduler work and
 process-group descendants. Record-owned teardown also releases helper scratch
 directories when normal callbacks are suppressed. Ordinary yielded completion
-still uses the captured owner mailbox and never launches an unsolicited model
+still uses the captured owner context and never launches an unsolicited model
 request. Bash, Eval, and filesystem helpers all resolve that owner through the
 same request-first execution-context resolver.
 

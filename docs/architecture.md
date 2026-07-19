@@ -27,7 +27,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   directory, tasks, touched-files, permission rules/mode, exact resource grants,
   reminders,
   deferred tool state, mailbox messages, the retained agent registry,
-  root activity and tree capacity, background agents, mention
+  root activity and tree capacity, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
   queue, plan queue, selected preset and resolved mevedel preset settings,
@@ -109,13 +109,12 @@ delivery is claimed exactly once by either a model observer or the single
 mailbox sink, using the session or agent invocation captured at spawn. The
 agent runtime parks an invocation while its owner has an unsettled execution.
 The agent's terminal callback remains gated while any owned execution is
-unsettled. Whether the last completion arrives before or after BWAIT entry,
-the runtime appends the queued completion to the agent's final response and
-settles the agent directly in DONE. A transient callback failure leaves the
-mailbox message intact and schedules an invocation-owned, bounded backoff
-retry; persistent failure stops the agent instead of looping. This terminal path
-launches no model request. Mixed ordinary mailbox messages still resume
-through WAIT.
+unsettled. Whether the last completion arrives before or after the agent's
+terminal response, the runtime appends the queued completion to that response
+and settles the turn directly. Agent execution completion is invocation-local,
+does not wake `WaitAgent`, and launches no model request. Ordinary mailbox
+messages are delivered before the next model sample or wake an explicit
+`WaitAgent`.
 
 `mevedel-executions-list.el` is the user-facing projection of that private
 registry. The execution module returns immutable all-owner snapshots and
@@ -167,7 +166,7 @@ absolute file pathname, and MCP server/URI; there is no resolver registry or
 sidecar identity store. See [`mentions.md`](mentions.md#atomic-binding-lifecycle).
 
 `mevedel-turn.el` owns the single top-level completion boundary. The ordinary
-gptel `DONE` state and direct foreground fork skills both call it after response
+gptel `DONE` state and awaited fork-skill workflows call it after response
 hooks, while error and abort terminals retain their separate
 no-save/no-follow-up behavior.
 

@@ -1249,7 +1249,7 @@ allowed-tools:
                          (mevedel-request-hook-rules
                           mevedel--current-request))
                    (funcall callback nil)))
-                ((symbol-function 'mevedel-agent-runtime-dispatch)
+                ((symbol-function 'mevedel-agent-control-spawn)
                  (lambda (&rest _args) (setq dispatched t))))
         (mevedel-skills-prepare
          skill "ignored"
@@ -1647,7 +1647,8 @@ allowed-tools:
 (mevedel-deftest mevedel-skills-dispatch-prepared-fork ()
   ,test
   (test)
-  :doc "dispatches prepared fork context and records the invocation"
+  :doc "spawns one retained fork and maps its canonical RESULT"
+  (require 'mevedel-agent-control)
   (let* ((session (mevedel-skills-test--make-session))
          (agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
@@ -1670,37 +1671,81 @@ allowed-tools:
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-agent-get)
                  (lambda (_) agent))
-                ((symbol-function 'mevedel-agent-runtime-dispatch)
-                 (lambda (callback actual-agent description prompt &rest keys)
-                   (setq dispatched
-                         (list :agent actual-agent :description description
-                               :prompt prompt :keys keys))
-                   (funcall callback
-                            '(:result "done"
-                              :render-data (:agent-id "explorer--1"))))))
+                ((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (actual-session task-name message &rest keys)
+                   (let* ((path (concat "/root/" task-name))
+                          (retained
+                           (mevedel-agent-record--create
+                            :id "storage-id"
+                            :path path
+                            :parent-path "/root"
+                            :role "explorer"
+                            :activity 'idle
+                            :conversation-location "agents/demo.chat.org")))
+                     (setf (mevedel-session-agent-registry actual-session)
+                           (list (cons path retained)))
+                     (setq dispatched
+                           (list :session actual-session
+                                 :task-name task-name
+                                 :message message
+                                 :keys keys))
+                     (funcall
+                      (plist-get keys :result-handler)
+                      (list :type 'RESULT :sender path :recipient "/root"
+                            :outcome 'completed :payload "done"))
+                     retained))))
         (mevedel-skills-dispatch-prepared-fork
          prepared (lambda (value) (setq outcome value)))))
-    (should (eq agent (plist-get dispatched :agent)))
-    (should (equal "prepared body" (plist-get dispatched :prompt)))
+    (should (eq session (plist-get dispatched :session)))
+    (should (equal "skill_demo" (plist-get dispatched :task-name)))
+    (should (equal "prepared body" (plist-get dispatched :message)))
     (let ((keys (plist-get dispatched :keys)))
+      (should (eq agent (plist-get keys :agent)))
+      (should (equal "none" (plist-get keys :fork-turns)))
       (should (equal '(("Read" :action allow))
                      (plist-get keys :skill-permission-rules)))
-      (should (equal '(:tier fast)
-                     (plist-get keys :skill-model-override)))
-      (should (eq 'high (plist-get keys :skill-effort-override)))
+      (should (equal '(:tier fast) (plist-get keys :model)))
+      (should (eq 'high (plist-get keys :effort)))
       (should (equal '((PreToolUse nil))
                      (plist-get keys :skill-hook-rules))))
     (should (equal (list record)
                    (mevedel-session-invoked-skills session)))
     (should (eq 'ok (plist-get outcome :status)))
     (should (equal "done" (plist-get outcome :result)))
-    (should (equal "explorer--1" (plist-get outcome :agent-id)))
+    (should (equal "/root/skill_demo" (plist-get outcome :agent-path)))
+    (should (equal "/root/skill_demo"
+                   (plist-get (plist-get outcome :render-data) :path)))
     (should (equal '((:event "expansion"))
                    (plist-get outcome :hook-audits))))
 
+  :doc "maps a non-completed RESULT to a normalized skill error"
+  (require 'mevedel-agent-control)
+  (let* ((session (mevedel-skills-test--make-session))
+         (agent (mevedel-agent--create :name "explorer"))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :agent "explorer" :body "Body"))
+         outcome)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
+                ((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (_session _task _message &rest keys)
+                   (funcall
+                    (plist-get keys :result-handler)
+                    '(:type RESULT :sender "/root/skill_demo"
+                      :recipient "/root" :outcome interrupted
+                      :payload "Stopped"))
+                   (mevedel-agent-record--create
+                    :path "/root/skill_demo" :activity 'idle))))
+        (mevedel-skills-invoke
+         skill nil (lambda (value) (setq outcome value)) :origin 'model)))
+    (should (eq 'error (plist-get outcome :status)))
+    (should (eq 'agent-interrupted (plist-get outcome :reason)))
+    (should (equal "Stopped" (plist-get outcome :message))))
+
   :doc "rejects an invalid prepared outcome without dispatching"
   (let (outcome dispatched)
-    (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+    (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                (lambda (&rest _) (setq dispatched t))))
       (mevedel-skills-dispatch-prepared-fork
        '(:status error :reason failed)
@@ -1712,226 +1757,80 @@ allowed-tools:
 (mevedel-deftest mevedel-skills-invoke-fork ()
   ,test
   (test)
-  :doc "model origin routes to direct dispatch via mevedel-agent-runtime-dispatch"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (dispatched nil)
+  :doc "forwards prompt context, description, and invocation callback"
+  (require 'mevedel-agent-control)
+  (let* ((session (mevedel-skills-test--make-session))
+         (agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
                  :name "demo" :context 'fork :agent "explorer"
-                 :body "Task body $ARGUMENTS"
-                 :allowed-tool-rules
-                 '(("Read" :action allow))
-                 :model "fast")))
-    (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (cb a desc prompt &rest args)
-                 (setq dispatched
-                       (list :agent a :description desc :prompt prompt
-                             :keys args))
-                 ;; Simulate a foreground completion.
-                 (funcall cb "agent finished"))))
-      (let (outcome)
-        (mevedel-skills-invoke
-         skill "the task"
-         (lambda (o) (setq outcome o))
-         :origin 'model)
-        (should dispatched)
-        (should (eq agent (plist-get dispatched :agent)))
-        (should (string-match-p "the task" (plist-get dispatched :prompt)))
-        (let ((keys (plist-get dispatched :keys)))
-          (should (equal '(("Read" :action allow))
-                         (plist-get keys :skill-permission-rules)))
-          (should (equal (mevedel-model-tier-selector 'fast)
-                         (plist-get keys :skill-model-override))))
-        (should (eq 'ok (plist-get outcome :status)))
-        (should (eq 'fork (plist-get outcome :kind)))
-        (should (equal "agent finished" (plist-get outcome :result)))
-        ;; When `mevedel-agent-runtime-dispatch' delivers a bare string (no
-        ;; transcript metadata, e.g. our test mock), the outcome
-        ;; falls back to the registry agent's name.  When it
-        ;; delivers a `(:result :render-data)' plist, the unique
-        ;; invocation agent-id from the render-data wins.
-        (should (equal "explorer" (plist-get outcome :agent-id)))
-        (should (null (plist-get outcome :render-data))))))
-
-  :doc "fork-direct forwards :render-data when the task callback wraps it"
-  ;; Outcome carries :render-data so the renderer can expose the
-  ;; transcript-open affordance.
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explorer"
-                 :body "Body")))
-    (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
-              ((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (cb _agent _desc _prompt &rest _args)
-                 (funcall cb
-                          (list :result "wrapped"
-                                :render-data
-                                '(:kind agent-transcript
-                                        :agent-id "explorer--abc123"
-                                        :transcript-relative-path "p"
-                                        :status running))))))
-      (let (outcome)
-        (mevedel-skills-invoke
-         skill nil
-         (lambda (o) (setq outcome o))
-         :origin 'model)
-        (should (equal "wrapped" (plist-get outcome :result)))
-        (should (equal "explorer--abc123"
-                       (plist-get outcome :agent-id)))
-        (should (eq 'agent-transcript
-                    (plist-get (plist-get outcome :render-data) :kind))))))
-
-  :doc "user origin direct-dispatches and returns fork outcome"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explorer"
-                 :body "Task body"))
+                 :body "Task body $ARGUMENTS"))
+         (progress-callback #'ignore)
+         captured
          outcome)
-    (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (cb _agent _desc _prompt &rest _args)
-                 (funcall cb "agent finished"))))
-      (mevedel-skills-invoke
-       skill "the task"
-       (lambda (o) (setq outcome o))
-       :origin 'user))
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) agent))
+                ((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (_session _task message &rest keys)
+                   (setq captured (cons message keys))
+                   (funcall
+                    (plist-get keys :result-handler)
+                    '(:type RESULT :sender "/root/skill_demo"
+                      :recipient "/root" :outcome completed
+                      :payload "agent finished"))
+                   (mevedel-agent-record--create
+                    :path "/root/skill_demo" :activity 'idle))))
+        (mevedel-skills-invoke
+         skill "the task" (lambda (value) (setq outcome value))
+         :origin 'user
+         :additional-context "<hook-context>ctx</hook-context>"
+         :description "target hint"
+         :on-invocation progress-callback)))
+    (should (string-match-p "the task" (car captured)))
+    (should (string-match-p "<hook-context>ctx</hook-context>" (car captured)))
+    (should (equal "target hint" (plist-get (cdr captured) :description)))
+    (should (eq progress-callback
+                (plist-get (cdr captured) :on-invocation)))
     (should (eq 'ok (plist-get outcome :status)))
-    (should (eq 'fork (plist-get outcome :kind)))
     (should (equal "agent finished" (plist-get outcome :result))))
 
-  :doc "fork additional context is appended to the dispatched prompt"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
+  :doc "unknown named roles fail before spawning"
+  (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explorer"
-                 :body "Task body"))
-         captured-prompt)
-    (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (cb _agent _desc prompt &rest _args)
-                 (setq captured-prompt prompt)
-                 (funcall cb "agent finished"))))
-      (mevedel-skills-invoke
-       skill nil #'ignore
-       :origin 'user
-       :additional-context "<hook-context>ctx</hook-context>"))
-  (should (string-match-p "Task body" captured-prompt))
-  (should (string-match-p "<hook-context>ctx</hook-context>"
-                          captured-prompt)))
-
-  :doc "fork dispatch forwards custom description and invocation callback"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explorer"
-                 :body "Task body"))
-         (progress-callback #'ignore)
-         captured-description
-         captured-on-invocation)
-    (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (cb _agent desc _prompt &rest args)
-                 (setq captured-description desc)
-                 (setq captured-on-invocation
-                       (plist-get args :on-invocation))
-                 (funcall cb "agent finished"))))
-      (mevedel-skills-invoke
-       skill nil #'ignore
-       :origin 'user
-       :description "target hint"
-       :on-invocation progress-callback))
-    (should (equal "target hint" captured-description))
-    (should (eq progress-callback captured-on-invocation)))
-
-  :doc "fork dispatch errors return an error outcome"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explorer"
-                 :body "Task body"))
+                 :name "demo" :context 'fork :agent "missing"))
          outcome)
-    (cl-letf (((symbol-function 'mevedel-agent-get)
-               (lambda (n) (and (equal n "explorer") agent)))
-              ((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (&rest _)
-                 (error "SubagentStart hook stopped sub-agent"))))
-      (mevedel-skills-invoke
-       skill nil
-       (lambda (o) (setq outcome o))
-       :origin 'user))
-    (should (eq 'error (plist-get outcome :status)))
-    (should (eq 'agent-dispatch-failed (plist-get outcome :reason)))
-    (should (string-match-p "SubagentStart hook stopped sub-agent"
-                            (plist-get outcome :message))))
-
-  :doc "user-origin fork hooks are active during body injection"
-  (let* ((agent (mevedel-agent--create :name "explorer"))
-         (hooks '((PreToolUse
-                   (:matcher "Bash"
-                    :hooks ((:type elisp
-                             :function mevedel-skills-test--hook-fn))))))
-         (skill (mevedel-skill--create
-                 :name "demo" :context 'fork :agent "explorer"
-                 :body "Task body"
-                 :hooks hooks))
-         (request (mevedel-request--create))
-         saw-hooks)
     (with-temp-buffer
-      (setq-local mevedel--current-request request)
-      (cl-letf (((symbol-function 'mevedel-agent-get)
-                 (lambda (n) (and (equal n "explorer") agent)))
-                ((symbol-function 'mevedel-skills--run-body-injections-async)
-                 (lambda (_text callback)
-                   (setq saw-hooks
-                         (mevedel-request-hook-rules
-                          mevedel--current-request))
-                   (funcall callback '(:status error
-                                       :reason stop
-                                       :message "stop"))))
-	                ((symbol-function 'mevedel-agent-runtime-dispatch)
-	                 (lambda (&rest _)
-	                   (error "Should not dispatch"))))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) nil)))
         (mevedel-skills-invoke
-         skill nil #'ignore
-         :origin 'user)))
-    (should (equal hooks saw-hooks)))
-
-  :doc "unknown agent yields :reason unknown-agent"
-  (let ((skill (mevedel-skill--create
-                :name "demo" :context 'fork :agent "missing"))
-        outcome)
-    (cl-letf (((symbol-function 'mevedel-agent-get) (lambda (_) nil)))
-      (mevedel-skills-invoke
-       skill nil
-       (lambda (o) (setq outcome o))
-       :origin 'model))
-    (should (eq 'error (plist-get outcome :status)))
+         skill nil (lambda (value) (setq outcome value)) :origin 'model)))
     (should (eq 'unknown-agent (plist-get outcome :reason))))
 
-  :doc "omitted agent (parent-inherited) dispatches to a synthetic agent"
-  ;; Parent-inherited fork uses a synthetic `skill:<name>' agent.
-  ;; Mock mevedel-agent-runtime-dispatch to assert the dispatch happens with
-  ;; the synthetic struct rather than erroring.
-  (let* ((skill (mevedel-skill--create
-                 :name "demo" :context 'fork
-                 :body "Body"))
-         (dispatched-agent nil))
-    (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
-               (lambda (cb agent &rest _)
-                 (setq dispatched-agent agent)
-                 (funcall cb "result"))))
-      (with-temp-buffer
-        (setq-local mevedel-agent-exec--agents nil)
+  :doc "omitted roles spawn a parent-inherited synthetic agent"
+  (require 'mevedel-agent-control)
+  (let* ((session (mevedel-skills-test--make-session))
+         (skill (mevedel-skill--create
+                 :name "demo" :context 'fork :body "Body"))
+         dispatched-agent)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (setq-local mevedel-agent-exec--agents nil)
+      (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (_session _task _message &rest keys)
+                   (setq dispatched-agent (plist-get keys :agent))
+                   (funcall
+                    (plist-get keys :result-handler)
+                    '(:type RESULT :sender "/root/skill_demo"
+                      :recipient "/root" :outcome completed :payload "result"))
+                   (mevedel-agent-record--create
+                    :path "/root/skill_demo" :activity 'idle))))
         (let (outcome)
           (mevedel-skills-invoke
-           skill nil
-           (lambda (o) (setq outcome o))
-           :origin 'model)
-          (should (eq 'ok (plist-get outcome :status)))
-          (should (mevedel-agent-p dispatched-agent))
-          (should (equal "skill:demo"
-                         (mevedel-agent-name dispatched-agent))))))))
+           skill nil (lambda (value) (setq outcome value)) :origin 'model)
+          (should (eq 'ok (plist-get outcome :status))))))
+    (should (mevedel-agent-p dispatched-agent))
+    (should (equal "skill:demo" (mevedel-agent-name dispatched-agent)))))
+
 
 (defun test-mevedel-skills--handler-result (envelope)
   "Return the required result from handler ENVELOPE."
@@ -2089,9 +1988,15 @@ description: Yell
     (setf (mevedel-session-skills session) (list skill))
     (with-temp-buffer
       (setq mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
-                 (lambda (callback _agent _description _prompt &rest _args)
-                   (funcall callback "Child result"))))
+      (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                 (lambda (_session _task _message &rest keys)
+                   (funcall
+                    (plist-get keys :result-handler)
+                    '(:type RESULT :sender "/root/skill_isolated"
+                      :recipient "/root" :outcome completed
+                      :payload "Child result"))
+                   (mevedel-agent-record--create
+                    :path "/root/skill_isolated" :activity 'idle))))
         (mevedel-skills--invoke-handler
          (lambda (value) (setq envelope value))
          '(:name "isolated"))))
@@ -2288,20 +2193,20 @@ description: Yell
                   "$superpowers:brainstorming now")))
 
   :doc "additional lines after the skill name are appended to ARGS"
-  (should (equal '("coordinator"
-                   "Launch three background explorer agents:\n  (a) ...\n  (b) ..."
+  (should (equal '("delegate"
+                   "Launch three explorer agents:\n  (a) ...\n  (b) ..."
                    0)
                  (mevedel-skills--parse-skill-line
-                  "$coordinator Launch three background explorer agents:
+                  "$delegate Launch three explorer agents:
   (a) ...
   (b) ...")))
 
   :doc "multi-line ARGS work even when no first-line arguments"
-  (should (equal '("coordinator"
+  (should (equal '("delegate"
                    "Multi-line task body\nspanning lines"
                    0)
                  (mevedel-skills--parse-skill-line
-                  "$coordinator
+                  "$delegate
 Multi-line task body
 spanning lines")))
 
@@ -2639,7 +2544,7 @@ spanning lines")))
       (let (continued)
         (cl-letf (((symbol-function 'mevedel-skills--ensure-fresh)
                    (lambda (&rest _) nil))
-                  ((symbol-function 'mevedel-agent-runtime-dispatch)
+                  ((symbol-function 'mevedel-agent-control-spawn)
                    (lambda (&rest _) (ert-fail "instruction forked"))))
           (should (eq 'skill
                       (mevedel-skills--dispatch-inline-attachments
@@ -2852,24 +2757,30 @@ spanning lines")))
 
   :doc "fork-context skill dispatches directly and inserts result"
   (let* ((session (mevedel-skills-test--make-session))
-         (agent (mevedel-agent--create :name "coordinator"))
+         (agent (mevedel-agent--create :name "explorer"))
          (skill (mevedel-skill--create
-                 :name "coordinator"
+                 :name "delegate"
                  :body "should-not-appear"
                  :context 'fork
-                 :agent "coordinator"))
+                 :agent "explorer"))
          save-called status-called stop-called
          baseline-recorded permission-restored
-         queue-drain-scheduled mailbox-cleared post-hook-called)
+         queue-drain-scheduled post-hook-called)
     (setf (mevedel-session-skills session) (list skill))
     (mevedel-skills-test--with-chat-buffer session
       (let ((mevedel-slash-commands nil))
         (require 'mevedel-session-persistence)
         (cl-letf (((symbol-function 'mevedel-agent-get)
-                   (lambda (n) (and (equal n "coordinator") agent)))
-                  ((symbol-function 'mevedel-agent-runtime-dispatch)
-                   (lambda (cb _agent _desc _prompt &rest _args)
-                     (funcall cb "agent finished")))
+                   (lambda (n) (and (equal n "explorer") agent)))
+                  ((symbol-function 'mevedel-agent-control-spawn)
+                   (lambda (_session _task _message &rest keys)
+                     (funcall
+                      (plist-get keys :result-handler)
+                      '(:type RESULT :sender "/root/skill_delegate"
+                        :recipient "/root" :outcome completed
+                        :payload "agent finished"))
+                     (mevedel-agent-record--create
+                      :path "/root/skill_delegate" :activity 'idle)))
                   ((symbol-function 'mevedel-session-persistence-save)
                    (lambda (s b)
                      (setq save-called (list s b))
@@ -2890,8 +2801,6 @@ spanning lines")))
                   ((symbol-function
                     'mevedel-view--schedule-queued-user-message-drain)
                    (lambda (_fsm) (setq queue-drain-scheduled t)))
-                  ((symbol-function 'mevedel-tools--handle-terminal-mailbox)
-                   (lambda (_fsm) (setq mailbox-cleared t)))
                   ((symbol-function 'gptel--update-status)
                    (lambda (&rest args) (setq status-called args))))
           (let ((gptel-response-separator "\n\n")
@@ -2899,13 +2808,12 @@ spanning lines")))
                  (list (lambda (_start _end)
                          (setq post-hook-called t)
                          (error "Broken post-response hook")))))
-            (insert "### $coordinator do the thing")
+            (insert "### $delegate do the thing")
             (goto-char (point-max))
             (should (eq 'skill (mevedel-skills--dispatch-skill-command)))
             (let ((buf (buffer-string)))
-              (should (string-match-p "\\$coordinator do the thing" buf))
+              (should (string-match-p "\\$delegate do the thing" buf))
               (should (string-match-p "agent finished" buf))
-              (should-not (string-match-p "Use the `coordinator` agent" buf))
               (should-not (string-match-p "should-not-appear" buf)))
             (should-not mevedel--current-request)
             (should (= 1 (mevedel-session-turn-count session)))
@@ -2914,7 +2822,6 @@ spanning lines")))
             (should baseline-recorded)
             (should permission-restored)
             (should queue-drain-scheduled)
-            (should mailbox-cleared)
             (should post-hook-called)
             (should (equal '(" Ready" success) status-called)))))))
 

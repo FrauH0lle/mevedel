@@ -20,7 +20,6 @@
 
 (defvar mevedel--agent-invocation)
 (defvar mevedel-agent-exec--agents)
-(defvar mevedel-agent-runtime--fsms)
 (defvar mevedel-bash-dangerous-commands)
 (defvar mevedel-session--read-only-mode)
 
@@ -543,6 +542,7 @@
             (mevedel-agent-invocation--create
              :agent (mevedel-agent-get "reviewer")
              :agent-id "reviewer--draft"
+             :path "/root/review"
              :description "review draft"
              :parent-session session
              :parent-data-buffer data-buf
@@ -550,7 +550,6 @@
              :transcript-relative-path "agents/reviewer--draft.chat.org")))
       (with-current-buffer data-buf
         (setq-local mevedel--session session)
-        (setq-local mevedel-agent-runtime--fsms nil)
         (setq-local mevedel-session--read-only-mode nil))
       (with-current-buffer view-buf
         (setq-local mevedel--session session)
@@ -584,7 +583,6 @@
   (mevedel-view-test--with-buffers
     (let ((draft "> quoted\nsecond line"))
       (with-current-buffer data-buf
-        (setq-local mevedel-agent-runtime--fsms nil)
         (setq-local mevedel-session--read-only-mode nil))
       (with-current-buffer view-buf
         (mevedel-view-test--insert-composer-draft draft 4))

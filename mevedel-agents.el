@@ -4,12 +4,11 @@
 
 ;; Declarative definitions for the specialised sub-agents that mevedel spawns
 ;; through the Agent tool: `worker' (implementation), `explorer' (read-only
-;; investigation), `coordinator' (legacy orchestration), `verifier'
-;; (adversarial read-only verification), and `reviewer' (structured code
-;; review).  Uses the `mevedel-define-agent' macro to bundle tool groups,
-;; prompt files, turn limits, and reminders.
+;; investigation), `verifier' (adversarial read-only verification), and
+;; `reviewer' (structured code review).  Uses the `mevedel-define-agent' macro
+;; to bundle tool groups, prompt files, turn limits, and reminders.
 ;;
-;; Per-invocation state (cloned reminders, deferred-tool lifecycle, mailbox)
+;; Per-turn state (cloned reminders and deferred-tool lifecycle)
 ;; lives on `mevedel-agent-invocation' structs created at dispatch time rather
 ;; than on the agent definition itself.
 
@@ -50,8 +49,6 @@
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-clone-list "mevedel-reminders" (reminders))
-(declare-function mevedel-reminders-make-agent-background-channels
-                  "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-agent-deferred-tools-expired
                   "mevedel-reminders" ())
 (declare-function mevedel-reminders-make-agent-deferred-tools-roster
@@ -197,6 +194,7 @@ the caller's current session context.  Reminders and hooks remain templates,
 but are copied so later role redefinition cannot alter retained follow-ups.
 Every reminder must have a durable recipe because retained agents survive a
 cold session resume."
+  (require 'mevedel-reminders)
   (if (mevedel-agent-frozen-p agent)
       agent
     (let ((frozen (copy-mevedel-agent agent))
@@ -358,9 +356,9 @@ Creates a `mevedel-agent' struct and registers it in
 
 Holds the cloned reminders list and a turn counter that are private to
 this particular invocation of AGENT. Created fresh each time
-`mevedel-agent-runtime-dispatch' spawns an agent, attached to the agent's task
-overlay so the reminders transform and terminal FSM handler can find it
-without relying on FSM info survival across `gptel-request'.
+`mevedel-agent-runtime-dispatch' starts a turn, then stored both buffer-locally
+and on the provider request so transforms, tools, and terminal callbacks can
+find it throughout that turn.
 
 The `deferred-*' slots mirror the same-named slots on `mevedel-session'
 and give the spawned agent its own deferred-tool lifecycle, independent
@@ -368,10 +366,10 @@ of the main chat's session state. The polymorphic accessors in
 `mevedel-tools.el' dispatch on struct type so the WAIT handler,
 pipeline, and reminders can share one code path for both contexts.
 
-Persistence slots. AGENT-ID is the opaque provider-runtime identifier used as
-the join key in the parent session's `agent-transcripts' alist, in
-`mevedel-agent-runtime--fsms', and in the on-disk transcript filename.  PATH is
-the canonical address of this retained conversation in the session agent tree.
+Persistence slots. AGENT-ID is the internal join key in the parent session's
+`agent-transcripts' alist and in the on-disk transcript filename.  PATH is the
+canonical model-visible address of this retained conversation in the session
+agent tree.
 PARENT-DATA-BUFFER points back at the parent chat (data) buffer;
 PARENT-SESSION points at the top-level session (transcripts always live
 under the top-level session's `agents/' subdirectory). PARENT-TURN is
@@ -392,8 +390,6 @@ and render-data markers are runtime-only caches for cheap live updates."
   (deferred-injected nil :type list)
   (deferred-used nil :type list)
   (deferred-expired nil :type list)
-  (messages nil :type list)
-  (background-agents nil :type list)
   (specialist-nudge-state nil :type list)
   ;; Persistence
   (agent-id nil :type (or null string))
@@ -406,14 +402,6 @@ and render-data markers are runtime-only caches for cheap live updates."
   (transcript-relative-path nil :type (or null string))
   (transcript-status nil :type (or null symbol))
   (sidecar-dirty nil :type boolean)
-  ;; Set by `mevedel-agent-runtime-dispatch' from its BACKGROUND argument. When
-  ;; non-nil, the agent runs concurrently with its caller; the dispatcher
-  ;; injects `SendMessage' into the agent buffer's `gptel-tools' so the agent
-  ;; can communicate through the route matrix enforced by
-  ;; `mevedel-tools--resolve-recipient'. Foreground sub-agents have their caller
-  ;; parked in TOOL state -- live messaging is pointless there, so SendMessage
-  ;; is not injected.
-  (background-p nil :type boolean)
   ;; Rules accumulate across nested skills (additive); model/effort are
   ;; last-writer-wins. Forks are seeded from
   ;; parent's currently active rules + the fork skill's own rules at spawn time;
@@ -438,21 +426,16 @@ and render-data markers are runtime-only caches for cheap live updates."
   (activity nil :type list)
   ;; Runtime-only caches for live agent updates.
   (hook-audits nil :type list)
-  (execution-settlement-retry-count 0 :type integer)
-  (execution-settlement-retry-timer nil)
   (transcript-save-timer nil)
   (render-data-start-marker nil)
   (render-data-end-marker nil)
-  ;; Immediate parent runtime context. PARENT-SESSION is always the top-level
-  ;; persisted session; a background agent may instead have another invocation
-  ;; as its immediate caller. These slots are intentionally runtime-only and let
-  ;; ERRS/ABRT/stop handlers complete the same cleanup path as the normal
-  ;; callback closure.
-  (parent-context nil)
-  (parent-fsm nil)
-  (parent-tool-callback nil)
-  (background-result-reported-p nil :type boolean)
-  (foreground-result-reported-p nil :type boolean))
+  ;; Runtime-only provider-turn state.  Durable identity and unread mail live
+  ;; on the root session's `mevedel-agent-record'.
+  runtime-fsm
+  runtime-settle-callback
+  runtime-pending-response
+  (runtime-execution-results nil :type list)
+  (runtime-settled-p nil :type boolean))
 
 (defun mevedel-agent-invocation-require-path (invocation)
   "Return INVOCATION's canonical path, or signal an error."
@@ -490,6 +473,7 @@ sub-agent can discover the agent's own lazy tools.  When the deferred set
 is non-empty, invocation-scoped roster and expiry reminders are added so
 the sub-agent learns which tools it can activate without polluting the
 main session's reminder list."
+  (require 'mevedel-reminders)
   (let* ((reminders (mevedel-reminders-clone-list
                      (mevedel-agent-reminders agent)))
          (resolved (mevedel-tool-resolve (mevedel-agent--declared-specs agent)))
@@ -513,12 +497,6 @@ main session's reminder list."
     (when deferred-set
       (push (mevedel-reminders-make-agent-deferred-tools-expired) reminders)
       (push (mevedel-reminders-make-agent-deferred-tools-roster) reminders))
-    ;; Install the background-channels one-shot reminder for every invocation;
-    ;; its trigger checks `background-p' on the invocation, which the dispatcher
-    ;; sets after this struct is created (so we cannot gate the install here on
-    ;; background-p). Foreground invocations carry the reminder dormant -- never
-    ;; firing -- which is harmless.
-    (push (mevedel-reminders-make-agent-background-channels) reminders)
     (mevedel-agent-invocation--create
      :agent agent
      :reminders reminders
@@ -590,25 +568,6 @@ modifies files."
   :include-workspace-config nil
   :include-memory nil
   :max-turns 30)
-
-(mevedel-define-agent coordinator
-  :description "Orchestration agent that dispatches and monitors workers via
-Agent, SendMessage, and the task system.  Never implements directly -- delegates
-all code changes to worker agents and verifies results before reporting."
-  ;; Orchestration-only tool set: deliberately no `read' group. The coordinator
-  ;; must not Glob, Grep, Read, or otherwise self-investigate; that work belongs
-  ;; to dispatched workers. Removing the tools removes the temptation. TaskGet
-  ;; is included alongside Create/Update/List so the coordinator can inspect a
-  ;; single task's state without a TaskList round-trip.
-  :tools ((:tool "Ask")
-          (:tool "Agent") (:tool "InterruptAgent") (:tool "SendMessage")
-          (:tool "TaskCreate") (:tool "TaskUpdate")
-          (:tool "TaskList") (:tool "TaskGet") (:tool "TaskNote")
-          (:tool "ToolSearch"))
-  :prompt-file "skills/coordinator/SKILL.md"
-  :include-workspace-config nil
-  :include-memory nil
-  :max-turns 50)
 
 (defun mevedel-agents--register-verifier ()
   "Register and return the bundled verifier agent."

@@ -225,9 +225,9 @@ description: present
         (cl-letf (((symbol-function 'mevedel-tool-get)
                    (lambda (n &optional _c) (cdr (assoc n fake-tools)))))
           (mevedel-skills-test--write-skill
-           dir "coordinator"
-           "name: coordinator
-description: Orchestrate workers
+           dir "delegation"
+           "name: delegation
+description: Delegate work
 context: fork
 agent: general-purpose
 allowed-tools:
@@ -237,7 +237,7 @@ disable-model-invocation: false
 user-invocable: true
 paths:
   - \"*.el\"
-" "Coordinator body")
+" "Delegation body")
           (let* ((skills (mevedel-skills-scan dir '(".")))
                  (skill (car skills)))
             (should (eq 'fork (mevedel-skill-context skill)))
@@ -250,7 +250,7 @@ paths:
             (should (mevedel-skill-model-invocable-p skill))))
       (delete-directory dir t)))
 
-  :doc "bundled coordinator, remember, and git-worktree skills are discoverable by default"
+  :doc "bundled remember and git-worktree skills are discoverable by default"
   (mevedel-tool-clear-registry)
   (let* ((skills (mevedel-skills-scan nil nil))
          (worktree (cl-find "git-worktree" skills
@@ -259,11 +259,6 @@ paths:
                             :key #'mevedel-skill-name :test #'equal))
          (body (and worktree (mevedel-skill-load-body worktree)))
          (remember-body (and remember (mevedel-skill-load-body remember))))
-    (should (cl-find-if
-             (lambda (s)
-               (and (equal "coordinator" (mevedel-skill-name s))
-                    (eq 'bundled (mevedel-skill-source s))))
-             skills))
     (should remember)
     (should (eq 'bundled (mevedel-skill-source remember)))
     (should (mevedel-skill-user-invocable-p remember))
@@ -515,21 +510,21 @@ description: Plugin skill
     (unwind-protect
         (progn
           (mevedel-skills-test--write-skill
-           plugin-skills "coordinator"
-           "name: coordinator
-description: Plugin coordinator
+           plugin-skills "remember"
+           "name: remember
+description: Plugin remember
 " "Body")
           (mevedel-plugins-enable "demo" workspace)
           (let* ((skills (mevedel-skills-scan nil nil workspace))
-                 (coordinator (cl-find "coordinator" skills
-                                       :key #'mevedel-skill-name
-                                       :test #'equal))
-                 (plugin (cl-find "demo:coordinator" skills
+                 (remember (cl-find "remember" skills
+                                    :key #'mevedel-skill-name
+                                    :test #'equal))
+                 (plugin (cl-find "demo:remember" skills
                                   :key #'mevedel-skill-name
                                   :test #'equal)))
-            (should coordinator)
+            (should remember)
             (should plugin)
-            (should (eq 'bundled (mevedel-skill-source coordinator)))
+            (should (eq 'bundled (mevedel-skill-source remember)))
             (should (eq 'plugin (mevedel-skill-source plugin)))))
       (delete-directory root t)))
   (let* ((mevedel-skills-include-bundled nil)

@@ -54,7 +54,7 @@
     ],
     "SubagentStart": [
       {
-        "matcher": "explorer|verifier|reviewer|coordinator",
+        "matcher": "worker|explorer|verifier|reviewer",
         "hooks": [
           {
             "type": "command",

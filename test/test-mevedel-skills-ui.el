@@ -119,20 +119,20 @@
                   "/superpowers:brainstorming now")))
 
   :doc "additional lines after the command are appended to ARGS"
-  (should (equal '("coordinator"
-                   "Launch three background explorer agents:\n  (a) ...\n  (b) ..."
+  (should (equal '("delegate"
+                   "Launch three explorer agents:\n  (a) ...\n  (b) ..."
                    0)
                  (mevedel-skills--parse-slash-line
-                  "/coordinator Launch three background explorer agents:
+                  "/delegate Launch three explorer agents:
   (a) ...
   (b) ...")))
 
   :doc "multi-line ARGS work even when no first-line arguments"
-  (should (equal '("coordinator"
+  (should (equal '("delegate"
                    "Multi-line task body\nspanning lines"
                    0)
                  (mevedel-skills--parse-slash-line
-                  "/coordinator
+                  "/delegate
 Multi-line task body
 spanning lines")))
 

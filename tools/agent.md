@@ -8,7 +8,7 @@ effective instructions, tools, model policy, and delegation capability. Use a
 named role when the child needs a specialization such as `worker`, `explorer`,
 `reviewer`, or `verifier`.
 
-Use `fork_turns` to choose the immutable parent-context snapshot: omit it or
+Use `fork_turns` to choose the immutable parent conversation snapshot: omit it or
 use `all` for every effective live turn, use `none` for no parent history, or
 use a positive string such as `"3"` for the anchored summary plus the three
 most recent live turns. Later parent turns are not synchronized. Use `model`

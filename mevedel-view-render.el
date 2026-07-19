@@ -21,6 +21,12 @@
 (declare-function cl-find "cl-seq" (cl-item cl-seq &rest cl-keys))
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-record-activity
+                  "mevedel-agent-control" (cl-x) t)
+(declare-function mevedel-agent-record-conversation-location
+                  "mevedel-agent-control" (cl-x) t)
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-status
@@ -44,7 +50,7 @@
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-agent-transcripts
+(declare-function mevedel-session-agent-registry
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
@@ -117,11 +123,11 @@
 ;; `mevedel-view-agent'
 (declare-function mevedel-view--insert-attribution
                   "mevedel-view-agent"
-                  (agent-id &optional live-click-p calls))
+                  (agent-path))
 (declare-function mevedel-view--render-agent-status
                   "mevedel-view-agent" ())
 (declare-function mevedel-view-agent-handle-activate
-                  "mevedel-view-agent" (&optional agent-id))
+                  "mevedel-view-agent" (&optional agent-path))
 (declare-function mevedel-view-agent-status-toggle
                   "mevedel-view-agent" ())
 (defvar mevedel-view--agent-handle-map)
@@ -863,7 +869,7 @@ real user message."
               (and data-buf
                    (memq type '(user render-data ignored))
                    (not (and (memq type '(render-data ignored))
-                             (mevedel-view--agent-transcript-render-segment-p
+                             (mevedel-view--collaboration-event-segment-p
                               data-buf seg-start (caddr seg))))
                    (mevedel-view--render-data-only-segment-p
                     data-buf seg-start (caddr seg)))))
@@ -1343,20 +1349,21 @@ buffer's font-lock refontification cycles."
           :plan-origins
           (mevedel-view--queue-origin-fingerprint
            (mevedel-session-plan-queue session))
-          :agent-transcripts
+          :agent-registry
           (mapcar (lambda (entry)
-                    (let ((data (cdr entry)))
+                    (let ((record (cdr entry)))
                       (list (car entry)
-                            (plist-get data :status)
-                            (plist-get data :path))))
-                  (mevedel-session-agent-transcripts session)))))
+                            (mevedel-agent-record-activity record)
+                            (mevedel-agent-record-conversation-location
+                             record))))
+                  (mevedel-session-agent-registry session)))))
 
 (defun mevedel-view--stamp-agent-handle (start end rendering)
   "Stamp START..END with handle properties from RENDERING."
-  (when-let* ((agent-id (plist-get rendering :agent-id)))
+  (when-let* ((agent-path (plist-get rendering :agent-path)))
     (add-text-properties
      start end
-     `(mevedel-view-agent-id ,agent-id
+     `(mevedel-view-agent-path ,agent-path
        mevedel-view-agent-handle-p t
        mevedel-view-agent-status ,(plist-get rendering :agent-status)))))
 
@@ -1368,19 +1375,18 @@ buffer's font-lock refontification cycles."
       'mevedel-view-agent-running
     'mevedel-view-tool-summary))
 
-(defun mevedel-view--buttonize-agent-header-label (line agent-id)
-  "Return LINE with its visible agent type label made clickable.
-AGENT-ID is stored on the label so it can open the same transcript the
-old attribution suffix opened."
-  (when (and agent-id
-             (string-match "Agent:[ \t]+\\([^ \t\n]+\\)" line))
+(defun mevedel-view--buttonize-agent-header-label (line agent-path)
+  "Return LINE with its visible AGENT-PATH made clickable.
+AGENT-PATH is stored on the label so it opens the retained transcript."
+  (when (and agent-path
+             (string-match (regexp-quote agent-path) line))
     (add-text-properties
-     (match-beginning 1) (match-end 1)
+     (match-beginning 0) (match-end 0)
      `(keymap ,mevedel-view--agent-label-map
        mouse-face highlight
        follow-link t
        help-echo "Open agent transcript"
-       mevedel-view-agent-id ,agent-id)
+       mevedel-view-agent-path ,agent-path)
      line))
   line)
 
@@ -1441,7 +1447,7 @@ Return nil when HEADER is not a `Tool: argument' style line."
               (mevedel-view--rendering-header-face rendering))))
         (if agent-p
             (mevedel-view--buttonize-agent-header-label
-             line (plist-get rendering :agent-id))
+             line (plist-get rendering :agent-path))
           line)))))
 
 (defun mevedel-view--render-collapsed-header (rendering source)
@@ -1604,6 +1610,9 @@ RAW is an optional precomputed expanded tool segment text."
            (rendering (or custom
                           (mevedel-view--generic-tool-rendering
                            name args result collapsed-only render-data))))
+      (when-let* (((eq (plist-get rendering :vtype) 'agent-handle))
+                  (path (plist-get render-data :path)))
+        (setq rendering (plist-put rendering :agent-path path)))
       (when-let* ((audits (append (plist-get rendering :hook-audits)
                                   (plist-get call :hook-audits))))
         (setq rendering (plist-put rendering :hook-audits audits)))
@@ -1808,11 +1817,12 @@ turn shows one bogus thinking summary per tool boundary."
          (eq (plist-get data :kind) 'inline-skill)
          data)))
 
-(defun mevedel-view--agent-transcript-render-data-from-text (text)
-  "Return agent-transcript render-data from TEXT, or nil."
+(defun mevedel-view--collaboration-event-from-text (text)
+  "Return a canonical started collaboration event from TEXT, or nil."
   (let ((data (cdr (mevedel-pipeline-extract-render-data text))))
     (and (consp data)
-         (eq (plist-get data :kind) 'agent-transcript)
+         (eq (plist-get data :kind) 'collaboration-event)
+         (eq (plist-get data :event) 'started)
          data)))
 
 (defun mevedel-view--request-summary-render-data-from-text (text)
@@ -1829,11 +1839,11 @@ turn shows one bogus thinking summary per tool boundary."
     (mevedel-view--inline-skill-render-data-from-text
      (buffer-substring-no-properties seg-start seg-end))))
 
-(defun mevedel-view--agent-transcript-render-segment-p
+(defun mevedel-view--collaboration-event-segment-p
     (data-buf seg-start seg-end)
-  "Return non-nil when DATA-BUF's SEG-START..SEG-END carries transcript data."
+  "Return non-nil when DATA-BUF's span carries a started collaboration event."
   (with-current-buffer data-buf
-    (mevedel-view--agent-transcript-render-data-from-text
+    (mevedel-view--collaboration-event-from-text
      (buffer-substring-no-properties seg-start seg-end))))
 
 (defun mevedel-view--request-summary-render-segment-p
@@ -2302,11 +2312,11 @@ caller scans the render span in display order."
     (let* ((kind (or (get-text-property
                       (car bounds) 'mevedel-view-mailbox-kind)
                      'agent-message))
-           (agent-id (get-text-property
-                      (car bounds) 'mevedel-view-mailbox-agent-id))
+           (agent-path (get-text-property
+                        (car bounds) 'mevedel-view-mailbox-agent-path))
            (body-hash (md5 (mevedel-view--mailbox-body-text
                             (car bounds) (cdr bounds))))
-           (base (list 'mailbox-delivery kind agent-id body-hash))
+           (base (list 'mailbox-delivery kind agent-path body-hash))
            (index (1+ (or (gethash base counts) 0))))
       (puthash base index counts)
       (append base (list index)))))
@@ -3156,45 +3166,13 @@ are left bare, while blank lines between payload lines keep the gutter."
     (prog1 (marker-position end-marker)
       (set-marker end-marker nil))))
 
-(defun mevedel-view--bash-completion-summary (text)
-  "Return compact visible execution facts from Bash completion TEXT."
-  (when (string-match "<bash-execution[^<>]*?/>[[:space:]]*\\'" text)
-    (require 'xml)
-    (condition-case nil
-        (with-temp-buffer
-          (insert (match-string 0 text))
-          (let* ((attributes (cadr (car (xml-parse-region
-                                         (point-min) (point-max)))))
-                 (id (alist-get 'execution_id attributes))
-                 (exit-code (alist-get 'exit_code attributes))
-                 (outcome (alist-get 'outcome attributes))
-                 (termination (alist-get 'termination attributes))
-                 (wall-time (alist-get 'wall_time_seconds attributes))
-                 (lines (alist-get 'output_lines attributes))
-                 (bytes (alist-get 'output_bytes attributes)))
-            (and id
-                 (string-join
-                  (delq nil
-                        (list id
-                              outcome
-                              termination
-                              (and exit-code (format "exit %s" exit-code))
-                              (and wall-time
-                                   (format "%.1fs"
-                                           (string-to-number wall-time)))
-                              (and lines (format "%s lines" lines))
-                              (and bytes (format "%s bytes" bytes))))
-                  " · "))))
-      (error nil))))
-
 (defun mevedel-view--decorate-mailbox-block
     (open-regex close-tag start end &optional kind)
   "Replace OPEN-REGEX/CLOSE-TAG regions from START to END with mailbox cards.
 KIND identifies the mailbox block flavor.  Shared engine for
 `<agent-message>' and `<agent-result>'
-rendering.  OPEN-REGEX must capture the agent-id in match group
-1.  Ordinary bodies between the matched open and close tags are preserved
-verbatim; Bash completion bodies are summarized from their trailing facts.
+rendering.  OPEN-REGEX must capture the canonical sender path in match group
+1.  Bodies between the matched open and close tags are preserved verbatim.
 If a body's line count exceeds CLOSE-TAG's threshold,
 `mevedel-view-mailbox-collapse-line-threshold', the body is marked
 invisible (with the `mailbox-delivery' vtype tag for downstream
@@ -3208,47 +3186,32 @@ hint.  Searches that region."
             (while (re-search-forward open-regex (marker-position end-marker) t)
               (let* ((open-start (match-beginning 0))
                      (open-end (match-end 0))
-                     (id (match-string-no-properties 1))
-                     (bash-completion-p (string-prefix-p "bash:" id))
-                     (attribution (mevedel-view--insert-attribution id))
+                     (sender (match-string-no-properties 1))
+                     (attribution (mevedel-view--insert-attribution sender))
                      (inhibit-read-only t))
                 (delete-region open-start open-end)
                 (goto-char open-start)
                 (let ((card-start (point))
                       (card-id (cl-gensym "mevedel-view-mailbox-")))
                   (insert (propertize
-                           (cond
-                            (bash-completion-p "✓ Bash completed · ")
-                            ((eq kind 'agent-result) "✓ finished ")
-                            (t "✉ message "))
+                           (if (eq kind 'agent-result)
+                               "✓ finished "
+                             "✉ message ")
                            'font-lock-face 'mevedel-view-attribution
                            'mevedel-view-mailbox t))
-                  (if bash-completion-p
-                      (insert (substring id (length "bash:")))
-                    (if (eq kind 'agent-result)
-                        (let ((label-start (point)))
-                          (insert attribution)
-                          (when (string-prefix-p "from " attribution)
-                            (delete-region label-start
-                                           (+ label-start (length "from ")))))
-                      (insert attribution)))
+                  (if (eq kind 'agent-result)
+                      (let ((label-start (point)))
+                        (insert attribution)
+                        (when (string-prefix-p "from " attribution)
+                          (delete-region label-start
+                                         (+ label-start (length "from ")))))
+                    (insert attribution))
                   (insert "\n")
                   (let ((body-start (point)))
                     (when-let* ((close
                                  (mevedel-transcript--mailbox-find-close
                                   open-regex close-tag
                                   (marker-position end-marker))))
-                      (when-let* ((summary
-                                   (and bash-completion-p
-                                        (mevedel-view--bash-completion-summary
-                                         (buffer-substring-no-properties
-                                          body-start (car close))))))
-                        (let ((old-end (car close)))
-                          (delete-region body-start old-end)
-                          (goto-char body-start)
-                          (insert summary)
-                          (setcdr close (+ (cdr close) (- (point) old-end)))
-                          (setcar close (point))))
                       (let* ((body-end (car close))
                              (close-end (cdr close))
                              (body-line-count
@@ -3260,7 +3223,7 @@ hint.  Searches that region."
                         (mevedel-view--debug-log
                          'mailbox-decorate
                          :kind kind
-                         :id id
+                         :sender sender
                          :open-start open-start
                          :body-start body-start
                          :body-end body-end
@@ -3315,14 +3278,14 @@ hint.  Searches that region."
                            mevedel-view-agent-status nil))
                         (remove-text-properties
                          body-start (point)
-                         '(mevedel-view-agent-id nil))
+                         '(mevedel-view-agent-path nil))
                         (add-text-properties
                          card-start (point)
                          (list 'mevedel-view-type 'mailbox-delivery
                                'mevedel-view-mailbox-card card-id
                                'mevedel-view-mailbox-kind
                                (or kind 'agent-message)
-                               'mevedel-view-mailbox-agent-id id
+                               'mevedel-view-mailbox-agent-path sender
                                'mevedel-view-collapsed long-body)))))))))
         (set-marker end-marker nil)))))
 
@@ -3333,13 +3296,13 @@ Delegates to `mevedel-view--decorate-mailbox-block' so
 header, same collapse threshold, and the same vtype tag for downstream
 TAB toggling."
   (mevedel-view--decorate-mailbox-block
-   "<agent-result\\s-+[^>]*agent-id=\"\\([^\"]+\\)\"[^>]*>"
+   "<agent-result\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-result>"
    start end
    'agent-result))
 
 (defun mevedel-view--decorate-agent-message-blocks (start end)
-  "Decorate `<agent-message from=ID>...</agent-message>' from START to END.
+  "Decorate canonical `<agent-message sender=PATH>' blocks from START to END.
 Delegates to `mevedel-view--decorate-mailbox-block' so the body
 collapse threshold, click gating, and vtype tag are uniform with
 `<agent-result>' rendering.
@@ -3348,7 +3311,7 @@ Multiple `<agent-message>' blocks in one user turn produce one mailbox
 card each, in source order.  Non-matching prose in the same turn
 remains as ordinary user text."
   (mevedel-view--decorate-mailbox-block
-   "<agent-message\\s-+[^>]*from=\"\\([^\"]+\\)\"[^>]*>"
+   "<agent-message\\s-+[^>]*sender=\"\\([^\"]+\\)\"[^>]*>"
    "</agent-message>"
    start end
    'agent-message))
@@ -3728,17 +3691,15 @@ are merged into a single summary."
                (dolist (record
                         (mevedel-view--hook-audit-records-from-text text))
                  (mevedel-view--insert-hook-audit-block record source))))
-            ((mevedel-view--agent-transcript-render-segment-p
+            ((mevedel-view--collaboration-event-segment-p
               data-buf (cadr seg) (caddr seg))
-               (progn
-                 (mevedel-view--flush-thinking-group thinking-group data-buf)
-                 (setq thinking-group nil)
-                 (when tool-group
-                   (mevedel-view--render-tool-group
-                    (nreverse tool-group) data-buf)
-                   (setq tool-group nil))
-                 (mevedel-view--render-agent-transcript-segment
-                  data-buf seg)))
+             (mevedel-view--flush-thinking-group thinking-group data-buf)
+             (setq thinking-group nil)
+             (when tool-group
+               (mevedel-view--render-tool-group
+                (nreverse tool-group) data-buf)
+               (setq tool-group nil))
+             (mevedel-view--render-collaboration-event-segment data-buf seg))
             ((and tool-group
                   (mevedel-view--hook-audit-only-segment-p
                    data-buf (cadr seg) (caddr seg)))
@@ -3763,22 +3724,23 @@ are merged into a single summary."
     (dolist (seg (nreverse request-summary-group))
       (mevedel-view--render-request-summary-segment seg data-buf))))
 
-(defun mevedel-view--render-agent-transcript-segment (data-buf seg)
-  "Render an agent-transcript render-data SEG from DATA-BUF."
+(defun mevedel-view--render-collaboration-event-segment (data-buf seg)
+  "Render a canonical started collaboration event SEG from DATA-BUF."
   (let* ((seg-start (cadr seg))
          (seg-end (caddr seg))
          (source (cons seg-start seg-end))
          (render-data
           (with-current-buffer data-buf
-            (mevedel-view--agent-transcript-render-data-from-text
+            (mevedel-view--collaboration-event-from-text
              (buffer-substring-no-properties seg-start seg-end)))))
     (when-let* ((rendering
                  (and render-data
                       (mevedel-tool-ui--render-agent
-                       (or (plist-get render-data :name) "Agent")
-                       (list :subagent_type
-                             (or (plist-get render-data :agent-type) "agent")
-                             :description
+                       "Agent"
+                       (list :task_name
+                             (file-name-nondirectory
+                              (or (plist-get render-data :path) "agent"))
+                             :message
                              (or (plist-get render-data :description) ""))
                        (or (plist-get render-data :body) "")
                        render-data))))
@@ -4006,11 +3968,12 @@ section only."
      ((eq vtype 'mailbox-delivery)
       (mevedel-view--toggle-mailbox-delivery))
      ((and (eq vtype 'agent-handle)
-           (get-text-property (point) 'mevedel-view-agent-id)
+           (get-text-property (point) 'mevedel-view-agent-path)
            (eq (get-text-property (point) 'mevedel-view-agent-status)
                'running))
-      (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
-        (mevedel-view-agent-handle-activate agent-id)))
+      (let ((agent-path (get-text-property
+                         (point) 'mevedel-view-agent-path)))
+        (mevedel-view-agent-handle-activate agent-path)))
      ((eq vtype 'hook-context)
       (mevedel-view--toggle-hook-context))
      ((eq vtype 'hook-audit)
@@ -4020,9 +3983,10 @@ section only."
           (mevedel-view--expand-section source vtype)
         (mevedel-view--collapse-section source vtype)))
      ((and (eq vtype 'agent-handle)
-           (get-text-property (point) 'mevedel-view-agent-id))
-      (let ((agent-id (get-text-property (point) 'mevedel-view-agent-id)))
-        (mevedel-view-agent-handle-activate agent-id)))
+           (get-text-property (point) 'mevedel-view-agent-path))
+      (let ((agent-path (get-text-property
+                         (point) 'mevedel-view-agent-path)))
+        (mevedel-view-agent-handle-activate agent-path)))
      ((and source (eq vtype 'agent-handle))
       (if collapsed
           (mevedel-view--expand-section source vtype)

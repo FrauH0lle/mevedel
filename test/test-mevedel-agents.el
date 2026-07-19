@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'mevedel-agents)
+(require 'mevedel-reminders)
 (require 'mevedel-skills-core)
 (require 'mevedel-tools)
 (require 'helpers
@@ -56,11 +57,12 @@
   (:before-each (test-mevedel-agents--restore-builtins))
   ,test
   (test)
-  :doc "explorer receives skill tools while review/verify/coordinator do not"
-  (let ((explorer (test-mevedel-agents--resolved-tool-names "explorer")))
-    (should (member "Skill" explorer))
-    (should (member "ListSkills" explorer)))
-  (dolist (name '("coordinator" "verifier" "reviewer"))
+  :doc "delegating roles receive skill tools while review and verify do not"
+  (dolist (name '("worker" "explorer"))
+    (let ((tools (test-mevedel-agents--resolved-tool-names name)))
+      (should (member "Skill" tools))
+      (should (member "ListSkills" tools))))
+  (dolist (name '("verifier" "reviewer"))
     (let ((tools (test-mevedel-agents--resolved-tool-names name)))
       (should-not (member "Skill" tools))
       (should-not (member "ListSkills" tools)))))
@@ -205,9 +207,10 @@
   ,test
   (test)
   :doc "skill roster follows resolved Skill/ListSkills availability"
-  (should (mevedel-agent-skill-tool-capable-p
-           (mevedel-agent-get "explorer")))
-  (dolist (name '("coordinator" "verifier" "reviewer"))
+  (dolist (name '("worker" "explorer"))
+    (should (mevedel-agent-skill-tool-capable-p
+             (mevedel-agent-get name))))
+  (dolist (name '("verifier" "reviewer"))
     (should-not (mevedel-agent-skill-tool-capable-p
                  (mevedel-agent-get name))))
 

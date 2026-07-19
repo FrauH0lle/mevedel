@@ -894,7 +894,7 @@
 	  (when saved
 	    (fset 'mevedel-permission--prompt-async-bash saved))))
 
-  :doc "Bash approval resumes once while background agents remain tracked"
+  :doc "Bash approval resumes exactly once"
   (let* ((session (test-pq--make-session))
          (entry (list :kind 'bash
                       :command "git status"
@@ -903,8 +903,6 @@
                       :session session))
          (outcomes nil)
          rendered)
-    (setf (mevedel-session-background-agents session)
-          '("explorer--still-running"))
     (setq entry (plist-put entry :callback
                            (lambda (o) (push o outcomes))))
     (setf (mevedel-session-permission-queue session) (list entry))
@@ -914,9 +912,7 @@
       (mevedel-permission-queue--on-head-outcome entry 'allow-once))
     (should (equal '(allow-once) outcomes))
     (should (null rendered))
-    (should (null (mevedel-session-permission-queue session)))
-    (should (equal '("explorer--still-running")
-                   (mevedel-session-background-agents session)))))
+    (should (null (mevedel-session-permission-queue session)))))
 
 (mevedel-deftest mevedel-permission-queue--render-eval
   (:doc "renders queued Eval permission prompts")
@@ -1007,10 +1003,10 @@
                      (lambda () 'ask))
                     ((symbol-function 'mevedel-view--agent-status-collect)
                      (lambda ()
-                       (list (list :agent-id
+                       (list (list :path
                                    "/root/verifier"
                                    :status 'blocked
-                                   :agent-type "verifier"
+                                   :role "verifier"
                                    :description "Verify tracked diff"
                                    :calls 18)))))
             (with-current-buffer parent-view
@@ -1034,7 +1030,7 @@
               (let* ((text (buffer-substring-no-properties
                             (point-min) mevedel-view--input-marker))
                      (agent-pos (string-search
-                                 "Agent: verifier -- Verify tracked diff" text))
+                                 "Blocked /root/verifier" text))
                      (prompt-pos (string-search
                                   "The LLM is requesting permission to evaluate elisp"
                                   text)))

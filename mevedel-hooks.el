@@ -702,7 +702,7 @@ current buffer.  Trust is keyed by workspace id, path, and file hash."
          'PostToolUse 'PostToolUseFailure)
      (plist-get event-plist :tool-name))
     ((or 'SubagentStart 'SubagentStop)
-     (plist-get event-plist :agent-type))
+     (plist-get event-plist :role))
     ((or 'PreCompact 'PostCompact)
      (plist-get event-plist :trigger))
     ('SessionStart
@@ -1680,7 +1680,7 @@ decision plist."
          'PostToolUse 'PostToolUseFailure)
      :tool-name)
     ((or 'SubagentStart 'SubagentStop)
-     :agent-type)
+     :role)
     ((or 'PreCompact 'PostCompact)
      :trigger)
     ('SessionStart :source)

@@ -19,10 +19,9 @@ Run an explicit, bounded validation loop for the current change in the active
 main request. The goal is not to chase perfection indefinitely; it is to surface
 the real state of the work, fix actionable issues, and stop with a clear report.
 
-This skill runs inline on purpose. Do not hand the whole loop to the
-coordinator: the coordinator is orchestration-only and cannot edit files. Apply
-in-scope fixes directly in the main loop when edit tools are available. Use
-sub-agents only for read-only review, verification, or focused investigation.
+This skill runs inline on purpose. Apply in-scope fixes directly in the main
+loop when edit tools are available. Use agents only for read-only review,
+verification, or focused investigation.
 
 ## Loop contract
 
@@ -40,7 +39,7 @@ Each round:
 4. Run a verifier for adversarial validation. Treat `VERDICT: FAIL` as blocking.
 5. Fix only actionable issues that are in scope for the requested change. Make
    these edits yourself in the main request; do not ask an explorer, reviewer,
-   verifier, or coordinator to edit.
+   or verifier to edit.
 6. Re-run the failing or most relevant validation after each fix batch.
 
 Stop early when:
@@ -65,8 +64,8 @@ Stop and ask when:
 - Do not use destructive Git commands.
 - Do not edit generated artifacts such as `*.elc`.
 - Keep reviewer/verifier findings tied to exact `file:line` references.
-- Do not delegate implementation to the coordinator or read-only agents. They
-  may return analysis, review findings, or verification results only.
+- Do not delegate implementation to read-only agents. They may return analysis,
+  review findings, or verification results only.
 
 ## Final report
 

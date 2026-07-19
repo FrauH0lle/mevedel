@@ -49,9 +49,9 @@ lazily — read them when planning work in the relevant area. The
   sub-agent permission propagation, example config
 - [`docs/guardian-prompts.md`](docs/guardian-prompts.md) — trusted guardian
   prompts, untrusted evidence boundaries, response contracts, examples
-- [`docs/agents.md`](docs/agents.md) — explorer/coordinator/
-  verifier/reviewer, background spawning + BWAIT, SendMessage mailboxes,
-  coordinator and review skills, task status fragment
+- [`docs/agents.md`](docs/agents.md) — worker/explorer/verifier/reviewer,
+  retained asynchronous spawning, canonical paths, mailboxes, waits,
+  tree-wide capacity, and task status
 - [`docs/preview.md`](docs/preview.md) — inline diff overlay,
   keybindings, mode dispatch, handler return shape
 - [`docs/mentions.md`](docs/mentions.md) — `@ref`/`@file`/`@agent`/`@mcp`
@@ -144,11 +144,11 @@ Prompt / presets / agents
   mevedel-system.el           system prompt assembly
   mevedel-presets.el          gptel presets and request-time FSM assembly
   mevedel-specialist-nudges.el  generic-tool specialist prompting policy
-  mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
+  mevedel-agents.el           worker/explorer/verifier/reviewer definitions
   mevedel-agent-control.el    retained-agent tree addressing, turns, mail, waits
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-persistence.el durable agent registry codec and cold hydration
-  mevedel-agent-runtime.el    Agent lifecycle, BWAIT, watchdogs, completion, interruption
+  mevedel-agent-runtime.el    retained agent request lifecycle and settlement
   mevedel-goal.el             supervised Goal controller and plan approval queue
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 

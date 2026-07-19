@@ -50,10 +50,6 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
-;; `mevedel-tools'
-(declare-function mevedel-tools--handle-terminal-mailbox
-                  "mevedel-tools" (fsm))
-
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--schedule-queued-user-message-drain
                   "mevedel-view-composer" (fsm))
@@ -165,8 +161,7 @@
          #'mevedel--turn-restore-permission-mode
          #'mevedel--turn-end-request
          #'mevedel-goal-dispatch-after-turn
-         #'mevedel-view--schedule-queued-user-message-drain
-         #'mevedel-tools--handle-terminal-mailbox)))
+         #'mevedel-view--schedule-queued-user-message-drain)))
 
 (defun mevedel--fail-turn (fsm status)
   "Run failure cleanup for FSM with terminal STATUS."
@@ -182,8 +177,7 @@
          #'mevedel--turn-restore-permission-mode
          #'mevedel--turn-end-request
          #'mevedel-goal-persist-failure
-         #'mevedel-goal-dispatch-after-failure
-         #'mevedel-tools--handle-terminal-mailbox)))
+         #'mevedel-goal-dispatch-after-failure)))
 
 
 (defun mevedel--handler-name (handler)

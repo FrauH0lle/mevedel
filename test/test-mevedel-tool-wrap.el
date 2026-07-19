@@ -433,10 +433,11 @@ FUNCTION, ARGS, ASYNC, DESCRIPTION, and INCLUDE configure the tool."
       (should (member '(:deferred xtra) specs))
       (should (member 'read specs))))
 
-  :doc "returns original specs when no extras are registered"
+  :doc "adds the common communication tools when no extras are registered"
   (let ((agent (mevedel-agent--create :name "other-agent" :tools '(read)))
         (mevedel-agent-extra-tool-specs nil))
-    (should (equal '(read) (mevedel-agent--effective-specs agent)))))
+    (should (equal '(read (:tool "SendMessage") (:tool "ListAgents"))
+                   (mevedel-agent--effective-specs agent)))))
 
 (provide 'test-mevedel-tool-wrap)
 ;;; test-mevedel-tool-wrap.el ends here

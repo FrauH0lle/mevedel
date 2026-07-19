@@ -123,8 +123,9 @@ silently placing controls in a data buffer."
            (or (let ((view (buffer-local-value 'mevedel--view-buffer
                                                buf)))
                  (and (live-interaction-view-p view) view))
-               (when-let* ((inv (buffer-local-value
-                                 'mevedel--agent-invocation buf))
+               (when-let* ((inv (and (boundp 'mevedel--agent-invocation)
+                                     (buffer-local-value
+                                      'mevedel--agent-invocation buf)))
                            ((mevedel-agent-invocation-p inv))
                            (parent (mevedel-agent-invocation-parent-data-buffer
                                     inv)))

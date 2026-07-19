@@ -154,7 +154,8 @@ summary requests, retries, preflight, and hooks for both targets.  The private
 target adapter supplies the protected transcript bounds and target-specific
 persistence, display, continuation, and failure operations.  Agent hooks run
 with the parent session, workspace, and invocation; their payload uses the
-agent ID as `:origin`, the stable canonical transcript as `:transcript-path`,
+canonical agent path as `:origin`, the stable canonical transcript as
+`:transcript-path`,
 and `"auto"` as `:trigger`.  Model-visible `PreCompact` additions retain their
 ignored audit record beside the summary.
 

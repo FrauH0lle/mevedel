@@ -9,7 +9,7 @@
 ;; Also hosts the deferred-tool (ToolSearch) infrastructure that does
 ;; not yet belong to any single tool module: the polymorphic
 ;; `mevedel-tools--ctx-*' accessors that dispatch on session vs.
-;; invocation mailboxes, the WAIT-state handler that drains queued
+;; invocation state, the WAIT-state handler that drains queued
 ;; `<agent-message>' blocks, and the `gptel-send' advice that
 ;; dispatches slash commands before they reach the model.
 
@@ -22,7 +22,6 @@
 (require 'mevedel-utilities)
 (require 'mevedel-agents)
 (require 'mevedel-agent-exec)
-(require 'mevedel-agent-runtime)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-tool-ask)
@@ -74,19 +73,8 @@
                   (invocation item &optional reserved))
 (defvar mevedel--agent-invocation)
 
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime--agent-invocation-at
-                  "mevedel-agent-runtime" (fsm))
-(declare-function mevedel-agent-runtime--agent-result-parse-id
-                  "mevedel-agent-runtime" (text))
-(defvar mevedel-agent-runtime--fsms)
-
 ;; `mevedel-agents'
-(declare-function mevedel-agent-invocation-agent-id "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-path
@@ -145,16 +133,6 @@ the active payload when it reaches zero.  Calling the tool resets the
 counter.  Set higher for looser timeouts, lower to prune more
 aggressively."
   :type 'integer
-  :group 'mevedel)
-
-(defcustom mevedel-agent-message-max-size 20000
-  "Maximum character size of a legacy inbound mailbox body.
-
-V1 background-agent results use this cap to limit large follow-up prompts.
-Canonical MAIL and RESULT records follow their V2 delivery contracts instead.
-Set to nil to disable legacy truncation."
-  :type '(choice (integer :tag "Max bytes")
-                 (const :tag "Disabled" nil))
   :group 'mevedel)
 
 ;;
@@ -525,146 +503,7 @@ otherwise queues them on the chat buffer's session."
 
 
 ;;
-;;; Inter-agent messaging (SendMessage)
-
-(defun mevedel-tools--sender-name (ctx)
-  "Return the display name for sender context CTX.
-Agent invocations use their agent's name; sessions fall back to
-\"main\"."
-  (cond
-   ((mevedel-agent-invocation-p ctx)
-    (mevedel-agent-name (mevedel-agent-invocation-agent ctx)))
-   ((mevedel-session-p ctx)
-    "main")
-   (t "unknown")))
-
-(declare-function mevedel-agent-runtime--prune-stale-agents-fsm
-                  "mevedel-agent-runtime" ())
-
-(defun mevedel-tools--buffer-invocation (buffer)
-  "Return BUFFER's agent invocation, or nil for the top-level chat."
-  (and (buffer-live-p buffer)
-       (buffer-local-value 'mevedel--agent-invocation buffer)))
-
-(defun mevedel-tools--coordinator-invocation-p (invocation)
-  "Return non-nil when INVOCATION is a coordinator agent."
-  (and (mevedel-agent-invocation-p invocation)
-       (equal (mevedel-agent-name
-               (mevedel-agent-invocation-agent invocation))
-              "coordinator")))
-
-(defun mevedel-tools--parent-invocation (buffer)
-  "Return BUFFER's immediate parent agent invocation, if any."
-  (when-let* ((invocation (mevedel-tools--buffer-invocation buffer))
-              (parent (mevedel-agent-invocation-parent-data-buffer invocation))
-              ((buffer-live-p parent)))
-    (mevedel-tools--buffer-invocation parent)))
-
-(defun mevedel-tools--parent-coordinator-invocation (buffer)
-  "Return BUFFER's immediate parent coordinator invocation, if any."
-  (let ((parent (mevedel-tools--parent-invocation buffer)))
-    (and (mevedel-tools--coordinator-invocation-p parent) parent)))
-
-(defun mevedel-tools--main-recipient-allowed-p (buffer)
-  "Return non-nil if BUFFER may address the top-level main session.
-
-The intended channel matrix allows main itself, coordinators, and
-agents spawned directly by main to talk to main.  Workers spawned by a
-coordinator must route through their coordinator instead."
-  (let* ((invocation (mevedel-tools--buffer-invocation buffer))
-         (parent (and invocation
-                      (mevedel-agent-invocation-parent-data-buffer
-                       invocation))))
-    (or (null invocation)
-        (mevedel-tools--coordinator-invocation-p invocation)
-        (and (buffer-live-p parent)
-             (null (mevedel-tools--buffer-invocation parent))))))
-
-(defun mevedel-tools--own-child-recipient (to buffer)
-  "Resolve TO as an exact agent id in BUFFER's own child registry."
-  (with-current-buffer buffer
-    (mevedel-agent-runtime--prune-stale-agents-fsm)
-    (when-let* ((pair (assoc to mevedel-agent-runtime--fsms)))
-      (mevedel-agent-runtime--agent-invocation-at (cdr pair)))))
-
-(defun mevedel-tools--parent-coordinator-recipient (to buffer)
-  "Resolve TO to BUFFER's parent coordinator when TO is its exact id."
-  (when-let* ((coordinator
-               (mevedel-tools--parent-coordinator-invocation buffer))
-              (agent-id (mevedel-agent-invocation-agent-id coordinator))
-              ((equal to agent-id)))
-    coordinator))
-
-(defun mevedel-tools--resolve-recipient (to chat-buffer)
-  "Resolve recipient TO to an inbox context bound to CHAT-BUFFER.
-
-TO is a string naming the destination:
-  - \"main\" / \"chat\" -> the top-level session, only when the sender
-    is main, a coordinator, or a direct child of main
-  - \"coordinator\" -> the sender's immediate parent coordinator, if any
-  - the sender's own child agent-id (exact match)
-  - the sender's immediate parent coordinator id (exact match)
-
-Returns the resolved `mevedel-session' or `mevedel-agent-invocation',
-or nil when no recipient matches.
-
-Prunes DONE/ERRS/ABRT entries from the FSM registry first so exact
-matches don't resolve to a dead invocation that would silently drop the
-message."
-  (unless (and (stringp to) (not (string-empty-p to)))
-    (error "Recipient must be a non-empty string"))
-  (cond
-   ((member (downcase to) '("main" "chat"))
-    (and (mevedel-tools--main-recipient-allowed-p chat-buffer)
-         (buffer-local-value 'mevedel--session chat-buffer)))
-   ((string= (downcase to) "coordinator")
-    (mevedel-tools--parent-coordinator-invocation chat-buffer))
-   (t
-    (or (mevedel-tools--own-child-recipient to chat-buffer)
-        (mevedel-tools--parent-coordinator-recipient to chat-buffer)))))
-
-(defun mevedel-tools--current-chat-buffer ()
-  "Return the chat buffer associated with the current tool call.
-Prefers the FSM bound during dispatch; falls back to
-`current-buffer'."
-  (or (when-let* ((fsm mevedel-tools--current-fsm)
-                  (info (gptel-fsm-info fsm))
-                  (buf (plist-get info :buffer))
-                  ((buffer-live-p buf)))
-        buf)
-      (current-buffer)))
-
-(defun mevedel-tools--send-message (args)
-  "Queue a message on a recipient agent's mailbox.
-ARGS is a plist with :to (recipient name or id) and :message (body).
-Returns a short confirmation string.  The message is delivered
-asynchronously on the recipient's next FSM turn via
-`mevedel-tools--handle-message-inject'."
-  (let ((to (plist-get args :to))
-        (body (plist-get args :message)))
-    (unless (and (stringp to) (not (string-empty-p to)))
-      (error "Parameter `to' is required"))
-    (unless (and (stringp body) (not (string-empty-p body)))
-      (error "Parameter `message' is required"))
-    (let* ((chat-buffer (mevedel-tools--current-chat-buffer))
-           (target (mevedel-tools--resolve-recipient to chat-buffer))
-           (sender (mevedel-tools--sender-name
-                    (mevedel-tools--current-deferred-context))))
-      (unless target
-        (error "Unknown recipient: %s" to))
-      (mevedel-agent-runtime--ctx-push-message
-       target
-       (list :from sender :body body :timestamp (current-time)))
-      (format "Message delivered to %s." to))))
-
-(defun mevedel-tools--truncate-message-body (body)
-  "Return BODY truncated to `mevedel-agent-message-max-size', if set."
-  (let ((cap mevedel-agent-message-max-size))
-    (if (and cap (> (length body) cap))
-        (concat (substring body 0 cap)
-                (format "\n... [truncated: %d of %d bytes shown]"
-                        cap (length body)))
-      body)))
+;;; Agent mailbox injection
 
 (defun mevedel-tools--mailbox-body-escape (body)
   "Escape mailbox delimiter-looking text in BODY."
@@ -678,13 +517,6 @@ asynchronously on the recipient's next FSM turn via
                                       (cdr pair)
                                       text t t)))
     text))
-
-(defun mevedel-tools--agent-result-block-p (body)
-  "Return non-nil when BODY is an `<agent-result>' delivery block."
-  (and (stringp body)
-       (string-match-p
-        "\\`[[:space:]\n\r]*<agent-result\\s-+[^>]*>\\(?:.\\|\n\\)*</agent-result>[[:space:]\n\r]*\\'"
-        body)))
 
 (defun mevedel-tools--message-delivery-block (msg)
   "Return the user-role delivery block for mailbox MSG."
@@ -704,15 +536,7 @@ asynchronously on the recipient's next FSM turn via
               (or (plist-get msg :payload) ""))))
     ('USER
      (or (plist-get msg :payload) ""))
-    (_
-     (let ((body (or (plist-get msg :body) "")))
-       (if (and (plist-get msg :agent-result-p)
-                (mevedel-tools--agent-result-block-p body))
-           body
-         (format "<agent-message from=\"%s\">\n%s\n</agent-message>"
-                 (or (plist-get msg :from) "unknown")
-                 (mevedel-tools--mailbox-body-escape
-                  (mevedel-tools--truncate-message-body body))))))))
+    (_ (error "Unknown agent mailbox record: %S" (plist-get msg :type)))))
 
 (defun mevedel-tools--live-buffer-marker-p (marker buffer)
   "Return non-nil when MARKER points into BUFFER."
@@ -727,52 +551,6 @@ asynchronously on the recipient's next FSM turn via
     (cond
      ((mevedel-tools--live-buffer-marker-p tracking buffer) tracking)
      ((mevedel-tools--live-buffer-marker-p position buffer) position))))
-
-(defun mevedel-tools--ctx-transcript-buffer (ctx fsm)
-  "Return the transcript buffer for CTX and FSM, when live."
-  (let ((buf (if (mevedel-agent-invocation-p ctx)
-                 (mevedel-agent-invocation-buffer ctx)
-               (when-let* ((info (and fsm (gptel-fsm-info fsm))))
-                 (plist-get info :buffer)))))
-    (and (buffer-live-p buf) buf)))
-
-(defun mevedel-tools--agent-result-delivered-p (agent-id buffer)
-  "Return non-nil when AGENT-ID's result block is already in BUFFER."
-  (when (and (stringp agent-id)
-             (not (string-empty-p agent-id))
-             (buffer-live-p buffer))
-    (with-current-buffer buffer
-      (save-excursion
-        (save-restriction
-          (widen)
-          (goto-char (point-min))
-          (re-search-forward
-           (concat "^<agent-result\\_>[^>\n]*agent-id=\""
-                   (regexp-quote agent-id)
-                   "\"")
-           nil t))))))
-
-(defun mevedel-tools--filter-duplicate-agent-results (messages ctx fsm)
-  "Return MESSAGES for CTX and FSM without delivered agent results."
-  (if-let* ((buffer (mevedel-tools--ctx-transcript-buffer ctx fsm)))
-      (let (seen)
-        (cl-remove-if
-         (lambda (msg)
-           (when-let* (((plist-get msg :agent-result-p))
-                       (body (plist-get msg :body))
-                       ((mevedel-tools--agent-result-block-p body))
-                       (agent-id (mevedel-agent-runtime--agent-result-parse-id body)))
-             (if (or (member agent-id seen)
-                     (mevedel-tools--agent-result-delivered-p
-                      agent-id buffer))
-                 (progn
-                   (message "mevedel: dropping duplicate agent result %s"
-                            agent-id)
-                   t)
-               (push agent-id seen)
-               nil)))
-         messages))
-    messages))
 
 (defun mevedel-tools--insert-session-injected-prompt
     (session fsm message block)
@@ -817,27 +595,13 @@ sync with what the model actually saw."
 
 Runs before `gptel--handle-wait' fires the HTTP request.  For the
 context that owns FSM, injects each unread record as a separate user-role
-communication block, and then removes it from the retained FIFO.  Agent
-follow-up steering queued on the active invocation uses the same boundary.
-Each injected block is also written to the owning transcript, preserving the
+communication block, and then removes it from the retained FIFO.  Each
+injected block is also written to the owning transcript, preserving the
 model-visible communication in conversation history."
   (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
     (require 'mevedel-agent-control)
     (let* ((agent-p (mevedel-agent-invocation-p ctx))
-           (retained (mevedel-agent-control-context-mailbox ctx))
-           (steering
-            (and agent-p
-                 (reverse (mevedel-agent-runtime--ctx-messages ctx))))
-           (messages
-            (mevedel-tools--filter-duplicate-agent-results
-             (cl-stable-sort
-              (append retained steering)
-              (lambda (left right)
-                (let ((left-time (plist-get left :timestamp))
-                      (right-time (plist-get right :timestamp)))
-                  (and left-time right-time
-                       (time-less-p left-time right-time)))))
-             ctx fsm))
+           (messages (mevedel-agent-control-context-mailbox ctx))
            (info (gptel-fsm-info fsm))
            (data (plist-get info :data))
            (prepend-p
@@ -848,9 +612,7 @@ model-visible communication in conversation history."
          for message in messages
          for index from 0
          for block = (mevedel-tools--message-delivery-block message)
-         for sender = (or (plist-get message :sender)
-                          (plist-get message :from)
-                          "unknown")
+         for sender = (or (plist-get message :sender) "unknown")
          do
          (when agent-p
            (mevedel-agent-exec--record-activity
@@ -868,9 +630,7 @@ model-visible communication in conversation history."
           (list :role "user" :content block)
           (and prepend-p index))))
       (when (or (null messages) data)
-        (mevedel-agent-control-clear-context-mailbox ctx)
-        (when agent-p
-          (setf (mevedel-agent-runtime--ctx-messages ctx) nil))))))
+        (mevedel-agent-control-clear-context-mailbox ctx)))))
 
 (defun mevedel-tools--handle-agent-roster-inject (fsm)
   "WAIT-state handler: expose direct children to FSM exactly once."
@@ -918,30 +678,9 @@ model-visible communication in conversation history."
         (setf (gptel-fsm-info fsm)
               (plist-put info :mevedel-agent-child-paths paths))))))
 
-(defun mevedel-tools--handle-terminal-mailbox (fsm)
-  "Terminal-state handler: log mailbox drops + sweep parent's perm queue.
-
-Runs on DONE and ERRS for FSMs whose context is a sub-agent
-invocation (wired via `mevedel-agent-runtime--inject-bwait-transition').
-
-Two cleanups:
-
-1.  If the FSM ends with queued mailbox messages that WAIT never
-    drained, warn so the drop is diagnosable, then clear the mailbox.
-
-2.  Sweep the parent session's permission and plan queues for any
-    queued entries whose `:origin' names this terminating agent.
-    Without this, queued entries owned by a now-terminated
-    sub-agent strand their callbacks forever (the FSM that would
-    have consumed the answer is gone)."
+(defun mevedel-tools--handle-agent-turn-terminal (fsm)
+  "Sweep pending human interactions owned by FSM's settling agent turn."
   (let ((ctx (mevedel-tools--deferred-context-for fsm)))
-    (when-let* ((messages (and ctx (mevedel-agent-runtime--ctx-messages ctx))))
-      (warn "mevedel: %d mailbox message(s) orphaned on FSM termination"
-            (length messages))
-      (setf (mevedel-agent-runtime--ctx-messages ctx) nil))
-    ;; Per-agent queue sweep -- only meaningful when CTX is an
-    ;; invocation (sub-agents); main-session terminal isn't reached
-    ;; via this handler.
     (when (and ctx
                (fboundp 'mevedel-agent-invocation-p)
                (mevedel-agent-invocation-p ctx)

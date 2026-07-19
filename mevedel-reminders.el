@@ -48,8 +48,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-background-p
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-deferred-expired
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-deferred-set
@@ -183,11 +181,7 @@ only when a frozen agent template must survive a cold session resume."
     (reviewer-read-only mevedel-reminders-make-reviewer-read-only no-args)
     (task-nudge mevedel-reminders-make-task-nudge interval)
     (verification-suggestion
-     mevedel-reminders-make-verification-suggestion no-args)
-    (agent-background-channels
-     mevedel-reminders-make-agent-background-channels no-args)
-    (background-agents-pending
-     mevedel-reminders-make-background-agents-pending no-args))
+     mevedel-reminders-make-verification-suggestion no-args))
   "Trusted constructor and argument contracts for durable reminder recipes.")
 
 (defun mevedel-reminders--recipe-arguments-p (contract arguments)
@@ -1340,124 +1334,6 @@ that pass local tests."))
 ;;
 ;;; Session defaults
 
-(defun mevedel-reminders-make-agent-background-channels ()
-  "Reminder fired once into a background sub-agent's first WAIT.
-
-Tells the sub-agent it is running concurrently with its caller and
-lists the routing targets available via `SendMessage'.  The content is
-context-sensitive because the channel matrix is intentionally narrow:
-
-  - coordinators and agents spawned directly by main may address
-    `to=\"main\"';
-  - workers spawned by a coordinator address that coordinator by its
-    exact agent id;
-  - agents may address only their own spawned background children by
-    exact id.
-
-Without this nudge, the LLM sees the SendMessage tool but has no
-sense of when to use it (the static prompt-file does not assume
-the caller is running concurrently)."
-  (mevedel-reminder-create
-   :type 'agent-background-channels
-   :recipe '(agent-background-channels)
-   :trigger (lambda (inv)
-              (and (mevedel-agent-invocation-p inv)
-                   (mevedel-agent-invocation-background-p inv)))
-   :content (lambda (inv)
-              (let* ((agent-name
-                      (and (mevedel-agent-invocation-agent inv)
-                           (mevedel-agent-name
-                            (mevedel-agent-invocation-agent inv))))
-                     (parent-buffer
-                      (mevedel-agent-invocation-parent-data-buffer inv))
-                     (parent-inv
-                      (and (buffer-live-p parent-buffer)
-                           (buffer-local-value 'mevedel--agent-invocation
-                                               parent-buffer)))
-                     (parent-name
-                      (and (mevedel-agent-invocation-p parent-inv)
-                           (mevedel-agent-invocation-agent parent-inv)
-                           (mevedel-agent-name
-                            (mevedel-agent-invocation-agent parent-inv))))
-                     (parent-id
-                      (and (mevedel-agent-invocation-p parent-inv)
-                           (mevedel-agent-invocation-agent-id parent-inv))))
-                (cond
-                 ((equal agent-name "coordinator")
-                  "You are running in the background, concurrent with main. \
-Use the `SendMessage' tool only for live agent-to-agent communication:
-
-  - `SendMessage(to=\"main\", message=\"...\")' delivers to the top-level \
-mevedel session.
-  - After you spawn background workers, `SendMessage(to=\"<worker-id>\", \
-...)' addresses one of your own live workers by exact id.
-
-Do not use SendMessage for user-facing questions; use the `Ask' tool \
-for interactive user input.")
-                 ((equal parent-name "coordinator")
-                  (format
-                   "You are running in the background as a worker for \
-coordinator `%s'.  Use `SendMessage(to=\"%s\", message=\"...\")' to send \
-partial findings, blockers, or clarification requests to that coordinator.
-
-Do not message `main' directly and do not message sibling workers directly; \
-route coordination through your coordinator.  For user-facing questions \
-that need an interactive answer, use the `Ask' tool."
-                   (or parent-id "coordinator")
-                   (or parent-id "coordinator")))
-                 ((null parent-inv)
-                  "You are running in the background, concurrent with main. \
-Use `SendMessage(to=\"main\", message=\"...\")' for partial findings, \
-blockers, or status that should reach the top-level mevedel session before \
-your final result.
-
-Do not message sibling agents directly.  For user-facing questions that \
-need an interactive answer, use the `Ask' tool.")
-                 (t
-                  "You are running in the background.  SendMessage is scoped \
-to live agent-to-agent channels, not sibling discovery.  If you spawn your \
-own background children, address those children by their exact returned id; \
-otherwise report through your final result.  For user-facing questions, use \
-the `Ask' tool."))))
-   :interval 'one-shot))
-
-(defun mevedel-reminders-make-background-agents-pending ()
-  "Reminder fired while background sub-agents are still running.
-
-Tells the parent LLM to wait for `<agent-result>' blocks instead of
-guessing the work is done.  Without this nudge, the model often
-declares all agents failed (or summarises prematurely) the moment a
-single failure lands while other agents are still in flight.
-
-Fires on every parent WAIT cycle that has a non-empty
-`background-agents' list, naming the still-pending agent IDs so the
-LLM can match them against `<agent-result>' deliveries it has
-received."
-  (mevedel-reminder-create
-   :type 'background-agents-pending
-   :recipe '(background-agents-pending)
-   :trigger (lambda (ctx)
-              (and (mevedel-session-p ctx)
-                   (mevedel-session-background-agents ctx)))
-   :content (lambda (ctx)
-              (let* ((ids (and (mevedel-session-p ctx)
-                               (mevedel-session-background-agents ctx)))
-                     (count (length ids)))
-                (format "You have %d background sub-agent%s still running:
-
-%s
-
-Do NOT produce a final summary or declare any agent as failed until
-you have received an `<agent-result agent-id=\"...\">' block for
-each agent ID listed above (or until the runtime parks your turn
-in BWAIT and resumes with the missing result).  An error from one
-agent says nothing about the others; each ID reports back
-independently."
-                        count
-                        (if (= count 1) "" "s")
-                        (mapconcat (lambda (id) (format "  - %s" id))
-                                   ids "\n"))))))
-
 (defun mevedel-reminders-install-defaults (session)
   "Install Tier 1 built-in reminders on SESSION.
 
@@ -1515,10 +1391,7 @@ with the same type are not added twice."
        session (mevedel-reminders-make-verification-suggestion)))
     (unless (memq 'plan-reference existing)
       (mevedel-session-add-reminder
-       session (mevedel-reminders-make-plan-reference)))
-    (unless (memq 'background-agents-pending existing)
-      (mevedel-session-add-reminder
-       session (mevedel-reminders-make-background-agents-pending))))
+       session (mevedel-reminders-make-plan-reference))))
   session)
 
 (provide 'mevedel-reminders)
