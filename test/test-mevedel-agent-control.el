@@ -23,7 +23,10 @@
           "helpers"))
 
 ;; `gptel'
+(declare-function gptel-make-openai "ext:gptel-openai" (name &rest args))
+(defvar gptel--known-backends)
 (defvar gptel-backend)
+(defvar gptel-model)
 
 (mevedel-tools-register)
 
@@ -1022,6 +1025,12 @@
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
+          (setq-local gptel-backend
+                      (let ((gptel--known-backends nil))
+                        (gptel-make-openai
+                         "Agent Control" :key "test"
+                         :models '(test-model))))
+          (setq-local gptel-model 'test-model)
           (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                      (lambda (_callback role _description _message child
                                         _buffer &optional _configure)

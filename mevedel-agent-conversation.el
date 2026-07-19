@@ -15,7 +15,9 @@
   (require 'subr-x))
 
 ;; `gptel'
+(declare-function gptel--save-state "ext:gptel" ())
 (declare-function gptel-mode "ext:gptel" (&optional arg))
+(defvar gptel-mode)
 (defvar gptel-post-response-functions)
 (defvar gptel-post-stream-hook)
 (defvar gptel-post-tool-call-functions)
@@ -670,10 +672,14 @@ When SUPPRESS-RERENDER is non-nil, do not schedule a parent view refresh."
             (condition-case err
                 (progn
                   (when (buffer-modified-p)
+                    (when (bound-and-true-p gptel-mode)
+                      (gptel--save-state))
                     (let ((coding-system-for-write 'utf-8-unix)
                           (save-silently t)
                           (inhibit-message t)
                           (message-log-max nil)
+                          (before-save-hook
+                           (remq 'gptel--save-state before-save-hook))
                           (undo-tree-auto-save-history nil)
                           (write-file-functions
                            (remq 'undo-tree-save-history-from-hook
