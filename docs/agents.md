@@ -174,8 +174,7 @@ PATH` from the canonical event.
 tree-wide. It queues one canonical `MAIL` record containing type, sender path,
 recipient path, and payload; it never starts an idle turn. Successful sends
 return an empty result and render `Interacted with PATH`. Canonical `MAIL`
-payloads are retained in full; the legacy mailbox body cap does not truncate
-them.
+payloads are retained in full without a mailbox body cap.
 
 Before a recipient's next model sample, its retained unread queue drains in
 FIFO order. Each record is injected as a separate user-role communication
