@@ -621,12 +621,68 @@
 			 (make-directory (file-name-directory absolute) t)
 			 (setf (mevedel-session-save-path session) root)
 			 (with-current-buffer buffer
-			   (insert "durable conversation\n")
+			   (org-mode)
+			   (gptel-mode +1)
+			   (setq-local gptel-backend
+				       (let ((gptel--known-backends nil))
+					 (gptel-make-openai
+					  "Agent Save" :key "test"
+					  :models '(agent-save-model))))
+			   (setq-local gptel-model 'agent-save-model)
+			   (setq-local gptel-temperature nil)
+			   (insert "* Agent Task: save\n\n")
+			   (let ((start (point)))
+			     (insert "durable conversation\n")
+			     (add-text-properties start (point) '(gptel response)))
 			   (set-visited-file-name absolute t t)
 			   (set-buffer-modified-p t))
 			 (should (mevedel-agent-conversation-save invocation))
+			 (with-temp-buffer
+			   (insert-file-contents absolute)
+			   (org-mode)
+			   (should (org-entry-get (point-min) "GPTEL_BOUNDS"))
+			   (should (string-match-p "durable conversation"
+					   (buffer-string)))))
+		     (when (buffer-live-p buffer)
+		       (with-current-buffer buffer
+			 (set-buffer-modified-p nil)
+			 (setq-local kill-buffer-hook nil))
+		       (kill-buffer buffer))
+		     (delete-directory root t)))
+
+		 :doc "rejects a write when gptel state serialization fails"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-agent-conversation-save-" t)))
+			(workspace
+			 (mevedel-workspace--create
+			  :type 'project :id root :root root :name "conversation"))
+			(session (mevedel-session-create "main" workspace))
+			(relative "agents/test.chat.org")
+			(absolute (expand-file-name relative root))
+			(buffer (generate-new-buffer " *agent-conversation-save*"))
+			(invocation
+			 (mevedel-agent-invocation--create
+			  :agent-id "default--save"
+			  :buffer buffer
+			  :parent-session session
+			  :transcript-relative-path relative)))
+		   (unwind-protect
+		       (progn
+			 (make-directory (file-name-directory absolute) t)
+			 (write-region "previous transcript\n" nil absolute nil 'silent)
+			 (setf (mevedel-session-save-path session) root)
+			 (with-current-buffer buffer
+			   (org-mode)
+			   (gptel-mode +1)
+			   (insert "* Agent Task: save\n\nnew transcript\n")
+			   (set-visited-file-name absolute t t)
+			   (set-buffer-modified-p t))
+			 (cl-letf (((symbol-function 'gptel--save-state)
+				    (lambda () (error "Injected serialization failure"))))
+			   (should-not
+			    (mevedel-agent-conversation-save invocation)))
 			 (should
-			  (equal "durable conversation\n"
+			  (equal "previous transcript\n"
 				 (with-temp-buffer
 				   (insert-file-contents absolute)
 				   (buffer-string)))))

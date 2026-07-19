@@ -21,6 +21,8 @@
 (defvar gptel--request-alist)
 
 ;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-configure
+                  "mevedel-agent-conversation" (invocation &optional buffer))
 (declare-function mevedel-agent-conversation-final-activity
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-final-response
@@ -634,6 +636,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
              (mevedel-agent-conversation-open
               invocation parent-buffer))))
       (setf (mevedel-agent-invocation-buffer invocation) buffer)
+      (mevedel-agent-conversation-configure invocation buffer)
       (if retained-p
           (progn
             (setf (mevedel-agent-invocation-transcript-relative-path invocation)
