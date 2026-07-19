@@ -25,8 +25,10 @@
 (declare-function mevedel-agent-invocation-require-path
                   "mevedel-agents" (invocation))
 
-;; `mevedel-structs'
+;; `mevedel-agent-conversation'
 (defvar mevedel--agent-invocation)
+
+;; `mevedel-structs'
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
@@ -123,34 +125,13 @@ Accepts nil, a vector, or a list.  Signals an error on non-integers."
            for v = (plist-get plist key)
            when v return v))
 
-(defun mevedel-tool-task--normalize-owner (owner &optional session)
-  "Normalize OWNER to a canonical path, bucket string, or nil.
-When SESSION is non-nil, require canonical non-root paths to name a retained
-agent in that session."
-  (when (and (stringp owner) (not (string-empty-p owner)))
-    (if (equal owner "/root")
-        nil
-      (let ((case-fold-search nil))
-        (when (string-match-p
-               "\\`[^[:space:]]+--[[:xdigit:]]\\{32\\}\\'" owner)
-          (error "Opaque agent IDs cannot own tasks: %s" owner)))
-      (when (and (string-prefix-p "/" owner)
-                 (not (mevedel-agent-path-p owner)))
-        (error "Invalid canonical task owner: %s" owner))
-      (when (and session
-                 (mevedel-agent-path-p owner)
-                 (not (assoc owner
-                             (mevedel-session-agent-registry session))))
-        (error "Unknown canonical task owner: %s" owner))
-      owner)))
-
 (defun mevedel-tool-task--current-agent-owner (&optional session)
   "Return the current agent's canonical task owner, or nil at root."
   (and (boundp 'mevedel--agent-invocation)
        (mevedel-agent-invocation-p mevedel--agent-invocation)
-       (mevedel-tool-task--normalize-owner
+       (mevedel-task-normalize-owner
         (mevedel-agent-invocation-require-path mevedel--agent-invocation)
-        session)))
+        (and session (mevedel-session-agent-registry session)))))
 
 (defun mevedel-tool-task--argument-value-present-p (args key)
   "Return non-nil when ARGS has KEY with a non-nil value.
@@ -168,8 +149,9 @@ An explicitly empty string targets the main session owner."
     (dolist (key keys)
       (when (mevedel-tool-task--argument-value-present-p args key)
         (throw 'found
-               (mevedel-tool-task--normalize-owner
-                (plist-get args key) session))))
+               (mevedel-task-normalize-owner
+                (plist-get args key)
+                (mevedel-session-agent-registry session)))))
     (mevedel-tool-task--current-agent-owner session)))
 
 (defun mevedel-tool-task--normalize-note (note)
@@ -198,7 +180,9 @@ An explicitly empty string targets the main session owner."
 (defun mevedel-tool-task--set-status-note (session owner note)
   "Set SESSION's status NOTE for OWNER.
 OWNER is nil for the main session.  A nil NOTE clears the entry."
-  (let* ((owner (mevedel-tool-task--normalize-owner owner))
+  (let* ((owner
+          (mevedel-task-normalize-owner
+           owner (mevedel-session-agent-registry session)))
          (note (mevedel-tool-task--normalize-note note))
          (notes (mevedel-session-task-status-notes session))
          (entry (mevedel-tool-task--status-note-entry session owner)))
@@ -274,7 +258,9 @@ Returns the new `mevedel-task' struct."
                   :subject subject
                   :description (and (stringp description) description)
                   :status status
-                  :owner (mevedel-tool-task--normalize-owner owner session)
+                  :owner
+                  (mevedel-task-normalize-owner
+                   owner (mevedel-session-agent-registry session))
                   :blocks (mevedel-tool-task--normalize-id-list blocks-raw)
                   :blocked-by (mevedel-tool-task--normalize-id-list
                                blocked-by-raw)
@@ -316,8 +302,9 @@ Returns the updated task.  Signals an error if ID is unknown."
           (setq new-status (mevedel-tool-task--parse-status status-raw)
                 status-p t)))
       (when (plist-member p :owner)
-        (setq owner (mevedel-tool-task--normalize-owner
-                     (plist-get p :owner) session)
+        (setq owner (mevedel-task-normalize-owner
+                     (plist-get p :owner)
+                     (mevedel-session-agent-registry session))
               owner-p t))
       (when (plist-member p :blocks)
         (setq blocks (mevedel-tool-task--normalize-id-list
@@ -494,7 +481,9 @@ group and sorting agent-owned groups by owner label."
 
 (defun mevedel-tool-task--owner-has-active-p (session owner)
   "Return non-nil when OWNER has at least one open task in SESSION."
-  (let ((owner (mevedel-tool-task--normalize-owner owner)))
+  (let ((owner
+         (mevedel-task-normalize-owner
+          owner (mevedel-session-agent-registry session))))
     (cl-some
      (lambda (task)
        (and (equal owner (mevedel-task-owner task))

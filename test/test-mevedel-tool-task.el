@@ -131,33 +131,6 @@
     (should-error (mevedel-tool-task--parse-status 'blocked))
     (should-error (mevedel-tool-task--parse-status 42))))
 
-(mevedel-deftest mevedel-tool-task--normalize-owner
-  ()
-  ,test
-  (test)
-  :doc "accepts registered canonical paths and ordinary buckets"
-  (let ((session (test-mevedel-tool-task--make-session)))
-    (test-mevedel-tool-task--register-agent session "/root/worker")
-    (should (equal "/root/worker"
-                   (mevedel-tool-task--normalize-owner
-                    "/root/worker" session)))
-    (should (equal "backend"
-                   (mevedel-tool-task--normalize-owner
-                    "backend" session)))
-    (should-not (mevedel-tool-task--normalize-owner "" session))
-    (should-not (mevedel-tool-task--normalize-owner "/root" session)))
-
-  :doc "rejects opaque IDs, malformed paths, and unknown agent paths"
-  (let ((session (test-mevedel-tool-task--make-session)))
-    (should-error
-     (mevedel-tool-task--normalize-owner
-      "explorer--0123456789abcdef0123456789abcdef" session))
-    (should-error
-     (mevedel-tool-task--normalize-owner "/root/Upper" session))
-    (should-error
-     (mevedel-tool-task--normalize-owner "/root/ghost" session))))
-
-
 ;;
 ;;; Task creation
 
@@ -292,6 +265,8 @@
 
   :doc "shows canonical agent paths without opaque-id abbreviation"
   (test-mevedel-tool-task--with-session session
+    (test-mevedel-tool-task--register-agent
+     session "/root/worker/explorer")
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create
                  :id 1 :subject "agent task" :status 'pending
@@ -478,6 +453,8 @@
   (test)
   :doc "completed agents complete only tasks owned by their canonical path"
   (test-mevedel-tool-task--with-session session
+    (test-mevedel-tool-task--register-agent
+     session "/root/worker/explorer")
     (setf (mevedel-session-turn-count session) 8)
     (setf (mevedel-session-tasks session)
           (list (mevedel-task--create

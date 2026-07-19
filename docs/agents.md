@@ -250,6 +250,11 @@ paths, role and frozen configuration, activity, unread mailbox, conversation
 location, and internal storage identity. The canonical path is the only
 model-facing address; storage identities never enter collaboration tools.
 
+`mevedel-agent-conversation.el` owns conversation creation and hydration,
+frozen request-local installation, activity snapshots, response extraction,
+and transcript saves. `mevedel-agent-exec.el` is the provider adapter: it owns
+the gptel request FSM, prompt dispatch, and streaming callback contract.
+
 Persisted agents may compact older history immediately before a continuation
 request.  The canonical transcript path remains stable, the original task and
 recent tail remain visible, and later compactions update the existing anchored
@@ -317,6 +322,11 @@ assignment, grouping, rendering, and terminal finalization; opaque storage IDs
 never enter the task surface. Explicit canonical owners must name a retained
 agent in the session, while `/root` normalizes to the main owner. Explicit
 non-path owner strings remain available as user-defined task buckets.
+Resume validates persisted task and status-note owners against the restored
+registry and drops entries carrying opaque IDs, malformed paths, or unknown
+canonical paths before they can reach model-visible task state. Dependency
+edges to dropped tasks are pruned in both directions, so resume cannot leave a
+surviving task blocked by an absent task.
 `blockedBy` propagates completion. Tasks therefore remain stable across
 follow-ups and cold session resume.
 

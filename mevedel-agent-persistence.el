@@ -31,12 +31,10 @@
 (declare-function mevedel-agent-control-recover-interrupted
                   "mevedel-agent-control" (session))
 
-;; `mevedel-agent-exec'
-(declare-function mevedel-agent-exec--allocate-agent-buffer
-                  "mevedel-agent-exec" (invocation parent-data-buffer))
-(declare-function mevedel-agent-exec--apply-request-locals
-                  "mevedel-agent-exec" (buffer values))
-(defvar mevedel--agent-invocation)
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-hydrate
+                  "mevedel-agent-conversation"
+                  (invocation parent-data-buffer absolute-path))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders--recipe-p
@@ -45,14 +43,6 @@
                   "mevedel-reminders" (recipes))
 (declare-function mevedel-reminders-serialize-agent-templates
                   "mevedel-reminders" (reminders))
-
-;; `mevedel-transcript'
-(declare-function mevedel-transcript-normalize-properties
-                  "mevedel-transcript" ())
-
-;; `mevedel-transcript-restore'
-(declare-function mevedel-transcript-restore-gptel-state
-                  "mevedel-transcript-restore" ())
 
 ;; `mevedel-utilities'
 (declare-function mevedel--plain-data-p "mevedel-utilities" (value))
@@ -476,7 +466,7 @@ descendants.  When READONLY-P is nil, active persisted turns recover as
 interrupted without dispatching a provider request.  Return the number of
 dropped or recovered records."
   (require 'mevedel-agent-control)
-  (require 'mevedel-agent-exec)
+  (require 'mevedel-agent-conversation)
   (require 'mevedel-agents)
   (let* ((save-path (mevedel-session-save-path session))
          (records
@@ -530,24 +520,8 @@ dropped or recovered records."
                       (mevedel-agent-invocation-frozen-configuration invocation)
                       configuration)
                 (setq buffer
-                      (mevedel-agent-exec--allocate-agent-buffer
-                       invocation root-buffer))
-                (setf (mevedel-agent-invocation-buffer invocation) buffer)
-                (with-current-buffer buffer
-                  (let ((inhibit-read-only t))
-                    (erase-buffer)
-                    (insert-file-contents absolute))
-                  (set-visited-file-name absolute t)
-                  (setq-local mevedel--agent-invocation invocation)
-                  (require 'mevedel-transcript-restore)
-                  (mevedel-transcript-restore-gptel-state)
-                  (mevedel-transcript-normalize-properties)
-                  (mevedel-agent-exec--apply-request-locals
-                   buffer
-                   (mevedel-agent-configuration-request-locals
-                    configuration))
-                  (set-buffer-modified-p nil)
-                  (set-visited-file-modtime))
+                      (mevedel-agent-conversation-hydrate
+                       invocation root-buffer absolute))
                 (when (and (not readonly-p)
                            (not (eq (mevedel-agent-record-activity record)
                                     'idle)))

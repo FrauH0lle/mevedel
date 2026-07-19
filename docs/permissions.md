@@ -478,7 +478,7 @@ provenance.
 
 Sub-agent buffers carry `mevedel--session` set buffer-locally to the
 **root session struct, by reference** (allocated in
-`mevedel-agent-exec--allocate-agent-buffer`). The pipeline reads
+`mevedel-agent-conversation-open`). The pipeline reads
 `mevedel--session` from the current buffer at tool-dispatch entry, so a
 tool dispatched at any nesting depth observes the root's permission mode,
 direct rules, explicit denies, protected resources, exact grants, and

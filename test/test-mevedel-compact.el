@@ -1359,7 +1359,7 @@
   (let ((invocation (mevedel-agent-invocation-create
                      (mevedel-agent--create :name "explorer")))
         activity status)
-    (cl-letf (((symbol-function 'mevedel-agent-exec--record-activity)
+    (cl-letf (((symbol-function 'mevedel-agent-conversation-record-activity)
                (lambda (_invocation value) (setq activity value)))
               ((symbol-function 'gptel--update-status)
                (lambda (value &optional _face) (setq status value))))
@@ -1392,7 +1392,7 @@
   (let ((invocation (mevedel-agent-invocation-create
                      (mevedel-agent--create :name "explorer")))
         activity status)
-    (cl-letf (((symbol-function 'mevedel-agent-exec--record-activity)
+    (cl-letf (((symbol-function 'mevedel-agent-conversation-record-activity)
                (lambda (_invocation value) (setq activity value)))
               ((symbol-function 'gptel--update-status)
                (lambda (value &optional _face) (setq status value))))
@@ -1491,7 +1491,7 @@
          activity status transition)
     (cl-letf (((symbol-function 'gptel--fsm-transition)
                (lambda (_fsm state) (setq transition state)))
-              ((symbol-function 'mevedel-agent-exec--record-activity)
+              ((symbol-function 'mevedel-agent-conversation-record-activity)
                (lambda (_invocation item) (setq activity item)))
               ((symbol-function 'gptel--update-status)
                (lambda (text &optional _face) (setq status text))))

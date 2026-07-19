@@ -32,9 +32,6 @@
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
 
-;; `mevedel-agent-exec'
-(defvar mevedel-agent-exec--agents)
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-get "mevedel-agents" (name))
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
@@ -42,9 +39,9 @@
 (declare-function mevedel-agent-invocation-call-count "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-p "mevedel-agents" (object))
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
@@ -53,6 +50,9 @@
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 (declare-function mevedel-agents-ensure-reviewer "mevedel-agents" ())
 (declare-function mevedel-agents-ensure-verifier "mevedel-agents" ())
+(declare-function mevedel-agents-set-specs
+                  "mevedel-agents" (specs))
+(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
 ;; `mevedel-chat'
 (declare-function mevedel--active-chat-buffer
@@ -887,7 +887,6 @@ permission policy decides whether verifier validation commands may run."
 
 (defun mevedel-review--ensure-agent-spec (data-buffer &optional command)
   "Ensure DATA-BUFFER can dispatch validation COMMAND's agent."
-  (require 'mevedel-agent-exec)
   (require 'mevedel-agents)
   (mevedel-review--ensure-dispatch-deps command)
   (let* ((agent-name (mevedel-review--command-agent-name command))
@@ -896,10 +895,9 @@ permission policy decides whether verifier validation commands may run."
       (user-error "%s agent is not available"
                   (mevedel-review--command-label command)))
     (with-current-buffer data-buffer
-      (setq-local
-       mevedel-agent-exec--agents
+      (mevedel-agents-set-specs
        (cons (mevedel-agent-to-gptel-spec agent)
-             (cl-remove agent-name mevedel-agent-exec--agents
+             (cl-remove agent-name (mevedel-agents-specs)
                         :key #'car :test #'equal))))))
 
 (defun mevedel-review--ensure-dispatch-allowed (data-buffer)

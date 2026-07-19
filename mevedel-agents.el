@@ -32,9 +32,6 @@
 ;; `gptel-request'
 (declare-function gptel-tool-args "ext:gptel-request" (cl-x) t)
 
-;; `mevedel-agent-exec'
-(defvar mevedel-agent-exec--agents)
-
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-normalize-rules
                   "mevedel-hooks" (rules &optional scope))
@@ -454,10 +451,6 @@ and render-data markers are runtime-only caches for cheap live updates."
   "Set INVOCATION's deferred-expired slot to VALUE."
   (setf (mevedel-agent-invocation-deferred-expired invocation) value))
 
-(defun mevedel-agent-invocation-set-activity (invocation activity)
-  "Set INVOCATION's ACTIVITY list."
-  (setf (mevedel-agent-invocation-activity invocation) activity))
-
 (defun mevedel-agent-invocation-create (agent)
   "Create a fresh `mevedel-agent-invocation' for AGENT.
 
@@ -510,7 +503,7 @@ main session's reminder list."
 (defun mevedel-agent-to-gptel-spec (agent)
   "Convert `mevedel-agent' AGENT to a gptel agent plist.
 
-Returns a cons (NAME . PLIST) suitable for `mevedel-agent-exec--agents'."
+Returns a cons (NAME . PLIST) suitable for the request-local role roster."
   (let* ((tool-specs (mevedel-agent--effective-specs agent))
          (sys-prompt (mevedel-agent-system-prompt agent))
          (system-spec (cond
@@ -612,6 +605,19 @@ returns prioritized structured findings as JSON."
 ;;
 ;;; Request-time agent setup
 
+(defvar-local mevedel-agents--specs nil
+  "Request-local alist of available agent role specifications.")
+
+(defun mevedel-agents-specs (&optional buffer)
+  "Return the agent role specifications visible in BUFFER.
+BUFFER defaults to the current buffer."
+  (buffer-local-value 'mevedel-agents--specs
+                      (or buffer (current-buffer))))
+
+(defun mevedel-agents-set-specs (specs)
+  "Install request-local agent role SPECS in the current buffer."
+  (setq-local mevedel-agents--specs specs))
+
 (defun mevedel-agents--setup-for-request (&optional preset-name)
   "Set up agents for the current request.
 
@@ -619,8 +625,8 @@ If PRESET-NAME is non-nil and has an `:agents' entry in
 `mevedel-preset--registry', only those agents are registered.  Otherwise
 all agents in `mevedel-agent--registry' are registered.
 
-Populates the buffer-local `mevedel-agent-exec--agents' and updates the
-Agent tool's role and model enums.  Must be called in the chat buffer."
+Populates the request-local role roster and updates the Agent tool's role and
+model enums.  Must be called in the chat buffer."
   (let* ((meta (and preset-name
                     (mevedel-preset--resolved-metadata preset-name)))
          (allowed (plist-get meta :agents))
@@ -633,7 +639,7 @@ Agent tool's role and model enums.  Must be called in the chat buffer."
                        (lambda (entry) (member (car entry) allowed-names))
                        mevedel-agent--registry)
                     mevedel-agent--registry))))
-    (setq-local mevedel-agent-exec--agents mevedel-specs))
+    (mevedel-agents-set-specs mevedel-specs))
   ;; Update Agent tool enums to list available role and model names.
   (when-let* ((agent-tool (gptel-get-tool '("mevedel" "Agent")))
               (args (gptel-tool-args agent-tool)))
@@ -642,7 +648,7 @@ Agent tool's role and model enums.  Must be called in the chat buffer."
                                (equal (plist-get arg :name) "role"))
                              args)))
       (setf (plist-get role-arg :enum)
-            (vconcat (mapcar #'car mevedel-agent-exec--agents))))
+            (vconcat (mapcar #'car (mevedel-agents-specs)))))
     (when-let* ((model-arg
                  (cl-find-if (lambda (arg)
                                (equal (plist-get arg :name) "model"))

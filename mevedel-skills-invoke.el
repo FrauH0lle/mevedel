@@ -32,10 +32,6 @@
 (defvar gptel-response-separator)
 (defvar gptel-system-prompt)
 
-;; `mevedel-agent-exec'
-(defvar mevedel--agent-invocation)
-(defvar mevedel-agent-exec--agents)
-
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-current-path
                   "mevedel-agent-control" (session))
@@ -48,6 +44,9 @@
 (declare-function mevedel-agent-record-role
                   "mevedel-agent-control" (cl-x) t)
 
+;; `mevedel-agent-conversation'
+(defvar mevedel--agent-invocation)
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent--create "mevedel-agents" (&rest args))
 (declare-function mevedel-agent-get "mevedel-agents" (name))
@@ -57,6 +56,9 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
+(declare-function mevedel-agents-set-specs
+                  "mevedel-agents" (specs))
+(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-at
@@ -105,9 +107,9 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-skill-permission-rules
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-invoked-skills
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-registry
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-invoked-skills
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
@@ -199,7 +201,7 @@ temporary prompt buffer.")
 (defun mevedel-skills--current-invocation ()
   "Return the active sub-agent invocation, or nil.
 Reads the buffer-local `mevedel--agent-invocation' set by
-`mevedel-agent-exec--allocate-agent-buffer' on agent buffers;
+`mevedel-agent-conversation-open' on agent buffers;
 returns nil when called outside any sub-agent."
   (and (boundp 'mevedel--agent-invocation)
        mevedel--agent-invocation))
@@ -1499,12 +1501,12 @@ Captures the calling buffer's current gptel state at spawn time
 and returns a `mevedel-agent' struct named `skill:<skill-name>'.
 The agent inherits the parent's system prompt directly; tools are
 inherited via the request-locals snapshot captured by
-`mevedel-agent-exec--run' at dispatch time, which carries the
+`mevedel-agent-exec-run' at dispatch time, which carries the
 calling buffer's `gptel-tools' through to the spawned agent
 buffer.
 
 Side effect: the synthetic agent is also registered (or refreshed)
-in the buffer-local `mevedel-agent-exec--agents' alist so the
+in the request-local agent role roster so the
 spawn path can resolve it the same way it resolves named agents.
 Registration is keyed on the `skill:<skill-name>' identifier."
   (let* ((skill-name (mevedel-skill-name skill))
@@ -1522,17 +1524,10 @@ Registration is keyed on the `skill:<skill-name>' identifier."
            :max-turns nil
            :reminders nil)))
     (let ((spec (mevedel-agent-to-gptel-spec agent))
-          (existing (and (boundp 'mevedel-agent-exec--agents)
-                         mevedel-agent-exec--agents)))
-      (setq-local mevedel-agent-exec--agents
-                  (cons spec
-                        (cl-remove agent-name existing
-                                   :key #'car :test #'equal)))
-      ;; Some tests dynamically bind this special variable; keep the
-      ;; dynamic binding in sync with the buffer-local value.
-      (setq mevedel-agent-exec--agents
-            (buffer-local-value 'mevedel-agent-exec--agents
-                                (current-buffer))))
+          (existing (mevedel-agents-specs)))
+      (mevedel-agents-set-specs
+       (cons spec
+             (cl-remove agent-name existing :key #'car :test #'equal))))
     agent))
 
 (defun mevedel-skills--build-fork-agent (skill)

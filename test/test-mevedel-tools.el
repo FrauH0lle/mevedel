@@ -991,50 +991,6 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
             "New direct child agents:"
             (plist-get (aref (plist-get data :messages) 1) :content))))
       (kill-buffer buffer))))
-(mevedel-deftest mevedel-agent-exec--record-activity
-  (:after-each (mevedel-workspace-clear-registry))
-  ,test
-  (test)
-
-  :doc "syncs running activity into transcript metadata"
-  (let* ((session (mevedel-tools-test--make-session))
-         (parent (generate-new-buffer " *mt-activity-parent*"))
-         (agent-id "explorer--activity-sync")
-         (inv (mevedel-agent-invocation--create
-               :agent-id agent-id
-               :parent-session session
-               :parent-data-buffer parent
-               :transcript-status 'running
-               :call-count 20
-               :activity (list (list :type 'waiting
-                                     :summary "waiting")))))
-    (unwind-protect
-        (progn
-          (setf (mevedel-session-agent-transcripts session)
-                (list (cons agent-id
-                            '(:status running
-                              :agent-type "explorer"
-                              :description "validate"))))
-          (mevedel-agent-exec--record-activity
-           inv
-           (list :type 'tool-finish
-                 :tool-name "Read"
-                 :summary "Read done"))
-          (let ((entry (cdr (assoc agent-id
-                                   (mevedel-session-agent-transcripts
-                                    session)))))
-            (should (= 20 (plist-get entry :calls)))
-            (should (= 2 (length (plist-get entry :activity))))
-            (should (equal "Read"
-                           (plist-get (cadr (plist-get entry :activity))
-                                      :tool-name)))))
-      (kill-buffer parent))))
-
-
-
-
-
-
 ;;
 ;;; Watchdog, bg-callback hardening, prune
 
