@@ -90,6 +90,9 @@
     (dolist (name '("Ask" "Agent" "FollowupAgent" "ListAgents"
                     "InterruptAgent" "ToolSearch" "SendMessage" "WaitAgent"))
       (should (mevedel-tool-get name)))
+    (should (eq #'mevedel-tool-ui--render-list-agents
+                (mevedel-tool-renderer
+                 (mevedel-tool-get "ListAgents"))))
     (should (mevedel-tool-async-p (mevedel-tool-get "WaitAgent")))
     (should-not (mevedel-tool-get "RequestAccess")))
 
@@ -914,6 +917,39 @@
               (mevedel-view--insert-rendered-tool rendering (cons 1 1))
             (set-marker-insertion-type mevedel-view--input-marker nil)))
         (should (string= draft (mevedel-view--input-text)))))))
+
+(mevedel-deftest mevedel-tool-ui--render-list-agents
+  (:doc "Renders the retained-agent roster")
+  ,test
+  (test)
+  :doc "renders aligned columns and preserves a multiline leading-> draft"
+  (mevedel-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (rendering
+            (mevedel-tool-ui--render-list-agents
+             "ListAgents" nil
+             "[{\"path\":\"/root\",\"role\":\"default\",\"activity\":\"running\"},{\"path\":\"/root/v2_smoke\",\"role\":\"explorer\",\"activity\":\"idle\"}]"
+             nil)))
+      (should (equal "Session agents (2)" (plist-get rendering :header)))
+      (should
+       (equal (concat "Path            Role      Activity\n"
+                      "/root           default   running\n"
+                      "/root/v2_smoke  explorer  idle")
+              (plist-get rendering :body)))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4)
+        (let ((inhibit-read-only t))
+          (goto-char mevedel-view--input-marker)
+          (set-marker-insertion-type mevedel-view--input-marker t)
+          (unwind-protect
+              (mevedel-view--insert-rendered-tool rendering (cons 1 1))
+            (set-marker-insertion-type mevedel-view--input-marker nil)))
+        (should (string= draft (mevedel-view--input-text))))))
+
+  :doc "falls back to generic rendering for malformed results"
+  (should-not
+   (mevedel-tool-ui--render-list-agents
+    "ListAgents" nil "not json" nil)))
 
 (mevedel-deftest mevedel-tool-ui--interrupt-agent
   (:doc "Interrupts retained turns through canonical path events")

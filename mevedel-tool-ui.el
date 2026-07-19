@@ -234,6 +234,43 @@
       (length (split-string result "\n" t))
     0))
 
+(defun mevedel-tool-ui--render-list-agents
+    (_name _args result _render-data)
+  "Render the ListAgents RESULT as a compact table."
+  (when (stringp result)
+    (condition-case nil
+        (let* ((agents (json-parse-string
+                        result :array-type 'list :object-type 'plist))
+               (rows
+                (mapcar
+                 (lambda (agent)
+                   (let ((path (plist-get agent :path))
+                         (role (plist-get agent :role))
+                         (activity (plist-get agent :activity)))
+                     (unless (and (stringp path)
+                                  (stringp role)
+                                  (stringp activity))
+                       (error "Invalid agent roster"))
+                     (list path role activity)))
+                 agents))
+               (path-width
+                (apply #'max (length "Path")
+                       (mapcar (lambda (row) (length (car row))) rows)))
+               (role-width
+                (apply #'max (length "Role")
+                       (mapcar (lambda (row) (length (cadr row))) rows)))
+               (row-format
+                (format "%%-%ds  %%-%ds  %%s" path-width role-width)))
+          (list :header (format "Session agents (%d)" (length rows))
+                :body
+                (mapconcat
+                 (lambda (row) (apply #'format row-format row))
+                 (cons '("Path" "Role" "Activity") rows)
+                 "\n")
+                :body-mode nil
+                :initially-collapsed-p t))
+      (error nil))))
+
 (defun mevedel-tool-ui--render-interrupt-agent
     (_name _args result render-data)
   "Render an interrupted-agent RESULT from RENDER-DATA."
@@ -320,7 +357,8 @@
     :args ((path_prefix string :optional
                         "Canonical subtree path prefix."))
     :groups (util)
-    :read-only-p t)
+    :read-only-p t
+    :renderer #'mevedel-tool-ui--render-list-agents)
   (mevedel-define-tool
     :name "InterruptAgent"
     :description "Interrupt one retained agent's current turn."
