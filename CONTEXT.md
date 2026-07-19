@@ -43,6 +43,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **conversation compaction** — Replacement of older model-visible transcript history with an anchored summary and a recent verbatim tail while retaining the original transcript on disk.
 - **compaction target** — A model-visible transcript whose context pressure is managed independently through conversation compaction; currently either a main session segment or a persisted sub-agent transcript.
 - **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
+- **view disclosure** — A collapsible view-buffer element consisting of a visible disclosure header and an optional expanded disclosure body. Avoid “handler,” which refers to executable tool behavior.
 - **status strip** — The mevedel-owned clickable header-line chrome in a view buffer that routes status items to session cockpit surfaces.
 - **data buffer** — The authoritative gptel/org transcript buffer backing a view buffer.
 - **agent transcript view** — A read-only projection of a sub-agent transcript,

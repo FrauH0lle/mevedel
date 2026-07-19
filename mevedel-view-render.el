@@ -632,7 +632,8 @@ no `mevedel-view-type' property yet."
   (add-text-properties start end
                        '(read-only t
                          front-sticky (read-only keymap)
-                         rear-nonsticky (read-only keymap)))
+                         rear-nonsticky
+                         (read-only keymap line-prefix wrap-prefix)))
   (let ((pos start))
     (while (< pos end)
       (let* ((keymap-next
@@ -1474,10 +1475,12 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (fontified (mevedel-view--fontify-as body body-mode))
          (header-line (mevedel-view--rendering-header-line rendering))
-         (ins-start (point)))
+         (ins-start (point))
+         body-start)
     (insert header-line "\n")
     (when (eq vtype 'agent-handle)
       (mevedel-view--stamp-agent-handle ins-start (point) rendering))
+    (setq body-start (copy-marker (point)))
     (insert fontified)
     (unless (eq (char-before) ?\n)
       (insert "\n"))
@@ -1490,7 +1493,12 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
                            mevedel-view-force-expanded
                            ,(and (plist-get rendering :force-expanded-p) t)
                            mevedel-view-rendered t))
-    (mevedel-view--decorate-markdown-in-range ins-start (point))))
+    (mevedel-view--decorate-markdown-in-range ins-start (point))
+    (add-text-properties body-start (point)
+                         '(line-prefix "    "
+                           wrap-prefix "    "
+                           rear-nonsticky (line-prefix wrap-prefix)))
+    (set-marker body-start nil)))
 
 (defun mevedel-view--insert-rendered-tool (rendering source)
   "Insert a rendered tool block honouring RENDERING's initial state.
@@ -3193,6 +3201,7 @@ hint.  Searches that region."
                 (goto-char open-start)
                 (let ((card-start (point))
                       (card-id (cl-gensym "mevedel-view-mailbox-")))
+                  (insert "  ")
                   (insert (propertize
                            (if (eq kind 'agent-result)
                                "✓ finished "
@@ -4209,7 +4218,8 @@ from signalling `args-out-of-range' on stale source coordinates."
                       (mevedel-view--add-display-region-properties
                        ins-start (point) (plist-get rendering :vtype)))
                   (let ((text (mevedel-view--data-substring
-                               data-buf data-start data-end)))
+                               data-buf data-start data-end))
+                        (body-start (point)))
                     ;; Clean org scaffolding from reasoning blocks
                     (when (eq vtype 'thinking-summary)
                       (setq text
@@ -4277,6 +4287,13 @@ from signalling `args-out-of-range' on stale source coordinates."
                        view-start (point))
                       (mevedel-view--decorate-markdown-in-range
                        view-start (point)))
+                    (when (memq vtype
+                                '(thinking-summary tool-summary plan-summary
+                                  prompt-summary system-reminder-summary
+                                  agent-handle))
+                      (add-text-properties
+                       body-start (point)
+                       '(line-prefix "    " wrap-prefix "    ")))
                     (mevedel-view--add-display-region-properties
                      view-start (point) vtype)))
                 (mevedel-view--record-source-collapse-state source vtype nil)

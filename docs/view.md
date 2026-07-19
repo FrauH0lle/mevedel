@@ -120,6 +120,15 @@ Before rendering a restored transcript, `mevedel-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same
 canonical transcript grammar. Restoration does not maintain a second parser.
 
+Inner transcript disclosures use a two-space left inset for their headers and
+a four-space left inset for expanded bodies. This includes mailbox, tool,
+reasoning, prompt, system-reminder, hook-audit, hook-context, and
+completed-agent disclosures. Nested audit details and mailbox payload gutters
+may indent further to express their hierarchy. Ordinary response prose and
+whole-turn headers or folds remain flush-left. Body insets are display-only,
+including on wrapped continuation lines, so copied disclosure content retains
+its authoritative text without presentation padding.
+
 ## Zones
 
 The view buffer is split into vertically ordered regions. The data buffer
@@ -304,8 +313,9 @@ Markdown rendering adds small view-only affordances:
 - completed fenced code blocks are rewritten in the view projection as
   source panels: the data buffer keeps the raw Markdown fences, while
   the view strips them, inserts a clickable `LANG ⧉` label (`snippet ⧉`
-  for unlabeled fences), adds panel padding/background, and copies only
-  the code body;
+  for unlabeled fences), adds vertical panel padding/background, and copies
+  only the code body. A source panel adds no left inset of its own and
+  inherits any inset from its containing disclosure;
 - incomplete streaming fences stay raw until the closing fence arrives;
 - local Markdown image links and bare local image paths render inline
   when Emacs can display images;
