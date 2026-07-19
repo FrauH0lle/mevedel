@@ -114,7 +114,8 @@
            :name "freeze_test"
            :description "Frozen role"
            :tools '((:tool "Agent"))
-           :system-prompt (lambda () prompt)))
+           :system-prompt (lambda () prompt)
+           :reminders (list (mevedel-reminders-make-verifier-read-only))))
          (frozen (mevedel-agent-freeze agent)))
     (setq prompt "Mutated instructions.")
     (setf (mevedel-agent-tools agent) '((:tool "Eval")))
@@ -130,7 +131,24 @@
     (should-not (member '(:tool "Write")
                         (mevedel-agent--effective-specs frozen)))
     (should-not (member '(:tool "Eval")
-                        (mevedel-agent--effective-specs frozen)))))
+                        (mevedel-agent--effective-specs frozen)))
+    (should
+     (equal '((verifier-read-only))
+            (mapcar #'mevedel-reminder-recipe
+                    (mevedel-agent-reminders frozen)))))
+
+  :doc "rejects a closure-only reminder before a role can be published"
+  (let ((agent
+         (mevedel-agent--create
+          :name "ephemeral"
+          :description "Non-durable role"
+          :reminders
+          (list
+           (mevedel-reminder-create
+            :type 'runtime-only
+            :trigger (lambda (_) t)
+            :content (lambda (_) "runtime"))))))
+    (should-error (mevedel-agent-freeze agent))))
 
 (mevedel-deftest mevedel-agent-role-tools/test
   (:before-each (test-mevedel-agents--restore-builtins))

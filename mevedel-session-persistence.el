@@ -47,6 +47,19 @@
 
 (require 'mevedel-transcript)
 
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-deserialize-registry
+                  "mevedel-agent-persistence" (raw))
+(declare-function mevedel-agent-persistence-restore-tree
+                  "mevedel-agent-persistence"
+                  (session root-buffer readonly-p))
+(declare-function mevedel-agent-persistence-sanitize-mailbox
+                  "mevedel-agent-persistence" (raw recipient))
+(declare-function mevedel-agent-persistence-serialize-registry
+                  "mevedel-agent-persistence" (session))
+(declare-function mevedel-agent-persistence-transcript-path-p
+                  "mevedel-agent-persistence" (path save-path))
+
 ;; `mevedel-execution'
 (declare-function mevedel-execution-relocate-artifacts
                   "mevedel-execution" (session old-root new-root))
@@ -74,6 +87,8 @@
                   "mevedel-transcript-audit" (text &optional type))
 
 ;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-restore-gptel-state
+                  "mevedel-transcript-restore" ())
 (declare-function mevedel-transcript-restore-properties
                   "mevedel-transcript-restore" (&optional only-if-missing))
 (declare-function mevedel-transcript-restore-sanitize-bounds
@@ -100,6 +115,8 @@
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-agent-turn-capacity
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal-handoff "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
@@ -181,9 +198,10 @@
                   "mevedel-agents" (invocation activity))
 (declare-function mevedel-agent-runtime--agent-invocation-at
                   "mevedel-agent-runtime" (fsm))
+(defvar mevedel--agent-invocation)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--workspace)
-(defvar mevedel--current-request)
 (defvar mevedel-permission-mode)
 (defvar mevedel-workspace-additional-roots)
 (defvar mevedel-agent-runtime--fsms)
@@ -291,8 +309,8 @@ add more, and we don't want to act on actions we don't understand).")
     :preset-name :preset-settings
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
-    :prompt-index :file-snapshots :agent-transcripts :plan-metadata :goal
-    :goal-handoff :messages)
+    :prompt-index :file-snapshots :agent-transcripts :agent-registry
+    :agent-turn-capacity :plan-metadata :goal :goal-handoff :messages)
   "Keys required in every current-version session sidecar.")
 
 
@@ -601,6 +619,7 @@ ADDITIONAL-ROOTS is the buffer-local value of
 
 The resulting plist is round-trippable via
 `mevedel-session-persistence-deserialize'."
+  (require 'mevedel-agent-persistence)
   (let ((permission-mode
          (or (mevedel-session-permission-mode session)
              (and (boundp 'mevedel-permission-mode)
@@ -641,16 +660,17 @@ The resulting plist is round-trippable via
    :prompt-index           (mevedel-session-prompt-index session)
    :file-snapshots         (mevedel-session-file-snapshots session)
    :agent-transcripts      (mevedel-session-agent-transcripts session)
+   :agent-registry         (mevedel-agent-persistence-serialize-registry session)
+   :agent-turn-capacity    (mevedel-session-agent-turn-capacity session)
    :plan-metadata          (mevedel-session-plan-metadata session)
    :goal                   (when-let* ((goal (mevedel-session-goal session)))
                              (mevedel-session-persistence--goal-to-plist goal))
    :goal-handoff           (mevedel-session-goal-handoff session)
-   ;; Inbound mailbox.  Background sub-agents push agent-result
-   ;; blocks here when they finalize; if Emacs restarts before the
-   ;; parent's next WAIT drains them, the messages would otherwise
-   ;; be lost.  Each message is a plist with :from, :body and
-   ;; :timestamp -- prin1/read clean.
-   :messages               (mevedel-session-messages session))))
+   ;; Root's reverse-order unread queue.  Child queues live on their explicit
+   ;; registry records and all queues become FIFO only at delivery time.
+   :messages
+   (mevedel-agent-persistence-sanitize-mailbox
+    (mevedel-session-messages session) "/root"))))
 
 (defun mevedel-session-persistence--validate-current-sidecar (plist)
   "Return PLIST when it contains every current-version sidecar key."
@@ -662,6 +682,10 @@ The resulting plist is round-trippable via
   (unless (memq (plist-get plist :permission-mode) '(ask auto full-auto))
     (error "Invalid persisted permission mode: %S"
            (plist-get plist :permission-mode)))
+  (unless (and (integerp (plist-get plist :agent-turn-capacity))
+               (> (plist-get plist :agent-turn-capacity) 0))
+    (error "Invalid persisted agent turn capacity: %S"
+           (plist-get plist :agent-turn-capacity)))
   (dolist (segment (plist-get plist :prompt-index))
     (unless (and (consp segment) (integerp (car segment)))
       (error "Invalid session prompt-index segment: %S" segment))
@@ -701,6 +725,7 @@ unknown actions are dropped via the hygiene filter."
     (error "Unsupported session version: %s"
            (or (plist-get plist :version) "missing")))
   (mevedel-session-persistence--validate-current-sidecar plist)
+  (require 'mevedel-agent-persistence)
   (let* ((workspace (mevedel-session-persistence--workspace-from-plist
                      (plist-get plist :workspace)))
          (working-directory
@@ -715,6 +740,9 @@ unknown actions are dropped via the hygiene filter."
            (plist-get plist :resource-grants)))
          (prompt-index (plist-get plist :prompt-index))
          (latest-user-message (plist-get plist :latest-user-message))
+         (raw-agent-registry (plist-get plist :agent-registry))
+         (agent-registry
+          (mevedel-agent-persistence-deserialize-registry raw-agent-registry))
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
@@ -755,9 +783,12 @@ unknown actions are dropped via the hygiene filter."
                      :agent-transcripts
                      (mevedel-session-persistence--sanitize-agent-transcripts
                       (plist-get plist :agent-transcripts))
+                     :agent-registry agent-registry
+                     :agent-turn-capacity
+                     (plist-get plist :agent-turn-capacity)
                      :messages
-                     (mevedel-session-persistence--sanitize-messages
-                      (plist-get plist :messages)))))
+                     (mevedel-agent-persistence-sanitize-mailbox
+                      (plist-get plist :messages) "/root"))))
     (when-let* ((goal (mevedel-session-goal session)))
       (unless (equal (mevedel-session-session-id session)
                      (mevedel-goal-owner-session goal))
@@ -787,7 +818,11 @@ unknown actions are dropped via the hygiene filter."
     (list :session             session
           :first-user-message  (plist-get plist :first-user-message)
           :latest-user-message latest-user-message
-          :additional-roots    (plist-get plist :additional-roots))))
+          :additional-roots    (plist-get plist :additional-roots)
+          :agent-registry-repaired-p
+          (not (= (length agent-registry)
+                  (length (and (proper-list-p raw-agent-registry)
+                               raw-agent-registry)))))))
 
 
 ;;
@@ -906,41 +941,6 @@ Returns the raw plist.  Caller is responsible for passing it through
                        path))
                (cl-pushnew id successor-ids :test #'equal)))
     count))
-
-;;
-;;; Sub-agent transcript helpers
-
-(defun mevedel-session-persistence--validate-transcript-path (path save-path)
-  "Return non-nil if PATH is safe under SAVE-PATH's `agents/' subdir.
-
-Used by sidecar load and by the view renderer when deciding whether
-to expose a transcript-open affordance.  Rules: PATH must be a
-non-empty relative string with no `..' segments and must end in
-`.chat.org'; once resolved against SAVE-PATH it must remain under
-`<SAVE-PATH>/agents/'."
-  (and (stringp path)
-       (not (string-empty-p path))
-       (not (file-name-absolute-p path))
-       (not (string-match-p "\\(?:^\\|/\\)\\.\\.\\(?:/\\|$\\)" path))
-       (string-suffix-p ".chat.org" path)
-       (let* ((agents-dir (file-name-as-directory
-                           (expand-file-name "agents" save-path)))
-              (resolved (expand-file-name path save-path)))
-         (string-prefix-p agents-dir
-                          (file-name-as-directory
-                           (file-name-directory resolved))))))
-
-(defun mevedel-session-persistence--sanitize-messages (raw)
-  "Sanitize the inbound mailbox RAW read from a sidecar.
-
-Drops entries that aren't well-formed plists with a :from string
-and a :body string.  Preserves arrival order so the next WAIT
-delivers them in the order they were originally pushed."
-  (cl-loop for entry in (and (listp raw) raw)
-           when (and (listp entry)
-                     (stringp (plist-get entry :from))
-                     (stringp (plist-get entry :body)))
-           collect entry))
 
 (defun mevedel-session-persistence--sanitize-agent-transcripts (raw)
   "Sanitize the `:agent-transcripts' alist RAW read from a sidecar.
@@ -1119,6 +1119,26 @@ and will be picked up by that autosave."
            (message "mevedel: sidecar rewrite failed: %S" err)
            nil)
           (:success t))))))
+
+(defun mevedel-session-persistence-save-agent-state (session)
+  "Best-effort persist SESSION's agent state through its root data buffer."
+  (when-let* ((save-path (mevedel-session-save-path session))
+              (segment-path
+               (mevedel-session-persistence--segment-path
+                save-path
+                (or (mevedel-session-current-segment session) 1)))
+              (buffer
+               (cl-find-if
+                (lambda (candidate)
+                  (with-current-buffer candidate
+                    (and (boundp 'mevedel--session)
+                         (eq mevedel--session session)
+                         (not (bound-and-true-p mevedel--agent-invocation))
+                         buffer-file-name
+                         (equal (expand-file-name buffer-file-name)
+                                segment-path))))
+                (buffer-list))))
+    (mevedel-session-persistence--write-sidecar-now session buffer)))
 
 
 ;;
@@ -1477,30 +1497,9 @@ Returns SESSION's `save-path' (allocated or existing)."
      :additional-roots   roots)))
 
 
-;;
-;;; Transcript gptel metadata repair
-
 (defvar-local mevedel-session-persistence--source-shift-rerendered-p nil
   "Non-nil when gptel metadata already refreshed this buffer's live view.")
 
-
-(defun mevedel-session-persistence--restore-gptel-state ()
-  "Restore gptel state without dirtying the visited segment buffer.
-
-Resume-time metadata repair can temporarily rewrite `GPTEL_BOUNDS' so
-gptel sees valid character positions, and property restoration can touch
-many text-property ranges.  Those repairs are derived from the persisted
-transcript; by themselves they should not make a just-resumed segment
-look like it needs saving."
-  (let ((was-modified (buffer-modified-p)))
-    (unwind-protect
-        (progn
-          (require 'mevedel-transcript-restore)
-          (mevedel-transcript-restore-sanitize-bounds)
-          (unless (bound-and-true-p gptel-mode)
-            (gptel-mode +1))
-          (mevedel-transcript-restore-properties t))
-      (set-buffer-modified-p was-modified))))
 
 ;;
 ;;; Fast Org property writes
@@ -2924,6 +2923,8 @@ mentions-shown reset to empty hash tables on load."
          (session          (or (plist-get result :session)
                                (mevedel-session-persistence--synthesize-session
                                 session-dir (mevedel-workspace))))
+         (agent-registry-repaired-p
+          (plist-get result :agent-registry-repaired-p))
          (additional-roots (plist-get result :additional-roots))
          (workspace        (mevedel-session-workspace session))
          (sidecar-current-n (and had-sidecar-p
@@ -2977,6 +2978,7 @@ mentions-shown reset to empty hash tables on load."
                              (and (file-exists-p segment-path)
                                   (mevedel-session-persistence--find-file-noselect
                                    segment-path))))
+           (agent-repairs 0)
            (setup-done   nil))
       (unwind-protect
           (progn
@@ -3013,7 +3015,8 @@ mentions-shown reset to empty hash tables on load."
                     (org-mode)))
                 (when (fboundp 'mevedel--chat-buffer-disable-org-element-cache)
                   (mevedel--chat-buffer-disable-org-element-cache))
-                (mevedel-session-persistence--restore-gptel-state)
+                (require 'mevedel-transcript-restore)
+                (mevedel-transcript-restore-gptel-state)
                 (when acquired
                   (require 'mevedel-pipeline)
                   (when (> (mevedel-pipeline-reconcile-lost-executions buf) 0)
@@ -3029,7 +3032,13 @@ mentions-shown reset to empty hash tables on load."
                 (mevedel-session-persistence--mark-running-incomplete-on-resume
                  session
                  (bound-and-true-p mevedel-session--read-only-mode))
-                (mevedel--chat-buffer-init-common buf workspace))
+                (mevedel--chat-buffer-init-common buf workspace)
+                (require 'mevedel-agent-persistence)
+                (setq agent-repairs
+                      (mevedel-agent-persistence-restore-tree
+                       session buf
+                       (bound-and-true-p
+                        mevedel-session--read-only-mode))))
               (unless live
                 (mevedel-session-persistence--load-instructions session buf))
               ;; Persist restore-time repairs so subsequent resumes don't
@@ -3037,6 +3046,8 @@ mentions-shown reset to empty hash tables on load."
               (when (and acquired
                          had-sidecar-p
                          (or cwd-retargeted-p
+                             agent-registry-repaired-p
+                             (> agent-repairs 0)
                              (and sidecar-current-n
                                   (not (= sidecar-current-n segment-n)))))
                 (condition-case _
@@ -3804,6 +3815,7 @@ only through PICKED-CUM-TURN.  Entries with non-integer
     (child buffer staging-buffer parent-save-path staging-path
            picked-segment picked-cum-turn)
   "Materialize CHILD under STAGING-PATH using STAGING-BUFFER."
+  (require 'mevedel-agent-persistence)
   (make-directory (file-name-concat staging-path "agents") t)
   (make-directory (file-name-concat staging-path "file-history") t)
   (when-let* ((parent-plans-dir
@@ -3856,9 +3868,9 @@ only through PICKED-CUM-TURN.  Entries with non-integer
              (dst (and rel-path
                        (expand-file-name rel-path staging-path))))
         (when (and rel-path
-                   (mevedel-session-persistence--validate-transcript-path
+                   (mevedel-agent-persistence-transcript-path-p
                     rel-path parent-save-path)
-                   (mevedel-session-persistence--validate-transcript-path
+                   (mevedel-agent-persistence-transcript-path-p
                     rel-path staging-path)
                    (file-exists-p src))
           (make-directory (file-name-directory dst) t)

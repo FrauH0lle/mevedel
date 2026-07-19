@@ -145,7 +145,9 @@ Prompt / presets / agents
   mevedel-presets.el          gptel presets and request-time FSM assembly
   mevedel-specialist-nudges.el  generic-tool specialist prompting policy
   mevedel-agents.el           explorer/verifier/coordinator/reviewer definitions
+  mevedel-agent-control.el    retained-agent tree addressing, turns, mail, waits
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
+  mevedel-agent-persistence.el durable agent registry codec and cold hydration
   mevedel-agent-runtime.el    Agent lifecycle, BWAIT, watchdogs, completion, interruption
   mevedel-goal.el             supervised Goal controller and plan approval queue
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection

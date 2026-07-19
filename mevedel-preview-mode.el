@@ -728,14 +728,14 @@ If FEEDBACK is non-nil, include it in the rejection message.  Does not
 invoke `mevedel-abort'."
   (let ((final-callback (overlay-get ov 'mevedel--final-callback))
         (real-path (overlay-get ov 'mevedel--real-path)))
+    (mevedel-preview-mode--cleanup-overlay ov)
     (when final-callback
       (funcall final-callback
                (if feedback
                    (format "Changes rejected by user. User feedback: %s"
                            feedback)
                  (format "Changes to %s were rejected by user"
-                         real-path))))
-    (mevedel-preview-mode--cleanup-overlay ov)))
+                         real-path))))))
 
 (defun mevedel-preview-mode-approve ()
   "Approve the inline preview at point."
@@ -773,10 +773,10 @@ prompt -- the intent is scoped to edits, not blanket trust."
 (defun mevedel-preview-mode-reject ()
   "Reject the inline preview at point and abort the request.
 
-Ordering is load-bearing: fire the rejection callback first so the
-FSM advances out of TOOL (the tool sees the rejection result), then
-`mevedel-abort' so any follow-up turn the FSM might have launched
-is cancelled.  Reject-then-abort is intentional for edit rejection --
+Ordering is load-bearing: release and remove the interaction before firing
+the rejection callback so the FSM resumes with no stale blocked activity,
+then call `mevedel-abort' so any follow-up turn the FSM might have launched is
+cancelled.  Reject-then-abort is intentional for edit rejection --
 unlike a generic permission `deny', rejecting a Write/Edit overlay
 expresses \"stop the whole sequence,\" not \"this one tool failed\"."
   (interactive)

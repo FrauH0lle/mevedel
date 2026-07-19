@@ -9,6 +9,10 @@
 
 (eval-when-compile (require 'cl-lib))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-block-turn
+                  "mevedel-agent-control" (session path activity))
+
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -49,6 +53,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
 (declare-function mevedel-view--queued-user-messages-render "mevedel-view-composer" (&optional session))
+(declare-function mevedel-view--session "mevedel-view-composer" ())
 (defvar mevedel-view--prompt-hook-pending)
 
 ;; `mevedel-view-stream'
@@ -164,12 +169,7 @@ silently placing controls in a data buffer."
              ('queued-user-message
               (cl-incf queued-user-messages count)))))
        mevedel-view--interaction-descriptors))
-    (let ((session (or (and (boundp 'mevedel--session)
-                            mevedel--session)
-                       (and (boundp 'mevedel--data-buffer)
-                            (buffer-live-p mevedel--data-buffer)
-                            (buffer-local-value 'mevedel--session
-                                                mevedel--data-buffer)))))
+    (let ((session (mevedel-view--session)))
       (when session
         (setq plans (max plans (length (mevedel-session-plan-queue session))))
         (setq permissions
@@ -349,6 +349,15 @@ OVERLAY is stored on the text as the descriptor's callback handle."
                                 (plist-get descriptor :read-only))))
     fragment))
 
+(defun mevedel-view--interaction-delete-overlay (overlay)
+  "Release OVERLAY's retained-agent activity token and delete it."
+  (when (overlayp overlay)
+    (when-let* ((release
+                 (overlay-get overlay 'mevedel-agent-activity-release)))
+      (overlay-put overlay 'mevedel-agent-activity-release nil)
+      (funcall release))
+    (delete-overlay overlay)))
+
 (defun mevedel-view--interaction-delete-stale-overlays ()
   "Delete descriptor overlays whose descriptors are no longer live."
   (when (hash-table-p mevedel-view--interaction-overlays)
@@ -356,7 +365,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
      (lambda (id overlay)
        (unless (and (hash-table-p mevedel-view--interaction-descriptors)
                     (gethash id mevedel-view--interaction-descriptors))
-         (delete-overlay overlay)
+         (mevedel-view--interaction-delete-overlay overlay)
          (remhash id mevedel-view--interaction-overlays)))
      mevedel-view--interaction-overlays)))
 
@@ -404,13 +413,7 @@ OVERLAY is stored on the text as the descriptor's callback handle."
 This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
     (mevedel-view--interaction-clear-for-rebuild)
-    (when-let* ((session (or (and (boundp 'mevedel--session)
-                                  mevedel--session)
-                             (and (boundp 'mevedel--data-buffer)
-                                  (buffer-live-p mevedel--data-buffer)
-                                  (buffer-local-value
-                                   'mevedel--session
-                                   mevedel--data-buffer)))))
+    (when-let* ((session (mevedel-view--session)))
       (when (mevedel-session-plan-queue session)
         (require 'mevedel-goal)
         (mevedel-plan-queue--render-head session))
@@ -436,6 +439,18 @@ This deletes only interaction UI overlays and never settles callbacks."
                (gethash id mevedel-view--interaction-overlays)))
          (overlay (or existing-overlay
                       (make-overlay anchor anchor (current-buffer) nil t))))
+    (unless existing-overlay
+      (let ((origin (plist-get descriptor :origin))
+            (kind (plist-get descriptor :kind))
+            (session (mevedel-view--session)))
+        (when (and session origin
+                   (not (equal origin "/root"))
+                   (not (eq kind 'permission)))
+          (require 'mevedel-agent-control)
+          (overlay-put
+           overlay 'mevedel-agent-activity-release
+           (mevedel-agent-control-block-turn
+            session origin 'interaction-blocked)))))
     (puthash id descriptor mevedel-view--interaction-descriptors)
     (puthash id overlay mevedel-view--interaction-overlays)
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
@@ -448,13 +463,13 @@ This deletes only interaction UI overlays and never settles callbacks."
     (remhash id mevedel-view--interaction-descriptors))
   (when (hash-table-p mevedel-view--interaction-overlays)
     (when-let* ((overlay (gethash id mevedel-view--interaction-overlays)))
-          (when (and (boundp 'mevedel--prompt-overlays)
-                     (listp mevedel--prompt-overlays))
-            (setq mevedel--prompt-overlays
-                  (delq overlay mevedel--prompt-overlays)))
-              (delete-overlay overlay))
-            (remhash id mevedel-view--interaction-overlays))
-          (mevedel-view--interaction-render))
+      (mevedel-view--interaction-delete-overlay overlay)
+      (when (and (boundp 'mevedel--prompt-overlays)
+                 (listp mevedel--prompt-overlays))
+        (setq mevedel--prompt-overlays
+              (delq overlay mevedel--prompt-overlays)))
+      (remhash id mevedel-view--interaction-overlays))
+    (mevedel-view--interaction-render)))
 
 (defun mevedel-view--interaction-clear-for-rebuild ()
   "Delete rebuild-owned interaction UI while preserving direct prompt UI."
@@ -469,7 +484,7 @@ This deletes only interaction UI overlays and never settles callbacks."
       (when (hash-table-p mevedel-view--interaction-overlays)
         (when-let* ((overlay (gethash id
                                       mevedel-view--interaction-overlays)))
-          (delete-overlay overlay))
+          (mevedel-view--interaction-delete-overlay overlay))
         (remhash id mevedel-view--interaction-overlays))
       (when (hash-table-p mevedel-view--interaction-descriptors)
         (remhash id mevedel-view--interaction-descriptors))))
@@ -489,7 +504,7 @@ This deletes only interaction UI overlays and never settles callbacks."
                  id
                  (not (mevedel-view--interaction-preserve-on-rebuild-p
                        descriptor)))
-            (delete-overlay ov))
+            (mevedel-view--interaction-delete-overlay ov))
            (t
             (push ov live)))))
       (setq mevedel--prompt-overlays (nreverse live))))
@@ -501,7 +516,8 @@ This deletes only interaction UI overlays and never settles callbacks."
     (clrhash mevedel-view--interaction-descriptors))
   (mevedel-view--interaction-render)
   (when (hash-table-p mevedel-view--interaction-overlays)
-    (maphash (lambda (_id overlay) (delete-overlay overlay))
+    (maphash (lambda (_id overlay)
+               (mevedel-view--interaction-delete-overlay overlay))
              mevedel-view--interaction-overlays)
     (clrhash mevedel-view--interaction-overlays))
   (when (and (boundp 'mevedel--prompt-overlays)
@@ -512,7 +528,7 @@ This deletes only interaction UI overlays and never settles callbacks."
          ((not (and (overlayp ov) (overlay-buffer ov))))
          ((and (eq (overlay-buffer ov) (current-buffer))
                (overlay-get ov 'mevedel-view-interaction-id))
-          (delete-overlay ov))
+          (mevedel-view--interaction-delete-overlay ov))
          (t
           (push ov live))))
       (setq mevedel--prompt-overlays (nreverse live)))))

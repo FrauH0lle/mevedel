@@ -84,6 +84,82 @@
     (kill-buffer view)
     (should-not (mevedel-view-interaction-pending-p view))))
 
+(mevedel-deftest mevedel-view--interaction-register ()
+  ,test
+  (test)
+  :doc "acquires one blocker per non-permission interaction identity"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "interaction-state"))
+           (invocation
+            (mevedel-agent-invocation--create :path "/root/worker"))
+           (record
+            (mevedel-agent-record--create
+             :path "/root/worker" :activity 'running
+             :invocation invocation)))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-register
+         '(:kind ask :id ask :origin "/root/worker" :body "ask"))
+        (mevedel-view--interaction-register
+         '(:kind ask :id ask :origin "/root/worker" :body "updated"))
+        (should (eq 'interaction-blocked
+                    (mevedel-agent-record-activity record)))
+        (should (= 1 (length (mevedel-agent-record-blockers record))))
+        (mevedel-view--interaction-register
+         '(:kind permission :id permission :origin "/root/worker"
+           :body "permission"))
+        (should (= 1 (length (mevedel-agent-record-blockers record))))))))
+
+(mevedel-deftest mevedel-view--interaction-unregister ()
+  ,test
+  (test)
+  :doc "releases overlapping interactions independently and in any order"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "interaction-release"))
+           (invocation
+            (mevedel-agent-invocation--create :path "/root/worker"))
+           (record
+            (mevedel-agent-record--create
+             :path "/root/worker" :activity 'running
+             :invocation invocation)))
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-register
+         '(:kind ask :id ask :origin "/root/worker" :body "ask"))
+        (mevedel-view--interaction-register
+         '(:kind preview :id preview :origin "/root/worker" :body "diff"))
+        (should (= 2 (length (mevedel-agent-record-blockers record))))
+        (mevedel-view--interaction-unregister 'ask)
+        (should (eq 'interaction-blocked
+                    (mevedel-agent-record-activity record)))
+        (mevedel-view--interaction-unregister 'preview)
+        (should (eq 'running (mevedel-agent-record-activity record)))
+        (should-not (mevedel-agent-record-blockers record))))))
+
+(mevedel-deftest mevedel-view--interaction-delete-overlay ()
+  ,test
+  (test)
+  :doc "releases an overlay activity token at most once while deleting it"
+  (with-temp-buffer
+    (let ((overlay (make-overlay (point-min) (point-min)))
+          (releases 0))
+      (overlay-put overlay 'mevedel-agent-activity-release
+                   (lambda () (cl-incf releases)))
+      (mevedel-view--interaction-delete-overlay overlay)
+      (mevedel-view--interaction-delete-overlay overlay)
+      (should (= 1 releases))
+      (should-not (overlay-buffer overlay))
+      (should-not
+       (overlay-get overlay 'mevedel-agent-activity-release)))))
+
 (mevedel-deftest mevedel-view--interaction-target-buffer
   (:doc "resolves the live parent view for queued interactions")
   ,test

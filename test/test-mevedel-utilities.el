@@ -25,6 +25,15 @@
         (throw 'found t)))
     nil))
 
+(mevedel-deftest mevedel--plain-data-p ()
+  ,test
+  (test)
+  :doc "accepts nested read-safe values and rejects runtime objects"
+  (should (mevedel--plain-data-p
+           '(nil symbol car "text" 4 (dotted . pair) [1 "two"])))
+  (should-not (mevedel--plain-data-p (lambda () t)))
+  (should-not (mevedel--plain-data-p (make-hash-table))))
+
 (mevedel-deftest mevedel--head-tail-preview-parts ()
   ,test
   (test)

@@ -13,6 +13,10 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+;; `gptel'
+(defvar gptel-mode)
+
+;; `org'
 (declare-function org-entry-get
                   "org" (pom property &optional inherit literal-nil))
 (declare-function org-entry-put "org" (pom property value))
@@ -129,6 +133,46 @@
     (should-not (get-text-property (match-beginning 0) 'gptel))
     (search-forward "New live response.")
     (should (eq (get-text-property (match-beginning 0) 'gptel) 'response))))
+
+(mevedel-deftest mevedel-transcript-restore-gptel-state ()
+  ,test
+  (test)
+  :doc "does not dirty resumed buffers while repairing bounds and properties"
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n"
+            ":GPTEL_BOUNDS: ((response (2 999)))\n"
+            ":END:\n"
+            "#+begin_tool\n"
+            "(:name \"Bash\" :args (:command \"true\"))\n"
+            "ok\n"
+            "#+end_tool\n"
+            "Focused tests passed\n")
+    (setq-local gptel-mode nil)
+    (set-buffer-modified-p nil)
+    (cl-letf (((symbol-function 'gptel-mode)
+               (lambda (&optional _arg)
+                 (setq-local gptel-mode t)
+                 (save-excursion
+                   (goto-char (point-min))
+                   (search-forward "#+begin_tool")
+                   (let ((tool-start (match-beginning 0)))
+                     (search-forward "sed tests")
+                     (add-text-properties
+                      tool-start (match-beginning 0)
+                      '(gptel (tool . "stale"))))
+                   (goto-char (point-min))
+                   (search-forward "sed tests")
+                   (add-text-properties
+                    (match-beginning 0) (point-max)
+                    '(gptel response))))))
+      (mevedel-transcript-restore-gptel-state))
+    (should-not (buffer-modified-p))
+    (save-excursion
+      (goto-char (point-min))
+      (search-forward "Focused tests")
+      (should (eq (get-text-property (match-beginning 0) 'gptel)
+                  'response)))))
 
 (provide 'test-mevedel-transcript-restore)
 ;;; test-mevedel-transcript-restore.el ends here

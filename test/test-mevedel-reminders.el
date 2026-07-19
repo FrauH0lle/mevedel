@@ -39,12 +39,15 @@
             :type 'demo
             :trigger (lambda (_) t)
             :content (lambda (_) "hello")
-            :interval 3)))
+            :interval 3
+            :recipe '(verifier-read-only))))
     (should (eq 'demo (mevedel-reminder-type r)))
     (should (functionp (mevedel-reminder-trigger r)))
     (should (functionp (mevedel-reminder-content r)))
     (should (equal 3 (mevedel-reminder-interval r)))
-    (should (null (mevedel-reminder-last-fired r))))
+    (should (null (mevedel-reminder-last-fired r)))
+    (should (equal '(verifier-read-only)
+                   (mevedel-reminder-recipe r))))
 
   :doc "`mevedel-reminder-create' accepts nil interval"
   (let ((r (mevedel-reminder-create
@@ -91,7 +94,14 @@
                  :type 'demo
                  :trigger (lambda (_) t)
                  :content (lambda (_) "x")
-                 :interval 'bogus)))
+                 :interval 'bogus))
+
+  :doc "`mevedel-reminder-create' rejects untrusted durable recipes"
+  (should-error (mevedel-reminder-create
+                 :type 'demo
+                 :trigger (lambda (_) t)
+                 :content (lambda (_) "x")
+                 :recipe '(erase-buffer))))
 
 
 ;;
@@ -215,14 +225,17 @@
   (let* ((trigger (lambda (_) t))
          (content (lambda (_) "x"))
          (r (mevedel-reminder-create
-             :type 'a :trigger trigger :content content :interval 7))
+             :type 'a :trigger trigger :content content :interval 7
+             :recipe '(verifier-read-only)))
          (_  (setf (mevedel-reminder-last-fired r) 42))
          (clone (mevedel-reminder-clone r)))
     (should (eq 'a (mevedel-reminder-type clone)))
     (should (eq trigger (mevedel-reminder-trigger clone)))
     (should (eq content (mevedel-reminder-content clone)))
     (should (equal 7 (mevedel-reminder-interval clone)))
-    (should (null (mevedel-reminder-last-fired clone))))
+    (should (null (mevedel-reminder-last-fired clone)))
+    (should (equal '(verifier-read-only)
+                   (mevedel-reminder-recipe clone))))
 
   :doc "`mevedel-reminder-clone' produces independent last-fired state"
   (let* ((r (mevedel-reminder-create
@@ -262,6 +275,84 @@
     (should (equal 0 (mevedel-reminder-last-fired clone-a)))
     (should (null (mevedel-reminder-last-fired clone-b)))
     (should (null (mevedel-reminder-last-fired r)))))
+
+(mevedel-deftest mevedel-reminders--recipe-p
+  ()
+  ,test
+  (test)
+  :doc "accepts only trusted constructors with valid argument contracts"
+  (should (mevedel-reminders--recipe-p '(mode-constraints 9)))
+  (should (mevedel-reminders--recipe-p '(verifier-read-only)))
+  (should-not (mevedel-reminders--recipe-p '(unknown-recipe)))
+  (should-not (mevedel-reminders--recipe-p '(mode-constraints . 9)))
+  (should-not (mevedel-reminders--recipe-p '(verifier-read-only 1)))
+  (should-not (mevedel-reminders--recipe-p '(mode-constraints "often")))
+  (should-not (mevedel-reminders--recipe-p '(max-turns-warning 2.0)))
+  (should-not (mevedel-reminders--recipe-p '(token-usage 0.9 -1)))
+  (should-not
+   (mevedel-reminders--recipe-p
+    `(mode-constraints ,(lambda () t)))))
+
+(mevedel-deftest mevedel-reminders--recipe-arguments-p
+  ()
+  ,test
+  (test)
+  :doc "validates every declarative reminder argument contract"
+  (should (mevedel-reminders--recipe-arguments-p 'no-args nil))
+  (should (mevedel-reminders--recipe-arguments-p 'interval '(nil)))
+  (should (mevedel-reminders--recipe-arguments-p 'interval '(0)))
+  (should (mevedel-reminders--recipe-arguments-p 'ratio '(0.75)))
+  (should (mevedel-reminders--recipe-arguments-p 'count '(40)))
+  (should (mevedel-reminders--recipe-arguments-p
+           'token-usage '(0.9 4)))
+  (should-not (mevedel-reminders--recipe-arguments-p 'no-args '(1)))
+  (should-not (mevedel-reminders--recipe-arguments-p 'interval '(-1)))
+  (should-not (mevedel-reminders--recipe-arguments-p 'ratio '(1.1)))
+  (should-not (mevedel-reminders--recipe-arguments-p 'count '(4.5)))
+  (should-not (mevedel-reminders--recipe-arguments-p
+               'token-usage '(0.9)))
+  (should-not (mevedel-reminders--recipe-arguments-p 'unknown nil)))
+
+(mevedel-deftest mevedel-reminders-serialize-agent-templates
+  ()
+  ,test
+  (test)
+  :doc "serializes trusted recipes and rejects closure-only templates"
+  (let ((recipes
+         (mevedel-reminders-serialize-agent-templates
+          (list (mevedel-reminders-make-mode-constraints 9)
+                (mevedel-reminders-make-verifier-read-only)))))
+    (should (equal '((mode-constraints 9) (verifier-read-only)) recipes)))
+  (should-error
+   (mevedel-reminders-serialize-agent-templates
+    (list (mevedel-reminder-create
+           :type 'runtime-only
+           :trigger (lambda (_) t)
+           :content (lambda (_) "runtime"))))))
+
+(mevedel-deftest mevedel-reminders-restore-agent-templates
+  ()
+  ,test
+  (test)
+  :doc "rebuilds frozen templates only through trusted recipe factories"
+  (let ((restored
+         (mevedel-reminders-restore-agent-templates
+          '((mode-constraints 9) (verifier-read-only)))))
+    (should (equal '(mode-constraints verifier-read-only)
+                   (mapcar #'mevedel-reminder-type restored)))
+    (should (= 9 (mevedel-reminder-interval (car restored)))))
+  (should-error
+   (mevedel-reminders-restore-agent-templates
+    '((erase-buffer))))
+  (should-error
+   (mevedel-reminders-restore-agent-templates
+    '((verifier-read-only 1))))
+  (should-error
+   (mevedel-reminders-restore-agent-templates
+    '((max-turns-warning 4.0))))
+  (should-error
+   (mevedel-reminders-restore-agent-templates
+    `((mode-constraints ,(lambda () t))))))
 
 
 ;;

@@ -21,6 +21,10 @@
 (require 'mevedel-permission-log)
 (require 'mevedel-queue)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-block-turn
+                  "mevedel-agent-control" (session path activity))
+
 ;; `mevedel-permission-prompt'
 (declare-function mevedel-permission--prompt-async-attributed
                   "mevedel-permission-prompt"
@@ -173,7 +177,28 @@ ENTRY plist keys:
       (error "Invalid permission queue origin: %S" origin)))
   (let ((session (or session (mevedel-permission-queue--current-session))))
     (mevedel-permission-queue--log 'permission-enqueued entry session)
-    (mevedel-queue--enqueue mevedel-permission-queue--spec entry session)))
+    (let* ((release
+            (and session
+                 (progn
+                   (require 'mevedel-agent-control)
+                   (mevedel-agent-control-block-turn
+                    session (plist-get entry :origin)
+                    'permission-blocked))))
+           (callback (plist-get entry :callback))
+           (wrapped
+            (if release
+                (lambda (outcome)
+                  (funcall release)
+                  (when callback
+                    (funcall callback outcome)))
+              callback))
+           (entry (plist-put (copy-sequence entry) :callback wrapped)))
+      (condition-case err
+          (mevedel-queue--enqueue mevedel-permission-queue--spec entry session)
+        (error
+         (when release
+           (funcall release))
+         (signal (car err) (cdr err)))))))
 
 (defun mevedel-permission-queue--render-entry (entry)
   "Render ENTRY directly via the kind-specific dispatcher.

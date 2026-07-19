@@ -15,6 +15,8 @@
   (require 'subr-x))
 
 ;; `mevedel-agent-exec'
+(declare-function mevedel-agent-exec--final-response-text
+                  "mevedel-agent-exec" (invocation))
 (declare-function mevedel-agent-exec--flush-transcript-save
                   "mevedel-agent-exec" (invocation))
 (defvar mevedel--agent-invocation)
@@ -33,6 +35,7 @@
 ;; `mevedel-agents'
 (declare-function mevedel-agent-configuration-p
                   "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-freeze "mevedel-agents" (agent))
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
@@ -65,6 +68,10 @@
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
+;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence-save-agent-state
+                  "mevedel-session-persistence" (session))
+
 ;; `mevedel-structs'
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session--set-agent-registry
@@ -84,6 +91,8 @@
 (declare-function mevedel-session-messages
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (object))
+(declare-function mevedel-session-save-path
+                  "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-utilities'
 (declare-function mevedel--head-tail-preview-parts
@@ -102,10 +111,22 @@
 (defconst mevedel-agent-control--wait-max-ms 3600000
   "Maximum WaitAgent timeout in milliseconds.")
 
+(defconst mevedel-agent-control--active-activities
+  '(starting running waiting permission-blocked interaction-blocked)
+  "Persisted agent activities that own one active-turn slot.")
+
+(defun mevedel-agent-control-active-activity-p (activity)
+  "Return non-nil when ACTIVITY owns one active-turn slot."
+  (memq activity mevedel-agent-control--active-activities))
+
+(defvar mevedel-agent-control--suppress-persistence nil
+  "Non-nil while a multi-step registry repair must be persisted atomically.")
+
 (cl-defstruct (mevedel-agent-waiter
                (:constructor mevedel-agent-waiter--create))
   "One suspended ordinary asynchronous WaitAgent tool call."
   callback
+  release
   timer)
 
 (cl-defstruct (mevedel-agent-record
@@ -121,11 +142,53 @@
   conversation-buffer
   invocation
   mailbox
+  blockers
   waiter)
 
 (defun mevedel-agent-control--active-p (record)
   "Return non-nil when RECORD owns one active-turn slot."
-  (memq (mevedel-agent-record-activity record) '(starting running)))
+  (mevedel-agent-control-active-activity-p
+   (mevedel-agent-record-activity record)))
+
+(defun mevedel-agent-control--persist-session (session)
+  "Best-effort persist SESSION's changed agent state."
+  (unless mevedel-agent-control--suppress-persistence
+    (when (mevedel-session-save-path session)
+      (require 'mevedel-session-persistence)
+      (mevedel-session-persistence-save-agent-state session))))
+
+(defun mevedel-agent-control-block-turn (session path activity)
+  "Block PATH's current turn in SESSION with durable ACTIVITY.
+
+ACTIVITY must be `waiting', `permission-blocked', or
+`interaction-blocked'.  Return an idempotent release closure bound to the
+current invocation, or nil when PATH has no active retained turn.  Overlapping
+blockers compose and stale releases cannot alter a later follow-up."
+  (unless (memq activity '(waiting permission-blocked interaction-blocked))
+    (error "Invalid blocked agent activity: %s" activity))
+  (when-let* (((not (equal path "/root")))
+              (entry (assoc path (mevedel-session-agent-registry session)))
+              (record (cdr entry))
+              ((mevedel-agent-control--active-p record))
+              (invocation (mevedel-agent-record-invocation record)))
+    (let ((token (list activity)))
+      (push token (mevedel-agent-record-blockers record))
+      (unless (eq activity (mevedel-agent-record-activity record))
+        (setf (mevedel-agent-record-activity record) activity)
+        (mevedel-agent-control--persist-session session))
+      (lambda ()
+        (when (and (eq record
+                       (cdr (assoc path
+                                   (mevedel-session-agent-registry session))))
+                   (eq invocation (mevedel-agent-record-invocation record))
+                   (memq token (mevedel-agent-record-blockers record)))
+          (setf (mevedel-agent-record-blockers record)
+                (delq token (mevedel-agent-record-blockers record)))
+          (let ((next (or (caar (mevedel-agent-record-blockers record))
+                          'running)))
+            (unless (eq next (mevedel-agent-record-activity record))
+              (setf (mevedel-agent-record-activity record) next)
+              (mevedel-agent-control--persist-session session))))))))
 
 (defun mevedel-agent-control--active-count (session)
   "Return the number of active non-root turns in SESSION."
@@ -241,13 +304,16 @@
 (defun mevedel-agent-control-clear-context-mailbox (context)
   "Remove all retained unread records for CONTEXT."
   (if (mevedel-session-p context)
-      (mevedel-agent-control--set-mailbox-queue context "/root" nil)
+      (progn
+        (mevedel-agent-control--set-mailbox-queue context "/root" nil)
+        (mevedel-agent-control--persist-session context))
     (let* ((session (mevedel-agent-invocation-parent-session context))
            (path (and session
                       (mevedel-agent-control--path-for-invocation
                        session context))))
       (when path
-        (mevedel-agent-control--set-mailbox-queue session path nil)))))
+        (mevedel-agent-control--set-mailbox-queue session path nil)
+        (mevedel-agent-control--persist-session session)))))
 
 (defun mevedel-agent-control--waiter (session path)
   "Return PATH's active waiter in SESSION, or nil."
@@ -273,6 +339,8 @@
     (when-let* ((timer (mevedel-agent-waiter-timer waiter))
                 ((timerp timer)))
       (cancel-timer timer))
+    (when-let* ((release (mevedel-agent-waiter-release waiter)))
+      (funcall release))
     t))
 
 (defun mevedel-agent-control--wake (session path reason)
@@ -313,11 +381,17 @@ Return the caller path when suspended, and nil after an immediate release."
        (t
         (let ((waiter (mevedel-agent-waiter--create :callback callback)))
           (mevedel-agent-control--set-waiter session path waiter)
-          (setf (mevedel-agent-waiter-timer waiter)
-                (run-at-time
-                 (/ timeout 1000.0) nil
-                 #'mevedel-agent-control--wait-timeout
-                 session path waiter))
+          (setf (mevedel-agent-waiter-release waiter)
+                (mevedel-agent-control-block-turn session path 'waiting))
+          (condition-case err
+              (setf (mevedel-agent-waiter-timer waiter)
+                    (run-at-time
+                     (/ timeout 1000.0) nil
+                     #'mevedel-agent-control--wait-timeout
+                     session path waiter))
+            (error
+             (mevedel-agent-control-cancel-wait session path)
+             (signal (car err) (cdr err))))
           path))))))
 
 (defun mevedel-agent-control-notify-context-mailbox (context &optional reason)
@@ -343,7 +417,8 @@ Return the caller path when suspended, and nil after an immediate release."
    session recipient
    (cons record (mevedel-agent-control--mailbox-queue session recipient)))
   (mevedel-agent-control--wake
-   session recipient (or wake-reason 'mailbox)))
+   session recipient (or wake-reason 'mailbox))
+  (mevedel-agent-control--persist-session session))
 
 (defun mevedel-agent-control-steer-user
     (session message &optional before-wake metadata)
@@ -396,13 +471,19 @@ Return the resolved recipient path.  Sending never activates a turn."
                      :role (mevedel-agent-record-role record)
                      :activity
                      (symbol-name
-                      (mevedel-agent-record-activity record)))))
+                      (pcase (mevedel-agent-record-activity record)
+                        ('starting 'starting)
+                        ('idle 'idle)
+                        (_ 'running))))))
            (mevedel-session-agent-registry session)))
          (roster
           (cons (list :path "/root" :role "default"
                       :activity
                       (symbol-name
-                       (mevedel-session-agent-root-activity session)))
+                       (pcase (mevedel-session-agent-root-activity session)
+                         ('starting 'starting)
+                         ('idle 'idle)
+                         (_ 'running))))
                 records))
          (filtered
           (if path-prefix
@@ -437,6 +518,54 @@ Return the resolved recipient path.  Sending never activates a turn."
                           :role (mevedel-agent-record-role record)))
    (lambda (a b)
      (string-lessp (plist-get a :path) (plist-get b :path)))))
+
+(defun mevedel-agent-control--recovery-result (record)
+  "Return RECORD's interrupted recovery payload with useful partial text."
+  (let* ((buffer (mevedel-agent-record-conversation-buffer record))
+         (identity
+          (and (buffer-live-p buffer)
+               (buffer-local-value 'mevedel--agent-invocation buffer)))
+         (partial
+          (and identity
+               (progn
+                 (require 'mevedel-agent-exec)
+                 (ignore-errors
+                   (mevedel-agent-exec--final-response-text identity)))))
+         (location (mevedel-agent-record-conversation-location record)))
+    (mevedel-agent-control--bounded-result
+     record
+     (concat
+     "Agent turn was interrupted by session recovery."
+      "\n\nReason: the persisted turn had no live provider "
+      "request after resume."
+      (when partial
+        (format "\n\nPartial response:\n\n%s" partial))
+      (when location
+        (format "\n\nTranscript: %s" location))))))
+
+(defun mevedel-agent-control-recover-interrupted (session)
+  "Recover every persisted active turn in SESSION as an interrupted RESULT.
+
+Return the number of repaired records.  The caller owns the atomic sidecar
+rewrite after the complete registry has been repaired."
+  (let ((mevedel-agent-control--suppress-persistence t)
+        (count 0))
+    (dolist (entry (mevedel-session-agent-registry session))
+      (let ((record (cdr entry)))
+        (when (mevedel-agent-control--active-p record)
+          (setf (mevedel-agent-record-activity record) 'idle)
+          (setf (mevedel-agent-record-invocation record) nil)
+          (setf (mevedel-agent-record-blockers record) nil)
+          (mevedel-agent-control--enqueue
+           session (mevedel-agent-record-parent-path record)
+           (list :type 'RESULT
+                 :sender (mevedel-agent-record-path record)
+                 :recipient (mevedel-agent-record-parent-path record)
+                 :outcome 'interrupted
+                 :payload (mevedel-agent-control--recovery-result record)
+                 :timestamp (current-time)))
+          (cl-incf count))))
+    count))
 
 (defun mevedel-agent-control--validate-spawn (session task-name message)
   "Validate SESSION, TASK-NAME, and MESSAGE for a new child."
@@ -498,7 +627,8 @@ positive decimal strings."
                 ((buffer-live-p buffer)))
       (with-current-buffer buffer
         (set-buffer-modified-p nil))
-      (kill-buffer buffer))))
+      (kill-buffer buffer)))
+  (mevedel-agent-control--persist-session session))
 
 (defun mevedel-agent-control--bounded-result (record response)
   "Return RECORD's bounded terminal payload for RESPONSE."
@@ -539,6 +669,7 @@ positive decimal strings."
               response)))
       (setf (mevedel-agent-record-activity record) 'idle)
       (setf (mevedel-agent-record-invocation record) nil)
+      (setf (mevedel-agent-record-blockers record) nil)
       (mevedel-agent-control-cancel-wait
        session (mevedel-agent-record-path record))
       (mevedel-agent-control--enqueue
@@ -559,6 +690,7 @@ positive decimal strings."
   (setf (mevedel-agent-record-id record)
         (mevedel-agent-invocation-agent-id invocation))
   (setf (mevedel-agent-record-invocation record) invocation)
+  (setf (mevedel-agent-record-blockers record) nil)
   (setf (mevedel-agent-record-conversation-buffer record)
         (mevedel-agent-invocation-buffer invocation))
   (setf (mevedel-agent-record-conversation-location record)
@@ -602,6 +734,7 @@ positive decimal strings."
         (error "Agent provider request did not start")))
     (when (eq (mevedel-agent-record-activity record) 'starting)
       (setf (mevedel-agent-record-activity record) 'running))
+    (mevedel-agent-control--persist-session session)
     record))
 
 (cl-defun mevedel-agent-control-followup
@@ -672,7 +805,8 @@ Return the committed retained record."
              mevedel-agent-exec--agents
              (not (assoc-string role mevedel-agent-exec--agents)))
     (user-error "Agent role is not available to this session: %s" role))
-  (let* ((agent (mevedel-agent-resolve-role role))
+  (let* ((agent (mevedel-agent-freeze
+                 (mevedel-agent-resolve-role role)))
          (role-name (mevedel-agent-name agent))
          (fork-turns (mevedel-agent-control--normalize-fork-turns fork-turns))
          (model-selector
@@ -720,6 +854,7 @@ Return the committed retained record."
             (error "Agent conversation could not be persisted"))
           (when (eq (mevedel-agent-record-activity record) 'starting)
             (setf (mevedel-agent-record-activity record) 'running))
+          (mevedel-agent-control--persist-session session)
           (setq committed t)
           record)
       (unless committed
