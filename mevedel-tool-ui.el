@@ -114,11 +114,13 @@
   "Return the retained agent roster described by ARGS."
   (require 'json)
   (require 'mevedel-agent-control)
-  (list :result
-        (json-serialize
-         (vconcat
-          (mevedel-agent-control-list-agents
-           mevedel--session (plist-get args :path_prefix))))))
+  (let ((path-prefix (plist-get args :path_prefix)))
+    (list :result
+          (json-serialize
+           (vconcat
+            (mevedel-agent-control-list-agents
+             mevedel--session
+             (unless (equal path-prefix "") path-prefix)))))))
 
 (defun mevedel-tool-ui--interrupt-agent (args)
   "Interrupt the retained agent turn described by ARGS."
@@ -355,7 +357,7 @@
     :prompt-file "tools/listagents.md"
     :handler #'mevedel-tool-ui--list-agents
     :args ((path_prefix string :optional
-                        "Canonical subtree path prefix."))
+                        "Canonical subtree path prefix. Omit to list all."))
     :groups (util)
     :read-only-p t
     :renderer #'mevedel-tool-ui--render-list-agents)
