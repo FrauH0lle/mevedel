@@ -87,6 +87,10 @@
                   "mevedel-pipeline" (result-string))
 
 ;; `mevedel-session-persistence'
+(declare-function mevedel-session-persistence--property-delete-direct
+                  "mevedel-session-persistence" (property))
+(declare-function mevedel-session-persistence--stabilize-gptel-bounds
+                  "mevedel-session-persistence" ())
 (declare-function mevedel-session-persistence--update-transcript-entry
                   "mevedel-session-persistence" (session agent-id updates))
 (declare-function mevedel-session-persistence--write-sidecar-now
@@ -304,6 +308,10 @@ Return the hydrated conversation buffer."
             (mevedel-transcript-restore-gptel-state)
             (mevedel-transcript-normalize-properties)
             (mevedel-agent-conversation-configure invocation)
+            (require 'mevedel-session-persistence)
+            (mevedel-session-persistence--property-delete-direct
+             "GPTEL_SYSTEM")
+            (mevedel-session-persistence--stabilize-gptel-bounds)
             (set-buffer-modified-p nil)
             (set-visited-file-modtime))
           buffer)
