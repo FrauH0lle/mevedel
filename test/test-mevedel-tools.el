@@ -869,6 +869,7 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
            :invocation invocation))
          (data (list :messages
                      (vector (list :role "user" :content "task"))))
+         tracking-marker
          (fsm (gptel-make-fsm
                :info (list :buffer buffer
                            :backend nil
@@ -881,7 +882,13 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
           (with-current-buffer buffer
             (setq-local mevedel--session session)
             (setq-local mevedel--agent-invocation invocation)
-            (insert "* Agent Task: work\n"))
+            (insert "* Agent Task: work\n\n"
+                    "#+begin_tool (WaitAgent :timeout_ms 120000)\n"
+                    "#+end_tool\n")
+            (setq tracking-marker (copy-marker (point-max))))
+          (setf (gptel-fsm-info fsm)
+                (plist-put (gptel-fsm-info fsm)
+                           :tracking-marker tracking-marker))
           (let ((mevedel--agent-invocation nil))
             (mevedel-agent-control-send-message
              session "/root/worker" "one")
@@ -898,8 +905,13 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                        (string-match-p "two" text))))
           (with-current-buffer buffer
             (let ((text (buffer-string)))
+              (should (< (string-match-p "\\* Agent Task:" text)
+                         (string-match-p "one" text)))
+              (should (< (string-match-p "#\\+end_tool" text)
+                         (string-match-p "one" text)))
               (should (< (string-match-p "one" text)
-                         (string-match-p "two" text))))))
+                         (string-match-p "two" text)))
+              (should (= (marker-position tracking-marker) (point-max))))))
       (kill-buffer buffer)))
 
   :doc "keeps USER model payload separate from transcript text and audits"

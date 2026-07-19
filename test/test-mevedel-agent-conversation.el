@@ -139,32 +139,50 @@
 			   (should-not (get-text-property (match-beginning 0) 'invisible))))
 		     (when (buffer-live-p buf) (kill-buffer buf))))
 
-		 :doc "prepended user-role injection clears accidental gptel properties"
-		 (let* ((buf (generate-new-buffer " *mev-agent-inject-prepend*"))
+		 :doc "marker user-role injection preserves chronology and clears properties"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-agent-inject-marker-" t)))
+			(relative "agents/marker.chat.org")
+			(absolute (expand-file-name relative root))
+			(workspace
+			 (mevedel-workspace--create
+			  :type 'project :id root :root root :name "conversation"))
+			(session (mevedel-session-create "main" workspace))
+			(buf (generate-new-buffer " *mev-agent-inject-marker*"))
 			(agent (mevedel-agent--create :name "explorer"))
 			(inv (mevedel-agent-invocation--create
 			      :path "/root/test_agent"
 			      :agent agent
 			      :agent-id "explorer--inject"
-			      :buffer buf))
+			      :buffer buf
+			      :parent-session session
+			      :transcript-relative-path relative))
+			(marker nil)
 			(block (propertize "Reminder text" 'gptel '(tool . "call_1"))))
 		   (unwind-protect
 		       (progn
+			 (make-directory (file-name-directory absolute) t)
+			 (setf (mevedel-session-save-path session) root)
 			 (with-current-buffer buf
-			   (insert "* Agent Task: inspect\nbody\n"))
-			 (cl-letf (((symbol-function
-				     'mevedel-agent-conversation-save)
-				    (lambda (_invocation) t)))
-			   (mevedel-agent-conversation-insert-user-block inv block 'prepend))
+			   (insert "* Agent Task: inspect\nbody\n")
+			   (set-visited-file-name absolute t t)
+			   (setq marker (copy-marker (point-max))))
+			 (mevedel-agent-conversation-insert-user-block inv block marker)
 			 (with-current-buffer buf
 			   (goto-char (point-min))
+			   (should (search-forward "* Agent Task:" nil t))
 			   (should (search-forward "Reminder text" nil t))
 			   (should-not (get-text-property (match-beginning 0) 'gptel))
-			   (should (< (match-beginning 0)
-				      (progn
-					(search-forward "* Agent Task:")
-					(match-beginning 0))))))
-		     (when (buffer-live-p buf) (kill-buffer buf)))))
+			   (should (= (marker-position marker) (point-max))))
+			 (with-temp-buffer
+			   (insert-file-contents absolute)
+			   (should (string-match-p "Reminder text" (buffer-string)))))
+		     (when (buffer-live-p buf)
+		       (with-current-buffer buf
+			 (set-buffer-modified-p nil)
+			 (setq-local kill-buffer-hook nil))
+		       (kill-buffer buf))
+		     (delete-directory root t))))
 
 
 ;;

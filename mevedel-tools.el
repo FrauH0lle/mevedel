@@ -68,13 +68,15 @@
 ;; `mevedel-agent-conversation'
 (declare-function mevedel-agent-conversation-insert-user-block
                   "mevedel-agent-conversation"
-                  (invocation block &optional position))
+                  (invocation block &optional marker))
 (declare-function mevedel-agent-conversation-record-activity
                   "mevedel-agent-conversation"
                   (invocation item &optional suppress-rerender))
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-buffer
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-session
                   "mevedel-agents" (cl-x) t)
@@ -622,7 +624,9 @@ model-visible communication in conversation history."
                   :from sender
                   :summary (format "message from %s" sender)))
            (mevedel-agent-conversation-insert-user-block
-            ctx block (and prepend-p 'prepend)))
+            ctx block
+            (mevedel-tools--active-response-marker
+             info (mevedel-agent-invocation-buffer ctx))))
          (unless agent-p
            (mevedel-tools--insert-session-injected-prompt
             ctx fsm message block))
