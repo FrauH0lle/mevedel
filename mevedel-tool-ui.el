@@ -11,7 +11,6 @@
 ;;; Code:
 
 (eval-when-compile
-  (require 'cl-lib)
   (require 'mevedel-tool-registry)
   (require 'subr-x))
 
@@ -40,10 +39,6 @@
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
-(declare-function mevedel-session-permission-queue
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue
-                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -69,69 +64,6 @@
              value
            (list :result value))
          args))
-
-(defun mevedel-tool-ui--handle-badge (render-data)
-  "Return a propertized state badge for RENDER-DATA, or an empty string."
-  (let* ((status (plist-get render-data :status))
-         (blocked-reason (plist-get render-data :blocked-reason))
-         (calls (plist-get render-data :calls))
-         (elapsed (plist-get render-data :elapsed))
-         (reason (plist-get render-data :reason))
-         (verdict (plist-get render-data :verdict))
-         (calls-suffix (if (and calls (> calls 0))
-                           (format " · %d calls" calls)
-                         ""))
-         (elapsed-suffix (if (and elapsed (> elapsed 0))
-                             (format " · %.1fs" elapsed)
-                           "")))
-    (if blocked-reason
-        (propertize (format "[blocked · awaiting %s]" blocked-reason)
-                    'font-lock-face 'mevedel-view-handle-blocked)
-      (pcase status
-        ('running
-         (propertize (format "[running%s]" calls-suffix)
-                     'font-lock-face 'mevedel-view-handle-running))
-        ('completed
-         (pcase verdict
-           ('fail
-            (propertize (format "✗ verdict FAIL%s%s"
-                                elapsed-suffix calls-suffix)
-                        'font-lock-face 'mevedel-view-handle-error))
-           ('partial
-            (propertize (format "○ verdict PARTIAL%s%s"
-                                elapsed-suffix calls-suffix)
-                        'font-lock-face 'mevedel-view-handle-error))
-           ('pass
-            (propertize (format "✓ verdict PASS%s%s"
-                                elapsed-suffix calls-suffix)
-                        'font-lock-face 'mevedel-view-handle-done))
-           (_
-            (propertize (format "✓ done%s%s" elapsed-suffix calls-suffix)
-                        'font-lock-face 'mevedel-view-handle-done))))
-        ('error
-         (propertize (format "✗ error%s"
-                             (if reason (format " · %s" reason) ""))
-                     'font-lock-face 'mevedel-view-handle-error))
-        ('aborted
-         (propertize "✗ aborted"
-                     'font-lock-face 'mevedel-view-handle-error))
-        ('incomplete
-         (propertize "○ incomplete"
-                     'font-lock-face 'mevedel-view-handle-error))
-        (_ "")))))
-
-(defun mevedel-tool-ui--agent-blocked-reason (path session)
-  "Return the visible blocked reason for canonical PATH in SESSION, or nil."
-  (when (and path session)
-    (cond
-     ((cl-some (lambda (entry)
-                 (equal (plist-get entry :origin) path))
-               (mevedel-session-permission-queue session))
-      "permission")
-     ((cl-some (lambda (entry)
-                 (equal (plist-get entry :origin) path))
-               (mevedel-session-plan-queue session))
-      "plan"))))
 
 (defun mevedel-tool-ui--agent (callback args)
   "Launch the agent described by ARGS and report through CALLBACK."

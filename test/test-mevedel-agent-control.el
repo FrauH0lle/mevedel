@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'mevedel-agent-control)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-agents)
@@ -563,7 +564,7 @@
 (mevedel-deftest mevedel-agent-control--publish-result ()
   ,test
   (test)
-  :doc "delivers a workflow-owned RESULT once without leaving duplicate mail"
+  :doc "queues a workflow-owned RESULT before consuming it after delivery"
   (let* ((session (mevedel-agent-control-test--session))
          (result '(:type RESULT :sender "/root/review"
                    :recipient "/root" :outcome completed :payload "done"))
@@ -582,23 +583,29 @@
                (lambda (_session) (cl-incf persisted))))
       (mevedel-agent-control--publish-result session record result))
     (should (eq result seen))
-    (should-not queued-during-handler)
-    (should (= 1 persisted))
+    (should queued-during-handler)
+    (should (= 2 persisted))
     (should-not (mevedel-agent-record-result-handler record))
     (should-not (mevedel-session-messages session)))
 
   :doc "falls back to ordinary parent mail when the workflow handler fails"
   (let* ((session (mevedel-agent-control-test--session))
+         (queued-during-handler nil)
          (record
           (mevedel-agent-record--create
            :path "/root/review" :parent-path "/root"
-           :result-handler (lambda (_result) (error "Broken workflow"))))
+           :result-handler
+           (lambda (value)
+             (setq queued-during-handler
+                   (memq value (mevedel-session-messages session)))
+             (error "Broken workflow"))))
          (result '(:type RESULT :sender "/root/review"
                    :recipient "/root" :outcome completed :payload "done"))
          warning)
     (cl-letf (((symbol-function 'display-warning)
                (lambda (&rest args) (setq warning args))))
       (mevedel-agent-control--publish-result session record result))
+    (should queued-during-handler)
     (should (eq result (car (mevedel-session-messages session))))
     (should-not (mevedel-agent-record-result-handler record))
     (should (string-match-p "result handler failed"
@@ -1015,7 +1022,7 @@
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+          (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                      (lambda (_callback role _description _message child
                                         _buffer &optional _configure)
                        (push role roles)
@@ -1062,7 +1069,7 @@
              :type 'user-error)
             (should-not (assoc "/root/unknown"
                                (mevedel-session-agent-registry session))))
-          (let ((mevedel-agent-exec--agents
+          (let ((mevedel-agents--specs
                  '(("explorer" :description "available"))))
             (should-error
              (mevedel-agent-control-spawn
@@ -1072,7 +1079,7 @@
             (should-not (assoc "/root/unavailable"
                                (mevedel-session-agent-registry session))))
           (let (synchronous-results)
-            (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+            (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                      (lambda (callback _role _description _message child
                                        _buffer &optional _configure)
                        (push child invocations)
@@ -1091,9 +1098,9 @@
                 (should-not (mevedel-session-messages session)))))
           (let (runner-called)
             (cl-letf (((symbol-function
-                        'mevedel-agent-exec--save-transcript-buffer)
+                        'mevedel-agent-conversation-save)
                        (lambda (_invocation) nil))
-                      ((symbol-function 'mevedel-agent-exec--run)
+                      ((symbol-function 'mevedel-agent-exec-run)
                        (lambda (&rest _)
                          (setq runner-called t)
                          'provider-request)))

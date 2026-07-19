@@ -1634,15 +1634,15 @@ allowed-tools:
                 :description "A test skill")))
     (with-temp-buffer
       (setq-local gptel-system-prompt "captured-system-prompt")
-      (setq-local mevedel-agent-exec--agents nil)
+      (setq-local mevedel-agents--specs nil)
       (let ((agent (mevedel-skills--build-fork-agent skill)))
         (should (mevedel-agent-p agent))
         (should (equal "skill:demo" (mevedel-agent-name agent)))
         (should (equal "captured-system-prompt"
                        (mevedel-agent-system-prompt agent)))
         ;; The synthetic agent is registered into the buffer-local
-        ;; `mevedel-agent-exec--agents' so spawn can resolve it.
-        (should (assoc-string "skill:demo" mevedel-agent-exec--agents))))))
+        ;; `mevedel-agents--specs' so spawn can resolve it.
+        (should (assoc-string "skill:demo" mevedel-agents--specs))))))
 
 (mevedel-deftest mevedel-skills-dispatch-prepared-fork ()
   ,test
@@ -1814,7 +1814,7 @@ allowed-tools:
          dispatched-agent)
     (with-temp-buffer
       (setq-local mevedel--session session)
-      (setq-local mevedel-agent-exec--agents nil)
+      (setq-local mevedel-agents--specs nil)
       (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
                  (lambda (_session _task _message &rest keys)
                    (setq dispatched-agent (plist-get keys :agent))

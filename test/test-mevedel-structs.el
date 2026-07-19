@@ -34,6 +34,54 @@
 
 
 ;;
+;;; Task invariants
+
+(mevedel-deftest mevedel-task-normalize-owner ()
+  ,test
+  (test)
+
+  :doc "accepts registered canonical paths and ordinary buckets"
+  (let ((registry '(("/root/worker" . retained))))
+    (should
+     (equal "/root/worker"
+            (mevedel-task-normalize-owner "/root/worker" registry)))
+    (should (equal "backend"
+                   (mevedel-task-normalize-owner "backend" registry)))
+    (should-not (mevedel-task-normalize-owner "" registry))
+    (should-not (mevedel-task-normalize-owner "/root" registry)))
+
+  :doc "rejects opaque IDs, malformed paths, and unknown agent paths"
+  (let ((registry '(("/root/worker" . retained))))
+    (should-error
+     (mevedel-task-normalize-owner
+      "explorer--0123456789abcdef0123456789abcdef" registry))
+    (should-error
+     (mevedel-task-normalize-owner "/root/Upper" registry))
+    (should-error
+     (mevedel-task-normalize-owner "/root/ghost" registry)))
+
+  :doc "rejects non-string owner values"
+  (should-error (mevedel-task-normalize-owner 42 nil)))
+
+(mevedel-deftest mevedel-task-prune-dangling-dependencies ()
+  ,test
+  (test)
+  :doc "removes missing IDs from both task dependency directions"
+  (let* ((first
+          (mevedel-task--create
+           :id 1 :blocks '(2 3) :blocked-by '(2 3)))
+         (third
+          (mevedel-task--create
+           :id 3 :blocks '(1 2) :blocked-by '(1 2)))
+         (tasks (list first third)))
+    (should (eq tasks (mevedel-task-prune-dangling-dependencies tasks)))
+    (should (equal '(3) (mevedel-task-blocks first)))
+    (should (equal '(3) (mevedel-task-blocked-by first)))
+    (should (equal '(1) (mevedel-task-blocks third)))
+    (should (equal '(1) (mevedel-task-blocked-by third)))))
+
+
+;;
 ;;; Workspace struct
 
 (mevedel-deftest mevedel-workspace--create

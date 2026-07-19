@@ -2,8 +2,9 @@
 
 ;;; Commentary:
 
-;; Workspace, session, and request structs that form the foundation for
-;; mevedel's state management.  All other modules reference these structs.
+;; Workspace, session, request, and task structs that form the foundation for
+;; mevedel's state management, plus canonical task data invariants.  All other
+;; modules reference these definitions.
 
 ;;; Code:
 
@@ -310,6 +311,41 @@ workspace."
   blocked-by        ; list of task IDs blocking this task
   completed-turn    ; integer or nil: turn when status changed to completed
   metadata)         ; plist or nil: free-form extra data
+
+(defun mevedel-task-normalize-owner (owner agent-registry)
+  "Normalize OWNER to a canonical path, bucket string, or nil.
+Canonical non-root paths must name a retained agent in AGENT-REGISTRY."
+  (cond
+   ((or (null owner) (equal owner "") (equal owner "/root")) nil)
+   ((not (stringp owner))
+    (error "Task owner must be a string: %S" owner))
+   (t
+    (let ((case-fold-search nil))
+      (when (string-match-p
+             "\\`[^[:space:]]+--[[:xdigit:]]\\{32\\}\\'" owner)
+        (error "Opaque agent IDs cannot own tasks: %s" owner)))
+    (when (and (string-prefix-p "/" owner)
+               (not (mevedel-agent-path-p owner)))
+      (error "Invalid canonical task owner: %s" owner))
+    (when (and (mevedel-agent-path-p owner)
+               (not (assoc owner agent-registry)))
+      (error "Unknown canonical task owner: %s" owner))
+    owner)))
+
+(defun mevedel-task-prune-dangling-dependencies (tasks)
+  "Remove dependency edges from TASKS to task IDs absent from TASKS.
+Return TASKS after updating both `blocks' and `blocked-by' in place."
+  (let ((ids (mapcar #'mevedel-task-id tasks)))
+    (dolist (task tasks)
+      (setf (mevedel-task-blocks task)
+            (cl-loop for id in (mevedel-task-blocks task)
+                     when (memq id ids)
+                     collect id)
+            (mevedel-task-blocked-by task)
+            (cl-loop for id in (mevedel-task-blocked-by task)
+                     when (memq id ids)
+                     collect id))))
+  tasks)
 
 
 ;;

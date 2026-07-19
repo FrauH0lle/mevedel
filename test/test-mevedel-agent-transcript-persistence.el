@@ -8,7 +8,6 @@
 
 (require 'gptel)
 (require 'mevedel)
-(require 'mevedel-agent-exec)
 (require 'mevedel-agents)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -32,18 +31,6 @@
     (cons (mevedel-workspace-get-or-create
            'project name root name)
           root)))
-
-(defun test-mevedel-agent-transcript--invocation (session buffer)
-  "Return a retained invocation owned by SESSION and BUFFER."
-  (let ((invocation
-         (mevedel-agent-invocation-create
-          (mevedel-agent--create
-           :name "default" :system-prompt "stub" :tools nil))))
-    (setf (mevedel-agent-invocation-agent-id invocation) "agent--test"
-          (mevedel-agent-invocation-path invocation) "/root/test"
-          (mevedel-agent-invocation-parent-data-buffer invocation) buffer
-          (mevedel-agent-invocation-parent-session invocation) session)
-    invocation))
 
 (defun test-mevedel-agent-transcript--release (buffer session root)
   "Release SESSION, kill BUFFER, and delete ROOT."
@@ -170,117 +157,8 @@
                        session buffer)))))
         (test-mevedel-agent-transcript--release buffer session root)))))
 
-(mevedel-deftest mevedel-agent-transcript-persistence--allocate-agent-buffer ()
-  ,test
-  (test)
-  :doc "allocates an independent conversation with canonical identity"
-  (cl-destructuring-bind (workspace . root)
-      (test-mevedel-agent-transcript--workspace)
-    (let* ((session (mevedel-session-create "main" workspace))
-           (parent (generate-new-buffer " *agent-transcript-parent*"))
-           (invocation
-            (test-mevedel-agent-transcript--invocation session parent))
-           agent-buffer)
-      (unwind-protect
-          (progn
-            (with-current-buffer parent
-              (setq-local mevedel--session session)
-              (setq-local mevedel--workspace workspace))
-            (setq agent-buffer
-                  (mevedel-agent-exec--allocate-agent-buffer
-                   invocation parent))
-            (setf (mevedel-agent-invocation-buffer invocation) agent-buffer)
-            (with-current-buffer agent-buffer
-              (should (derived-mode-p 'org-mode))
-              (should (eq mevedel--session session))
-              (should (eq mevedel--agent-invocation invocation))
-              (should (equal "/root/test"
-                             (mevedel-agent-invocation-path invocation)))))
-        (when (buffer-live-p agent-buffer)
-          (with-current-buffer agent-buffer
-            (set-buffer-modified-p nil)
-            (setq-local kill-buffer-hook nil))
-          (kill-buffer agent-buffer))
-        (test-mevedel-agent-transcript--release parent session root)))))
-
-(mevedel-deftest mevedel-agent-exec--save-transcript-buffer ()
-  ,test
-  (test)
-  :doc "ignores conversations without a live visited file"
-  (let* ((buffer (generate-new-buffer " *agent-transcript-unsaved*"))
-         (invocation
-          (mevedel-agent-invocation-create
-           (mevedel-agent--create :name "default"))))
-    (setf (mevedel-agent-invocation-buffer invocation) buffer)
-    (unwind-protect
-        (should-not (mevedel-agent-exec--save-transcript-buffer invocation))
-      (kill-buffer buffer))
-    (should-not (mevedel-agent-exec--save-transcript-buffer invocation)))
-
-  :doc "writes a modified retained conversation"
-  (cl-destructuring-bind (workspace . root)
-      (test-mevedel-agent-transcript--workspace)
-    (let* ((session (mevedel-session-create "main" workspace))
-           (parent (generate-new-buffer " *agent-transcript-save-parent*"))
-           (invocation
-            (test-mevedel-agent-transcript--invocation session parent))
-           (save-path (file-name-as-directory
-                       (file-name-concat root "session")))
-           (relative "agents/test.chat.org")
-           (absolute (expand-file-name relative save-path))
-           (buffer (generate-new-buffer " *agent-transcript-save*")))
-      (unwind-protect
-          (progn
-            (make-directory (file-name-directory absolute) t)
-            (setf (mevedel-session-save-path session) save-path
-                  (mevedel-agent-invocation-buffer invocation) buffer
-                  (mevedel-agent-invocation-transcript-relative-path
-                   invocation)
-                  relative)
-            (with-current-buffer buffer
-              (insert "durable conversation\n")
-              (set-visited-file-name absolute t t)
-              (set-buffer-modified-p t))
-            (should (mevedel-agent-exec--save-transcript-buffer invocation))
-            (should
-             (equal "durable conversation\n"
-                    (with-temp-buffer
-                      (insert-file-contents absolute)
-                      (buffer-string)))))
-        (when (buffer-live-p buffer)
-          (with-current-buffer buffer
-            (set-buffer-modified-p nil)
-            (setq-local kill-buffer-hook nil))
-          (kill-buffer buffer))
-        (test-mevedel-agent-transcript--release parent session root)))))
-
-
 ;;
-;;; Frozen request context and root mailbox
-
-(mevedel-deftest mevedel-agent-exec--apply-request-locals-overrides-existing ()
-  ,test
-  (test)
-  :doc "restores frozen request locals over stale buffer values"
-  (let ((buffer (generate-new-buffer " *agent-transcript-locals*")))
-    (unwind-protect
-        (progn
-          (with-current-buffer buffer
-            (setq-local gptel-tools '(stale-tools))
-            (setq-local gptel-backend 'stale-backend)
-            (setq-local gptel-model 'stale-model))
-          (mevedel-agent-exec--apply-request-locals
-           buffer
-           '((gptel-tools . (fresh-tools))
-             (gptel-backend . fresh-backend)
-             (gptel-model . fresh-model)))
-          (should (equal '(fresh-tools)
-                         (buffer-local-value 'gptel-tools buffer)))
-          (should (eq 'fresh-backend
-                      (buffer-local-value 'gptel-backend buffer)))
-          (should (eq 'fresh-model
-                      (buffer-local-value 'gptel-model buffer))))
-      (kill-buffer buffer))))
+;;; Root mailbox
 
 (mevedel-deftest mevedel-session-persistence-messages-roundtrip ()
   ,test

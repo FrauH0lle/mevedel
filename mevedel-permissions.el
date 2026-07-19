@@ -1395,7 +1395,7 @@ execution level.
 
 Mutates SESSION's `permission-rules' slot via `setf' -- this is a
 **by-reference** write.  Sub-agents share the parent session by
-reference (see `mevedel-agent-exec--allocate-agent-buffer'), so a
+reference (see `mevedel-agent-conversation-open'), so a
 rule recorded inside any sub-agent's permission prompt, such as
 \"allow-session\" or \"deny-session\", immediately applies to the parent
 and to every other live sub-agent sharing the same session struct.  This

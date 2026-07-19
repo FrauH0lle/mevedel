@@ -14,13 +14,12 @@
   (require 'cl-lib)
   (require 'subr-x))
 
-;; `mevedel-agent-exec'
-(declare-function mevedel-agent-exec--final-response-text
-                  "mevedel-agent-exec" (invocation))
-(declare-function mevedel-agent-exec--flush-transcript-save
-                  "mevedel-agent-exec" (invocation))
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-final-response
+                  "mevedel-agent-conversation" (invocation))
+(declare-function mevedel-agent-conversation-save
+                  "mevedel-agent-conversation" (invocation &optional deferred))
 (defvar mevedel--agent-invocation)
-(defvar mevedel-agent-exec--agents)
 
 ;; `mevedel-agent-runtime'
 (declare-function mevedel-agent-runtime-dispatch
@@ -31,11 +30,11 @@
                   "mevedel-agent-runtime" (invocation reason))
 
 ;; `mevedel-agents'
+(declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-configuration-p
                   "mevedel-agents" (cl-x))
-(declare-function copy-mevedel-agent "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-hook-rules "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-freeze "mevedel-agents" (agent))
+(declare-function mevedel-agent-hook-rules "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent-id
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer
@@ -54,6 +53,7 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-resolve-role "mevedel-agents" (role))
+(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
 ;; `mevedel-compact'
 (declare-function mevedel-compact-context-snapshot
@@ -224,8 +224,8 @@ blockers compose and stale releases cannot alter a later follow-up."
                  (or (not (buffer-modified-p))
                      (when (and (boundp 'mevedel--agent-invocation)
                                 mevedel--agent-invocation)
-                       (require 'mevedel-agent-exec)
-                       (mevedel-agent-exec--flush-transcript-save
+                       (require 'mevedel-agent-conversation)
+                       (mevedel-agent-conversation-save
                         mevedel--agent-invocation))))))
           (if saved-p
               (kill-buffer buffer)
@@ -393,18 +393,6 @@ Return the caller path when suspended, and nil after an immediate release."
              (signal (car err) (cdr err))))
           path))))))
 
-(defun mevedel-agent-control-notify-context-mailbox (context &optional reason)
-  "Wake CONTEXT's WaitAgent for mailbox activity with optional REASON."
-  (if (mevedel-session-p context)
-      (mevedel-agent-control--wake context "/root" (or reason 'mailbox))
-    (let* ((session (mevedel-agent-invocation-parent-session context))
-           (path (and session
-                      (mevedel-agent-control--path-for-invocation
-                       session context))))
-      (and path
-           (mevedel-agent-control--wake
-            session path (or reason 'mailbox))))))
-
 (defun mevedel-agent-control-root-waiting-p (session)
   "Return non-nil when SESSION's root has an active WaitAgent callback."
   (and (mevedel-agent-control--waiter session "/root") t))
@@ -539,9 +527,9 @@ Return the resolved recipient path.  Sending never activates a turn."
          (partial
           (and identity
                (progn
-                 (require 'mevedel-agent-exec)
+                 (require 'mevedel-agent-conversation)
                  (ignore-errors
-                   (mevedel-agent-exec--final-response-text identity)))))
+                   (mevedel-agent-conversation-final-response identity)))))
          (location (mevedel-agent-record-conversation-location record)))
     (mevedel-agent-control--bounded-result
      record
@@ -662,28 +650,30 @@ positive decimal strings."
 (defun mevedel-agent-control--publish-result (session record result)
   "Publish RECORD's canonical RESULT in SESSION.
 
-Ordinary turns enqueue RESULT for the spawn parent.  A workflow may install a
-one-shot result handler when it owns the parent interaction.  Successful
-workflow delivery persists the settled record without queueing duplicate mail;
-a failed handler falls back to ordinary parent mail."
+Every turn first enqueues RESULT for the spawn parent.  A workflow may install
+a one-shot result handler when it owns the parent interaction.  Successful
+workflow delivery consumes that exact queued record; a failed handler leaves
+it queued for ordinary parent delivery."
   (let* ((recipient (mevedel-agent-record-parent-path record))
          (handler (mevedel-agent-record-result-handler record)))
-    (if handler
-        (progn
-          (setf (mevedel-agent-record-result-handler record) nil)
-          (condition-case err
-              (progn
-                (funcall handler result)
-                (mevedel-agent-control--persist-session session))
-            (error
-             (display-warning
-              'mevedel
-              (format "Agent result handler failed for %s: %s"
-                      (mevedel-agent-record-path record)
-                      (error-message-string err))
-              :warning)
-             (mevedel-agent-control--enqueue session recipient result))))
-      (mevedel-agent-control--enqueue session recipient result))))
+    (mevedel-agent-control--enqueue session recipient result)
+    (when handler
+      (setf (mevedel-agent-record-result-handler record) nil)
+      (condition-case err
+          (progn
+            (funcall handler result)
+            (mevedel-agent-control--set-mailbox-queue
+             session recipient
+             (delq result
+                   (mevedel-agent-control--mailbox-queue session recipient)))
+            (mevedel-agent-control--persist-session session))
+        (error
+         (display-warning
+          'mevedel
+          (format "Agent result handler failed for %s: %s"
+                  (mevedel-agent-record-path record)
+                  (error-message-string err))
+          :warning))))))
 
 (defun mevedel-agent-control--settle
     (session record invocation response &optional event)
@@ -827,9 +817,8 @@ Return the committed retained record."
   (mevedel-agent-control--validate-spawn session task-name message)
   (require 'mevedel-agents)
   (when (and role (null agent)
-             (boundp 'mevedel-agent-exec--agents)
-             mevedel-agent-exec--agents
-             (not (assoc-string role mevedel-agent-exec--agents)))
+             (mevedel-agents-specs)
+             (not (assoc-string role (mevedel-agents-specs))))
     (user-error "Agent role is not available to this session: %s" role))
   (let* ((resolved-agent
           (or agent (mevedel-agent-resolve-role role)))

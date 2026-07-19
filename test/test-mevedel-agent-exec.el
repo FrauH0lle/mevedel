@@ -15,6 +15,7 @@
 (require 'gptel)
 (require 'mevedel-structs)
 (require 'mevedel-agents)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
 (require 'mevedel-permissions)
 (require 'mevedel-sandbox)
@@ -83,66 +84,6 @@ fire-count and payload."
                     (cdr wait-entry)))
     (should-not (member #'gptel--handle-wait (cdr wait-entry)))))
 
-(mevedel-deftest mevedel-agent-exec--insert-injected-prompt ()
-  ,test
-  (test)
-
-  :doc "appended user-role injection clears accidental gptel properties"
-  (let* ((buf (generate-new-buffer " *mev-agent-inject-append*"))
-         (agent (mevedel-agent--create :name "explorer"))
-         (inv (mevedel-agent-invocation--create
-               :path "/root/test_agent"
-               :agent agent
-               :agent-id "explorer--inject"
-               :buffer buf))
-         (block (propertize "<agent-message from=\"main\">\nhello\n</agent-message>"
-                            'gptel 'response
-                            'invisible t)))
-    (unwind-protect
-        (progn
-          (with-current-buffer buf
-            (insert (propertize "Assistant text\n" 'gptel 'response)))
-          (cl-letf (((symbol-function
-                      'mevedel-agent-exec--save-transcript-buffer)
-                     (lambda (_invocation) t)))
-            (mevedel-agent-exec--insert-injected-prompt inv block))
-          (with-current-buffer buf
-            (goto-char (point-min))
-            (should (search-forward "<agent-message" nil t))
-            (should-not (get-text-property (match-beginning 0) 'gptel))
-            (should-not (get-text-property (match-beginning 0) 'invisible))))
-      (when (buffer-live-p buf) (kill-buffer buf))))
-
-  :doc "prepended user-role injection clears accidental gptel properties"
-  (let* ((buf (generate-new-buffer " *mev-agent-inject-prepend*"))
-         (agent (mevedel-agent--create :name "explorer"))
-         (inv (mevedel-agent-invocation--create
-               :path "/root/test_agent"
-               :agent agent
-               :agent-id "explorer--inject"
-               :buffer buf))
-         (block (propertize "Reminder text" 'gptel '(tool . "call_1"))))
-    (unwind-protect
-        (progn
-          (with-current-buffer buf
-            (insert "* Agent Task: inspect\nbody\n"))
-          (cl-letf (((symbol-function
-                      'mevedel-agent-exec--save-transcript-buffer)
-                     (lambda (_invocation) t)))
-            (mevedel-agent-exec--insert-injected-prompt inv block 'prepend))
-          (with-current-buffer buf
-            (goto-char (point-min))
-            (should (search-forward "Reminder text" nil t))
-            (should-not (get-text-property (match-beginning 0) 'gptel))
-            (should (< (match-beginning 0)
-                       (progn
-                         (search-forward "* Agent Task:")
-                         (match-beginning 0))))))
-      (when (buffer-live-p buf) (kill-buffer buf)))))
-
-
-;;
-;;; Callback contract
 
 (mevedel-deftest mevedel-agent-exec--make-callback ()
 		 ,test
@@ -316,259 +257,6 @@ fire-count and payload."
 ;;
 ;;; Request buffer configuration
 
-(mevedel-deftest mevedel-agent-exec--allocate-agent-buffer ()
-			 ,test
-			 (test)
-
-			 :doc "forces agent data buffers to use linear gptel Org context"
-			 (let* ((root (file-name-as-directory
-				       (make-temp-file "mevedel-agent-parent-" t)))
-				(workspace (mevedel-workspace--create
-					    :type 'project
-					    :id root
-					    :root root
-					    :name "agent"))
-				(session (mevedel-session-create "main" workspace root))
-				(parent-buf (generate-new-buffer " *mev-agent-parent*"))
-				(agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create
-				      :path "/root/test_agent"
-				      :agent agent
-				      :agent-id "explorer--linear"))
-				agent-buf)
-			   (unwind-protect
-			       (progn
-				 (with-current-buffer parent-buf
-				   (setq-local mevedel--session session)
-				   (setq-local mevedel--workspace workspace))
-				 (cl-letf (((symbol-function 'gptel-mode) #'ignore))
-				   (let ((gptel-org-branching-context t))
-				     (setq agent-buf
-					   (mevedel-agent-exec--allocate-agent-buffer
-					    inv parent-buf))))
-				 (with-current-buffer agent-buf
-				   (should-not gptel-org-branching-context)))
-			     (when (buffer-live-p agent-buf) (kill-buffer agent-buf))
-			     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
-			     (delete-directory root t)))
-
-			 :doc "shares root policy by reference through nested agent buffers"
-			 (let* ((root (file-name-as-directory
-			               (make-temp-file "mevedel-agent-policy-" t)))
-			        (workspace (mevedel-workspace--create
-			                    :type 'project :id root :root root
-			                    :name "agent"))
-			        (session (mevedel-session-create "main" workspace root))
-			        (parent-buf
-			         (generate-new-buffer " *mev-agent-policy-parent*"))
-			        (worker-inv
-			         (mevedel-agent-invocation--create
-			          :path "/root/worker"
-			          :agent (mevedel-agent--create :name "worker")
-			          :agent-id "worker--policy"))
-			        (nested-inv
-			         (mevedel-agent-invocation--create
-			          :path "/root/worker/verifier"
-			          :agent (mevedel-agent--create :name "verifier")
-			          :agent-id "verifier--policy"))
-			        worker-buf
-			        nested-buf)
-			   (setf (mevedel-session-permission-mode session) 'full-auto)
-			   (setf (mevedel-session-permission-rules session)
-			         '(("Edit" :path "/tmp/protected/**" :action deny)))
-			   (setf (mevedel-session-resource-grants session)
-			         '((:path "/tmp/protected/read.txt" :access read)))
-			   (unwind-protect
-			       (let ((mevedel-protected-paths
-			              '(("/tmp/protected/**" . inaccessible)))
-			             (mevedel-sandbox-mode 'required))
-			         (with-current-buffer parent-buf
-			           (setq-local mevedel--session session)
-			           (setq-local mevedel--workspace workspace))
-			         (cl-letf (((symbol-function 'gptel-mode) #'ignore))
-			           (setq worker-buf
-			                 (mevedel-agent-exec--allocate-agent-buffer
-			                  worker-inv parent-buf))
-			           (setq nested-buf
-			                 (mevedel-agent-exec--allocate-agent-buffer
-			                  nested-inv worker-buf)))
-			         (dolist (buffer (list worker-buf nested-buf))
-			           (should
-			            (eq session
-			                (buffer-local-value 'mevedel--session buffer))))
-			         (with-current-buffer nested-buf
-			           (should (eq 'required mevedel-sandbox-mode))
-			           (should
-			            (eq 'deny
-			                (mevedel-check-permission
-			                 "Edit"
-			                 :path "/tmp/protected/write.txt"
-			                 :session-rules
-			                 (mevedel-session-permission-rules mevedel--session)
-			                 :mode
-			                 (mevedel-session-permission-mode mevedel--session)
-			                 :resource-grants
-			                 (mevedel-session-resource-grants mevedel--session))))
-			           (should
-			            (eq 'allow
-			                (mevedel-check-permission
-			                 "Read"
-			                 :path "/tmp/protected/read.txt"
-			                 :resource-access 'read
-			                 :session-rules
-			                 (mevedel-session-permission-rules mevedel--session)
-			                 :mode
-			                 (mevedel-session-permission-mode mevedel--session)
-			                 :resource-grants
-			                 (mevedel-session-resource-grants mevedel--session))))))
-			     (when (buffer-live-p nested-buf) (kill-buffer nested-buf))
-			     (when (buffer-live-p worker-buf) (kill-buffer worker-buf))
-			     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))
-			     (delete-directory root t)))
-
-                         :doc "installs path-scoped skill activation in agent buffers"
-                         (let* ((root (file-name-as-directory
-                                       (make-temp-file "mevedel-agent-parent-" t)))
-                                (workspace (mevedel-workspace--create
-                                            :type 'project
-                                            :id root
-                                            :root root
-                                            :name "agent"))
-                                (session (mevedel-session-create
-                                          "main" workspace root))
-                                (parent-buf
-                                 (generate-new-buffer " *mev-agent-parent*"))
-                                (agent (mevedel-agent--create
-                                        :name "explorer"))
-                                (inv (mevedel-agent-invocation--create
-                                      :path "/root/test_agent"
-                                      :agent agent
-                                      :agent-id "explorer--skills"))
-                                agent-buf)
-                           (unwind-protect
-                               (progn
-                                 (with-current-buffer parent-buf
-                                   (setq-local mevedel--session session)
-                                   (setq-local mevedel--workspace workspace))
-                                 (cl-letf (((symbol-function 'gptel-mode)
-                                            #'ignore))
-                                   (setq agent-buf
-                                         (mevedel-agent-exec--allocate-agent-buffer
-                                          inv parent-buf)))
-                                 (with-current-buffer agent-buf
-                                   (should (memq
-                                            #'mevedel-skills--post-tool-activate
-                                            gptel-post-tool-call-functions))))
-                             (when (buffer-live-p agent-buf)
-                               (kill-buffer agent-buf))
-                             (when (buffer-live-p parent-buf)
-                               (kill-buffer parent-buf))
-                             (delete-directory root t)))
-
-                         :doc "installs independent repair hooks in retained agent buffers"
-                         (let* ((root (file-name-as-directory
-                                      (make-temp-file "mevedel-agent-repair-" t)))
-                                (workspace (mevedel-workspace--create
-                                            :type 'project :id root :root root
-                                            :name "agent"))
-                                (session (mevedel-session-create
-                                          "main" workspace root))
-                                (parent-buf
-                                 (generate-new-buffer " *mev-agent-parent*"))
-                                buffers)
-                           (unwind-protect
-                               (progn
-                                 (with-current-buffer parent-buf
-                                   (setq-local mevedel--session session)
-                                   (setq-local mevedel--workspace workspace))
-                                 (dotimes (index 2)
-                                   (let* ((agent
-                                           (mevedel-agent--create
-                                            :name "explorer"))
-                                          (inv
-                                           (mevedel-agent-invocation--create
-                                            :path "/root/test_agent"
-                                            :agent agent
-                                            :agent-id
-                                            (format "explorer--%d" index)))
-                                          buffer)
-                                     (cl-letf (((symbol-function 'gptel-mode)
-                                                #'ignore))
-                                       (setq buffer
-                                             (mevedel-agent-exec--allocate-agent-buffer
-                                              inv parent-buf)))
-                                     (push buffer buffers)
-                                     (with-current-buffer buffer
-                                       (should
-                                        (memq #'mevedel-tool-repair-pre-tool-call
-                                              gptel-pre-tool-call-functions))
-                                       (should
-                                        (memq #'mevedel-tool-repair-post-tool-call
-                                              gptel-post-tool-call-functions))
-                                       (should
-                                        (memq #'mevedel-tool-repair-clear-ledger
-                                              gptel-post-response-functions))
-                                       (should
-                                        (memq #'mevedel-view-agent-live-transcript-stream
-                                              gptel-post-stream-hook))
-                                       (should
-                                        (memq #'mevedel-view-agent-live-transcript-pre-tool
-                                              gptel-pre-tool-call-functions))
-                                       (should
-                                        (memq #'mevedel-view-agent-live-transcript-post-tool
-                                              gptel-post-tool-call-functions))
-                                       (should
-                                        (memq #'mevedel-tool-repair-clear-ledger
-                                              kill-buffer-hook)))))
-                                 (with-current-buffer (car buffers)
-                                   (setq-local mevedel-tool-repair--ledger
-                                               '((:tool "first"
-                                                        :telemetry-recorded t))))
-                                 (with-current-buffer (cadr buffers)
-                                   (setq-local mevedel-tool-repair--ledger
-                                               '((:tool "second"
-                                                        :telemetry-recorded t))))
-                                 (kill-buffer (car buffers))
-                                 (should
-                                  (equal
-                                   '((:tool "second" :telemetry-recorded t))
-                                   (buffer-local-value
-                                    'mevedel-tool-repair--ledger
-                                    (cadr buffers)))))
-                             (dolist (buffer buffers)
-                               (when (buffer-live-p buffer)
-                                 (kill-buffer buffer)))
-                             (when (buffer-live-p parent-buf)
-                               (kill-buffer parent-buf))
-                             (delete-directory root t))))
-
-(mevedel-deftest mevedel-agent-exec--apply-request-locals ()
-		 ,test
-		 (test)
-
-		 :doc "copies active preset values onto the per-agent request buffer"
-		 ;; `gptel-request' copies `gptel-tools' and related request state
-		 ;; from the request buffer into its prompt buffer.  Dynamic
-		 ;; `gptel-with-preset' bindings alone are not enough for the
-		 ;; per-agent buffer path.
-		 (let ((buf (generate-new-buffer " *mev-agent-exec-locals*"))
-		       (tools '(new-tools)))
-		   (unwind-protect
-		       (progn
-			 (with-current-buffer buf
-			   (setq-local gptel-tools '(old-tools))
-			   (setq-local gptel-use-tools nil)
-			   (setq-local gptel-system-prompt "old"))
-			 (mevedel-agent-exec--apply-request-locals
-			  buf
-			  `((gptel-tools . ,tools)
-			    (gptel-use-tools . t)
-			    (gptel-system-prompt . "agent system")))
-			 (with-current-buffer buf
-			   (should (eq gptel-tools tools))
-			   (should (eq gptel-use-tools t))
-			   (should (equal gptel-system-prompt "agent system"))))
-			     (when (buffer-live-p buf) (kill-buffer buf)))))
 
 (mevedel-deftest mevedel-agent-exec--policy-for-invocation
   ()
@@ -744,7 +432,7 @@ fire-count and payload."
             (insert "prompt")
             (set-buffer-modified-p nil))
           (cl-letf (((symbol-function
-                     'mevedel-agent-exec--save-transcript-buffer)
+                     'mevedel-agent-conversation-save)
                      (lambda (arg)
                        (setq saved
                              (list arg
@@ -766,7 +454,7 @@ fire-count and payload."
             (insert "prompt")
             (set-buffer-modified-p nil))
           (cl-letf (((symbol-function
-                      'mevedel-agent-exec--save-transcript-buffer)
+                      'mevedel-agent-conversation-save)
                      (lambda (_arg) (setq saved t))))
             (mevedel-agent-exec--refresh-initial-transcript-state inv))
           (should-not saved)
@@ -824,7 +512,7 @@ fire-count and payload."
                                (should-not (plist-member audit :context)))))
 			 (setf (mevedel-agent-invocation-terminal-reason inv) "done")
 			 (with-temp-buffer
-			   (mevedel-agent-exec--run-stop-hook inv 'completed))
+			   (mevedel-agent-exec-run-stop-hook inv 'completed))
 			 (should (equal (plist-get stop-event :role) "explorer"))
 			 (should (equal (plist-get stop-event :agent-path)
 			                "/root/test_agent"))
@@ -836,7 +524,7 @@ fire-count and payload."
 			     (mevedel-workspace-clear-registry))))
 
 
-(mevedel-deftest mevedel-agent-exec--run ()
+(mevedel-deftest mevedel-agent-exec-run ()
 		 ,test
 		 (test)
 
@@ -859,7 +547,7 @@ fire-count and payload."
 		       (progn
 			 (with-current-buffer parent-buf
 			   (let ((gptel-agent-preset '(:include-reasoning nil))
-				 (mevedel-agent-exec--agents
+				 (mevedel-agents--specs
 				  '(("explorer" :include-reasoning nil)))
 				 (gptel-include-reasoning t)
 				 (gptel-stream nil)
@@ -899,7 +587,7 @@ fire-count and payload."
 				       ((symbol-function 'gptel--update-status)
 					#'ignore))
 		       (setq captured-fsm
-			     (mevedel-agent-exec--run
+			     (mevedel-agent-exec-run
 			      #'ignore "default" "count defcustoms" "prompt"
 			      inv agent-buf)))))
 			 (should (eq captured-buffer agent-buf))
@@ -941,7 +629,7 @@ fire-count and payload."
 			 (mevedel-tool-ui--register)
 			 (with-current-buffer parent-buf
 			   (let ((gptel-agent-preset nil)
-				 (mevedel-agent-exec--agents nil)
+				 (mevedel-agents--specs nil)
 				 (gptel-include-reasoning nil)
 				 (gptel-stream nil)
 				 (gptel-backend nil)
@@ -973,7 +661,7 @@ fire-count and payload."
 					  (setq captured-tools gptel-tools)))
 				       ((symbol-function 'gptel--update-status)
 					#'ignore))
-			       (mevedel-agent-exec--run
+			       (mevedel-agent-exec-run
 				#'ignore "reviewer" "review changes" "prompt"
 				inv agent-buf))))
 			 (should (equal captured-system "agent system"))
@@ -997,122 +685,21 @@ fire-count and payload."
 		 )
 
 
-(mevedel-deftest mevedel-agent-exec--render-data-bounds ()
-		 ,test
-		 (test)
-
-		 :doc "uses cached render-data markers without rescanning parent buffer"
-		 (let ((buf (generate-new-buffer " *mev-agent-render-data-cache*")))
-		   (unwind-protect
-		       (with-current-buffer buf
-			 (let* ((agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create :agent agent))
-				(scans 0))
-			   (insert (mevedel-pipeline--format-render-data-block
-				    '(:agent-id "explorer--1" :status running)))
-			   (mevedel-agent-exec--cache-render-data-bounds
-			    inv (point-min) (point-max))
-			   (cl-letf (((symbol-function
-				       'mevedel-pipeline--find-render-data-block-by-agent-id)
-				      (lambda (_agent-id)
-					(cl-incf scans)
-					nil)))
-			     (let ((bounds
-				    (mevedel-agent-exec--render-data-bounds
-				     inv "explorer--1")))
-			       (should (consp bounds))
-			       (should (markerp (car bounds)))
-			       (should (markerp (cdr bounds)))
-			       (should (= 0 scans))))))
-		     (when (buffer-live-p buf) (kill-buffer buf))))
-
-		 :doc "rejects stale cached markers before falling back to scan"
-		 (let ((buf (generate-new-buffer " *mev-agent-render-data-stale*")))
-		   (unwind-protect
-		       (with-current-buffer buf
-			 (let* ((agent (mevedel-agent--create :name "explorer"))
-				(inv (mevedel-agent-invocation--create :agent agent))
-				(scans 0)
-				(fallback-bounds nil)
-				(block-end nil))
-			   (insert (mevedel-pipeline--format-render-data-block
-				    '(:agent-id "other--1" :status running)))
-			   (setq block-end (point))
-			   (insert "tail\n")
-			   (mevedel-agent-exec--cache-render-data-bounds
-			    inv (point-min) block-end)
-			   (goto-char (point-max))
-			   (setq fallback-bounds (cons (point) nil))
-			   (insert (mevedel-pipeline--format-render-data-block
-				    '(:agent-id "explorer--1" :status running)))
-			   (setcdr fallback-bounds (point))
-			   (cl-letf (((symbol-function
-			       'mevedel-pipeline--find-render-data-block-by-agent-id)
-			      (lambda (agent-id)
-				(cl-incf scans)
-				(and (equal agent-id "explorer--1")
-				     fallback-bounds))))
-			     (let ((bounds
-				    (mevedel-agent-exec--render-data-bounds
-				     inv "explorer--1")))
-			       (should (markerp (car bounds)))
-			       (should (markerp (cdr bounds)))
-			       (should (= (car fallback-bounds)
-					  (marker-position (car bounds))))
-			       (should (= (cdr fallback-bounds)
-					  (marker-position (cdr bounds))))
-			       (should (= 1 scans))))))
-		     (when (buffer-live-p buf) (kill-buffer buf)))))
-
-
-
-
-
-
-
 
 (mevedel-deftest mevedel-agent-exec--handle-tret-save ()
 		 ,test
 		 (test)
 
-		 :doc "debounces transcript saves between tool result cycles"
+		 :doc "requests a deferred conversation save after tool results"
 		 (let* ((agent (mevedel-agent--create :name "explorer"))
 			(inv (mevedel-agent-invocation--create :agent agent))
 			(fsm (gptel-make-fsm
 			      :info (list :mevedel-agent-invocation inv)))
-			(save-count 0)
-			(mevedel-agent-transcript-save-debounce 10))
-		   (unwind-protect
-		       (cl-letf (((symbol-function
-				   'mevedel-agent-exec--save-transcript-buffer)
-				  (lambda (_invocation)
-				    (cl-incf save-count))))
-			 (mevedel-agent-exec--handle-tret-save fsm)
-			 (should (= 0 save-count))
-			 (should
-			  (timerp
-			   (mevedel-agent-invocation-transcript-save-timer inv)))
-			 (mevedel-agent-exec--flush-transcript-save inv)
-			 (should (= 1 save-count))
-			 (should-not
-			  (mevedel-agent-invocation-transcript-save-timer inv)))
-		     (mevedel-agent-exec--cancel-transcript-save inv)))
-
-		 :doc "zero debounce saves immediately"
-		 (let* ((agent (mevedel-agent--create :name "explorer"))
-			(inv (mevedel-agent-invocation--create :agent agent))
-			(fsm (gptel-make-fsm
-			      :info (list :mevedel-agent-invocation inv)))
-			(save-count 0)
-			(mevedel-agent-transcript-save-debounce 0))
-		   (cl-letf (((symbol-function
-			       'mevedel-agent-exec--save-transcript-buffer)
-			      (lambda (_invocation)
-				(cl-incf save-count))))
-		     (mevedel-agent-exec--handle-tret-save fsm)
-		     (should (= 1 save-count))
-		     (should-not
-		      (mevedel-agent-invocation-transcript-save-timer inv)))))
+			called)
+		   (cl-letf (((symbol-function 'mevedel-agent-conversation-save)
+			      (lambda (&rest args) (setq called args))))
+		     (mevedel-agent-exec--handle-tret-save fsm))
+		   (should (equal (list inv t) called))))
 
 
 (mevedel-deftest mevedel-agent-exec--error-reason-from-info ()
@@ -1145,73 +732,6 @@ fire-count and payload."
 		   (should (<= (length reason) 203))
 		   (should (string-suffix-p "..." reason))))
 
-
-(mevedel-deftest mevedel-agent-exec--record-activity ()
-		 ,test
-		 (test)
-
-		 :doc "keeps all items and calls targeted agent refresh"
-		 (let* ((agent (mevedel-agent--create :name "explorer"
-						      :description "Explore"))
-			(inv (mevedel-agent-invocation--create
-			      :path "/root/test_agent"
-			      :agent agent
-			      :agent-id "explorer--activity"))
-			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
-			(view-buf (generate-new-buffer " *mev-agent-activity-view*"))
-			(renders 0))
-		   (unwind-protect
-		       (progn
-			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
-			 (with-current-buffer parent-buf
-			   (setq-local mevedel--view-buffer view-buf))
-			 (cl-letf (((symbol-function 'mevedel-view-refresh-agent-rendering)
-				    (lambda (_buffer _agent-id)
-				      (cl-incf renders))))
-			   (mevedel-agent-exec--record-activity
-			    inv '(:type tool-start :summary "one"))
-			   (mevedel-agent-exec--record-activity
-			    inv '(:type tool-finish :summary "two"))
-			   (mevedel-agent-exec--record-activity
-			    inv '(:type waiting :summary "three")))
-			 (let ((items (mevedel-agent-invocation-activity inv)))
-			   (should (= 3 (length items)))
-			   (should (equal "one" (plist-get (car items) :summary)))
-			   (should (equal "two" (plist-get (cadr items) :summary)))
-			   (should (equal "three" (plist-get (caddr items) :summary)))
-			   (should (numberp (plist-get (car items) :time))))
-			 (should (= 3 renders)))
-		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
-		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf))))
-
-		 :doc "records allowed activity item types without rewriting their type"
-		 (let* ((agent (mevedel-agent--create :name "explorer"
-						      :description "Explore"))
-			(inv (mevedel-agent-invocation--create
-			      :path "/root/test_agent"
-			      :agent agent
-			      :agent-id "explorer--activity-types"))
-			(parent-buf (generate-new-buffer " *mev-agent-activity-parent*"))
-			(view-buf (generate-new-buffer " *mev-agent-activity-view*"))
-			(types '(tool-start tool-finish tool-error waiting message status)))
-		   (unwind-protect
-		       (progn
-			 (setf (mevedel-agent-invocation-parent-data-buffer inv) parent-buf)
-			 (with-current-buffer parent-buf
-			   (setq-local mevedel--view-buffer view-buf))
-			 (cl-letf (((symbol-function 'mevedel-view-refresh-agent-rendering)
-				    (lambda (_buffer _agent-id) nil)))
-			   (dolist (type types)
-			     (mevedel-agent-exec--record-activity
-			      inv (list :type type :summary (symbol-name type)))))
-			 (should (equal types
-					(mapcar (lambda (item) (plist-get item :type))
-						(mevedel-agent-invocation-activity inv))))
-			 (should (cl-every
-				  (lambda (item) (numberp (plist-get item :time)))
-				  (mevedel-agent-invocation-activity inv))))
-		     (when (buffer-live-p view-buf) (kill-buffer view-buf))
-		     (when (buffer-live-p parent-buf) (kill-buffer parent-buf)))))
 
 
 (mevedel-deftest mevedel-agent-exec--handle-wait-activity ()

@@ -1411,13 +1411,13 @@
     (unwind-protect
         (let ((mevedel-reminders--current-chat-buffer buf))
           (with-current-buffer buf
-            (setq-local mevedel-agent-exec--agents
+            (setq-local mevedel-agents--specs
                         '(("explorer" . (:description "Explore")))))
           (should-not (mevedel-reminders--should-fire-p r 0 session))
           (should (equal '(("explorer" . "Explore"))
                          (mevedel-session-agent-types-snapshot session)))
           (with-current-buffer buf
-            (setq-local mevedel-agent-exec--agents
+            (setq-local mevedel-agents--specs
                         '(("verifier" . (:description "Verify")))))
           (should (mevedel-reminders--should-fire-p r 1 session))
           (let ((body (funcall (mevedel-reminder-content r) session)))

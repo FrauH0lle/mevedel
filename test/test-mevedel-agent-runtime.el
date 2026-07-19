@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'gptel-request)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
 (require 'mevedel-agent-runtime)
@@ -78,7 +79,7 @@
                  'mevedel-agent-exec-freeze-configuration)
                 (lambda (&rest _) configuration))
                ((symbol-function
-                 'mevedel-agent-exec--allocate-agent-buffer)
+                 'mevedel-agent-conversation-open)
                 (lambda (&rest _) agent-buffer))
                ((symbol-function 'mevedel-agent-runtime--setup-transcript)
                 (lambda (invocation _buffer)
@@ -87,9 +88,9 @@
                     invocation)
                    "agents/explorer.chat.org")))
                ((symbol-function
-                 'mevedel-agent-exec--save-transcript-buffer)
+                 'mevedel-agent-conversation-save)
                 (lambda (&rest _) t))
-               ((symbol-function 'mevedel-agent-exec--run)
+               ((symbol-function 'mevedel-agent-exec-run)
                 (lambda (callback _role _description _prompt invocation
                                   _buffer)
                   (setq provider-callback callback)
@@ -148,10 +149,10 @@
             (setq-local mevedel--session session)
             (cl-letf
                 (((symbol-function
-                   'mevedel-agent-exec--save-transcript-buffer)
+                   'mevedel-agent-conversation-save)
                   (lambda (&rest _)
                     (setq saved t)))
-                 ((symbol-function 'mevedel-agent-exec--run)
+                 ((symbol-function 'mevedel-agent-exec-run)
                   (lambda (_callback _role _description _prompt invocation
                                      _buffer)
                     (setf (mevedel-agent-invocation-runtime-fsm invocation)
@@ -240,23 +241,23 @@
                       'mevedel-session-persistence--update-transcript-entry)
                      (lambda (&rest _) (push 'transcript calls)))
                     ((symbol-function
-                      'mevedel-agent-exec--flush-transcript-save)
+                      'mevedel-agent-conversation-save)
                      (lambda (&rest _) (push 'save calls)))
-                    ((symbol-function 'mevedel-agent-exec--record-activity)
+                    ((symbol-function 'mevedel-agent-conversation-record-activity)
                      (lambda (&rest _) (push 'activity calls)))
                     ((symbol-function
-                      'mevedel-agent-exec--final-activity-snapshot)
+                      'mevedel-agent-conversation-final-activity)
                      (lambda (&rest _) '(:status completed)))
                     ((symbol-function 'mevedel-tool-task-finalize-owner)
                      (lambda (&rest _) (push 'tasks calls) t))
                     ((symbol-function 'mevedel-tool-task--refresh-display)
                      (lambda () (push 'task-view calls)))
-                    ((symbol-function 'mevedel-agent-exec--handle-update)
+                    ((symbol-function 'mevedel-agent-conversation-refresh)
                      (lambda (&rest _) (push 'handle calls)))
                     ((symbol-function
                       'mevedel-session-persistence--write-sidecar-now)
                      (lambda (&rest _) (push 'sidecar calls)))
-                    ((symbol-function 'mevedel-agent-exec--run-stop-hook)
+                    ((symbol-function 'mevedel-agent-exec-run-stop-hook)
                      (lambda (&rest _) (push 'hook calls)))
                     ((symbol-function
                       'mevedel-view-agent-live-transcript-finalize)

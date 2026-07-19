@@ -573,7 +573,7 @@ keys are `$skill-name` symbols.
 | Custom Variable                         | Variable Description                                                |
 |-----------------------------------------|---------------------------------------------------------------------|
 | `mevedel-agent-extra-tool-specs`          | Add active or deferred tool specs to built-in agent definitions.  |
-| `mevedel-agent-transcript-save-debounce`  | Delay before a changed retained transcript is flushed to disk.    |
+| `mevedel-agent-conversation-save-debounce` | Delay before a changed retained conversation is flushed to disk.  |
 | `mevedel-agent-view-display-action`       | Display action used for rendered agent transcript views.          |
 
 ### Goals

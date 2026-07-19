@@ -4,7 +4,6 @@
 
 ;; Tests for the pure renderer + helper functions used by the view layout:
 ;; - mevedel-agent-runtime-display-label
-;; - mevedel-tool-ui--handle-badge
 ;; - mevedel-view--zone-separator
 
 ;;; Code:
@@ -26,66 +25,6 @@
 ;;; Display label derivation
 
 
-
-
-;;
-;;; Handle badge renderer
-
-(mevedel-deftest mevedel-tool-ui--handle-badge
-  (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
-  ,test
-  (test)
-
-  :doc "running with N calls renders [running · N calls]"
-  (should (string-match-p
-           "running.*3 calls"
-           (mevedel-tool-ui--handle-badge
-            '(:status running :calls 3))))
-
-  :doc "running with zero calls suppresses the count suffix"
-  (let ((badge (mevedel-tool-ui--handle-badge
-                '(:status running :calls 0))))
-    (should (string-match-p "running" badge))
-    (should-not (string-match-p "calls" badge)))
-
-  :doc "blocked reason overrides running badge"
-  (let ((badge (mevedel-tool-ui--handle-badge
-                '(:status running :calls 2 :blocked-reason "permission"))))
-    (should (string-match-p "blocked" badge))
-    (should (string-match-p "permission" badge))
-    (should-not (string-match-p "running" badge)))
-
-  :doc "completed renders ✓ done with elapsed and calls"
-  (let ((badge (mevedel-tool-ui--handle-badge
-                '(:status completed :calls 5 :elapsed 2.3))))
-    (should (string-match-p "done" badge))
-    (should (string-match-p "2\\.3s" badge))
-    (should (string-match-p "5 calls" badge)))
-
-  :doc "completed without elapsed/calls renders just ✓ done"
-  (should (string-match-p
-           "✓ done"
-           (mevedel-tool-ui--handle-badge '(:status completed))))
-
-  :doc "error renders ✗ error · REASON"
-  (should (string-match-p
-           "error.*max-turns"
-           (mevedel-tool-ui--handle-badge
-            '(:status error :reason "max-turns"))))
-
-  :doc "aborted renders ✗ aborted"
-  (should (string-match-p
-           "✗ aborted"
-           (mevedel-tool-ui--handle-badge '(:status aborted))))
-
-  :doc "incomplete renders ○ incomplete"
-  (should (string-match-p
-           "○ incomplete"
-           (mevedel-tool-ui--handle-badge '(:status incomplete))))
-
-  :doc "unknown status returns empty string"
-  (should (equal ""
-                 (mevedel-tool-ui--handle-badge '(:status banana)))))
 
 
 (mevedel-deftest mevedel-tool-ui--render-agent

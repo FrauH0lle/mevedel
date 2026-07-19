@@ -40,9 +40,6 @@
 (declare-function imenu--make-index-alist "imenu" (&optional noerror))
 (defvar imenu--index-alist)
 
-;; `mevedel-agent-exec'
-(defvar mevedel-agent-exec--agents)
-
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-agent
                   "mevedel-agents" (cl-x) t)
@@ -61,6 +58,7 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-max-turns "mevedel-agents" (agent) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agents-specs "mevedel-agents" (&optional buffer))
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-auto-eligible-p "mevedel-compact" ())
@@ -411,12 +409,12 @@ The shape is (NAME . DESCRIPTION), sorted by NAME.  Returns nil when
 the current chat buffer has no request-local agent roster yet."
   (when-let* ((buf (mevedel-reminders--current-buffer)))
     (with-current-buffer buf
-      (when (boundp 'mevedel-agent-exec--agents)
+      (when-let* ((specs (mevedel-agents-specs)))
         (sort
          (mapcar (lambda (entry)
                    (cons (car entry)
                          (plist-get (cdr entry) :description)))
-                 mevedel-agent-exec--agents)
+                 specs)
          (lambda (a b) (string< (car a) (car b))))))))
 
 (defun mevedel-reminders--format-agent-delta (added removed)

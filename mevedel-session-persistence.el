@@ -145,16 +145,20 @@
 (declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-task-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-description "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-owner "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-blocks "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-completed-turn "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-task--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-blocks "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-completed-turn "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-description "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-normalize-owner
+                  "mevedel-structs" (owner agent-registry))
+(declare-function mevedel-task-owner "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-prune-dangling-dependencies
+                  "mevedel-structs" (tasks))
+(declare-function mevedel-task-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -566,13 +570,6 @@ containment semantics as session creation."
 ;;
 ;;; Task serialization
 
-(defun mevedel-session-persistence--task-owner-from-plist (plist)
-  "Return PLIST's task owner as a non-empty string or nil."
-  (let ((owner (plist-get plist :owner)))
-    (and (stringp owner)
-         (not (string-empty-p owner))
-         owner)))
-
 (defun mevedel-session-persistence--task-to-plist (task)
   "Serialize TASK struct to a plist."
   (list :id          (mevedel-task-id task)
@@ -585,14 +582,16 @@ containment semantics as session creation."
         :completed-turn (mevedel-task-completed-turn task)
         :metadata    (mevedel-task-metadata task)))
 
-(defun mevedel-session-persistence--task-from-plist (plist)
+(defun mevedel-session-persistence--task-from-plist
+    (plist &optional agent-registry)
   "Reconstruct a `mevedel-task' from PLIST."
   (mevedel-task--create
    :id          (plist-get plist :id)
    :subject     (plist-get plist :subject)
    :description (plist-get plist :description)
    :status      (plist-get plist :status)
-   :owner       (mevedel-session-persistence--task-owner-from-plist plist)
+   :owner       (mevedel-task-normalize-owner
+                 (plist-get plist :owner) agent-registry)
    :blocks      (plist-get plist :blocks)
    :blocked-by  (plist-get plist :blocked-by)
    :completed-turn (plist-get plist :completed-turn)
@@ -717,7 +716,8 @@ latest-user-message, additional-roots) are returned alongside because
 they are not on the session struct.
 
 Only the current sidecar version is accepted.  Permission rules with
-unknown actions are dropped via the hygiene filter."
+unknown actions and task state with invalid agent owners are dropped via
+their hygiene filters."
   (unless (equal (plist-get plist :version) (mevedel-version))
     (error "Unsupported session version: %s"
            (or (plist-get plist :version) "missing")))
@@ -728,8 +728,6 @@ unknown actions are dropped via the hygiene filter."
          (working-directory
           (mevedel-session-persistence--working-directory-from-plist
            plist workspace))
-         (tasks     (mapcar #'mevedel-session-persistence--task-from-plist
-                            (plist-get plist :tasks)))
          (rules     (mevedel-session-persistence--filter-permission-rules
                      (plist-get plist :permission-rules)))
          (resource-grants
@@ -740,6 +738,31 @@ unknown actions are dropped via the hygiene filter."
          (raw-agent-registry (plist-get plist :agent-registry))
          (agent-registry
           (mevedel-agent-persistence-deserialize-registry raw-agent-registry))
+         (tasks
+          (mevedel-task-prune-dangling-dependencies
+           (delq
+            nil
+            (mapcar
+             (lambda (task-plist)
+               (condition-case nil
+                   (mevedel-session-persistence--task-from-plist
+                    task-plist agent-registry)
+                 (error nil)))
+             (plist-get plist :tasks)))))
+         (task-status-notes
+          (cl-loop
+           for entry in (and (proper-list-p
+                              (plist-get plist :task-status-notes))
+                             (plist-get plist :task-status-notes))
+           when (consp entry)
+           for normalized
+           = (condition-case nil
+                 (cons t
+                       (mevedel-task-normalize-owner
+                        (car entry) agent-registry))
+               (error nil))
+           when normalized
+           collect (cons (cdr normalized) (copy-tree (cdr entry)))))
          (session   (mevedel-session--create
                      :name             (plist-get plist :session-name)
                      :workspace        workspace
@@ -760,8 +783,7 @@ unknown actions are dropped via the hygiene filter."
                      :skills-snapshot (plist-get plist :skills-snapshot)
                      :last-task-write-turn
                      (plist-get plist :last-task-write-turn)
-                     :task-status-notes
-                     (plist-get plist :task-status-notes)
+                     :task-status-notes task-status-notes
                      :session-id       (plist-get plist :session-id)
                      :created-at       (plist-get plist :created-at)
                      :updated-at       (plist-get plist :updated-at)

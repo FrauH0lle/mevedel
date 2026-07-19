@@ -10,6 +10,7 @@
 (require 'gptel)
 (require 'json)
 (require 'mevedel-agent-control)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
 (require 'mevedel-compact)
 (require 'mevedel-session-persistence)
@@ -121,7 +122,7 @@
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+          (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                      (lambda (callback _role _description message invocation
                                        _buffer &optional _configure)
                        (if (equal message "Fail initialization.")
@@ -310,8 +311,8 @@
           (let ((response-start (point)))
             (insert "Second live response.\n")
             (put-text-property response-start (point) 'gptel 'response))
-          (let ((mevedel-agent-exec--agents nil))
-            (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+          (let ((mevedel-agents--specs nil))
+            (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                        (lambda (callback _role _description _message invocation
                                          buffer &optional _configure)
                          (push callback callbacks)
@@ -492,7 +493,7 @@
             (setq-local gptel-model 'parent-model)
             (setq-local gptel-reasoning-effort 'low)
             (let ((gptel-agent-preset nil)
-                  (mevedel-agent-exec--agents nil)
+                  (mevedel-agents--specs nil)
                   (mevedel-model-tiers
                    '((role-tier :provider "Role:role-model" :effort medium)
                      (explicit-tier :provider "Explicit:explicit-model")))
@@ -502,7 +503,7 @@
                           (plist-get
                            (mevedel-model-resolve-workload 'default)
                            :effort)))
-              (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+              (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                          (lambda (callback _role _description _message invocation
                                            _buffer &optional _configure)
                            (push callback callbacks)
@@ -628,7 +629,7 @@
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+          (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                      (lambda (callback _role _description message invocation
                                        buffer &optional _configure)
                        (when fail-launch
@@ -689,7 +690,7 @@
                              (buffer-string))))
                 (cl-letf
                     (((symbol-function
-                       'mevedel-agent-exec--save-transcript-buffer)
+                       'mevedel-agent-conversation-save)
                       (lambda (_invocation) nil)))
                   (should-error
                    (mevedel-tool-ui--followup-agent
@@ -743,7 +744,7 @@
         (with-current-buffer parent
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+          (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                      (lambda (callback _role _description message invocation
                                        buffer &optional _configure)
                        (setq launches

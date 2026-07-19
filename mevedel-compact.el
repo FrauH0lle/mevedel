@@ -50,11 +50,12 @@
 (defvar gptel-tools)
 (defvar gptel-use-tools)
 
-;; `mevedel-agent-exec'
-(declare-function mevedel-agent-exec--flush-transcript-save
-                  "mevedel-agent-exec" (invocation))
-(declare-function mevedel-agent-exec--record-activity
-                  "mevedel-agent-exec" (invocation item &optional reserved))
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-record-activity
+                  "mevedel-agent-conversation"
+                  (invocation item &optional suppress-rerender))
+(declare-function mevedel-agent-conversation-save
+                  "mevedel-agent-conversation" (invocation &optional deferred))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-buffer
@@ -1344,7 +1345,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
          (summary (mevedel--compact-append-hook-audits summary hook-audits))
          (execution-archive-text
           (mevedel--compact-execution-row-archive-text target)))
-    (unless (mevedel-agent-exec--flush-transcript-save invocation)
+    (unless (mevedel-agent-conversation-save invocation)
       (error "Could not persist agent transcript before compaction"))
     (copy-file canonical-path archive-path nil)
     (let ((inhibit-read-only t))
@@ -1356,7 +1357,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
       (when execution-archive-text (insert execution-archive-text))
       (when pending-text (insert pending-text))
       (set-buffer-modified-p t))
-    (unless (mevedel-agent-exec--flush-transcript-save invocation)
+    (unless (mevedel-agent-conversation-save invocation)
       (error "Could not persist compacted agent transcript"))
     (mevedel--compact-commit-execution-row-archive target)
     archive-path))
@@ -1388,7 +1389,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
 
 (defun mevedel--compact-agent-start (target)
   "Show agent TARGET compaction progress."
-  (mevedel-agent-exec--record-activity
+  (mevedel-agent-conversation-record-activity
    (plist-get target :invocation)
    '(:type status :summary "Compacting..."))
   (gptel--update-status " Compacting..." 'warning))
@@ -1407,7 +1408,7 @@ AUTO is non-nil for automatic compaction."
 
 (defun mevedel--compact-agent-complete (target _auto)
   "Restore ordinary continuation status for agent TARGET."
-  (mevedel-agent-exec--record-activity
+  (mevedel-agent-conversation-record-activity
    (plist-get target :invocation)
    '(:type status :summary "waiting"))
   (gptel--update-status " Calling Agent..." 'font-lock-escape-face))
@@ -1840,7 +1841,7 @@ set already stored on FSM's info plist."
           (or (plist-get target :invocation)
               (plist-get info :mevedel-agent-invocation))))
     (when (mevedel-agent-invocation-p invocation)
-      (mevedel-agent-exec--record-activity
+      (mevedel-agent-conversation-record-activity
        invocation '(:type status :summary "error")))
     (gptel--update-status " Agent failed" 'error)
     (plist-put info :status (format "Compaction failed: %s" err))

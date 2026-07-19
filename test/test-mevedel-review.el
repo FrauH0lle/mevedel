@@ -7,6 +7,7 @@
 (require 'mevedel-review)
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
 (require 'mevedel-tool-exec)
 (require 'mevedel-view)
@@ -19,7 +20,7 @@
           "helpers"))
 
 (defvar mevedel--agent-invocation)
-(defvar mevedel-agent-exec--agents)
+(defvar mevedel-agents--specs)
 (defvar mevedel-bash-dangerous-commands)
 (defvar mevedel-session--read-only-mode)
 
@@ -325,11 +326,11 @@
     (unwind-protect
         (progn
           (with-current-buffer data
-            (setq-local mevedel-agent-exec--agents nil))
+            (setq-local mevedel-agents--specs nil))
           (mevedel-review--ensure-agent-spec data 'review)
           (with-current-buffer data
             (let ((spec (cdr (assoc "reviewer"
-                                    mevedel-agent-exec--agents))))
+                                    mevedel-agents--specs))))
               (should spec)
               (should (plist-get spec :system))
               (should (plist-get spec :tools)))))
@@ -340,11 +341,11 @@
     (unwind-protect
         (progn
           (with-current-buffer data
-            (setq-local mevedel-agent-exec--agents nil))
+            (setq-local mevedel-agents--specs nil))
           (mevedel-review--ensure-agent-spec data 'verify)
           (with-current-buffer data
             (let ((spec (cdr (assoc "verifier"
-                                    mevedel-agent-exec--agents))))
+                                    mevedel-agents--specs))))
               (should spec)
               (should (plist-get spec :system))
               (should (plist-get spec :tools)))))
@@ -563,7 +564,7 @@
       (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
       (setf (mevedel-agent-invocation-call-count invocation) 2)
       (let ((mevedel-view-agent-refresh-delay 0))
-        (mevedel-agent-exec--handle-update invocation))
+        (mevedel-agent-conversation-refresh invocation))
       (with-current-buffer data-buf
         (pcase-let ((`(,start . ,end)
                      (mevedel-pipeline--find-render-data-block-by-agent-id
@@ -658,7 +659,7 @@
             (should (equal "target" task-description))
             (should (equal "prompt" task-prompt))
             (with-current-buffer data
-              (should (assoc "reviewer" mevedel-agent-exec--agents))
+              (should (assoc "reviewer" mevedel-agents--specs))
               (let ((text (buffer-string)))
                 (should (string-search "/review target" text))
                 (should (string-search "review result" text))

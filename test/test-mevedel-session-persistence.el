@@ -653,6 +653,82 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             (should (equal "test-id" (mevedel-workspace-id workspace)))))
       (when (file-directory-p root)
         (delete-directory root t))))
+
+  :doc "drops persisted opaque and unknown agent task owners"
+  (let ((root (make-temp-file "mevedel-task-owner-roundtrip-" t)))
+    (unwind-protect
+        (let* ((source
+                (test-mevedel-session-persistence--make-session root))
+               (configuration
+                (test-mevedel-session-persistence--agent-configuration))
+               (worker-id
+                "worker--0123456789abcdef0123456789abcdef")
+               (reviewer-id
+                "reviewer--fedcba9876543210fedcba9876543210")
+               (valid-owner "/root/worker/reviewer"))
+          (setf
+           (mevedel-session-agent-registry source)
+           (list
+            (cons
+             "/root/worker"
+             (mevedel-agent-record--create
+              :id worker-id
+              :path "/root/worker"
+              :parent-path "/root"
+              :role "default"
+              :configuration configuration
+              :activity 'idle
+              :conversation-location "agents/worker.chat.org"))
+            (cons
+             valid-owner
+             (mevedel-agent-record--create
+              :id reviewer-id
+              :path valid-owner
+              :parent-path "/root/worker"
+              :role "default"
+              :configuration configuration
+              :activity 'idle
+              :conversation-location "agents/reviewer.chat.org")))
+           (mevedel-session-tasks source)
+           (list
+            (mevedel-task--create
+             :id 1 :subject "valid nested" :status 'pending
+             :owner valid-owner :blocks '(2) :blocked-by '(3))
+            (mevedel-task--create
+             :id 2 :subject "opaque" :status 'pending
+             :owner worker-id)
+            (mevedel-task--create
+             :id 3 :subject "unknown" :status 'pending
+             :owner "/root/ghost"))
+           (mevedel-session-task-status-notes source)
+           (list
+            (list valid-owner :note "valid")
+            (list worker-id :note "opaque")
+            (list "/root/ghost" :note "unknown")))
+          (let* ((sidecar (mevedel-session-persistence-serialize source))
+                 (restored
+                  (plist-get
+                   (mevedel-session-persistence-deserialize sidecar)
+                   :session)))
+            (should
+             (equal (list valid-owner)
+                    (mapcar #'mevedel-task-owner
+                            (mevedel-session-tasks restored))))
+            (should-not
+             (mevedel-task-blocks (car (mevedel-session-tasks restored))))
+            (should-not
+             (mevedel-task-blocked-by
+              (car (mevedel-session-tasks restored))))
+            (should
+             (equal (list valid-owner)
+                    (mapcar #'car
+                            (mevedel-session-task-status-notes restored))))
+            (should (= 2 (length
+                          (mevedel-session-agent-registry restored))))))
+      (when (file-directory-p root)
+        (delete-directory root t))
+      (mevedel-workspace-clear-registry)))
+
   :doc "preserves automatic revision metadata and compact cycle audit evidence"
   (let* ((input-hash (secure-hash 'sha256 "# Original"))
          (replacement-hash (secure-hash 'sha256 "# Revised"))

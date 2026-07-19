@@ -90,7 +90,7 @@ Entry point
   mevedel.el                  top-level loader, install/uninstall, directives
 
 Data model
-  mevedel-structs.el          workspace, session, request, agent-invocation
+  mevedel-structs.el          workspace, session, request, task data invariants
   mevedel-turn.el             canonical success/failure turn settlement
   mevedel-workspace.el        workspace detection and registry
   mevedel-models.el           model tier/provider resolution
@@ -145,6 +145,7 @@ Prompt / presets / agents
   mevedel-presets.el          gptel presets and request-time FSM assembly
   mevedel-specialist-nudges.el  generic-tool specialist prompting policy
   mevedel-agents.el           worker/explorer/verifier/reviewer definitions
+  mevedel-agent-conversation.el  retained conversation buffers, activity, and saves
   mevedel-agent-control.el    retained-agent tree addressing, turns, mail, waits
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-persistence.el durable agent registry codec and cold hydration

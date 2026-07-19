@@ -21,7 +21,7 @@
 (require 'mevedel-structs)
 (require 'mevedel-utilities)
 (require 'mevedel-agents)
-(require 'mevedel-agent-exec)
+(require 'mevedel-agent-conversation)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permission-prompt)
 (require 'mevedel-tool-ask)
@@ -65,12 +65,13 @@
 (declare-function mevedel-agent-control-direct-children
                   "mevedel-agent-control" (session parent-path))
 
-;; `mevedel-agent-exec'
-(declare-function mevedel-agent-exec--insert-injected-prompt
-                  "mevedel-agent-exec" (invocation block &optional position))
-(declare-function mevedel-agent-exec--record-activity
-                  "mevedel-agent-exec"
-                  (invocation item &optional reserved))
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-insert-user-block
+                  "mevedel-agent-conversation"
+                  (invocation block &optional position))
+(declare-function mevedel-agent-conversation-record-activity
+                  "mevedel-agent-conversation"
+                  (invocation item &optional suppress-rerender))
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-agents'
@@ -615,12 +616,12 @@ model-visible communication in conversation history."
          for sender = (or (plist-get message :sender) "unknown")
          do
          (when agent-p
-           (mevedel-agent-exec--record-activity
+           (mevedel-agent-conversation-record-activity
             ctx
             (list :type 'message
                   :from sender
                   :summary (format "message from %s" sender)))
-           (mevedel-agent-exec--insert-injected-prompt
+           (mevedel-agent-conversation-insert-user-block
             ctx block (and prepend-p 'prepend)))
          (unless agent-p
            (mevedel-tools--insert-session-injected-prompt

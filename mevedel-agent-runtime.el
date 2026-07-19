@@ -20,31 +20,31 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-alist)
 
+;; `mevedel-agent-conversation'
+(declare-function mevedel-agent-conversation-final-activity
+                  "mevedel-agent-conversation" (invocation))
+(declare-function mevedel-agent-conversation-final-response
+                  "mevedel-agent-conversation" (invocation))
+(declare-function mevedel-agent-conversation-open
+                  "mevedel-agent-conversation" (invocation parent-data-buffer))
+(declare-function mevedel-agent-conversation-record-activity
+                  "mevedel-agent-conversation"
+                  (invocation item &optional suppress-rerender))
+(declare-function mevedel-agent-conversation-refresh
+                  "mevedel-agent-conversation" (invocation))
+(declare-function mevedel-agent-conversation-save
+                  "mevedel-agent-conversation" (invocation &optional deferred))
+
 ;; `mevedel-agent-exec'
-(declare-function mevedel-agent-exec--allocate-agent-buffer
-                  "mevedel-agent-exec" (invocation parent-data-buffer))
-(declare-function mevedel-agent-exec--final-activity-snapshot
-                  "mevedel-agent-exec" (invocation))
-(declare-function mevedel-agent-exec--final-response-text
-                  "mevedel-agent-exec" (invocation))
-(declare-function mevedel-agent-exec--flush-transcript-save
-                  "mevedel-agent-exec" (invocation))
-(declare-function mevedel-agent-exec--handle-update
-                  "mevedel-agent-exec" (invocation))
-(declare-function mevedel-agent-exec--record-activity
-                  "mevedel-agent-exec" (invocation item &optional reserved))
-(declare-function mevedel-agent-exec--run
-                  "mevedel-agent-exec"
-                  (main-cb agent-type description prompt invocation
-                           agent-buffer))
-(declare-function mevedel-agent-exec--run-stop-hook
-                  "mevedel-agent-exec" (invocation status))
-(declare-function mevedel-agent-exec--save-transcript-buffer
-                  "mevedel-agent-exec" (invocation))
 (declare-function mevedel-agent-exec-freeze-configuration
                   "mevedel-agent-exec"
                   (agent-type invocation &optional model-policy))
-(defvar mevedel-agent-exec--suppress-activity-rerender)
+(declare-function mevedel-agent-exec-run
+                  "mevedel-agent-exec"
+                  (main-cb agent-type description prompt invocation
+                           agent-buffer))
+(declare-function mevedel-agent-exec-run-stop-hook
+                  "mevedel-agent-exec" (invocation status))
 
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p
@@ -281,7 +281,7 @@
 (defun mevedel-agent-runtime--partial-text (invocation &optional fallback)
   "Return bounded partial output for INVOCATION or FALLBACK."
   (when-let* ((raw (or (ignore-errors
-                         (mevedel-agent-exec--final-response-text invocation))
+                         (mevedel-agent-conversation-final-response invocation))
                        fallback))
               ((stringp raw))
               (text
@@ -378,14 +378,14 @@
                   :updated-at (format-time-string "%FT%H-%M-%S"))))))
       (mevedel-agent-runtime--finalize-step
        invocation 'transcript-save
-       (lambda () (mevedel-agent-exec--flush-transcript-save invocation)))
+       (lambda () (mevedel-agent-conversation-save invocation)))
       (mevedel-agent-runtime--finalize-step
        invocation 'activity
        (lambda ()
-         (let ((mevedel-agent-exec--suppress-activity-rerender t))
-           (mevedel-agent-exec--record-activity
-            invocation (list :type 'status :status status
-                             :summary (symbol-name status))))))
+         (mevedel-agent-conversation-record-activity
+          invocation (list :type 'status :status status
+                           :summary (symbol-name status))
+          t)))
       (mevedel-agent-runtime--finalize-step
        invocation 'transcript-activity
        (lambda ()
@@ -393,7 +393,7 @@
            (mevedel-session-persistence--update-transcript-entry
             session (mevedel-agent-invocation-agent-id invocation)
             (list :activity
-                  (mevedel-agent-exec--final-activity-snapshot invocation))))))
+                  (mevedel-agent-conversation-final-activity invocation))))))
       (mevedel-agent-runtime--finalize-step
        invocation 'tasks
        (lambda ()
@@ -407,7 +407,7 @@
                  (mevedel-tool-task--refresh-display)))))))
       (mevedel-agent-runtime--finalize-step
        invocation 'handle
-       (lambda () (mevedel-agent-exec--handle-update invocation)))
+       (lambda () (mevedel-agent-conversation-refresh invocation)))
       (mevedel-agent-runtime--finalize-step
        invocation 'sidecar
        (lambda ()
@@ -417,7 +417,7 @@
       (setf (mevedel-agent-invocation-activity invocation) nil)
       (mevedel-agent-runtime--finalize-step
        invocation 'hook
-       (lambda () (mevedel-agent-exec--run-stop-hook invocation status)))
+       (lambda () (mevedel-agent-exec-run-stop-hook invocation status)))
       (mevedel-agent-runtime--finalize-step
        invocation 'view
        (lambda ()
@@ -560,7 +560,7 @@ Settle a held provider response once its last owned execution has finished."
                         (mevedel-agent-invocation-require-path invocation))))
       (insert "\n" (or prompt "") "\n")
       (when (mevedel-agent-invocation-transcript-relative-path invocation)
-        (unless (mevedel-agent-exec--save-transcript-buffer invocation)
+        (unless (mevedel-agent-conversation-save invocation)
           (if retained-p
               (progn
                 (delete-region start (point-max))
@@ -578,6 +578,7 @@ Settle a held provider response once its last owned execution has finished."
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
 ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
+  (require 'mevedel-agent-conversation)
   (require 'mevedel-agent-exec)
   (unless (and (stringp path) (string-match-p "\\`/root/" path))
     (error "Agent requires a canonical path below /root"))
@@ -630,7 +631,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                (if (buffer-live-p retained-buffer)
                    retained-buffer
                  (error "Retained agent buffer is not live"))
-             (mevedel-agent-exec--allocate-agent-buffer
+             (mevedel-agent-conversation-open
               invocation parent-buffer))))
       (setf (mevedel-agent-invocation-buffer invocation) buffer)
       (if retained-p
@@ -650,7 +651,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
         (funcall on-invocation invocation))
       (condition-case err
           (let ((fsm
-                 (mevedel-agent-exec--run
+                 (mevedel-agent-exec-run
                   (apply-partially
                    #'mevedel-agent-runtime--handle-provider-result invocation)
                   agent-type description prompt invocation buffer)))

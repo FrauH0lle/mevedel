@@ -42,6 +42,89 @@
    :activity activity
    :invocation invocation))
 
+(mevedel-deftest mevedel-view-agent--handle-badge
+  (:doc "maps :status + :calls/:elapsed/:reason to a state badge string")
+  ,test
+  (test)
+
+  :doc "running with N calls renders [running · N calls]"
+  (should (string-match-p
+           "running.*3 calls"
+           (mevedel-view-agent--handle-badge
+            '(:status running :calls 3))))
+
+  :doc "running with zero calls suppresses the count suffix"
+  (let ((badge (mevedel-view-agent--handle-badge
+                '(:status running :calls 0))))
+    (should (string-match-p "running" badge))
+    (should-not (string-match-p "calls" badge)))
+
+  :doc "blocked reason overrides running badge"
+  (let ((badge (mevedel-view-agent--handle-badge
+                '(:status running :calls 2 :blocked-reason "permission"))))
+    (should (string-match-p "blocked" badge))
+    (should (string-match-p "permission" badge))
+    (should-not (string-match-p "running" badge)))
+
+  :doc "completed renders ✓ done with elapsed and calls"
+  (let ((badge (mevedel-view-agent--handle-badge
+                '(:status completed :calls 5 :elapsed 2.3))))
+    (should (string-match-p "done" badge))
+    (should (string-match-p "2\\.3s" badge))
+    (should (string-match-p "5 calls" badge)))
+
+  :doc "completed without elapsed/calls renders just ✓ done"
+  (should (string-match-p
+           "✓ done"
+           (mevedel-view-agent--handle-badge '(:status completed))))
+
+  :doc "error renders ✗ error · REASON"
+  (should (string-match-p
+           "error.*max-turns"
+           (mevedel-view-agent--handle-badge
+            '(:status error :reason "max-turns"))))
+
+  :doc "aborted renders ✗ aborted"
+  (should (string-match-p
+           "✗ aborted"
+           (mevedel-view-agent--handle-badge '(:status aborted))))
+
+  :doc "incomplete renders ○ incomplete"
+  (should (string-match-p
+           "○ incomplete"
+           (mevedel-view-agent--handle-badge '(:status incomplete))))
+
+  :doc "unknown status returns empty string"
+  (should (equal ""
+                 (mevedel-view-agent--handle-badge '(:status banana)))))
+
+(mevedel-deftest mevedel-view-agent--blocked-reason
+  (:doc "reports the root interaction queue blocking a canonical path")
+  ,test
+  (test)
+
+  :doc "prefers a pending permission over a pending plan"
+  (let ((session (mevedel-view-agent-test--session)))
+    (setf (mevedel-session-permission-queue session)
+          '((:origin "/root/worker"))
+          (mevedel-session-plan-queue session)
+          '((:origin "/root/worker")))
+    (should
+     (equal "permission"
+            (mevedel-view-agent--blocked-reason
+             "/root/worker" session))))
+
+  :doc "reports plan blocking and ignores unrelated paths"
+  (let ((session (mevedel-view-agent-test--session)))
+    (setf (mevedel-session-plan-queue session)
+          '((:origin "/root/worker")))
+    (should
+     (equal "plan"
+            (mevedel-view-agent--blocked-reason
+             "/root/worker" session)))
+    (should-not
+     (mevedel-view-agent--blocked-reason "/root/other" session))))
+
 (mevedel-deftest mevedel-view-agent-ownership ()
   ,test
   (test)
