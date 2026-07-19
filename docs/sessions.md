@@ -203,6 +203,17 @@ running Bash rows across the installed segment and copied predecessors before
 the new directory is published, preserving later archive/completion successors
 and marking only otherwise-stale rows `lost`.
 
+Rewind refuses while an agent turn is active, so branching never
+interrupts the source tree. A fork keeps eligible child transcript metadata and
+files as read-only historical evidence, but starts with an empty addressable
+registry and empty agent mailboxes. Historical handles remain inspectable,
+while `ListAgents` and collaboration commands see only the fork's independent
+tree. The task list, owner status notes, and last task-write marker also start
+empty, so former canonical task names are immediately reusable. Session policy,
+prompt state, skills, and reminders are independently copied; the workspace
+identity and its cache are the only session-owned reference deliberately shared
+with the source. The source sidecar and its retained tree are not modified.
+
 Renaming a materialized session preserves live execution ownership. Retained
 artifact paths are retargeted immediately after the session directory moves,
 before process filters can append further output.

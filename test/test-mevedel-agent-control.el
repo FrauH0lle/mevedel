@@ -92,6 +92,22 @@
                  (mevedel-agent-record--create :activity 'idle))))
     (should (= 2 (mevedel-agent-control--active-count session)))))
 
+(mevedel-deftest mevedel-agent-control-active-turn-p ()
+  ,test
+  (test)
+  :doc "reports whether any active agent turn owns capacity"
+  (let ((session (mevedel-agent-control-test--session)))
+    (should-not (mevedel-agent-control-active-turn-p session))
+    (setf (mevedel-session-agent-registry session)
+          (list
+           (cons "/root/idle"
+                 (mevedel-agent-record--create :activity 'idle))))
+    (should-not (mevedel-agent-control-active-turn-p session))
+    (setf (mevedel-agent-record-activity
+           (cdar (mevedel-session-agent-registry session)))
+          'permission-blocked)
+    (should (mevedel-agent-control-active-turn-p session))))
+
 (mevedel-deftest mevedel-agent-control-block-turn ()
   ,test
   (test)

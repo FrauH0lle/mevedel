@@ -41,6 +41,14 @@
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-message-inject "mevedel-tools" (fsm))
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission-add-session-resource-grant
+                  "mevedel-permissions" (session path access))
+
+;; `mevedel-skills-core'
+(declare-function mevedel-skills--maybe-activate
+                  "mevedel-skills-core" (session path))
+
 ;; `org'
 (declare-function org-entry-delete "org" (pom property))
 (declare-function org-entry-get "org" (pom property &optional inherit literal-nil))
@@ -1150,6 +1158,29 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
   (setq mevedel--instruction-states (make-hash-table :test #'equal))
   (setq mevedel--instruction-current-state-key :global))
 
+(mevedel-deftest mevedel-session-persistence--root-data-buffer-p ()
+  ,test
+  (test)
+  :doc "recognizes only root session data buffers"
+  (let ((root (generate-new-buffer " *test-root-role*"))
+        (view (generate-new-buffer " *test-view-role*"))
+        (agent (generate-new-buffer " *test-agent-role*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer view
+            (setq-local mevedel--data-buffer root))
+          (with-current-buffer agent
+            (setq-local mevedel--agent-invocation t))
+          (should
+           (mevedel-session-persistence--root-data-buffer-p root))
+          (should-not
+           (mevedel-session-persistence--root-data-buffer-p view))
+          (should-not
+           (mevedel-session-persistence--root-data-buffer-p agent)))
+      (dolist (buffer (list root view agent))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-session-persistence--authoritative-buffer ()
   ,test
   (test)
@@ -1217,7 +1248,16 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
               (with-current-buffer data-buf (set-buffer-modified-p nil))
               (kill-buffer data-buf))))
       (delete-directory tempdir t)
-      (mevedel-workspace-clear-registry))))
+      (mevedel-workspace-clear-registry)))
+  :doc "rejects agent conversation buffers"
+  (let ((buf (generate-new-buffer " *test-agent-data*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (setq-local mevedel--agent-invocation t)
+          (should-not
+           (mevedel-session-persistence--authoritative-buffer buf)))
+      (when (buffer-live-p buf)
+        (kill-buffer buf)))))
 
 (defun test-mevedel-session-persistence--cold-agent-tree-round-trip ()
   "Exercise one durable agent-tree cold resume and its recovery boundary."
@@ -4302,6 +4342,22 @@ workspace tree."
               (should (string-match-p
                        "/ps or /stop" (error-message-string err))))))
       (when (buffer-live-p buffer) (kill-buffer buffer))))
+  :doc "refuses without changing a tree that has an active agent turn"
+  (with-temp-buffer
+    (let* ((session (mevedel-session--create :name "rewind"))
+           (record
+            (mevedel-agent-record--create :activity 'running)))
+      (setq-local mevedel--session session)
+      (setf (mevedel-session-agent-registry session)
+            (list (cons "/root/worker" record)))
+      (let ((err (should-error (mevedel-rewind) :type 'user-error)))
+        (should (string-match-p
+                 "Interrupt active agent turns"
+                 (error-message-string err))))
+      (should (eq record
+                  (cdr (assoc
+                        "/root/worker"
+                        (mevedel-session-agent-registry session)))))))
   :doc "errors when request in flight"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
@@ -4698,6 +4754,17 @@ The result is a plist whose :tempdir owns every created file."
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
            (buf (generate-new-buffer "*test-data-buf*"))
+           (source-agent-buffer
+            (generate-new-buffer " *fork-source-agent*"))
+           (root-view-buffer
+            (generate-new-buffer " *fork-root-view*"))
+           (source-invocation
+            (mevedel-agent-invocation--create
+             :agent-id "eligible--1"
+             :path "/root/eligible"
+             :parent-session session
+             :parent-context session
+             :buffer source-agent-buffer))
            (eligible-transcript
             (concat "* Agent Task: inspect\n\n"
                     "#+begin_summary\n"
@@ -4759,18 +4826,54 @@ The result is a plist whose :tempdir owns every created file."
                 (3 . (("/tmp/future.el"
                        . (:backup-name "future@v2" :version 2))))))
         (setf (mevedel-session-agent-transcripts session)
-              '(("eligible--1" :parent-turn 2
-                 :path "agents/eligible.chat.org")
+              '(("eligible--1" :parent-turn 2 :type "default"
+                 :description "Historical eligible agent"
+                 :status completed :path "agents/eligible.chat.org")
                 ("future--2" :parent-turn 3
                  :path "agents/future.chat.org")
                 ("poison--3" :parent-turn 2
                  :path "../poison.chat.org")))
+        (setf (mevedel-session-agent-registry session)
+              (list
+               (cons
+                "/root/eligible"
+                (mevedel-agent-record--create
+                 :id "eligible--1"
+                 :path "/root/eligible"
+                 :parent-path "/root"
+                 :role "default"
+                 :configuration
+                 (test-mevedel-session-persistence--agent-configuration)
+                 :activity 'idle
+                 :conversation-location "agents/eligible.chat.org"
+                 :conversation-buffer source-agent-buffer
+                 :invocation source-invocation
+                 :mailbox
+                 (list
+                  (list :type 'MAIL :sender "/root"
+                        :recipient "/root/eligible"
+                        :payload "Source-only mail"
+                        :timestamp (current-time)))))))
+        (setf (mevedel-session-agent-turn-capacity session) 7)
+        (setf (mevedel-session-messages session)
+              (list
+               (list :type 'RESULT :sender "/root/eligible"
+                     :recipient "/root" :outcome 'completed
+                     :payload "Source-only result"
+                     :timestamp (current-time))))
         (setf (mevedel-session-turn-count session) 3)
+        (with-current-buffer source-agent-buffer
+          (setq-local mevedel--session session)
+          (setq-local mevedel--agent-invocation source-invocation))
         (mevedel-session-persistence-write
          (mevedel-session-persistence--sidecar-path parent-path)
          (mevedel-session-persistence--build-sidecar session buf))
         (mevedel-session-persistence--load-truncated
-         session buf 2 1 2 1))
+         session buf 2 1 2 1)
+        (setq-local mevedel--view-buffer root-view-buffer))
+      (with-current-buffer root-view-buffer
+        (setq-local mevedel--session session)
+        (setq-local mevedel--data-buffer buf))
       (let* ((sessions-dir
               (mevedel-session-persistence--sessions-dir workspace))
              (parent-lock
@@ -4780,6 +4883,7 @@ The result is a plist whose :tempdir owns every created file."
          :tempdir tempdir
          :session session
          :buffer buf
+         :root-view-buffer root-view-buffer
          :sessions-dir sessions-dir
          :parent-id parent-id
          :parent-path parent-path
@@ -4787,6 +4891,11 @@ The result is a plist whose :tempdir owns every created file."
          :parent-lock-state
          (mevedel-session-persistence--read-lock parent-lock)
          :eligible-transcript eligible-transcript
+         :source-agent-record
+         (cdr (assoc "/root/eligible"
+                     (mevedel-session-agent-registry session)))
+         :source-agent-buffer source-agent-buffer
+         :source-invocation source-invocation
          :parent-sidecar-text
          (mevedel-session-persistence--file-text
           (mevedel-session-persistence--sidecar-path parent-path))
@@ -4835,6 +4944,10 @@ The result is a plist whose :tempdir owns every created file."
       (should mevedel-session--fork-pending)
       (should (equal (plist-get fixture :rewind-context)
                      mevedel-session--rewind-context)))
+    (when-let ((view-buffer (plist-get fixture :root-view-buffer)))
+      (when (buffer-live-p view-buffer)
+        (should (eq session
+                    (buffer-local-value 'mevedel--session view-buffer)))))
     (should
      (equal (list (file-name-nondirectory
                    (directory-file-name parent-path)))
@@ -4849,6 +4962,14 @@ The result is a plist whose :tempdir owns every created file."
     (when (buffer-live-p buf)
       (with-current-buffer buf (set-buffer-modified-p nil))
       (kill-buffer buf)))
+  (when-let ((agent-buffer (plist-get fixture :source-agent-buffer)))
+    (when (buffer-live-p agent-buffer)
+      (with-current-buffer agent-buffer
+        (set-buffer-modified-p nil))
+      (kill-buffer agent-buffer)))
+  (when-let ((view-buffer (plist-get fixture :root-view-buffer)))
+    (when (buffer-live-p view-buffer)
+      (kill-buffer view-buffer)))
   (when-let ((tempdir (plist-get fixture :tempdir)))
     (when (file-directory-p tempdir)
       (delete-directory tempdir t)))
@@ -4861,9 +4982,38 @@ The result is a plist whose :tempdir owns every created file."
   (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
     (unwind-protect
         (let* ((session (plist-get fixture :session))
+               (source-reminder
+                (mevedel-reminder--create
+                 :type 'fork-isolation
+                 :trigger (lambda (_ctx) t)
+                 :content (lambda (_ctx) "Fork isolation")
+                 :interval 1
+                 :last-fired 1))
+               (source-skill
+                (mevedel-skill--create
+                 :name "fork-isolation"
+                 :display-name "Fork isolation"
+                 :path-patterns '("*.el")))
+               (source-invoked-skill
+                (mevedel-skill-invocation-record--create
+                 :name "source-skill"
+                 :role 'instruction
+                 :origin 'user
+                 :turn 1))
                (_ (setf (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-preset-settings session)
                         '((mevedel-test-setting base))
+                        (mevedel-session-resource-grants session)
+                        '((:path "/tmp/source-only" :access read))
+                        (mevedel-session-reminders session)
+                        (list source-reminder)
+                        (mevedel-session-skills session)
+                        (list source-skill)
+                        (mevedel-session-invoked-skills session)
+                        (list source-invoked-skill)
+                        (mevedel-session-task-status-notes session)
+                        '((nil :note "Source task note" :updated-turn 1))
+                        (mevedel-session-last-task-write-turn session) 1
                         (mevedel-session-goal session)
                         (mevedel-goal--create
                          :id "parent-goal" :objective "Ship"
@@ -4873,8 +5023,11 @@ The result is a plist whose :tempdir owns every created file."
                          '(:kind current :directory "/tmp/"
                            :session-id "parent" :locked t)
                          :implementation-context 'full
-                         :cycles '((:cycle 1)))))
+                         :cycles '((:cycle 1)))
+                        (mevedel-session-execution-state session)
+                        'source-execution-state))
                (before (mevedel-session-persistence-serialize session))
+               (before-text (prin1-to-string before))
                (child
                 (mevedel-session-persistence--fork-candidate
                  session "/tmp/staged-fork/" "child-id"
@@ -4889,15 +5042,59 @@ The result is a plist whose :tempdir owns every created file."
           (should-not (assoc 3 (mevedel-session-file-snapshots child)))
           (should-not (assoc "future--2"
                              (mevedel-session-agent-transcripts child)))
+          (should-not (mevedel-session-agent-registry child))
+          (should-not (mevedel-session-messages child))
+          (should-not (mevedel-session-execution-state child))
+          (should (eq 'source-execution-state
+                      (mevedel-session-execution-state session)))
+          (should (= 7 (mevedel-session-agent-turn-capacity child)))
           (should-not (mevedel-session-goal child))
           (should (mevedel-session-goal session))
+          (should-not (mevedel-session-task-status-notes child))
+          (should-not (mevedel-session-last-task-write-turn child))
+          (puthash "child.el" t (mevedel-session-touched-files child))
+          (puthash '(file . "child.el") '(1 . "hash")
+                   (mevedel-session-mentions-shown child))
+          (should-not (gethash "child.el"
+                               (mevedel-session-touched-files session)))
+          (should-not (gethash '(file . "child.el")
+                               (mevedel-session-mentions-shown session)))
           (setcar (cdr (assq 'mevedel-test-setting
                              (mevedel-session-preset-settings child)))
                   'child)
           (should (equal '((mevedel-test-setting base))
                          (mevedel-session-preset-settings session)))
           (should (equal '((mevedel-test-setting child))
-                         (mevedel-session-preset-settings child))))
+                         (mevedel-session-preset-settings child)))
+          (mevedel-permission-add-session-resource-grant
+           child "/tmp/child-only" 'read)
+          (should-not
+           (member '(:path "/tmp/child-only" :access read)
+                   (mevedel-session-resource-grants session)))
+          (let ((child-reminder (car (mevedel-session-reminders child)))
+                (child-skill (car (mevedel-session-skills child)))
+                (child-invoked-skill
+                 (car (mevedel-session-invoked-skills child))))
+            (should-not (eq source-reminder child-reminder))
+            (should-not (eq source-skill child-skill))
+            (should-not (eq source-invoked-skill child-invoked-skill))
+            (mevedel-reminders--collect-from
+             (mevedel-session-reminders child) 2 child)
+            (mevedel-skills--maybe-activate child "/tmp/child.el")
+            (setf (mevedel-skill-invocation-record-name child-invoked-skill)
+                  "child-skill")
+            (should (= 1 (mevedel-reminder-last-fired source-reminder)))
+            (should (= 2 (mevedel-reminder-last-fired child-reminder)))
+            (should-not (mevedel-skill-active-p source-skill))
+            (should (mevedel-skill-active-p child-skill))
+            (should (equal "source-skill"
+                           (mevedel-skill-invocation-record-name
+                            source-invoked-skill))))
+          (should (equal before
+                         (mevedel-session-persistence-serialize session)))
+          (should (equal before-text
+                         (prin1-to-string
+                          (mevedel-session-persistence-serialize session)))))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture))))
 
 (mevedel-deftest mevedel-session-persistence--stage-fork ()
@@ -4976,11 +5173,30 @@ The result is a plist whose :tempdir owns every created file."
                 (with-current-buffer buf
                   (goto-char (point-max))
                   (insert stale-block)))
-               (_state (mevedel-execution--state-for-session session))
+               (source-execution-state
+                (mevedel-execution--state-for-session session))
+               (source-state
+                (mevedel-session-persistence-serialize session))
                (new-path (mevedel-session-persistence-fork-now buf))
+               (child-session
+                (buffer-local-value 'mevedel--session buf))
                (sidecar
                 (mevedel-session-persistence-read
                  (mevedel-session-persistence--sidecar-path new-path))))
+          (should (equal source-state
+                         (mevedel-session-persistence-serialize session)))
+          (should (equal (plist-get fixture :parent-sidecar-text)
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--sidecar-path
+                           parent-path))))
+          (should (equal parent-segment-1-text
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--segment-path
+                           parent-path 1))))
+          (should (equal (plist-get fixture :parent-segment-2-text)
+                         (mevedel-session-persistence--file-text
+                          (mevedel-session-persistence--segment-path
+                           parent-path 2))))
           (should (string-match-p
                    ":state archived"
                    (mevedel-session-persistence--file-text
@@ -5025,6 +5241,9 @@ The result is a plist whose :tempdir owns every created file."
                          (plist-get sidecar :agent-transcripts)))
           (should-not (assoc "future--2"
                              (plist-get sidecar :agent-transcripts)))
+          (should-not (plist-get sidecar :agent-registry))
+          (should-not (plist-get sidecar :messages))
+          (should (= 7 (plist-get sidecar :agent-turn-capacity)))
           (should (assoc 1 (plist-get sidecar :file-snapshots)))
           (should-not (assoc 3 (plist-get sidecar :file-snapshots)))
           (should (file-exists-p
@@ -5033,25 +5252,165 @@ The result is a plist whose :tempdir owns every created file."
           (with-current-buffer buf
             (should-not mevedel-session--fork-pending)
             (should-not mevedel-session--rewind-context)
+            (should (eq child-session mevedel--session))
             (should (string-prefix-p new-path buffer-file-name)))
-          (should-not (mevedel-session-execution-state session))
-          (should (equal (plist-get fixture :parent-sidecar-text)
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--sidecar-path
-                           parent-path))))
-          (should (equal parent-segment-1-text
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--segment-path
-                           parent-path 1))))
-          (should (equal (plist-get fixture :parent-segment-2-text)
-                         (mevedel-session-persistence--file-text
-                          (mevedel-session-persistence--segment-path
-                           parent-path 2))))
+          (should (eq child-session
+                      (buffer-local-value
+                       'mevedel--session
+                       (plist-get fixture :root-view-buffer))))
+          (should-not (eq child-session session))
+          (should-not (mevedel-session-agent-registry child-session))
+          (should-not (mevedel-session-messages child-session))
+          (should (equal
+                   '((:path "/root" :role "default" :activity "idle"))
+                   (mevedel-agent-control-list-agents child-session)))
+          (let ((parent-view (generate-new-buffer
+                              " *fork-historical-parent*"))
+                historical-view
+                historical-data)
+            (unwind-protect
+                (with-current-buffer parent-view
+                  (setq-local mevedel--data-buffer buf)
+                  (let ((info
+                         (mevedel-view--resolve-agent-transcript
+                          "eligible--1")))
+                    (should (equal
+                             (file-name-concat
+                              new-path "agents/eligible.chat.org")
+                             (plist-get info :absolute-path)))
+                    (setq historical-view
+                          (mevedel-view--ensure-agent-transcript-view
+                           "eligible--1" info parent-view)))
+                  (with-current-buffer historical-view
+                    (setq historical-data mevedel--data-buffer)
+                    (should buffer-read-only))
+                  (with-current-buffer historical-data
+                    (should buffer-read-only)))
+              (when (buffer-live-p historical-view)
+                (kill-buffer historical-view))
+              (when (buffer-live-p historical-data)
+                (kill-buffer historical-data))
+              (when (buffer-live-p parent-view)
+                (kill-buffer parent-view))))
+          (dolist (operation
+                   (list
+                    (lambda ()
+                      (mevedel-agent-control-send-message
+                       child-session "/root/eligible" "mail"))
+                    (lambda ()
+                      (mevedel-agent-control-followup
+                       child-session "/root/eligible" "continue"))
+                    (lambda ()
+                      (mevedel-agent-control-interrupt
+                       child-session "/root/eligible"))))
+            (should-error (funcall operation) :type 'user-error))
+          (let ((mevedel--agent-invocation
+                 (mevedel-agent-invocation--create
+                  :path "/root/eligible" :parent-session child-session)))
+            (should-error
+             (mevedel-agent-control-wait child-session #'ignore 10000)))
+          (let ((fresh
+                 (mevedel-agent-control--reserve
+                  child-session "/root" "eligible" "default")))
+            (should (equal "/root/eligible"
+                           (mevedel-agent-record-path fresh)))
+            (mevedel-agent-control--rollback child-session fresh))
+          (let ((source-record (plist-get fixture :source-agent-record))
+                (source-buffer (plist-get fixture :source-agent-buffer))
+                (source-invocation (plist-get fixture :source-invocation))
+                resumed-root
+                resumed-session)
+            (should (eq source-record
+                        (cdr (assoc
+                              "/root/eligible"
+                              (mevedel-session-agent-registry session)))))
+            (should (eq 'idle
+                        (mevedel-agent-record-activity source-record)))
+            (should (equal "Source-only mail"
+                           (plist-get
+                            (car (mevedel-agent-record-mailbox source-record))
+                            :payload)))
+            (should (mevedel-agent-configuration-p
+                     (mevedel-agent-record-configuration source-record)))
+            (should (buffer-live-p source-buffer))
+            (should (eq session
+                        (buffer-local-value 'mevedel--session
+                                            source-buffer)))
+            (should (eq source-invocation
+                        (buffer-local-value 'mevedel--agent-invocation
+                                            source-buffer)))
+            (should (eq session
+                        (mevedel-agent-invocation-parent-session
+                         source-invocation)))
+            (let ((source-buffer-name (buffer-name source-buffer)))
+              (unwind-protect
+                  (progn
+                    (setq resumed-root
+                          (mevedel-session-persistence-restore parent-path)
+                          resumed-session
+                          (buffer-local-value 'mevedel--session resumed-root))
+                    (should-not (eq resumed-root source-buffer))
+                    (should-not (eq resumed-root buf))
+                    (should-not (eq resumed-session session))
+                    (should-not
+                     (buffer-local-value 'mevedel--agent-invocation
+                                         resumed-root))
+                    (should (equal (plist-get fixture :parent-id)
+                                   (mevedel-session-session-id
+                                    resumed-session)))
+                    (should (equal source-buffer-name
+                                   (buffer-name source-buffer)))
+                    (should (eq session
+                                (buffer-local-value 'mevedel--session
+                                                    source-buffer)))
+                    (should (eq source-invocation
+                                (buffer-local-value
+                                 'mevedel--agent-invocation
+                                 source-buffer))))
+                (test-mevedel-session-persistence--release-and-kill
+                 resumed-root resumed-session))))
+          (should (eq source-execution-state
+                      (mevedel-session-execution-state session)))
+          (should (equal source-state
+                         (mevedel-session-persistence-serialize session)))
+          (should-not (mevedel-session-execution-state child-session))
           (should (= 2 (length
                         (directory-files
                          (plist-get fixture :sessions-dir) nil
                          directory-files-no-dot-files-regexp))))
-          (should (equal new-path (mevedel-session-save-path session))))
+          (should (equal parent-path (mevedel-session-save-path session)))
+          (should (equal new-path
+                         (mevedel-session-save-path child-session))))
+      (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
+  :doc "refuses a turn activated after rewind without changing the source"
+  (let ((fixture (test-mevedel-session-persistence--make-fork-ready)))
+    (unwind-protect
+        (let* ((session (plist-get fixture :session))
+               (buffer (plist-get fixture :buffer))
+               (record (plist-get fixture :source-agent-record)))
+          (setf (mevedel-agent-record-activity record) 'running)
+          (let ((before-state
+                 (mevedel-session-persistence-serialize session))
+                (err
+                 (should-error
+                  (mevedel-session-persistence-fork-now buffer)
+                  :type 'user-error)))
+            (should (string-match-p
+                     "Interrupt active agent turns"
+                     (error-message-string err)))
+            (should (equal before-state
+                           (mevedel-session-persistence-serialize session))))
+          (should (equal
+                   (plist-get fixture :parent-sidecar-text)
+                   (mevedel-session-persistence--file-text
+                    (mevedel-session-persistence--sidecar-path
+                     (plist-get fixture :parent-path)))))
+          (with-current-buffer buffer
+            (should mevedel-session--fork-pending))
+          (should (= 1 (length
+                        (directory-files
+                         (plist-get fixture :sessions-dir) nil
+                         directory-files-no-dot-files-regexp)))))
       (test-mevedel-session-persistence--cleanup-fork-fixture fixture)))
   :doc "retries a colliding session id before staging publication"
   (let* ((fixture (test-mevedel-session-persistence--make-fork-ready))
@@ -5819,6 +6178,36 @@ The result is a plist whose :tempdir owns every created file."
 
 ;;
 ;;; View rerender on resume / rewind
+
+(mevedel-deftest mevedel-session-persistence--find-live-buffer ()
+  ,test
+  (test)
+  :doc "finds only root data buffers, never agent or view projections"
+  (let* ((session (mevedel-session--create
+                   :name "source" :session-id "source-id"))
+         (root-buffer (generate-new-buffer " *source-root*"))
+         (view-buffer (generate-new-buffer " *source-view*"))
+         (agent-buffer (generate-new-buffer " *source-agent*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer root-buffer
+            (setq-local mevedel--session session))
+          (with-current-buffer view-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--data-buffer root-buffer))
+          (with-current-buffer agent-buffer
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation t))
+          (should (eq root-buffer
+                      (mevedel-session-persistence--find-live-buffer
+                       "source-id" "unused")))
+          (kill-buffer root-buffer)
+          (should-not
+           (mevedel-session-persistence--find-live-buffer
+            "source-id" "unused")))
+      (dolist (buffer (list agent-buffer view-buffer root-buffer))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
 
 (mevedel-deftest mevedel-session-persistence--find-file-noselect ()
   ,test

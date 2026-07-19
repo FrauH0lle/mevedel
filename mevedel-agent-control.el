@@ -197,6 +197,10 @@ blockers compose and stale releases cannot alter a later follow-up."
      (mevedel-agent-control--active-p (cdr entry)))
    (mevedel-session-agent-registry session)))
 
+(defun mevedel-agent-control-active-turn-p (session)
+  "Return non-nil when SESSION has an active non-root agent turn."
+  (> (mevedel-agent-control--active-count session) 0))
+
 (defun mevedel-agent-control-retained-buffer-p (session buffer)
   "Return non-nil when SESSION retains BUFFER as an agent conversation."
   (and (mevedel-session-p session)

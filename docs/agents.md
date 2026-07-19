@@ -287,6 +287,13 @@ are not copied by rewind forks. Each retained conversation owns this lifecycle
 independently; compacting one agent does not change its registry path or any
 other conversation.
 
+Rewind forks copy eligible canonical transcript files and metadata only as
+historical inspection artifacts. They do not copy registry identities, frozen
+configuration, mailboxes, waiters, or active turns. Historical agent
+transcripts remain openable from their handles but are absent from the
+collaboration roster, and their former canonical task names are immediately
+available to the fork.
+
 `mevedel-view-agent.el` owns transcript lookup and inspection views plus the
 aggregate live-agent status and targeted handle refresh. The main view renders
 compact one-line agent handles from tool render-data and sidecar state.
