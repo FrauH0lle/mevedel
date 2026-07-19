@@ -1683,9 +1683,9 @@ bounds no longer change."
   "Call ORIG-FUN with ARGS without freezing dynamic system prompt values.
 
 This is an around-advice for `gptel--save-state'.  For non-mevedel
-buffers and static prompts it delegates unchanged.  For mevedel chat
-buffers using presets with dynamic `:system' values, it removes any
-existing `GPTEL_SYSTEM' first and dynamically binds
+buffers and static prompts it delegates unchanged.  For retained agents
+and mevedel chat buffers using presets with dynamic `:system' values, it
+removes any existing `GPTEL_SYSTEM' first and dynamically binds
 `gptel-system-prompt' to nil while gptel writes its Org metadata.
 After delegation, it rewrites `GPTEL_BOUNDS' until the saved absolute
 positions match the post-drawer-update buffer.  If the metadata changed
@@ -1699,7 +1699,8 @@ coordinates continue to address the intended transcript segments."
         (if mevedel-org-buffer-p
             (mevedel-session-persistence--with-fast-property-writes
              (lambda ()
-               (if (and (mevedel-session-persistence--dynamic-system-preset-p)
+               (if (and (or (bound-and-true-p mevedel--agent-invocation)
+                            (mevedel-session-persistence--dynamic-system-preset-p))
                         (require 'org nil t))
                    (save-excursion
                      (save-restriction

@@ -421,6 +421,56 @@
                      (delete-directory root t))))
 
 
+(mevedel-deftest mevedel-agent-conversation-hydrate ()
+		 ,test
+		 (test)
+		 :doc "drops redundant saved system prompts and restores the frozen prompt"
+		 (let* ((root (file-name-as-directory
+			       (make-temp-file "mevedel-agent-hydrate-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project :id root :root root :name "agent"))
+			(session (mevedel-session-create "main" workspace root))
+			(parent-buffer (generate-new-buffer " *mev-agent-parent*"))
+			(transcript (expand-file-name "agent.chat.org" root))
+			(agent (mevedel-agent--create :name "worker"))
+			(invocation
+			 (mevedel-agent-invocation--create
+			  :path "/root/worker"
+			  :agent agent
+			  :agent-id "worker--hydrate"
+			  :parent-session session
+			  :frozen-configuration
+			  (mevedel-agent-configuration--create
+			   :agent agent
+			   :request-locals
+			   '((gptel-system-prompt . "Frozen worker prompt")))))
+			buffer)
+		   (unwind-protect
+		       (progn
+			 (write-region
+			  ":PROPERTIES:\n:GPTEL_SYSTEM: Expanded stale prompt\n:END:\nConversation\n"
+			  nil transcript nil 'silent)
+			 (with-current-buffer parent-buffer
+			   (setq-local mevedel--session session)
+			   (setq-local mevedel--workspace workspace))
+			 (mevedel-session-persistence--install-gptel-save-state-advice)
+			 (setq buffer
+			       (mevedel-agent-conversation-hydrate
+				invocation parent-buffer transcript))
+			 (with-current-buffer buffer
+			   (should (equal "Frozen worker prompt" gptel-system-prompt))
+			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
+			   (should-not (buffer-modified-p))))
+		     (when (buffer-live-p buffer)
+		       (with-current-buffer buffer
+			 (set-buffer-modified-p nil)
+			 (setq-local kill-buffer-hook nil))
+		       (kill-buffer buffer))
+		     (when (buffer-live-p parent-buffer)
+		       (kill-buffer parent-buffer))
+		     (delete-directory root t))))
+
+
 (mevedel-deftest mevedel-agent-conversation--render-data-bounds ()
 		 ,test
 		 (test)
@@ -641,6 +691,10 @@
 			 (with-current-buffer buffer
 			   (org-mode)
 			   (gptel-mode +1)
+			   (setq-local mevedel--session session)
+			   (setq-local mevedel--agent-invocation invocation)
+			   (setq-local gptel-system-prompt
+				       "A deliberately expanded retained-agent prompt")
 			   (setq-local gptel-backend
 				       (let ((gptel--known-backends nil))
 					 (gptel-make-openai
@@ -654,11 +708,13 @@
 			     (add-text-properties start (point) '(gptel response)))
 			   (set-visited-file-name absolute t t)
 			   (set-buffer-modified-p t))
+			 (mevedel-session-persistence--install-gptel-save-state-advice)
 			 (should (mevedel-agent-conversation-save invocation))
 			 (with-temp-buffer
 			   (insert-file-contents absolute)
 			   (org-mode)
 			   (should (org-entry-get (point-min) "GPTEL_BOUNDS"))
+			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
 			   (should (string-match-p "durable conversation"
 					   (buffer-string)))))
 		     (when (buffer-live-p buffer)

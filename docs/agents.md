@@ -249,6 +249,9 @@ sidecar persists an explicit registry record for its canonical and parent
 paths, role and frozen configuration, activity, unread mailbox, conversation
 location, and internal storage identity. The canonical path is the only
 model-facing address; storage identities never enter collaboration tools.
+The frozen configuration is authoritative for the agent's system prompt, so
+agent transcripts omit gptel's redundant expanded `GPTEL_SYSTEM` property
+while retaining `GPTEL_BOUNDS` and the remaining conversation metadata.
 
 `mevedel-agent-conversation.el` owns conversation creation and hydration,
 frozen request-local installation, activity snapshots, response extraction,
