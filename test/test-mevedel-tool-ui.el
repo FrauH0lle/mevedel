@@ -578,7 +578,7 @@
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "returns only the stable path-sorted roster and applies subtree filters"
+  :doc "returns the stable roster, treats an empty prefix as omitted, and filters subtrees"
   (let* ((workspace (mevedel-workspace--create
                      :type 'project :id "list-agents"
                      :root temporary-file-directory :name "list-agents"))
@@ -605,7 +605,12 @@
             (should (< (string-match "/root/alpha" result)
                        (string-match "/root/zeta" result)))
             (should-not (string-match-p "private" result))
-            (should-not (string-match-p "chat.org" result)))
+            (should-not (string-match-p "chat.org" result))
+            (should
+             (equal result
+                    (plist-get
+                     (mevedel-tool-ui--list-agents '(:path_prefix ""))
+                     :result))))
           (let ((result
                  (plist-get
                   (mevedel-tool-ui--list-agents
