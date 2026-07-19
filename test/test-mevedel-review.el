@@ -6,7 +6,10 @@
 
 (require 'mevedel-review)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
+(require 'mevedel-agent-exec)
 (require 'mevedel-tool-exec)
+(require 'mevedel-view)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -17,6 +20,9 @@
 
 (defvar mevedel--agent-invocation)
 (defvar mevedel-agent-exec--agents)
+(defvar mevedel-agent-runtime--fsms)
+(defvar mevedel-bash-dangerous-commands)
+(defvar mevedel-session--read-only-mode)
 
 
 (mevedel-deftest mevedel-review--target-prompt-and-hint ()
@@ -222,21 +228,6 @@
          (outcome `(:status ok :kind fork :result ,raw :agent-id "reviewer--1")))
     (should (eq outcome (mevedel-review-transform-outcome "review" outcome)))))
 
-(mevedel-deftest mevedel-review--augment-skill ()
-  ,test
-  (test)
-  :doc "adds review permission rules to a copied skill"
-  (let ((skill (mevedel-skill--create :name "review")))
-    (cl-letf (((symbol-function 'mevedel-review--permission-rules)
-               (lambda () '(("Bash" :pattern "git diff:*" :action allow)))))
-      (let ((augmented (mevedel-review--augment-skill skill)))
-        (should-not (eq skill augmented))
-        (should (null (mevedel-skill-allowed-tool-rules skill)))
-        (should (equal mevedel-review--allowed-tool-entries
-                       (mevedel-skill-allowed-tools augmented)))
-        (should (equal '(("Bash" :pattern "git diff:*" :action allow))
-                       (mevedel-skill-allowed-tool-rules augmented)))))))
-
 (mevedel-deftest mevedel-review--permission-rules ()
   ,test
   (test)
@@ -305,28 +296,6 @@
       (should (eq 'deny (decide "GIT_EXTERNAL_DIFF=sh git diff HEAD")))
       (should (eq 'deny (decide "make test"))))))
 
-(mevedel-deftest mevedel-review--review-skill ()
-  ,test
-  (test)
-  :doc "uses bundled review skill even when session has an override"
-  (let* ((override (mevedel-skill--create
-                    :name "review" :context 'inline :agent "other"
-                    :source 'project))
-         (session (mevedel-session--create
-                   :name "main" :skills (list override)))
-         (skill (mevedel-review--review-skill session)))
-    (should (eq 'bundled (mevedel-skill-source skill)))
-    (should (eq 'fork (mevedel-skill-context skill)))
-    (should (equal "reviewer" (mevedel-skill-agent skill))))
-
-  :doc "rejects a malformed bundled skill definition"
-  (cl-letf (((symbol-function 'mevedel-skills--build-skill)
-             (lambda (_file _source)
-               (mevedel-skill--create
-                :name "review" :context 'inline :agent "other"
-                :source 'bundled))))
-    (should-error (mevedel-review--review-skill nil) :type 'user-error)))
-
 (mevedel-deftest mevedel-review--ensure-dispatch-deps ()
   ,test
   (test)
@@ -382,115 +351,253 @@
               (should (plist-get spec :tools)))))
       (kill-buffer data))))
 
+(mevedel-deftest mevedel-review--next-task-name ()
+  ,test
+  (test)
+  :doc "reserves monotonically suffixed review and verify path names"
+  (let* ((session (mevedel-session--create :name "validation"))
+         (review (mevedel-agent-record--create :path "/root/review"))
+         (review-2 (mevedel-agent-record--create :path "/root/review_2"))
+         (verify (mevedel-agent-record--create :path "/root/verify")))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/review" review)
+                (cons "/root/review_2" review-2)
+                (cons "/root/verify" verify)))
+    (should (equal "review_3"
+                   (mevedel-review--next-task-name session 'review)))
+    (should (equal "verify_2"
+                   (mevedel-review--next-task-name session 'verify)))))
+
+(mevedel-deftest mevedel-review--result-outcome ()
+  ,test
+  (test)
+  :doc "maps completed RESULT into the existing fork outcome contract"
+  (should
+   (equal '(:status ok :kind fork :result "findings"
+            :agent-path "/root/review")
+          (mevedel-review--result-outcome
+           '(:outcome completed :payload "findings" :sender "/root/review"))))
+
+  :doc "maps interrupted and malformed RESULT into workflow errors"
+  (let ((interrupted
+         (mevedel-review--result-outcome
+          '(:outcome interrupted :payload "stopped" :sender "/root/verify")))
+        (invalid (mevedel-review--result-outcome '(:outcome unknown))))
+    (should (eq 'error (plist-get interrupted :status)))
+    (should (eq 'agent-interrupted (plist-get interrupted :reason)))
+    (should (equal "stopped" (plist-get interrupted :message)))
+    (should (eq 'invalid-agent-result (plist-get invalid :reason)))))
+
 (mevedel-deftest mevedel-review--run-task ()
   ,test
   (test)
-  :doc "dispatches review through shared fork skill invocation"
+  :doc "spawns and awaits a retained reviewer leaf through agent control"
   (let ((data (generate-new-buffer " *mevedel-review-run-task*"))
-        captured-skill captured-arguments captured-options outcome)
+        captured-options captured-message captured-name captured-session
+        outcomes)
     (unwind-protect
         (with-current-buffer data
           (setq-local mevedel--session
                       (mevedel-session--create :name "review"))
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :session mevedel--session))
           (let ((progress-callback #'ignore))
-            (cl-letf (((symbol-function 'mevedel-review--review-skill)
-                      (lambda (_session)
-                        (mevedel-skill--create
-                         :name "review" :context 'fork
-                         :agent "reviewer" :source 'bundled
-                         :allowed-tool-rules '((rule . git))
-                         :hooks '((Stop ((:hooks ((:elisp ignore)))))))))
-                      ((symbol-function 'mevedel-skills-invoke)
-                       (lambda (skill arguments callback &rest args)
-                         (setq captured-skill skill)
-                         (setq captured-arguments arguments)
-                         (setq captured-options args)
-                         (funcall callback
-                                  '(:status ok :kind fork
-                                    :result "review json"
-                                    :agent-id "reviewer--abc")))))
+            (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                       (lambda (session task-name message &rest options)
+                         (setq captured-session session
+                               captured-name task-name
+                               captured-message message
+                               captured-options options)
+                         (mevedel-agent-record--create
+                          :path (concat "/root/" task-name)))))
               (mevedel-review--run-task
                "prompt" "target"
-               (lambda (result) (setq outcome result))
+               (lambda (result) (push result outcomes))
                "<hook-context>extra</hook-context>"
                progress-callback)
-              (should (equal "review" (mevedel-skill-name captured-skill)))
-              (should (equal "prompt" captured-arguments))
-              (should (eq 'user
-                          (plist-get captured-options :origin)))
-              (should (plist-get captured-options :skip-gates))
+              (should (eq mevedel--session captured-session))
+              (should (equal "review" captured-name))
+              (should (equal "prompt\n\n<hook-context>extra</hook-context>"
+                             captured-message))
+              (should (equal "reviewer"
+                             (plist-get captured-options :role)))
+              (should (equal "none"
+                             (plist-get captured-options :fork-turns)))
               (should (equal "target"
                              (plist-get captured-options :description)))
-              (should (equal "<hook-context>extra</hook-context>"
-                             (plist-get captured-options
-                                        :additional-context)))
               (should (eq progress-callback
                           (plist-get captured-options :on-invocation)))
-              (should (eq 'ok (plist-get outcome :status)))
-              (should (eq 'fork (plist-get outcome :kind)))
-              (should (equal "review json" (plist-get outcome :result)))
-              (should (equal "reviewer--abc" (plist-get outcome :agent-id)))
-              (should (plist-get outcome :mevedel-review-command)))))
+              (should (equal (mevedel-review--permission-rules)
+                             (plist-get captured-options
+                                        :skill-permission-rules)))
+              (should-not outcomes)
+              (should (= 1 (length (mevedel-request-cancellers
+                                    mevedel--current-request))))
+              (let ((handler (plist-get captured-options :result-handler)))
+                (funcall handler
+                         '(:outcome completed :payload "review json"
+                           :sender "/root/review"))
+                (funcall handler
+                         '(:outcome completed :payload "duplicate"
+                           :sender "/root/review")))
+              (should (= 1 (length outcomes)))
+              (let ((outcome (car outcomes)))
+                (should (eq 'ok (plist-get outcome :status)))
+                (should (eq 'fork (plist-get outcome :kind)))
+                (should (equal "review json" (plist-get outcome :result)))
+                (should (equal "/root/review"
+                               (plist-get outcome :agent-path)))
+                (should-not (plist-get outcome :mevedel-review-command))))))
       (kill-buffer data)))
 
-  :doc "dispatches verify through shared fork skill invocation"
+  :doc "keeps verifier role, policy, and interrupted outcome distinct"
   (let ((data (generate-new-buffer " *mevedel-verify-run-task*"))
-        captured-skill captured-options outcome)
+        captured-options outcome)
     (unwind-protect
         (with-current-buffer data
           (setq-local mevedel--session
                       (mevedel-session--create :name "verify"))
-          (cl-letf (((symbol-function 'mevedel-review--verify-skill)
-                     (lambda (_session)
-                       (mevedel-skill--create
-                        :name "verify" :context 'fork
-                        :agent "verifier" :source 'bundled
-                        :allowed-tool-rules '((rule . git)))))
-                    ((symbol-function 'mevedel-skills-invoke)
-                     (lambda (skill _arguments callback &rest args)
-                       (setq captured-skill skill)
-                       (setq captured-options args)
-                       (funcall callback
-                                '(:status ok :kind fork
-                                  :result "verifier result"
-                                  :agent-id "verifier--abc")))))
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :session mevedel--session))
+          (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                     (lambda (_session task-name _message &rest options)
+                       (setq captured-options options)
+                       (mevedel-agent-record--create
+                        :path (concat "/root/" task-name)))))
             (mevedel-review--run-task
              "prompt" "target"
              (lambda (result) (setq outcome result))
              nil nil 'verify)
-            (should (equal "verify" (mevedel-skill-name captured-skill)))
-            (should (plist-get captured-options :skip-gates))
-            (should (eq 'ok (plist-get outcome :status)))
-            (should (equal "verifier result" (plist-get outcome :result)))
-            (should (equal "verifier--abc" (plist-get outcome :agent-id)))
+            (should (equal "verifier"
+                           (plist-get captured-options :role)))
+            (should (equal (mevedel-review--verify-permission-rules)
+                           (plist-get captured-options
+                                      :skill-permission-rules)))
+            (funcall (plist-get captured-options :result-handler)
+                     '(:outcome interrupted :payload "stopped"
+                       :sender "/root/verify"))
+            (should (eq 'error (plist-get outcome :status)))
+            (should (eq 'agent-interrupted (plist-get outcome :reason)))
+            (should (equal "/root/verify"
+                           (plist-get outcome :agent-path)))
             (should-not (plist-get outcome :mevedel-review-command))))
       (kill-buffer data)))
 
-  :doc "reports shared dispatch errors through the callback"
+  :doc "request cancellation interrupts once and suppresses the late RESULT"
+  (let ((data (generate-new-buffer " *mevedel-review-cancel-task*"))
+        result-handler interrupt-target callback-called)
+    (unwind-protect
+        (with-current-buffer data
+          (setq-local mevedel--session
+                      (mevedel-session--create :name "cancel"))
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :session mevedel--session))
+          (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                     (lambda (_session task-name _message &rest options)
+                       (setq result-handler
+                             (plist-get options :result-handler))
+                       (mevedel-agent-record--create
+                        :path (concat "/root/" task-name))))
+                    ((symbol-function 'mevedel-agent-control-interrupt)
+                     (lambda (_session target)
+                       (setq interrupt-target target)
+                       (funcall result-handler
+                                `(:outcome interrupted :payload "cancelled"
+                                  :sender ,target)))))
+            (mevedel-review--run-task
+             "prompt" "target"
+             (lambda (_result) (setq callback-called t)))
+            (mevedel-request-drain-cancellers mevedel--current-request)
+            (should (equal "/root/review" interrupt-target))
+            (should-not callback-called)))
+      (kill-buffer data)))
+
+  :doc "reports retained-agent dispatch errors through the callback"
   (let ((data (generate-new-buffer " *mevedel-review-run-task-error*"))
         outcome)
     (unwind-protect
         (with-current-buffer data
-          (cl-letf (((symbol-function 'mevedel-review--review-skill)
-                     (lambda (_session)
-                       (mevedel-skill--create
-                        :name "review" :context 'fork
-                        :agent "reviewer" :source 'bundled)))
-                    ((symbol-function 'mevedel-skills-invoke)
-                     (lambda (_skill _arguments callback &rest _args)
-                       (funcall callback
-                                '(:status error
-                                  :reason agent-dispatch-failed
-                                  :message "dispatch exploded")))))
+          (setq-local mevedel--session
+                      (mevedel-session--create :name "error"))
+          (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
+                     (lambda (&rest _args)
+                       (error "Dispatch exploded"))))
             (mevedel-review--run-task
              "prompt" "target"
              (lambda (result) (setq outcome result)))
             (should (eq 'error (plist-get outcome :status)))
             (should (eq 'agent-dispatch-failed
                         (plist-get outcome :reason)))
-            (should (equal "dispatch exploded"
+            (should (equal "Dispatch exploded"
                            (plist-get outcome :message)))))
       (kill-buffer data))))
+
+(mevedel-deftest mevedel-review--insert-progress-handle ()
+  ,test
+  (test)
+  :doc "review status redraw preserves a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (session (mevedel-session--create :name "review-redraw"))
+           (invocation
+            (mevedel-agent-invocation--create
+             :agent (mevedel-agent-get "reviewer")
+             :agent-id "reviewer--draft"
+             :description "review draft"
+             :parent-session session
+             :parent-data-buffer data-buf
+             :transcript-status 'running
+             :transcript-relative-path "agents/reviewer--draft.chat.org")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel-agent-runtime--fsms nil)
+        (setq-local mevedel-session--read-only-mode nil))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft draft 4))
+      (with-current-buffer data-buf
+        (mevedel-review--insert-progress-handle
+         invocation "review draft" 'review))
+      (with-current-buffer view-buf
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4))))
+      (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
+      (setf (mevedel-agent-invocation-call-count invocation) 2)
+      (let ((mevedel-view-agent-refresh-delay 0))
+        (mevedel-agent-exec--handle-update invocation))
+      (with-current-buffer data-buf
+        (pcase-let ((`(,start . ,end)
+                     (mevedel-pipeline--find-render-data-block-by-agent-id
+                      "reviewer--draft")))
+          (let* ((raw (buffer-substring-no-properties start end))
+                 (render-data (cdr (mevedel-pipeline-extract-render-data raw))))
+            (should (eq 'completed (plist-get render-data :status)))
+            (should (= 2 (plist-get render-data :calls))))))
+      (with-current-buffer view-buf
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
+
+(mevedel-deftest mevedel-review--handle-view-outcome ()
+  ,test
+  (test)
+  :doc "validation result redraw preserves a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line"))
+      (with-current-buffer data-buf
+        (setq-local mevedel-agent-runtime--fsms nil)
+        (setq-local mevedel-session--read-only-mode nil))
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft 4))
+      (cl-letf (((symbol-function 'mevedel-skills--insert-fork-result)
+                 (lambda (_outcome)
+                   (with-current-buffer view-buf
+                     (mevedel-view--full-rerender)))))
+        (mevedel-review--handle-view-outcome
+         '(:status ok :kind fork :result "VERDICT: PASS")
+         view-buf data-buf 'verify))
+      (with-current-buffer view-buf
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))))))
 
 (mevedel-deftest mevedel-review--current-data-buffer ()
   ,test
@@ -570,14 +677,9 @@
                       (mevedel-session--create :name "review"))
           (setq-local mevedel--current-request t)
           (cl-letf (((symbol-function 'mevedel-review--ensure-dispatch-deps)
-                     #'ignore)
+                    #'ignore)
                     ((symbol-function 'mevedel-review--current-data-buffer)
-                     (lambda () data))
-                    ((symbol-function 'mevedel-review--review-skill)
-                     (lambda (_session)
-                       (mevedel-skill--create
-                        :name "review" :context 'fork
-                        :agent "reviewer" :source 'bundled))))
+                     (lambda () data)))
             (should-error
              (mevedel-review--dispatch "prompt" "target" "/tmp/")
              :type 'user-error)))

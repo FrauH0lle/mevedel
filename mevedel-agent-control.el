@@ -143,7 +143,8 @@
   invocation
   mailbox
   blockers
-  waiter)
+  waiter
+  result-handler)
 
 (defun mevedel-agent-control--active-p (record)
   "Return non-nil when RECORD owns one active-turn slot."
@@ -652,6 +653,35 @@ positive decimal strings."
                :text)))
         (concat preview suffix)))))
 
+(defun mevedel-agent-control--publish-result (session record result)
+  "Publish RECORD's canonical RESULT in SESSION.
+
+Ordinary turns enqueue RESULT for the spawn parent.  A workflow may install a
+one-shot result handler when it owns the parent interaction; that handler
+consumes the queued envelope after successful delivery so later model turns do
+not receive a duplicate.  If the handler fails, RESULT remains ordinary parent
+mail."
+  (let* ((recipient (mevedel-agent-record-parent-path record))
+         (handler (mevedel-agent-record-result-handler record)))
+    (mevedel-agent-control--enqueue session recipient result)
+    (when handler
+      (setf (mevedel-agent-record-result-handler record) nil)
+      (condition-case err
+          (progn
+            (funcall handler result)
+            (mevedel-agent-control--set-mailbox-queue
+             session recipient
+             (delq result
+                   (mevedel-agent-control--mailbox-queue session recipient)))
+            (mevedel-agent-control--persist-session session))
+        (error
+         (display-warning
+          'mevedel
+          (format "Agent result handler failed for %s: %s"
+                  (mevedel-agent-record-path record)
+                  (error-message-string err))
+          :warning))))))
+
 (defun mevedel-agent-control--settle
     (session record invocation response &optional event)
   "Settle RECORD's INVOCATION in SESSION from RESPONSE and terminal EVENT."
@@ -676,8 +706,8 @@ positive decimal strings."
       (setf (mevedel-agent-record-blockers record) nil)
       (mevedel-agent-control-cancel-wait
        session (mevedel-agent-record-path record))
-      (mevedel-agent-control--enqueue
-       session (mevedel-agent-record-parent-path record)
+      (mevedel-agent-control--publish-result
+       session record
        (list :type 'RESULT
              :sender (mevedel-agent-record-path record)
              :recipient (mevedel-agent-record-parent-path record)
@@ -799,7 +829,9 @@ positive decimal strings."
 (cl-defun mevedel-agent-control-spawn
     (session task-name message
              &key role fork-turns model effort
-             parent-fsm message-handler terminal-handler)
+             parent-fsm message-handler terminal-handler
+             description on-invocation result-handler
+             skill-permission-rules)
   "Spawn TASK-NAME with MESSAGE and optional controls in SESSION.
 Return the committed retained record."
   (mevedel-agent-control--validate-spawn session task-name message)
@@ -833,12 +865,13 @@ Return the committed retained record."
          (record (mevedel-agent-control--reserve
                   session caller-path task-name role-name))
          committed)
+    (setf (mevedel-agent-record-result-handler record) result-handler)
     (unwind-protect
         (progn
           (require 'mevedel-agent-runtime)
           (unless
               (mevedel-agent-runtime-dispatch
-               #'ignore agent task-name message
+               #'ignore agent (or description task-name) message
                :background t
                :parent-context parent-context
                :parent-fsm parent-fsm
@@ -846,10 +879,13 @@ Return the committed retained record."
                :terminal-handler terminal-handler
                :context-snapshot context-snapshot
                :model-policy model-policy
+               :skill-permission-rules skill-permission-rules
                :path (mevedel-agent-record-path record)
                :on-invocation
-               (apply-partially
-                #'mevedel-agent-control--record-invocation record)
+               (lambda (invocation)
+                 (mevedel-agent-control--record-invocation record invocation)
+                 (when on-invocation
+                   (funcall on-invocation invocation)))
                :on-settle
                (apply-partially
                 #'mevedel-agent-control--settle session record))

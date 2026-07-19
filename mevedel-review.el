@@ -3,8 +3,8 @@
 ;;; Commentary:
 
 ;; Implements the `/review' and `/verify' workflows: choose a shared
-;; validation target, run a dedicated foreground reviewer or verifier
-;; task, and route the result back into the parent transcript.  Review
+;; validation target, await a dedicated asynchronous reviewer or verifier
+;; leaf task, and route the result back into the parent transcript.  Review
 ;; output is parsed from structured JSON and mirrored into a synthetic
 ;; action so follow-up prompts can refer to findings by number.
 
@@ -23,6 +23,14 @@
 (defvar gptel-display-buffer-action)
 (defvar gptel-prompt-prefix-alist)
 (defvar gptel-response-separator)
+
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-interrupt
+                  "mevedel-agent-control" (session target))
+(declare-function mevedel-agent-control-spawn
+                  "mevedel-agent-control" t t)
+(declare-function mevedel-agent-record-path
+                  "mevedel-agent-control" (cl-x) t)
 
 ;; `mevedel-agent-exec'
 (defvar mevedel-agent-exec--agents)
@@ -56,25 +64,15 @@
                   "mevedel-pipeline" (render-data))
 
 ;; `mevedel-skills-core'
-(declare-function copy-mevedel-skill "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skill--create "mevedel-skills-core" (&rest slots))
 (declare-function mevedel-skill-agent "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skill-allowed-tool-rules
-                  "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skill-allowed-tools
-                  "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-p "mevedel-skills-core" (object))
 (declare-function mevedel-skill-source "mevedel-skills-core" (cl-x) t)
-(declare-function mevedel-skills--build-skill
-                  "mevedel-skills-core" (skill-file source))
-(defvar mevedel-skills--bundled-dir)
 
 ;; `mevedel-skills-invoke'
 (declare-function mevedel-skills--insert-fork-result
                   "mevedel-skills-invoke" (outcome))
-(declare-function mevedel-skills-invoke "mevedel-skills-invoke" t t)
 
 ;; `mevedel-skills-ui'
 (defvar mevedel-slash-commands)
@@ -83,6 +81,10 @@
 (declare-function mevedel-request-begin
                   "mevedel-structs" (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-request-push-canceller
+                  "mevedel-structs" (request canceller))
+(declare-function mevedel-session-agent-registry
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -187,11 +189,6 @@
     "git --no-pager diff:*"
     "head:*")
   "Skill-scoped permission grants for the reviewer's git inspection.")
-
-(defconst mevedel-review--allowed-tool-entries
-  (mapcar (lambda (pattern) (format "Bash(%s)" pattern))
-          mevedel-review--allowed-bash-patterns)
-  "Model-facing forms of `mevedel-review--allowed-bash-patterns'.")
 
 (defconst mevedel-review--bash-deny-rule
   '("Bash" :action deny)
@@ -828,6 +825,35 @@ the `<user_action>' block for parent-history continuity."
 ;;
 ;;; Dispatch
 
+(defun mevedel-review--next-task-name (session command)
+  "Return the next unreserved task name for COMMAND in SESSION."
+  (let* ((base (mevedel-review--command-name command))
+         (name base)
+         (index 2)
+         (registry (mevedel-session-agent-registry session)))
+    (while (assoc (concat "/root/" name) registry)
+      (setq name (format "%s_%d" base index))
+      (cl-incf index))
+    name))
+
+(defun mevedel-review--result-outcome (result)
+  "Return a fork-style workflow outcome for canonical RESULT."
+  (let ((payload (or (plist-get result :payload) "Agent returned no result."))
+        (path (plist-get result :sender)))
+    (pcase (plist-get result :outcome)
+      ('completed
+       (list :status 'ok :kind 'fork :result payload :agent-path path))
+      ('interrupted
+       (list :status 'error :reason 'agent-interrupted
+             :message payload :agent-path path))
+      ('errored
+       (list :status 'error :reason 'agent-errored
+             :message payload :agent-path path))
+      (_
+       (list :status 'error :reason 'invalid-agent-result
+             :message "Agent returned an invalid terminal result"
+             :agent-path path)))))
+
 (defun mevedel-review--git-allow-rules ()
   "Return validation skill-scoped git inspection allow rules."
   (mapcar (lambda (pattern)
@@ -844,55 +870,6 @@ the `<user_action>' block for parent-history continuity."
 Unlike reviewer rules, these do not deny other Bash commands; normal
 permission policy decides whether verifier validation commands may run."
   (mevedel-review--git-allow-rules))
-
-(defun mevedel-review--augment-skill (skill)
-  "Return a copy of SKILL with review permission grants installed."
-  (let ((copy (copy-mevedel-skill skill))
-        (rules (mevedel-review--permission-rules)))
-    (when rules
-      (setf (mevedel-skill-allowed-tools copy)
-            mevedel-review--allowed-tool-entries)
-      (setf (mevedel-skill-allowed-tool-rules copy) rules))
-    copy))
-
-(defun mevedel-review--bundled-skill-file ()
-  "Return the bundled review SKILL.md path."
-  (file-name-concat mevedel-skills--bundled-dir "review" "SKILL.md"))
-
-(defun mevedel-review--bundled-skill ()
-  "Load and return the bundled review skill, or signal."
-  (let* ((file (mevedel-review--bundled-skill-file))
-         (skill (and (file-readable-p file)
-                     (mevedel-skills--build-skill file 'bundled))))
-    (unless skill
-      (user-error "Bundled review skill is not available"))
-    (unless (and (equal "review" (mevedel-skill-name skill))
-                 (eq 'fork (mevedel-skill-context skill))
-                 (equal "reviewer" (mevedel-skill-agent skill))
-                 (eq 'bundled (mevedel-skill-source skill)))
-      (user-error "Bundled review skill is malformed"))
-    skill))
-
-(defun mevedel-review--review-skill (_session)
-  "Return the bundled review skill, ignoring session skill overrides."
-  (mevedel-review--augment-skill (mevedel-review--bundled-skill)))
-
-(defun mevedel-review--verify-skill (_session)
-  "Return the synthetic first-class verify skill."
-  (let ((rules (mevedel-review--verify-permission-rules)))
-    (mevedel-skill--create
-     :name "verify"
-     :context 'fork
-     :agent "verifier"
-     :source 'bundled
-     :allowed-tools mevedel-review--allowed-tool-entries
-     :allowed-tool-rules rules)))
-
-(defun mevedel-review--command-skill (command session)
-  "Return synthetic or bundled skill metadata for COMMAND and SESSION."
-  (if (eq command 'verify)
-      (mevedel-review--verify-skill session)
-    (mevedel-review--review-skill session)))
 
 (defun mevedel-review--ensure-dispatch-deps (&optional command)
   "Load modules needed when a validation COMMAND is autoloaded directly."
@@ -1021,27 +998,63 @@ permission policy decides whether verifier validation commands may run."
 
 (defun mevedel-review--run-task
     (prompt hint callback &optional submit-context progress-callback command)
-  "Run the dedicated validation task for PROMPT and HINT.
+  "Run and await the dedicated validation leaf for PROMPT and HINT.
 CALLBACK receives the normalized fork-style outcome.  SUBMIT-CONTEXT, when
-non-empty, is appended after `UserPromptExpansion' handling.  PROGRESS-CALLBACK,
-when non-nil, receives the spawned invocation before the child request is
-dispatched.  COMMAND defaults to `review'."
+non-empty, is appended to the leaf prompt.  PROGRESS-CALLBACK, when non-nil,
+receives the retained invocation before provider dispatch.  COMMAND defaults
+to `review'."
   (let* ((command (or command 'review))
-         (session (and (boundp 'mevedel--session) mevedel--session))
-         (skill (mevedel-review--command-skill command session)))
-    (mevedel-skills-invoke
-     skill prompt
-     (lambda (outcome)
-       (funcall callback
-                (if (and (eq command 'review)
-                         (eq (plist-get outcome :status) 'ok))
-                    (mevedel-review--mark-command-outcome outcome)
-                  outcome)))
-     :origin 'user
-     :description (or hint (mevedel-review--command-description command))
-     :additional-context submit-context
-     :on-invocation progress-callback
-     :skip-gates t)))
+         (session mevedel--session)
+         (message
+          (if (and (stringp submit-context)
+                   (not (string-empty-p submit-context)))
+              (concat prompt "\n\n" submit-context)
+            prompt)))
+    (if (null session)
+        (funcall callback
+                 '(:status error :reason no-session
+                   :message "Validation requires an active session"))
+      (require 'mevedel-agent-control)
+      (let (path cancelled-p settled-p)
+        (cl-labels
+            ((finish
+              (result)
+              (unless settled-p
+                (setq settled-p t)
+                (unless cancelled-p
+                  (funcall callback
+                           (mevedel-review--result-outcome result)))))
+             (cancel
+              ()
+              (unless (or settled-p cancelled-p)
+                (setq cancelled-p t)
+                (mevedel-agent-control-interrupt session path))))
+          (condition-case err
+              (let ((record
+                     (mevedel-agent-control-spawn
+                      session
+                      (mevedel-review--next-task-name session command)
+                      message
+                      :role (mevedel-review--command-agent-name command)
+                      :fork-turns "none"
+                      :description
+                      (or hint (mevedel-review--command-description command))
+                      :skill-permission-rules
+                      (if (eq command 'verify)
+                          (mevedel-review--verify-permission-rules)
+                        (mevedel-review--permission-rules))
+                      :on-invocation progress-callback
+                      :result-handler #'finish)))
+                (setq path (mevedel-agent-record-path record))
+                (unless settled-p
+                  (mevedel-request-push-canceller
+                   mevedel--current-request #'cancel)))
+            (error
+             (unless settled-p
+               (setq settled-p t)
+               (funcall callback
+                        (list :status 'error :reason 'agent-dispatch-failed
+                              :message (error-message-string err)))))))))))
 
 (defun mevedel-review--transform-command-outcome (outcome &optional command)
   "Transform validation OUTCOME for COMMAND before parent insertion."

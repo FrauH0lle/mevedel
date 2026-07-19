@@ -560,6 +560,46 @@
       (should (string-match-p "TAIL" payload))
       (should (string-match-p "agents/large.chat.org" payload)))))
 
+(mevedel-deftest mevedel-agent-control--publish-result ()
+  ,test
+  (test)
+  :doc "delivers a workflow-owned RESULT once without leaving duplicate mail"
+  (let* ((session (mevedel-agent-control-test--session))
+         (result '(:type RESULT :sender "/root/review"
+                   :recipient "/root" :outcome completed :payload "done"))
+         (seen nil)
+         (queued-during-handler nil)
+         (record
+          (mevedel-agent-record--create
+           :path "/root/review" :parent-path "/root"
+           :result-handler
+           (lambda (value)
+             (setq seen value)
+             (setq queued-during-handler
+                   (memq value (mevedel-session-messages session)))))))
+    (mevedel-agent-control--publish-result session record result)
+    (should (eq result seen))
+    (should queued-during-handler)
+    (should-not (mevedel-agent-record-result-handler record))
+    (should-not (mevedel-session-messages session)))
+
+  :doc "falls back to ordinary parent mail when the workflow handler fails"
+  (let* ((session (mevedel-agent-control-test--session))
+         (record
+          (mevedel-agent-record--create
+           :path "/root/review" :parent-path "/root"
+           :result-handler (lambda (_result) (error "Broken workflow"))))
+         (result '(:type RESULT :sender "/root/review"
+                   :recipient "/root" :outcome completed :payload "done"))
+         warning)
+    (cl-letf (((symbol-function 'display-warning)
+               (lambda (&rest args) (setq warning args))))
+      (mevedel-agent-control--publish-result session record result))
+    (should (eq result (car (mevedel-session-messages session))))
+    (should-not (mevedel-agent-record-result-handler record))
+    (should (string-match-p "result handler failed"
+                            (cadr warning)))))
+
 (mevedel-deftest mevedel-agent-control--settle ()
   ,test
   (test)
@@ -584,7 +624,27 @@
       (should-not (mevedel-agent-record-blockers record))
       (should (eq 'RESULT (plist-get result :type)))
       (should (eq 'errored (plist-get result :outcome)))
-      (should (equal "Provider failed" (plist-get result :payload))))))
+      (should (equal "Provider failed" (plist-get result :payload)))))
+
+  :doc "settles a workflow-owned turn once through its RESULT handler"
+  (let* ((session (mevedel-agent-control-test--session))
+         (invocation (mevedel-agent-invocation-create
+                      (mevedel-agent-default)))
+         results
+         (record
+          (mevedel-agent-record--create
+           :path "/root/review" :parent-path "/root"
+           :activity 'running :invocation invocation
+           :result-handler (lambda (result) (push result results)))))
+    (setf (mevedel-agent-invocation-transcript-status invocation) 'completed)
+    (mevedel-agent-control--settle session record invocation "review result")
+    (mevedel-agent-control--settle session record invocation "duplicate")
+    (should (= 1 (length results)))
+    (should (eq 'completed (plist-get (car results) :outcome)))
+    (should (equal "review result" (plist-get (car results) :payload)))
+    (should (eq 'idle (mevedel-agent-record-activity record)))
+    (should-not (mevedel-agent-record-invocation record))
+    (should-not (mevedel-session-messages session))))
 
 (mevedel-deftest mevedel-agent-control-interrupt ()
   ,test
@@ -1000,18 +1060,24 @@
              :type 'user-error)
             (should-not (assoc "/root/unavailable"
                                (mevedel-session-agent-registry session))))
-          (cl-letf (((symbol-function 'mevedel-agent-exec--run)
+          (let (synchronous-results)
+            (cl-letf (((symbol-function 'mevedel-agent-exec--run)
                      (lambda (callback _role _description _message child
                                        _buffer &optional _configure)
                        (push child invocations)
                        (funcall callback "Synchronous completion.")
                        'provider-request)))
-            (let ((record
-                   (mevedel-agent-control-spawn
-                    session "synchronous" "Complete immediately.")))
-              (should (eq 'idle (mevedel-agent-record-activity record)))
-              (should (= 1 (mevedel-agent-control--active-count session)))
-              (should (= 1 (length (mevedel-session-messages session))))))
+              (let ((record
+                     (mevedel-agent-control-spawn
+                      session "synchronous" "Complete immediately."
+                      :result-handler
+                      (lambda (result) (push result synchronous-results)))))
+                (should (eq 'idle (mevedel-agent-record-activity record)))
+                (should (= 1 (mevedel-agent-control--active-count session)))
+                (should (= 1 (length synchronous-results)))
+                (should (eq 'completed
+                            (plist-get (car synchronous-results) :outcome)))
+                (should-not (mevedel-session-messages session)))))
           (let (runner-called)
             (cl-letf (((symbol-function
                         'mevedel-agent-exec--save-transcript-buffer)
