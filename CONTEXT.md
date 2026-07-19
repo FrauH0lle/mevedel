@@ -8,7 +8,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **workspace** — The project context mevedel operates in, including repository roots, workspace configuration, persistent memory, and session state.
 - **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill, plugin, or durable memory.
 - **mevedel state** — Runtime data owned by mevedel, such as session persistence, tool artifacts, input history, and generated metadata.
-- **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, background agents, and persistence metadata.
+- **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, agent state, and persistence metadata.
 - **session setting** — Configuration owned by one session, initially derived from global defaults, preserved across resume, and copied when the session is forked without affecting other sessions.
 - **session cockpit** — The central user-facing control surface for one session, presenting live session state and routing common workflow, configuration, and inspection actions.
 - **tabulated cockpit surface** — A session-owned cockpit buffer for inspecting and acting on selectable resources in a table.
@@ -96,7 +96,39 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **hook audit record** — Persisted structured metadata or transcript markup describing how a hook changed model-visible context, submitted content, control flow, or permissions.
 - **hook audit surface** — The user-facing record that a hook changed model-visible context, control flow, permissions, or submitted content.
 - **plugin cockpit** — A session cockpit surface for inspecting installed plugins and managing one selected plugin at a time.
-- **agent** — A specialized sub-agent such as explorer, coordinator, verifier, or reviewer.
+- **agent** — A delegated model participant whose identity is distinct from any one unit of work it performs.
+- **agent conversation** — The context retained by one agent across its turns. Follow-ups continue it; spawning another agent starts a fresh conversation.
+- **agent context fork** — The immutable snapshot of `all`, `none`, or a positive number of recent turns selected from the parent's effective post-compaction context. Later parent turns are not synchronized into it.
+- **agent model policy** — The model and reasoning effort resolved for an agent from parent defaults, then role or workload policy, then optional explicit Agent overrides.
+- **agent task name** — The caller-supplied local name of a child agent, restricted to lowercase ASCII letters, digits, and underscores.
+- **agent path** — The stable model- and user-facing address formed by joining an agent's task name to its parent's path, such as `/root/spec_review`. It is distinct from the opaque storage identity.
+- **relative agent path** — A model-facing descendant address resolved beneath the caller's canonical path. Cross-branch or ancestor targets use canonical paths instead.
+- **agent roster** — The tree-wide, path-sorted list of retained agents exposed by ListAgents, with each agent's path, role, and current activity status.
+- **agent registry** — The explicitly persisted root-session index of addressable agent identities, paths, topology, configuration snapshots, activity, mailboxes, and conversation storage.
+- **historical agent transcript** — A read-only child transcript retained for inspection without registering an addressable agent identity, such as an artifact copied into a rewound session fork.
+- **agent role** — An optional named configuration overlay that specializes an agent's instructions, tools, or model policy without defining a different runtime kind. _Avoid_: agent type, subagent type
+- **agent configuration snapshot** — The role, instructions, tools, base model, effort, and inherited configuration resolved at spawn and retained unchanged across follow-ups and resume.
+- **agent permission origin** — The canonical agent path attached to a root-session permission-queue entry so one shared human authority surface can attribute and settle requests from the whole tree.
+- **default agent role** — The role used when delegation names no specialization; it inherits the delegating agent's effective configuration and capabilities.
+- **worker agent role** — A built-in implementation overlay with broad direct tools, explicit file ownership guidance, concurrent-edit coordination, and delegation authority. It has no distinct runtime semantics and does not inherit a read-only delegator's tool ceiling.
+- **agent turn** — One bounded unit of work performed by an agent. Every agent turn executes asynchronously, whether or not its owning workflow waits for the result.
+- **active agent turn** — An agent turn that has started but not settled, including while it waits for child work. Active agent turns consume the shared capacity of their session tree.
+- **settled agent** — An addressable agent with no active turn. It retains its conversation for the lifetime of the root session but consumes no agent-turn capacity.
+- **agent-turn capacity** — The maximum number of active non-root agent turns permitted across one session tree. Agent identities, tree depth, and settled turns do not consume it.
+- **awaited agent turn** — An agent turn whose owning workflow delays completion until the result settles. _Avoid_: foreground agent, background agent
+- **agent wait** — An explicit, event-driven wait for the first queued or newly arriving mailbox activity from any agent in the root session tree. New user input interrupts it; otherwise the caller's turn remains active and consumes agent-turn capacity during the wait.
+- **agent wait timeout** — A successful WaitAgent outcome when no activity arrives before its bounded deadline; it does not imply failure or terminate any agent.
+- **parent agent** — The agent or root session that directly created an agent and owns their communication relationship.
+- **agent result owner** — The spawn parent that receives one automatic queue-only result for every settled turn of its child, regardless of which agent initiated a later follow-up.
+- **agent result** — A RESULT mailbox record sent to the spawn parent when a child turn settles, carrying canonical sender and recipient paths, the completed, errored, or interrupted outcome, and its plain-text payload.
+- **child agent** — An agent directly created by one parent agent.
+- **agent delegation** — Creation of a child agent by any agent whose capabilities include the Agent tool. Delegation is not reserved for the root session or a coordinator role.
+- **delegation authority** — The transitive ability conferred by the Agent tool to create any agent role available to the session. Default, worker, and explorer have Agent and WaitAgent; reviewer, verifier, and custom roles that omit Agent remain leaves. A role's direct tool restrictions do not restrict its descendants; session permissions remain the outer authority boundary.
+- **agent control tools** — Agent, FollowupAgent, WaitAgent, and InterruptAgent. They are bundled for roles with delegation authority; passive SendMessage and ListAgents remain available to every role.
+- **agent message** — Queue-only information sent directly between any two addressable agents in the same root session tree.
+- **agent mailbox** — The persisted per-agent FIFO of unread communication records waiting to be injected separately into that agent's conversation before a model sample. Injected records leave the FIFO and remain in conversation history. WaitAgent observes mailbox activity but does not return mailbox content.
+- **agent follow-up** — A task sent to an existing non-root agent that continues its retained conversation and ensures it receives an agent turn. Unlike an agent message, it starts a turn when the target is idle; agents cannot start the root session.
+- **agent interruption** — Cancellation of one non-root agent's current turn without affecting its descendants, retained conversation, canonical path, or future follow-ups. It does not remove the agent.
 - **task** — A tracked work item within a goal cycle or ordinary session work, optionally with dependency links.
 - **persistent memory** — Durable user- or workspace-local memory included in future sessions.
 - **ADR** — An architecture decision record under `docs/adr/` for durable decisions that should constrain future design work.
