@@ -1,0 +1,5 @@
+# Wait for agents explicitly
+
+Status: accepted
+
+V2 replaces implicit BWAIT parking with an explicit `WaitAgent` tool. Calling it keeps the current agent turn active and suspends its tool callback until the first queued or newly arriving message, completion, failure, or interruption from any agent in the root session tree. New user input also interrupts the wait so user steering takes precedence. The tool does not target a particular agent, poll, or spend additional model turns while suspended. Its result reports only why the wait ended; mailbox content is delivered separately, and the caller may invoke `WaitAgent` again when it needs more results. An agent that does not need another result may settle while other agents continue. Every role with `Agent` also receives `WaitAgent`, so a delegator can join work it creates; leaf roles receive neither. The implementation should use the ordinary asynchronous tool path rather than retain BWAIT's injected FSM state, terminal interception, and watchdog machinery.
