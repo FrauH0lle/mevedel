@@ -410,6 +410,10 @@ workspace root and is kept stable for the lifetime of the session."
   "Set SESSION's transient queued user message QUEUE."
   (setf (mevedel-session-queued-user-messages session) queue))
 
+(defun mevedel-session-set-hook-context-pending (session entries)
+  "Set SESSION's pending hook context ENTRIES."
+  (setf (mevedel-session-hook-context-pending session) entries))
+
 (defun mevedel-session--set-agent-registry (session registry)
   "Store retained agent REGISTRY on SESSION."
   (setf (mevedel-session-agent-registry session) registry))

@@ -332,8 +332,9 @@ no body preparation and runs no prompt hook. When an entry becomes the next
 turn, it is planned, prepared, and submitted independently; the entry leaves
 the queue only at the request or fork dispatch boundary. If a prepared
 WaitAgent steering attempt loses its waiter race, its already-approved outcome
-is queued instead and drains without repeating preparation or
-`UserPromptSubmit`.
+is queued instead, owns its accepted hook context while queued, and drains
+without repeating preparation or `UserPromptSubmit`. Editing or clearing the
+queue restores that context to the session.
 
 The transcript and input history keep the exact original user text. An ignored
 render-data block connects that text to the prepared model prompt without

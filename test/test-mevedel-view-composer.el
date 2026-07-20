@@ -1090,23 +1090,26 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (with-current-buffer data-buf
         (mevedel-skills-plan-prepare plan (lambda (value) (setq prepared value))))
       (let* ((token (list :cancelled nil))
-             (submission
+             (plan-submission
               (list :token token :input input :plan plan
                     :view-buffer view-buf :data-buffer data-buf
-                    :before-send (lambda () (setq before t)))))
+                    :before-send (lambda () (setq before t))))
+             (prompt-submission
+              (mevedel-view--prompt-submission-create
+               :input (concat (plist-get prepared :model-input) " $literal")
+               :display-text input)))
         (with-current-buffer view-buf
           (setq-local mevedel-view--pending-skill-submission token)
           (cl-letf (((symbol-function 'mevedel-view--forward-input)
                      (lambda (&rest args) (setq forwarded args))))
             (mevedel-view--dispatch-prepared-plan
-             submission prepared
-             (concat (plist-get prepared :model-input) " $literal")
-             nil nil nil))
+             plan-submission prepared prompt-submission))
           (should-not mevedel-view--pending-skill-submission))
         (should before)
-        (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))
+        (should (string-match-p "ALPHA BODY"
+                                (plist-get (cdr forwarded) :model-input)))
         (should (string-match-p (regexp-quote "$literal")
-                                (nth 7 forwarded)))
+                                (plist-get (cdr forwarded) :model-input)))
         (with-current-buffer data-buf
           (should (equal (plist-get prepared :request-context)
                          mevedel-skills--pending-request-context)))))))
@@ -1132,7 +1135,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (cl-letf (((symbol-function 'mevedel-view--forward-input)
                      (lambda (&rest args) (setq forwarded args))))
             (mevedel-view--handle-prepared-plan submission prepared)))
-        (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))))))
+        (should (string-match-p "ALPHA BODY"
+                                (plist-get (cdr forwarded) :model-input)))))))
 
 (mevedel-deftest mevedel-view--submit-planned-input ()
   ,test
@@ -2455,7 +2459,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (mapcar #'mevedel-skill-invocation-record-name
                              (mevedel-session-invoked-skills session))))))
 
-  :doc "a lost steering race queues the approved prompt without a second hook"
+  :doc "a lost steering race reserves context behind an older queued prompt"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'test :id "steering-race" :root "/tmp"
@@ -2471,6 +2475,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     (mevedel-request--create :session session))
         (mevedel-hooks-record-session-context
          session '(:additional-context ("race context")) 'SessionStart))
+      (mevedel-session-set-queued-user-messages
+       session (list (list :input "older prompt" :queued-at-turn 0)))
       (cl-letf (((symbol-function 'mevedel-agent-control-root-waiting-p)
                  (lambda (_session)
                    (= 1 (cl-incf waiting-checks))))
@@ -2486,16 +2492,24 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (goto-char (mevedel-view--input-start))
           (insert "race prompt")
           (mevedel-view-send))
-        (let ((entry (car (mevedel-session-queued-user-messages session))))
-          (should (plist-get entry :prepared-outcome))
-          (should (plist-get entry :context-token)))
+        (let* ((queue (mevedel-session-queued-user-messages session))
+               (entry (cadr queue))
+               (submission (plist-get entry :submission)))
+          (should (= 2 (length queue)))
+          (should (mevedel-view-prompt-submission-p submission))
+          (should (eq 'reserved
+                      (mevedel-view-prompt-submission-state submission))))
         (should (= 1 hook-calls))
-        (should (mevedel-session-hook-context-pending session))
+        (should-not (mevedel-session-hook-context-pending session))
         (with-current-buffer data-buf
           (setq-local mevedel--current-request nil))
+        (mevedel-view--drain-queued-user-message data-buf)
+        (with-current-buffer data-buf
+          (should-not (string-match-p "race context" (buffer-string))))
+        (should (= 2 hook-calls))
         (mevedel-view--drain-queued-user-message data-buf))
       (should sent)
-      (should (= 1 hook-calls))
+      (should (= 2 hook-calls))
       (should-not (mevedel-session-hook-context-pending session))
       (with-current-buffer data-buf
         (should (= 1 (mevedel-view-test--count-matches
@@ -3177,21 +3191,49 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                              :table (make-hash-table :test #'equal)
                              :order nil :total-bytes 0)))
            (session (mevedel-session-create "main" ws))
+           (context-entries '((:event SessionStart :body "reserved context")))
+           (submission
+            (mevedel-view--prompt-submission-create
+             :input "second" :display-text "second" :session session
+             :context-entries context-entries :state 'reserved))
            (sent nil))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (setf (mevedel-session-queued-user-messages session)
             (list (list :input "first" :display-text "first")
-                  (list :input "second" :display-text "second")))
+                  (list :input "second" :display-text "second"
+                        :submission submission)))
       (with-current-buffer view-buf
         (mevedel-view--interaction-rebuild)
         (mevedel-view-edit-last-queued-message)
         (should (string= "first\n\nsecond" (mevedel-view--input-text)))
-        (should-not (mevedel-session-queued-user-messages session)))
+        (should-not (mevedel-session-queued-user-messages session))
+        (should (equal context-entries
+                       (mevedel-session-hook-context-pending session))))
       (cl-letf (((symbol-function 'gptel-send)
                  (lambda (&rest _) (setq sent t))))
         (mevedel-view--drain-queued-user-message data-buf)
         (should-not sent))))
+
+  :doc "clearing prepared queued prompts restores their reserved context"
+  (mevedel-view-test--with-buffers
+    (let* ((ws (mevedel-workspace--create
+                :type 'test :id "vq-clear" :root "/tmp/vq" :name "vq"))
+           (session (mevedel-session-create "main" ws))
+           (context-entries '((:event SessionStart :body "clear context")))
+           (submission
+            (mevedel-view--prompt-submission-create
+             :input "prepared" :display-text "prepared" :session session
+             :context-entries context-entries :state 'reserved)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (setf (mevedel-session-queued-user-messages session)
+            (list (list :input "prepared" :submission submission)))
+      (with-current-buffer view-buf
+        (mevedel-view-clear-queued-messages))
+      (should-not (mevedel-session-queued-user-messages session))
+      (should (equal context-entries
+                     (mevedel-session-hook-context-pending session)))))
 
   :doc "resubmitting an edited queued batch creates one queued entry"
   (mevedel-view-test--with-buffers
@@ -3240,14 +3282,20 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (_args _input callback)
-                   (funcall callback "expanded" "hook context" nil nil)))
+                   (funcall
+                    callback
+                    (mevedel-view--prompt-submission-create
+                     :input "expanded" :display-text "/goal draft"
+                     :context "hook context" :session session))))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display &optional policy hook-context
-                          context-token)
-                   (setq started (list objective display policy hook-context)
+                 (lambda (objective display &optional policy submission)
+                   (setq started
+                         (list objective display policy
+                               (mevedel-view-prompt-submission-context
+                                submission))
                          started-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal "/goal draft" "draft")))
@@ -3263,15 +3311,21 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (objective _input callback)
                    (should (equal "ship it" objective))
-                   (funcall callback objective nil nil nil)))
+                   (funcall
+                    callback
+                    (mevedel-view--prompt-submission-create
+                     :input objective :display-text "/goal auto ship it"
+                     :session session))))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display policy &optional hook-context
-                          context-token)
+                 (lambda (objective display policy &optional submission)
                    (setq started
-                         (list objective display policy hook-context)))))
+                         (list objective display policy
+                               (and submission
+                                    (mevedel-view-prompt-submission-context
+                                     submission)))))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal
            "/goal auto ship it" "auto ship it")))
@@ -3293,9 +3347,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session
                     mevedel--workspace workspace))
       (cl-letf (((symbol-function 'mevedel-goal-start)
-                 (lambda (_objective display _policy context context-token)
+                 (lambda (_objective display _policy submission)
                    (mevedel-goal--insert-and-send
-                    "planning prompt" display context context-token)))
+                    "planning prompt" display submission)))
                 ((symbol-function 'mevedel--gptel-send-request) #'ignore))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal "/goal ship it" "ship it")))
@@ -3386,9 +3440,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (mevedel-session-hook-context-pending session))
           (mevedel-view--run-prompt-submit-hook
            "accepted" "accepted"
-           (lambda (_input context _audits context-token)
-             (setq accepted-context context)
-             (mevedel-view--commit-prompt-context context-token))))
+           (lambda (submission)
+             (setq accepted-context
+                   (mevedel-view-prompt-submission-context submission))
+             (mevedel-view-prompt-submission-commit submission))))
         (should (string-match-p "blocked context" accepted-context))
         (should (string-match-p "UserPromptSubmit" accepted-context))
         (should-not (mevedel-session-hook-context-pending session)))))
@@ -3415,9 +3470,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (with-current-buffer view-buf
           (mevedel-view--run-prompt-submit-hook
            "expanded prompt" "Use $alpha"
-           (lambda (_input context _audits context-token)
-             (setq accepted-context context)
-             (mevedel-view--commit-prompt-context context-token))
+           (lambda (submission)
+             (setq accepted-context
+                   (mevedel-view-prompt-submission-context submission))
+             (mevedel-view-prompt-submission-commit submission))
            nil
            "<hook-context>expansion context</hook-context>")))
       (let ((start-pos (string-search "start context" accepted-context))
@@ -3448,9 +3504,10 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (mevedel-session-hook-context-pending session))
         (mevedel-view--run-prompt-submit-hook
          "retry" "retry"
-         (lambda (_input context _audits context-token)
-           (setq retry-context context)
-           (mevedel-view--commit-prompt-context context-token))))
+         (lambda (submission)
+           (setq retry-context
+                 (mevedel-view-prompt-submission-context submission))
+           (mevedel-view-prompt-submission-commit submission))))
       (should (string-match-p "retry context" retry-context))
       (should-not (mevedel-session-hook-context-pending session))))
 
@@ -3502,9 +3559,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (push 'fork events)))
                     ((symbol-function 'mevedel-goal-start)
-                     (lambda (objective display &optional policy hook-context
-                              context-token)
-                       (push (list objective display policy hook-context)
+                     (lambda (objective display &optional policy submission)
+                       (push (list
+                              objective display policy
+                              (mevedel-view-prompt-submission-context
+                               submission))
                              events))))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))

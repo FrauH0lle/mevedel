@@ -100,10 +100,10 @@
           (with-current-buffer view-buffer
             (setq-local mevedel--data-buffer data-buffer))
           (cl-letf (((symbol-function 'mevedel-view--forward-input)
-                     (lambda (input display before-send &rest _rest)
+                     (lambda (input &rest args)
                        (setq sent-input input)
-                       (setq sent-display display)
-                       (funcall before-send)))
+                       (setq sent-display (plist-get args :display-text))
+                       (funcall (plist-get args :before-send))))
                     ((symbol-function 'mevedel-view-history-add)
                      (lambda (text) (setq history text)))
                     ((symbol-function 'mevedel-view--fork-if-pending)

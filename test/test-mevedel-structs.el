@@ -19,6 +19,22 @@
 
 
 ;;
+;;; Session transient state
+
+(mevedel-deftest mevedel-session-set-hook-context-pending ()
+  ,test
+  (test)
+  :doc "replaces the session's pending hook context entries"
+  (let* ((session (mevedel-session--create))
+         (entries '((:event SessionStart :body "context"))))
+    (should (equal entries
+                   (mevedel-session-set-hook-context-pending
+                    session entries)))
+    (should (equal entries
+                   (mevedel-session-hook-context-pending session)))))
+
+
+;;
 ;;; Agent tree identity
 
 (mevedel-deftest mevedel-agent-path-p ()

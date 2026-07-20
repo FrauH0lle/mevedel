@@ -34,10 +34,7 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
 (declare-function mevedel-view--forward-input
-                  "mevedel-view-composer"
-                  (input &optional display-text before-send prompt-checked
-                         on-block hook-context hook-audits model-input
-                         context-token))
+                  "mevedel-view-composer" (input &rest args))
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
 
 ;; `mevedel-structs'
@@ -179,7 +176,9 @@
         (progn
           (with-current-buffer view-buffer
             (mevedel-view--forward-input
-             prompt display
+             prompt
+             :display-text display
+             :before-send
              (lambda ()
                (mevedel-view-history-add display)
                (mevedel-view--fork-if-pending))))
