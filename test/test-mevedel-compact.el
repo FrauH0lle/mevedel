@@ -17,6 +17,9 @@
 (require 'mevedel-structs)
 (require 'mevedel-system)
 (require 'mevedel-utilities)
+(require 'mevedel-view)
+(require 'mevedel-view-composer)
+(require 'mevedel-view-render)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -1456,7 +1459,22 @@
             (mevedel--compact-main-complete nil t))
           (should (= 2 renders))
           (should (= 1 stops)))
-      (kill-buffer view-buffer))))
+      (kill-buffer view-buffer)))
+
+  :doc "real compaction redraw preserves a multiline leading-> draft and point"
+  (mevedel-view-test--with-buffers
+    (let ((draft "> quoted\nsecond line")
+          (point-offset 4))
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (mevedel-view-test--insert-data data-buf "Response.\n" 'response)
+      (with-current-buffer view-buf
+        (mevedel-view-test--insert-composer-draft draft point-offset))
+      (with-current-buffer data-buf
+        (mevedel--compact-main-complete nil t))
+      (with-current-buffer view-buf
+        (should (string= draft (mevedel-view--input-text)))
+        (should (= (point)
+                   (+ (mevedel-view--input-start) point-offset)))))))
 
 (mevedel-deftest mevedel--compact-agent-complete ()
   ,test

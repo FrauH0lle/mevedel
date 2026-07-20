@@ -335,6 +335,7 @@ function uses recorded extents and never scans TEXT."
         permission-rules
         hook-rules
         invoked-skills
+        hook-contexts
         hook-audits
         single-command-context)
     (dolist (pair pairs)
@@ -343,6 +344,10 @@ function uses recorded extents and never scans TEXT."
              (context (plist-get outcome :request-context)))
         (setq invoked-skills
               (append invoked-skills (plist-get context :invoked-skills))
+              hook-contexts
+              (append hook-contexts
+                      (and (plist-get outcome :hook-context)
+                           (list (plist-get outcome :hook-context))))
               hook-audits
               (append hook-audits (plist-get outcome :hook-audits)))
         (if (eq (mevedel-skill-plan-entry-role entry) 'command)
@@ -366,6 +371,7 @@ function uses recorded extents and never scans TEXT."
           :permission-rules permission-rules
           :hook-rules hook-rules
           :invoked-skills invoked-skills
+          :hook-contexts hook-contexts
           :hook-audits hook-audits
           :single-command-context single-command-context)))
 
@@ -413,6 +419,9 @@ function uses recorded extents and never scans TEXT."
                          'unavailable))
                    (mevedel-skill-invocation-plan-occurrences plan)))
           :request-context request-context
+          :hook-context
+          (when-let* ((contexts (plist-get aggregate :hook-contexts)))
+            (mapconcat #'identity contexts "\n\n"))
           :hook-audits (plist-get aggregate :hook-audits))))
 
 (defun mevedel-skills-plan-prepare (plan callback &optional cancelled-p)
