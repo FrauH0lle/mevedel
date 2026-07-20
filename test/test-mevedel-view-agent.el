@@ -181,6 +181,36 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-view-agent-cleanup-parent
+  (:doc "cleans up saved transcript views without tearing down the session")
+  ,test
+  (test)
+  (let* ((session (mevedel-view-agent-test--session))
+         (parent-view (generate-new-buffer " *test-agent-parent-view*"))
+         (data-buffer (generate-new-buffer " *test-agent-saved-data*"))
+         (view-buffer (generate-new-buffer " *test-agent-saved-view*"))
+         (teardown-count 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (org-mode)
+            (setq-local mevedel--session session))
+          (mevedel-view--setup
+           view-buffer data-buffer
+           (list :agent-transcript-p t
+                 :parent-view parent-view))
+          (cl-letf (((symbol-function
+                      'mevedel-agent-control-teardown-session)
+                     (lambda (_session)
+                       (cl-incf teardown-count))))
+            (mevedel-view-agent-cleanup-parent parent-view))
+          (should (= 0 teardown-count))
+          (should-not (buffer-live-p view-buffer))
+          (should-not (buffer-live-p data-buffer)))
+      (dolist (buffer (list view-buffer data-buffer parent-view))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-view--agent-record
   (:doc "resolves retained identities by canonical path")
   ,test

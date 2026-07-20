@@ -102,6 +102,8 @@
                   (&optional buffer))
 
 ;; `mevedel-view-agent'
+(declare-function mevedel-view--on-agent-transcript-data-killed
+                  "mevedel-view-agent" ())
 (declare-function mevedel-view-agent-cleanup-parent
                   "mevedel-view-agent" (parent-view))
 (declare-function mevedel-view-agent-handle-view-kill
@@ -625,7 +627,11 @@ view.  When `:preserve-data-view-buffer' is non-nil, leave DATA-BUF's
        (copy-keymap (or (current-local-map) (make-sparse-keymap))))
       (local-set-key (kbd "C-c C-o") #'mevedel-menu)
       ;; Kill-buffer lifecycle: data killed -> kill view buffer
-      (add-hook 'kill-buffer-hook #'mevedel-view--on-data-killed nil t))))
+      (add-hook 'kill-buffer-hook
+                (if (plist-get options :agent-transcript-p)
+                    #'mevedel-view--on-agent-transcript-data-killed
+                  #'mevedel-view--on-data-killed)
+                nil t))))
 
 (defun mevedel-view--ensure (data-buf &optional view-name options)
   "Return the view buffer for DATA-BUF, creating it if needed.
