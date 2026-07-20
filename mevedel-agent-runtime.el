@@ -608,7 +608,7 @@ Settle a held provider response once its last owned execution has finished."
       'UserPromptSubmit session workspace
       :agent-path (mevedel-agent-invocation-path invocation)
       :prompt prompt
-     :display-text prompt)
+      :display-text prompt)
      invocation)))
 
 (defun mevedel-agent-runtime--run-stop-hook (invocation status)
