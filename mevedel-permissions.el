@@ -876,7 +876,8 @@ defcustom buckets may otherwise authorize or explicitly ask for LEVEL."
     (&key tool tool-name args session workspace request invocation buffer
           path pattern domain name mode workspace-root allowed-roots
           exact-allowed-paths invocation-rules request-rules session-rules
-          persistent-rules resource-grants warn-no-session-p)
+          persistent-rules resource-grants permission-request
+          warn-no-session-p)
   "Return normalized permission invocation context.
 
 The context concentrates facts shared by the permission decision
@@ -886,7 +887,8 @@ TOOL, TOOL-NAME, ARGS, SESSION, WORKSPACE, REQUEST, INVOCATION, BUFFER,
 PATH, PATTERN, DOMAIN, NAME, MODE, WORKSPACE-ROOT, ALLOWED-ROOTS,
 EXACT-ALLOWED-PATHS, INVOCATION-RULES, REQUEST-RULES, SESSION-RULES,
 PERSISTENT-RULES, RESOURCE-GRANTS, and WARN-NO-SESSION-P provide the
-context facts."
+context facts.  PERMISSION-REQUEST admits an interactive request at its
+hook boundary before it enters the shared queue."
   (setq tool (or tool
                  (and tool-name (mevedel-tool-ensure tool-name)))
         tool-name (or tool-name (and tool (mevedel-tool-name tool))))
@@ -1002,7 +1004,8 @@ happen for a non-read-only tool."
           :session-rules session-rules
           :persistent-rules persistent-rules
           :buckets buckets
-          :mode mode)))
+          :mode mode
+          :permission-request permission-request)))
 
 (defun mevedel-permission--checker-args (context)
   "Return `mevedel-check-permission' keyword args for CONTEXT."

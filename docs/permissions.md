@@ -58,14 +58,14 @@ Hook integration sits around this chain:
   `ask` can tighten an allow into a prompt. A hook `allow` can only skip
   a prompt when the normal resolver would have returned `ask`; explicit
   denies still win.
-- `PermissionRequest` runs after the chain returns `ask` and before the
-  generic queued prompt is shown. It can allow, deny, or leave the prompt
-  in place. Tools with specialized permission queues, currently Bash and
-  Eval, make their prompt decision inside the tool permission slot instead
-  of returning a generic `ask`.
+- `PermissionRequest` runs whenever generic, Bash, Eval, or sandbox authority
+  resolution reaches `ask`, before the corresponding entry enters the shared
+  queue. It can allow, deny, or leave the prompt in place. Queue display and
+  rule-driven re-evaluation do not rerun it.
 - `PermissionDenied` runs after any final denial. It can adjust the
   reason/context shown to the model, but it cannot turn the denial into an
-  allow.
+  allow. Its payload identifies the original policy, user, `PreToolUse`, or
+  `PermissionRequest` provenance.
 
 Permission invocation context is normalized in the permission module before
 callers enter the decision chain. That context centralizes specifier
@@ -195,6 +195,10 @@ prompts are aborted on their owning request or root-session teardown. A child
 turn awaiting one of these prompts remains active and continues to occupy one
 tree capacity slot.
 
+The permission hook boundary precedes queue admission. An admitted entry has
+already fired `PermissionRequest`; rendering the head, redrawing it, and
+coalescing siblings by re-running policy never fire that hook again.
+
 `mevedel-permission-prompt.el` is the focused UI owner for all four entry
 kinds. It owns generic permission controls, agent attribution, Bash guardian
 and dangerous-command presentation, and Eval presentation. The queue retains
@@ -229,9 +233,9 @@ output, configuration, pager, helper-execution, or mutation options.  Find,
 ripgrep, base64, sed, and awk likewise reject deletion, helper execution,
 output-file options, and unrecognized programs.  Safe forms need no broad
 default allow patterns; variants outside these narrow policies remain unknown.
-Bash does not use the
-pipeline's generic permission prompt or `PermissionRequest` hook path;
-when it needs a decision it enqueues a Bash-specific permission entry.
+Bash keeps its specialized permission entry and controls, but an `ask` passes
+through the pipeline's shared `PermissionRequest` boundary before that entry
+is admitted.
 Under `full-auto`, unknown, dangerous, and complex Bash commands are
 allowed without a prompt after explicit deny rules and literal protected
 path tokens have been checked. Outside `full-auto`, unknown commands
@@ -445,9 +449,9 @@ dangerous effect remains dangerous when currently blocked by the sandbox.
 ## Eval
 
 Eval asks through the same session permission queue's Eval-specific
-entry type unless the effective permission mode is `full-auto`. Like
-Bash, it does not use the generic `PermissionRequest` hook path. The
-expression shown in the prompt is subject to
+entry type unless the effective permission mode is `full-auto`. Like Bash,
+an `ask` fires `PermissionRequest` before queue admission without changing the
+specialized card. The expression shown in the prompt is subject to
 `mevedel-eval-expression-display-limit`.  The prompt also shows the
 requested execution mode and, for live Eval, whether UI preservation is
 enabled.

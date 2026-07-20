@@ -102,10 +102,10 @@ boundaries:
 | `UserPromptSubmit` | before a root or retained-agent task input is sent | none | block, add context |
 | `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
-| `PermissionRequest` | before a generic permission prompt is shown | tool name | allow, deny, ask |
-| `PermissionDenied` | after a tool is denied | tool name | add feedback/context only |
+| `PermissionRequest` | once before any permission card enters the shared queue | tool name | allow, deny, ask |
+| `PermissionDenied` | once after a final tool denial | tool name | add feedback/context only |
 | `PostToolUse` | after handler and result shaping | tool name | add context, replace result, mark feedback |
-| `PostToolUseFailure` | after a tool result beginning with `Error:` | tool name | add context, replace result |
+| `PostToolUseFailure` | after a handler reports or signals failure | tool name | add context, replace result |
 | `PreCompact` | before manual/automatic compaction | trigger (`manual`, `auto`) | block, add context |
 | `PostCompact` | after compaction completes | trigger | notification/logging |
 | `SubagentStart` | once before a retained-agent identity is published | agent role | block, add context |
@@ -372,20 +372,21 @@ The tool pipeline shape is:
 ```
 validate
 -> PreToolUse hooks
--> permission
+-> permission / PermissionRequest hooks
 -> snapshot
 -> handler
 -> persist
--> attach-render-data
 -> PostToolUse / PostToolUseFailure hooks
+-> attach render/media data
 ```
 
 Running `PreToolUse` after validation means hooks see normalized args and
 do not need to duplicate schema checks.  Running it before permission lets
 project policy deny early and lets `PermissionRequest` hooks participate
-in the existing generic prompt path.  Bash and Eval currently use
-specialized permission queue entries from their tool permission slots, so
-they can be guarded with `PreToolUse` but do not fire `PermissionRequest`.
+in every permission-card path.  Generic, Bash, Eval, and sandbox-authority
+requests all fire it once before shared queue admission.  Hook allow or deny
+settles the pending request without creating a card; displaying or
+re-evaluating an admitted card does not rerun the hook.
 
 `PostToolUse` runs after persistence/render-data shaping and receives
 `:raw-result`, `:tool-response`, and `:result`.  `:tool-response` /
@@ -393,6 +394,10 @@ they can be guarded with `PreToolUse` but do not fire `PermissionRequest`.
 for audit, formatting, redaction, or repair hooks that need the handler's
 original output.  Post-tool hooks cannot block already-completed tool side
 effects; they may replace feedback with `:updated-result` or add context.
+Only a handler execution reaches a post-use hook: canonical success emits
+`PostToolUse`, while explicit or signaled handler failure emits
+`PostToolUseFailure`.  Validation, permission, and aborted-interaction
+failures emit neither.
 `PostToolUse` and `PostToolUseFailure :additional-context` attach their
 hook audit surface to the affected tool transcript result because that is
 the feedback they modify.  The hidden audit block is stripped at
@@ -555,7 +560,9 @@ not evaluate arbitrary forms.
 Hooks may tighten policy.  They should not silently weaken explicit
 permission denies.  A `PreToolUse` or `PermissionRequest` allow can skip a
 prompt only when the normal permission resolver would not return an
-explicit deny.
+explicit deny.  Every final policy, user, `PermissionRequest`, or
+`PreToolUse` denial emits one `PermissionDenied` payload carrying the
+original `:permission-provenance`.
 
 ## Emacs API
 

@@ -200,6 +200,16 @@
   (or (plist-get permission-context :origin)
       (mevedel-current-origin)))
 
+(defun mevedel-tool-exec--request-permission
+    (entry permission-context &optional session)
+  "Submit ENTRY through PERMISSION-CONTEXT's request boundary.
+Fall back to direct queue admission for callers outside the tool pipeline."
+  (if-let* ((request (plist-get permission-context :permission-request)))
+      (funcall request entry session (plist-get entry :callback))
+    (if session
+        (mevedel-permission--enqueue entry session)
+      (mevedel-permission--enqueue entry))))
+
 (defun mevedel-tool-exec--permission-decision-result
     (metadata-p outcome via &rest props)
   "Return OUTCOME, or metadata when METADATA-P is non-nil."
@@ -380,8 +390,7 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
              :sandbox-permissions 'additive
              :additional-permissions '(:network t)))
           (funcall cont command-outcome))
-      (apply
-       #'mevedel-permission--enqueue
+      (mevedel-tool-exec--request-permission
        (list
         :kind 'sandbox
         :tool-name tool-name
@@ -393,7 +402,12 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
         :callback
         (lambda (outcome)
           (pcase outcome
-            ('allow-once (funcall cont command-outcome))
+            ((or 'allow 'allow-once) (funcall cont command-outcome))
+            (`(deny . ,reason)
+             (funcall
+              cont
+              (mevedel-tool-exec--permission-decision-result
+               metadata-p (cons 'deny reason) 'sandbox-network)))
             (`(feedback . ,text)
              (funcall cont (mevedel-tool-exec--additional-denial
                             metadata-p 'sandbox-network text)))
@@ -404,8 +418,8 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
                metadata-p 'aborted 'sandbox-network)))
             (_ (funcall cont (mevedel-tool-exec--additional-denial
                               metadata-p 'sandbox-network))))))
-       (and (plist-get permission-context :session)
-            (list (plist-get permission-context :session)))))))
+       permission-context
+       (plist-get permission-context :session)))))
 
 (defun mevedel-tool-exec--filesystem-resource-granted-p
     (grant permission-context)
@@ -461,8 +475,7 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
               grant permission-context))
         (funcall continue))
        (t
-        (apply
-         #'mevedel-permission--enqueue
+        (mevedel-tool-exec--request-permission
          (list
           :kind 'sandbox
           :tool-name tool-name
@@ -494,6 +507,11 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
                 :resource-access access)
                (funcall cont (mevedel-tool-exec--additional-denial
                               metadata-p 'sandbox-filesystem)))
+              (`(deny . ,reason)
+               (funcall
+                cont
+                (mevedel-tool-exec--permission-decision-result
+                 metadata-p (cons 'deny reason) 'sandbox-filesystem)))
               (`(feedback . ,text)
                (funcall cont (mevedel-tool-exec--additional-denial
                               metadata-p 'sandbox-filesystem text)))
@@ -504,7 +522,7 @@ TOOL is `bash' or `eval'.  EVAL-MODE distinguishes live from batch Eval."
                  metadata-p 'aborted 'sandbox-filesystem)))
               (_ (funcall cont (mevedel-tool-exec--additional-denial
                                 metadata-p 'sandbox-filesystem))))))
-         (and session (list session))))))))
+         permission-context session))))))
 
 (defun mevedel-tool-exec--check-additional-permission-async
     (tool-name detail input request command-outcome cont)
@@ -582,7 +600,7 @@ BUCKETS supplies ordinary and execution-level rules for LEVEL."
     (outcome tool-name detail level session workspace metadata-p)
   "Apply full-escalation prompt OUTCOME and return its permission result."
   (pcase outcome
-    ('allow-once
+    ((or 'allow 'allow-once)
      (mevedel-tool-exec--permission-decision-result
       metadata-p 'allow 'sandbox-full-escalation
       :sandbox-permissions level))
@@ -602,6 +620,10 @@ BUCKETS supplies ordinary and execution-level rules for LEVEL."
      (mevedel-tool-exec--full-escalation-denial metadata-p))
     (`(feedback . ,text)
      (mevedel-tool-exec--full-escalation-denial metadata-p text))
+    (`(deny . ,reason)
+     (mevedel-tool-exec--permission-decision-result
+      metadata-p (cons 'deny reason) 'sandbox-full-escalation
+      :sandbox-permissions level))
     ('aborted
      (mevedel-tool-exec--permission-decision-result
       metadata-p 'aborted 'sandbox-full-escalation
@@ -661,8 +683,7 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
          tool-name 'ask 'sandbox-full-escalation permission-context
          :sandbox-permissions level
          :specifier-key :pattern :specifier-value detail))
-      (apply
-       #'mevedel-permission--enqueue
+      (mevedel-tool-exec--request-permission
        (list
         :kind 'sandbox
         :tool-name tool-name
@@ -682,7 +703,7 @@ the prompt.  Delegated expansion never prompts for or grants this authority."
            cont
            (mevedel-tool-exec--apply-full-escalation-prompt-result
             outcome tool-name detail level session workspace metadata-p))))
-       (and session (list session)))))))
+       permission-context session)))))
 
 (defun mevedel-tool-exec--command-permission-input (input request)
   "Return INPUT carrying REQUEST facts for command authorization."
@@ -1596,26 +1617,33 @@ denial parity with the sync slot is preserved."
            (when metadata-p
              (mevedel-tool-exec--log-permission-decision
               "Eval" 'ask 'eval-policy permission-context))
-           (apply #'mevedel-permission--enqueue
+           (mevedel-tool-exec--request-permission
             (list :kind 'eval
                   :expression expression
                   :mode (symbol-name mode)
                   :preserve-ui preserve-ui
+                  :specifier-key :pattern
+                  :specifier-value expression
                   :origin
                   (mevedel-tool-exec--permission-origin permission-context)
                   :callback
                   (lambda (outcome)
                     (pcase outcome
-                      ('allow-once
+                      ((or 'allow 'allow-once)
                        (funcall
                         cont
                         (mevedel-tool-exec--permission-decision-result
                          metadata-p 'allow 'eval-policy)))
-                      ('deny-once
+                      ((or 'deny 'deny-once)
                        (funcall
                         cont
                         (mevedel-tool-exec--permission-decision-result
                          metadata-p 'deny 'eval-policy)))
+                      (`(deny . ,reason)
+                       (funcall
+                        cont
+                        (mevedel-tool-exec--permission-decision-result
+                         metadata-p (cons 'deny reason) 'eval-policy)))
                       (`(feedback . ,text)
                        (funcall cont
                                 (mevedel-tool-exec--permission-decision-result
@@ -1634,8 +1662,8 @@ denial parity with the sync slot is preserved."
                         cont
                         (mevedel-tool-exec--permission-decision-result
                          metadata-p 'deny 'eval-policy))))))
-            (and (plist-get permission-context :session)
-                 (list (plist-get permission-context :session)))))))))))
+            permission-context
+            (plist-get permission-context :session)))))))))
 
 (defun mevedel-tool-exec--eval-check-permission-async
     (tool-struct input cont)
@@ -1761,6 +1789,8 @@ parity with the sync slot."
                  (entry
                   (list :kind 'bash
                         :command command
+                        :specifier-key :pattern
+                        :specifier-value command
                         :analysis analysis
                         :command-class command-class
                         :commands commands
@@ -1866,8 +1896,10 @@ parity with the sync slot."
                                  command)))
             (if (buffer-live-p source-buffer)
                 (with-current-buffer source-buffer
-                  (mevedel-permission--enqueue entry session))
-              (mevedel-permission--enqueue entry session))
+                  (mevedel-tool-exec--request-permission
+                   entry permission-context session))
+              (mevedel-tool-exec--request-permission
+               entry permission-context session))
             (when mevedel-permission-guardian
               (setq guardian-context
                     (plist-put guardian-context :workspace workspace))
