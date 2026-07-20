@@ -32,6 +32,10 @@
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
+;; `mevedel-chat'
+(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+
+;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
@@ -49,9 +53,6 @@
                   "mevedel-cockpit" (&optional selected-id))
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
-
-;; `mevedel-chat'
-(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
 ;; `mevedel-compact'
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())

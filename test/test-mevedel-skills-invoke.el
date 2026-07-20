@@ -1183,12 +1183,15 @@ allowed-tools:
                 :origin 'user :session session :rules rules :hooks hooks
                 :model '(:tier fast) :effort 'high))
          (outcome (mevedel-skills--preparation-success-outcome
-                   metadata "original" "expanded" nil))
+                   metadata "original" "expanded"
+                   '(:additional-context ("expansion context"))))
          (context (plist-get outcome :request-context))
          (record (car (plist-get context :invoked-skills))))
     (should (eq 'ok (plist-get outcome :status)))
     (should (eq 'inline (plist-get outcome :kind)))
     (should (equal "expanded" (plist-get outcome :body)))
+    (should (string-match-p "expansion context"
+                            (plist-get outcome :hook-context)))
     (should (equal rules (plist-get context :permission-rules)))
     (should (equal hooks (plist-get context :hook-rules)))
     (should (equal '(:tier fast) (plist-get context :model)))
@@ -1386,9 +1389,9 @@ allowed-tools:
        (lambda (o) (setq outcome o))
        :origin 'user))
     (should (eq 'ok (plist-get outcome :status)))
-    (should (equal
-             "Expanded by hook\n\n<hook-context>\n<hook-event name=\"UserPromptExpansion\">\nexpansion context\n</hook-event>\n</hook-context>"
-             (plist-get outcome :body)))
+    (should (equal "Expanded by hook" (plist-get outcome :body)))
+    (should (string-match-p "expansion context"
+                            (plist-get outcome :hook-context)))
     (let ((audit (car (plist-get outcome :hook-audits))))
       (should (eq (plist-get audit :type) 'prompt-rewrite))
       (should (equal (plist-get audit :event) "UserPromptExpansion"))

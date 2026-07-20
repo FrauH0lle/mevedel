@@ -1031,11 +1031,7 @@ skip the hook and call CALLBACK with PROMPT and nil."
         :prompt prompt)
        (lambda (decision)
          (let* ((updated (plist-get decision :updated-input))
-                (context (mevedel-hooks-additional-context-string
-                          decision 'UserPromptExpansion))
                 (prompt (if (stringp updated) updated prompt)))
-           (when (and context (not (string-empty-p context)))
-             (setq prompt (concat prompt "\n\n" context)))
            (funcall callback prompt decision)))
        session workspace request nil))))
 
@@ -1402,9 +1398,13 @@ sanitized `UserPromptExpansion' hook decision."
                 ((eq role 'instruction) 'instruction)
                 ((eq (mevedel-skill-context skill) 'fork) 'fork)
                 (t 'inline)))
-         (audit (mevedel-skills--prompt-rewrite-audit-record original decision)))
+         (audit (mevedel-skills--prompt-rewrite-audit-record original decision))
+         (hook-context
+          (mevedel-hooks-additional-context-string
+           decision 'UserPromptExpansion)))
     (list :status 'ok :kind kind :skill skill
           :body expanded :arguments arguments
+          :hook-context hook-context
           :hook-audits (and audit (list audit))
           :ignored-policy-fields (plist-get metadata :ignored-policy-fields)
           :request-context context)))

@@ -151,14 +151,16 @@
            (list
             (list :entry command
                   :outcome
-                  '(:body "command" :hook-audits (command-audit)
+                  '(:body "command" :hook-context "command-context"
+                    :hook-audits (command-audit)
                     :request-context
                     (:permission-rules (permission)
                      :hook-rules (hook) :invoked-skills (command-record)
                      :model selected :effort high)))
             (list :entry instruction
                   :outcome
-                  '(:body "instruction" :hook-audits (instruction-audit)
+                  '(:body "instruction" :hook-context "instruction-context"
+                    :hook-audits (instruction-audit)
                     :request-context (:invoked-skills
                                       (instruction-record))))))))
     (should (= 1 (plist-get aggregate :command-count)))
@@ -167,6 +169,8 @@
     (should (equal '(hook) (plist-get aggregate :hook-rules)))
     (should (equal '(command-record instruction-record)
                    (plist-get aggregate :invoked-skills)))
+    (should (equal '("command-context" "instruction-context")
+                   (plist-get aggregate :hook-contexts)))
     (should (= 1 (length (plist-get aggregate :instruction-reminders))))
     (should (equal '(command-audit instruction-audit)
                    (plist-get aggregate :hook-audits)))))
@@ -186,6 +190,7 @@
            (list :entry entry
                  :outcome
                  '(:body "instruction body"
+                   :hook-context "expansion context"
                    :request-context (:invoked-skills (record))))))
          (outcome (mevedel-skills-plan--prepared-outcome plan pairs)))
     (should (eq 'ok (plist-get outcome :status)))
@@ -193,6 +198,7 @@
                             (plist-get outcome :model-input)))
     (should (string-match-p (regexp-quote "instruction body")
                             (plist-get outcome :model-input)))
+    (should (equal "expansion context" (plist-get outcome :hook-context)))
     (should (equal '(record)
                    (plist-get (plist-get outcome :request-context)
                               :invoked-skills)))))

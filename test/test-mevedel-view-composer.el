@@ -1062,7 +1062,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               prepared
               (plist-get prepared :model-input)
               "hook context"
-              '((:type prompt-rewrite)))))
+              '((:type prompt-rewrite))
+              "hook context")))
         (should (string-match-p "ALPHA BODY"
                                 (plist-get outcome :model-input)))
         (should (string-match-p "hook context"
@@ -3273,11 +3274,44 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (mevedel-session-hook-context-pending session))
           (mevedel-view--run-prompt-submit-hook
            "accepted" "accepted"
-           (lambda (_input context _audits)
+           (lambda (_input context _audits &optional _transcript-context)
              (setq accepted-context context))))
         (should (string-match-p "blocked context" accepted-context))
         (should (string-match-p "UserPromptSubmit" accepted-context))
         (should-not (mevedel-session-hook-context-pending session)))))
+
+  :doc "first skill turn orders start, expansion, then submit context"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "ordered-context" :root "/tmp"
+                       :name "ordered-context"))
+           (session (mevedel-session-create "main" workspace))
+           accepted-context)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace workspace)
+        (mevedel-hooks-record-session-context
+         session '(:additional-context ("start context")) 'SessionStart))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback
+                            '(:additional-context ("submit context"))))))
+        (with-current-buffer view-buf
+          (mevedel-view--run-prompt-submit-hook
+           "expanded prompt" "Use $alpha"
+           (lambda (_input context _audits &optional _transcript-context)
+             (setq accepted-context context))
+           nil
+           "<hook-context>expansion context</hook-context>")))
+      (let ((start-pos (string-search "start context" accepted-context))
+            (expansion-pos
+             (string-search "expansion context" accepted-context))
+            (submit-pos (string-search "submit context" accepted-context)))
+        (should (< start-pos expansion-pos))
+        (should (< expansion-pos submit-pos)))))
 
   :doc "/goal prompts run UserPromptSubmit and materialize rewind forks"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
