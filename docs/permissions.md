@@ -315,7 +315,10 @@ permits one direct fallback. A command failure, signal, or timeout after the
 marker is returned exactly once and is never replayed. `required` returns an
 execution error instead of falling back, while `off` selects direct execution
 deliberately. Direct execution always reports `filesystem: unrestricted` and
-`network: unrestricted`. Bash and batch-Eval results append their active
+`network: unrestricted`. A pre-marker failure retains its launcher error,
+Bubblewrap diagnostics, or exit code and remains visible until the next child
+execution reprobes the backend; one transient launch failure therefore does not
+disable confinement permanently. Bash and batch-Eval results append their active
 sandbox facts for the model and audit trail. Native helper facts remain
 internal and in tests rather than being added to successful tool content.
 Trusted skill substitutions keep those facts out of the substituted literal;
