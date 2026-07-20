@@ -45,8 +45,6 @@
 (declare-function mevedel-agent-exec-run
                   "mevedel-agent-exec"
                   (main-cb agent-type description invocation agent-buffer))
-(declare-function mevedel-agent-exec-run-stop-hook
-                  "mevedel-agent-exec" (invocation status))
 
 ;; `mevedel-agent-persistence'
 (declare-function mevedel-agent-persistence-transcript-path-p
@@ -435,7 +433,7 @@
       (setf (mevedel-agent-invocation-activity invocation) nil)
       (mevedel-agent-runtime--finalize-step
        invocation 'hook
-       (lambda () (mevedel-agent-exec-run-stop-hook invocation status)))
+       (lambda () (mevedel-agent-runtime--run-stop-hook invocation status)))
       (mevedel-agent-runtime--finalize-step
        invocation 'view
        (lambda ()
@@ -610,8 +608,41 @@ Settle a held provider response once its last owned execution has finished."
       'UserPromptSubmit session workspace
       :agent-path (mevedel-agent-invocation-path invocation)
       :prompt prompt
-      :display-text prompt)
+     :display-text prompt)
      invocation)))
+
+(defun mevedel-agent-runtime--run-stop-hook (invocation status)
+  "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."
+  (when (mevedel-agent-invocation-p invocation)
+    (require 'mevedel-hooks)
+    (let* ((session (mevedel-agent-invocation-parent-session invocation))
+           (workspace (and session (mevedel-session-workspace session)))
+           (agent (mevedel-agent-invocation-agent invocation))
+           (agent-type (and agent (mevedel-agent-name agent)))
+           (parent-buffer
+            (mevedel-agent-invocation-parent-data-buffer invocation))
+           (runner
+            (lambda ()
+              (mevedel-hooks-run-event
+               'SubagentStop
+               (mevedel-hooks-event-plist
+                'SubagentStop session workspace
+                :agent-path (mevedel-agent-invocation-path invocation)
+                :role agent-type
+                :description
+                (mevedel-agent-invocation-description invocation)
+                :status status
+                :terminal-reason
+                (mevedel-agent-invocation-terminal-reason invocation)
+                :transcript-relative-path
+                (mevedel-agent-invocation-transcript-relative-path
+                 invocation))
+               #'ignore
+               session workspace nil invocation))))
+      (if (and parent-buffer (buffer-live-p parent-buffer))
+          (with-current-buffer parent-buffer
+            (funcall runner))
+        (funcall runner)))))
 
 (defun mevedel-agent-runtime--prepare-turn
     (agent-type description prompt invocation retained-p
@@ -661,8 +692,7 @@ to this retained conversation; ON-HOOK-CONTEXT records its transition."
                  'UserPromptSubmit prompt submitted
                  (mevedel-hooks-decision-reason prompt-decision)))))
         (list :prompt effective-prompt
-              :audits (and rewrite-audit (list rewrite-audit))
-              :consume-pending (and pending-hook-context t))))))
+              :audits (and rewrite-audit (list rewrite-audit)))))))
 
 
 ;;
@@ -787,7 +817,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
               (mevedel-agent-runtime--insert-prompt
                invocation buffer description (plist-get turn :prompt)
                context-snapshot retained-p (plist-get turn :audits))
-              (when (and (plist-get turn :consume-pending) on-hook-context)
+              (when (and pending-hook-context on-hook-context)
                 (funcall on-hook-context nil))
               (when (and on-settle
                          (not
