@@ -619,6 +619,37 @@
       (kill-buffer data)
       (kill-buffer view))))
 
+(mevedel-deftest mevedel-review--send-from-view ()
+  ,test
+  (test)
+  :doc "accepts the complete prompt-hook callback contract"
+  (let ((data (generate-new-buffer " *mevedel-review-data*"))
+        (view (generate-new-buffer " *mevedel-review-view*"))
+        history forked turn-context task-context)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                   (lambda (input display callback &rest _)
+                     (should (equal input display))
+                     (funcall callback input "hook context" nil)))
+                  ((symbol-function 'mevedel-view-history-add)
+                   (lambda (input) (setq history input)))
+                  ((symbol-function 'mevedel-view--fork-if-pending)
+                   (lambda () (setq forked t)))
+                  ((symbol-function 'mevedel-view--start-fork-skill-turn)
+                   (lambda (_input _display context)
+                     (setq turn-context context)))
+                  ((symbol-function 'mevedel-review--run-task)
+                   (lambda (_prompt _hint _callback &optional context &rest _)
+                     (setq task-context context))))
+          (mevedel-review--send-from-view
+           "/review target" "prompt" "target" view data)
+          (should (equal "/review target" history))
+          (should forked)
+          (should (equal "hook context" turn-context))
+          (should (equal "hook context" task-context)))
+      (kill-buffer data)
+      (kill-buffer view))))
+
 (mevedel-deftest mevedel-review--dispatch ()
   ,test
   (test)

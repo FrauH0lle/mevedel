@@ -229,10 +229,10 @@
   '(:updated-input "rewritten prompt"))
 
 (defun mevedel-view-test--rewrite-prompt-hook-with-context (event)
-  "Capture prompt EVENT, rewrite it, and add model-only context."
+  "Capture prompt EVENT, rewrite it, and add hook context."
   (setq mevedel-view-test--seen-prompt (plist-get event :prompt))
   '(:updated-input "rewritten prompt"
-    :additional-context "model-only context"))
+    :additional-context "hook policy context"))
 
 (defun mevedel-view-test--rewrite-prompt-hook-with-message (event)
   "Capture prompt EVENT, rewrite it, and add a user-facing message."
@@ -1062,14 +1062,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               prepared
               (plist-get prepared :model-input)
               "expansion context\n\nhook context"
-              '((:type prompt-rewrite))
-              "hook context")))
+              '((:type prompt-rewrite)))))
         (should (string-match-p "ALPHA BODY"
                                 (plist-get outcome :model-input)))
         (should (string-match-p "hook context"
                                 (plist-get outcome :transcript-input)))
-        (should-not (string-match-p "expansion context"
-                                    (plist-get outcome :transcript-input)))
+        (should (string-match-p "expansion context"
+                                (plist-get outcome :transcript-input)))
         (should (plist-get outcome :request-context))
         (should (plist-get outcome :render-data))
         (should (equal '((:type prompt-rewrite))
@@ -1101,7 +1100,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (mevedel-view--dispatch-prepared-plan
              submission prepared
              (concat (plist-get prepared :model-input) " $literal")
-             nil nil ""))
+             nil nil))
           (should-not mevedel-view--pending-skill-submission))
         (should before)
         (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))
@@ -1286,7 +1285,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-match-p "hook changed prompt" text))
             (should (string-match-p "hook context added" text))
             (should-not (string-match-p "rewritten prompt" text))
-            (should-not (string-match-p "model-only context" text)))
+            (should-not (string-match-p "hook policy context" text)))
           (goto-char (point-min))
           (search-forward "hook changed prompt")
           (mevedel-view-toggle-section)
@@ -1304,20 +1303,27 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
             (should (string-match-p "rewritten prompt" expanded))
-            (should-not (string-match-p "model-only context" expanded)))))
+            (should-not (string-match-p "hook policy context" expanded)))))
       (with-current-buffer data-buf
         (let ((text (buffer-string)))
           (should (string-match-p (regexp-quote "$myskill hello") text))
           (should-not (string-match-p "rewritten prompt" text))
-          (should-not (string-match-p "model-only context" text))
+          (should (string-match-p "hook policy context" text))
           (should (string-match-p "<!-- mevedel-hook-audit -->" text))))
       (with-current-buffer view-buf
         (mevedel-view--full-rerender)
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
-	          (should (string-match-p "hook changed prompt" text))
-	          (should-not (string-match-p "hook context added" text))
-	          (should-not (string-match-p "model-only context" text))))))
+          (should (string-match-p "hook changed prompt" text))
+          (should (string-match-p "hook context added" text))
+          (should-not (string-match-p "hook policy context" text)))
+        (goto-char (point-min))
+        (search-forward "hook context added")
+        (mevedel-view-toggle-section)
+        (should (string-match-p
+                 "hook policy context"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker))))))
 
   :doc "manually typed queued mention keeps its exact source and latest body"
   (let* ((mevedel-skills-include-bundled nil)
@@ -2396,7 +2402,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (let ((payload (plist-get (car (mevedel-session-messages session))
                                     :payload)))
             (should (string-match-p "rewritten prompt" payload))
-            (should (string-match-p "model-only context" payload))
+            (should (string-match-p "hook policy context" payload))
             (should-not (string-match-p "original steering" payload))
             (should (plist-get (car (mevedel-session-messages session))
                                :hook-audits))))
@@ -3171,8 +3177,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (_args _input callback)
-                   (funcall callback "expanded" "hook context" nil
-                            "hook context")))
+                   (funcall callback "expanded" "hook context" nil)))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
@@ -3194,7 +3199,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (objective _input callback)
                    (should (equal "ship it" objective))
-                   (funcall callback objective nil nil "")))
+                   (funcall callback objective nil nil)))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
@@ -3277,7 +3282,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (mevedel-session-hook-context-pending session))
           (mevedel-view--run-prompt-submit-hook
            "accepted" "accepted"
-           (lambda (_input context _audits _transcript-context)
+           (lambda (_input context _audits)
              (setq accepted-context context))))
         (should (string-match-p "blocked context" accepted-context))
         (should (string-match-p "UserPromptSubmit" accepted-context))
@@ -3305,7 +3310,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (with-current-buffer view-buf
           (mevedel-view--run-prompt-submit-hook
            "expanded prompt" "Use $alpha"
-           (lambda (_input context _audits _transcript-context)
+           (lambda (_input context _audits)
              (setq accepted-context context))
            nil
            "<hook-context>expansion context</hook-context>")))
@@ -3354,9 +3359,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (should (equal "rewritten prompt" (cadr (cadr events))))
               (should (string-match-p "rewritten prompt"
                                       (car (cadr events))))
-              (should-not (string-match-p "model-only context"
+              (should-not (string-match-p "hook policy context"
                                           (car (cadr events))))
-              (should (string-match-p "model-only context"
+              (should (string-match-p "hook policy context"
                                       (nth 3 (cadr events))))
               (should (string-empty-p (mevedel-view--input-text)))))
           (with-current-buffer view-buf
@@ -3514,20 +3519,20 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (should (string-match-p "Prompt" text))
             (should (string-match-p "hook context added" text))
             (should-not (string-match-p "rewritten prompt" text))
-            (should-not (string-match-p "model-only context" text)))
+            (should-not (string-match-p "hook policy context" text)))
           (goto-char (point-min))
           (search-forward "Prompt")
           (mevedel-view-toggle-section)
           (let ((expanded (buffer-substring-no-properties
                            (point-min) mevedel-view--input-marker)))
             (should-not (string-match-p "rewritten prompt" expanded))
-            (should-not (string-match-p "model-only context" expanded)))))
+            (should-not (string-match-p "hook policy context" expanded)))))
       (with-current-buffer data-buf
         (let ((text (buffer-string)))
           (should-not (string-match-p "rewritten prompt" text))
           (should (string-match-p (regexp-quote "$myskill hello") text))
           (should-not (string-match-p "Expanded hello" text))
-          (should (string-match-p "model-only context" text))))))
+          (should (string-match-p "hook policy context" text))))))
 
   :doc "malformed UserPromptSubmit decisions are ignored"
   (let* ((root (make-temp-file "mevedel-view-hooks-malformed" t))

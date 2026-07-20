@@ -113,7 +113,8 @@
                          on-block hook-context hook-audits))
 (declare-function mevedel-view--run-prompt-submit-hook
                   "mevedel-view-composer"
-                  (input display-text callback &optional blocked-callback))
+                  (input display-text callback &optional blocked-callback
+                         prior-context))
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view-composer"
                   (input display-text &optional hook-context))
@@ -1124,7 +1125,7 @@ DATA-BUFFER receives the task transcript."
   (with-current-buffer view-buffer
     (mevedel-view--run-prompt-submit-hook
      display display
-     (lambda (hook-input hook-context)
+     (lambda (hook-input hook-context _hook-audits)
        (when (and (buffer-live-p view-buffer)
                   (buffer-live-p data-buffer))
          (cond
