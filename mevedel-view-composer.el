@@ -1336,12 +1336,10 @@ in the view when present."
       (funcall on-block))))
 
 (defun mevedel-view--prepared-plan-outcome
-    (submission prepared hook-input hook-context hook-audits
-                transcript-hook-context)
+    (submission prepared hook-input hook-context hook-audits)
   "Return the structured prepared outcome for SUBMISSION.
 PREPARED is the skill planner result.  HOOK-INPUT, HOOK-CONTEXT, and
-HOOK-AUDITS are the accepted `UserPromptSubmit' result.
-TRANSCRIPT-HOOK-CONTEXT excludes model-only expansion context."
+HOOK-AUDITS are the accepted `UserPromptSubmit' result."
   (let* ((plan (plist-get submission :plan))
          (input (plist-get submission :input))
          (prepared-input (plist-get prepared :model-input))
@@ -1356,9 +1354,8 @@ TRANSCRIPT-HOOK-CONTEXT excludes model-only expansion context."
               (concat hook-input "\n\n" hook-context)
             hook-input)
           :transcript-input
-          (if (and transcript-hook-context
-                   (not (string-empty-p transcript-hook-context)))
-              (concat input "\n\n" transcript-hook-context)
+          (if hook-context
+              (concat input "\n\n" hook-context)
             input)
           :hook-input hook-input
           :hook-context hook-context
@@ -1371,8 +1368,7 @@ TRANSCRIPT-HOOK-CONTEXT excludes model-only expansion context."
                (mevedel-view--prepared-fork-outcome prepared)))))
 
 (defun mevedel-view--dispatch-prepared-plan
-    (submission prepared hook-input hook-context hook-audits
-                transcript-hook-context)
+    (submission prepared hook-input hook-context hook-audits)
   "Dispatch PREPARED plan for SUBMISSION after the prompt hook completes."
   (let* ((token (plist-get submission :token))
          (view-buffer (plist-get submission :view-buffer))
@@ -1384,8 +1380,7 @@ TRANSCRIPT-HOOK-CONTEXT excludes model-only expansion context."
         (let* ((input (plist-get submission :input))
                (outcome
                 (mevedel-view--prepared-plan-outcome
-                 submission prepared hook-input hook-context hook-audits
-                 transcript-hook-context))
+                 submission prepared hook-input hook-context hook-audits))
                (model-input (plist-get outcome :model-input))
                (transcript-input (plist-get outcome :transcript-input))
                (hook-input (plist-get outcome :hook-input))
@@ -1458,11 +1453,9 @@ TRANSCRIPT-HOOK-CONTEXT excludes model-only expansion context."
           (mevedel-view--run-prompt-submit-hook
            (plist-get prepared :model-input)
            (plist-get submission :input)
-           (lambda (hook-input hook-context hook-audits
-                               transcript-hook-context)
+           (lambda (hook-input hook-context hook-audits)
              (mevedel-view--dispatch-prepared-plan
-              submission prepared hook-input hook-context hook-audits
-              transcript-hook-context))
+              submission prepared hook-input hook-context hook-audits))
            (lambda ()
              (when (mevedel-view--skill-submission-active-p
                     token view-buffer data-buffer)
@@ -1491,8 +1484,7 @@ of starting a new request."
           (if dispatch
               (mevedel-view--run-prompt-submit-hook
                input input
-               (lambda (hook-input hook-context hook-audits
-                                   _transcript-hook-context)
+               (lambda (hook-input hook-context hook-audits)
                  (when before-send
                    (funcall before-send))
                  (let ((prepared-input
@@ -1684,7 +1676,7 @@ INPUT is the original composer text, including the slash command."
       (user-error "Goal objective must not be blank"))
     (mevedel-view--run-prompt-submit-hook
      objective input
-     (lambda (hook-input context _audits _transcript-context)
+     (lambda (hook-input context _audits)
        (when (and (buffer-live-p view-buffer)
                   (buffer-live-p data-buffer))
          (with-current-buffer view-buffer
@@ -1738,9 +1730,8 @@ such as `passed' cannot escape into `plist-get' or `plist-member'."
     (input display-text callback &optional blocked-callback prior-context)
   "Run `UserPromptSubmit' for INPUT, then call CALLBACK if accepted.
 DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
-`(HOOK-INPUT CONTEXT AUDITS TRANSCRIPT-CONTEXT)'.  PRIOR-CONTEXT, when
-non-nil, is placed after pending session context and before submit-hook
-context; it is omitted from TRANSCRIPT-CONTEXT because it is model-only."
+`(HOOK-INPUT CONTEXT AUDITS)'.  PRIOR-CONTEXT, when non-nil, is placed after
+pending session context and before submit-hook context."
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--prompt-hook-pending
     (user-error "A prompt hook is still running -- wait or abort first"))
@@ -1796,16 +1787,11 @@ context; it is omitted from TRANSCRIPT-CONTEXT because it is model-only."
                                 pending-context
                                 prior-context
                                 submit-context))
-                              (transcript-context
-                               (mevedel-view--join-hook-contexts
-                                pending-context submit-context))
                               (audit
                                (mevedel-view--prompt-rewrite-audit-record
                                 'UserPromptSubmit input submitted decision)))
-                         (funcall
-                          callback submitted context
-                          (and audit (list audit))
-                          (or transcript-context "")))))))))
+                         (funcall callback submitted context
+                                  (and audit (list audit))))))))))
              session workspace nil nil)))
       (error
        (setq mevedel-view--prompt-hook-pending nil)
@@ -1842,7 +1828,7 @@ after the forwarded prompt, where the LLM's response will begin."
                   model-input)
       (mevedel-view--run-prompt-submit-hook
        input display-text
-       (lambda (hook-input context audits _transcript-context)
+       (lambda (hook-input context audits)
          (send-now
           (if context
               (concat hook-input "\n\n" context)
