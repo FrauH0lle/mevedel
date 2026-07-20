@@ -74,11 +74,15 @@
 (declare-function mevedel-agent-path-p "mevedel-structs" (path))
 (declare-function mevedel-session--set-agent-registry
                   "mevedel-structs" (session registry))
+(declare-function mevedel-session--set-agent-reservations
+                  "mevedel-structs" (session reservations))
 (declare-function mevedel-session--set-agent-root-waiter
                   "mevedel-structs" (session waiter))
 (declare-function mevedel-session--set-messages
                   "mevedel-structs" (session messages))
 (declare-function mevedel-session-agent-registry
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-agent-reservations
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-agent-root-activity
                   "mevedel-structs" (cl-x) t)
@@ -192,10 +196,11 @@ blockers compose and stale releases cannot alter a later follow-up."
 
 (defun mevedel-agent-control--active-count (session)
   "Return the number of active non-root turns in SESSION."
-  (cl-count-if
-   (lambda (entry)
-     (mevedel-agent-control--active-p (cdr entry)))
-   (mevedel-session-agent-registry session)))
+  (+ (length (mevedel-session-agent-reservations session))
+     (cl-count-if
+      (lambda (entry)
+        (mevedel-agent-control--active-p (cdr entry)))
+      (mevedel-session-agent-registry session))))
 
 (defun mevedel-agent-control-active-turn-p (session)
   "Return non-nil when SESSION has an active non-root agent turn."
@@ -214,6 +219,7 @@ blockers compose and stale releases cannot alter a later follow-up."
 (defun mevedel-agent-control-teardown-session (session)
   "Kill every retained conversation buffer owned by SESSION."
   (when (mevedel-session-p session)
+    (mevedel-session--set-agent-reservations session nil)
     (mevedel-agent-control-cancel-wait session "/root")
     (dolist (entry (mevedel-session-agent-registry session))
       (mevedel-agent-control-cancel-wait session (car entry))
@@ -598,8 +604,9 @@ positive decimal strings."
     (session parent-path task-name role)
   "Atomically reserve TASK-NAME below PARENT-PATH in SESSION for ROLE."
   (let* ((path (concat parent-path "/" task-name))
-         (registry (mevedel-session-agent-registry session)))
-    (when (assoc path registry)
+         (registry (mevedel-session-agent-registry session))
+         (reservations (mevedel-session-agent-reservations session)))
+    (when (or (assoc path registry) (assoc path reservations))
       (user-error "Agent path is already reserved: %s" path))
     (when (>= (mevedel-agent-control--active-count session)
               (mevedel-session-agent-turn-capacity session))
@@ -611,16 +618,16 @@ positive decimal strings."
             :role role
             :configuration (list :role role)
             :activity 'starting)))
-      (mevedel-session--set-agent-registry
-       session (cons (cons path record) registry))
+      (mevedel-session--set-agent-reservations
+       session (cons (cons path record) reservations))
       record)))
 
 (defun mevedel-agent-control--rollback (session record)
   "Remove unpublished RECORD from SESSION and release its slot."
-  (mevedel-session--set-agent-registry
+  (mevedel-session--set-agent-reservations
    session
    (assoc-delete-all (mevedel-agent-record-path record)
-                     (mevedel-session-agent-registry session)))
+                     (mevedel-session-agent-reservations session)))
   (when-let* ((invocation (mevedel-agent-record-invocation record)))
     (mevedel-agent-runtime-dispatch--abandon-persistence invocation)
     (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
@@ -709,8 +716,9 @@ it queued for ordinary parent delivery."
              :payload (mevedel-agent-control--bounded-result record payload)
              :timestamp (current-time))))))
 
-(defun mevedel-agent-control--record-invocation (record invocation)
-  "Attach INVOCATION and its conversation location to RECORD."
+(defun mevedel-agent-control--record-invocation
+    (session record invocation)
+  "Publish RECORD with INVOCATION in SESSION's retained registry."
   (unless (equal (mevedel-agent-invocation-path invocation)
                  (mevedel-agent-record-path record))
     (error "Agent invocation path mismatch: %s"
@@ -724,13 +732,19 @@ it queued for ordinary parent delivery."
   (setf (mevedel-agent-record-conversation-location record)
         (mevedel-agent-invocation-transcript-relative-path invocation))
   (setf (mevedel-agent-record-configuration record)
-        (mevedel-agent-invocation-frozen-configuration invocation)))
+        (mevedel-agent-invocation-frozen-configuration invocation))
+  (let ((path (mevedel-agent-record-path record)))
+    (mevedel-session--set-agent-reservations
+     session
+     (assoc-delete-all path (mevedel-session-agent-reservations session)))
+    (mevedel-session--set-agent-registry
+     session
+     (cons (cons path record) (mevedel-session-agent-registry session)))))
 
-(defun mevedel-agent-control--set-hook-context (session record entries)
-  "Replace RECORD's pending hook context with ENTRIES and persist SESSION."
+(defun mevedel-agent-control--set-hook-context (record entries)
+  "Replace RECORD's pending hook context with a copy of ENTRIES."
   (setf (mevedel-agent-record-hook-context-pending record)
-        (copy-tree entries))
-  (mevedel-agent-control--persist-session session))
+        (copy-tree entries)))
 
 (defun mevedel-agent-control--dispatch-followup (session record message)
   "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
@@ -757,10 +771,10 @@ it queued for ordinary parent delivery."
            (mevedel-agent-record-hook-context-pending record)
            :on-hook-context
            (apply-partially
-            #'mevedel-agent-control--set-hook-context session record)
+            #'mevedel-agent-control--set-hook-context record)
            :on-invocation
            (apply-partially
-            #'mevedel-agent-control--record-invocation record)
+            #'mevedel-agent-control--record-invocation session record)
            :on-settle
            (apply-partially
             #'mevedel-agent-control--settle session record))
@@ -875,14 +889,11 @@ Return the committed retained record."
                :model-policy model-policy
                :skill-permission-rules skill-permission-rules
                :path (mevedel-agent-record-path record)
-               :pending-hook-context
-               (mevedel-agent-record-hook-context-pending record)
-               :on-hook-context
-               (apply-partially
-                #'mevedel-agent-control--set-hook-context session record)
                :on-invocation
                (lambda (invocation)
-                 (mevedel-agent-control--record-invocation record invocation)
+                 (mevedel-agent-control--record-invocation
+                  session record invocation)
+                 (setq committed t)
                  (when on-invocation
                    (funcall on-invocation invocation)))
                :on-settle
@@ -894,7 +905,6 @@ Return the committed retained record."
           (when (eq (mevedel-agent-record-activity record) 'starting)
             (setf (mevedel-agent-record-activity record) 'running))
           (mevedel-agent-control--persist-session session)
-          (setq committed t)
           record)
       (unless committed
         (mevedel-agent-control--rollback session record)))))

@@ -145,8 +145,6 @@
                   "mevedel-compact" (fsm))
 
 ;; `mevedel-hooks'
-(declare-function mevedel-hooks-context-audit-records
-                  "mevedel-hooks" (decision event type &optional omit-context))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
@@ -457,70 +455,6 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 
 ;;
 ;;; Task runner
-
-(defun mevedel-agent-exec--run-hook-sync (event payload invocation)
-  "Run EVENT with PAYLOAD for INVOCATION and return its decision.
-Command hooks still execute through the shared async runner; this helper
-waits because callers need the child FSM synchronously for
-interruption bookkeeping."
-  (require 'mevedel-hooks)
-  (let* ((session (and (mevedel-agent-invocation-p invocation)
-                       (mevedel-agent-invocation-parent-session invocation)))
-         (workspace (and session (mevedel-session-workspace session)))
-         (done nil)
-         decision)
-    (mevedel-hooks-run-event
-     event payload
-     (lambda (result)
-       (setq decision result
-             done t))
-     session workspace nil invocation)
-    (while (not done)
-      (accept-process-output nil 0.05))
-    decision))
-
-(defun mevedel-agent-exec-run-start-hook
-    (agent-type description prompt invocation)
-  "Run `SubagentStart' for a new retained agent and return its decision."
-  (require 'mevedel-hooks)
-  (let* ((session (mevedel-agent-invocation-parent-session invocation))
-         (workspace (and session (mevedel-session-workspace session)))
-         (decision
-          (mevedel-agent-exec--run-hook-sync
-           'SubagentStart
-           (mevedel-hooks-event-plist
-            'SubagentStart session workspace
-            :agent-path (mevedel-agent-invocation-path invocation)
-            :role agent-type
-            :description description
-            :prompt prompt
-            :transcript-relative-path
-            (mevedel-agent-invocation-transcript-relative-path invocation))
-           invocation)))
-    (when-let* ((msg (plist-get decision :system-message)))
-      (message "mevedel: %s" msg))
-    (setf (mevedel-agent-invocation-hook-audits invocation)
-          (mevedel-agent-exec--start-hook-audit-records decision))
-    decision))
-
-(defun mevedel-agent-exec-run-prompt-hook (prompt invocation)
-  "Run `UserPromptSubmit' for agent PROMPT and return its decision."
-  (require 'mevedel-hooks)
-  (let* ((session (mevedel-agent-invocation-parent-session invocation))
-         (workspace (and session (mevedel-session-workspace session))))
-    (mevedel-agent-exec--run-hook-sync
-     'UserPromptSubmit
-     (mevedel-hooks-event-plist
-      'UserPromptSubmit session workspace
-      :agent-path (mevedel-agent-invocation-path invocation)
-      :prompt prompt
-      :display-text prompt)
-     invocation)))
-
-(defun mevedel-agent-exec--start-hook-audit-records (decision)
-  "Return parent-row audit records for a SubagentStart hook DECISION."
-  (mevedel-hooks-context-audit-records
-   decision 'SubagentStart 'subagent-context t))
 
 (defun mevedel-agent-exec-run-stop-hook (invocation status)
   "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."

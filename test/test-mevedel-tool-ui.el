@@ -140,9 +140,12 @@
               #'ignore
               '(:task_name "retryable"
                 :message "Fail initialization.")))
-            (should-not (assoc "/root/retryable"
-                               (mevedel-session-agent-registry session)))
-            (should-not (mevedel-session-agent-transcripts session))
+            (let ((record
+                   (cdr (assoc "/root/retryable"
+                               (mevedel-session-agent-registry session)))))
+              (should record)
+              (should (eq 'idle (mevedel-agent-record-activity record))))
+            (should (= 1 (length (mevedel-session-agent-transcripts session))))
             (dotimes (index 3)
               (let (result)
                 (mevedel-tool-ui--agent
@@ -171,7 +174,7 @@
                                :header)))))
             (let* ((records (mevedel-session-agent-registry session))
                    (record (cdr (assoc "/root/task_0" records))))
-              (should (= 3 (length records)))
+              (should (= 4 (length records)))
               (should (stringp (mevedel-agent-record-id record)))
               (should (equal "/root/task_0"
                              (mevedel-agent-record-path record)))
@@ -194,7 +197,7 @@
                    (messages (mevedel-session-messages session))
                    (result (car messages)))
               (should (eq 'idle (mevedel-agent-record-activity record)))
-              (should (= 1 (length messages)))
+              (should (= 2 (length messages)))
               (should (eq 'RESULT (plist-get result :type)))
               (should (equal "/root/task_0" (plist-get result :sender)))
               (should (equal "/root" (plist-get result :recipient)))
@@ -216,7 +219,7 @@
                :error-details "Duplicate error"
                :fallback-partial nil))
             (let ((result (car (mevedel-session-messages session))))
-              (should (= 2 (length (mevedel-session-messages session))))
+              (should (= 3 (length (mevedel-session-messages session))))
               (should (eq 'errored (plist-get result :outcome)))
               (should (string-match-p "Provider failed"
                                       (plist-get result :payload)))
@@ -226,7 +229,7 @@
                      (concat "HEAD" (make-string 40000 ?x) "TAIL"))
             (let* ((result (car (mevedel-session-messages session)))
                    (payload (plist-get result :payload)))
-              (should (= 3 (length (mevedel-session-messages session))))
+              (should (= 4 (length (mevedel-session-messages session))))
               (should (<= (length payload) (* 32 1024)))
               (should (string-prefix-p "HEAD" payload))
               (should (string-match-p "TAIL" payload))

@@ -245,6 +245,7 @@
     (should (hash-table-p (mevedel-session-touched-files session)))
     (should (= 0 (mevedel-session-turn-count session)))
     (should (null (mevedel-session-agent-registry session)))
+    (should (null (mevedel-session-agent-reservations session)))
     (should (eq 'idle (mevedel-session-agent-root-activity session)))
     (should (= 3 (mevedel-session-agent-turn-capacity session)))
     (should (null (mevedel-session-tasks session)))
@@ -268,6 +269,16 @@
          (registry (list (cons "/root/worker" (make-symbol "record")))))
     (mevedel-session--set-agent-registry session registry)
     (should (eq registry (mevedel-session-agent-registry session)))))
+
+(mevedel-deftest mevedel-session--set-agent-reservations ()
+  ,test
+  (test)
+  :doc "stores transient unpublished agent reservations by identity"
+  (let* ((session (mevedel-session--create))
+         (reservations (list (cons "/root/worker" (make-symbol "record")))))
+    (mevedel-session--set-agent-reservations session reservations)
+    (should (eq reservations
+                (mevedel-session-agent-reservations session)))))
 
 (mevedel-deftest mevedel-session--set-execution-state ()
   ,test
