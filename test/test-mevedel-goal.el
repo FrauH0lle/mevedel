@@ -2230,7 +2230,7 @@ Each binding is (NAME KEYS)."
 (mevedel-deftest mevedel-goal--insert-and-send ()
   ,test
   (test)
-  :doc "returns its FSM while keeping hook context out of the transcript"
+  :doc "returns its FSM while persisting hook context in the transcript"
   (with-temp-buffer
     (org-mode)
     (setq-local gptel-response-separator "\n\n"
@@ -2250,7 +2250,7 @@ Each binding is (NAME KEYS)."
              (mevedel-goal--insert-and-send
               "Planning prompt" "Goal" "<hook-context>ctx</hook-context>"))))
       (should (string-match-p "Planning prompt" (buffer-string)))
-      (should-not (string-match-p "hook-context" (buffer-string)))
+      (should (string-match-p "hook-context" (buffer-string)))
       (should (string-match-p "hook-context" model-input))
       (should (equal '(transform) (plist-get request-args :transforms))))))
 

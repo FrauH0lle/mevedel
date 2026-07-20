@@ -36,6 +36,7 @@
 (require 'mevedel-persistence)
 (require 'mevedel-review)
 (require 'mevedel-goal)
+(require 'mevedel)
 (require 'mevedel-agents)
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
@@ -3210,7 +3211,46 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal
            "/goal auto ship it" "auto ship it")))
-      (should (equal '("ship it" "ship it" automatic nil) started)))))
+      (should (equal '("ship it" "ship it" automatic nil) started))))
+
+  :doc "/goal persists consumed start context across a full rerender"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "goal-context" :root "/tmp"
+                       :name "goal-context"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (mevedel-hooks-record-session-context
+         session '(:additional-context ("goal startup context"))
+         'SessionStart))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-goal-start)
+                 (lambda (_objective display _policy context)
+                   (mevedel-goal--insert-and-send
+                    "planning prompt" display context)))
+                ((symbol-function 'mevedel--gptel-send-request) #'ignore))
+        (with-current-buffer view-buf
+          (mevedel-view--send-local-goal "/goal ship it" "ship it")))
+      (should-not (mevedel-session-hook-context-pending session))
+      (with-current-buffer data-buf
+        (should (string-match-p "goal startup context" (buffer-string))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "hook context added" text))
+          (should-not (string-match-p "goal startup context" text)))
+        (goto-char (point-min))
+        (search-forward "hook context added")
+        (mevedel-view-toggle-section)
+        (should (string-match-p
+                 "goal startup context"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker)))))))
 
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
@@ -3320,6 +3360,33 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (submit-pos (string-search "submit context" accepted-context)))
         (should (< start-pos expansion-pos))
         (should (< expansion-pos submit-pos)))))
+
+  :doc "accepted callback errors restore pending context for retry"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "callback-rollback" :root "/tmp"
+                       :name "callback-rollback"))
+           (session (mevedel-session-create "main" workspace))
+           retry-context)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (mevedel-hooks-record-session-context
+         session '(:additional-context ("retry context")) 'SessionStart))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (should-error
+         (mevedel-view--run-prompt-submit-hook
+          "first" "first" (lambda (&rest _) (error "Dispatch failed"))))
+        (should (mevedel-session-hook-context-pending session))
+        (mevedel-view--run-prompt-submit-hook
+         "retry" "retry"
+         (lambda (_input context _audits)
+           (setq retry-context context)
+           t)))
+      (should (string-match-p "retry context" retry-context))
+      (should-not (mevedel-session-hook-context-pending session))))
 
   :doc "/goal prompts run UserPromptSubmit and materialize rewind forks"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))

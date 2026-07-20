@@ -2125,10 +2125,14 @@ dispatch and attach the attempt identity to the returned FSM."
   "Insert PROMPT as a user turn in the current data buffer and send it.
 DISPLAY-TEXT is shown in the view instead of PROMPT.  HOOK-CONTEXT is
 shown as a collapsed hook-context disclosure."
-  (mevedel--insert-local-user-turn
-   prompt display-text nil hook-context)
-  (mevedel--gptel-send-request
-   (and hook-context (concat prompt "\n\n" hook-context))))
+  (let ((stored-prompt
+         (if hook-context
+             (concat prompt "\n\n" hook-context)
+           prompt)))
+    (mevedel--insert-local-user-turn
+     stored-prompt display-text nil hook-context)
+    (mevedel--gptel-send-request
+     (and hook-context stored-prompt))))
 
 (defun mevedel-plan-queue--current-session ()
   "Resolve the session struct that owns the plan approval FIFO."

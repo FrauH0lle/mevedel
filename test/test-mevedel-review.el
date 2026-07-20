@@ -9,8 +9,11 @@
 (require 'mevedel-agent-control)
 (require 'mevedel-agent-conversation)
 (require 'mevedel-agent-exec)
+(require 'mevedel-hooks)
+(require 'mevedel-structs)
 (require 'mevedel-tool-exec)
 (require 'mevedel-view)
+(require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -22,6 +25,7 @@
 (defvar mevedel--agent-invocation)
 (defvar mevedel-agents--specs)
 (defvar mevedel-bash-dangerous-commands)
+(defvar mevedel-plugin-extra-roots)
 (defvar mevedel-session--read-only-mode)
 
 
@@ -622,33 +626,44 @@
 (mevedel-deftest mevedel-review--send-from-view ()
   ,test
   (test)
-  :doc "accepts the complete prompt-hook callback contract"
-  (let ((data (generate-new-buffer " *mevedel-review-data*"))
-        (view (generate-new-buffer " *mevedel-review-view*"))
-        history forked turn-context task-context)
-    (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                   (lambda (input display callback &rest _)
-                     (should (equal input display))
-                     (funcall callback input "hook context" nil)))
-                  ((symbol-function 'mevedel-view-history-add)
-                   (lambda (input) (setq history input)))
-                  ((symbol-function 'mevedel-view--fork-if-pending)
-                   (lambda () (setq forked t)))
-                  ((symbol-function 'mevedel-view--start-fork-skill-turn)
-                   (lambda (_input _display context)
-                     (setq turn-context context)))
-                  ((symbol-function 'mevedel-review--run-task)
-                   (lambda (_prompt _hint _callback &optional context &rest _)
-                     (setq task-context context))))
-          (mevedel-review--send-from-view
-           "/review target" "prompt" "target" view data)
-          (should (equal "/review target" history))
-          (should forked)
-          (should (equal "hook context" turn-context))
-          (should (equal "hook context" task-context)))
-      (kill-buffer data)
-      (kill-buffer view))))
+  :doc "persists consumed start context across a full transcript rerender"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "review-context" :root "/tmp"
+                       :name "review-context"))
+           (session (mevedel-session-create "main" workspace))
+           task-context)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (mevedel-hooks-record-session-context
+         session '(:additional-context ("review startup context"))
+         'SessionStart))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-review--run-task)
+                 (lambda (_prompt _hint _callback &optional context &rest _)
+                   (setq task-context context))))
+        (mevedel-review--send-from-view
+         "/review target" "prompt" "target" view-buf data-buf))
+      (should (string-match-p "review startup context" task-context))
+      (should-not (mevedel-session-hook-context-pending session))
+      (with-current-buffer data-buf
+        (should (string-match-p "review startup context" (buffer-string))))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (let ((text (buffer-substring-no-properties
+                     (point-min) mevedel-view--input-marker)))
+          (should (string-match-p "hook context added" text))
+          (should-not (string-match-p "review startup context" text)))
+        (goto-char (point-min))
+        (search-forward "hook context added")
+        (mevedel-view-toggle-section)
+        (should (string-match-p
+                 "review startup context"
+                 (buffer-substring-no-properties
+                  (point-min) mevedel-view--input-marker)))))))
 
 (mevedel-deftest mevedel-review--dispatch ()
   ,test

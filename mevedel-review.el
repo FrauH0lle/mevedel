@@ -1128,8 +1128,7 @@ DATA-BUFFER receives the task transcript."
      (lambda (hook-input hook-context _hook-audits)
        (when (and (buffer-live-p view-buffer)
                   (buffer-live-p data-buffer))
-         (cond
-          ((not (equal hook-input display))
+         (if (not (equal hook-input display))
            (let ((model-input (if hook-context
                                   (concat hook-input "\n\n" hook-context)
                                 hook-input)))
@@ -1138,12 +1137,14 @@ DATA-BUFFER receives the task transcript."
               (lambda ()
                 (mevedel-view-history-add hook-input)
                 (mevedel-view--fork-if-pending))
-              t nil hook-context)))
-          (t
+              t nil hook-context))
            (mevedel-view-history-add display)
            (mevedel-view--fork-if-pending)
            (mevedel-view--start-fork-skill-turn
-            display display hook-context)
+            (if hook-context
+                (concat display "\n\n" hook-context)
+              display)
+            display hook-context)
            (with-current-buffer data-buffer
              (mevedel-review--run-task
               prompt hint
@@ -1154,7 +1155,8 @@ DATA-BUFFER receives the task transcript."
               (lambda (invocation)
                 (mevedel-review--insert-progress-handle
                  invocation hint command))
-              command)))))))))
+              command))
+         t))))))
 
 (defun mevedel-review--dispatch (prompt hint &optional cwd command)
   "Dispatch COMMAND with PROMPT, HINT, and CWD."

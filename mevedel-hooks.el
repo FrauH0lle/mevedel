@@ -1009,6 +1009,20 @@ When ATTRIBUTE is non-nil, also escape double quotes."
     (setf (mevedel-session-hook-context-pending session) nil)
     context))
 
+(defun mevedel-hooks-consume-session-context (session entries)
+  "Consume ENTRIES when they still prefix SESSION's pending context.
+Context appended after ENTRIES remains pending.  A prefix mismatch leaves the
+slot unchanged and returns nil."
+  (let ((expected entries)
+        (remaining (mevedel-session-hook-context-pending session)))
+    (while (and expected remaining
+                (equal (car expected) (car remaining)))
+      (setq expected (cdr expected)
+            remaining (cdr remaining)))
+    (when (null expected)
+      (setf (mevedel-session-hook-context-pending session) remaining)
+      t)))
+
 (defun mevedel-hooks-record-session-reminder (event session decision)
   "Queue model-visible hook guidance for EVENT, SESSION, and DECISION."
   (when-let* ((session session)

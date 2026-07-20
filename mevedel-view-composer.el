@@ -52,6 +52,8 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision &optional event))
+(declare-function mevedel-hooks-consume-session-context "mevedel-hooks"
+                  (session entries))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-format-context "mevedel-hooks" (entries))
@@ -60,7 +62,6 @@
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
-(declare-function mevedel-hooks-take-session-context "mevedel-hooks" (session))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-copy-text
@@ -164,6 +165,8 @@
                   "mevedel-structs" (session path))
 (declare-function mevedel-session-clear-dropped-file-grants
                   "mevedel-structs" (session))
+(declare-function mevedel-session-hook-context-pending
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
@@ -1430,7 +1433,8 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
                   (mevedel-view--forward-input
                    (concat transcript-input render-data)
                    input nil t nil view-context all-audits
-                   (concat model-input render-data)))))
+                   (concat model-input render-data))))
+                t)
             (error
              (when (buffer-live-p data-buffer)
                (with-current-buffer data-buffer
@@ -1438,7 +1442,8 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
              (message "mevedel: skill dispatch failed: %s"
                       (error-message-string err))
              (when on-block
-               (funcall on-block)))))))))
+               (funcall on-block))
+             nil)))))))
 
 (defun mevedel-view--handle-prepared-plan (submission prepared)
   "Continue SUBMISSION after PREPARED skill work settles."
@@ -1494,7 +1499,8 @@ of starting a new request."
                    (funcall dispatch
                             (list :model-input prepared-input
                                   :transcript-input prepared-input
-                                  :hook-audits hook-audits))))
+                                  :hook-audits hook-audits))
+                   t))
                on-block)
             (mevedel-view--forward-input input nil before-send nil on-block))
         (let* ((token (list :cancelled nil))
@@ -1689,7 +1695,8 @@ INPUT is the original composer text, including the slash command."
             hook-input
             hook-input
             (if automatic 'automatic 'supervised)
-            context)))))))
+            context)
+           t))))))
 
 (defun mevedel-view--fork-if-pending ()
   "Materialize the fork if the data buffer is in rewind preview state.
@@ -1716,10 +1723,6 @@ such as `passed' cannot escape into `plist-get' or `plist-member'."
      :warning)
     nil))
 
-(defun mevedel-view--take-pending-hook-context (session)
-  "Return and clear SESSION's pending hook context as model-visible XML."
-  (mevedel-hooks-take-session-context session))
-
 (defun mevedel-view--join-hook-contexts (&rest contexts)
   "Return CONTEXTS joined as separate hook context blocks."
   (let ((contexts (delq nil contexts)))
@@ -1731,7 +1734,9 @@ such as `passed' cannot escape into `plist-get' or `plist-member'."
   "Run `UserPromptSubmit' for INPUT, then call CALLBACK if accepted.
 DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
 `(HOOK-INPUT CONTEXT AUDITS)'.  PRIOR-CONTEXT, when non-nil, is placed after
-pending session context and before submit-hook context."
+pending session context and before submit-hook context.  CALLBACK returns
+non-nil after it commits the accepted turn; otherwise pending context is
+restored for retry."
   (mevedel-view--ensure-interactive-chat-view)
   (when mevedel-view--prompt-hook-pending
     (user-error "A prompt hook is still running -- wait or abort first"))
@@ -1776,9 +1781,10 @@ pending session context and before submit-hook context."
                                (if (stringp (plist-get decision :updated-input))
                                    (plist-get decision :updated-input)
                                  input))
+                              (pending-entries
+                               (mevedel-session-hook-context-pending session))
                               (pending-context
-                               (mevedel-view--take-pending-hook-context
-                                session))
+                               (mevedel-hooks-format-context pending-entries))
                               (submit-context
                                (mevedel-hooks-additional-context-string
                                 decision 'UserPromptSubmit))
@@ -1790,8 +1796,13 @@ pending session context and before submit-hook context."
                               (audit
                                (mevedel-view--prompt-rewrite-audit-record
                                 'UserPromptSubmit input submitted decision)))
-                         (funcall callback submitted context
-                                  (and audit (list audit))))))))))
+                         (let ((committed
+                                (funcall callback submitted context
+                                         (and audit (list audit)))))
+                           (when (and committed pending-entries)
+                             (mevedel-hooks-consume-session-context
+                              session pending-entries))
+                           committed))))))))
              session workspace nil nil)))
       (error
        (setq mevedel-view--prompt-hook-pending nil)
@@ -1836,7 +1847,8 @@ after the forwarded prompt, where the LLM's response will begin."
           (or display-text hook-input)
           context
           audits
-          nil))
+          nil)
+         t)
        on-block))))
 
 (defun mevedel-view--forward-input-now
