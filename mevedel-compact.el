@@ -1255,13 +1255,14 @@ current agent buffer's invocation."
               ((file-writable-p canonical-path))
               ((file-writable-p (file-name-directory canonical-path)))
               (task-heading (mevedel--compact-agent-task-heading invocation))
-              (first-response
+              (first-output
                (cl-find-if
-                (lambda (segment) (eq (car segment) 'response))
+                (lambda (segment)
+                  (memq (car segment) '(response reasoning tool)))
                 (mevedel-transcript-segments task-heading (point-max)))))
     (let* ((summary-bounds (mevedel--compact-agent-summary-bounds invocation))
            (anchor-end (or (plist-get summary-bounds :begin)
-                           (cadr first-response))))
+                           (cadr first-output))))
       (when (<= task-heading anchor-end)
         (let ((previous-summary
                (when summary-bounds
@@ -1325,6 +1326,31 @@ forward by an earlier compaction."
       (when-let* ((tool-use-id (plist-get record :tool-use-id)))
         (cl-pushnew tool-use-id ids :test #'equal)))
     (nreverse ids)))
+
+(defun mevedel--compact-current-tool-batch-start (info body-start)
+  "Return the start of INFO's current transcript tool batch.
+Only search from BODY-START so inherited parent history cannot become the
+pending continuation."
+  (let ((ids
+         (delq nil
+               (mapcar
+                (lambda (call)
+                  (and (listp call) (plist-get call :id)))
+                (plist-get info :tool-use))))
+        (batch-start body-start)
+        found)
+    (dolist (segment
+             (mevedel-transcript-segments body-start (point-max)))
+      (when (and (not found) (eq (car segment) 'tool))
+        (if (cl-some
+             (lambda (id)
+               (member id
+                       (mevedel--compact-archived-tool-use-ids
+                        (cadr segment) (caddr segment))))
+             ids)
+            (setq found batch-start)
+          (setq batch-start (caddr segment)))))
+    found))
 
 (defun mevedel--compact-commit-execution-row-archive (target)
   "Commit TARGET's prepared execution-row archive after compaction."
@@ -1906,11 +1932,14 @@ set already stored on FSM's info plist."
   "Surface automatic main TARGET compaction failure ERR."
   (mevedel--compact-auto-failure (plist-get target :buffer) err))
 
-(defun mevedel--compact-handle-target-wait (fsm target admission)
-  "Gate FSM continuation through TARGET using precomputed ADMISSION."
+(defun mevedel--compact-handle-target-wait
+    (fsm target admission &optional pending-start)
+  "Gate FSM continuation through TARGET using precomputed ADMISSION.
+PENDING-START, when non-nil, begins the continuation batch that must survive."
   (if (not admission)
       (gptel--handle-wait fsm)
-    (let ((pending-start (mevedel--compact-find-boundary)))
+    (let ((pending-start (or pending-start
+                             (mevedel--compact-find-boundary))))
       (if (not pending-start)
           (if (plist-get admission :target-pressure)
               (mevedel--compact-target-call
@@ -1965,7 +1994,10 @@ set already stored on FSM's info plist."
                      (mevedel--compact-admission estimate target-policy))))
           (cond
            (target
-            (mevedel--compact-handle-target-wait fsm target admission))
+            (mevedel--compact-handle-target-wait
+             fsm target admission
+             (mevedel--compact-current-tool-batch-start
+              info (plist-get target :body-start))))
            ((and auto-ready
                  (>= estimate
                      (mevedel--compact-policy-threshold-tokens

@@ -98,6 +98,9 @@
 (declare-function mevedel-tool-media-strip-blocks
                   "mevedel-tool-media" (string))
 
+;; `subr'
+(defvar read-eval)
+
 ;; `mevedel-tool-repair-diagnostics'
 (declare-function mevedel-tool-repair-audit-record
                   "mevedel-tool-repair-diagnostics" (state repairs))
@@ -1335,21 +1338,81 @@ display."
            "\n" mevedel-pipeline--render-data-close "\n")
    'invisible t))
 
-(defun mevedel-pipeline--render-data-regexp ()
-  "Return the regexp matching a render-data side-channel block.
-Matches the delimiters (with their newline wrappers) and everything in
-between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
-  (concat "\n?"
-          (regexp-quote mevedel-pipeline--render-data-open)
-          "\\(?:.\\|\n\\)*?"
-          (regexp-quote mevedel-pipeline--render-data-close)
-          "\n?"))
+(defun mevedel-pipeline--read-render-data-payload (payload)
+  "Read one render-data plist from PAYLOAD or return a failure sentinel."
+  (condition-case nil
+      (let* ((read-eval nil)
+             (parsed (read-from-string payload))
+             (data (car parsed))
+             (end (cdr parsed))
+             (rest (substring payload end)))
+        (if (and (consp data)
+                 (string-blank-p rest)
+                 (proper-list-p data)
+                 (zerop (% (length data) 2))
+                 (cl-loop for tail on data by #'cddr
+                          always (keywordp (car tail))))
+            data
+          :mevedel-parse-failed))
+    (error :mevedel-parse-failed)))
+
+(defun mevedel-pipeline--render-data-blocks (string)
+  "Return valid render-data blocks found in STRING, oldest first.
+Each entry is `(BEGIN END DATA)'.  Invalid marker-looking text is skipped.
+BEGIN and END include the formatter's optional surrounding newlines."
+  (when (stringp string)
+    (let ((search-start 0)
+          blocks open)
+      (while (setq open
+                   (string-search mevedel-pipeline--render-data-open
+                                  string search-start))
+        (let* ((payload-start
+                (+ open (length mevedel-pipeline--render-data-open)))
+               (close
+                (string-search mevedel-pipeline--render-data-close
+                               string payload-start)))
+          (if (not close)
+              (setq search-start payload-start)
+            (let* ((payload
+                    (string-trim
+                     (substring string payload-start close)))
+                   (data
+                    (mevedel-pipeline--read-render-data-payload payload))
+                   (next-open
+                    (string-search mevedel-pipeline--render-data-open
+                                   string payload-start))
+                   (close-end
+                    (+ close (length mevedel-pipeline--render-data-close))))
+              (cond
+               ((not (eq data :mevedel-parse-failed))
+                (let ((begin
+                       (if (and (> open 0)
+                                (eq (aref string (1- open)) ?\n))
+                           (1- open)
+                         open))
+                      (end
+                       (if (and (< close-end (length string))
+                                (eq (aref string close-end) ?\n))
+                           (1+ close-end)
+                         close-end)))
+                  (push (list begin end data) blocks))
+                (setq search-start close-end))
+               ((and next-open (< next-open close))
+                (setq search-start next-open))
+               (t
+                (setq search-start close-end)))))))
+      (nreverse blocks))))
 
 (defun mevedel-pipeline--strip-render-data-blocks (string)
-  "Return STRING with every render-data side-channel block removed."
-  (if (stringp string)
-      (replace-regexp-in-string
-       (mevedel-pipeline--render-data-regexp) "" string t t)
+  "Return STRING with every valid render-data side-channel block removed."
+  (if-let* ((blocks (mevedel-pipeline--render-data-blocks string)))
+      (let ((cursor 0)
+            parts)
+        (dolist (block blocks)
+          (push (substring string cursor (car block)) parts)
+          (setq cursor (cadr block)))
+        (push (substring string cursor) parts)
+        (apply #'concat (nreverse parts)))
     string))
 
 (defun mevedel-pipeline--strip-side-channel-blocks (string)
@@ -1362,12 +1425,6 @@ between.  Kept in sync with `mevedel-pipeline--format-render-data-block'."
   "Return STRING with non-media mevedel side-channel blocks removed."
   (mevedel--strip-hook-audit-blocks
    (mevedel-pipeline--strip-render-data-blocks string)))
-
-(defun mevedel-pipeline--read-render-data-payload (payload)
-  "Read render-data PAYLOAD or return a parse-failure sentinel."
-  (condition-case nil
-      (read payload)
-    (error :mevedel-parse-failed)))
 
 (defun mevedel-pipeline--find-render-data-block-by-agent-id (agent-id)
   "Return bounds of the first render-data block for AGENT-ID.
@@ -1715,7 +1772,7 @@ the view parser, persistence) keeps seeing the full block."
                    allow-payload-tool-use-id)
   "Return (VISIBLE-PART . RENDER-DATA) parsed from RESULT-STRING.
 VISIBLE-PART is the tool result with the side-channel block stripped.
-RENDER-DATA is the Lisp object deserialized from inside the block, or
+RENDER-DATA is the plist deserialized from inside the block, or
 nil when no valid block is present.  Unparseable payloads are treated as
 absent: the original string is returned verbatim in VISIBLE-PART.
 SESSION, EXPECTED-TOOL-USE-ID, and ALLOW-PAYLOAD-TOOL-USE-ID
@@ -1727,39 +1784,29 @@ control trusted side-channel lookup."
            (file-name-concat save-path "tool-results"))))
     (if (not (stringp result-string))
         (cons result-string nil)
-      (let ((open (string-search mevedel-pipeline--render-data-open
-                                 result-string)))
-        (if (null open)
+      (let ((blocks (mevedel-pipeline--render-data-blocks result-string)))
+        (if (null blocks)
+            (if (string-search mevedel-pipeline--render-data-open
+                               result-string)
+                (cons result-string nil)
             (cons
              (car (mevedel-tool-media-extract
                    (mevedel-tool-media-strip-blocks result-string)
                    tool-results-dir
                    expected-tool-use-id
                    allow-payload-tool-use-id))
-             nil)
-          (let* ((payload-start
-                  (+ open (length mevedel-pipeline--render-data-open)))
-                 (close (string-search mevedel-pipeline--render-data-close
-                                       result-string payload-start)))
-            (if (null close)
-                (cons result-string nil)
-              (let* ((payload (string-trim
-                               (substring result-string payload-start close)))
-                     (data (mevedel-pipeline--read-render-data-payload
-                            payload))
-                     (trail-end
-                      (+ close (length mevedel-pipeline--render-data-close))))
-                (if (eq data :mevedel-parse-failed)
-                    (cons result-string nil)
-                  (cons (string-trim-right
-                         (car (mevedel-tool-media-extract
-                               (mevedel-tool-media-strip-blocks
-                                (concat (substring result-string 0 open)
-                                        (substring result-string trail-end)))
-                               tool-results-dir
-                               expected-tool-use-id
-                               allow-payload-tool-use-id)))
-                        data))))))))))
+             nil))
+          (let* ((block (car (last blocks)))
+                 (visible
+                  (concat (substring result-string 0 (car block))
+                          (substring result-string (cadr block)))))
+            (cons (string-trim-right
+                   (car (mevedel-tool-media-extract
+                         (mevedel-tool-media-strip-blocks visible)
+                         tool-results-dir
+                         expected-tool-use-id
+                         allow-payload-tool-use-id)))
+                  (caddr block))))))))
 
 (defun mevedel-pipeline--step-attach-render-data (context next _fail)
   "Embed render-data from CONTEXT, then call NEXT.
