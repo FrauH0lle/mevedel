@@ -2611,9 +2611,9 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                            (org-entry-get (point-min) "GPTEL_SYSTEM")))))
       (when (file-directory-p root)
         (delete-directory root t))))
-  :doc "rerenders a live view when gptel metadata shifts transcript positions"
+  :doc "rebases a live view when gptel metadata shifts transcript positions"
   (let ((view (generate-new-buffer " *mevedel-save-state-view*"))
-        (rerenders 0))
+        deltas)
     (unwind-protect
         (with-temp-buffer
           (org-mode)
@@ -2625,12 +2625,13 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
             (insert "Transcript body\n")
             (cl-letf (((symbol-function 'gptel--get-buffer-bounds)
                        (lambda () nil))
-                      ((symbol-function 'mevedel-view--full-rerender)
-                       (lambda () (cl-incf rerenders))))
+                      ((symbol-function 'mevedel-view--rebase-data-sources)
+                       (lambda (delta) (push delta deltas))))
               (mevedel-session-persistence--save-gptel-state-around
                (lambda ()
                  (org-entry-put (point-min) "GPTEL_MODEL" "fake-model"))))
-            (should (= rerenders 1))))
+            (should (= 1 (length deltas)))
+            (should-not (= 0 (car deltas)))))
       (when (buffer-live-p view)
         (kill-buffer view)))))
 
@@ -6356,7 +6357,7 @@ The result is a plist whose :tempdir owns every created file."
 (mevedel-deftest mevedel-session-persistence/view-rerender ()
   ,test
   (test)
-  :doc "save path calls mevedel-view--full-rerender after buffer save"
+  :doc "save path does not rebuild the visible transcript"
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (unwind-protect
@@ -6374,7 +6375,7 @@ The result is a plist whose :tempdir owns every created file."
                 (cl-letf (((symbol-function 'mevedel-view--full-rerender)
                            (lambda () (cl-incf rerender-count))))
                   (mevedel-session-persistence-save session buf))
-                (should (= rerender-count 1)))
+                (should (= rerender-count 0)))
             (when (buffer-live-p vb) (kill-buffer vb))
             (test-mevedel-session-persistence--release-and-kill
              buf session)))

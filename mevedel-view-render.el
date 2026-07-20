@@ -457,6 +457,69 @@ turns rendered as usual.")
   (setq-local mevedel-view--response-cache-entries 0)
   (setq-local mevedel-view--user-pre-rendered nil))
 
+(defun mevedel-view--rebase-data-sources (delta)
+  "Shift rendered data-buffer source coordinates by DELTA."
+  (unless (zerop delta)
+    (cl-labels
+        ((shift-key
+          (key)
+          (if (and (consp key)
+                   (eq (car key) 'source)
+                   (integerp (nth 2 key)))
+              (let ((shifted (copy-tree key)))
+                (setcar (nthcdr 2 shifted) (+ (nth 2 key) delta))
+                shifted)
+            key)))
+      ;; Rebuild the hash before mutating property values: a key's hash
+      ;; must not change while it is still installed in the old table.
+      (when (hash-table-p mevedel-view--source-collapse-states)
+        (let ((shifted (make-hash-table
+                        :test (hash-table-test
+                               mevedel-view--source-collapse-states)
+                        :size (hash-table-size
+                               mevedel-view--source-collapse-states))))
+          (maphash
+           (lambda (key value)
+             (puthash (shift-key key) value shifted))
+           mevedel-view--source-collapse-states)
+          (setq mevedel-view--source-collapse-states shifted)))
+      ;; Property values are ordinary Lisp objects.  Mutating each shared
+      ;; value once updates its coordinates without modifying the visible
+      ;; buffer and forcing a frame-wide redisplay.
+      (let ((seen-sources (make-hash-table :test #'eq))
+            (seen-keys (make-hash-table :test #'eq))
+            (limit (point-max))
+            (pos (point-min)))
+        (while (< pos limit)
+          (let* ((source (get-text-property pos 'mevedel-view-source))
+                 (next (or (next-single-property-change
+                            pos 'mevedel-view-source nil limit)
+                           limit)))
+            (when (and (consp source)
+                       (not (gethash source seen-sources)))
+              (puthash source t seen-sources)
+              (when (integerp (car source))
+                (setcar source (+ (car source) delta)))
+              (when (integerp (cdr source))
+                (setcdr source (+ (cdr source) delta))))
+            (setq pos next)))
+        (setq pos (point-min))
+        (while (< pos limit)
+          (let* ((key (get-text-property pos 'mevedel-view-source-key))
+                 (next (or (next-single-property-change
+                            pos 'mevedel-view-source-key nil limit)
+                           limit)))
+            (when (and (consp key)
+                       (not (gethash key seen-keys)))
+              (puthash key t seen-keys)
+              (when (and (eq (car key) 'source)
+                         (integerp (nth 2 key)))
+                (setcar (nthcdr 2 key) (+ (nth 2 key) delta))))
+            (setq pos next))))
+      (when (hash-table-p mevedel-view--tool-rendering-cache)
+        (clrhash mevedel-view--tool-rendering-cache)
+        (setq mevedel-view--render-cache-entries 0)))))
+
 
 (defun mevedel-view--debug-buffer ()
   "Return the view-render debug buffer, creating it when needed."
@@ -4915,6 +4978,7 @@ rerender)."
             (render-agent-transcript-p mevedel-view--agent-transcript-p)
             (inhibit-read-only t)
             (inhibit-modification-hooks t)
+            (inhibit-redisplay t)
             (saved-states
              (and (markerp mevedel-view--input-marker)
                   (marker-position mevedel-view--input-marker)

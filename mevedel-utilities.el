@@ -51,6 +51,12 @@
 ;; `mevedel-workspace'
 (declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
 
+;; `org'
+(declare-function org-mode "org" ())
+
+;; `org-indent'
+(declare-function org-indent-mode "org-indent" (&optional arg))
+
 ;; `subr'
 (defvar read-eval)
 
@@ -90,6 +96,14 @@ visual/checking/history modes there keeps generated model and tool-output
 insertion from running expensive editor hooks."
   :type '(repeat symbol)
   :group 'mevedel)
+
+(defun mevedel--transcript-org-mode ()
+  "Enable Org mode without activating its frame-wide indentation redraw."
+  (require 'org)
+  (if (fboundp 'org-indent-mode)
+      (cl-letf (((symbol-function 'org-indent-mode) #'ignore))
+        (org-mode))
+    (org-mode)))
 
 (defun mevedel--optimize-transcript-buffer ()
   "Apply buffer-local performance settings for generated transcript buffers."

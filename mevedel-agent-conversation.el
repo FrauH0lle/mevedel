@@ -129,6 +129,8 @@
                   "mevedel-utilities" ())
 (declare-function mevedel--same-file-p
                   "mevedel-utilities" (file-a file-b))
+(declare-function mevedel--transcript-org-mode
+                  "mevedel-utilities" ())
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-post-tool
@@ -195,7 +197,8 @@ A non-positive value saves immediately.  Terminal paths always save now."
     (with-current-buffer buffer
       (let ((org-element-use-cache nil)
             (org-element-cache-persistent nil))
-        (org-mode))
+        (require 'mevedel-utilities)
+        (mevedel--transcript-org-mode))
       (when (fboundp 'org-element-cache-reset)
         (let ((org-element-use-cache t))
           (ignore-errors
@@ -205,7 +208,6 @@ A non-positive value saves immediately.  Terminal paths always save now."
       (setq-local gptel-org-convert-response nil)
       (setq-local gptel-org-branching-context nil)
       (setq-local gptel-org-ignore-elements '(property-drawer))
-      (require 'mevedel-utilities)
       (mevedel--optimize-transcript-buffer)
       (unless (require 'gptel nil t)
         (kill-buffer buffer)

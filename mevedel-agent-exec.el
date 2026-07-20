@@ -435,6 +435,8 @@ Skill-scoped model and effort policy applies to direct skill dispatches."
                  ('gptel-model (plist-get policy :model))
                  ('gptel-reasoning-effort (plist-get policy :effort))
                  (_ (and (boundp symbol) (symbol-value symbol))))
+   when (and (eq symbol 'gptel-system-prompt) (functionp value))
+   do (setq value (funcall value))
    collect (cons symbol (copy-tree value))))
 
 (defun mevedel-agent-exec-freeze-configuration

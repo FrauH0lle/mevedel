@@ -34,6 +34,22 @@
   (should-not (mevedel--plain-data-p (lambda () t)))
   (should-not (mevedel--plain-data-p (make-hash-table))))
 
+(mevedel-deftest mevedel--transcript-org-mode ()
+  ,test
+  (test)
+  :doc "suppresses org-indent-mode while transcript Org hooks run"
+  (progn
+    (require 'org)
+    (with-temp-buffer
+      (let ((org-mode-hook (list (lambda () (org-indent-mode +1))))
+            (redraws 0))
+        (cl-letf (((symbol-function 'redraw-display)
+                   (lambda () (cl-incf redraws))))
+          (mevedel--transcript-org-mode))
+        (should (derived-mode-p 'org-mode))
+        (should-not (bound-and-true-p org-indent-mode))
+        (should (= 0 redraws))))))
+
 (mevedel-deftest mevedel--head-tail-preview-parts ()
   ,test
   (test)
