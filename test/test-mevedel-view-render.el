@@ -159,6 +159,23 @@
                        (mapcar (lambda (turn) (plist-get turn :role))
                                turns))))))
 
+  :doc "retained agent task after tool activity starts a user turn"
+  (mevedel-view-test--with-buffers
+    (mevedel-view-test--insert-data data-buf "Initial prompt.\n" nil)
+    (mevedel-view-test--insert-data
+     data-buf "Tool activity.\n" '(tool . "call_1"))
+    (mevedel-view-test--insert-data
+     data-buf
+     "* Agent Task: follow_up\n\nSecond prompt.\n"
+     nil)
+    (mevedel-view-test--insert-data data-buf "Second answer.\n" 'response)
+    (with-current-buffer data-buf
+      (let* ((segments (mevedel-transcript-segments (point-min) (point-max)))
+             (turns (mevedel-view--group-into-turns segments data-buf)))
+        (should (equal '(user assistant user assistant)
+                       (mapcar (lambda (turn) (plist-get turn :role))
+                               turns))))))
+
   :doc "guardian audit does not absorb the following Goal turn"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "Planning complete.\n" 'response)
