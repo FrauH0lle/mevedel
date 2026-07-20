@@ -523,13 +523,16 @@ Preparation that requires a fork, request-policy change, or new media context
 cannot modify the already active request and is blocked explicitly. Any blocked
 preparation leaves the composer unchanged.
 
-After a successful turn, the next entry drains as its own normal user turn. It
-is planned and prepared at that point, then passes through `UserPromptSubmit`
-once before request or fork dispatch. The entry leaves the FIFO only at that
-dispatch boundary, so planning, preparation, and hook failures keep it
-editable. Each successful queued turn schedules the next entry; aborted and
-errored turns leave the remaining FIFO pending for review. There is no `WAIT`
-injection or synthetic queued-message transcript format.
+After a successful turn, the next ordinary entry drains as its own normal user
+turn. It is planned and prepared at that point, then passes through
+`UserPromptSubmit` once before request or fork dispatch. A WaitAgent steering
+attempt that was already approved before losing its waiter race retains that
+prepared outcome in the queue and does not run preparation or the prompt hook
+again. The entry leaves the FIFO only at its dispatch boundary, so earlier
+planning, preparation, and hook failures keep it editable. Each successful
+queued turn schedules the next entry; aborted and errored turns leave the
+remaining FIFO pending for review. There is no `WAIT` injection or synthetic
+queued-message transcript format.
 
 Outside root WaitAgent steering, `@` mentions and dropped-file grants therefore
 follow the same ordinary send path as direct composer input and are expanded or

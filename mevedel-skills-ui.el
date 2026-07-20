@@ -73,7 +73,8 @@
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-start
                   "mevedel-goal"
-                  (objective &optional display-text approval-policy hook-context))
+                  (objective &optional display-text approval-policy hook-context
+                             context-token))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges

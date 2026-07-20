@@ -422,8 +422,12 @@ body.  The view shows a generic collapsed `◇ hook context added`
 disclosure that can be expanded to see the contributing event names and
 injected text.  Multiple hook context contributions consumed by the same
 prompt share one combined disclosure, preserving contribution order in the
-expanded details. Pending context is cleared only after the accepted turn has
-been committed to its transcript; a dispatch error leaves it pending for retry.
+expanded details. Pending context is cleared at the transcript commit boundary,
+before request startup, so a later dispatch error cannot duplicate context that
+is already stored.  An error before transcript insertion leaves it pending for
+retry.  If a prepared WaitAgent steering attempt loses its waiter race, mevedel
+queues the approved prompt and context together; draining it does not rerun
+`UserPromptSubmit`.
 Hook audit records for persisted `<hook-context>` blocks contain ordered `<hook-event
 name="...">` entries so resume, rewind, and full rerender can recover
 which hook events contributed context:

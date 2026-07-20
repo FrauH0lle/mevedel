@@ -216,7 +216,7 @@ workspace."
   (agent-root-activity 'idle) ; root roster activity: running or idle
   agent-root-waiter ; transient async WaitAgent callback and timer
   (agent-turn-capacity 3) ; maximum active non-root turns in this session tree
-  queued-user-messages ; transient FIFO of bound original prompts awaiting preparation
+  queued-user-messages ; transient FIFO of bound or prepared prompts awaiting dispatch
   dropped-file-grants ; pending exact-file read grants from drag/drop
   active-dropped-file-grants ; session-scoped exact-file read grants
   mentions-shown    ; hash-table: (KIND . KEY) -> (turn . content-hash) for mention dedup
