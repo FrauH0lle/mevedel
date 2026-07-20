@@ -53,10 +53,6 @@
 (declare-function mevedel--compact-token-usage-count "mevedel-compact" (tokens))
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())
 
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-consume-session-context
-                  "mevedel-hooks" (session entries))
-
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle
                   "mevedel-interaction-prompt" (overlay outcome))
@@ -154,6 +150,10 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
+(declare-function mevedel-view-prompt-submission-commit
+                  "mevedel-view-composer" (submission))
+(declare-function mevedel-view-prompt-submission-context
+                  "mevedel-view-composer" (submission))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-anchor
@@ -177,7 +177,7 @@
 ;;; Lifecycle
 
 (defvar mevedel-goal-dispatch-function #'mevedel-goal--dispatch-gptel
-  "Function called with PHASE, PROMPT, DISPLAY-TEXT, and hook context data.")
+  "Function called with PHASE, PROMPT, DISPLAY-TEXT, and prompt submission.")
 
 (defcustom mevedel-goal-guardian-timeout 60
   "Seconds before an automatic Goal guardian request escalates to the user."
@@ -1942,12 +1942,11 @@ still-current candidate reviewed in CHAT-BUFFER."
     goal))
 
 (defun mevedel-goal-start
-    (objective &optional display-text approval-policy hook-context context-token)
+    (objective &optional display-text approval-policy prompt-submission)
   "Start a Goal for OBJECTIVE in the current session.
 DISPLAY-TEXT is the user-facing form of the planning turn.
 APPROVAL-POLICY is `supervised' by default or explicitly `automatic'.
-HOOK-CONTEXT is model-visible context for the initial planning turn.
-CONTEXT-TOKEN is committed after that turn is written to the transcript."
+PROMPT-SUBMISSION owns accepted hook context for the initial planning turn."
   (unless (bound-and-true-p mevedel--session)
     (user-error "No mevedel session in this buffer"))
   (when-let* ((existing (mevedel-session-goal mevedel--session)))
@@ -1997,8 +1996,7 @@ CONTEXT-TOKEN is committed after that turn is written to the transcript."
     (condition-case err
         (mevedel-goal--dispatch-phase
          'planning (mevedel-goal--planning-prompt goal)
-         (or display-text (mevedel-goal-objective goal)) hook-context
-         context-token)
+         (or display-text (mevedel-goal-objective goal)) prompt-submission)
       (error
        (if (mevedel-goal-checkpoint goal)
            (message "mevedel: goal paused before planning dispatch: %s"
@@ -2017,10 +2015,10 @@ CONTEXT-TOKEN is committed after that turn is written to the transcript."
     goal))
 
 (defun mevedel-goal--dispatch-gptel
-    (phase prompt display-text &optional hook-context context-token)
+    (phase prompt display-text &optional prompt-submission)
   "Dispatch PHASE with PROMPT, showing DISPLAY-TEXT in the transcript."
   (let ((fsm (mevedel-goal--insert-and-send
-              prompt display-text hook-context context-token)))
+              prompt display-text prompt-submission)))
     (when fsm
       (setf (gptel-fsm-info fsm)
             (plist-put (gptel-fsm-info fsm)
@@ -2114,7 +2112,7 @@ dispatch and attach the attempt identity to the returned FSM."
                   gptel-reasoning-effort old-effort))))
 
 (defun mevedel-goal--dispatch-phase
-    (phase prompt display-text &optional hook-context context-token)
+    (phase prompt display-text &optional prompt-submission)
   "Dispatch Goal PHASE with PROMPT and DISPLAY-TEXT."
   (unless (memq phase '(planning reviewing))
     (error "Goal phase cannot dispatch: %s" phase))
@@ -2124,24 +2122,27 @@ dispatch and attach the attempt identity to the returned FSM."
      (if (eq phase 'planning) 'planning 'review)
      (lambda ()
        (funcall mevedel-goal-dispatch-function
-                phase prompt display-text hook-context context-token))
+                phase prompt display-text prompt-submission))
      phase prompt)))
 
 (defun mevedel-goal--insert-and-send
-    (prompt &optional display-text hook-context context-token)
+    (prompt &optional display-text prompt-submission)
   "Insert PROMPT as a user turn in the current data buffer and send it.
-DISPLAY-TEXT is shown in the view instead of PROMPT.  HOOK-CONTEXT is
-shown as a collapsed hook-context disclosure.  CONTEXT-TOKEN is committed
-after the turn is inserted."
-  (let ((stored-prompt
+DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
+hook context until the turn is inserted."
+  (when prompt-submission
+    (require 'mevedel-view-composer))
+  (let* ((hook-context
+          (and prompt-submission
+               (mevedel-view-prompt-submission-context prompt-submission)))
+         (stored-prompt
          (if hook-context
              (concat prompt "\n\n" hook-context)
            prompt)))
     (mevedel--insert-local-user-turn
      stored-prompt display-text nil hook-context)
-    (when context-token
-      (require 'mevedel-hooks)
-      (mevedel-hooks-consume-session-context mevedel--session context-token))
+    (when prompt-submission
+      (mevedel-view-prompt-submission-commit prompt-submission))
     (mevedel--gptel-send-request
      (and hook-context stored-prompt))))
 

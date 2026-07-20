@@ -108,19 +108,20 @@
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
 (declare-function mevedel-view--forward-input
-                  "mevedel-view-composer"
-                  (input &optional display-text before-send prompt-checked
-                         on-block hook-context hook-audits model-input
-                         context-token))
+                  "mevedel-view-composer" (input &rest args))
 (declare-function mevedel-view--run-prompt-submit-hook
                   "mevedel-view-composer"
                   (input display-text callback &optional blocked-callback
                          prior-context))
-(declare-function mevedel-view--commit-prompt-context
-                  "mevedel-view-composer" (context-token &optional session))
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view-composer"
                   (input display-text &optional hook-context))
+(declare-function mevedel-view-prompt-submission-commit
+                  "mevedel-view-composer" (submission))
+(declare-function mevedel-view-prompt-submission-context
+                  "mevedel-view-composer" (submission))
+(declare-function mevedel-view-prompt-submission-input
+                  "mevedel-view-composer" (submission))
 
 ;; `mevedel-view-history'
 (declare-function mevedel-view-history-add
@@ -1128,38 +1129,44 @@ DATA-BUFFER receives the task transcript."
   (with-current-buffer view-buffer
     (mevedel-view--run-prompt-submit-hook
      display display
-     (lambda (hook-input hook-context _hook-audits context-token)
+     (lambda (submission)
        (when (and (buffer-live-p view-buffer)
                   (buffer-live-p data-buffer))
-         (if (not (equal hook-input display))
-           (let ((model-input (if hook-context
-                                  (concat hook-input "\n\n" hook-context)
-                                hook-input)))
+         (let ((hook-input (mevedel-view-prompt-submission-input submission))
+               (hook-context
+                (mevedel-view-prompt-submission-context submission)))
+           (if (not (equal hook-input display))
+               (let ((model-input (if hook-context
+                                      (concat hook-input "\n\n" hook-context)
+                                    hook-input)))
              (mevedel-view--forward-input
-              model-input hook-input
-              (lambda ()
-                (mevedel-view-history-add hook-input)
-                (mevedel-view--fork-if-pending))
-              t nil hook-context nil nil context-token))
-           (mevedel-view-history-add display)
-           (mevedel-view--fork-if-pending)
-           (mevedel-view--start-fork-skill-turn
-            (if hook-context
-                (concat display "\n\n" hook-context)
-              display)
-            display hook-context)
-           (mevedel-view--commit-prompt-context context-token)
-           (with-current-buffer data-buffer
-             (mevedel-review--run-task
-              prompt hint
-              (lambda (outcome)
-                (mevedel-review--handle-view-outcome
-                 outcome view-buffer data-buffer command))
-              hook-context
-              (lambda (invocation)
-                (mevedel-review--insert-progress-handle
-                 invocation hint command))
-              command))))))))
+                  model-input
+                  :display-text hook-input
+                  :before-send
+                  (lambda ()
+                    (mevedel-view-history-add hook-input)
+                    (mevedel-view--fork-if-pending))
+                  :prompt-checked t
+                  :submission submission))
+             (mevedel-view-history-add display)
+             (mevedel-view--fork-if-pending)
+             (mevedel-view--start-fork-skill-turn
+              (if hook-context
+                  (concat display "\n\n" hook-context)
+                display)
+              display hook-context)
+             (mevedel-view-prompt-submission-commit submission)
+             (with-current-buffer data-buffer
+               (mevedel-review--run-task
+                prompt hint
+                (lambda (outcome)
+                  (mevedel-review--handle-view-outcome
+                   outcome view-buffer data-buffer command))
+                hook-context
+                (lambda (invocation)
+                  (mevedel-review--insert-progress-handle
+                   invocation hint command))
+                command)))))))))
 
 (defun mevedel-review--dispatch (prompt hint &optional cwd command)
   "Dispatch COMMAND with PROMPT, HINT, and CWD."

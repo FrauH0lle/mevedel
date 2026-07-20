@@ -528,7 +528,8 @@ turn. It is planned and prepared at that point, then passes through
 `UserPromptSubmit` once before request or fork dispatch. A WaitAgent steering
 attempt that was already approved before losing its waiter race retains that
 prepared outcome in the queue and does not run preparation or the prompt hook
-again. The entry leaves the FIFO only at its dispatch boundary, so earlier
+again. It also owns its accepted hook context so earlier FIFO entries cannot
+consume it. The entry leaves the FIFO only at its dispatch boundary, so earlier
 planning, preparation, and hook failures keep it editable. Each successful
 queued turn schedules the next entry; aborted and errored turns leave the
 remaining FIFO pending for review. There is no `WAIT` injection or synthetic
@@ -540,7 +541,8 @@ activated for their own turn.
 
 Editing queued prompts removes the whole uncommitted FIFO
 and restores a combined draft to the composer, so it cannot be
-auto-submitted while being edited.
+auto-submitted while being edited. Editing or clearing also returns context
+owned by prepared entries to the session for the next submitted prompt.
 
 ## Agent Transcript Views
 

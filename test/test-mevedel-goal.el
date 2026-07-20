@@ -821,8 +821,7 @@ Each binding is (NAME KEYS)."
         (with-temp-buffer
           (setq-local mevedel--session session)
           (let ((mevedel-goal-dispatch-function
-                 (lambda (phase prompt display _hook-context
-                          &optional _context-token)
+                 (lambda (phase prompt display &optional _submission)
                    (setq dispatched (list phase prompt display)))))
             (let ((goal (mevedel-goal-start "Fix the race")))
               (should (eq goal (mevedel-session-goal session)))
@@ -1546,8 +1545,7 @@ Each binding is (NAME KEYS)."
                      (lambda (&rest _)
                        '(:backend nil :model new-model :effort high))))
             (let ((mevedel-goal-dispatch-function
-                   (lambda (_phase prompt _display _hook-context
-                            &optional _context-token)
+                   (lambda (_phase prompt _display &optional _submission)
                      (setq observed
                            (list prompt gptel-model
                                  gptel-reasoning-effort)))))
@@ -1689,8 +1687,7 @@ Each binding is (NAME KEYS)."
                         ((symbol-function 'mevedel--implement-plan)
                          (lambda (_input) (setq implemented t) nil)))
                 (let ((mevedel-goal-dispatch-function
-                       (lambda (phase _prompt _display _hook-context
-                                &optional _context-token)
+                       (lambda (phase _prompt _display &optional _submission)
                          (push (list phase gptel-model
                                      gptel-reasoning-effort)
                                dispatched))))
@@ -1810,8 +1807,7 @@ Each binding is (NAME KEYS)."
                      (lambda (&rest _)
                        '(:backend nil :model retry-model :effort high))))
             (let ((mevedel-goal-dispatch-function
-                   (lambda (_phase prompt _display _hook-context
-                            &optional _context-token)
+                   (lambda (_phase prompt _display &optional _submission)
                      (setq observed
                            (list prompt gptel-model
                                  gptel-reasoning-effort)))))
@@ -2252,7 +2248,10 @@ Each binding is (NAME KEYS)."
         (should
          (eq fsm
              (mevedel-goal--insert-and-send
-              "Planning prompt" "Goal" "<hook-context>ctx</hook-context>"))))
+              "Planning prompt" "Goal"
+              (mevedel-view--prompt-submission-create
+               :context "<hook-context>ctx</hook-context>"
+               :state 'committed)))))
       (should (string-match-p "Planning prompt" (buffer-string)))
       (should (string-match-p "hook-context" (buffer-string)))
       (should (string-match-p "hook-context" model-input))
@@ -2262,17 +2261,21 @@ Each binding is (NAME KEYS)."
   (with-temp-buffer
     (org-mode)
     (let* ((session (mevedel-session--create :name "goal-context"))
-           (context-token '((:event SessionStart :body "goal context"))))
+           (context-entries '((:event SessionStart :body "goal context")))
+           (submission
+            (mevedel-view--prompt-submission-create
+             :context "<hook-context>goal context</hook-context>"
+             :session session
+             :context-entries context-entries)))
       (setq-local mevedel--session session
                   gptel-response-separator "\n\n"
                   gptel-prompt-prefix-alist '((org-mode . "* User\n")))
-      (setf (mevedel-session-hook-context-pending session) context-token)
+      (setf (mevedel-session-hook-context-pending session) context-entries)
       (cl-letf (((symbol-function 'gptel-request)
                  (lambda (&rest _) (error "Request startup failed"))))
         (should-error
          (mevedel-goal--insert-and-send
-          "Planning prompt" "Goal"
-          "<hook-context>goal context</hook-context>" context-token)))
+          "Planning prompt" "Goal" submission)))
       (should-not (mevedel-session-hook-context-pending session))
       (should (string-match-p "goal context" (buffer-string))))))
 
@@ -2674,8 +2677,7 @@ Each binding is (NAME KEYS)."
             (test-mevedel-goal--apply-preset
              'test-goal-supervised-team buffer)
             (let ((mevedel-goal-dispatch-function
-                   (lambda (phase prompt display _hook-context
-                            &optional _context-token)
+                   (lambda (phase prompt display &optional _submission)
                      (push (list phase prompt display) dispatched))))
               (mevedel-goal-start "Fix the race")
               (should (eq 'test-goal-supervised-team
@@ -3274,8 +3276,7 @@ Each binding is (NAME KEYS)."
         (with-current-buffer buffer
           (setq-local mevedel--session session)
           (let ((mevedel-goal-dispatch-function
-                 (lambda (phase prompt display _hook-context
-                          &optional _context-token)
+                 (lambda (phase prompt display &optional _submission)
                    (push (list phase prompt display) dispatched))))
             (mevedel-goal-start "Finish both slices")
             (cl-letf (((symbol-function 'mevedel-goal--save-session-state)
@@ -3389,8 +3390,7 @@ Each binding is (NAME KEYS)."
             (test-mevedel-goal--apply-preset
              'test-goal-automatic-team buffer)
             (let ((mevedel-goal-dispatch-function
-                   (lambda (phase _prompt _display _hook-context
-                            &optional _context-token)
+                   (lambda (phase _prompt _display &optional _submission)
                      (push phase dispatches)))
                   (mevedel-goal-guardian-function
                    (lambda (goal _plan _buffer callback)

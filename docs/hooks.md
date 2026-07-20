@@ -426,8 +426,9 @@ expanded details. Pending context is cleared at the transcript commit boundary,
 before request startup, so a later dispatch error cannot duplicate context that
 is already stored.  An error before transcript insertion leaves it pending for
 retry.  If a prepared WaitAgent steering attempt loses its waiter race, mevedel
-queues the approved prompt and context together; draining it does not rerun
-`UserPromptSubmit`.
+transfers the approved context into the queued prompt. Earlier FIFO entries
+cannot consume it, draining does not rerun `UserPromptSubmit`, and editing or
+clearing the queue restores the context for the next user submission.
 Hook audit records for persisted `<hook-context>` blocks contain ordered `<hook-event
 name="...">` entries so resume, rewind, and full rerender can recover
 which hook events contributed context:
