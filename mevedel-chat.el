@@ -330,8 +330,8 @@ workspace."
 (defvar-local mevedel--session-start-hooks-pending nil
   "Non-nil while asynchronous SessionStart hooks are still running.")
 
-(defun mevedel--run-session-start-hooks ()
-  "Run native and declarative session-start hooks for the current buffer."
+(defun mevedel--run-session-start-hooks (source)
+  "Run session-start hooks for the current buffer with SOURCE."
   (run-hooks 'mevedel-session-start-hook)
   (when (bound-and-true-p mevedel--session)
     (let ((buffer (current-buffer))
@@ -344,10 +344,7 @@ workspace."
        'SessionStart
        (mevedel-hooks-event-plist
         'SessionStart mevedel--session workspace
-        :source (if (ignore-errors
-                      (mevedel-session-save-path mevedel--session))
-                    "resume"
-                  "startup"))
+        :source source)
        (lambda (decision)
          (when (buffer-live-p buffer)
            (with-current-buffer buffer
@@ -373,8 +370,8 @@ workspace."
         :reason "kill-buffer")
        #'ignore mevedel--session workspace nil nil))))
 
-(defun mevedel--chat-buffer-init-common (buf workspace)
-  "Set up BUF for WORKSPACE after fresh-session creation or resume.
+(defun mevedel--chat-buffer-init-common (buf workspace source)
+  "Set up BUF for WORKSPACE and start its lifecycle with SOURCE.
 
 Caller must already have set BUF's buffer-local `mevedel--session'.
 Wires the FSM handler chain, header-line, visual settings, all
@@ -383,7 +380,7 @@ view buffer.
 
 Both `mevedel--chat-buffer-setup' (fresh path) and the resume path
 \(`mevedel-session-persistence-restore') call this after planting the
-session struct."
+session struct. SOURCE is `startup' or `resume' as a string."
   (with-current-buffer buf
     (when (derived-mode-p 'org-mode)
       (mevedel--chat-buffer-disable-org-element-cache))
@@ -480,7 +477,7 @@ session struct."
     (mevedel-view--ensure buf)
     (when (fboundp 'mevedel-goal-restore-pending-approval)
       (mevedel-goal-restore-pending-approval mevedel--session buf))
-    (mevedel--run-session-start-hooks)))
+    (mevedel--run-session-start-hooks source)))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
   "Set up chat buffer BUF in WORKSPACE with SESSION-NAME and WORKING-DIRECTORY."
@@ -504,7 +501,7 @@ session struct."
     (setq-local mevedel--session
                 (mevedel-session-create
                  session-name workspace working-directory))
-    (mevedel--chat-buffer-init-common buf workspace)))
+    (mevedel--chat-buffer-init-common buf workspace "startup")))
 
 (defun mevedel--patch-buffer (&optional create workspace)
   "Get or create the mevedel patch staging buffer for WORKSPACE.

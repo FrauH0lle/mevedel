@@ -50,6 +50,9 @@
 (declare-function mevedel-cockpit-surface-selected
                   "mevedel-cockpit" (&optional no-error))
 
+;; `mevedel-chat'
+(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+
 ;; `mevedel-compact'
 (declare-function mevedel--estimate-tokens "mevedel-compact" ())
 (declare-function mevedel-compact "mevedel-compact" (&optional aggressive instructions))
@@ -362,6 +365,7 @@ Routes through the lifecycle-aware permission transition path."
       (mevedel-session-persistence-start-fresh-segment
        mevedel--session (current-buffer)
        :initial-text prefix)
+      (mevedel--run-session-start-hooks "clear")
       (message "mevedel: started a fresh chat segment"))
      (t
       (when (yes-or-no-p "Clear all chat buffer content? ")
@@ -369,6 +373,8 @@ Routes through the lifecycle-aware permission transition path."
           (erase-buffer)
           (insert prefix)
           (goto-char (point-max)))
+        (when (bound-and-true-p mevedel--session)
+          (mevedel--run-session-start-hooks "clear"))
         (message "mevedel: cleared chat buffer"))))))
 
 (defun mevedel-cmd--help (_args)

@@ -55,6 +55,8 @@
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-format-context "mevedel-hooks" (entries))
+(declare-function mevedel-hooks-record-session-context "mevedel-hooks"
+                  (session decision &optional event))
 (declare-function mevedel-hooks-run-event "mevedel-hooks"
                   (event event-plist callback
                          &optional session workspace request invocation))
@@ -1758,6 +1760,8 @@ DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
                      (cond
                       ((and (plist-member decision :continue)
                             (not (plist-get decision :continue)))
+                       (mevedel-hooks-record-session-context
+                        session decision 'UserPromptSubmit)
                        (when blocked-callback
                          (funcall blocked-callback))
                        (message "mevedel: prompt blocked by hook: %s"

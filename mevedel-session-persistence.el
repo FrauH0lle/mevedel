@@ -195,7 +195,7 @@
 (declare-function mevedel-session-buffer-name
                   "mevedel-structs" (session-name workspace))
 (declare-function mevedel--chat-buffer-init-common
-                  "mevedel-chat" (buf workspace))
+                  "mevedel-chat" (buf workspace source))
 (declare-function mevedel--chat-buffer-disable-org-element-cache
                   "mevedel-chat" ())
 (declare-function mevedel--normalize-session-directory
@@ -3012,7 +3012,7 @@ mentions-shown reset to empty hash tables on load."
                     (set-visited-file-modtime)))
                 (unless acquired
                   (mevedel-session-persistence--apply-read-only-mode buf))
-                (mevedel--chat-buffer-init-common buf workspace)
+                (mevedel--chat-buffer-init-common buf workspace "resume")
                 (require 'mevedel-agent-persistence)
                 (setq agent-repairs
                       (mevedel-agent-persistence-restore-tree
