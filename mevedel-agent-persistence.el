@@ -220,11 +220,15 @@ callers reverse it only when delivering the mailbox as FIFO."
          (role (and id (mevedel-agent-record-role record)))
          (activity (and id (mevedel-agent-record-activity record)))
          (location
-          (and id (mevedel-agent-record-conversation-location record))))
+          (and id (mevedel-agent-record-conversation-location record)))
+         (hook-context
+          (and id (mevedel-agent-record-hook-context-pending record))))
     (unless
         (and (equal (car entry) path)
              (mevedel-agent-persistence--identity-p
-              id path parent role activity location seen-paths seen-ids))
+              id path parent role activity location seen-paths seen-ids)
+             (proper-list-p hook-context)
+             (mevedel--plain-data-p hook-context))
       (error "Invalid live agent registry entry"))
     (let ((encoded
            (list :id id
@@ -236,6 +240,7 @@ callers reverse it only when delivering the mailbox as FIFO."
                   (mevedel-agent-record-configuration record))
                  :activity activity
                  :conversation-location location
+                 :hook-context-pending (copy-tree hook-context)
                  :mailbox
                  (mevedel-agent-persistence-sanitize-mailbox
                   (mevedel-agent-record-mailbox record) path))))
@@ -370,9 +375,12 @@ succeed after silently losing an addressable agent."
          (parent (and id (plist-get entry :parent-path)))
          (role (and id (plist-get entry :role)))
          (activity (and id (plist-get entry :activity)))
-         (location (and id (plist-get entry :conversation-location))))
-    (unless (mevedel-agent-persistence--identity-p
-             id path parent role activity location seen-paths seen-ids)
+         (location (and id (plist-get entry :conversation-location)))
+         (hook-context (and id (plist-get entry :hook-context-pending))))
+    (unless (and (mevedel-agent-persistence--identity-p
+                  id path parent role activity location seen-paths seen-ids)
+                 (proper-list-p hook-context)
+                 (mevedel--plain-data-p hook-context))
       (mevedel-agent-persistence--invalid
        "Invalid persisted agent identity"))
     (let ((record
@@ -386,6 +394,7 @@ succeed after silently losing an addressable agent."
              (plist-get entry :configuration) role)
             :activity activity
             :conversation-location location
+            :hook-context-pending (copy-tree hook-context)
             :mailbox
             (mevedel-agent-persistence-sanitize-mailbox
              (plist-get entry :mailbox) path))))

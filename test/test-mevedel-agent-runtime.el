@@ -95,8 +95,7 @@
                   (push 'transcript-save events)
                   t))
                ((symbol-function 'mevedel-agent-exec-run)
-                (lambda (callback _role _description _prompt invocation
-                                  _buffer)
+                (lambda (callback _role _description invocation _buffer)
                   (setq provider-callback callback)
                   (setf (mevedel-agent-invocation-runtime-fsm invocation)
                         'provider-fsm)
@@ -126,7 +125,7 @@
               (should (equal "/root/explore"
                              (mevedel-agent-invocation-path invocation)))
               (should
-               (equal '(transcript-setup invocation-published transcript-save)
+               (equal '(transcript-setup transcript-save invocation-published)
                       (nreverse events)))
               (with-current-buffer agent-buffer
                 (should (string-match-p "Prior context" (buffer-string)))
@@ -163,8 +162,7 @@
                   (lambda (&rest _)
                     (setq saved t)))
                  ((symbol-function 'mevedel-agent-exec-run)
-                  (lambda (_callback _role _description _prompt invocation
-                                     _buffer)
+                  (lambda (_callback _role _description invocation _buffer)
                     (setf (mevedel-agent-invocation-runtime-fsm invocation)
                           'continued-fsm)
                     'continued-fsm)))
@@ -189,6 +187,138 @@
                                           (buffer-string)))
                   (should-not (string-match-p "Must not be copied"
                                               (buffer-string))))))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent)))
+
+  :doc "runs SubagentStart once for a retained conversation, not per turn"
+  (let* ((parent (generate-new-buffer " *agent-runtime-start-parent*"))
+         (agent-buffer (generate-new-buffer " *agent-runtime-start-child*"))
+         (session (mevedel-session--create :name "main"))
+         (agent (mevedel-agent-runtime-test--agent))
+         (configuration
+          (mevedel-agent-runtime-test--configuration agent))
+         (start-count 0)
+         (submit-count 0)
+         lifecycle
+         provider-prompts
+         first)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (let ((mevedel-subagent-start-functions
+                 (list (lambda (_event)
+                         (cl-incf start-count)
+                         (push 'start lifecycle)
+                         '(:additional-context ("one startup context")))))
+                (mevedel-user-prompt-submit-functions
+                 (list (lambda (_event)
+                         (cl-incf submit-count)
+                         (push 'submit lifecycle)
+                         '(:additional-context ("per-turn context"))))))
+            (cl-letf
+                (((symbol-function 'mevedel-agent-conversation-open)
+                  (lambda (&rest _) agent-buffer))
+                 ((symbol-function 'mevedel-agent-runtime--setup-transcript)
+                  (lambda (invocation _buffer)
+                    (setf
+                     (mevedel-agent-invocation-transcript-relative-path
+                      invocation)
+                     "agents/explorer.chat.org")))
+                 ((symbol-function 'mevedel-agent-conversation-save)
+                  (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-agent-exec-run)
+                  (lambda (_callback _role _description invocation buffer)
+                    (with-current-buffer buffer
+                      (push (buffer-string) provider-prompts))
+                    (push 'model lifecycle)
+                    (setf (mevedel-agent-invocation-runtime-fsm invocation)
+                          'provider-fsm)
+                    'provider-fsm)))
+              (setq first
+                    (mevedel-agent-runtime-dispatch
+                     agent "Explore" "Initial task"
+                     :path "/root/explore"
+                     :frozen-configuration configuration))
+              (mevedel-agent-runtime-dispatch
+               nil "Continue" "Follow-up task"
+               :path "/root/explore"
+               :frozen-configuration configuration
+               :retained-id
+               (mevedel-agent-invocation-agent-id first)
+               :retained-buffer agent-buffer
+               :retained-transcript "agents/explorer.chat.org")
+              (should (= 1 start-count))
+              (should (= 2 submit-count))
+              (should (equal '(start submit model submit model)
+                             (nreverse lifecycle)))
+              (should (string-match-p "one startup context"
+                                      (car (last provider-prompts))))
+              (with-current-buffer agent-buffer
+                (goto-char (point-min))
+                (should (= 1 (how-many "one startup context")))))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent)))
+
+  :doc "keeps blocked prompt context local until the next accepted agent turn"
+  (let* ((parent (generate-new-buffer " *agent-runtime-block-parent*"))
+         (agent-buffer (generate-new-buffer " *agent-runtime-block-child*"))
+         (session (mevedel-session--create :name "main"))
+         (agent (mevedel-agent-runtime-test--agent))
+         (configuration
+          (mevedel-agent-runtime-test--configuration agent))
+         (submit-count 0)
+         pending
+         provider-prompt)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (let ((mevedel-user-prompt-submit-functions
+                 (list
+                  (lambda (_event)
+                    (cl-incf submit-count)
+                    (if (= submit-count 1)
+                        '(:continue nil
+                          :additional-context ("carry this context"))
+                      '(:updated-input "Rewritten accepted task"
+                        :additional-context ("current context")))))))
+            (cl-letf
+                (((symbol-function 'mevedel-agent-conversation-save)
+                  (lambda (&rest _) t))
+                 ((symbol-function 'mevedel-agent-exec-run)
+                  (lambda (_callback _role _description invocation buffer)
+                    (with-current-buffer buffer
+                      (setq provider-prompt (buffer-string)))
+                    (setf (mevedel-agent-invocation-runtime-fsm invocation)
+                          'provider-fsm)
+                    'provider-fsm)))
+              (should-error
+               (mevedel-agent-runtime-dispatch
+                nil "Continue" "Blocked task"
+                :path "/root/explore"
+                :frozen-configuration configuration
+                :retained-id "explorer--test"
+                :retained-buffer agent-buffer
+                :retained-transcript "agents/explorer.chat.org"
+                :on-hook-context (lambda (entries) (setq pending entries))))
+              (with-current-buffer agent-buffer
+                (should-not (string-match-p "Blocked task" (buffer-string))))
+              (should pending)
+              (mevedel-agent-runtime-dispatch
+               nil "Continue" "Accepted task"
+               :path "/root/explore"
+               :frozen-configuration configuration
+               :retained-id "explorer--test"
+               :retained-buffer agent-buffer
+               :retained-transcript "agents/explorer.chat.org"
+               :pending-hook-context pending
+               :on-hook-context (lambda (entries) (setq pending entries)))
+              (should-not pending)
+              (should (string-match-p "Rewritten accepted task"
+                                      provider-prompt))
+              (should (string-match-p "carry this context" provider-prompt))
+              (should (string-match-p "current context" provider-prompt))
+              (with-current-buffer agent-buffer
+                (should (string-match-p "Accepted task" (buffer-string)))))))
       (kill-buffer agent-buffer)
       (kill-buffer parent))))
 

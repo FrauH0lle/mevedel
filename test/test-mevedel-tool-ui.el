@@ -126,9 +126,11 @@
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
           (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                     (lambda (callback _role _description message invocation
-                                       _buffer &optional _configure)
-                       (if (equal message "Fail initialization.")
+                     (lambda (callback _role _description invocation
+                                       buffer &optional _configure)
+                       (if (with-current-buffer buffer
+                             (string-match-p "Fail initialization\\."
+                                             (buffer-string)))
                            (error "Provider initialization failed")
                          (push callback callbacks)
                          (push invocation invocations)
@@ -316,7 +318,7 @@
             (put-text-property response-start (point) 'gptel 'response))
           (let ((mevedel-agents--specs nil))
             (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                       (lambda (callback _role _description _message invocation
+                       (lambda (callback _role _description invocation
                                          buffer &optional _configure)
                          (push callback callbacks)
                          (push invocation invocations)
@@ -507,7 +509,7 @@
                            (mevedel-model-resolve-workload 'default)
                            :effort)))
               (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                         (lambda (callback _role _description _message invocation
+                         (lambda (callback _role _description invocation
                                            _buffer &optional _configure)
                            (push callback callbacks)
                            (push invocation invocations)
@@ -638,7 +640,7 @@
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
           (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                     (lambda (callback _role _description message invocation
+                     (lambda (callback _role _description invocation
                                        buffer &optional _configure)
                        (when fail-launch
                          (error "Simulated provider launch failure"))
@@ -646,7 +648,6 @@
                              (append launches
                                      (list (list :callback callback
                                                  :invocation invocation
-                                                 :message message
                                                  :buffer buffer))))
                        'provider-request)))
             (let (started)
@@ -753,13 +754,12 @@
           (setq-local mevedel--session session)
           (setq-local mevedel--workspace workspace)
           (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                     (lambda (callback _role _description message invocation
+                     (lambda (callback _role _description invocation
                                        buffer &optional _configure)
                        (setq launches
                              (append launches
                                      (list (list :callback callback
                                                  :invocation invocation
-                                                 :message message
                                                  :buffer buffer))))
                        'provider-request)))
             (dolist (name '("one" "two" "three"))
