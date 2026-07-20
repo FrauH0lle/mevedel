@@ -206,7 +206,7 @@
 				    (lambda (workspace)
 				      (setq notified-workspace workspace))))
 			   (mevedel--chat-buffer-init-common
-			    (current-buffer) workspace))
+			    (current-buffer) workspace "startup"))
 			 (should (eq notified-workspace workspace))
 			 (should (memq #'mevedel-tool-repair-pre-tool-call
 				       gptel-pre-tool-call-functions))
@@ -261,7 +261,7 @@
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
 			 (setq-local mevedel--workspace workspace)
-			 (mevedel--run-session-start-hooks)
+			 (mevedel--run-session-start-hooks "startup")
 			 (mevedel--run-session-end-hooks)
 			 (should (equal (nreverse normal-events) '(start end)))
 			 (should
@@ -287,13 +287,15 @@
 				    :root root
 				    :name "hooks"))
 			(session (mevedel-session-create "main" workspace root))
-			(called nil))
+			(called nil)
+                        payload)
 		   (unwind-protect
 		       (with-temp-buffer
 			 (setq-local mevedel--session session)
 			 (setq-local mevedel--workspace workspace)
 			 (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-				    (lambda (_event _payload callback &rest _)
+				    (lambda (_event event-payload callback &rest _)
+                                      (setq payload event-payload)
 				      (run-at-time
 				       0.01 nil
 				       (lambda ()
@@ -301,8 +303,9 @@
 					 (funcall callback
 						  '(:additional-context
 						    ("async startup"))))))))
-			   (mevedel--run-session-start-hooks))
+			   (mevedel--run-session-start-hooks "compact"))
 			 (should called)
+			 (should (equal "compact" (plist-get payload :source)))
 			 (should-not mevedel--session-start-hooks-pending)
 			 (should
 			  (equal (mevedel-session-hook-context-pending session)

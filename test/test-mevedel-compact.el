@@ -8,6 +8,7 @@
 (require 'gptel-request)
 (require 'mevedel)
 (require 'mevedel-agent-control)
+(require 'mevedel-agent-exec)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-compact)
 (require 'mevedel-models)
@@ -475,6 +476,9 @@
                          (with-current-buffer source-buf
                            (setq-local mevedel--compact-current-request-reminder
                                        "Re-read /tmp/old.el")
+                           (setq-local
+                            mevedel--compact-current-request-hook-context
+                            "<hook-context>\n<hook-event name=\"SessionStart\">\ncompact context\n</hook-event>\n</hook-context>")
                            (let ((inhibit-read-only t))
                              (erase-buffer)
                              (insert "#+begin_summary\nSummary\n#+end_summary\n")
@@ -497,12 +501,16 @@
               (should (string-match-p "Summary" text))
               (should (string-match-p "Late prefix" text))
               (should (string-match-p "Late context" text))
+              (let ((first (string-match "compact context" text)))
+                (should first)
+                (should-not (string-match "compact context" text (1+ first))))
               (should (string-match-p "<system-reminder>\nRe-read /tmp/old.el"
                                       text))
               (should-not (string-match-p "Old prompt" text))
               (should (string-match-p "Pending prompt" text))))
           (with-current-buffer source-buf
-            (should-not mevedel--compact-current-request-reminder)))
+            (should-not mevedel--compact-current-request-reminder)
+            (should-not mevedel--compact-current-request-hook-context)))
       (when (buffer-live-p source-buf)
         (kill-buffer source-buf))
       (when (buffer-live-p prompt-buf)
@@ -1367,6 +1375,71 @@
     (should (equal '(:type status :summary "Compacting...") activity))
     (should (equal " Compacting..." status))))
 
+(mevedel-deftest mevedel--compact-begin-root-context-epoch ()
+  ,test
+  (test)
+  :doc "manual compaction leaves compact-start context for the next input"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "compact-epoch" :root "/tmp"
+                     :name "compact-epoch"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *mevedel-compact-epoch*"))
+         source)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (insert "Transcript\n"))
+          (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
+                     (lambda (value)
+                       (setq source value)
+                       (mevedel-hooks-record-session-context
+                        session '(:additional-context ("fresh context"))
+                        'SessionStart))))
+            (mevedel--compact-begin-root-context-epoch
+             (list :buffer buffer :session session) nil))
+          (should (equal "compact" source))
+          (should (mevedel-session-hook-context-pending session))
+          (with-current-buffer buffer
+            (should-not mevedel--compact-current-request-hook-context)
+            (should-not (string-match-p "fresh context" (buffer-string)))))
+      (kill-buffer buffer)))
+
+  :doc "automatic compaction consumes compact-start context into its request"
+  (let* ((workspace (mevedel-workspace--create
+                     :type 'test :id "compact-auto-epoch" :root "/tmp"
+                     :name "compact-auto-epoch"))
+         (session (mevedel-session-create "main" workspace))
+         (buffer (generate-new-buffer " *mevedel-compact-auto-epoch*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (insert "Pending prompt\n"))
+          (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
+                     (lambda (_source)
+                       (mevedel-hooks-record-session-context
+                        session '(:additional-context ("fresh context"))
+                        'SessionStart))))
+            (mevedel--compact-begin-root-context-epoch
+             (list :buffer buffer :session session) t))
+          (should-not (mevedel-session-hook-context-pending session))
+          (with-current-buffer buffer
+            (should (string-match-p
+                     "fresh context"
+                     mevedel--compact-current-request-hook-context))
+            (should (string-match-p "fresh context" (buffer-string)))))
+      (kill-buffer buffer)))
+
+  :doc "retained-agent compaction does not begin a root context epoch"
+  (let ((buffer (generate-new-buffer " *mevedel-agent-compact-epoch*"))
+        called)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel--run-session-start-hooks)
+                   (lambda (_source) (setq called t))))
+          (mevedel--compact-begin-root-context-epoch
+           (list :buffer buffer :session 'session :invocation 'agent) t)
+          (should-not called))
+      (kill-buffer buffer))))
+
 (mevedel-deftest mevedel--compact-main-complete ()
   ,test
   (test)
@@ -2173,16 +2246,138 @@
       (should-not (string-match-p "Stable child task anchor" captured-prompt))
       (should (equal result "Compaction aborted"))))
 
+  :doc "successful root compaction starts a compact epoch after PostCompact"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (events result)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (let* ((pending-start (point))
+             (target (mevedel--compact-main-target)))
+        (insert "Pending prompt\n")
+        (setq target
+              (plist-put target :apply
+                         (lambda (&rest _)
+                           (push 'apply events))))
+        (setq target
+              (plist-put target :complete
+                         (lambda (&rest _)
+                           (push 'complete events))))
+        (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                   (lambda (&rest _) "system prompt"))
+                  ((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (push event events)
+                     (funcall callback nil)))
+                  ((symbol-function 'mevedel--run-session-start-hooks)
+                   (lambda (source)
+                     (push (list 'SessionStart source) events)
+                     (mevedel-hooks-record-session-context
+                      session
+                      '(:additional-context ("compact context"))
+                      'SessionStart)))
+                  ((symbol-function 'gptel-get-preset)
+                   (lambda (&rest _) '(:description "test")))
+                  ((symbol-function 'gptel-request)
+                   (lambda (_prompt &rest args)
+                     (funcall (plist-get args :callback)
+                              "summary" nil)))
+                  ((symbol-function 'message) #'ignore))
+          (mevedel--compact-run
+           :target target
+           :aggressive t
+           :pending-start pending-start
+           :auto t
+           :admission
+           '(:summary-policy (:backend nil :model nil :max-tokens 0)
+             :target-pressure t)
+           :callback (lambda (err) (setq result err)))))
+      (should-not result)
+      (should (equal (nreverse events)
+                     '(PreCompact apply PostCompact
+                       (SessionStart "compact") complete)))
+      (should (string-match-p "compact context" (buffer-string)))
+      (should-not (mevedel-session-hook-context-pending session))
+      (should (string-match-p
+               "compact context"
+               mevedel--compact-current-request-hook-context))))
+
+  :doc "successful retained-agent compaction does not start a root epoch"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (events result)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (let* ((pending-start (point))
+             (target (mevedel--compact-main-target)))
+        (insert "Pending prompt\n")
+        (setq target (plist-put target :invocation 'retained-agent))
+        (setq target (plist-put target :origin "/root/agent"))
+        (setq target (plist-put target :apply (lambda (&rest _))))
+        (setq target (plist-put target :complete (lambda (&rest _))))
+        (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                   (lambda (&rest _) "system prompt"))
+                  ((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (event _payload callback &rest _)
+                     (push event events)
+                     (funcall callback nil)))
+                  ((symbol-function 'mevedel--run-session-start-hooks)
+                   (lambda (_source)
+                     (ert-fail "Agent compaction started a root epoch")))
+                  ((symbol-function 'gptel-get-preset)
+                   (lambda (&rest _) '(:description "test")))
+                  ((symbol-function 'gptel-request)
+                   (lambda (_prompt &rest args)
+                     (funcall (plist-get args :callback)
+                              "summary" nil)))
+                  ((symbol-function 'message) #'ignore))
+          (mevedel--compact-run
+           :target target
+           :aggressive t
+           :pending-start pending-start
+           :auto t
+           :admission
+           '(:summary-policy (:backend nil :model nil :max-tokens 0)
+             :target-pressure t)
+           :callback (lambda (err) (setq result err)))))
+      (should-not result)
+      (should (equal (nreverse events) '(PreCompact PostCompact)))))
+
+  :doc "blocked compaction emits neither PostCompact nor SessionStart"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (events result)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (event _payload callback &rest _)
+                   (push event events)
+                   (funcall callback
+                            '(:continue nil :stop-reason "blocked"))))
+                ((symbol-function 'mevedel--run-session-start-hooks)
+                 (lambda (_source)
+                   (ert-fail "Blocked compaction started a context epoch")))
+                ((symbol-function 'gptel-request)
+                 (lambda (&rest _)
+                   (ert-fail "Blocked compaction sent a request"))))
+        (mevedel--compact-run
+         :aggressive t
+         :pending-start (point-max)
+         :callback (lambda (err) (setq result err))))
+      (should (equal "blocked" result))
+      (should (equal (nreverse events) '(PreCompact)))))
+
   :doc "request failures retain three identical attempts"
   (test-mevedel-compact--with-persisted-buffer (chat-buf session)
-    (let ((attempts 0) prompts result)
+    (let ((attempts 0) events prompts result)
       (insert "Prompt\n")
       (insert (propertize "Response\n" 'gptel 'response))
       (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
                      (lambda (&rest _) "system prompt"))
                     ((symbol-function 'mevedel-hooks-run-event)
-                     (lambda (_event _plist callback &rest _)
+                     (lambda (event _plist callback &rest _)
+                       (push event events)
                        (funcall callback nil)))
+                    ((symbol-function 'mevedel--run-session-start-hooks)
+                     (lambda (_source)
+                       (ert-fail "Failed compaction started a context epoch")))
                     ((symbol-function 'gptel-get-preset)
                      (lambda (&rest _) '(:description "test")))
                     ((symbol-function 'run-at-time)
@@ -2205,6 +2400,8 @@
                :target-pressure t)
              :callback (lambda (err) (setq result err))))
       (should (= attempts 3))
+      (should (equal (nreverse events)
+                     '(PreCompact PreCompact PreCompact)))
       (should (= 1 (length (delete-dups prompts))))
       (should (string-match-p "temporary" result))))
 

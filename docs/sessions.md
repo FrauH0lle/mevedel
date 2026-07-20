@@ -7,6 +7,14 @@ Conversation compaction has its own doc in
 [`compaction.md`](compaction.md). This page describes the session
 persistence contract that compaction relies on.
 
+A root data buffer owns one live session epoch. Fresh initialization emits
+`SessionStart(startup)`, restoration emits `SessionStart(resume)`, and killing
+the data buffer emits one `SessionEnd`. Successful `/clear` and root compaction
+start `clear` and `compact` context epochs inside that same live epoch; they do
+not emit `SessionEnd`. Their hook context is appended as a new snapshot and is
+consumed by the next accepted root input, except automatic compaction attaches
+compact-start context to its already-pending request.
+
 ## Persistence flow
 
 ```mermaid

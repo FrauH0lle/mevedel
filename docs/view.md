@@ -583,6 +583,13 @@ one combined disclosure for that prompt, preserving contribution order in
 the expanded details.  This keeps successful context injection quiet by
 default while still making it auditable in the transcript view.
 
+If `UserPromptSubmit` blocks a root input, its context stays pending without a
+visible user turn and joins the next accepted root input once. Context from
+`SessionStart(clear)` behaves the same way. Automatic root compaction adds
+`SessionStart(compact)` context to the already-rendered pending turn and the
+rerendered transcript exposes it through the same disclosure; it does not run
+the prompt hook again.
+
 The renderer builds hook audit surfaces from hook audit records.  For
 context injection, it reads ordered `<hook-event name="...">` entries
 inside a `<hook-context>` block; new persisted hook context does not need

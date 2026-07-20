@@ -3243,6 +3243,42 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 		(should (string-empty-p (buffer-string))))))
       (delete-directory root t)))
 
+  :doc "blocked prompt context is consumed once by the next accepted root input"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "blocked-context" :root "/tmp"
+                       :name "blocked-context"))
+           (session (mevedel-session-create "main" workspace))
+           (decisions
+            (list '(:continue nil :additional-context ("blocked context"))
+                  nil))
+           accepted-context
+           (blocked-count 0))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace workspace))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback (pop decisions)))))
+        (with-current-buffer view-buf
+          (mevedel-view--run-prompt-submit-hook
+           "blocked" "blocked"
+           (lambda (&rest _)
+             (ert-fail "Blocked prompt was accepted"))
+           (lambda () (cl-incf blocked-count)))
+          (should (= 1 blocked-count))
+          (should (mevedel-session-hook-context-pending session))
+          (mevedel-view--run-prompt-submit-hook
+           "accepted" "accepted"
+           (lambda (_input context _audits)
+             (setq accepted-context context))))
+        (should (string-match-p "blocked context" accepted-context))
+        (should (string-match-p "UserPromptSubmit" accepted-context))
+        (should-not (mevedel-session-hook-context-pending session)))))
+
   :doc "/goal prompts run UserPromptSubmit and materialize rewind forks"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
          (workspace (mevedel-workspace-get-or-create

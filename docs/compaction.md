@@ -43,6 +43,15 @@ When `PreCompact` adds hook context, the hook audit surface is stored as
 an ignored side channel next to the compaction summary, not in the
 model-visible summary text.  The expanded audit detail shows the
 `PreCompact` event and injected context that affected the summarizer.
+Each summary request retry is a new compaction attempt and reruns
+`PreCompact`; hook context from one failed attempt is not reused by the next.
+
+After a successful root summary is applied, mevedel runs `PostCompact` and
+then begins a `SessionStart(compact)` context epoch. Manual compaction leaves
+the resulting context for the next accepted input. Automatic compaction adds
+it to the already-pending request and resumes that same request without
+rerunning `UserPromptSubmit`. Failed or blocked compaction runs neither event.
+Retained-agent compaction runs `PostCompact` but no start hook.
 
 The first-compaction accuracy notice is controlled by
 `mevedel-compact-warn-on-completion`, enabled by default. It is emitted
@@ -218,7 +227,8 @@ Compaction requests disable tools (`gptel-use-tools` and `gptel-tools`),
 use a no-tools prompt preamble, respect the active `gptel-stream`
 setting, and use the `compaction` workload policy from the current session's
 `mevedel-model-workloads`. Failures retry up to three attempts with exponential
-backoff. After repeated failures,
+backoff. Every retry reacquires current `PreCompact` policy before sending the
+otherwise identical summary request. After repeated failures,
 `mevedel--compact-auto-disabled` prevents further automatic attempts in
 that buffer.
 

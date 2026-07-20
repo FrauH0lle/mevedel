@@ -98,7 +98,7 @@ boundaries:
 
 | Event | Fires | Matcher | Control |
 | --- | --- | --- | --- |
-| `SessionStart` | fresh or restored chat-buffer initialization | source (`startup`, `resume`) | add context only |
+| `SessionStart` | root context epoch begins | source (`startup`, `resume`, `clear`, `compact`) | add context only |
 | `UserPromptSubmit` | before a root or retained-agent task input is sent | none | block, add context |
 | `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
@@ -408,7 +408,9 @@ skill plan has fully prepared its bodies, placeholders, and hidden instruction
 context, but before the view renders or forwards the prompt to `gptel-send`.
 Queueing runs no prompt hook; a queued entry fires this event once when it
 becomes its own turn. A blocking decision stops the send without
-inserting a user turn.  For ordinary prompts, `:updated-input` replaces the
+inserting a user turn. Its additional context remains pending on the root
+session and is consumed once by the next accepted root input. For ordinary
+prompts, `:updated-input` replaces the
 prompt text.  For a deterministic skill plan, the replacement is accepted
 only when it retains the complete prepared prompt unchanged as a substring;
 otherwise the rewrite and its audit record are ignored.  This lets a hook add
@@ -447,13 +449,14 @@ sibling conversation. Internal root flows that construct their own requests,
 such as directive processing and plan execution, do not currently fire this
 event.
 
-`SessionStart :additional-context` is pending context for the next
-request, not an immediate transcript event.  Its hook audit surface is
-attached to the first user turn that consumes it, so the visible record
-appears at the point where the context actually affects model input.
-Restoring a saved session fires `SessionStart` again with source `resume` so
-transient hook context is reacquired; restoring an already-live buffer does
-not reinitialize it.  This is distinct from the initial `startup` source.
+`SessionStart :additional-context` is pending context for the next request,
+not an immediate transcript event. Its hook audit surface is attached to the
+first user turn that consumes it, so the visible record appears where the
+context affects model input. A fresh buffer uses source `startup`; restoring a
+saved session uses `resume`; successful `/clear` uses `clear`; and successful
+root compaction uses `compact`. Restoring an already-live buffer does not
+reinitialize it. Clear and compaction begin context epochs inside the same
+live session epoch and therefore do not emit `SessionEnd`.
 
 Context-changing audit surfaces represent an event once and list its
 contributing handlers in execution order.  Each handler retains its own
@@ -475,13 +478,17 @@ prompt, so hooks can give the summarizer local policy or retention hints.
 Its hook audit surface belongs on the compaction event/summary, not a
 user turn, because the summarizer request is the model call it changes.
 For automatic compaction, a block is treated as compaction failure and the
-pending user request is not sent.
+pending user request is not sent. Each provider retry reruns `PreCompact` with
+a fresh decision and system prompt rather than reusing the previous attempt's
+hook result.
 
-`PostCompact` runs after a successful summary has been applied and the view
-has been rerendered.  It receives the summary and before/after token
-estimates.  Decisions are currently logged but not injected anywhere; this
-keeps post-compaction hooks observational and avoids mutating a summary
-after it has already been persisted.
+`PostCompact` runs after a successful summary has been applied. It receives
+the summary and before/after token estimates. Decisions are currently logged
+but not injected anywhere. A successful root compaction then runs
+`SessionStart(compact)` before final view completion. Manual compaction leaves
+that context pending for the next accepted input; automatic compaction adds it
+to the already-approved pending request without rerunning `UserPromptSubmit`.
+Retained-agent compaction emits `PreCompact` and `PostCompact` only.
 
 `SubagentStart` runs once when a retained identity is created, before
 `UserPromptSubmit` and before the identity is published. Follow-ups and
@@ -572,8 +579,8 @@ as declarative `elisp` handlers.
 The hook runner keeps a per-session in-memory hook log with event,
 handler, status, elapsed time for command hooks, stdout/stderr previews,
 parsed decision, and failure details.  `SessionStart` entries also record
-`:event-source` as `"startup"` or `"resume"`, separately from the handler's
-configuration source.
+`:event-source` as `"startup"`, `"resume"`, `"clear"`, or `"compact"`,
+separately from the handler's configuration source.
 
 Raw command-hook stdout/stderr never appears in the view by default.
 Only structured decision fields are eligible for user-facing hook audit
