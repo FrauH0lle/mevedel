@@ -115,8 +115,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-agent "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-buffer "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-description
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-frozen-configuration
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
