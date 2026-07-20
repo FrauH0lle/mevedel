@@ -644,14 +644,14 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
             (with-current-buffer buffer
               (setq-local mevedel--agent-invocation invocation)))
         (mevedel-agent-runtime--setup-transcript invocation buffer))
+      (when on-invocation
+        (funcall on-invocation invocation))
       (mevedel-agent-runtime--insert-prompt
        invocation buffer description prompt context-snapshot retained-p)
       (when (and on-settle
                  (not (mevedel-agent-invocation-transcript-relative-path
                        invocation)))
         (error "Agent conversation could not be persisted"))
-      (when on-invocation
-        (funcall on-invocation invocation))
       (condition-case err
           (let ((fsm
                  (mevedel-agent-exec-run

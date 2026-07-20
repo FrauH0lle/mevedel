@@ -182,6 +182,8 @@
                   "mevedel-utilities" (start end))
 (declare-function mevedel--optimize-transcript-buffer
                   "mevedel-utilities" ())
+(declare-function mevedel--transcript-org-mode
+                  "mevedel-utilities" ())
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--begin-external-turn
@@ -491,7 +493,8 @@ session struct."
     (let ((org-agenda-file-menu-enabled nil)
           (org-element-use-cache nil)
           (org-element-cache-persistent nil))
-      (org-mode))
+      (require 'mevedel-utilities)
+      (mevedel--transcript-org-mode))
     (mevedel--chat-buffer-disable-org-element-cache)
     (setq-local gptel-org-convert-response nil)
     (setq-local gptel-org-branching-context nil)

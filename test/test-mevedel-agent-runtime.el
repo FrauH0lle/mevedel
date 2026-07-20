@@ -70,7 +70,8 @@
          provider-callback
          seen-invocation
          settlements
-         finalizations)
+         finalizations
+         events)
     (unwind-protect
         (with-current-buffer parent
           (setq-local mevedel--session session)
@@ -83,13 +84,16 @@
                 (lambda (&rest _) agent-buffer))
                ((symbol-function 'mevedel-agent-runtime--setup-transcript)
                 (lambda (invocation _buffer)
+                  (push 'transcript-setup events)
                   (setf
                    (mevedel-agent-invocation-transcript-relative-path
                     invocation)
                    "agents/explorer.chat.org")))
                ((symbol-function
                  'mevedel-agent-conversation-save)
-                (lambda (&rest _) t))
+                (lambda (&rest _)
+                  (push 'transcript-save events)
+                  t))
                ((symbol-function 'mevedel-agent-exec-run)
                 (lambda (callback _role _description _prompt invocation
                                   _buffer)
@@ -109,7 +113,10 @@
                     agent "Explore" "Find the entry point."
                     :path "/root/explore"
                     :context-snapshot "Prior context"
-                    :on-invocation (lambda (inv) (setq seen-invocation inv))
+                    :on-invocation
+                    (lambda (inv)
+                      (push 'invocation-published events)
+                      (setq seen-invocation inv))
                     :on-settle
                     (lambda (inv response event)
                       (push (list inv response event) settlements)))))
@@ -118,6 +125,9 @@
                           (mevedel-agent-invocation-runtime-fsm invocation)))
               (should (equal "/root/explore"
                              (mevedel-agent-invocation-path invocation)))
+              (should
+               (equal '(transcript-setup invocation-published transcript-save)
+                      (nreverse events)))
               (with-current-buffer agent-buffer
                 (should (string-match-p "Prior context" (buffer-string)))
                 (should (string-match-p "Find the entry point"

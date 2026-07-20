@@ -230,6 +230,10 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-view-render'
+(declare-function mevedel-view--rebase-data-sources
+                  "mevedel-view-render" (delta))
+
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-reset-agent-ephemeral-state
                   "mevedel-view-agent" (&optional view-buffer))
@@ -1509,10 +1513,6 @@ Returns SESSION's `save-path' (allocated or existing)."
      :additional-roots   roots)))
 
 
-(defvar-local mevedel-session-persistence--source-shift-rerendered-p nil
-  "Non-nil when gptel metadata already refreshed this buffer's live view.")
-
-
 ;;
 ;;; Fast Org property writes
 
@@ -1689,8 +1689,8 @@ removes any existing `GPTEL_SYSTEM' first and dynamically binds
 `gptel-system-prompt' to nil while gptel writes its Org metadata.
 After delegation, it rewrites `GPTEL_BOUNDS' until the saved absolute
 positions match the post-drawer-update buffer.  If the metadata changed
-the buffer size, it rerenders the bound view so disclosure source
-coordinates continue to address the intended transcript segments."
+the buffer size, it shifts the bound view's source coordinates by the same
+amount so disclosures continue to address the intended transcript segments."
   (let ((size-before (buffer-size))
         (mevedel-org-buffer-p
          (and (bound-and-true-p mevedel--session)
@@ -1713,16 +1713,16 @@ coordinates continue to address the intended transcript segments."
           (apply orig-fun args))
       (when mevedel-org-buffer-p
         (mevedel-session-persistence--stabilize-gptel-bounds)
-        (when (/= size-before (buffer-size))
-          (when-let* ((view (and (boundp 'mevedel--view-buffer)
-                                 mevedel--view-buffer))
-                      ((buffer-live-p view)))
-            (when (eq (buffer-local-value 'mevedel--data-buffer view)
-                      (current-buffer))
-              (with-current-buffer view
-                (mevedel-view--full-rerender))
-              (setq mevedel-session-persistence--source-shift-rerendered-p
-                    t))))))))
+        (let ((delta (- (buffer-size) size-before)))
+          (when (/= delta 0)
+            (when-let* ((view (and (boundp 'mevedel--view-buffer)
+                                   mevedel--view-buffer))
+                        ((buffer-live-p view)))
+              (when (eq (buffer-local-value 'mevedel--data-buffer view)
+                        (current-buffer))
+                (require 'mevedel-view-render)
+                (with-current-buffer view
+                  (mevedel-view--rebase-data-sources delta))))))))))
 
 (defun mevedel-session-persistence--install-gptel-save-state-advice ()
   "Install mevedel's dynamic-system preservation advice for gptel save operations."
@@ -1815,60 +1815,34 @@ files for this turn, evict old snapshots over the cap, and rewrite the
 sidecar."
   (when-let ((buffer (mevedel-session-persistence--authoritative-buffer
                       buffer)))
-    (let ((had-save-path (mevedel-session-save-path session))
-          (rerender-needed nil))
-      (with-current-buffer buffer
-        (setq mevedel-session-persistence--source-shift-rerendered-p nil))
-      (when (mevedel-session-persistence-ensure-files session buffer)
-        (unless had-save-path
-          (setq rerender-needed t)))
-      (setf (mevedel-session-updated-at session)
-            (format-time-string "%FT%H-%M-%S"))
-      (with-current-buffer buffer
-        (when (buffer-modified-p)
-          (save-buffer)
-          (setq rerender-needed t)))
-      ;; Refresh the live segment's prompt list (drives the rewind picker).
-      (mevedel-session-persistence--update-prompt-index session buffer)
-      ;; Snapshot files modified during the just-completed turn.
-      (when (and (boundp 'mevedel--current-request)
-                 mevedel--current-request)
-        (let ((pre-snapshots
-               (mevedel-request-file-snapshots mevedel--current-request)))
-          (mevedel-file-history-snapshot-modified
-           session
-           (or (mevedel-session-turn-count session) 0)
-           pre-snapshots)
-          (mevedel-file-history-evict session)))
-      (mevedel-session-persistence-write
-       (mevedel-session-persistence--sidecar-path
-        (mevedel-session-save-path session))
-       (mevedel-session-persistence--build-sidecar session buffer))
-      (mevedel-session-persistence--save-instructions session buffer)
-      (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
-                  ((buffer-live-p vb)))
-        (require 'mevedel-view-history)
-        (mevedel-view-history-save vb))
-      ;; `gptel-org--save-state' rewrites the top-level org property
-      ;; drawer during `save-buffer'.  That drawer contains large values
-      ;; such as GPTEL_SYSTEM and GPTEL_BOUNDS, so inserting or resizing it
-      ;; shifts every content position in the data buffer.  The view stores
-      ;; data-buffer source coordinates on collapsed sections; refresh it
-      ;; after save-time shifts so expand/collapse does not read from the
-      ;; drawer.
-      (when rerender-needed
-        (unless (buffer-local-value
-                 'mevedel-session-persistence--source-shift-rerendered-p
-                 buffer)
-          (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
-                      ((buffer-live-p vb)))
-            (with-current-buffer vb
-              (when (and (boundp 'mevedel--data-buffer)
-                         (eq mevedel--data-buffer buffer))
-                (mevedel-view--full-rerender))))))
-      (with-current-buffer buffer
-        (setq mevedel-session-persistence--source-shift-rerendered-p nil))
-      (mevedel-session-save-path session))))
+    (mevedel-session-persistence-ensure-files session buffer)
+    (setf (mevedel-session-updated-at session)
+          (format-time-string "%FT%H-%M-%S"))
+    (with-current-buffer buffer
+      (when (buffer-modified-p)
+        (save-buffer)))
+    ;; Refresh the live segment's prompt list (drives the rewind picker).
+    (mevedel-session-persistence--update-prompt-index session buffer)
+    ;; Snapshot files modified during the just-completed turn.
+    (when (and (boundp 'mevedel--current-request)
+               mevedel--current-request)
+      (let ((pre-snapshots
+             (mevedel-request-file-snapshots mevedel--current-request)))
+        (mevedel-file-history-snapshot-modified
+         session
+         (or (mevedel-session-turn-count session) 0)
+         pre-snapshots)
+        (mevedel-file-history-evict session)))
+    (mevedel-session-persistence-write
+     (mevedel-session-persistence--sidecar-path
+      (mevedel-session-save-path session))
+     (mevedel-session-persistence--build-sidecar session buffer))
+    (mevedel-session-persistence--save-instructions session buffer)
+    (when-let* ((vb (buffer-local-value 'mevedel--view-buffer buffer))
+                ((buffer-live-p vb)))
+      (require 'mevedel-view-history)
+      (mevedel-view-history-save vb))
+    (mevedel-session-save-path session)))
 
 
 ;;

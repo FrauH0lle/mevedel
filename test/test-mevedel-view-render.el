@@ -398,6 +398,18 @@
                  "Response"
                  (buffer-substring-no-properties
                   (point-min) mevedel-view--input-marker))))))
+  :doc "suppresses intermediate redisplay while rebuilding the transcript"
+  (mevedel-view-test--with-buffers
+    (let ((original (symbol-function 'mevedel-view--header-string))
+          redisplay-inhibited)
+      (mevedel-view-test--insert-data data-buf "*** Prompt\n" nil)
+      (with-current-buffer view-buf
+        (cl-letf (((symbol-function 'mevedel-view--header-string)
+                   (lambda (buffer)
+                     (setq redisplay-inhibited inhibit-redisplay)
+                     (funcall original buffer))))
+          (mevedel-view--full-rerender))
+        (should redisplay-inhibited))))
   :doc "suppresses hooks while cleaning stale pending lines"
   (mevedel-view-test--with-buffers
     (let ((changes 0))
@@ -1100,6 +1112,51 @@
         (should-not (string-match-p "Planning instructions" text))
         (should (string-match-p "verdict: complete" text))
         (should-not (string-match-p "goal_review" text))))))
+
+
+(mevedel-deftest mevedel-view--rebase-data-sources ()
+  ,test
+  (test)
+  :doc "shifts rendered source ranges, collapse keys, and saved states"
+  (with-temp-buffer
+    (insert "rendered")
+    (let* ((anchor '(tool "call-1"))
+           (source (cons 10 20))
+           (key (list 'source 'tool-summary 10 anchor)))
+      (add-text-properties
+       (point-min) (point-max)
+       `(mevedel-view-source ,source
+         mevedel-view-source-key ,key))
+      (setq-local mevedel-view--source-collapse-states
+                  (make-hash-table :test #'equal))
+      (puthash key t mevedel-view--source-collapse-states)
+      (let ((tick (buffer-chars-modified-tick)))
+        (mevedel-view--rebase-data-sources 5)
+        (should (= tick (buffer-chars-modified-tick))))
+      (should (eq source
+                  (get-text-property (point-min) 'mevedel-view-source)))
+      (should (equal '(15 . 25) source))
+      (should (eq key
+                  (get-text-property
+                   (point-min) 'mevedel-view-source-key)))
+      (should (equal '(source tool-summary 15 (tool "call-1")) key))
+      (should (gethash '(source tool-summary 15 (tool "call-1"))
+                       mevedel-view--source-collapse-states))))
+  :doc "leaves marker coordinates to track data-buffer edits themselves"
+  (let ((data (generate-new-buffer " *mevedel-rebase-data*")))
+    (unwind-protect
+        (with-temp-buffer
+          (let ((start (with-current-buffer data (copy-marker (point-min))))
+                (end (with-current-buffer data (copy-marker (point-max) t))))
+            (insert "rendered")
+            (put-text-property (point-min) (point-max)
+                               'mevedel-view-source (cons start end))
+            (mevedel-view--rebase-data-sources 5)
+            (let ((source (get-text-property
+                           (point-min) 'mevedel-view-source)))
+              (should (eq start (car source)))
+              (should (eq end (cdr source))))))
+      (kill-buffer data))))
 
 
 (mevedel-deftest mevedel-view--full-rerender-live-tail ()

@@ -313,6 +313,21 @@ fire-count and payload."
   ()
   ,test
   (test)
+
+  :doc "materializes a dynamic system prompt once into frozen plain data"
+  (let* ((calls 0)
+         (gptel-system-prompt
+          (lambda ()
+            (cl-incf calls)
+            '("Dynamic system." "Second part."))))
+    (let* ((snapshot
+            (mevedel-agent-exec--request-snapshot
+             '(:backend frozen-backend :model frozen-model :effort high)))
+           (system-prompt (alist-get 'gptel-system-prompt snapshot)))
+      (should (= 1 calls))
+      (should (equal '("Dynamic system." "Second part.") system-prompt))
+      (should-not (functionp system-prompt))))
+
   :doc "captures every inherited request local through one schema"
   (let* ((gptel--num-messages-to-send 7)
          (gptel--request-params '(:custom "parent"))
