@@ -57,7 +57,8 @@ Hook integration sits around this chain:
 - `PreToolUse` runs before the chain. A hook `deny` is final. A hook
   `ask` can tighten an allow into a prompt. A hook `allow` can only skip
   a prompt when the normal resolver would have returned `ask`; explicit
-  denies still win.
+  denies still win. The resulting `ask` still crosses `PermissionRequest`
+  once before that earlier allow suppresses queue admission.
 - `PermissionRequest` runs whenever generic, Bash, Eval, or sandbox authority
   resolution reaches `ask`, before the corresponding entry enters the shared
   queue. It can allow, deny, or leave the prompt in place. Queue display and

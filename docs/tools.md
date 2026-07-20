@@ -303,9 +303,10 @@ render-data.
 ### Render-data side channel
 
 Every handler returns a plist containing `:result` and may set `:status` to
-`success` or `error`. Handlers without explicit status retain the legacy
-`Error:`-prefix classification. Invalid returns and handler signals become
-canonical `:status error` results before post-use hooks run. When a handler
+`success` or `error`. The handler boundary normalizes that optional status
+into canonical lifecycle state before post-use hooks run; legacy `Error:`
+results are classified only at that boundary. Invalid returns and handler
+signals become canonical errors there as well. When a handler
 includes `:render-data DATA` or
 explicit status, the pipeline writes `:result` to the data buffer and appends a
 hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
@@ -341,8 +342,8 @@ When `:max-result-size` is set and result exceeds the effective limit
 (min of tool value and 50,000-char global cap), the full result is saved
 to `.mevedel/tool-results/` and replaced with a preview wrapped in
 `<persisted-output>` XML. The LLM can `Read` the file to see the full
-output. Oversized error results are truncated but not persisted; explicit
-handler status takes precedence over the legacy `Error:` prefix. Every
+output. Oversized error results are truncated but not persisted according to
+the canonical status produced at the handler boundary. Every
 oversized preview keeps equal head and tail budgets, prefers nearby newline
 boundaries, and reports the exact omitted character count. The persisted file
 remains complete. Bash and Eval do not apply an earlier prefix-only cap. No

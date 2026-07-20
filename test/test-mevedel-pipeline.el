@@ -381,7 +381,9 @@
 			result-ctx)
 		   (mevedel-pipeline--step-handler
 		    ctx (lambda (c) (setq result-ctx c)) #'ignore)
-		   (should (equal (plist-get result-ctx :result) "got test")))
+		   (should (equal (plist-get result-ctx :result) "got test"))
+		   (should (eq 'success
+			       (plist-get result-ctx :handler-status))))
 		 :doc "async handler calls continuation with result"
 		 (let* ((tool (mevedel-tool--create
 			       :name "AsyncTool"
@@ -454,7 +456,8 @@
 		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
 		   (should (equal "ok" (plist-get out :result)))
 		   (should (equal '(:kind diff :patch "p") (plist-get out :render-data)))
-		   (should-not (plist-member out :status)))
+		   (should-not (plist-member out :status))
+		   (should (eq 'success (plist-get out :handler-status))))
 		 :doc "handler plist stores explicit status"
 		 (let* ((tool (mevedel-tool--create
 			       :name "StatusReturn"
@@ -463,7 +466,19 @@
 			(ctx (list :tool tool :args nil))
 			out)
 		   (mevedel-pipeline--step-handler ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (eq 'error (plist-get out :status))))
+		   (should (eq 'error (plist-get out :status)))
+		   (should (eq 'error (plist-get out :handler-status))))
+		 :doc "legacy error text is normalized at the handler boundary"
+		 (let* ((tool (mevedel-tool--create
+			       :name "LegacyFailure"
+			       :handler (lambda (_args)
+					  (list :result "Error: failed"))))
+			(ctx (list :tool tool :args nil))
+			out)
+		   (mevedel-pipeline--step-handler
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should-not (plist-member out :status))
+		   (should (eq 'error (plist-get out :handler-status))))
 		 :doc "handler plist stores media"
 		 (let* ((tool (mevedel-tool--create
 			       :name "MediaReturn"
@@ -489,6 +504,7 @@
 		    (lambda (reason) (setq failure reason)))
 		   (should-not failure)
 		   (should (eq 'error (plist-get out :status)))
+		   (should (eq 'error (plist-get out :handler-status)))
 		   (should (string-match-p "expected a plist containing :result"
 					   (plist-get out :result))))
 		 :doc "a signaling handler becomes a canonical handler failure"
@@ -503,6 +519,7 @@
 		    (lambda (reason) (setq failure reason)))
 		   (should-not failure)
 		   (should (eq 'error (plist-get out :status)))
+		   (should (eq 'error (plist-get out :handler-status)))
 		   (should (equal "Error: Handler exploded" (plist-get out :result))))
 		 :doc "normalizes raw byte result strings before callback"
 		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
@@ -805,6 +822,21 @@
 		     (mevedel-pipeline--step-post-tool-hooks context #'ignore #'ignore))
 		   (should (eq 'PostToolUseFailure seen-event))
 		   (should (equal "plain failure" (plist-get seen-payload :error))))
+		 :doc "canonical handler status, not result text, selects the event"
+		 (let* ((tool (mevedel-tool--create :name "Read"))
+			(context (list :tool tool
+				       :args nil
+				       :result "Error: visible success"
+				       :raw-result "Error: visible success"
+				       :handler-status 'success
+				       :default-directory default-directory))
+			seen-event)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event _payload callback &rest _)
+				(setq seen-event event)
+				(funcall callback nil))))
+		     (mevedel-pipeline--step-post-tool-hooks context #'ignore #'ignore))
+		   (should (eq 'PostToolUse seen-event)))
 		 :doc "updated hook results retain explicit status for rendering"
 		 (let* ((tool (mevedel-tool--create :name "Bash"))
 			(context (list :tool tool
@@ -1107,6 +1139,105 @@
       (mevedel-pipeline--permission-origin (list :request request)))))
   :doc "falls back to root without a scoped owner"
   (should (equal "/root" (mevedel-pipeline--permission-origin nil))))
+
+(mevedel-deftest mevedel-pipeline--permission-denial-outcome-p ()
+  ,test
+  (test)
+  :doc "recognizes every interactive denial outcome"
+  (dolist (outcome '(deny deny-once deny-session
+                     (deny . "reason") (feedback . "reason")))
+    (should (mevedel-pipeline--permission-denial-outcome-p outcome)))
+  :doc "rejects allow, abort, and unrelated compound outcomes"
+  (dolist (outcome '(allow allow-once allow-session always-allow aborted
+                     (allow . "reason") (unknown . "reason") nil))
+    (should-not (mevedel-pipeline--permission-denial-outcome-p outcome))))
+
+(mevedel-deftest mevedel-pipeline--permission-denial-provenance ()
+  ,test
+  (test)
+  :doc "prefers stored interactive provenance over decision metadata"
+  (should
+   (eq 'user
+       (mevedel-pipeline--permission-denial-provenance
+        '(:permission-denial-provenance user)
+        '(:via deny-rule))))
+  :doc "uses decision metadata when no interactive provenance is stored"
+  (should
+   (eq 'deny-rule
+       (mevedel-pipeline--permission-denial-provenance
+        nil '(:via deny-rule))))
+  :doc "falls back to policy when neither source is present"
+  (should
+   (eq 'policy
+       (mevedel-pipeline--permission-denial-provenance nil nil))))
+
+(mevedel-deftest mevedel-pipeline--request-permission ()
+  ,test
+  (test)
+  :doc "unresolved requests enter the queue and user denials retain provenance"
+  (let (queued settled-context settled-outcome)
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback nil)))
+              ((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session) (setq queued entry))))
+      (mevedel-pipeline--request-permission
+       nil '(:kind generic :callback ignore) nil
+       (lambda (context outcome)
+         (setq settled-context context settled-outcome outcome)))
+      (should queued)
+      (funcall (plist-get queued :callback) 'deny-session)
+      (should (eq 'deny-session settled-outcome))
+      (should (eq 'user
+                  (plist-get settled-context
+                             :permission-denial-provenance)))))
+  :doc "hook allow and deny settle without queue admission"
+  (dolist (decision '((:permission-decision allow)
+                      (:permission-decision deny
+                       :permission-reason "blocked")))
+    (let (queued settled-context settled-outcome)
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback decision)))
+                ((symbol-function 'mevedel-permission--enqueue)
+                 (lambda (&rest _) (setq queued t))))
+        (mevedel-pipeline--request-permission
+         nil '(:kind generic :callback ignore) nil
+         (lambda (context outcome)
+           (setq settled-context context settled-outcome outcome)))
+        (should-not queued)
+        (if (eq 'allow (plist-get decision :permission-decision))
+            (should (eq 'allow settled-outcome))
+          (should (eq 'deny (car settled-outcome)))
+          (should (eq 'PermissionRequest
+                      (plist-get settled-context
+                                 :permission-denial-provenance)))))))
+  :doc "an unresolved request uses its card-free fallback"
+  (let (queued settled-outcome)
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback nil)))
+              ((symbol-function 'mevedel-permission--enqueue)
+               (lambda (&rest _) (setq queued t))))
+      (mevedel-pipeline--request-permission
+       nil '(:kind generic :callback ignore) nil
+       (lambda (_context outcome) (setq settled-outcome outcome))
+       nil 'allow)
+      (should-not queued)
+      (should (eq 'allow settled-outcome))))
+  :doc "an explicit hook ask overrides the card-free fallback"
+  (let (queued settled-outcome)
+    (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+               (lambda (_event _payload callback &rest _)
+                 (funcall callback '(:permission-decision ask))))
+              ((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional _session) (setq queued entry))))
+      (mevedel-pipeline--request-permission
+       nil '(:kind generic :callback ignore) nil
+       (lambda (_context outcome) (setq settled-outcome outcome))
+      nil 'allow)
+      (should queued)
+      (should-not settled-outcome))))
 
 (mevedel-deftest mevedel-pipeline--step-permission ()
 		 ,test
@@ -1976,9 +2107,12 @@
 			 (mevedel-permission-queue--render-head session)
 			 (mevedel-permission-queue--reevaluate entry)
 			 (should (= 1 hook-count))))))
-		 :doc "PreToolUse allow skips specialized Bash and Eval cards"
+		 :doc "PreToolUse allow runs PermissionRequest and skips all cards"
 		 (dolist (case
 			  (list
+			   (list (mevedel-tool--create
+				  :name "Prompted" :read-only-p nil)
+				 nil)
 			   (list (mevedel-tool-ensure "Bash")
 				 '(:command "unknown-hook-probe"))
 			   (list (mevedel-tool-ensure "Eval")
@@ -2005,7 +2139,7 @@
 			(lambda (_context) (setq next-called t)) #'ignore))
 		     (should next-called)
 		     (should-not enqueued)
-		     (should-not events)))
+		     (should (equal '(PermissionRequest) events))))
 		 :doc "PermissionRequest allow settles generic Bash and Eval asks without cards"
 		 (dolist (case
 			  (list
@@ -3156,15 +3290,19 @@
 (mevedel-deftest mevedel-pipeline--context-status ()
 		 ,test
 		 (test)
-		 :doc "explicit status takes precedence over visible text"
+		 :doc "canonical handler status takes precedence over render status"
 		 (should (eq 'success
 			     (mevedel-pipeline--context-status
-			      '(:status success :result "Error: visible text"))))
-		 :doc "legacy Error prefix means error"
+			      '(:handler-status success :status error))))
+		 :doc "explicit render status remains valid for direct contexts"
 		 (should (eq 'error
 			     (mevedel-pipeline--context-status
-			      '(:result "Error: legacy failure"))))
-		 :doc "plain legacy output means success"
+			      '(:status error :result "visible"))))
+		 :doc "result text never determines lifecycle status"
+		 (should (eq 'success
+			     (mevedel-pipeline--context-status
+			      '(:result "Error: visible text"))))
+		 :doc "missing status defaults to success"
 		 (should (eq 'success
 			     (mevedel-pipeline--context-status '(:result "ok")))))
 
@@ -3197,7 +3335,8 @@
 			 (let* ((tool (mevedel-tool--create :name "ErrTool" :max-result-size 100))
 				(result (concat "Error: " (make-string 5000 ?x)))
 				(original-length (length result))
-				(ctx (list :tool tool :result result))
+				(ctx (list :tool tool :result result
+					   :handler-status 'error))
 				next-ctx)
 			   (mevedel-pipeline--step-persist
 			    ctx (lambda (c) (setq next-ctx c)) #'ignore)
@@ -3695,12 +3834,14 @@
 			       (lambda (_name _args _result)
 				 (cl-incf calls)
 				 '(:data t)))))
-		   (dolist (result '(42 "Error: nope"))
-		     (let (out)
+		   (dolist (case '((42 success) ("Error: nope" error)))
+		     (pcase-let ((`(,result ,status) case))
+		       (let (out)
 		       (mevedel-pipeline--step-render-transform
-			(list :tool tool :args nil :result result)
+			(list :tool tool :args nil :result result
+			      :handler-status status)
 			(lambda (c) (setq out c)) #'ignore)
-		       (should (null (plist-get out :render-data)))))
+			 (should (null (plist-get out :render-data))))))
 		   (should (= 0 calls)))
 		 :doc "oversized transform metadata is rejected"
 		 (let* ((tool (mevedel-tool--create

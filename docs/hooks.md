@@ -560,7 +560,9 @@ not evaluate arbitrary forms.
 Hooks may tighten policy.  They should not silently weaken explicit
 permission denies.  A `PreToolUse` or `PermissionRequest` allow can skip a
 prompt only when the normal permission resolver would not return an
-explicit deny.  Every final policy, user, `PermissionRequest`, or
+explicit deny.  An `ask` still emits `PermissionRequest` once before a
+`PreToolUse` allow suppresses queue admission.  Every final policy, user,
+`PermissionRequest`, or
 `PreToolUse` denial emits one `PermissionDenied` payload carrying the
 original `:permission-provenance`.
 

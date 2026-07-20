@@ -670,12 +670,21 @@ can tighten policy or skip a prompt without overriding explicit denies."
      'PreToolUse
      (mevedel-hooks-tool-event-plist 'PreToolUse context)
      (lambda (decision)
-       (cond
-	((and (plist-member decision :continue)
-	      (not (plist-get decision :continue)))
-         (let* ((reason (format "blocked by PreToolUse: %s"
-                                (or (plist-get decision :stop-reason)
-                                    "hook stopped tool execution")))
+       (let ((stopped-p
+              (and (plist-member decision :continue)
+                   (not (plist-get decision :continue))))
+             (denied-p
+              (eq (plist-get decision :permission-decision) 'deny)))
+         (cond
+          ((or stopped-p denied-p)
+           (let* ((reason
+                   (format
+                    "blocked by PreToolUse: %s"
+                    (or (and stopped-p (plist-get decision :stop-reason))
+                        (plist-get decision :permission-reason)
+                        (if stopped-p
+                            "hook stopped tool execution"
+                          "hook denied tool execution"))))
                 (updated
                  (mevedel-pipeline--record-hook-audit
                   (mevedel-pipeline--record-hook-context
@@ -684,89 +693,64 @@ can tighten policy or skip a prompt without overriding explicit denies."
                    (list
                     (mevedel-pipeline--hook-permission-audit-record
                      'PreToolUse 'deny decision reason))
-                   (mevedel-pipeline--hook-context-audit-records
+                    (mevedel-pipeline--hook-context-audit-records
                     decision 'PreToolUse)))))
-           (mevedel-pipeline--log-permission-decision
-            context
-            (list :outcome 'deny
-                  :raw-outcome `(deny . ,reason)
-                  :via 'pre-tool-hook))
-           (mevedel-pipeline--fail-permission-denied
-            updated fail reason reason 'PreToolUse)))
-	((eq (plist-get decision :permission-decision) 'deny)
-	 (let* ((reason (format "blocked by PreToolUse: %s"
-                                (or (plist-get decision :permission-reason)
-	                            "hook denied tool execution")))
-                (updated
-                 (mevedel-pipeline--record-hook-audit
-                  (mevedel-pipeline--record-hook-context
-                   context decision 'PreToolUse)
-                  (append
-                   (list
-                    (mevedel-pipeline--hook-permission-audit-record
-                     'PreToolUse 'deny decision reason))
-                   (mevedel-pipeline--hook-context-audit-records
-                    decision 'PreToolUse)))))
-                   (mevedel-pipeline--log-permission-decision
-                    context
-                    (list :outcome 'deny
-                          :raw-outcome `(deny . ,reason)
-                          :via 'pre-tool-hook))
-           (mevedel-pipeline--fail-permission-denied
-            updated fail
-            (format "Permission denied: %s" reason)
-            reason 'PreToolUse)))
-        (t
-         (let ((updated (mevedel-pipeline--record-hook-context
-                         context decision 'PreToolUse)))
-           (setq updated
-                 (mevedel-pipeline--record-hook-audit
-                  updated
-                  (mevedel-pipeline--hook-context-audit-records
-                   decision 'PreToolUse)))
-           (when (plist-member decision :permission-decision)
+             (mevedel-pipeline--log-permission-decision
+              context
+              (list :outcome 'deny
+                    :raw-outcome `(deny . ,reason)
+                    :via 'pre-tool-hook))
+             (mevedel-pipeline--fail-permission-denied
+              updated fail
+              (if stopped-p reason (format "Permission denied: %s" reason))
+              reason 'PreToolUse)))
+          (t
+           (let ((updated (mevedel-pipeline--record-hook-context
+                           context decision 'PreToolUse)))
              (setq updated
-                   (plist-put
-                    updated :hook-permission-decision
-                    (plist-get decision :permission-decision)))
-             (setq updated
-                   (plist-put updated :hook-permission-hook-decision
-                              decision)))
-           (if (plist-member decision :updated-input)
-               (let* ((args (plist-get decision :updated-input))
-                      (err (mevedel-pipeline--validate-updated-args
-                            tool args)))
-                 (if err
-                     (funcall fail err)
-                   (funcall next
-                            (plist-put
-                             (mevedel-pipeline--record-hook-audit
-                              updated
-                              (mevedel-pipeline--hook-input-rewrite-audit-record
-                               'PreToolUse
-                               (plist-get context :args)
-                               args
-                               decision))
-                             :args args))))
-             (funcall next updated))))))
+                   (mevedel-pipeline--record-hook-audit
+                    updated
+                    (mevedel-pipeline--hook-context-audit-records
+                     decision 'PreToolUse)))
+             (when (plist-member decision :permission-decision)
+               (setq updated
+                     (plist-put
+                      updated :hook-permission-decision
+                      (plist-get decision :permission-decision)))
+               (setq updated
+                     (plist-put updated :hook-permission-hook-decision
+                                decision)))
+             (if (plist-member decision :updated-input)
+                 (let* ((args (plist-get decision :updated-input))
+                        (err (mevedel-pipeline--validate-updated-args
+                              tool args)))
+                   (if err
+                       (funcall fail err)
+                     (funcall next
+                              (plist-put
+                               (mevedel-pipeline--record-hook-audit
+                                updated
+                                (mevedel-pipeline--hook-input-rewrite-audit-record
+                                 'PreToolUse
+                                 (plist-get context :args)
+                                 args
+                                 decision))
+                               :args args))))
+               (funcall next updated)))))))
      context session workspace request invocation)))
 
 (defun mevedel-pipeline--apply-hook-permission-decision (outcome context)
   "Apply CONTEXT's hook permission decision to permission OUTCOME.
 
 Hook `deny' always wins.  Hook `ask' can tighten an `allow' into a
-prompt.  Hook `allow' can skip a prompt only when the normal resolver
-returned `ask'; explicit denials from the resolver stay intact."
+prompt.  Hook `allow' is applied at the `PermissionRequest' boundary
+when the normal resolver returns `ask'; explicit denials stay intact."
   (let ((decision (plist-get context :hook-permission-decision)))
     (pcase decision
       ('deny 'deny)
       ('ask
        (if (memq outcome '(allow approve implement implement-clear))
            'ask
-         outcome))
-      ('allow
-       (if (eq outcome 'ask)
-           'allow
          outcome))
       (_ outcome))))
 
@@ -813,10 +797,11 @@ MODEL-REASON and PROVENANCE are included in the hook event when available."
       'policy))
 
 (defun mevedel-pipeline--request-permission
-    (context entry session settle &optional ask-decision)
+    (context entry session settle &optional ask-decision fallback-outcome)
   "Run `PermissionRequest' for ENTRY, then call SETTLE or enqueue.
 SETTLE receives the updated CONTEXT and the permission outcome.
-ASK-DECISION is logged only when hooks leave queue admission unresolved."
+ASK-DECISION is logged only when hooks leave queue admission unresolved.
+FALLBACK-OUTCOME settles an unresolved request without queue admission."
   (let ((workspace (plist-get context :workspace)))
     (mevedel-pipeline--run-hook-event
      'PermissionRequest
@@ -870,23 +855,25 @@ ASK-DECISION is logged only when hooks leave queue admission unresolved."
                   :via 'permission-request-hook))
            (funcall settle updated 'allow))
           (t
-           (when ask-decision
-             (mevedel-pipeline--log-permission-decision
-              updated ask-decision))
-           (let ((queued (copy-sequence entry)))
-             (setq queued
-                   (plist-put
-                    queued :callback
-                    (lambda (outcome)
-                      (funcall
-                       settle
-                       (if (mevedel-pipeline--permission-denial-outcome-p
-                            outcome)
-                           (plist-put updated :permission-denial-provenance
-                                      'user)
-                         updated)
-                       outcome))))
-             (mevedel-permission--enqueue queued session))))))
+           (if (and fallback-outcome (null permission-decision))
+               (funcall settle updated fallback-outcome)
+             (when ask-decision
+               (mevedel-pipeline--log-permission-decision
+                updated ask-decision))
+             (let ((queued (copy-sequence entry)))
+               (setq queued
+                     (plist-put
+                      queued :callback
+                      (lambda (outcome)
+                        (funcall
+                         settle
+                         (if (mevedel-pipeline--permission-denial-outcome-p
+                              outcome)
+                             (plist-put updated :permission-denial-provenance
+                                        'user)
+                           updated)
+                         outcome))))
+               (mevedel-permission--enqueue queued session)))))))
      context session workspace
      (plist-get context :request)
      (plist-get context :invocation))))
@@ -926,13 +913,14 @@ outcomes) or FAIL (all denial shapes, plus `aborted')."
            :buffer (plist-get context :buffer)
            :permission-request
            (lambda (entry queue-session settle)
-             (if (eq 'allow (plist-get context :hook-permission-decision))
-                 (funcall settle 'allow)
-               (mevedel-pipeline--request-permission
-                context entry (or queue-session session)
-                (lambda (updated outcome)
-                  (setq context updated)
-                  (funcall settle outcome)))))
+             (mevedel-pipeline--request-permission
+              context entry (or queue-session session)
+              (lambda (updated outcome)
+                (setq context updated)
+                (funcall settle outcome))
+              nil
+              (and (eq 'allow (plist-get context :hook-permission-decision))
+                   'allow)))
            :warn-no-session-p t))
          (path (plist-get permission-context :path))
          (workspace-root (plist-get permission-context :workspace-root))
@@ -1035,8 +1023,7 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
               :include-always
               (plist-get permission-context :include-always)
               :workspace workspace
-              :origin (mevedel-pipeline--permission-origin context)
-              :callback #'ignore)
+              :origin (mevedel-pipeline--permission-origin context))
         session
         (lambda (prompt-context prompt-outcome)
           (condition-case err
@@ -1060,7 +1047,9 @@ DECISION, and PERMISSION-CONTEXT describe the permission context."
                  :permission-context permission-context))
             (error
              (funcall fail (error-message-string err)))))
-        decision-metadata)))
+        decision-metadata
+        (and (eq 'allow (plist-get context :hook-permission-decision))
+             'allow))))
     ((or 'allow 'approve 'implement 'implement-clear)
      (funcall next context))
     ('deny
@@ -1127,11 +1116,9 @@ explicit `:status' must be `success' or `error'."
            (memq (plist-get value :status) '(success error)))))
 
 (defun mevedel-pipeline--context-status (context)
-  "Return CONTEXT's explicit or legacy result status."
-  (or (plist-get context :status)
-      (and (stringp (plist-get context :result))
-           (string-prefix-p "Error:" (plist-get context :result))
-           'error)
+  "Return CONTEXT's canonical handler status."
+  (or (plist-get context :handler-status)
+      (plist-get context :status)
       'success))
 
 (defun mevedel-pipeline--normalize-tool-string (value)
@@ -1150,11 +1137,13 @@ handler receives just the args plist and returns the result directly.
 A handler must return a plist of the form
 `(:result VALUE :status STATUS :render-data DATA :media ITEMS)'.  `:result'
 is required; `:status' may be `success' or `error', and the side-channel keys
-are optional.  Invalid returns and handler signals become canonical error
-results so `PostToolUseFailure' observes every failed handler execution.
+are optional.  The boundary normalizes a missing status before lifecycle
+dispatch.  Invalid returns and handler signals become canonical error results
+so `PostToolUseFailure' observes every failed handler execution.
 
-Sets `:result', `:status', `:render-data', and `:media' in CONTEXT for
-downstream steps;
+Sets `:result', canonical `:handler-status', `:render-data', and `:media' in
+CONTEXT for downstream steps.  Explicit handler `:status' is preserved
+separately for rendering;
 NEXT is called on success.  Run the handler in CONTEXT's captured dispatch
 buffer because an asynchronous permission prompt may resume from the view
 buffer."
@@ -1166,6 +1155,13 @@ buffer."
                   (let ((result
                          (mevedel-pipeline--normalize-tool-string
                           (plist-get raw :result)))
+                        (status
+                         (or (plist-get raw :status)
+                             (and (stringp (plist-get raw :result))
+                                  (string-prefix-p
+                                   "Error:" (plist-get raw :result))
+                                  'error)
+                             'success))
                         (updated context))
                     (setq updated
                           (plist-put
@@ -1173,6 +1169,8 @@ buffer."
                             (plist-put updated :result result)
                             :raw-result result)
                            :render-data (plist-get raw :render-data)))
+                    (setq updated
+                          (plist-put updated :handler-status status))
                     (when (plist-member raw :status)
                       (setq updated
                             (plist-put updated :status
@@ -1828,8 +1826,8 @@ is still truncated to the preview size to prevent context overflow --
 only the file write is skipped.
 
 Skips entirely when the result is not a string.  Oversized error results are
-truncated rather than persisted.  Explicit handler status takes precedence;
-legacy handlers continue to derive error status from an `Error:' prefix.
+truncated rather than persisted.  The handler boundary supplies canonical
+status before this step runs.
 CONTEXT must contain :tool and :result.  NEXT is called with the
 possibly-updated context."
   (let* ((tool (plist-get context :tool))
@@ -1844,7 +1842,7 @@ possibly-updated context."
           (<= (length result) effective))
       (funcall next context))
      ((eq 'error (mevedel-pipeline--context-status context))
-      (funcall next
+     (funcall next
                (plist-put context :result
                           (mevedel-pipeline--truncate-error-result
                            result tool
