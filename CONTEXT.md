@@ -9,6 +9,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **agent resource** — A portable user- or project-authored asset intended to be shared with agent tools, such as a skill, plugin, or durable memory.
 - **mevedel state** — Runtime data owned by mevedel, such as session persistence, tool artifacts, input history, and generated metadata.
 - **session** — A chat/workflow instance attached to a workspace. Sessions hold transcript state, permissions, reminders, tasks, agent state, and persistence metadata.
+- **live session epoch** — One continuous activation of a root session between `SessionStart` and `SessionEnd`. A persisted session may have multiple live epochs across resume; clear and compaction begin context epochs within the same live epoch.
 - **session setting** — Configuration owned by one session, initially derived from global defaults, preserved across resume, and copied when the session is forked without affecting other sessions.
 - **session cockpit** — The central user-facing control surface for one session, presenting live session state and routing common workflow, configuration, and inspection actions.
 - **tabulated cockpit surface** — A session-owned cockpit buffer for inspecting and acting on selectable resources in a table.
@@ -41,6 +42,7 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **implementation context** — The context supplied to a goal's implementer: either the full goal transcript or a focused handoff containing the goal objective and accepted plan.
 - **model workload** — A named kind of model request, such as planning, implementation, review, exploration, or compaction, whose model and reasoning effort can be configured by a preset.
 - **conversation compaction** — Replacement of older model-visible transcript history with an anchored summary and a recent verbatim tail while retaining the original transcript on disk.
+- **compaction attempt** — One bounded attempt to produce and apply a compacted context. It emits `PreCompact`; successful application emits `PostCompact`, and only a root-session success begins a `SessionStart(compact)` context epoch. A retry is a new attempt.
 - **compaction target** — A model-visible transcript whose context pressure is managed independently through conversation compaction; currently either a main session segment or a persisted sub-agent transcript.
 - **view buffer** — The compact, user-facing mevedel buffer with status, interaction, and input zones.
 - **view disclosure** — A collapsible view-buffer element consisting of a visible disclosure header and an optional expanded disclosure body. Avoid “handler,” which refers to executable tool behavior.
@@ -51,6 +53,9 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
   it reaches a terminal state. It is an observation-only view-buffer variant,
   not a separate transcript presentation or interaction surface.
 - **tool** — A model-callable operation routed through mevedel's validation, permission, execution, rendering, and persistence pipeline.
+- **tool attempt** — One validated model tool call passing through pre-use and permission gates. It receives one post-use outcome only when its handler runs; a model retry is a separate attempt.
+- **permission-denied hook** — The `PermissionDenied` hook emitted exactly once after any final denial of a valid tool attempt, including rejection by `PreToolUse`. Its payload preserves the event that originated the denial.
+- **permission-request hook** — The `PermissionRequest` hook emitted once when any tool's permission resolution produces `ask`, before the request enters the shared permission queue. Tool-specific cards, display, and queue re-evaluation do not create additional events.
 - **tool input repair** — A deterministic correction to a tool call that either responds to a specific contract violation or is explicitly requested by the tool. Ordinary default values are tool semantics, not repairs.
 - **permission rule** — A rule deciding whether a tool call is allowed, denied, or requires user approval.
 - **permission mode** — A session setting selecting the autonomy ceiling `ask`, `auto`, or `full-auto`. It is independent of resource authorization and execution confinement; `edit` is only a user-facing alias for `auto`.
@@ -96,6 +101,14 @@ This glossary captures the domain language for mevedel. Keep it focused on user-
 - **pending plugin hook consent** — A plugin activation state where plugin skills may remain active, but executable plugin hooks are withheld until the user reviews and approves the changed hook surface.
 - **hook audit record** — Persisted structured metadata or transcript markup describing how a hook changed model-visible context, submitted content, control flow, or permissions.
 - **hook audit surface** — The user-facing record that a hook changed model-visible context, control flow, permissions, or submitted content.
+- **start hook** — A lifecycle hook marking entry into a new identity or context epoch, never merely another model request. `SessionStart` covers startup, resume, clear, and compact epochs; `SubagentStart` covers creation of a retained agent and its conversation. _Avoid_: request start hook
+- **session-start context** — An append-only snapshot of context contributed when a session enters or re-enters an active epoch. Resume adds a current snapshot without rewriting or deduplicating historical hook context.
+- **sub-agent stop hook** — The `SubagentStop` lifecycle hook emitted whenever one agent turn settles. It does not end the retained agent or its conversation. _Avoid_: agent end hook
+- **prompt submission hook** — The `UserPromptSubmit` hook emitted once for each root or retained-agent task input. Mailbox delivery and internal requests such as compaction, guardians, and automatic continuations are not prompt submissions.
+- **pending hook context** — Model context produced when no request is sent, retained by the originating root or agent conversation and consumed exactly once by its next accepted task input. It never crosses between agents or into the root session.
+- **prompt expansion hook** — The `UserPromptExpansion` hook emitted once per canonical skill actually prepared from a user `$skill` invocation. Repeated mentions of the same skill and model-side `Skill` calls do not create additional expansion events.
+- **hook context composition** — The non-recursive ordering that runs start hooks, user skill expansion hooks, and the prompt submission hook before merging their context once into model input. Hook output is never reinterpreted as another skill invocation or rerun through earlier hooks.
+- **turn terminal hook** — The single observational hook emitted when a turn settles: `Stop` for root success, `StopFailure` for root error or abort, and `SubagentStop` for any settled agent turn. It cannot reject settlement or continue the turn.
 - **plugin cockpit** — A session cockpit surface for inspecting installed plugins and managing one selected plugin at a time.
 - **agent** — A delegated model participant whose identity is distinct from any one unit of work it performs.
 - **agent conversation** — The context retained by one agent across its turns. Follow-ups continue it; spawning another agent starts a fresh conversation.

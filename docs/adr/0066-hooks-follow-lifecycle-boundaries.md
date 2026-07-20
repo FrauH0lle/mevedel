@@ -1,0 +1,3 @@
+# Hooks Follow Lifecycle Boundaries, Not Model Requests
+
+Mevedel emits hooks at domain boundaries rather than on every model request: `SubagentStart` runs once when a retained agent is created, while prompt, tool, compaction, and terminal hooks run once per corresponding turn or attempt. `SessionStart` begins root startup, resume, clear, and compact context epochs; retained-agent compaction does not rerun a start hook, and hook context is composed once without recursively triggering earlier hooks. Unlike Codex, `Stop` remains an observational, exactly-once settlement event because Goals and reviewers own supervised continuation.
