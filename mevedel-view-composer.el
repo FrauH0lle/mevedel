@@ -83,6 +83,18 @@
 (declare-function mevedel-mentions-prepare-user-input
                   "mevedel-mentions" (text &optional session))
 
+;; `mevedel-menu'
+(declare-function mevedel-menu "mevedel-menu" ())
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-effective "mevedel-permissions"
+                  (&optional session data-buffer surface-buffer))
+(declare-function mevedel-permission-mode-label "mevedel-permissions"
+                  (&optional mode))
+(declare-function mevedel-permission-mode-transition "mevedel-permissions"
+                  (mode))
+(defvar mevedel-permission-mode)
+
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-audits
                   "mevedel-prompt-submission" (cl-x) t)
@@ -104,18 +116,6 @@
                   "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-set-outcome
                   "mevedel-prompt-submission" (submission outcome))
-
-;; `mevedel-menu'
-(declare-function mevedel-menu "mevedel-menu" ())
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-effective "mevedel-permissions"
-                  (&optional session data-buffer surface-buffer))
-(declare-function mevedel-permission-mode-label "mevedel-permissions"
-                  (&optional mode))
-(declare-function mevedel-permission-mode-transition "mevedel-permissions"
-                  (mode))
-(defvar mevedel-permission-mode)
 
 ;; `mevedel-review'
 (declare-function mevedel-review--mark-command-outcome

@@ -69,6 +69,12 @@
 (declare-function mevedel-preset-restore-session
                   "mevedel-presets" (session &optional buffer))
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-commit
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-context
+                  "mevedel-prompt-submission" (cl-x) t)
+
 ;; `mevedel-queue'
 (declare-function mevedel-queue--entry-metadata-get "mevedel-queue"
                   (entry key))
@@ -146,12 +152,6 @@
 (declare-function mevedel-view--fontify-as "mevedel-view" (text mode))
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel--view-buffer)
-
-;; `mevedel-prompt-submission'
-(declare-function mevedel-prompt-submission-commit
-                  "mevedel-prompt-submission" (submission))
-(declare-function mevedel-prompt-submission-context
-                  "mevedel-prompt-submission" (cl-x) t)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())

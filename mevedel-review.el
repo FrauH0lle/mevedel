@@ -65,6 +65,14 @@
 (declare-function mevedel-pipeline--format-render-data-block
                   "mevedel-pipeline" (render-data))
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-commit
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-context
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-input
+                  "mevedel-prompt-submission" (cl-x) t)
+
 ;; `mevedel-skills-core'
 (declare-function mevedel-skill-agent "mevedel-skills-core" (cl-x) t)
 (declare-function mevedel-skill-context "mevedel-skills-core" (cl-x) t)
@@ -104,14 +112,6 @@
 
 ;; `mevedel-view'
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
-
-;; `mevedel-prompt-submission'
-(declare-function mevedel-prompt-submission-commit
-                  "mevedel-prompt-submission" (submission))
-(declare-function mevedel-prompt-submission-context
-                  "mevedel-prompt-submission" (cl-x) t)
-(declare-function mevedel-prompt-submission-input
-                  "mevedel-prompt-submission" (cl-x) t)
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--fork-if-pending "mevedel-view-composer" ())
