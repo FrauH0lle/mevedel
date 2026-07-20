@@ -52,8 +52,6 @@
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
                   (decision &optional event))
-(declare-function mevedel-hooks-consume-session-context "mevedel-hooks"
-                  (session entries))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
                   (event &optional session workspace &rest extra))
 (declare-function mevedel-hooks-format-context "mevedel-hooks" (entries))
@@ -84,6 +82,28 @@
 (declare-function mevedel-mentions-install "mevedel-mentions" ())
 (declare-function mevedel-mentions-prepare-user-input
                   "mevedel-mentions" (text &optional session))
+
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-audits
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-commit
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-context
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-create
+                  "mevedel-prompt-submission" (&rest args))
+(declare-function mevedel-prompt-submission-display-text
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-input
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-outcome
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-reserve
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-restore
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-set-outcome
+                  "mevedel-prompt-submission" (submission outcome))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -174,8 +194,6 @@
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-queued-user-messages
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-set-hook-context-pending
-                  "mevedel-structs" (session entries))
 (declare-function mevedel-session-set-queued-user-messages
                   "mevedel-structs" (session queue))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
@@ -1010,18 +1028,6 @@ means a failed attempt leaves the exact source attached for a retry."
            (buffer-live-p mevedel--data-buffer)
            (buffer-local-value 'mevedel--session mevedel--data-buffer))))
 
-(cl-defstruct
-    (mevedel-view-prompt-submission
-     (:constructor mevedel-view--prompt-submission-create))
-  input
-  display-text
-  context
-  audits
-  session
-  context-entries
-  outcome
-  (state 'pending))
-
 (defun mevedel-view--queued-user-messages (&optional session)
   "Return SESSION's queued user messages."
   (when-let* ((sess (or session (mevedel-view--session))))
@@ -1130,7 +1136,7 @@ prompt hook when the queue drains."
                     :queued-at-turn
                     (or (mevedel-session-turn-count session) 0))))
         (when submission
-          (mevedel-view--reserve-prompt-submission submission))
+          (mevedel-prompt-submission-reserve submission))
         (mevedel-view--set-queued-user-messages
          (append (mevedel-view--queued-user-messages session) (list entry))
          session)
@@ -1155,7 +1161,7 @@ prompt hook when the queue drains."
                   "\n\n")))
       (dolist (entry (reverse queue))
         (when-let* ((submission (plist-get entry :submission)))
-          (mevedel-view--restore-prompt-submission submission)))
+          (mevedel-prompt-submission-restore submission)))
       (mevedel-view--set-queued-user-messages nil session)
       (mevedel-view--clear-input)
       (dolist (path (mevedel-view--queued-user-message-dropped-file-grants
@@ -1176,7 +1182,7 @@ prompt hook when the queue drains."
       (user-error "No queued messages"))
     (dolist (entry (reverse (mevedel-view--queued-user-messages session)))
       (when-let* ((submission (plist-get entry :submission)))
-        (mevedel-view--restore-prompt-submission submission)))
+        (mevedel-prompt-submission-restore submission)))
     (mevedel-view--set-queued-user-messages nil session)
     (mevedel-view--interaction-rebuild)
     (message "mevedel: cleared queued messages")))
@@ -1395,15 +1401,15 @@ HOOK-AUDITS are the accepted `UserPromptSubmit' result."
           (and (mevedel-skill-invocation-plan-fork-p plan)
                (mevedel-view--prepared-fork-outcome prepared)))))
 
-(defun mevedel-view--dispatch-prepared-outcome
-    (submission data-buffer &optional before-send on-block dispatch)
+(cl-defun mevedel-view--dispatch-prepared-outcome
+    (submission data-buffer &key before-send after-insert on-block dispatch)
   "Dispatch accepted prompt SUBMISSION through DATA-BUFFER.
-BEFORE-SEND runs at the dispatch boundary.  ON-BLOCK runs after a dispatch
-error.  DISPATCH, when non-nil, receives SUBMISSION instead of starting a
-request."
+BEFORE-SEND runs at the dispatch boundary.  AFTER-INSERT runs once the prompt
+is durably recorded.  ON-BLOCK runs after a dispatch error.  DISPATCH, when
+non-nil, receives SUBMISSION instead of starting a request."
   (let* ((view-buffer (current-buffer))
-         (outcome (mevedel-view-prompt-submission-outcome submission))
-         (input (mevedel-view-prompt-submission-display-text submission))
+         (outcome (mevedel-prompt-submission-outcome submission))
+         (input (mevedel-prompt-submission-display-text submission))
          (model-input (plist-get outcome :model-input))
          (transcript-input (plist-get outcome :transcript-input))
          (hook-input (plist-get outcome :hook-input))
@@ -1430,7 +1436,9 @@ request."
                    (name (mevedel-skill-name skill)))
               (mevedel-view--start-fork-skill-turn
                (concat transcript-input render-data) input view-context)
-              (mevedel-view-prompt-submission-commit submission)
+              (mevedel-prompt-submission-commit submission)
+              (when after-insert
+                (funcall after-insert))
               (with-current-buffer data-buffer
                 (mevedel-skills-dispatch-prepared-fork
                  fork-outcome
@@ -1449,6 +1457,7 @@ request."
              :display-text input
              :prompt-checked t
              :submission submission
+             :after-insert after-insert
              :model-input (concat model-input render-data)))))
       (error
        (when (buffer-live-p data-buffer)
@@ -1471,25 +1480,24 @@ request."
       (with-current-buffer view-buffer
         (mevedel-view--finish-skill-submission token)
         (let* ((hook-input
-                (mevedel-view-prompt-submission-input prompt-submission))
+                (mevedel-prompt-submission-input prompt-submission))
                (hook-context
-                (mevedel-view-prompt-submission-context prompt-submission))
+                (mevedel-prompt-submission-context prompt-submission))
                (hook-audits
-                (mevedel-view-prompt-submission-audits prompt-submission))
+                (mevedel-prompt-submission-audits prompt-submission))
                (outcome
                 (mevedel-view--prepared-plan-outcome
                  plan-submission prepared hook-input hook-context hook-audits)))
-          (setf (mevedel-view-prompt-submission-outcome prompt-submission)
-                outcome
-                (mevedel-view-prompt-submission-audits prompt-submission)
-                (plist-get outcome :hook-audits))
+          (mevedel-prompt-submission-set-outcome
+           prompt-submission outcome)
           (when-let* ((warnings (plist-get prepared :warnings)))
             (message "mevedel: %s" (string-join warnings "; ")))
           (mevedel-view--dispatch-prepared-outcome
            prompt-submission data-buffer
-           (plist-get plan-submission :before-send)
-           (plist-get plan-submission :on-block)
-           (plist-get plan-submission :dispatch)))))))
+           :before-send (plist-get plan-submission :before-send)
+           :after-insert (plist-get plan-submission :after-insert)
+           :on-block (plist-get plan-submission :on-block)
+           :dispatch (plist-get plan-submission :dispatch)))))))
 
 (defun mevedel-view--handle-prepared-plan (submission prepared)
   "Continue SUBMISSION after PREPARED skill work settles."
@@ -1515,14 +1523,14 @@ request."
            (plist-get prepared :hook-context)))))))
 
 (defun mevedel-view--submit-planned-input
-    (input &optional before-send on-block dispatch)
+    (input &optional before-send on-block dispatch after-insert)
   "Plan, prepare, and submit atomically bound user INPUT.
 
 BEFORE-SEND runs exactly once at the dispatch boundary.  ON-BLOCK runs when
 planning, preparation, or `UserPromptSubmit' rejects the submission.  Derived
 skill bodies and hook output are never scanned for additional invocations.
 When DISPATCH is non-nil, call it with an accepted prompt submission instead of
-starting a new request."
+starting a new request.  AFTER-INSERT runs once the prompt is durably recorded."
   (let ((view-buffer (current-buffer))
         (data-buffer mevedel--data-buffer)
         (session (mevedel-view--session)))
@@ -1537,30 +1545,34 @@ starting a new request."
                input input
                (lambda (prompt-submission)
                  (let* ((hook-input
-                         (mevedel-view-prompt-submission-input
+                         (mevedel-prompt-submission-input
                           prompt-submission))
                         (hook-context
-                         (mevedel-view-prompt-submission-context
+                         (mevedel-prompt-submission-context
                           prompt-submission))
                         (prepared-input
                          (if hook-context
                              (concat hook-input "\n\n" hook-context)
                            hook-input)))
-                   (setf
-                    (mevedel-view-prompt-submission-outcome prompt-submission)
+                   (mevedel-prompt-submission-set-outcome
+                    prompt-submission
                     (list :model-input prepared-input
                           :transcript-input prepared-input
                           :hook-input hook-input
                           :hook-context hook-context
                           :hook-audits
-                          (mevedel-view-prompt-submission-audits
+                          (mevedel-prompt-submission-audits
                            prompt-submission)))
                    (mevedel-view--dispatch-prepared-outcome
-                    prompt-submission data-buffer before-send on-block
-                    dispatch)))
+                    prompt-submission data-buffer
+                    :before-send before-send
+                    :after-insert after-insert
+                    :on-block on-block
+                    :dispatch dispatch)))
                on-block)
             (mevedel-view--forward-input
-             input :before-send before-send :on-block on-block))
+             input :before-send before-send :after-insert after-insert
+             :on-block on-block))
         (let* ((token (list :cancelled nil))
                (submission
                 (list :token token
@@ -1569,6 +1581,7 @@ starting a new request."
                       :view-buffer view-buffer
                       :data-buffer data-buffer
                       :before-send before-send
+                      :after-insert after-insert
                       :dispatch dispatch
                       :on-block on-block)))
           (setq mevedel-view--pending-skill-submission token)
@@ -1591,10 +1604,21 @@ starting a new request."
               (null value))
              (_ nil))))
 
+(defun mevedel-view--finish-prepared-steering (submission)
+  "Commit and present successfully delivered steering SUBMISSION."
+  (let ((input (mevedel-prompt-submission-display-text submission)))
+    (mevedel-prompt-submission-commit submission)
+    (mevedel-view-history-add input)
+    (when (equal-including-properties (mevedel-view--input-text) input)
+      (mevedel-view--clear-input))
+    (mevedel-view--interaction-rebuild)
+    (message "mevedel: steered the waiting turn")
+    t))
+
 (defun mevedel-view--deliver-prepared-steering (submission)
   "Deliver accepted prompt SUBMISSION as steering for the waiting root."
-  (let* ((input (mevedel-view-prompt-submission-display-text submission))
-         (outcome (mevedel-view-prompt-submission-outcome submission))
+  (let* ((input (mevedel-prompt-submission-display-text submission))
+         (outcome (mevedel-prompt-submission-outcome submission))
          (session (mevedel-view--session))
          (request-context (plist-get outcome :request-context)))
     (cond
@@ -1609,37 +1633,30 @@ starting a new request."
                (require 'mevedel-mentions)
                (mevedel-mentions-expand-user-input
                 (plist-get outcome :model-input) session))))
-        (if (plist-get expansion :media-contexts)
-            (message "mevedel: media mentions cannot steer an active request")
-          (if (not (mevedel-agent-control-root-waiting-p session))
-              (mevedel-view--queue-user-message input t submission)
-            (if
-                (mevedel-agent-control-steer-user
-                 session (plist-get expansion :text)
-                 (lambda ()
-                   (let ((dropped-file-grants
-                          (mevedel-view--pop-dropped-file-grants-for-input
-                           input session)))
-                     (mevedel-mentions--commit-expansion session expansion)
-                     (mevedel-skills-commit-invoked-records
-                      session (plist-get request-context :invoked-skills))
-                     (mevedel-view--activate-dropped-file-grants
-                      dropped-file-grants session)))
-                 (list
-                  :transcript-payload
-                  (concat (plist-get outcome :transcript-input)
-                          (plist-get outcome :render-data))
-                  :hook-audits (plist-get outcome :hook-audits)))
-                (progn
-                  (mevedel-view-prompt-submission-commit submission)
-                  (mevedel-view-history-add input)
-                  (when (equal-including-properties
-                         (mevedel-view--input-text) input)
-                    (mevedel-view--clear-input))
-                  (mevedel-view--interaction-rebuild)
-                  (message "mevedel: steered the waiting turn")
-                  t)
-              (mevedel-view--queue-user-message input t submission)))))))))
+        (cond
+         ((plist-get expansion :media-contexts)
+          (message "mevedel: media mentions cannot steer an active request"))
+         ((not (mevedel-agent-control-root-waiting-p session))
+          (mevedel-view--queue-user-message input t submission))
+         ((mevedel-agent-control-steer-user
+           session (plist-get expansion :text)
+           (lambda ()
+             (let ((dropped-file-grants
+                    (mevedel-view--pop-dropped-file-grants-for-input
+                     input session)))
+               (mevedel-mentions--commit-expansion session expansion)
+               (mevedel-skills-commit-invoked-records
+                session (plist-get request-context :invoked-skills))
+               (mevedel-view--activate-dropped-file-grants
+                dropped-file-grants session)))
+           (list
+            :transcript-payload
+            (concat (plist-get outcome :transcript-input)
+                    (plist-get outcome :render-data))
+            :hook-audits (plist-get outcome :hook-audits)))
+          (mevedel-view--finish-prepared-steering submission))
+         (t
+          (mevedel-view--queue-user-message input t submission))))))))
 
 (defun mevedel-view-send ()
   "Send the current composer text to the LLM via the data buffer.
@@ -1756,8 +1773,8 @@ INPUT is the original composer text, including the slash command."
          (with-current-buffer data-buffer
            (require 'mevedel-goal)
            (mevedel-goal-start
-            (mevedel-view-prompt-submission-input submission)
-            (mevedel-view-prompt-submission-input submission)
+            (mevedel-prompt-submission-input submission)
+            (mevedel-prompt-submission-input submission)
             (if automatic 'automatic 'supervised)
             submission)))))))
 
@@ -1792,57 +1809,11 @@ such as `passed' cannot escape into `plist-get' or `plist-member'."
     (when contexts
       (mapconcat #'identity contexts "\n\n"))))
 
-(defun mevedel-view-prompt-submission-commit (submission)
-  "Commit SUBMISSION's pending context exactly once."
-  (pcase (mevedel-view-prompt-submission-state submission)
-    ('committed t)
-    ('reserved
-     (setf (mevedel-view-prompt-submission-state submission) 'committed)
-     t)
-    ('pending
-     (let ((entries
-            (mevedel-view-prompt-submission-context-entries submission)))
-       (when (and entries
-                  (not (mevedel-hooks-consume-session-context
-                        (mevedel-view-prompt-submission-session submission)
-                        entries)))
-         (error "Prompt context ownership changed before commit"))
-       (setf (mevedel-view-prompt-submission-state submission) 'committed)
-       t))
-    (_ (error "Invalid prompt submission state"))))
-
-(defun mevedel-view--reserve-prompt-submission (submission)
-  "Transfer SUBMISSION's pending context into the submission itself."
-  (pcase (mevedel-view-prompt-submission-state submission)
-    ('reserved t)
-    ('pending
-     (let ((entries
-            (mevedel-view-prompt-submission-context-entries submission)))
-       (when (and entries
-                  (not (mevedel-hooks-consume-session-context
-                        (mevedel-view-prompt-submission-session submission)
-                        entries)))
-         (error "Prompt context ownership changed before reservation"))
-       (setf (mevedel-view-prompt-submission-state submission) 'reserved)
-       t))
-    (_ (error "Cannot reserve committed prompt submission"))))
-
-(defun mevedel-view--restore-prompt-submission (submission)
-  "Restore a queued SUBMISSION's reserved context to its session."
-  (when (eq (mevedel-view-prompt-submission-state submission) 'reserved)
-    (let ((session (mevedel-view-prompt-submission-session submission)))
-      (mevedel-session-set-hook-context-pending
-       session
-       (append
-        (mevedel-view-prompt-submission-context-entries submission)
-        (mevedel-session-hook-context-pending session)))
-      (setf (mevedel-view-prompt-submission-state submission) 'pending))))
-
 (defun mevedel-view--run-prompt-submit-hook
     (input display-text callback &optional blocked-callback prior-context)
   "Run `UserPromptSubmit' for INPUT, then call CALLBACK if accepted.
 DISPLAY-TEXT is the user-facing prompt text.  CALLBACK receives
-one `mevedel-view-prompt-submission'.  PRIOR-CONTEXT, when non-nil, is placed
+one `mevedel-prompt-submission'.  PRIOR-CONTEXT, when non-nil, is placed
 after pending session context and before submit-hook context.  The consumer
 commits the submission immediately after it durably records the accepted
 input."
@@ -1907,7 +1878,7 @@ input."
                                 'UserPromptSubmit input submitted decision)))
                          (funcall
                           callback
-                          (mevedel-view--prompt-submission-create
+                          (mevedel-prompt-submission-create
                            :input submitted
                            :display-text display-text
                            :context context
@@ -1920,8 +1891,8 @@ input."
        (signal (car err) (cdr err))))))
 
 (cl-defun mevedel-view--forward-input
-    (input &key display-text before-send prompt-checked on-block submission
-           model-input)
+    (input &key display-text before-send after-insert prompt-checked on-block
+           submission model-input)
   "Render INPUT in the history region, forward to the data buffer, and send.
 Helper for `mevedel-view-send'.  When DISPLAY-TEXT is non-nil, show
 that in the view instead of INPUT (e.g., compact skill invocation).
@@ -1947,6 +1918,7 @@ after the forwarded prompt, where the LLM's response will begin."
           stored-input
           :display-text view-text
           :submission accepted
+          :after-insert after-insert
           :model-input request-input)))
     (if prompt-checked
         (send-now input (or display-text input) submission model-input)
@@ -1954,9 +1926,9 @@ after the forwarded prompt, where the LLM's response will begin."
        input display-text
        (lambda (accepted)
          (let ((hook-input
-                (mevedel-view-prompt-submission-input accepted))
+                (mevedel-prompt-submission-input accepted))
                (context
-                (mevedel-view-prompt-submission-context accepted)))
+                (mevedel-prompt-submission-context accepted)))
            (send-now
             (if context
                 (concat hook-input "\n\n" context)
@@ -1967,7 +1939,7 @@ after the forwarded prompt, where the LLM's response will begin."
        on-block))))
 
 (cl-defun mevedel-view--forward-input-now
-    (input &key display-text submission model-input)
+    (input &key display-text submission after-insert model-input)
   "Forward INPUT to gptel immediately, after prompt hooks have run.
 DISPLAY-TEXT is shown in the view instead of INPUT when non-nil.  SUBMISSION
 supplies hook context, audits, and commit ownership.  MODEL-INPUT, when non-nil,
@@ -1981,10 +1953,10 @@ replaces INPUT only in the temporary request prompt."
                             (mevedel--normalize-message-text display-text)))
          (hook-context
           (and submission
-               (mevedel-view-prompt-submission-context submission)))
+               (mevedel-prompt-submission-context submission)))
          (hook-audits
           (and submission
-               (mevedel-view-prompt-submission-audits submission)))
+               (mevedel-prompt-submission-audits submission)))
          (prompt-summary-body
           (mevedel-view--inline-skill-prompt-summary-body
            (or model-input input)))
@@ -2034,7 +2006,9 @@ replaces INPUT only in the temporary request prompt."
         ;; without switching buffers.
         (setq data-turn-start (copy-marker (point) nil)))
       (when submission
-        (mevedel-view-prompt-submission-commit submission))
+        (mevedel-prompt-submission-commit submission))
+      (when after-insert
+        (funcall after-insert))
       ;; Render the user's message in the view after the data source is
       ;; known, but before the model request starts.
       (let ((turn-start
@@ -2080,7 +2054,7 @@ replaces INPUT only in the temporary request prompt."
   "Submit the next queued user message for DATA-BUFFER.
 
 Each bound entry is planned and prepared as its own turn.  The queue entry is
-removed only when the resulting request or fork reaches its dispatch boundary."
+removed only when the resulting prompt reaches its transcript commit boundary."
   (when (buffer-live-p data-buffer)
     (let* ((view-buffer (buffer-local-value 'mevedel--view-buffer data-buffer))
            (session (buffer-local-value 'mevedel--session data-buffer)))
@@ -2104,25 +2078,30 @@ removed only when the resulting request or fork reaches its dispatch boundary."
                       (plist-get entry :dropped-file-grants)))
                 (let ((before-send
                        (lambda ()
+                         (mevedel-view--fork-if-pending)
+                         (mevedel-view--activate-dropped-file-grants
+                          dropped-file-grants session)))
+                      (after-insert
+                       (lambda ()
                          (when (eq entry
                                    (car (mevedel-view--queued-user-messages
                                          session)))
                            (mevedel-view--set-queued-user-messages
                             (cdr (mevedel-view--queued-user-messages session))
                             session))
-                         (mevedel-view--interaction-rebuild)
-                         (mevedel-view--fork-if-pending)
-                         (mevedel-view--activate-dropped-file-grants
-                          dropped-file-grants session))))
+                         (mevedel-view--interaction-rebuild))))
                   (if submission
                       (mevedel-view--dispatch-prepared-outcome
-                       submission data-buffer before-send
-                       (lambda ()
-                         (mevedel-view--interaction-rebuild)))
+                       submission data-buffer
+                       :before-send before-send
+                       :after-insert after-insert
+                       :on-block (lambda ()
+                                   (mevedel-view--interaction-rebuild)))
                     (mevedel-view--submit-planned-input
                      input before-send
                      (lambda ()
-                       (mevedel-view--interaction-rebuild)))))))))))))
+                       (mevedel-view--interaction-rebuild))
+                     nil after-insert)))))))))))
 
 (defun mevedel-view--run-queued-user-message-drain (data-buffer)
   "Drain one queued user message for DATA-BUFFER if it is live."
