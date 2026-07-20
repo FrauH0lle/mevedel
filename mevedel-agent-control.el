@@ -735,6 +735,7 @@ it queued for ordinary parent delivery."
       (unless (mevedel-agent-configuration-p configuration)
         (error "Agent has no frozen configuration: %s"
                (mevedel-agent-record-path record)))
+      (require 'mevedel-agent-runtime)
       (unless
           (mevedel-agent-runtime-dispatch
            nil (file-name-nondirectory (mevedel-agent-record-path record))

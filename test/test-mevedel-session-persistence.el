@@ -1338,6 +1338,7 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
 (defun test-mevedel-session-persistence--cold-agent-tree-round-trip ()
   "Exercise one durable agent-tree cold resume and its recovery boundary."
   (mevedel-tools-register)
+  (require 'mevedel-agent-runtime)
   (cl-destructuring-bind (workspace . tempdir)
       (test-mevedel-session-persistence--make-tempdir-workspace)
     (let* ((session (mevedel-session-create "main" workspace))
