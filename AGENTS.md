@@ -95,6 +95,7 @@ Data model
   mevedel-workspace.el        workspace detection and registry
   mevedel-models.el           model tier/provider resolution
   mevedel-hooks.el            project/user/skill/agent hook loading + runner
+  mevedel-prompt-submission.el accepted prompt + lifecycle-context transaction
   mevedel-bash-analysis.el    conservative shell parsing and normalized command facts
   mevedel-bash-policy.el      argument-aware read-only command policies
   mevedel-execution.el        bounded child-process lifecycle and session state

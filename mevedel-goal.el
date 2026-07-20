@@ -147,13 +147,15 @@
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel--view-buffer)
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-commit
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-context
+                  "mevedel-prompt-submission" (cl-x) t)
+
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--clear-input "mevedel-view-composer" ())
 (declare-function mevedel-view--input-start "mevedel-view-composer" ())
-(declare-function mevedel-view-prompt-submission-commit
-                  "mevedel-view-composer" (submission))
-(declare-function mevedel-view-prompt-submission-context
-                  "mevedel-view-composer" (submission))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-anchor
@@ -2131,10 +2133,10 @@ dispatch and attach the attempt identity to the returned FSM."
 DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
 hook context until the turn is inserted."
   (when prompt-submission
-    (require 'mevedel-view-composer))
+    (require 'mevedel-prompt-submission))
   (let* ((hook-context
           (and prompt-submission
-               (mevedel-view-prompt-submission-context prompt-submission)))
+               (mevedel-prompt-submission-context prompt-submission)))
          (stored-prompt
          (if hook-context
              (concat prompt "\n\n" hook-context)
@@ -2142,7 +2144,7 @@ hook context until the turn is inserted."
     (mevedel--insert-local-user-turn
      stored-prompt display-text nil hook-context)
     (when prompt-submission
-      (mevedel-view-prompt-submission-commit prompt-submission))
+      (mevedel-prompt-submission-commit prompt-submission))
     (mevedel--gptel-send-request
      (and hook-context stored-prompt))))
 

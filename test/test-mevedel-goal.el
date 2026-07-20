@@ -2249,7 +2249,7 @@ Each binding is (NAME KEYS)."
          (eq fsm
              (mevedel-goal--insert-and-send
               "Planning prompt" "Goal"
-              (mevedel-view--prompt-submission-create
+              (mevedel-prompt-submission-create
                :context "<hook-context>ctx</hook-context>"
                :state 'committed)))))
       (should (string-match-p "Planning prompt" (buffer-string)))
@@ -2263,7 +2263,7 @@ Each binding is (NAME KEYS)."
     (let* ((session (mevedel-session--create :name "goal-context"))
            (context-entries '((:event SessionStart :body "goal context")))
            (submission
-            (mevedel-view--prompt-submission-create
+            (mevedel-prompt-submission-create
              :context "<hook-context>goal context</hook-context>"
              :session session
              :context-entries context-entries)))
