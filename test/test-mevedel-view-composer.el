@@ -1101,7 +1101,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (mevedel-view--dispatch-prepared-plan
              submission prepared
              (concat (plist-get prepared :model-input) " $literal")
-             nil nil))
+             nil nil nil))
           (should-not mevedel-view--pending-skill-submission))
         (should before)
         (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))
@@ -1988,6 +1988,22 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should-not fork-called)
         (should (string-match-p "FORK<>" sent)))))
 
+  :doc "fork dispatch failure consumes context already stored in its turn"
+  (mevedel-view-test--with-source-skills
+      '(("forker" "fork" "FORK<$ARGUMENTS>"))
+    (mevedel-hooks-record-session-context
+     session '(:additional-context ("fork startup context")) 'SessionStart)
+    (cl-letf (((symbol-function 'mevedel-skills-dispatch-prepared-fork)
+               (lambda (&rest _) (error "Fork dispatch failed"))))
+      (with-current-buffer view-buf
+        (goto-char (mevedel-view--input-start))
+        (insert "$forker inspect")
+        (mevedel-view-send)))
+    (should-not (mevedel-session-hook-context-pending session))
+    (with-current-buffer data-buf
+      (should (= 1 (mevedel-view-test--count-matches
+                    "fork startup context" (buffer-string))))))
+
   :doc "preparation failure preserves the bound draft for retry"
   (mevedel-view-test--with-source-skills
       '(("alpha" "inline" "ALPHA")
@@ -2438,6 +2454,52 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (should (equal '("alpha")
                      (mapcar #'mevedel-skill-invocation-record-name
                              (mevedel-session-invoked-skills session))))))
+
+  :doc "a lost steering race queues the approved prompt without a second hook"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "steering-race" :root "/tmp"
+                       :name "steering-race"))
+           (session (mevedel-session-create "main" workspace))
+           (waiting-checks 0)
+           (hook-calls 0)
+           sent)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace
+                    mevedel--current-request
+                    (mevedel-request--create :session session))
+        (mevedel-hooks-record-session-context
+         session '(:additional-context ("race context")) 'SessionStart))
+      (cl-letf (((symbol-function 'mevedel-agent-control-root-waiting-p)
+                 (lambda (_session)
+                   (= 1 (cl-incf waiting-checks))))
+                ((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (cl-incf hook-calls)
+                   (funcall callback nil)))
+                ((symbol-function 'gptel-send)
+                 (lambda (&rest _) (setq sent t)))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest _) 'fake-timer)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "race prompt")
+          (mevedel-view-send))
+        (let ((entry (car (mevedel-session-queued-user-messages session))))
+          (should (plist-get entry :prepared-outcome))
+          (should (plist-get entry :context-token)))
+        (should (= 1 hook-calls))
+        (should (mevedel-session-hook-context-pending session))
+        (with-current-buffer data-buf
+          (setq-local mevedel--current-request nil))
+        (mevedel-view--drain-queued-user-message data-buf))
+      (should sent)
+      (should (= 1 hook-calls))
+      (should-not (mevedel-session-hook-context-pending session))
+      (with-current-buffer data-buf
+        (should (= 1 (mevedel-view-test--count-matches
+                      "race context" (buffer-string)))))))
 
   :doc "queued direct reference keeps its UUID when the number is reused"
   (let* ((root (make-temp-file "mevedel-ref-queue-" t))
@@ -3178,12 +3240,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (_args _input callback)
-                   (funcall callback "expanded" "hook context" nil)))
+                   (funcall callback "expanded" "hook context" nil nil)))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display &optional policy hook-context)
+                 (lambda (objective display &optional policy hook-context
+                          context-token)
                    (setq started (list objective display policy hook-context)
                          started-buffer (current-buffer)))))
         (with-current-buffer view-buf
@@ -3200,12 +3263,13 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (objective _input callback)
                    (should (equal "ship it" objective))
-                   (funcall callback objective nil nil)))
+                   (funcall callback objective nil nil nil)))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display policy &optional hook-context)
+                 (lambda (objective display policy &optional hook-context
+                          context-token)
                    (setq started
                          (list objective display policy hook-context)))))
         (with-current-buffer view-buf
@@ -3229,9 +3293,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session
                     mevedel--workspace workspace))
       (cl-letf (((symbol-function 'mevedel-goal-start)
-                 (lambda (_objective display _policy context)
+                 (lambda (_objective display _policy context context-token)
                    (mevedel-goal--insert-and-send
-                    "planning prompt" display context)))
+                    "planning prompt" display context context-token)))
                 ((symbol-function 'mevedel--gptel-send-request) #'ignore))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal "/goal ship it" "ship it")))
@@ -3322,8 +3386,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (mevedel-session-hook-context-pending session))
           (mevedel-view--run-prompt-submit-hook
            "accepted" "accepted"
-           (lambda (_input context _audits)
-             (setq accepted-context context))))
+           (lambda (_input context _audits context-token)
+             (setq accepted-context context)
+             (mevedel-view--commit-prompt-context context-token))))
         (should (string-match-p "blocked context" accepted-context))
         (should (string-match-p "UserPromptSubmit" accepted-context))
         (should-not (mevedel-session-hook-context-pending session)))))
@@ -3350,8 +3415,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (with-current-buffer view-buf
           (mevedel-view--run-prompt-submit-hook
            "expanded prompt" "Use $alpha"
-           (lambda (_input context _audits)
-             (setq accepted-context context))
+           (lambda (_input context _audits context-token)
+             (setq accepted-context context)
+             (mevedel-view--commit-prompt-context context-token))
            nil
            "<hook-context>expansion context</hook-context>")))
       (let ((start-pos (string-search "start context" accepted-context))
@@ -3361,7 +3427,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (< start-pos expansion-pos))
         (should (< expansion-pos submit-pos)))))
 
-  :doc "accepted callback errors restore pending context for retry"
+  :doc "errors before transcript insertion leave pending context for retry"
   (mevedel-view-test--with-buffers
     (let* ((workspace (mevedel-workspace--create
                        :type 'test :id "callback-rollback" :root "/tmp"
@@ -3382,11 +3448,34 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (should (mevedel-session-hook-context-pending session))
         (mevedel-view--run-prompt-submit-hook
          "retry" "retry"
-         (lambda (_input context _audits)
+         (lambda (_input context _audits context-token)
            (setq retry-context context)
-           t)))
+           (mevedel-view--commit-prompt-context context-token))))
       (should (string-match-p "retry context" retry-context))
       (should-not (mevedel-session-hook-context-pending session))))
+
+  :doc "send startup failure does not duplicate context already inserted"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "send-failure" :root "/tmp"
+                       :name "send-failure"))
+           (session (mevedel-session-create "main" workspace)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace)
+        (mevedel-hooks-record-session-context
+         session '(:additional-context ("send startup context"))
+         'SessionStart))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (error "Request startup failed"))))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "send prompt")
+          (should-error (mevedel-view-send))))
+      (should-not (mevedel-session-hook-context-pending session))
+      (with-current-buffer data-buf
+        (should (= 1 (mevedel-view-test--count-matches
+                      "send startup context" (buffer-string)))))))
 
   :doc "/goal prompts run UserPromptSubmit and materialize rewind forks"
   (let* ((root (make-temp-file "mevedel-view-plan-hooks" t))
@@ -3413,7 +3502,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (push 'fork events)))
                     ((symbol-function 'mevedel-goal-start)
-                     (lambda (objective display &optional policy hook-context)
+                     (lambda (objective display &optional policy hook-context
+                              context-token)
                        (push (list objective display policy hook-context)
                              events))))
             (with-current-buffer view-buf

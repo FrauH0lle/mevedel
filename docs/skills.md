@@ -327,10 +327,13 @@ effort; every stacked command's frontmatter and preset-side skill policy is
 ignored without choosing a winner. Instruction mentions also retain session
 policy, including when the mentioned skill normally has `context: fork`.
 
-Queued prompts retain their original bound text. Queueing performs no body
-preparation and runs no prompt hook. When an entry becomes the next turn, it is
-planned, prepared, and submitted independently; the entry leaves the queue
-only at the request or fork dispatch boundary.
+Ordinarily, queued prompts retain their original bound text. Queueing performs
+no body preparation and runs no prompt hook. When an entry becomes the next
+turn, it is planned, prepared, and submitted independently; the entry leaves
+the queue only at the request or fork dispatch boundary. If a prepared
+WaitAgent steering attempt loses its waiter race, its already-approved outcome
+is queued instead and drains without repeating preparation or
+`UserPromptSubmit`.
 
 The transcript and input history keep the exact original user text. An ignored
 render-data block connects that text to the prepared model prompt without

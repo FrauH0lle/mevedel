@@ -110,11 +110,14 @@
 (declare-function mevedel-view--forward-input
                   "mevedel-view-composer"
                   (input &optional display-text before-send prompt-checked
-                         on-block hook-context hook-audits))
+                         on-block hook-context hook-audits model-input
+                         context-token))
 (declare-function mevedel-view--run-prompt-submit-hook
                   "mevedel-view-composer"
                   (input display-text callback &optional blocked-callback
                          prior-context))
+(declare-function mevedel-view--commit-prompt-context
+                  "mevedel-view-composer" (context-token &optional session))
 (declare-function mevedel-view--start-fork-skill-turn
                   "mevedel-view-composer"
                   (input display-text &optional hook-context))
@@ -1125,7 +1128,7 @@ DATA-BUFFER receives the task transcript."
   (with-current-buffer view-buffer
     (mevedel-view--run-prompt-submit-hook
      display display
-     (lambda (hook-input hook-context _hook-audits)
+     (lambda (hook-input hook-context _hook-audits context-token)
        (when (and (buffer-live-p view-buffer)
                   (buffer-live-p data-buffer))
          (if (not (equal hook-input display))
@@ -1137,7 +1140,7 @@ DATA-BUFFER receives the task transcript."
               (lambda ()
                 (mevedel-view-history-add hook-input)
                 (mevedel-view--fork-if-pending))
-              t nil hook-context))
+              t nil hook-context nil nil context-token))
            (mevedel-view-history-add display)
            (mevedel-view--fork-if-pending)
            (mevedel-view--start-fork-skill-turn
@@ -1145,6 +1148,7 @@ DATA-BUFFER receives the task transcript."
                 (concat display "\n\n" hook-context)
               display)
             display hook-context)
+           (mevedel-view--commit-prompt-context context-token)
            (with-current-buffer data-buffer
              (mevedel-review--run-task
               prompt hint
@@ -1155,8 +1159,7 @@ DATA-BUFFER receives the task transcript."
               (lambda (invocation)
                 (mevedel-review--insert-progress-handle
                  invocation hint command))
-              command))
-         t))))))
+              command))))))))
 
 (defun mevedel-review--dispatch (prompt hint &optional cwd command)
   "Dispatch COMMAND with PROMPT, HINT, and CWD."

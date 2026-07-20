@@ -36,7 +36,8 @@
 (declare-function mevedel-view--forward-input
                   "mevedel-view-composer"
                   (input &optional display-text before-send prompt-checked
-                         on-block hook-context hook-audits))
+                         on-block hook-context hook-audits model-input
+                         context-token))
 (declare-function mevedel-view-history-add "mevedel-view-history" (text))
 
 ;; `mevedel-structs'
