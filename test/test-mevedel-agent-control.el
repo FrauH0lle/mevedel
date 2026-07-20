@@ -1042,7 +1042,7 @@
                          :models '(test-model))))
           (setq-local gptel-model 'test-model)
           (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                     (lambda (_callback role _description _message child
+                     (lambda (_callback role _description child
                                         _buffer &optional _configure)
                        (push role roles)
                        (push child invocations)
@@ -1099,7 +1099,7 @@
                                (mevedel-session-agent-registry session))))
           (let (synchronous-results)
             (cl-letf (((symbol-function 'mevedel-agent-exec-run)
-                     (lambda (callback _role _description _message child
+                     (lambda (callback _role _description child
                                        _buffer &optional _configure)
                        (push child invocations)
                        (funcall callback "Synchronous completion.")
@@ -1128,6 +1128,20 @@
                 session "ephemeral" "Require a durable transcript."))
               (should-not runner-called)
               (should-not (assoc "/root/ephemeral"
+                                 (mevedel-session-agent-registry session)))))
+          (let ((mevedel-subagent-start-functions
+                 (list (lambda (_event)
+                         '(:continue nil :stop-reason "blocked by policy"))))
+                runner-called)
+            (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+                       (lambda (&rest _)
+                         (setq runner-called t)
+                         'provider-request)))
+              (should-error
+               (mevedel-agent-control-spawn
+                session "blocked" "Never publish this agent."))
+              (should-not runner-called)
+              (should-not (assoc "/root/blocked"
                                  (mevedel-session-agent-registry session))))))
       (dolist (invocation invocations)
         (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))

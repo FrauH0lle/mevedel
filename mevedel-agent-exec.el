@@ -145,8 +145,6 @@
                   "mevedel-compact" (fsm))
 
 ;; `mevedel-hooks'
-(declare-function mevedel-hooks-additional-context-string "mevedel-hooks"
-                  (decision &optional event))
 (declare-function mevedel-hooks-context-audit-records
                   "mevedel-hooks" (decision event type &optional omit-context))
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
@@ -460,10 +458,8 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 ;;
 ;;; Task runner
 
-(defun mevedel-agent-exec--run-start-hook-sync
-    (agent-type description prompt invocation)
-  "Run `SubagentStart' hooks for AGENT-TYPE and return their decision.
-DESCRIPTION, PROMPT, and INVOCATION are included in the event payload.
+(defun mevedel-agent-exec--run-hook-sync (event payload invocation)
+  "Run EVENT with PAYLOAD for INVOCATION and return its decision.
 Command hooks still execute through the shared async runner; this helper
 waits because callers need the child FSM synchronously for
 interruption bookkeeping."
@@ -474,17 +470,7 @@ interruption bookkeeping."
          (done nil)
          decision)
     (mevedel-hooks-run-event
-     'SubagentStart
-     (mevedel-hooks-event-plist
-      'SubagentStart session workspace
-      :agent-path (and (mevedel-agent-invocation-p invocation)
-                       (mevedel-agent-invocation-path invocation))
-      :role agent-type
-      :description description
-      :prompt prompt
-      :transcript-relative-path
-      (and (mevedel-agent-invocation-p invocation)
-           (mevedel-agent-invocation-transcript-relative-path invocation)))
+     event payload
      (lambda (result)
        (setq decision result
              done t))
@@ -492,6 +478,44 @@ interruption bookkeeping."
     (while (not done)
       (accept-process-output nil 0.05))
     decision))
+
+(defun mevedel-agent-exec-run-start-hook
+    (agent-type description prompt invocation)
+  "Run `SubagentStart' for a new retained agent and return its decision."
+  (require 'mevedel-hooks)
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (workspace (and session (mevedel-session-workspace session)))
+         (decision
+          (mevedel-agent-exec--run-hook-sync
+           'SubagentStart
+           (mevedel-hooks-event-plist
+            'SubagentStart session workspace
+            :agent-path (mevedel-agent-invocation-path invocation)
+            :role agent-type
+            :description description
+            :prompt prompt
+            :transcript-relative-path
+            (mevedel-agent-invocation-transcript-relative-path invocation))
+           invocation)))
+    (when-let* ((msg (plist-get decision :system-message)))
+      (message "mevedel: %s" msg))
+    (setf (mevedel-agent-invocation-hook-audits invocation)
+          (mevedel-agent-exec--start-hook-audit-records decision))
+    decision))
+
+(defun mevedel-agent-exec-run-prompt-hook (prompt invocation)
+  "Run `UserPromptSubmit' for agent PROMPT and return its decision."
+  (require 'mevedel-hooks)
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (workspace (and session (mevedel-session-workspace session))))
+    (mevedel-agent-exec--run-hook-sync
+     'UserPromptSubmit
+     (mevedel-hooks-event-plist
+      'UserPromptSubmit session workspace
+      :agent-path (mevedel-agent-invocation-path invocation)
+      :prompt prompt
+      :display-text prompt)
+     invocation)))
 
 (defun mevedel-agent-exec--start-hook-audit-records (decision)
   "Return parent-row audit records for a SubagentStart hook DECISION."
@@ -530,14 +554,12 @@ interruption bookkeeping."
 	    (funcall runner))
 	(funcall runner)))))
 
-(defun mevedel-agent-exec-run (main-cb agent-type description prompt
+(defun mevedel-agent-exec-run (main-cb agent-type description
                                         invocation agent-buffer)
   "Dispatch a sub-agent task and route its final response to MAIN-CB.
 
 AGENT-TYPE is the registry key (e.g. `\"explorer\"', `\"verifier\"').
 DESCRIPTION is a short human-facing label shown in the agent handle.
-PROMPT is the full instruction handed to the sub-agent.
-
 INVOCATION is the `mevedel-agent-invocation' associated with this task.
 It is stashed on the FSM info plist so collaboration-mail, reminder,
 and compaction handlers can reach it at ordinary request boundaries.
@@ -565,25 +587,6 @@ Returns the spawned FSM."
     (error "Invalid sub-agent invocation"))
   (unless (buffer-live-p agent-buffer)
     (error "Sub-agent buffer is not live"))
-  (let ((decision (mevedel-agent-exec--run-start-hook-sync
-                   agent-type description prompt invocation)))
-    (when (and (plist-member decision :continue)
-               (not (plist-get decision :continue)))
-      (error "%s" (or (plist-get decision :stop-reason)
-                      "SubagentStart hook stopped sub-agent")))
-    (when-let* ((msg (plist-get decision :system-message)))
-      (message "mevedel: %s" msg))
-    (setf (mevedel-agent-invocation-hook-audits invocation)
-          (mevedel-agent-exec--start-hook-audit-records decision))
-    (when-let* ((context (mevedel-hooks-additional-context-string
-                          decision 'SubagentStart)))
-      (setq prompt (concat prompt "\n\n" context))
-      (with-current-buffer agent-buffer
-        (let ((inhibit-read-only t))
-          (goto-char (point-max))
-          (unless (bolp) (insert "\n"))
-          (insert "\n" context "\n")))
-      (mevedel-agent-conversation-save invocation)))
   (let ((frozen
          (mevedel-agent-invocation-frozen-configuration invocation)))
     (unless (mevedel-agent-configuration-p frozen)

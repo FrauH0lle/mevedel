@@ -99,7 +99,7 @@ boundaries:
 | Event | Fires | Matcher | Control |
 | --- | --- | --- | --- |
 | `SessionStart` | fresh or restored chat-buffer initialization | source (`startup`, `resume`) | add context only |
-| `UserPromptSubmit` | before a view-submitted user prompt is sent | none | block, add context |
+| `UserPromptSubmit` | before a root or retained-agent task input is sent | none | block, add context |
 | `UserPromptExpansion` | before a user `$skill` expansion reaches the model | none | block, add context, rewrite prompt |
 | `PreToolUse` | after validation, before permission | tool name | deny, ask, add context, rewrite args |
 | `PermissionRequest` | before a generic permission prompt is shown | tool name | allow, deny, ask |
@@ -108,8 +108,8 @@ boundaries:
 | `PostToolUseFailure` | after a tool result beginning with `Error:` | tool name | add context, replace result |
 | `PreCompact` | before manual/automatic compaction | trigger (`manual`, `auto`) | block, add context |
 | `PostCompact` | after compaction completes | trigger | notification/logging |
-| `SubagentStart` | before an Agent request is launched | agent role | block, add context |
-| `SubagentStop` | after an Agent reaches terminal status | agent role | notification/logging |
+| `SubagentStart` | once before a retained-agent identity is published | agent role | block, add context |
+| `SubagentStop` | after each retained-agent turn reaches terminal status | agent role | notification/logging |
 | `Stop` | after a successful top-level assistant turn | none | notification/logging |
 | `StopFailure` | after an errored or aborted top-level assistant turn | none | notification/logging |
 | `SessionEnd` | buffer kill/session teardown | reason | notification only |
@@ -438,8 +438,14 @@ Project-specific prompt policy.
 
 No backwards-compatible plain-body format is required for new persisted
 hook context.
-Internal flows that construct their own requests, such as directive
-processing and plan execution, do not currently fire this event.
+Retained-agent initial tasks and idle-agent follow-ups also fire this event
+once before their model request. Mailbox delivery, compaction, guardians,
+response items, and automatic continuations do not. If an agent task is
+blocked, its additional context remains pending on that retained identity and
+is consumed once by its next accepted task; it cannot enter the root or a
+sibling conversation. Internal root flows that construct their own requests,
+such as directive processing and plan execution, do not currently fire this
+event.
 
 `SessionStart :additional-context` is pending context for the next
 request, not an immediate transcript event.  Its hook audit surface is
@@ -477,8 +483,10 @@ estimates.  Decisions are currently logged but not injected anywhere; this
 keeps post-compaction hooks observational and avoids mutating a summary
 after it has already been persisted.
 
-`SubagentStart` runs before the retained agent request is launched. A blocking
-decision stops the Agent tool before the child turn is published.
+`SubagentStart` runs once when a retained identity is created, before
+`UserPromptSubmit` and before the identity is published. Follow-ups and
+retained-agent compaction do not rerun it. A blocking decision stops the Agent
+tool without leaving an addressable identity or partial conversation.
 `:additional-context` is appended to the sub-agent prompt inside a
 `<hook-context>` block. This hook is awaited before the atomic spawn commits;
 after commit the Agent tool returns the retained canonical path immediately.
@@ -487,8 +495,9 @@ the parent Agent tool row records that the spawned agent received hook
 context, while the child transcript attaches the full hook context to the
 child's initial prompt.
 
-`SubagentStop` runs after the invocation reaches `completed`, `error`, or
-`aborted` and after transcript status/sidecar updates have been written.
+`SubagentStop` runs once after every invocation reaches `completed`, `error`,
+or `aborted` and after transcript status/sidecar updates have been written.
+The retained identity remains addressable for later follow-ups.
 Decisions are currently logged but do not change terminal status or parent
 feedback.
 

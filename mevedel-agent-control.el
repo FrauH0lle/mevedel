@@ -140,6 +140,7 @@
   conversation-buffer
   invocation
   mailbox
+  hook-context-pending
   blockers
   waiter
   result-handler)
@@ -725,6 +726,12 @@ it queued for ordinary parent delivery."
   (setf (mevedel-agent-record-configuration record)
         (mevedel-agent-invocation-frozen-configuration invocation)))
 
+(defun mevedel-agent-control--set-hook-context (session record entries)
+  "Replace RECORD's pending hook context with ENTRIES and persist SESSION."
+  (setf (mevedel-agent-record-hook-context-pending record)
+        (copy-tree entries))
+  (mevedel-agent-control--persist-session session))
+
 (defun mevedel-agent-control--dispatch-followup (session record message)
   "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
   (let ((buffer (mevedel-agent-record-conversation-buffer record)))
@@ -746,6 +753,11 @@ it queued for ordinary parent delivery."
            :retained-buffer buffer
            :retained-transcript
            (mevedel-agent-record-conversation-location record)
+           :pending-hook-context
+           (mevedel-agent-record-hook-context-pending record)
+           :on-hook-context
+           (apply-partially
+            #'mevedel-agent-control--set-hook-context session record)
            :on-invocation
            (apply-partially
             #'mevedel-agent-control--record-invocation record)
@@ -787,6 +799,7 @@ it queued for ordinary parent delivery."
           (error
            (setf (mevedel-agent-record-activity record) 'idle)
            (setf (mevedel-agent-record-invocation record) nil)
+           (mevedel-agent-control--persist-session session)
            (signal (car err) (cdr err)))))
       record)))
 
@@ -862,6 +875,11 @@ Return the committed retained record."
                :model-policy model-policy
                :skill-permission-rules skill-permission-rules
                :path (mevedel-agent-record-path record)
+               :pending-hook-context
+               (mevedel-agent-record-hook-context-pending record)
+               :on-hook-context
+               (apply-partially
+                #'mevedel-agent-control--set-hook-context session record)
                :on-invocation
                (lambda (invocation)
                  (mevedel-agent-control--record-invocation record invocation)

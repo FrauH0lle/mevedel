@@ -478,11 +478,11 @@ fire-count and payload."
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
 
-(mevedel-deftest mevedel-agent-exec--run-lifecycle-hooks ()
+(mevedel-deftest mevedel-agent-exec-run-start-hook ()
 			 ,test
 			 (test)
 
-		 :doc "fires SubagentStart and SubagentStop with invocation metadata"
+		 :doc "fires SubagentStart with invocation metadata"
 		 (let* ((root (make-temp-file "mevedel-agent-hooks" t))
 			(workspace (mevedel-workspace-get-or-create
 				    'project "agent-hooks" root "agent-hooks"))
@@ -496,21 +496,14 @@ fire-count and payload."
 			      :description "inspect hooks"
 			      :parent-session session
 			      :parent-data-buffer parent-buffer))
-			start-event
-			stop-event)
+			start-event)
 		   (unwind-protect
-		       (progn
-			 (with-current-buffer parent-buffer
-			   (setq-local mevedel-subagent-stop-functions
-				       (list (lambda (event)
-					       (setq stop-event event)
-					       nil))))
-			 (let ((mevedel-subagent-start-functions
+		       (let ((mevedel-subagent-start-functions
 				(list (lambda (event)
 					(setq start-event event)
 					'(:additional-context ("extra start context"))))))
 			   (let ((decision
-				  (mevedel-agent-exec--run-start-hook-sync
+				  (mevedel-agent-exec-run-start-hook
 				   "explorer" "inspect hooks" "prompt body" inv)))
 			     (should (equal (plist-get start-event :role) "explorer"))
 			     (should (equal (plist-get start-event :agent-path)
@@ -525,18 +518,59 @@ fire-count and payload."
                                (should (equal (plist-get audit :event)
                                               "SubagentStart"))
                                (should-not (plist-member audit :context)))))
-			 (setf (mevedel-agent-invocation-terminal-reason inv) "done")
-			 (with-temp-buffer
-			   (mevedel-agent-exec-run-stop-hook inv 'completed))
-			 (should (equal (plist-get stop-event :role) "explorer"))
-			 (should (equal (plist-get stop-event :agent-path)
-			                "/root/test_agent"))
-			 (should (eq (plist-get stop-event :status) 'completed))
-			 (should (equal (plist-get stop-event :terminal-reason) "done")))
-			     (delete-directory root t)
-			     (when (buffer-live-p parent-buffer)
-			       (kill-buffer parent-buffer))
-			     (mevedel-workspace-clear-registry))))
+		     (delete-directory root t)
+		     (when (buffer-live-p parent-buffer)
+		       (kill-buffer parent-buffer))
+		     (mevedel-workspace-clear-registry))))
+
+(mevedel-deftest mevedel-agent-exec-run-prompt-hook ()
+  ,test
+  (test)
+  :doc "fires UserPromptSubmit with retained-agent metadata"
+  (let* ((session (mevedel-session--create :name "main"))
+         (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
+               :parent-session session))
+         event)
+    (let ((mevedel-user-prompt-submit-functions
+           (list (lambda (payload)
+                   (setq event payload)
+                   '(:updated-input "rewritten")))))
+      (should
+       (equal '(:updated-input "rewritten")
+              (mevedel-agent-exec-run-prompt-hook "prompt body" inv)))
+      (should (equal (plist-get event :agent-path) "/root/test_agent"))
+      (should (equal (plist-get event :prompt) "prompt body")))))
+
+(mevedel-deftest mevedel-agent-exec-run-stop-hook ()
+  ,test
+  (test)
+  :doc "fires SubagentStop with invocation metadata"
+  (let* ((session (mevedel-session--create :name "main"))
+         (agent (mevedel-agent--create :name "explorer"))
+         (parent-buffer (generate-new-buffer " *mev-agent-parent-hooks*"))
+         (inv (mevedel-agent-invocation--create
+               :path "/root/test_agent"
+               :agent agent
+               :parent-session session
+               :parent-data-buffer parent-buffer))
+         stop-event)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-subagent-stop-functions
+                        (list (lambda (event)
+                                (setq stop-event event)
+                                nil))))
+          (setf (mevedel-agent-invocation-terminal-reason inv) "done")
+          (with-temp-buffer
+            (mevedel-agent-exec-run-stop-hook inv 'completed))
+          (should (equal (plist-get stop-event :role) "explorer"))
+          (should (equal (plist-get stop-event :agent-path)
+                         "/root/test_agent"))
+          (should (eq (plist-get stop-event :status) 'completed))
+          (should (equal (plist-get stop-event :terminal-reason) "done")))
+      (kill-buffer parent-buffer))))
 
 
 (mevedel-deftest mevedel-agent-exec-run ()
@@ -603,8 +637,7 @@ fire-count and payload."
 					#'ignore))
 		       (setq captured-fsm
 			     (mevedel-agent-exec-run
-			      #'ignore "default" "count defcustoms" "prompt"
-			      inv agent-buf)))))
+			      #'ignore "default" "count defcustoms" inv agent-buf)))))
 			 (should (eq captured-buffer agent-buf))
 			 (should (eq captured-include-reasoning t))
 			 (should (equal captured-system "parent system"))
@@ -677,8 +710,7 @@ fire-count and payload."
 				       ((symbol-function 'gptel--update-status)
 					#'ignore))
 			       (mevedel-agent-exec-run
-				#'ignore "reviewer" "review changes" "prompt"
-				inv agent-buf))))
+				#'ignore "reviewer" "review changes" inv agent-buf))))
 			 (should (equal captured-system "agent system"))
 			 (should captured-use-tools)
 			 (should (member "Bash" (mapcar #'gptel-tool-name

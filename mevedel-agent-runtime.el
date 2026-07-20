@@ -41,10 +41,15 @@
 (declare-function mevedel-agent-exec-freeze-configuration
                   "mevedel-agent-exec"
                   (agent-type invocation &optional model-policy))
+(declare-function mevedel-agent-exec-run-prompt-hook
+                  "mevedel-agent-exec"
+                  (prompt invocation))
+(declare-function mevedel-agent-exec-run-start-hook
+                  "mevedel-agent-exec"
+                  (agent-type description prompt invocation))
 (declare-function mevedel-agent-exec-run
                   "mevedel-agent-exec"
-                  (main-cb agent-type description prompt invocation
-                           agent-buffer))
+                  (main-cb agent-type description invocation agent-buffer))
 (declare-function mevedel-agent-exec-run-stop-hook
                   "mevedel-agent-exec" (invocation status))
 
@@ -102,6 +107,21 @@
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-context-entries
+                  "mevedel-hooks" (decision event))
+(declare-function mevedel-hooks-decision-reason
+                  "mevedel-hooks" (decision))
+(declare-function mevedel-hooks-format-context
+                  "mevedel-hooks" (entries))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-transcript-audit" (record))
+(declare-function mevedel--hook-prompt-rewrite-audit-record
+                  "mevedel-transcript-audit"
+                  (event original submitted &optional reason))
 (defvar mevedel--agent-invocation)
 (defvar mevedel-agent-task-path-property)
 
@@ -542,8 +562,10 @@ Settle a held provider response once its last owned execution has finished."
 ;;; Provider dispatch
 
 (defun mevedel-agent-runtime--insert-prompt
-    (invocation buffer description prompt context-snapshot retained-p)
-  "Append PROMPT and optional CONTEXT-SNAPSHOT to INVOCATION's BUFFER."
+    (invocation buffer description prompt context-snapshot retained-p
+                &optional hook-audits)
+  "Append PROMPT and optional CONTEXT-SNAPSHOT to INVOCATION's BUFFER.
+HOOK-AUDITS are hidden transcript records associated with this user turn."
   (with-current-buffer buffer
     (let ((inhibit-read-only t)
           (start (point-max))
@@ -561,6 +583,10 @@ Settle a held provider response once its last owned execution has finished."
                         mevedel-agent-task-path-property
                         (mevedel-agent-invocation-require-path invocation))))
       (insert "\n" (or prompt "") "\n")
+      (when hook-audits
+        (require 'mevedel-transcript-audit)
+        (dolist (audit hook-audits)
+          (insert (mevedel--format-hook-audit-record audit))))
       (when (mevedel-agent-invocation-transcript-relative-path invocation)
         (unless (mevedel-agent-conversation-save invocation)
           (if retained-p
@@ -575,7 +601,8 @@ Settle a held provider response once its last owned execution has finished."
     (agent description prompt
            &key context-snapshot model-policy skill-permission-rules
            on-invocation on-settle path frozen-configuration
-           retained-id retained-buffer retained-transcript)
+           retained-id retained-buffer retained-transcript
+           pending-hook-context on-hook-context)
   "Start one asynchronous retained agent turn and return its invocation.
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
@@ -644,27 +671,84 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
             (with-current-buffer buffer
               (setq-local mevedel--agent-invocation invocation)))
         (mevedel-agent-runtime--setup-transcript invocation buffer))
-      (when on-invocation
-        (funcall on-invocation invocation))
-      (mevedel-agent-runtime--insert-prompt
-       invocation buffer description prompt context-snapshot retained-p)
-      (when (and on-settle
-                 (not (mevedel-agent-invocation-transcript-relative-path
-                       invocation)))
-        (error "Agent conversation could not be persisted"))
-      (condition-case err
-          (let ((fsm
-                 (mevedel-agent-exec-run
-                  (apply-partially
-                   #'mevedel-agent-runtime--handle-provider-result invocation)
-                  agent-type description prompt invocation buffer)))
-            (unless fsm
-              (error "Agent provider request did not start"))
-            invocation)
-        (error
-         (mevedel-agent-runtime--mark-start-failed
-          invocation (error-message-string err))
-         (signal (car err) (cdr err)))))))
+      (let (published-p)
+        (condition-case err
+            (let* ((start-decision
+                    (and (not retained-p)
+                         (mevedel-agent-exec-run-start-hook
+                          agent-type description prompt invocation)))
+                   (_
+                    (when (and (plist-member start-decision :continue)
+                               (not (plist-get start-decision :continue)))
+                      (error "%s"
+                             (or (plist-get start-decision :stop-reason)
+                                 "SubagentStart hook stopped sub-agent"))))
+                   (prompt-decision
+                    (mevedel-agent-exec-run-prompt-hook prompt invocation))
+                   (prompt-context
+                    (mevedel-hooks-context-entries
+                     prompt-decision 'UserPromptSubmit)))
+              (when (and (plist-member prompt-decision :continue)
+                         (not (plist-get prompt-decision :continue)))
+                (when (and retained-p on-hook-context)
+                  (funcall on-hook-context
+                           (append pending-hook-context prompt-context)))
+                (error "%s"
+                       (or (plist-get prompt-decision :stop-reason)
+                           "UserPromptSubmit hook stopped agent task")))
+              (when-let* ((msg (plist-get prompt-decision :system-message)))
+                (message "mevedel: %s" msg))
+              (let* ((submitted
+                      (if (stringp (plist-get prompt-decision :updated-input))
+                          (plist-get prompt-decision :updated-input)
+                        prompt))
+                     (context
+                      (mevedel-hooks-format-context
+                       (append
+                        (mevedel-hooks-context-entries
+                         start-decision 'SubagentStart)
+                        pending-hook-context
+                        prompt-context)))
+                     (effective-prompt
+                      (if context (concat submitted "\n\n" context) submitted))
+                     (rewrite-audit
+                      (progn
+                        (require 'mevedel-transcript-audit)
+                        (mevedel--hook-prompt-rewrite-audit-record
+                         'UserPromptSubmit prompt submitted
+                         (mevedel-hooks-decision-reason prompt-decision)))))
+                (mevedel-agent-runtime--insert-prompt
+                 invocation buffer description effective-prompt
+                 context-snapshot retained-p
+                 (and rewrite-audit (list rewrite-audit)))
+                (when (and pending-hook-context on-hook-context)
+                  (funcall on-hook-context nil))
+                (when (and on-settle
+                           (not
+                            (mevedel-agent-invocation-transcript-relative-path
+                             invocation)))
+                  (error "Agent conversation could not be persisted"))
+                (when on-invocation
+                  (funcall on-invocation invocation))
+                (setq published-p t)
+                (let ((fsm
+                       (mevedel-agent-exec-run
+                        (apply-partially
+                        #'mevedel-agent-runtime--handle-provider-result
+                         invocation)
+                        agent-type description invocation buffer)))
+                  (unless fsm
+                    (error "Agent provider request did not start"))
+                  invocation)))
+          (error
+           (if published-p
+               (mevedel-agent-runtime--mark-start-failed
+                invocation (error-message-string err))
+             (unless retained-p
+               (mevedel-agent-runtime-dispatch--abandon-persistence invocation)
+               (when (buffer-live-p buffer)
+                 (kill-buffer buffer))))
+           (signal (car err) (cdr err))))))))
 
 (provide 'mevedel-agent-runtime)
 

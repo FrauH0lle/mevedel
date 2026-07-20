@@ -42,6 +42,14 @@ user steering, follow-up steering, or its bounded successful timeout wakes it.
 path, returns its previous activity, and leaves its identity, conversation,
 mailbox, descendants, and future follow-up capability intact.
 
+Creation runs `SubagentStart` exactly once, then runs `UserPromptSubmit` for
+the initial task before publishing the identity. Every idle-agent follow-up
+runs `UserPromptSubmit` again but not `SubagentStart`. A blocked follow-up is
+not appended as a user turn; its additional hook context stays with that
+identity and is consumed once by its next accepted task. Every completed,
+errored, or interrupted turn runs one observational `SubagentStop` without
+removing the retained identity.
+
 The built-in role configurations are:
 
 - **worker**: broad implementation, execution, navigation, skill, task, and
@@ -132,15 +140,16 @@ reviewer agents remain skill-free.
 ```mermaid
 flowchart TD
     A[Agent reserves path and capacity] --> B[Freeze configuration]
-    B --> C[Persist retained record and conversation]
-    C --> D[Return canonical path]
-    D --> E[Run child turn asynchronously]
-    E --> F[Settle exactly once]
-    F --> G[Release capacity and persist idle record]
-    G --> H[Queue RESULT for spawn parent]
-    H --> I{Parent needs result now?}
-    I -- Yes --> J[WaitAgent wakes]
-    I -- No --> K[Parent continues independently]
+    B --> C[Run SubagentStart once]
+    C --> D[Run UserPromptSubmit]
+    D --> E[Persist and publish retained identity]
+    E --> F[Run child turn asynchronously]
+    F --> G[Settle and run SubagentStop exactly once]
+    G --> H[Release capacity and persist idle record]
+    H --> I[Queue RESULT for spawn parent]
+    I --> J{Parent needs result now?}
+    J -- Yes --> K[WaitAgent wakes]
+    J -- No --> L[Parent continues independently]
 ```
 
 Every agent turn uses this path. A caller that needs the result explicitly
@@ -246,8 +255,9 @@ handles, without exposing the hidden bookkeeping block to the model.
 Each retained agent runs in its own gptel conversation buffer backed by a
 canonical transcript under the root session's `agents/` directory. The
 sidecar persists an explicit registry record for its canonical and parent
-paths, role and frozen configuration, activity, unread mailbox, conversation
-location, and internal storage identity. The canonical path is the only
+paths, role and frozen configuration, activity, unread mailbox, pending
+conversation-local hook context, conversation location, and internal storage
+identity. The canonical path is the only
 model-facing address; storage identities never enter collaboration tools.
 The frozen configuration is authoritative for the agent's system prompt, so
 agent transcripts omit gptel's redundant expanded `GPTEL_SYSTEM` property

@@ -355,6 +355,8 @@
            :configuration configuration
            :activity 'waiting
            :conversation-location "agents/task.chat.org"
+           :hook-context-pending
+           '((:event UserPromptSubmit :body "pending guidance"))
            :mailbox
            (list (list :type 'MAIL :sender "/root"
                        :recipient "/root/task" :payload "news"
@@ -370,6 +372,9 @@
                              :request-locals)))
             (should (equal "opaque-id" (plist-get saved :id)))
             (should (eq 'waiting (plist-get saved :activity)))
+            (should
+             (equal '((:event UserPromptSubmit :body "pending guidance"))
+                    (plist-get saved :hook-context-pending)))
             (should (equal '("/tmp/plain.el" ("/tmp/durable.el"))
                            (cdr (assq 'gptel-context locals))))
             (should
@@ -406,7 +411,9 @@
           (mevedel-agent-record--create
            :id "opaque-id" :path "/root/task" :parent-path "/root"
            :role "default" :configuration configuration :activity 'idle
-           :conversation-location "agents/task.chat.org")))
+           :conversation-location "agents/task.chat.org"
+           :hook-context-pending
+           '((:event UserPromptSubmit :body "persist me")))))
     (setf (mevedel-session-agent-registry source)
           (list (cons "/root/task" record)))
     (let* ((raw (mevedel-agent-persistence-serialize-registry source))
@@ -426,6 +433,9 @@
             (mevedel-agent-configuration-request-locals
              (mevedel-agent-record-configuration result))))
       (should (equal "opaque-id" (mevedel-agent-record-id result)))
+      (should
+       (equal '((:event UserPromptSubmit :body "persist me"))
+              (mevedel-agent-record-hook-context-pending result)))
       (should (gptel-backend-p (alist-get 'gptel-backend locals)))
       (should (gptel-tool-p (car (alist-get 'gptel-tools locals))))
       (should (equal '("/tmp/plain.el" ("/tmp/durable.el"))
