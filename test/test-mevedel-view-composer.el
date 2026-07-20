@@ -1061,13 +1061,15 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (list :input input :plan plan)
               prepared
               (plist-get prepared :model-input)
-              "hook context"
+              "expansion context\n\nhook context"
               '((:type prompt-rewrite))
               "hook context")))
         (should (string-match-p "ALPHA BODY"
                                 (plist-get outcome :model-input)))
         (should (string-match-p "hook context"
                                 (plist-get outcome :transcript-input)))
+        (should-not (string-match-p "expansion context"
+                                    (plist-get outcome :transcript-input)))
         (should (plist-get outcome :request-context))
         (should (plist-get outcome :render-data))
         (should (equal '((:type prompt-rewrite))
@@ -1099,7 +1101,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (mevedel-view--dispatch-prepared-plan
              submission prepared
              (concat (plist-get prepared :model-input) " $literal")
-             nil nil))
+             nil nil ""))
           (should-not mevedel-view--pending-skill-submission))
         (should before)
         (should (string-match-p "ALPHA BODY" (nth 7 forwarded)))
@@ -3169,7 +3171,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--session session))
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (_args _input callback)
-                   (funcall callback "expanded" "hook context" nil)))
+                   (funcall callback "expanded" "hook context" nil
+                            "hook context")))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
@@ -3191,7 +3194,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
                  (lambda (objective _input callback)
                    (should (equal "ship it" objective))
-                   (funcall callback objective nil nil)))
+                   (funcall callback objective nil nil "")))
                 ((symbol-function 'mevedel-view-history-add) #'ignore)
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
@@ -3274,7 +3277,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should (mevedel-session-hook-context-pending session))
           (mevedel-view--run-prompt-submit-hook
            "accepted" "accepted"
-           (lambda (_input context _audits &optional _transcript-context)
+           (lambda (_input context _audits _transcript-context)
              (setq accepted-context context))))
         (should (string-match-p "blocked context" accepted-context))
         (should (string-match-p "UserPromptSubmit" accepted-context))
@@ -3302,7 +3305,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (with-current-buffer view-buf
           (mevedel-view--run-prompt-submit-hook
            "expanded prompt" "Use $alpha"
-           (lambda (_input context _audits &optional _transcript-context)
+           (lambda (_input context _audits _transcript-context)
              (setq accepted-context context))
            nil
            "<hook-context>expansion context</hook-context>")))

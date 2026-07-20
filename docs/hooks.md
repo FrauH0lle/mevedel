@@ -470,6 +470,11 @@ prepared contribution; `:additional-context` is appended inside a
 `<hook-context>` block. A blocking decision stops the complete plan before any
 request or child dispatch. After all expansions settle, `UserPromptSubmit`
 sees the complete inert prompt. Model-side Skill calls do not fire this event.
+Expansion context follows the prepared skill body: it is request-only model
+input, shown by the live view disclosure but omitted from the persisted compact
+skill transcript. It therefore does not reappear after resume or full rerender.
+Session-start and prompt-submit context consumed by the same turn remains
+persisted under the durable audit contract above.
 
 `PreCompact` runs after the compaction range and prompt have been prepared
 but before the compaction request is sent.  A blocking decision stops the
