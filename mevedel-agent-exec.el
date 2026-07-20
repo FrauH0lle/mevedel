@@ -119,14 +119,7 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-frozen-configuration
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-hook-audits
-                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
-(declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-parent-session
-                  "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-fsm
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-model-override
@@ -135,7 +128,6 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
-(declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-to-gptel-spec "mevedel-agents" (agent))
 
 ;; `mevedel-compact'
