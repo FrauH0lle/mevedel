@@ -721,6 +721,29 @@
                :body "literal </hook-event> & <tag> \"quoted\"")
        (:event "A\"B" :body "x & y"))))))
 
+(mevedel-deftest mevedel-hooks-consume-session-context ()
+  ,test
+  (test)
+  :doc "consumes the captured prefix while preserving appended context"
+  (let* ((session (mevedel-session--create :name "hooks"))
+         (captured '((:event SessionStart :body "start")))
+         (appended '((:event UserPromptSubmit :body "later"))))
+    (setf (mevedel-session-hook-context-pending session)
+          (append captured appended))
+    (should (mevedel-hooks-consume-session-context session captured))
+    (should (equal appended
+                   (mevedel-session-hook-context-pending session))))
+
+  :doc "leaves a changed prefix untouched"
+  (let* ((session (mevedel-session--create :name "hooks"))
+         (current '((:event SessionStart :body "replacement")))
+         (captured '((:event SessionStart :body "start"))))
+    (setf (mevedel-session-hook-context-pending session) current)
+    (should-not
+     (mevedel-hooks-consume-session-context session captured))
+    (should (equal current
+                   (mevedel-session-hook-context-pending session)))))
+
 
 ;;
 ;;; Decisions

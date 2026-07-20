@@ -422,7 +422,8 @@ body.  The view shows a generic collapsed `◇ hook context added`
 disclosure that can be expanded to see the contributing event names and
 injected text.  Multiple hook context contributions consumed by the same
 prompt share one combined disclosure, preserving contribution order in the
-expanded details.
+expanded details. Pending context is cleared only after the accepted turn has
+been committed to its transcript; a dispatch error leaves it pending for retry.
 Hook audit records for persisted `<hook-context>` blocks contain ordered `<hook-event
 name="...">` entries so resume, rewind, and full rerender can recover
 which hook events contributed context:
