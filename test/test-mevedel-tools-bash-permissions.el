@@ -52,6 +52,28 @@
              (mevedel-skills-test--make-session "bash"))))
     (mevedel-tool-exec--bash callback args)))
 
+(mevedel-deftest mevedel-tool-exec--request-permission ()
+  ,test
+  (test)
+  :doc "uses the pipeline boundary when present"
+  (let (seen)
+    (mevedel-tool-exec--request-permission
+     (list :callback #'ignore)
+     (list :permission-request
+           (lambda (entry session callback)
+             (setq seen (list entry session callback))))
+     'session)
+    (should (equal 'session (cadr seen)))
+    (should (eq #'ignore (nth 2 seen))))
+  :doc "falls back to direct queue admission outside the pipeline"
+  (let (seen)
+    (cl-letf (((symbol-function 'mevedel-permission--enqueue)
+               (lambda (entry &optional session)
+                 (setq seen (list entry session)))))
+      (mevedel-tool-exec--request-permission
+       '(:kind bash) nil 'session))
+    (should (equal '((:kind bash) session) seen))))
+
 
 (mevedel-deftest mevedel-tool-exec--bash-commands-summary ()
   ,test

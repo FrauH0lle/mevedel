@@ -1576,7 +1576,13 @@ must restore the prior value to avoid cross-test pollution."
     (should (equal "explicit-pattern" (plist-get context :pattern)))
     (should (eq :pattern (plist-get context :specifier-key)))
     (should (equal "explicit-pattern"
-                   (plist-get context :specifier-value)))))
+                   (plist-get context :specifier-value))))
+
+  :doc "retains the pipeline permission-request boundary"
+  (let* ((request #'ignore)
+         (context (mevedel-permission--invocation-context
+                   :tool-name "Bash" :permission-request request)))
+    (should (eq request (plist-get context :permission-request)))))
 
 (mevedel-deftest mevedel-permission--checker-args ()
   ,test

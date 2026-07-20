@@ -12,7 +12,10 @@ flowchart TD
     B --> C[Permission check]
     C --> D{Allowed?}
     D -- No --> E[PermissionDenied hooks]
-    D -- Ask --> F[Permission queue]
+    D -- Ask --> Q[PermissionRequest hooks]
+    Q -- Ask --> F[Permission queue]
+    Q -- Deny --> E
+    Q -- Allow --> G
     F --> C
     D -- Yes --> G[Snapshot files]
     G --> H[Handler]
@@ -187,12 +190,12 @@ Tool descriptions live in `tools/*.md` and are loaded via
 before permission so policy hooks can deny, force an ask, add context, or
 replace args before the permission resolver and handler see the call.
 
-`PermissionRequest` runs only when the permission chain resolves to a
-generic `ask`. It can allow, deny, or leave the normal queued prompt in
-place. Bash and Eval use specialized permission queue entries from their
-tool permission slots, so they do not currently fire `PermissionRequest`.
-`PermissionDenied` runs after denial and can add model-facing feedback or
-context, but it cannot reopen the denied tool call.
+`PermissionRequest` runs whenever generic, Bash, Eval, or sandbox-authority
+resolution produces `ask`, immediately before shared queue admission. It can
+allow, deny, or leave the kind-specific card in place. Queue display,
+redraw, and rule-driven re-evaluation do not rerun it. `PermissionDenied`
+runs once after a final denial, carries its original provenance, and can add
+model-facing feedback or context without reopening the tool call.
 
 Post-tool hooks run after initial oversized-result persistence and specialist
 nudges, but before final render-data attachment. The specialist-nudge step is a
@@ -204,6 +207,11 @@ feedback or add context, but they cannot undo tool side effects that
 already happened. For capped tools, a second persistence/truncation pass
 runs after post-tool hooks so `updated_result` cannot reintroduce an
 oversized model-visible result.
+
+Post-use hooks imply handler execution. A successful handler emits only
+`PostToolUse`; an explicit error result, invalid return, or handler signal is
+normalized and emits only `PostToolUseFailure`. Validation failures,
+permission failures, and aborted permission interactions emit neither event.
 
 ### Hazard: post-handler steps must read from context, not buffer-local
 
@@ -296,7 +304,9 @@ render-data.
 
 Every handler returns a plist containing `:result` and may set `:status` to
 `success` or `error`. Handlers without explicit status retain the legacy
-`Error:`-prefix classification. When a handler includes `:render-data DATA` or
+`Error:`-prefix classification. Invalid returns and handler signals become
+canonical `:status error` results before post-use hooks run. When a handler
+includes `:render-data DATA` or
 explicit status, the pipeline writes `:result` to the data buffer and appends a
 hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
 `'gptel 'ignore` and `'invisible t`. Parser:

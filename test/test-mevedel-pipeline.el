@@ -15,6 +15,7 @@
 (require 'mevedel-tools)
 (require 'mevedel-session-persistence)
 (require 'mevedel-permission-log)
+(require 'mevedel-permission-queue)
 ;; gptel-request needed for mevedel-define-tool tests
 (require 'gptel-request nil t)
 (require 'gptel-anthropic nil t)
@@ -476,16 +477,33 @@
 		   (should (equal "ok" (plist-get out :result)))
 		   (should (equal '((:path "/tmp/a.png" :mime "image/png"))
 				  (plist-get out :media))))
-		 :doc "handler returning a bare string fails the step"
+		 :doc "handler returning a bare string becomes a canonical handler failure"
 		 (let* ((tool (mevedel-tool--create
 			       :name "StringReturn"
 			       :handler (lambda (_args) "invalid")))
 			(ctx (list :tool tool :args nil))
+			out
 			failure)
 		   (mevedel-pipeline--step-handler
-		    ctx #'ignore (lambda (reason) (setq failure reason)))
+		    ctx (lambda (next-context) (setq out next-context))
+		    (lambda (reason) (setq failure reason)))
+		   (should-not failure)
+		   (should (eq 'error (plist-get out :status)))
 		   (should (string-match-p "expected a plist containing :result"
-					   failure)))
+					   (plist-get out :result))))
+		 :doc "a signaling handler becomes a canonical handler failure"
+		 (let* ((tool (mevedel-tool--create
+			       :name "SignalingTool"
+			       :handler (lambda (_args) (error "Handler exploded"))))
+			(ctx (list :tool tool :args nil))
+			out
+			failure)
+		   (mevedel-pipeline--step-handler
+		    ctx (lambda (next-context) (setq out next-context))
+		    (lambda (reason) (setq failure reason)))
+		   (should-not failure)
+		   (should (eq 'error (plist-get out :status)))
+		   (should (equal "Error: Handler exploded" (plist-get out :result))))
 		 :doc "normalizes raw byte result strings before callback"
 		 (let* ((raw (string (unibyte-char-to-multibyte #x80)))
 			(tool (mevedel-tool--create
@@ -587,9 +605,10 @@
 				       :args '(:file_path "/tmp/out")
 				       :default-directory default-directory))
 			permission-denied-p
+			provenance
 			result)
 		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
-			      (lambda (event _payload callback &rest _)
+			      (lambda (event payload callback &rest _)
 				(pcase event
 				  ('PreToolUse
 				   (funcall callback
@@ -597,6 +616,8 @@
 								   :permission-reason "hook denied")))
 				  ('PermissionDenied
 				   (setq permission-denied-p t)
+				   (setq provenance
+					 (plist-get payload :permission-provenance))
 				   (funcall callback
 					    '(:permission-reason "rewritten denial")))))))
 		     (mevedel-pipeline--step-pre-tool-hooks
@@ -604,6 +625,7 @@
 		      (lambda (_ctx) (setq result "next"))
 		      (lambda (reason) (setq result reason))))
 		   (should permission-denied-p)
+		   (should (eq 'PreToolUse provenance))
 		   (should (equal (mevedel--strip-hook-audit-blocks
                                    result)
 				  "rewritten denial"))
@@ -708,7 +730,27 @@
 		     (should (equal (plist-get record :updated-input)
 				    '(:file_path "/tmp/new")))
 		     (should (equal (plist-get record :reason)
-				    "normalized")))))
+				    "normalized"))))
+		 :doc "routes PreToolUse stop decisions through PermissionDenied once"
+		 (let* ((tool (mevedel-tool--create :name "Write"))
+			(context (list :tool tool :args nil))
+			events
+			provenance
+			failure)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(push event events)
+				(when (eq event 'PermissionDenied)
+				  (setq provenance
+					(plist-get payload :permission-provenance)))
+				(funcall callback
+					 (and (eq event 'PreToolUse)
+					      '(:continue nil :stop-reason "stopped"))))))
+		     (mevedel-pipeline--step-pre-tool-hooks
+		      context #'ignore (lambda (reason) (setq failure reason))))
+		   (should (equal '(PreToolUse PermissionDenied) (nreverse events)))
+		   (should (eq 'PreToolUse provenance))
+		   (should (string-match-p "stopped" failure))))
 
 
 ;;
@@ -1895,7 +1937,184 @@
                      (should (eq (plist-get record :type) 'tool-permission))
                      (should (equal (plist-get record :event)
                                     "PermissionRequest"))
-                     (should (equal (plist-get record :outcome) "deny")))))
+                     (should (equal (plist-get record :outcome) "deny"))))
+		 :doc "generic Bash and Eval asks run PermissionRequest before real queue admission"
+		 (dolist (case
+			  (list
+			   (list (mevedel-tool--create
+				  :name "Prompted" :read-only-p nil)
+				 nil 'generic)
+			   (list (mevedel-tool-ensure "Bash")
+				 '(:command "unknown-hook-probe") 'bash)
+			   (list (mevedel-tool-ensure "Eval")
+				 '(:expression "(+ 1 2)" :mode "live") 'eval)))
+		   (pcase-let* ((`(,tool ,args ,kind) case)
+				(session (mevedel-session--create
+					  :name "permission-hook"
+					  :permission-mode 'ask))
+				(mevedel--session session)
+				(mevedel-permission-rules nil)
+				(mevedel-protected-paths nil)
+				(mevedel-permission-guardian nil)
+				(hook-count 0))
+		     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+				(lambda (event _payload callback &rest _)
+				  (when (eq event 'PermissionRequest)
+				    (cl-incf hook-count))
+				  (funcall callback nil)))
+			       ((symbol-function
+				 'mevedel-permission-queue--render-entry)
+				#'ignore))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args args :session session)
+			#'ignore #'ignore)
+		       (let ((entry (car (mevedel-session-permission-queue
+					 session))))
+			 (should entry)
+			 (should (eq kind (plist-get entry :kind)))
+			 (should (= 1 hook-count))
+			 (mevedel-permission-queue--render-head session)
+			 (mevedel-permission-queue--reevaluate entry)
+			 (should (= 1 hook-count))))))
+		 :doc "PreToolUse allow skips specialized Bash and Eval cards"
+		 (dolist (case
+			  (list
+			   (list (mevedel-tool-ensure "Bash")
+				 '(:command "unknown-hook-probe"))
+			   (list (mevedel-tool-ensure "Eval")
+				 '(:expression "(+ 1 2)" :mode "live"))))
+		   (pcase-let* ((`(,tool ,args) case)
+				(session (mevedel-session--create
+					  :name "pre-tool-allow"
+					  :permission-mode 'ask))
+				(mevedel-permission-rules nil)
+				(mevedel-protected-paths nil)
+				(mevedel-permission-guardian nil)
+				(enqueued nil)
+				(events nil)
+				(next-called nil))
+		     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+				(lambda (event _payload callback &rest _)
+				  (push event events)
+				  (funcall callback nil)))
+			       ((symbol-function 'mevedel-permission--enqueue)
+				(lambda (&rest _) (setq enqueued t))))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args args :session session
+			      :hook-permission-decision 'allow)
+			(lambda (_context) (setq next-called t)) #'ignore))
+		     (should next-called)
+		     (should-not enqueued)
+		     (should-not events)))
+		 :doc "PermissionRequest allow settles generic Bash and Eval asks without cards"
+		 (dolist (case
+			  (list
+			   (list (mevedel-tool--create
+				  :name "Prompted" :read-only-p nil)
+				 nil)
+			   (list (mevedel-tool-ensure "Bash")
+				 '(:command "unknown-hook-probe"))
+			   (list (mevedel-tool-ensure "Eval")
+				 '(:expression "(+ 1 2)" :mode "live"))))
+		   (pcase-let* ((`(,tool ,args) case)
+				(session (mevedel-session--create
+					  :name "permission-hook"
+					  :permission-mode 'ask))
+				(mevedel-permission-rules nil)
+				(mevedel-protected-paths nil)
+				(mevedel-permission-guardian nil)
+				(enqueued nil)
+				(next-called nil))
+		     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+				(lambda (_event _payload callback &rest _)
+				  (funcall callback
+					   '(:permission-decision allow))))
+			       ((symbol-function 'mevedel-permission--enqueue)
+				(lambda (&rest _) (setq enqueued t))))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args args :session session)
+			(lambda (_context) (setq next-called t)) #'ignore))
+		     (should next-called)
+		     (should-not enqueued)))
+		 :doc "PermissionRequest deny settles generic Bash and Eval asks with provenance"
+		 (dolist (case
+			  (list
+			   (list (mevedel-tool--create
+				  :name "Prompted" :read-only-p nil)
+				 nil)
+			   (list (mevedel-tool-ensure "Bash")
+				 '(:command "unknown-hook-probe"))
+			   (list (mevedel-tool-ensure "Eval")
+				 '(:expression "(+ 1 2)" :mode "live"))))
+		   (pcase-let* ((`(,tool ,args) case)
+				(session (mevedel-session--create
+					  :name "permission-hook"
+					  :permission-mode 'ask))
+				(mevedel-permission-rules nil)
+				(mevedel-protected-paths nil)
+				(mevedel-permission-guardian nil)
+				(events nil)
+				(provenance nil)
+				(enqueued nil)
+				(failure nil))
+		     (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+				(lambda (event payload callback &rest _)
+				  (push event events)
+				  (when (eq event 'PermissionDenied)
+				    (setq provenance
+					  (plist-get payload
+						     :permission-provenance)))
+				  (funcall callback
+					   (and (eq event 'PermissionRequest)
+						'(:permission-decision deny
+						  :permission-reason "hook denied")))))
+			       ((symbol-function 'mevedel-permission--enqueue)
+				(lambda (&rest _) (setq enqueued t))))
+		       (mevedel-pipeline--step-permission
+			(list :tool tool :args args :session session)
+			#'ignore (lambda (reason) (setq failure reason))))
+		     (should (equal '(PermissionRequest PermissionDenied)
+				    (nreverse events)))
+		     (should (eq 'PermissionRequest provenance))
+		     (should (string-match-p "hook denied" failure))
+		     (should-not enqueued)))
+		 :doc "policy denials retain their rule provenance"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Edit" :read-only-p nil))
+			(mevedel-permission-rules '(("Edit" :action deny)))
+			(mevedel-protected-paths nil)
+			(mevedel-permission-mode 'ask)
+			provenance)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(when (eq event 'PermissionDenied)
+				  (setq provenance
+					(plist-get payload :permission-provenance)))
+				(funcall callback nil))))
+		     (mevedel-pipeline--step-permission
+		      (list :tool tool :args nil) #'ignore #'ignore))
+		   (should (eq 'deny-rule provenance)))
+		 :doc "queued user denials retain user provenance"
+		 (let* ((tool (mevedel-tool--create
+			       :name "Edit" :read-only-p nil))
+			(mevedel-permission-rules '(("Edit" :action ask)))
+			(mevedel-protected-paths nil)
+			(mevedel-permission-mode 'ask)
+			entry
+			provenance)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event payload callback &rest _)
+				(when (eq event 'PermissionDenied)
+				  (setq provenance
+					(plist-get payload :permission-provenance)))
+				(funcall callback nil)))
+			     ((symbol-function 'mevedel-permission--enqueue)
+			      (lambda (queued &optional _session)
+				(setq entry queued))))
+		     (mevedel-pipeline--step-permission
+		      (list :tool tool :args nil) #'ignore #'ignore)
+		     (funcall (plist-get entry :callback) 'deny-once))
+		   (should (eq 'user provenance))))
 
 
 ;;
@@ -2011,6 +2230,51 @@
 		   (mevedel-pipeline-run-tool
 		    tool (lambda (r) (setq result r)) '(:msg "hello"))
 		   (should (equal result "hello")))
+		 :doc "each retry gets one pre-hook and one handler-specific post-hook"
+		 (let* ((attempt 0)
+			(tool (mevedel-tool--create
+			       :name "Retry"
+			       :handler (lambda (_args)
+					  (if (= 1 (cl-incf attempt))
+					      (error "First attempt failed")
+					    '(:result "ok")))
+			       :read-only-p t))
+			events
+			results)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event _payload callback &rest _)
+				(push event events)
+				(funcall callback nil))))
+		     (mevedel-pipeline-run-tool
+		      tool (lambda (result) (push result results)) nil)
+		     (mevedel-pipeline-run-tool
+		      tool (lambda (result) (push result results)) nil))
+		   (should (equal '(PreToolUse PostToolUseFailure
+				    PreToolUse PostToolUse)
+				  (nreverse events)))
+		   (should (string-prefix-p "Error: First attempt failed"
+					    (cadr results)))
+		   (should (equal "ok" (car results))))
+		 :doc "validation failures run no lifecycle hooks or handler"
+		 (let* ((handler-called nil)
+			(tool (mevedel-tool--create
+			       :name "Invalid"
+			       :args '((value string :required "Value"))
+			       :handler (lambda (_args)
+					  (setq handler-called t)
+					  '(:result "unexpected"))
+			       :read-only-p t))
+			events
+			result)
+		   (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+			      (lambda (event _payload callback &rest _)
+				(push event events)
+				(funcall callback nil))))
+		     (mevedel-pipeline-run-tool
+		      tool (lambda (value) (setq result value)) nil))
+		   (should (string-prefix-p "Error:" result))
+		   (should-not handler-called)
+		   (should-not events))
 		 :doc "repaired calls reach the handler and append one corrective note"
 		 (let* ((tool (mevedel-tool--create
 			       :name "Collect"
