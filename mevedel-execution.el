@@ -495,10 +495,15 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
                   (run-at-time
                    0.02 nil
                    #'mevedel-execution--settle-managed-main-exit record)))
-        (unless (and (mevedel-execution--record-stop-p record)
-                     (timerp (mevedel-execution--record-force-timer record)))
-          (mevedel-execution--finish-record
-           record (mevedel-execution--record-exit-code record)))))))
+        (unless (or (and (mevedel-execution--record-stop-p record)
+                         (timerp
+                          (mevedel-execution--record-force-timer record)))
+                    (timerp
+                     (mevedel-execution--record-settle-timer record)))
+          (setf (mevedel-execution--record-settle-timer record)
+                (run-at-time
+                 0.02 nil #'mevedel-execution--finish-record record
+                 (mevedel-execution--record-exit-code record))))))))
 
 (defun mevedel-execution--launch-record
     (record name command workdir coding filter)

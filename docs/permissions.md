@@ -280,11 +280,13 @@ A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
 invocation, session, and persistent approvals use the same exact resource-grant
 store as native filesystem tools. Approved paths are rebound at only the
-requested access level after protected masks are installed. Inaccessible
-parents expose traversal only far enough to reach the named mount, so their
-contents and sibling resources remain hidden. Command or Eval authorization is
-resolved independently and is never supplied by the resource grant. Explicit
-path denies remain final. Network and filesystem additions may be combined
+requested access level. A grant that contains a protected descendant is bound
+before that descendant is masked; all other grants are bound after protected
+masks are installed. Inaccessible parents expose traversal only far enough to
+reach the named mount, so their contents and sibling resources remain hidden.
+Command or Eval authorization is resolved independently and is never supplied
+by the resource grant. Explicit path denies remain final. Network and
+filesystem additions may be combined
 without changing any unrequested confinement boundary.
 
 Before Bash executes, identified literal resources are resolved against the

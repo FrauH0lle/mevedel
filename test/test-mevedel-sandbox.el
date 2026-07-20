@@ -960,6 +960,41 @@ the named protected files reopen while parent and sibling restrictions remain"
           (mevedel-sandbox-cleanup directory-prepared)
           (mevedel-sandbox-cleanup prepared)
           (delete-directory root t)))))
+  :doc "real additive filesystem parent:
+a broad read grant keeps an inaccessible descendant masked"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (or (plist-get availability :reason)
+                      "Bubblewrap unavailable")))
+      (let* ((root (make-temp-file "mevedel-sandbox-parent-root-" t))
+             (external (make-temp-file "mevedel-sandbox-parent-read-" t))
+             (credentials (file-name-concat external "credentials"))
+             (secret (file-name-concat credentials "token"))
+             (mevedel-protected-paths
+              `((,(concat credentials "/**") . inaccessible)))
+             prepared)
+        (unwind-protect
+            (progn
+              (make-directory credentials)
+              (with-temp-file secret (insert "do-not-read"))
+              (setq prepared
+                    (mevedel-sandbox-prepare
+                     (list "sh" "-c"
+                           (format "test ! -r %s"
+                                   (shell-quote-argument secret)))
+                     root (list root)
+                     `(:file-system
+                       ((:path ,external :access read)))))
+              (should
+               (zerop
+                (apply #'call-process
+                       (car (plist-get prepared :command)) nil nil nil
+                       (cdr (plist-get prepared :command))))))
+          (mevedel-sandbox-cleanup prepared)
+          (delete-directory external t)
+          (delete-directory root t)))))
   :doc "real protected paths:
 `mevedel-sandbox-prepare' keeps Git readable, hides credentials, and guards missing roots"
   (let ((mevedel-sandbox-mode 'required)

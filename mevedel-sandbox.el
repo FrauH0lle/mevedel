@@ -473,6 +473,7 @@ runs only `true'.  A failed probe means the backend is unavailable even when a
                                   "--chmod" "000" path))))))))
             (list :arguments arguments
                   :post-arguments post-arguments
+                  :paths (mapcar #'car resolved)
                   :cleanup-paths (nreverse cleanup-paths)
                   :count (length resolved))))
       (error
@@ -609,13 +610,15 @@ has concurrent child invocations.  Return TOKEN."
     (setq mevedel-sandbox--last-facts facts)
     (list :state 'unrestricted :command command :facts facts)))
 
-(defun mevedel-sandbox--additional-filesystem-mounts (permissions)
-  "Return FD-backed exact mounts for normalized filesystem PERMISSIONS."
+(defun mevedel-sandbox--additional-filesystem-mounts
+    (permissions &optional first-fd)
+  "Return FD-backed exact mounts for normalized filesystem PERMISSIONS.
+FIRST-FD defaults to 10."
   (let (arguments paths)
     (dolist (grant (plist-get permissions :file-system))
       (let ((path (plist-get grant :path))
             (access (plist-get grant :access))
-            (fd (+ 10 (length paths))))
+            (fd (+ (or first-fd 10) (length paths))))
         (unless (and (stringp path)
                      (file-name-absolute-p path)
                      (file-exists-p path))
@@ -735,9 +738,31 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
            (filesystem-write-count
             (cl-count 'write filesystem-permissions
                       :key (lambda (grant) (plist-get grant :access))))
-           (filesystem-mounts
+           (protected-paths (plist-get protected :paths))
+           (ancestor-permissions
+            (cl-remove-if-not
+             (lambda (grant)
+               (let ((grant-path
+                      (directory-file-name
+                       (expand-file-name (plist-get grant :path)))))
+                 (cl-some
+                  (lambda (protected-path)
+                    (and (not (string-equal grant-path protected-path))
+                         (string-prefix-p
+                          (file-name-as-directory grant-path)
+                          protected-path)))
+                  protected-paths)))
+             filesystem-permissions))
+           (post-protection-permissions
+            (cl-set-difference filesystem-permissions ancestor-permissions
+                               :test #'eq))
+           (ancestor-mounts
             (mevedel-sandbox--additional-filesystem-mounts
-             effective-permissions))
+             (list :file-system ancestor-permissions)))
+           (post-protection-mounts
+            (mevedel-sandbox--additional-filesystem-mounts
+             (list :file-system post-protection-permissions)
+             (+ 10 (length ancestor-permissions))))
            (facts (list :sandbox 'bubblewrap
                         :filesystem 'workspace-write
                         :proc (if mount-proc-p 'fresh 'host)
@@ -759,10 +784,11 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
              (cl-mapcan
               (lambda (root) (list "--bind" root root))
               roots)
+             (plist-get ancestor-mounts :arguments)
              (mevedel-sandbox--open-granted-parent-traversal
               (plist-get protected :arguments)
               effective-permissions)
-             (plist-get filesystem-mounts :arguments)
+             (plist-get post-protection-mounts :arguments)
              (mevedel-sandbox--protected-remounts
               (plist-get protected :post-arguments)
               effective-permissions)
@@ -782,7 +808,8 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
             :command
             (mevedel-sandbox--fd-backed-command
              (cons executable arguments)
-             (plist-get filesystem-mounts :paths))
+             (append (plist-get ancestor-mounts :paths)
+                     (plist-get post-protection-mounts :paths)))
             :original-command command
             :marker marker
             :cleanup-paths (plist-get protected :cleanup-paths)

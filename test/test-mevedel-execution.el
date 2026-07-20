@@ -29,6 +29,51 @@
 (mevedel-deftest mevedel-execution-start-one-shot ()
   ,test
   (test)
+  :doc "preserves filter output when the watchdog observes exit before delivery"
+  (let ((original-make-process (symbol-function 'make-process))
+        (original-run-at-time (symbol-function 'run-at-time))
+        (mevedel-sandbox-mode 'off)
+        chunks filter watch done result)
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (setq filter (plist-get args :filter))
+                 (apply
+                  original-make-process
+                  (plist-put
+                   (plist-put
+                    args :filter
+                    (lambda (process chunk)
+                      (push (cons process chunk) chunks)))
+                   :sentinel #'ignore))))
+              ((symbol-function 'run-at-time)
+               (lambda (time repeat function &rest args)
+                 (if (and (equal time 0.1) (equal repeat 0.1))
+                     (progn
+                       (setq watch (lambda () (apply function args)))
+                       (funcall original-run-at-time 3600 nil #'ignore))
+                   (apply original-run-at-time
+                          time repeat function args)))))
+      (mevedel-execution-start-one-shot
+       (lambda (child-result)
+         (setq result child-result
+               done t))
+       :name "mevedel-test-watchdog-output"
+       :command '("sh" "-c" "printf recovered")
+       :workdir temporary-file-directory
+       :writable-roots (list temporary-file-directory))
+      (with-timeout (2 (error "Process did not exit"))
+        (while (not chunks)
+          (accept-process-output nil 0.01))
+        (while (process-live-p (caar chunks))
+          (accept-process-output nil 0.01)))
+      (funcall watch)
+      (dolist (entry (nreverse chunks))
+        (funcall filter (car entry) (cdr entry)))
+      (with-timeout (2 (error "One-shot process did not settle"))
+        (while (not done)
+          (accept-process-output nil 0.01)))
+      (should (= 0 (plist-get result :exit-code)))
+      (should (equal "recovered" (plist-get result :output)))))
   :doc "settles an exited child even when Emacs does not deliver its sentinel"
   (let ((original-make-process (symbol-function 'make-process))
         (mevedel-sandbox-mode 'off)
