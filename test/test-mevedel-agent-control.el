@@ -84,7 +84,7 @@
 (mevedel-deftest mevedel-agent-control--active-count ()
   ,test
   (test)
-  :doc "counts active records across the session registry"
+  :doc "counts published active turns and unpublished reservations"
   (let ((session (mevedel-agent-control-test--session)))
     (setf (mevedel-session-agent-registry session)
           (list
@@ -94,7 +94,10 @@
                  (mevedel-agent-record--create :activity 'running))
            (cons "/root/c"
                  (mevedel-agent-record--create :activity 'idle))))
-    (should (= 2 (mevedel-agent-control--active-count session)))))
+    (setf (mevedel-session-agent-reservations session)
+          (list (cons "/root/d"
+                      (mevedel-agent-record--create :activity 'starting))))
+    (should (= 3 (mevedel-agent-control--active-count session)))))
 
 (mevedel-deftest mevedel-agent-control-active-turn-p ()
   ,test
@@ -464,11 +467,17 @@
     (setq record (mevedel-agent-control--reserve
                   session "/root" "first" "default"))
     (should (equal "/root/first" (mevedel-agent-record-path record)))
+    (should-not (mevedel-session-agent-registry session))
+    (should (eq record
+                (cdar (mevedel-session-agent-reservations session))))
     (should-error (mevedel-agent-control--reserve
                    session "/root" "first" "default"))
     (should-error (mevedel-agent-control--reserve
                    session "/root" "second" "worker"))
     (setf (mevedel-agent-record-activity record) 'idle)
+    (setf (mevedel-session-agent-reservations session) nil
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/first" record)))
     (let ((child
            (mevedel-agent-control--reserve
             session "/root/first" "second" "worker")))
@@ -538,12 +547,13 @@
     (setf (mevedel-agent-invocation-parent-session invocation) session)
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/retry.chat.org")
-    (setf (mevedel-session-agent-registry session)
+    (setf (mevedel-session-agent-reservations session)
           (list (cons "/root/retry" record)))
     (setf (mevedel-session-agent-transcripts session)
           '(("default--rollback" :path "agents/retry.chat.org")))
     (mevedel-agent-control--rollback session record)
     (should-not (mevedel-session-agent-registry session))
+    (should-not (mevedel-session-agent-reservations session))
     (should-not (mevedel-session-agent-transcripts session))
     (should-not (buffer-live-p buffer))))
 
@@ -868,23 +878,42 @@
 (mevedel-deftest mevedel-agent-control--record-invocation ()
   ,test
   (test)
-  :doc "records the stable opaque identity and persisted conversation location"
-  (let ((record (mevedel-agent-record--create :path "/root/worker"))
+  :doc "publishes a reserved identity with its conversation location"
+  (let ((session (mevedel-agent-control-test--session))
+        (record (mevedel-agent-record--create :path "/root/worker"))
         (invocation (mevedel-agent-invocation-create
                      (mevedel-agent-default)))
         (buffer (generate-new-buffer " *agent-control-record*")))
+    (setf (mevedel-session-agent-reservations session)
+          (list (cons "/root/worker" record)))
     (setf (mevedel-agent-invocation-agent-id invocation) "default--opaque")
     (setf (mevedel-agent-invocation-path invocation) "/root/worker")
     (setf (mevedel-agent-invocation-buffer invocation) buffer)
     (setf (mevedel-agent-invocation-transcript-relative-path invocation)
           "agents/default.chat.org")
-    (mevedel-agent-control--record-invocation record invocation)
+    (mevedel-agent-control--record-invocation session record invocation)
     (should (equal "default--opaque" (mevedel-agent-record-id record)))
     (should (eq invocation (mevedel-agent-record-invocation record)))
     (should (eq buffer (mevedel-agent-record-conversation-buffer record)))
     (should (equal "agents/default.chat.org"
                    (mevedel-agent-record-conversation-location record)))
+    (should-not (mevedel-session-agent-reservations session))
+    (should (eq record
+                (cdr (assoc "/root/worker"
+                            (mevedel-session-agent-registry session)))))
     (kill-buffer buffer)))
+
+(mevedel-deftest mevedel-agent-control--set-hook-context ()
+  ,test
+  (test)
+  :doc "copies pending context onto its retained identity"
+  (let* ((record (mevedel-agent-record--create :path "/root/worker"))
+         (entries (list (list :source "hook" :body "context"))))
+    (mevedel-agent-control--set-hook-context record entries)
+    (setf (plist-get (car entries) :body) "changed")
+    (should
+     (equal '((:source "hook" :body "context"))
+            (mevedel-agent-record-hook-context-pending record)))))
 
 (mevedel-deftest mevedel-agent-control-followup ()
   ,test
@@ -913,6 +942,35 @@
     (should (eq 'MAIL (plist-get steered :type)))
     (should (equal "/root" (plist-get steered :sender)))
     (should (equal "Steer safely." (plist-get steered :payload))))
+
+  :doc "rolls a failed retained dispatch back to durable idle state"
+  (let* ((session (mevedel-agent-control-test--session))
+         (buffer (generate-new-buffer " *agent-control-failed-followup*"))
+         (record
+          (mevedel-agent-record--create
+           :id "worker--retained"
+           :path "/root/worker"
+           :parent-path "/root"
+           :role "worker"
+           :configuration (mevedel-agent-control-test--configuration)
+           :activity 'idle
+           :conversation-buffer buffer
+           :conversation-location "agents/worker.chat.org"))
+         (persisted 0))
+    (setf (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-agent-runtime-dispatch)
+                   (lambda (&rest _) (error "Provider did not start")))
+                  ((symbol-function 'mevedel-agent-control--persist-session)
+                   (lambda (_session) (cl-incf persisted))))
+          (should-error
+           (mevedel-agent-control-followup
+            session "/root/worker" "Try the next turn."))
+          (should (eq 'idle (mevedel-agent-record-activity record)))
+          (should-not (mevedel-agent-record-invocation record))
+          (should (= 1 persisted)))
+      (kill-buffer buffer)))
 
   :doc "attributes peer steering while returning results to the spawn parent"
   (let* ((session (mevedel-agent-control-test--session))
@@ -1130,8 +1188,19 @@
               (should-not (assoc "/root/ephemeral"
                                  (mevedel-session-agent-registry session)))))
           (let ((mevedel-subagent-start-functions
-                 (list (lambda (_event)
-                         '(:continue nil :stop-reason "blocked by policy"))))
+                 (list
+                  (lambda (_event)
+                    (should-not
+                     (cl-find
+                      "/root/blocked"
+                      (mevedel-agent-control-list-agents session)
+                      :key (lambda (entry) (plist-get entry :path))
+                      :test #'equal))
+                    (should-error
+                     (mevedel-agent-control-resolve-path
+                      session "/root" "/root/blocked")
+                     :type 'user-error)
+                    '(:continue nil :stop-reason "blocked by policy"))))
                 runner-called)
             (cl-letf (((symbol-function 'mevedel-agent-exec-run)
                        (lambda (&rest _)
@@ -1142,7 +1211,21 @@
                 session "blocked" "Never publish this agent."))
               (should-not runner-called)
               (should-not (assoc "/root/blocked"
-                                 (mevedel-session-agent-registry session))))))
+                                 (mevedel-session-agent-registry session)))
+              (should-not (mevedel-session-agent-reservations session))))
+          (let ((mevedel-subagent-stop-functions
+                 (list (lambda (_event) (push 'stop roles)))))
+            (cl-letf (((symbol-function 'mevedel-agent-exec-run)
+                       (lambda (&rest _) nil)))
+              (should-error
+               (mevedel-agent-control-spawn
+                session "launch_error" "Fail after publication."))
+              (let ((record
+                     (cdr (assoc "/root/launch_error"
+                                 (mevedel-session-agent-registry session)))))
+                (should record)
+                (should (eq 'idle (mevedel-agent-record-activity record)))
+                (should (memq 'stop roles))))))
       (dolist (invocation invocations)
         (when-let* ((buffer (mevedel-agent-invocation-buffer invocation))
                     ((buffer-live-p buffer)))

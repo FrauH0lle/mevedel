@@ -48,6 +48,89 @@
           (mevedel-agent-invocation-transcript-status invocation) 'running)
     invocation))
 
+(mevedel-deftest mevedel-agent-runtime--run-hook-sync ()
+  ,test
+  (test)
+  :doc "waits for and returns an agent hook decision"
+  (let* ((session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (mevedel-user-prompt-submit-functions
+          (list (lambda (_event) '(:updated-input "rewritten")))))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (should
+     (equal '(:updated-input "rewritten")
+            (mevedel-agent-runtime--run-hook-sync
+             'UserPromptSubmit
+             (list :hook-event 'UserPromptSubmit)
+             invocation)))))
+
+(mevedel-deftest mevedel-agent-runtime--run-start-hook ()
+  ,test
+  (test)
+  :doc "records SubagentStart metadata and its parent audit"
+  (let* ((session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         event
+         (mevedel-subagent-start-functions
+          (list (lambda (payload)
+                  (setq event payload)
+                  '(:additional-context ("startup context"))))))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (mevedel-agent-runtime--run-start-hook
+     "explorer" "Inspect hooks" "Prompt body" invocation)
+    (should (equal (plist-get event :agent-path) "/root/explore"))
+    (should (equal (plist-get event :role) "explorer"))
+    (should (equal (plist-get event :prompt) "Prompt body"))
+    (let ((audit (car (mevedel-agent-invocation-hook-audits invocation))))
+      (should (eq (plist-get audit :type) 'subagent-context))
+      (should (equal (plist-get audit :event) "SubagentStart"))
+      (should-not (plist-member audit :context)))))
+
+(mevedel-deftest mevedel-agent-runtime--run-prompt-hook ()
+  ,test
+  (test)
+  :doc "runs UserPromptSubmit with retained-agent metadata"
+  (let* ((session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         event
+         (mevedel-user-prompt-submit-functions
+          (list (lambda (payload)
+                  (setq event payload)
+                  '(:updated-input "rewritten")))))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (should
+     (equal '(:updated-input "rewritten")
+            (mevedel-agent-runtime--run-prompt-hook
+             "Prompt body" invocation)))
+    (should (equal (plist-get event :agent-path) "/root/explore"))
+    (should (equal (plist-get event :prompt) "Prompt body"))))
+
+(mevedel-deftest mevedel-agent-runtime--prepare-turn ()
+  ,test
+  (test)
+  :doc "composes lifecycle context once and consumes retained pending context"
+  (let* ((session (mevedel-session--create :name "main"))
+         (invocation (mevedel-agent-runtime-test--invocation))
+         (pending '((:event Old :source "old" :body "pending context")))
+         transition
+         lifecycle
+         (mevedel-user-prompt-submit-functions
+          (list (lambda (_event)
+                  (push 'submit lifecycle)
+                  '(:updated-input "rewritten prompt"
+                    :additional-context ("prompt context"))))))
+    (setf (mevedel-agent-invocation-parent-session invocation) session)
+    (let ((turn
+           (mevedel-agent-runtime--prepare-turn
+            "explorer" "Explore" "original prompt" invocation t
+            pending (lambda (entries) (setq transition entries)))))
+      (should (equal '(submit) (nreverse lifecycle)))
+      (should (string-match-p "rewritten prompt" (plist-get turn :prompt)))
+      (should (string-match-p "pending context" (plist-get turn :prompt)))
+      (should (string-match-p "prompt context" (plist-get turn :prompt)))
+      (should-not transition)
+      (should (plist-get turn :audits)))))
+
 (mevedel-deftest mevedel-agent-runtime-dispatch
   ()
   ,test

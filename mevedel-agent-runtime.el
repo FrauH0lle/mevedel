@@ -36,17 +36,12 @@
                   "mevedel-agent-conversation" (invocation))
 (declare-function mevedel-agent-conversation-save
                   "mevedel-agent-conversation" (invocation &optional deferred))
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-agent-exec'
 (declare-function mevedel-agent-exec-freeze-configuration
                   "mevedel-agent-exec"
                   (agent-type invocation &optional model-policy))
-(declare-function mevedel-agent-exec-run-prompt-hook
-                  "mevedel-agent-exec"
-                  (prompt invocation))
-(declare-function mevedel-agent-exec-run-start-hook
-                  "mevedel-agent-exec"
-                  (agent-type description prompt invocation))
 (declare-function mevedel-agent-exec-run
                   "mevedel-agent-exec"
                   (main-cb agent-type description invocation agent-buffer))
@@ -74,6 +69,8 @@
 (declare-function mevedel-agent-invocation-description
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-frozen-configuration
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-hook-audits
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
@@ -107,22 +104,6 @@
 (declare-function mevedel-agent-invocation-transcript-status
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-name "mevedel-agents" (cl-x) t)
-
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-context-entries
-                  "mevedel-hooks" (decision event))
-(declare-function mevedel-hooks-decision-reason
-                  "mevedel-hooks" (decision))
-(declare-function mevedel-hooks-format-context
-                  "mevedel-hooks" (entries))
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel--format-hook-audit-record
-                  "mevedel-transcript-audit" (record))
-(declare-function mevedel--hook-prompt-rewrite-audit-record
-                  "mevedel-transcript-audit"
-                  (event original submitted &optional reason))
-(defvar mevedel--agent-invocation)
 (defvar mevedel-agent-task-path-property)
 
 ;; `mevedel-execution'
@@ -130,6 +111,23 @@
                   "mevedel-execution" (session owner))
 (declare-function mevedel-execution-stop-owner
                   "mevedel-execution" (session owner))
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks-context-audit-records
+                  "mevedel-hooks" (decision event type &optional omit-context))
+(declare-function mevedel-hooks-context-entries
+                  "mevedel-hooks" (decision event))
+(declare-function mevedel-hooks-decision-reason
+                  "mevedel-hooks" (decision))
+(declare-function mevedel-hooks-event-plist
+                  "mevedel-hooks"
+                  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-format-context
+                  "mevedel-hooks" (entries))
+(declare-function mevedel-hooks-run-event
+                  "mevedel-hooks"
+                  (event event-plist callback
+                         &optional session workspace request invocation))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--record-running-transcript
@@ -150,12 +148,20 @@
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task--refresh-display "mevedel-tool-task" ())
 (declare-function mevedel-tool-task-finalize-owner
                   "mevedel-tool-task" (session owner status))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel--format-hook-audit-record
+                  "mevedel-transcript-audit" (record))
+(declare-function mevedel--hook-prompt-rewrite-audit-record
+                  "mevedel-transcript-audit"
+                  (event original submitted &optional reason))
 
 ;; `mevedel-view-agent'
 (declare-function mevedel-view-agent-live-transcript-finalize
@@ -183,16 +189,6 @@
       (setf (mevedel-session-agent-transcripts session)
             (assoc-delete-all
              agent-id (mevedel-session-agent-transcripts session))))))
-
-(defun mevedel-agent-runtime--mark-start-failed (invocation reason)
-  "Mark INVOCATION as failed to start for REASON."
-  (setf (mevedel-agent-invocation-transcript-status invocation) 'error
-        (mevedel-agent-invocation-terminal-reason invocation) reason)
-  (when-let* ((session (mevedel-agent-invocation-parent-session invocation))
-              (agent-id (mevedel-agent-invocation-agent-id invocation)))
-    (require 'mevedel-session-persistence)
-    (mevedel-session-persistence--update-transcript-entry
-     session agent-id (list :status 'error :reason reason))))
 
 (defun mevedel-agent-runtime--setup-transcript (invocation agent-buffer)
   "Create and register INVOCATION's transcript for AGENT-BUFFER."
@@ -559,6 +555,118 @@ Settle a held provider response once its last owned execution has finished."
 
 
 ;;
+;;; Turn hooks
+
+(defun mevedel-agent-runtime--run-hook-sync (event payload invocation)
+  "Run EVENT with PAYLOAD for INVOCATION and return its decision."
+  (require 'mevedel-hooks)
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (workspace (and session (mevedel-session-workspace session)))
+         done
+         decision)
+    (mevedel-hooks-run-event
+     event payload
+     (lambda (result)
+       (setq decision result
+             done t))
+     session workspace nil invocation)
+    (while (not done)
+      (accept-process-output nil 0.05))
+    decision))
+
+(defun mevedel-agent-runtime--run-start-hook
+    (agent-type description prompt invocation)
+  "Run `SubagentStart' for a new retained agent and return its decision."
+  (require 'mevedel-hooks)
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (workspace (and session (mevedel-session-workspace session)))
+         (decision
+          (mevedel-agent-runtime--run-hook-sync
+           'SubagentStart
+           (mevedel-hooks-event-plist
+            'SubagentStart session workspace
+            :agent-path (mevedel-agent-invocation-path invocation)
+            :role agent-type
+            :description description
+            :prompt prompt
+            :transcript-relative-path
+            (mevedel-agent-invocation-transcript-relative-path invocation))
+           invocation)))
+    (when-let* ((msg (plist-get decision :system-message)))
+      (message "mevedel: %s" msg))
+    (setf (mevedel-agent-invocation-hook-audits invocation)
+          (mevedel-hooks-context-audit-records
+           decision 'SubagentStart 'subagent-context t))
+    decision))
+
+(defun mevedel-agent-runtime--run-prompt-hook (prompt invocation)
+  "Run `UserPromptSubmit' for agent PROMPT and return its decision."
+  (require 'mevedel-hooks)
+  (let* ((session (mevedel-agent-invocation-parent-session invocation))
+         (workspace (and session (mevedel-session-workspace session))))
+    (mevedel-agent-runtime--run-hook-sync
+     'UserPromptSubmit
+     (mevedel-hooks-event-plist
+      'UserPromptSubmit session workspace
+      :agent-path (mevedel-agent-invocation-path invocation)
+      :prompt prompt
+      :display-text prompt)
+     invocation)))
+
+(defun mevedel-agent-runtime--prepare-turn
+    (agent-type description prompt invocation retained-p
+                pending-hook-context on-hook-context)
+  "Prepare one agent task and return its effective prompt and audits.
+RETAINED-P suppresses the identity start hook.  PENDING-HOOK-CONTEXT belongs
+to this retained conversation; ON-HOOK-CONTEXT records its transition."
+  (let* ((start-decision
+          (and (not retained-p)
+               (mevedel-agent-runtime--run-start-hook
+                agent-type description prompt invocation))))
+    (when (and (plist-member start-decision :continue)
+               (not (plist-get start-decision :continue)))
+      (error "%s" (or (plist-get start-decision :stop-reason)
+                      "SubagentStart hook stopped sub-agent")))
+    (let* ((prompt-decision
+            (mevedel-agent-runtime--run-prompt-hook prompt invocation))
+           (prompt-context
+            (mevedel-hooks-context-entries
+             prompt-decision 'UserPromptSubmit)))
+      (when (and (plist-member prompt-decision :continue)
+                 (not (plist-get prompt-decision :continue)))
+        (when (and retained-p on-hook-context)
+          (funcall on-hook-context
+                   (append pending-hook-context prompt-context)))
+        (error "%s" (or (plist-get prompt-decision :stop-reason)
+                        "UserPromptSubmit hook stopped agent task")))
+      (when-let* ((msg (plist-get prompt-decision :system-message)))
+        (message "mevedel: %s" msg))
+      (let* ((submitted
+              (if (stringp (plist-get prompt-decision :updated-input))
+                  (plist-get prompt-decision :updated-input)
+                prompt))
+             (context
+              (mevedel-hooks-format-context
+               (append
+                (mevedel-hooks-context-entries
+                 start-decision 'SubagentStart)
+                pending-hook-context
+                prompt-context)))
+             (effective-prompt
+              (if context (concat submitted "\n\n" context) submitted))
+             (rewrite-audit
+              (progn
+                (require 'mevedel-transcript-audit)
+                (mevedel--hook-prompt-rewrite-audit-record
+                 'UserPromptSubmit prompt submitted
+                 (mevedel-hooks-decision-reason prompt-decision)))))
+        (when (and pending-hook-context on-hook-context)
+          (funcall on-hook-context nil))
+        (list :prompt effective-prompt
+              :audits (and rewrite-audit (list rewrite-audit)))))))
+
+
+;;
 ;;; Provider dispatch
 
 (defun mevedel-agent-runtime--insert-prompt
@@ -673,77 +781,39 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
         (mevedel-agent-runtime--setup-transcript invocation buffer))
       (let (published-p)
         (condition-case err
-            (let* ((start-decision
-                    (and (not retained-p)
-                         (mevedel-agent-exec-run-start-hook
-                          agent-type description prompt invocation)))
-                   (_
-                    (when (and (plist-member start-decision :continue)
-                               (not (plist-get start-decision :continue)))
-                      (error "%s"
-                             (or (plist-get start-decision :stop-reason)
-                                 "SubagentStart hook stopped sub-agent"))))
-                   (prompt-decision
-                    (mevedel-agent-exec-run-prompt-hook prompt invocation))
-                   (prompt-context
-                    (mevedel-hooks-context-entries
-                     prompt-decision 'UserPromptSubmit)))
-              (when (and (plist-member prompt-decision :continue)
-                         (not (plist-get prompt-decision :continue)))
-                (when (and retained-p on-hook-context)
-                  (funcall on-hook-context
-                           (append pending-hook-context prompt-context)))
-                (error "%s"
-                       (or (plist-get prompt-decision :stop-reason)
-                           "UserPromptSubmit hook stopped agent task")))
-              (when-let* ((msg (plist-get prompt-decision :system-message)))
-                (message "mevedel: %s" msg))
-              (let* ((submitted
-                      (if (stringp (plist-get prompt-decision :updated-input))
-                          (plist-get prompt-decision :updated-input)
-                        prompt))
-                     (context
-                      (mevedel-hooks-format-context
-                       (append
-                        (mevedel-hooks-context-entries
-                         start-decision 'SubagentStart)
-                        pending-hook-context
-                        prompt-context)))
-                     (effective-prompt
-                      (if context (concat submitted "\n\n" context) submitted))
-                     (rewrite-audit
-                      (progn
-                        (require 'mevedel-transcript-audit)
-                        (mevedel--hook-prompt-rewrite-audit-record
-                         'UserPromptSubmit prompt submitted
-                         (mevedel-hooks-decision-reason prompt-decision)))))
-                (mevedel-agent-runtime--insert-prompt
-                 invocation buffer description effective-prompt
-                 context-snapshot retained-p
-                 (and rewrite-audit (list rewrite-audit)))
-                (when (and pending-hook-context on-hook-context)
-                  (funcall on-hook-context nil))
-                (when (and on-settle
-                           (not
-                            (mevedel-agent-invocation-transcript-relative-path
-                             invocation)))
-                  (error "Agent conversation could not be persisted"))
-                (when on-invocation
-                  (funcall on-invocation invocation))
-                (setq published-p t)
-                (let ((fsm
-                       (mevedel-agent-exec-run
-                        (apply-partially
-                        #'mevedel-agent-runtime--handle-provider-result
-                         invocation)
-                        agent-type description invocation buffer)))
-                  (unless fsm
-                    (error "Agent provider request did not start"))
-                  invocation)))
+            (let ((turn
+                   (mevedel-agent-runtime--prepare-turn
+                    agent-type description prompt invocation retained-p
+                    pending-hook-context on-hook-context)))
+              (mevedel-agent-runtime--insert-prompt
+               invocation buffer description (plist-get turn :prompt)
+               context-snapshot retained-p (plist-get turn :audits))
+              (when (and on-settle
+                         (not
+                          (mevedel-agent-invocation-transcript-relative-path
+                           invocation)))
+                (error "Agent conversation could not be persisted"))
+              (setq published-p t)
+              (when on-invocation
+                (funcall on-invocation invocation))
+              (let ((fsm
+                     (mevedel-agent-exec-run
+                      (apply-partially
+                       #'mevedel-agent-runtime--handle-provider-result
+                       invocation)
+                      agent-type description invocation buffer)))
+                (unless fsm
+                  (error "Agent provider request did not start"))
+                invocation))
           (error
            (if published-p
-               (mevedel-agent-runtime--mark-start-failed
-                invocation (error-message-string err))
+               (progn
+                 (setf (mevedel-agent-invocation-terminal-reason invocation)
+                       (error-message-string err))
+                 (mevedel-agent-runtime--settle
+                  invocation nil
+                  (list :mevedel-agent-terminal-status 'error
+                        :error-details (error-message-string err))))
              (unless retained-p
                (mevedel-agent-runtime-dispatch--abandon-persistence invocation)
                (when (buffer-live-p buffer)

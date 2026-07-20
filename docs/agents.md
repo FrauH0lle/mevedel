@@ -139,7 +139,7 @@ reviewer agents remain skill-free.
 
 ```mermaid
 flowchart TD
-    A[Agent reserves path and capacity] --> B[Freeze configuration]
+    A[Agent privately reserves path and capacity] --> B[Freeze configuration]
     B --> C[Run SubagentStart once]
     C --> D[Run UserPromptSubmit]
     D --> E[Persist and publish retained identity]
