@@ -86,6 +86,37 @@
       (should (equal (plist-get audit :event) "SubagentStart"))
       (should-not (plist-member audit :context)))))
 
+(mevedel-deftest mevedel-agent-runtime--run-stop-hook ()
+  ,test
+  (test)
+  :doc "fires SubagentStop with invocation metadata"
+  (let* ((session (mevedel-session--create :name "main"))
+         (agent (mevedel-agent--create :name "explorer"))
+         (parent-buffer (generate-new-buffer " *mev-agent-parent-hooks*"))
+         (invocation
+          (mevedel-agent-invocation--create
+           :path "/root/test_agent"
+           :agent agent
+           :parent-session session
+           :parent-data-buffer parent-buffer))
+         stop-event)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent-buffer
+            (setq-local mevedel-subagent-stop-functions
+                        (list (lambda (event)
+                                (setq stop-event event)
+                                nil))))
+          (setf (mevedel-agent-invocation-terminal-reason invocation) "done")
+          (with-temp-buffer
+            (mevedel-agent-runtime--run-stop-hook invocation 'completed))
+          (should (equal (plist-get stop-event :role) "explorer"))
+          (should (equal (plist-get stop-event :agent-path)
+                         "/root/test_agent"))
+          (should (eq (plist-get stop-event :status) 'completed))
+          (should (equal (plist-get stop-event :terminal-reason) "done")))
+      (kill-buffer parent-buffer))))
+
 (mevedel-deftest mevedel-agent-runtime--run-prompt-hook ()
   ,test
   (test)
@@ -108,7 +139,7 @@
 (mevedel-deftest mevedel-agent-runtime--prepare-turn ()
   ,test
   (test)
-  :doc "composes lifecycle context once and consumes retained pending context"
+  :doc "composes retained pending context without consuming it during preparation"
   (let* ((session (mevedel-session--create :name "main"))
          (invocation (mevedel-agent-runtime-test--invocation))
          (pending '((:event Old :source "old" :body "pending context")))
@@ -129,7 +160,6 @@
       (should (string-match-p "pending context" (plist-get turn :prompt)))
       (should (string-match-p "prompt context" (plist-get turn :prompt)))
       (should-not transition)
-      (should (plist-get turn :consume-pending))
       (should (plist-get turn :audits)))))
 
 (mevedel-deftest mevedel-agent-runtime-dispatch
@@ -522,7 +552,7 @@
                     ((symbol-function
                       'mevedel-session-persistence--write-sidecar-now)
                      (lambda (&rest _) (push 'sidecar calls)))
-                    ((symbol-function 'mevedel-agent-exec-run-stop-hook)
+                    ((symbol-function 'mevedel-agent-runtime--run-stop-hook)
                      (lambda (&rest _) (push 'hook calls)))
                     ((symbol-function
                       'mevedel-view-agent-live-transcript-finalize)

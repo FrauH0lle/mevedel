@@ -144,24 +144,12 @@
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
 
-;; `mevedel-hooks'
-(declare-function mevedel-hooks-event-plist "mevedel-hooks"
-                  (event &optional session workspace &rest extra))
-(declare-function mevedel-hooks-run-event "mevedel-hooks"
-                  (event event-plist callback
-                         &optional session workspace request invocation))
-(defvar mevedel-hooks-command-timeout)
-(defvar mevedel-hooks-command-timeout-max)
-
 ;; `mevedel-models'
 (declare-function mevedel-model-resolve-workload
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 (defvar mevedel-model-tiers)
 (defvar mevedel-model-workloads)
-
-;; `mevedel-structs'
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
@@ -455,38 +443,6 @@ MODEL-POLICY may supply a tuple already validated before spawn admission."
 
 ;;
 ;;; Task runner
-
-(defun mevedel-agent-exec-run-stop-hook (invocation status)
-  "Fire `SubagentStop' hooks for INVOCATION terminal STATUS."
-  (when (mevedel-agent-invocation-p invocation)
-    (require 'mevedel-hooks)
-    (let* ((session (mevedel-agent-invocation-parent-session invocation))
-	   (workspace (and session (mevedel-session-workspace session)))
-	   (agent (mevedel-agent-invocation-agent invocation))
-	   (agent-type (and agent (mevedel-agent-name agent)))
-	   (parent-buffer
-	    (mevedel-agent-invocation-parent-data-buffer invocation))
-	   (runner
-	    (lambda ()
-	      (mevedel-hooks-run-event
-	       'SubagentStop
-	       (mevedel-hooks-event-plist
-	        'SubagentStop session workspace
-	        :agent-path (mevedel-agent-invocation-path invocation)
-	        :role agent-type
-	        :description (mevedel-agent-invocation-description invocation)
-	        :status status
-	        :terminal-reason
-	        (mevedel-agent-invocation-terminal-reason invocation)
-	        :transcript-relative-path
-	        (mevedel-agent-invocation-transcript-relative-path
-	         invocation))
-	       #'ignore
-	       session workspace nil invocation))))
-      (if (and parent-buffer (buffer-live-p parent-buffer))
-	  (with-current-buffer parent-buffer
-	    (funcall runner))
-	(funcall runner)))))
 
 (defun mevedel-agent-exec-run (main-cb agent-type description
                                         invocation agent-buffer)

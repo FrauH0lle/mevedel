@@ -20,7 +20,6 @@
 (require 'mevedel-permissions)
 (require 'mevedel-sandbox)
 (require 'mevedel-session-persistence)
-(require 'mevedel-hooks)
 (require 'mevedel-skills-prompt)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
@@ -476,37 +475,6 @@ fire-count and payload."
           (with-current-buffer buf
             (should-not (buffer-modified-p))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
-
-
-(mevedel-deftest mevedel-agent-exec-run-stop-hook ()
-  ,test
-  (test)
-  :doc "fires SubagentStop with invocation metadata"
-  (let* ((session (mevedel-session--create :name "main"))
-         (agent (mevedel-agent--create :name "explorer"))
-         (parent-buffer (generate-new-buffer " *mev-agent-parent-hooks*"))
-         (inv (mevedel-agent-invocation--create
-               :path "/root/test_agent"
-               :agent agent
-               :parent-session session
-               :parent-data-buffer parent-buffer))
-         stop-event)
-    (unwind-protect
-        (progn
-          (with-current-buffer parent-buffer
-            (setq-local mevedel-subagent-stop-functions
-                        (list (lambda (event)
-                                (setq stop-event event)
-                                nil))))
-          (setf (mevedel-agent-invocation-terminal-reason inv) "done")
-          (with-temp-buffer
-            (mevedel-agent-exec-run-stop-hook inv 'completed))
-          (should (equal (plist-get stop-event :role) "explorer"))
-          (should (equal (plist-get stop-event :agent-path)
-                         "/root/test_agent"))
-          (should (eq (plist-get stop-event :status) 'completed))
-          (should (equal (plist-get stop-event :terminal-reason) "done")))
-      (kill-buffer parent-buffer))))
 
 
 (mevedel-deftest mevedel-agent-exec-run ()
