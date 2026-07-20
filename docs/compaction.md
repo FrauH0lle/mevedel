@@ -179,6 +179,12 @@ once.  Activity temporarily reports `Compacting...` and then returns to the
 ordinary continuation status.  Agent compaction emits neither the main-session
 file reminder nor the long-thread accuracy warning.
 
+An agent need not have emitted prose after its task to be eligible.  Tool-only
+turns anchor the compactable body at the first reasoning or tool span.  During
+a continuation `WAIT`, the tool-use ids still held by gptel identify the current
+batch; that batch remains verbatim as pending text while older completed tool
+cycles can be summarized.
+
 A forked transcript can contain ancestor `* Agent Task:` headings before the
 child's own task. The child's initial heading carries its canonical path in an
 ignored Org property drawer; follow-up headings do not. This identifies the

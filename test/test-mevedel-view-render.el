@@ -3298,6 +3298,25 @@ state of its inner sections"
 	        (should (equal "Edit" (plist-get call :name)))
 	        (should (equal "visible body" (plist-get call :result)))
 	        (should (equal render-data (plist-get call :render-data)))))))
+  :doc "keeps numbered render markers in Read output as literal text"
+  (mevedel-view-test--with-buffers
+    (let ((literal
+           (concat "158 " mevedel-pipeline--render-data-open
+                   "\n159 (:kind user-display :text \"literal\")"
+                   "\n160 " mevedel-pipeline--render-data-close)))
+      (mevedel-view-test--insert-data
+       data-buf
+       (concat "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\n"
+               literal "\n")
+       '(tool . "call_1"))
+      (with-current-buffer data-buf
+        (let ((call (mevedel-view--tool-call-parse
+                     data-buf (point-min) (point-max))))
+          (should (string-match-p (regexp-quote literal)
+                                  (plist-get call :result)))
+          (should-not (plist-get call :render-data))
+          (should (mevedel-view--compute-segment-rendering
+                   data-buf (point-min) (point-max)))))))
   :doc "preserves literal trailing end-tool marker in unwrapped result"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data

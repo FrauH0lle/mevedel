@@ -1173,7 +1173,22 @@
       (should-not (string-match-p "Inherited prompt"
                                   (plist-get target :anchor-text)))
       (should (string-match-p "Keep this task"
-                              (plist-get target :anchor-text))))))
+                              (plist-get target :anchor-text)))))
+
+  :doc "accepts a tool-only agent turn after the marked task"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this task.")
+    (let ((tool-start (point)))
+      (insert "(:name \"Read\" :args (:file_path \"/tmp/f\"))\n\nresult\n")
+      (put-text-property tool-start (point) 'gptel '(tool . "call-1"))
+      (basic-save-buffer)
+      (let ((target (mevedel--compact-agent-target invocation)))
+        (should target)
+        (should (= tool-start (plist-get target :body-start)))
+        (should (string-match-p "Keep this task"
+                                (plist-get target :anchor-text)))))))
 
 (mevedel-deftest mevedel--compact-agent-archive-path ()
   ,test
@@ -1211,6 +1226,27 @@
      (equal '("call-1" "call-2" "call-archived")
             (mevedel--compact-archived-tool-use-ids
              (point-min) (point-max))))))
+
+(mevedel-deftest mevedel--compact-current-tool-batch-start ()
+  ,test
+  (test)
+  :doc "includes reasoning and prose before the active continuation tools"
+  (with-temp-buffer
+    (let ((body-start (point)))
+      (insert (propertize "old tool\n" 'gptel '(tool . "call-old")))
+      (let ((batch-start (point)))
+        (insert "#+begin_reasoning\nthinking\n#+end_reasoning\n")
+        (insert (propertize "assistant preface\n" 'gptel 'response))
+        (insert (propertize "current tool one\n"
+                            'gptel '(tool . "call-current-1")))
+        (insert (propertize "current tool two\n"
+                            'gptel '(tool . "call-current-2")))
+        (should
+         (= batch-start
+            (mevedel--compact-current-tool-batch-start
+             (list :tool-use
+                   '((:id "call-current-1") (:id "call-current-2")))
+             body-start)))))))
 
 (mevedel-deftest mevedel--compact-agent-apply ()
   ,test
@@ -1803,6 +1839,47 @@
            (cl-some (lambda (entry) (string-match-p "long threads" entry))
                     messages))
           (should-not mevedel--compact-current-request-reminder)))))
+
+  :doc "preserves reasoning and prose before the current persisted tool batch"
+  (test-mevedel-compact--with-persisted-agent
+      (agent-buffer invocation session canonical-path parent-buffer)
+    (test-mevedel-compact--insert-agent-task
+     invocation "inspect" "Keep this exact task.")
+    (let ((old-start (point)))
+      (insert "old tool result\n")
+      (put-text-property old-start (point) 'gptel '(tool . "call-old")))
+    (let ((batch-start (point)))
+      (insert "#+begin_reasoning\nthinking\n#+end_reasoning\n")
+      (insert (propertize "assistant preface\n" 'gptel 'response))
+      (let ((current-start (point)))
+        (insert "current tool result\n")
+        (put-text-property current-start (point)
+                           'gptel '(tool . "call-current")))
+      (basic-save-buffer)
+      (let* ((fsm
+              (gptel-make-fsm
+               :info
+               (list :buffer agent-buffer
+                     :history '(TRET)
+                     :data '(:messages [])
+                     :tool-use '((:id "call-current"))
+                     :mevedel-agent-invocation invocation
+                     :mevedel-compaction-target-policy '(:model test))))
+             pending-start waits)
+        (let ((mevedel-compact-auto t)
+              (mevedel--compact-auto-disabled nil)
+              (mevedel--compaction-in-flight nil))
+          (cl-letf (((symbol-function 'mevedel--compact-admission)
+                     (lambda (&rest _) '(:target-pressure t)))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest args)
+                       (setq pending-start
+                             (plist-get args :pending-start))))
+                    ((symbol-function 'gptel--handle-wait)
+                     (lambda (_fsm) (cl-incf waits))))
+            (mevedel--compact-handle-agent-wait fsm)))
+        (should (= batch-start pending-start))
+        (should-not waits))))
 
   :doc "updates the anchored summary and archives each persisted continuation"
   (test-mevedel-compact--with-persisted-agent

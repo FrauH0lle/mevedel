@@ -31,6 +31,7 @@
           "helpers"))
 
 (defvar mevedel-bash-dangerous-commands)
+(defvar test-mevedel-pipeline--read-eval-ran nil)
 (defvar warning-minimum-level)
 
 (defun test-mevedel-pipeline--format-media-data-block
@@ -3786,6 +3787,35 @@
 			(extract (mevedel-pipeline-extract-render-data s)))
 		   (should (equal s (car extract)))
 		   (should (null (cdr extract))))
+		 :doc "non-plist payload treated as literal visible text"
+		 (let* ((s (concat "158 " mevedel-pipeline--render-data-open
+				   "\n159 (:kind user-display :text \"literal\")"
+				   "\n160 " mevedel-pipeline--render-data-close))
+			(extract (mevedel-pipeline-extract-render-data s)))
+		   (should (equal s (car extract)))
+		   (should (null (cdr extract))))
+		 :doc "reader evaluation stays disabled for literal marker payloads"
+		 (let* ((test-mevedel-pipeline--read-eval-ran nil)
+			(s (concat mevedel-pipeline--render-data-open
+				   "\n#.(progn "
+				   "(setq test-mevedel-pipeline--read-eval-ran t) "
+				   "'(:kind diff))\n"
+				   mevedel-pipeline--render-data-close))
+			(extract (mevedel-pipeline-extract-render-data s)))
+		   (should-not test-mevedel-pipeline--read-eval-ran)
+		   (should (equal s (car extract)))
+		   (should (null (cdr extract))))
+		 :doc "extracts appended metadata after a malformed literal block"
+		 (let* ((literal
+			 (concat "158 " mevedel-pipeline--render-data-open
+				 "\n159 (:kind user-display :text \"literal\")"
+				 "\n160 " mevedel-pipeline--render-data-close))
+			(data '(:kind read :path "/tmp/transcript"))
+			(s (concat literal
+				   (mevedel-pipeline--format-render-data-block data)))
+			(extract (mevedel-pipeline-extract-render-data s)))
+		   (should (equal literal (car extract)))
+		   (should (equal data (cdr extract))))
 		 :doc "non-string input returns (INPUT . nil)"
 		 (let ((extract (mevedel-pipeline-extract-render-data nil)))
 		   (should (null (car extract)))
@@ -3896,6 +3926,24 @@
 ;;
 ;;; Render-data strip hooks
 
+(mevedel-deftest mevedel-pipeline--render-data-blocks ()
+		 ,test
+		 (test)
+		 :doc "returns valid blocks while skipping earlier malformed literals"
+		 (let* ((literal
+			 (concat "158 " mevedel-pipeline--render-data-open
+				 "\n159 (:kind user-display :text \"literal\")"
+				 "\n160 " mevedel-pipeline--render-data-close))
+			(data '(:kind read :path "/tmp/transcript"))
+			(valid (mevedel-pipeline--format-render-data-block data))
+			(raw (concat literal valid))
+			(blocks (mevedel-pipeline--render-data-blocks raw)))
+		   (should (= 1 (length blocks)))
+		   (should (equal data (caddr (car blocks))))
+		   (should (equal valid
+				  (substring raw (caar blocks)
+					     (cadar blocks))))))
+
 (mevedel-deftest mevedel-pipeline--strip-render-data-blocks ()
 		 ,test
 		 (test)
@@ -3924,7 +3972,19 @@
 		 :doc "pass-through when no block is present"
 		 (should (equal "Changes applied to bar"
 				(mevedel-pipeline--strip-render-data-blocks
-				 "Changes applied to bar"))))
+				 "Changes applied to bar")))
+
+		 :doc "preserves malformed literal blocks while stripping valid metadata"
+		 (let* ((literal
+			 (concat "158 " mevedel-pipeline--render-data-open
+				 "\n159 (:kind user-display :text \"literal\")"
+				 "\n160 " mevedel-pipeline--render-data-close))
+			(valid (mevedel-pipeline--format-render-data-block
+				'(:kind read :path "/tmp/transcript")))
+			(cleaned
+			 (mevedel-pipeline--strip-render-data-blocks
+			  (concat literal valid))))
+		   (should (equal literal cleaned))))
 
 (mevedel-deftest mevedel--parse-tool-results-scrub-advice ()
 		 ,test

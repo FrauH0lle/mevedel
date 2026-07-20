@@ -312,6 +312,9 @@ explicit status, the pipeline writes `:result` to the data buffer and appends a
 hidden block wrapped in `<!-- mevedel-render-data -->` delimiters, propertized
 `'gptel 'ignore` and `'invisible t`. Parser:
 `mevedel-pipeline-extract-render-data`.
+The payload is exactly one proper keyword plist.  Marker-looking text with a
+non-plist payload, trailing Lisp data, or unreadable data is ordinary visible
+tool output and is preserved verbatim.
 
 Tool renderer input is derived from the data buffer on each rerender; it
 must not depend on durable state stored only in view overlays or text
