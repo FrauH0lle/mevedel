@@ -27,15 +27,14 @@
 (defvar gptel-model)
 (defvar gptel-prompt-prefix-alist)
 
+;; `mevedel-chat'
+(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
+
 ;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-context-data-buffer
                   "mevedel-cockpit" (&optional context))
 (declare-function mevedel-cockpit-context-session
                   "mevedel-cockpit" (&optional context))
-;; `mevedel-chat'
-(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
-
-;; `mevedel-cockpit'
 (declare-function mevedel-cockpit-current-context "mevedel-cockpit" ())
 (declare-function mevedel-cockpit-open-surface
                   "mevedel-cockpit" (surface &optional context))
