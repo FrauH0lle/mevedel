@@ -129,6 +129,7 @@
       (should (string-match-p "pending context" (plist-get turn :prompt)))
       (should (string-match-p "prompt context" (plist-get turn :prompt)))
       (should-not transition)
+      (should (plist-get turn :consume-pending))
       (should (plist-get turn :audits)))))
 
 (mevedel-deftest mevedel-agent-runtime-dispatch
@@ -402,6 +403,47 @@
               (should (string-match-p "current context" provider-prompt))
               (with-current-buffer agent-buffer
                 (should (string-match-p "Accepted task" (buffer-string)))))))
+      (kill-buffer agent-buffer)
+      (kill-buffer parent)))
+
+  :doc "keeps pending context when an accepted retained turn cannot be saved"
+  (let* ((parent (generate-new-buffer " *agent-runtime-save-parent*"))
+         (agent-buffer (generate-new-buffer " *agent-runtime-save-child*"))
+         (session (mevedel-session--create :name "main"))
+         (agent (mevedel-agent-runtime-test--agent))
+         (configuration
+          (mevedel-agent-runtime-test--configuration agent))
+         (pending '((:event UserPromptSubmit
+                     :source "hook"
+                     :body "keep this context")))
+         (transitions 0)
+         provider-called)
+    (unwind-protect
+        (with-current-buffer parent
+          (setq-local mevedel--session session)
+          (cl-letf (((symbol-function 'mevedel-agent-conversation-save)
+                     (lambda (&rest _) nil))
+                    ((symbol-function 'mevedel-agent-exec-run)
+                     (lambda (&rest _)
+                       (setq provider-called t)
+                       'provider-fsm)))
+            (should-error
+             (mevedel-agent-runtime-dispatch
+              nil "Continue" "Accepted but unsaved task"
+              :path "/root/explore"
+              :frozen-configuration configuration
+              :retained-id "explorer--test"
+              :retained-buffer agent-buffer
+              :retained-transcript "agents/explorer.chat.org"
+              :pending-hook-context pending
+              :on-hook-context
+              (lambda (_entries) (cl-incf transitions))))
+            (should-not provider-called)
+            (should (= 0 transitions))
+            (with-current-buffer agent-buffer
+              (should-not
+               (string-match-p "Accepted but unsaved task"
+                               (buffer-string))))))
       (kill-buffer agent-buffer)
       (kill-buffer parent))))
 

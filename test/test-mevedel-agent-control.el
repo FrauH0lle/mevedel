@@ -1023,6 +1023,7 @@
                  :name "worker" :system-prompt "Frozen." :frozen-p t))
          (configuration
           (mevedel-agent-configuration--create :agent agent))
+         (turn (mevedel-agent-invocation-create agent))
          (record
           (mevedel-agent-record--create
            :id "worker--retained"
@@ -1036,6 +1037,14 @@
          runtime-required
          captured-agent
          captured-configuration)
+    (setf (mevedel-agent-invocation-agent-id turn) "worker--retained"
+          (mevedel-agent-invocation-path turn) "/root/worker"
+          (mevedel-agent-invocation-buffer turn) buffer
+          (mevedel-agent-invocation-frozen-configuration turn) configuration
+          (mevedel-agent-invocation-transcript-relative-path turn)
+          "agents/worker.chat.org"
+          (mevedel-session-agent-registry session)
+          (list (cons "/root/worker" record)))
     (unwind-protect
         (cl-letf (((symbol-function 'require)
                    (lambda (feature &rest _)
@@ -1053,13 +1062,15 @@
                      (setq captured-agent seen-agent
                            captured-configuration
                            (plist-get keys :frozen-configuration))
+                     (funcall (plist-get keys :on-invocation) turn)
                      t)))
           (mevedel-agent-control--dispatch-followup
            session record "Continue."))
       (kill-buffer buffer))
     (should runtime-required)
     (should-not captured-agent)
-    (should (eq configuration captured-configuration))))
+    (should (eq configuration captured-configuration))
+    (should (= 1 (length (mevedel-session-agent-registry session))))))
 
 (mevedel-deftest mevedel-agent-control--normalize-fork-turns
   ()

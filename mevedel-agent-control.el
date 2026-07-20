@@ -733,13 +733,21 @@ it queued for ordinary parent delivery."
         (mevedel-agent-invocation-transcript-relative-path invocation))
   (setf (mevedel-agent-record-configuration record)
         (mevedel-agent-invocation-frozen-configuration invocation))
-  (let ((path (mevedel-agent-record-path record)))
-    (mevedel-session--set-agent-reservations
-     session
-     (assoc-delete-all path (mevedel-session-agent-reservations session)))
-    (mevedel-session--set-agent-registry
-     session
-     (cons (cons path record) (mevedel-session-agent-registry session)))))
+  (let* ((path (mevedel-agent-record-path record))
+         (reservation
+          (assoc path (mevedel-session-agent-reservations session)))
+         (published (assoc path (mevedel-session-agent-registry session))))
+    (cond
+     (reservation
+      (mevedel-session--set-agent-reservations
+       session
+       (assoc-delete-all path (mevedel-session-agent-reservations session)))
+      (mevedel-session--set-agent-registry
+       session
+       (cons (cons path record)
+             (mevedel-session-agent-registry session))))
+     ((not (eq (cdr published) record))
+      (error "Agent record is not reserved or published: %s" path)))))
 
 (defun mevedel-agent-control--set-hook-context (record entries)
   "Replace RECORD's pending hook context with a copy of ENTRIES."

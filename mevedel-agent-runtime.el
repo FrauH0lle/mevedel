@@ -660,10 +660,9 @@ to this retained conversation; ON-HOOK-CONTEXT records its transition."
                 (mevedel--hook-prompt-rewrite-audit-record
                  'UserPromptSubmit prompt submitted
                  (mevedel-hooks-decision-reason prompt-decision)))))
-        (when (and pending-hook-context on-hook-context)
-          (funcall on-hook-context nil))
         (list :prompt effective-prompt
-              :audits (and rewrite-audit (list rewrite-audit)))))))
+              :audits (and rewrite-audit (list rewrite-audit))
+              :consume-pending (and pending-hook-context t))))))
 
 
 ;;
@@ -788,6 +787,8 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
               (mevedel-agent-runtime--insert-prompt
                invocation buffer description (plist-get turn :prompt)
                context-snapshot retained-p (plist-get turn :audits))
+              (when (and (plist-get turn :consume-pending) on-hook-context)
+                (funcall on-hook-context nil))
               (when (and on-settle
                          (not
                           (mevedel-agent-invocation-transcript-relative-path
