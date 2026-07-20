@@ -385,6 +385,14 @@
         '(:sandbox unavailable :filesystem unrestricted
           :network unrestricted :reason "probe failed")
         (mevedel-sandbox-pending-facts)))))
+  :doc "keeps a retryable runtime failure visible without consuming its retry"
+  (let ((mevedel-sandbox-mode 'auto)
+        (mevedel-sandbox--probe-cache
+         '(:available nil :reason "runtime failure" :retry-on-execution t)))
+    (should (string-match-p
+             "runtime failure"
+             (plist-get (mevedel-sandbox-pending-facts) :reason)))
+    (should (plist-get mevedel-sandbox--probe-cache :retry-on-execution)))
   :doc "reports required-mode refusal instead of an unrestricted execution"
   (let ((mevedel-sandbox-mode 'required))
     (cl-letf (((symbol-function 'mevedel-sandbox-probe)
@@ -598,6 +606,24 @@
       (should (string-match-p
                "test backend unavailable"
                (plist-get (plist-get prepared :facts) :reason)))))
+  :doc "runtime failure retry:
+`mevedel-sandbox-prepare' reprobes after a transient launch failure"
+  (let ((mevedel-sandbox-mode 'auto)
+        (mevedel-sandbox--probe-cache
+         '(:available nil :reason "transient launch failure"
+           :retry-on-execution t))
+        cache-at-probe)
+    (cl-letf (((symbol-function 'mevedel-sandbox-probe)
+               (lambda ()
+                 (setq cache-at-probe mevedel-sandbox--probe-cache)
+                 '(:available nil :reason "fresh probe unavailable"))))
+      (let ((prepared
+             (mevedel-sandbox-prepare
+              '("true") temporary-file-directory nil)))
+        (should-not cache-at-probe)
+        (should (string-match-p
+                 "fresh probe unavailable"
+                 (plist-get (plist-get prepared :facts) :reason))))))
   :doc "additive network profile:
 `mevedel-sandbox-prepare' changes only network isolation"
   (let* ((root (make-temp-file "mevedel-sandbox-network-" t))
@@ -1085,16 +1111,33 @@ the named protected files reopen while parent and sibling restrictions remain"
   ,test
   (test)
   :doc "launch failure state:
-`mevedel-sandbox--record-launch-failure' disables later probes and records facts"
+`mevedel-sandbox--record-launch-failure' records a retryable runtime verdict"
   (let ((mevedel-sandbox--probe-cache '(:available t))
         (mevedel-sandbox--last-facts nil))
     (let ((facts
            (mevedel-sandbox--record-launch-failure
             '(:exit-code 125 :output "backend refused"))))
       (should-not (plist-get mevedel-sandbox--probe-cache :available))
+      (should (plist-get mevedel-sandbox--probe-cache :retry-on-execution))
       (should (eq facts mevedel-sandbox--last-facts))
       (should (eq (plist-get facts :sandbox) 'unavailable))
-      (should (string-match-p "backend refused" (plist-get facts :reason))))))
+      (should (string-match-p "backend refused" (plist-get facts :reason)))))
+  :doc "empty backend output:
+`mevedel-sandbox--record-launch-failure' retains the Bubblewrap exit code"
+  (let ((mevedel-sandbox--probe-cache '(:available t)))
+    (let ((facts
+           (mevedel-sandbox--record-launch-failure
+            '(:exit-code 125 :output ""))))
+      (should (string-match-p "exit code 125" (plist-get facts :reason)))))
+  :doc "process spawn error:
+`mevedel-sandbox--record-launch-failure' retains structured launcher errors"
+  (let ((mevedel-sandbox--probe-cache '(:available t)))
+    (let ((facts
+           (mevedel-sandbox--record-launch-failure
+            '(:exit-code -1 :output ""
+              :error (file-error "Process spawn failed")))))
+      (should (string-match-p "Process spawn failed"
+                              (plist-get facts :reason))))))
 
 (provide 'test-mevedel-sandbox)
 

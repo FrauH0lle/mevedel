@@ -45,7 +45,8 @@ directly and visibly disables confinement."
   :group 'mevedel)
 
 (defvar mevedel-sandbox--probe-cache nil
-  "Cached Bubblewrap availability plist, or nil before the first probe.")
+  "Cached Bubblewrap availability plist, or nil before the first probe.
+A runtime failure carries :retry-on-execution until the next child launch.")
 
 (defvar mevedel-sandbox--last-facts nil
   "Most recently prepared child-confinement facts.")
@@ -813,6 +814,8 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
        (mevedel-sandbox--direct-preparation
         command 'off "Confinement disabled by mevedel-sandbox-mode"))
       ((or 'auto 'required)
+       (when (plist-get mevedel-sandbox--probe-cache :retry-on-execution)
+         (setq mevedel-sandbox--probe-cache nil))
        (let ((availability (mevedel-sandbox-probe)))
          (if (plist-get availability :available)
              (condition-case err
@@ -889,14 +892,21 @@ SANDBOX-PERMISSIONS may be `require-escalated' after explicit approval."
        (format "; reason: %s" reason)))))
 
 (defun mevedel-sandbox--record-launch-failure (child-result)
-  "Record CHILD-RESULT as an unavailable backend launch."
+  "Record CHILD-RESULT as a retryable unavailable backend launch."
   (let* ((output (string-trim (or (plist-get child-result :output) "")))
          (reason
-          (if (string-empty-p output)
-              "Bubblewrap failed before the requested process started"
-            (format "Bubblewrap failed before process start: %s" output))))
+          (cond
+           ((not (string-empty-p output))
+            (format "Bubblewrap failed before process start: %s" output))
+           ((plist-get child-result :error)
+            (format "Sandbox launcher failed before process start: %s"
+                    (error-message-string
+                     (plist-get child-result :error))))
+           (t
+            (format "Bubblewrap exited before process start with exit code %s"
+                    (or (plist-get child-result :exit-code) "unknown"))))))
     (setq mevedel-sandbox--probe-cache
-          (list :available nil :reason reason))
+          (list :available nil :reason reason :retry-on-execution t))
     (setq mevedel-sandbox--last-facts
           (mevedel-sandbox--unrestricted-facts 'unavailable reason))))
 
