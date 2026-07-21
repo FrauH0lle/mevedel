@@ -116,6 +116,14 @@ view of the buffer. Hidden audit record grammar and
 attachment spans live in `mevedel-transcript-audit.el`; the view consumes
 those spans without reparsing the wire format.
 
+Streaming chunks, tool boundaries, and explicit rerender requests share one
+buffer-local render scheduler.  Requests in the same pending window collapse
+into one refresh; a full request upgrades an incremental request instead of
+starting a second timer.  Status and interaction zones remain independent of
+transcript parsing.  Reconciliation leaves an unchanged managed fragment in
+place, and spinner animation changes its frame display property without
+rewriting the textual progress row until elapsed or agent metadata changes.
+
 Before rendering a restored transcript, `mevedel-transcript-restore.el`
 recovers gptel bounds and normalizes their text properties through that same
 canonical transcript grammar. Restoration does not maintain a second parser.

@@ -49,6 +49,54 @@
 ;;
 ;;; Rendering
 
+(mevedel-deftest mevedel-view--schedule-render
+  (:doc "coalesces stream, tool-boundary, and full requests into one refresh")
+  (mevedel-view-test--with-buffers
+    (let ((mevedel-view-stream-render-delay 1)
+          (mevedel-view-tool-boundary-render-delay 1)
+          (mevedel-view-rerender-debounce 1)
+          (scheduled 0) callback args
+          (incremental-count 0)
+          (full-count 0))
+      (with-current-buffer view-buf
+        (setq mevedel-view--in-flight-turn-start
+              (copy-marker mevedel-view--input-marker))
+        (setq mevedel-view--data-turn-start
+              (with-current-buffer data-buf (copy-marker (point-min)))))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_delay _repeat function &rest function-args)
+                   (cl-incf scheduled)
+                   (setq callback function
+                         args function-args)
+                   'scheduled))
+                ((symbol-function 'mevedel-view--render-stream-update)
+                 (lambda (_data-buffer) (cl-incf incremental-count)))
+                ((symbol-function 'mevedel-view--full-rerender)
+                 (lambda () (cl-incf full-count))))
+        (with-current-buffer data-buf
+          (mevedel-view-stream-schedule))
+        (with-current-buffer view-buf
+          (mevedel-view--schedule-tool-boundary-render data-buf))
+        (mevedel-view-rerender view-buf)
+        (should (= 1 scheduled))
+        (with-current-buffer view-buf
+          (should (eq 'full mevedel-view--pending-render-kind)))
+        (apply callback args)
+        (should (= 1 full-count))
+        (should (= 0 incremental-count))
+        (with-current-buffer view-buf
+          (should-not mevedel-view--render-timer)
+          (should-not mevedel-view--pending-render-kind))
+        (setq callback nil args nil)
+        (with-current-buffer data-buf
+          (mevedel-view-stream-schedule))
+        (with-current-buffer view-buf
+          (mevedel-view--schedule-tool-boundary-render data-buf))
+        (should (= 2 scheduled))
+        (apply callback args)
+        (should (= 1 full-count))
+        (should (= 1 incremental-count))))))
+
 (mevedel-deftest mevedel-view--setup ()
   ,test
   (test)

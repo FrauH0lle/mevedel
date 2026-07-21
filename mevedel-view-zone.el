@@ -431,18 +431,27 @@ priorities."
          (old-bounds (mevedel-view-zone--region-bounds region))
          (region-start (car old-bounds))
          (spans (mevedel-view-zone--owned-spans region))
+         (unchanged-p
+          (and (= (length spans) 1)
+               (equal (car spans) old-bounds)
+               (equal-including-properties
+                text
+                (buffer-substring
+                 (caar spans) (cdar spans)))))
          (insert-marker (copy-marker (if spans (caar spans) region-start)))
-         new-start new-end)
-    (mevedel-view-zone--call-mutating
-     (lambda ()
-       (dolist (span (reverse spans))
-         (delete-region (car span) (cdr span)))
-       (goto-char insert-marker)
-       (setq new-start (point))
-       (insert text)
-       (setq new-end (point))))
+         (new-start region-start)
+         (new-end (cdr old-bounds)))
+    (unless unchanged-p
+      (mevedel-view-zone--call-mutating
+       (lambda ()
+         (dolist (span (reverse spans))
+           (delete-region (car span) (cdr span)))
+         (goto-char insert-marker)
+         (setq new-start (point))
+         (insert text)
+         (setq new-end (point))))
+      (mevedel-view-zone--set-region-bounds region new-start new-end))
     (set-marker insert-marker nil)
-    (mevedel-view-zone--set-region-bounds region new-start new-end)
     (list :start new-start :end new-end :region region-id :namespace namespace)))
 
 

@@ -155,7 +155,7 @@
                      'scheduled)))
           (with-current-buffer data-buf
             (mevedel-view-stream-schedule)))
-        (setq mevedel-view--stream-render-timer nil)
+        (setq mevedel-view--render-timer nil)
         (should (string-match-p
                  "Assistant text"
                  (buffer-substring-no-properties
@@ -845,7 +845,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail recovers above status-zone content when status marker detaches"
   (mevedel-view-stream-test--with-buffers
@@ -881,7 +881,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail stays above status-zone content after immediate render"
   (mevedel-view-stream-test--with-buffers
@@ -919,7 +919,7 @@
                                       count t
                                       do (setq start (match-end 0))))))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail recovers after existing history when status marker detaches"
   (mevedel-view-stream-test--with-buffers
@@ -958,7 +958,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail stays after existing live assistant text"
   (mevedel-view-stream-test--with-buffers
@@ -1002,7 +1002,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail stays above propertized status rows"
   (mevedel-view-stream-test--with-buffers
@@ -1043,7 +1043,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail ignores stale attached status marker"
   (mevedel-view-stream-test--with-buffers
@@ -1085,7 +1085,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "pending live tail recovers after collapsed turn summaries"
   (mevedel-view-stream-test--with-buffers
@@ -1126,7 +1126,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "incremental render preserves status rows when status marker detaches"
   (mevedel-view-stream-test--with-buffers
@@ -1499,7 +1499,7 @@
                 (should (< calling status))
                 (should (= 0 render-count)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "tool hooks do not return rendered agent-status strings to gptel"
   (mevedel-view-stream-test--with-buffers
@@ -1593,7 +1593,7 @@
                 (should (equal '(("call-2" . "Calling Grep..."))
                                mevedel-view--pending-tool-calls)))))
         (with-current-buffer view-buf
-          (mevedel-view--cancel-tool-boundary-render)))))
+          (mevedel-view--cancel-scheduled-render)))))
 
   :doc "repair audit redraw preserves a single-line composer and point"
   (mevedel-view-stream-test--with-buffers
@@ -2192,6 +2192,33 @@
         (mevedel-view--spinner-tick)
         (should (= 0 changes))
         (mevedel-view--stop-spinner))))
+
+  :doc "spinner ticks update frames without rewriting unchanged status text"
+  (mevedel-view-stream-test--with-buffers
+    (let ((now (seconds-to-time 1000))
+          (reconciles 0)
+          (original-reconcile (symbol-function 'mevedel-view-zone-reconcile)))
+      (cl-letf (((symbol-function 'current-time) (lambda () now))
+                ((symbol-function 'mevedel-view-zone-reconcile)
+                 (lambda (zone start end fragments)
+                   (when (eq zone 'progress)
+                     (cl-incf reconciles))
+                   (funcall original-reconcile zone start end fragments))))
+        (with-current-buffer view-buf
+          (let ((mevedel-view-spinner-frames '("-" "+")))
+            (mevedel-view--start-spinner "Working...")
+            (setq reconciles 0)
+            (dotimes (_ 10)
+              (mevedel-view--spinner-tick))
+            (should (= 0 reconciles))
+            (let* ((region (mevedel-view-zone-region 'progress))
+                   (frame-pos
+                    (text-property-any
+                     (overlay-start region) (overlay-end region)
+                     'mevedel-view-spinner-frame t)))
+              (should frame-pos)
+              (should (equal (get-text-property frame-pos 'display) "-")))
+            (mevedel-view--stop-spinner))))))
 
   :doc "decorated spinner status is normalized to its base label"
   (should (equal "Working..."

@@ -60,6 +60,9 @@
                   "mevedel-tool-exec" (facts timeout-seconds))
 
 ;; `mevedel-view'
+(declare-function mevedel-view--cancel-scheduled-render "mevedel-view" ())
+(declare-function mevedel-view--schedule-render
+                  "mevedel-view" (kind data-buffer delay))
 (declare-function mevedel-view--tool-status-string "mevedel-view" (tool-name args))
 (declare-function mevedel-view-rerender "mevedel-view" (&optional buffer))
 (defvar mevedel-view--display-map)
@@ -133,6 +136,9 @@ spinner without a data-buffer request.")
 (defvar-local mevedel-view--spinner-frame-index 0
   "Current frame index for animated view buffer spinners.")
 
+(defvar-local mevedel-view--spinner-rendered-display-status nil
+  "Last textual status rendered in the request-progress fragment.")
+
 (defvar-local mevedel-view--request-progress-suppressed nil
   "Non-nil means the request progress row must not be recreated.
 Set during terminal cleanup; cleared when a new progress row is
@@ -184,26 +190,15 @@ tools are in flight in parallel.")
 (defconst mevedel-view-stream--pending-execution-terminal-limit 64
   "Maximum terminal Bash updates retained while rows are unavailable.")
 
-(defvar-local mevedel-view--stream-render-timer nil
-  "Idle timer scheduling a `gptel-post-stream-hook'-driven render.
-
-`mevedel-view-stream-schedule' sets this on each stream chunk
-to batch the burst of per-chunk hook fires into one incremental render
-after a short quiescence window.")
-
-(defvar-local mevedel-view--tool-boundary-render-timer nil
-  "Timer scheduling a tool-boundary incremental render.")
-
 (defcustom mevedel-view-stream-render-delay 0.4
-  "Seconds to wait after the last stream chunk before re-rendering.
+  "Seconds to wait before rendering a batch of stream chunks.
 
 The `gptel-post-stream-hook' path fires once per streamed chunk (up to
-dozens per second).  `mevedel-view-stream-schedule' debounces
-those fires by waiting this long for no new chunks before calling
-`mevedel-view--render-incremental'.  Tune higher if the render cost
-is visible in your environment; lower for snappier updates.
+dozens per second).  `mevedel-view-stream-schedule' lets chunks arriving
+inside one pending window share a single incremental render.  Tune higher
+if the render cost is visible in your environment; lower for snappier updates.
 
-Tool-boundary hooks have their own shorter debounce."
+Tool boundaries use a shorter delay but join the same pending render."
   :type 'number
   :group 'mevedel)
 
@@ -606,12 +601,12 @@ the view has already inserted the in-flight markers."
   (and (mevedel-view--request-progress-visible-p)
        (mevedel-view-zone-start 'progress)))
 
-(defun mevedel-view--request-progress-fragments (status)
+(defun mevedel-view--request-progress-fragments (status &optional display-status)
   "Return the fragment list for request-progress STATUS."
   (list (list :namespace 'progress
               :id 'request
               :priority 0
-              :body (mevedel-view--format-spinner-block status)
+              :body (mevedel-view--format-spinner-block status display-status)
               :keymap mevedel-view--display-map
               :navigatable nil)))
 
@@ -619,21 +614,31 @@ the view has already inserted the in-flight markers."
   "Render the current request-progress row from buffer-local state."
   (when mevedel-view--spinner-status
     (require 'mevedel-view-zone)
-    (let ((anchor (mevedel-view--request-progress-anchor)))
-      (mevedel-view-zone-reconcile
-       'progress anchor anchor
-       (mevedel-view--request-progress-fragments
-        mevedel-view--spinner-status)))))
+    (let ((display-status
+           (mevedel-view--spinner-display-status
+            mevedel-view--spinner-status)))
+      (unless (and (equal display-status
+                          mevedel-view--spinner-rendered-display-status)
+                   (mevedel-view-zone-region 'progress))
+        (let ((anchor (mevedel-view--request-progress-anchor)))
+          (mevedel-view-zone-reconcile
+           'progress anchor anchor
+           (mevedel-view--request-progress-fragments
+            mevedel-view--spinner-status display-status))
+          (setq mevedel-view--spinner-rendered-display-status
+                display-status))))))
 
 (defun mevedel-view--clear-request-progress ()
   "Remove the fragment-managed request-progress row."
   (require 'mevedel-view-zone)
-  (mevedel-view-zone-clear 'progress))
+  (mevedel-view-zone-clear 'progress)
+  (setq mevedel-view--spinner-rendered-display-status nil))
 
 (defun mevedel-view--forget-request-progress-region ()
   "Forget the request-progress region after a larger redraw deleted it."
   (require 'mevedel-view-zone)
-  (mevedel-view-zone-forget 'progress))
+  (mevedel-view-zone-forget 'progress)
+  (setq mevedel-view--spinner-rendered-display-status nil))
 
 (defun mevedel-view--ensure-request-progress (&optional data-buf status)
   "Ensure the foreground request progress row is visible.
@@ -701,12 +706,13 @@ falls back to \"Working...\"."
          (agents (mevedel-view--spinner-agent-count-label)))
     (string-join (delq nil (list base elapsed agents)) " · ")))
 
-(defun mevedel-view--format-spinner-line (status &optional face)
+(defun mevedel-view--format-spinner-line (status &optional face display-status)
   "Return propertized spinner line for STATUS.
 FACE defaults to `mevedel-view-spinner'."
   (let* ((frame (mevedel-view--spinner-frame))
          (face (or face 'mevedel-view-spinner))
-         (display-status (mevedel-view--spinner-display-status status)))
+         (display-status (or display-status
+                             (mevedel-view--spinner-display-status status))))
     (concat
      (unless (string-empty-p frame)
        (concat
@@ -755,10 +761,10 @@ FACE defaults to `mevedel-view-spinner'."
                   'front-sticky '(read-only keymap)
                   'rear-nonsticky '(read-only keymap)))))
 
-(defun mevedel-view--format-spinner-block (status)
+(defun mevedel-view--format-spinner-block (status &optional display-status)
   "Return request-progress spinner text for STATUS at point."
   (concat (mevedel-view--request-progress-prefix)
-          (mevedel-view--format-spinner-line status)))
+          (mevedel-view--format-spinner-line status nil display-status)))
 
 (defun mevedel-view--spinner-active-p ()
   "Return non-nil when this view buffer has visible spinner work."
@@ -819,6 +825,17 @@ line."
      (point-max)
      'mevedel-view-ephemeral)))
 
+(defun mevedel-view--refresh-request-spinner-frame ()
+  "Refresh the request-progress spinner frame without rewriting its text."
+  (when-let* ((region (mevedel-view-zone-region 'progress)))
+    (let ((inhibit-read-only t)
+          (inhibit-modification-hooks t))
+      (mevedel-view--refresh-spinner-frame-spans
+       'mevedel-view-spinner-frame
+       (overlay-start region)
+       (overlay-end region)
+       'mevedel-view-spinner))))
+
 (defun mevedel-view--spinner-tick ()
   "Advance visible spinner frames in the current view buffer."
   (mevedel-view--call-preserving-user-view-state
@@ -827,6 +844,7 @@ line."
            (mod (1+ mevedel-view--spinner-frame-index)
                 (max 1 (length mevedel-view-spinner-frames))))
      (mevedel-view--ensure-request-progress)
+     (mevedel-view--refresh-request-spinner-frame)
      (mevedel-view--refresh-inline-spinner-frames))))
 
 (defun mevedel-view--start-spinner (&optional status)
@@ -981,20 +999,6 @@ INFO is a plist with at least :name and :args."
 POSITION may be an integer or marker."
   (setq mevedel-view--in-flight-turn-start
         (copy-marker position nil)))
-
-(defun mevedel-view--cancel-stream-render ()
-  "Cancel any pending debounced stream render on the view buffer."
-  (when (and (boundp 'mevedel-view--stream-render-timer)
-             mevedel-view--stream-render-timer)
-    (cancel-timer mevedel-view--stream-render-timer)
-    (setq mevedel-view--stream-render-timer nil)))
-
-(defun mevedel-view--cancel-tool-boundary-render ()
-  "Cancel any pending debounced tool-boundary render."
-  (when (and (boundp 'mevedel-view--tool-boundary-render-timer)
-             mevedel-view--tool-boundary-render-timer)
-    (cancel-timer mevedel-view--tool-boundary-render-timer)
-    (setq mevedel-view--tool-boundary-render-timer nil)))
 
 (defun mevedel-view--refresh-pending-tool-lines ()
   "Refresh lightweight pending-tool live-tail lines."
@@ -1384,28 +1388,16 @@ Always return nil; only the mailbox sink may acknowledge durable delivery."
   (when (and (buffer-live-p data-buf)
              (mevedel-view--in-flight-turn-start-position)
              (markerp mevedel-view--data-turn-start))
-    (mevedel-view--cancel-tool-boundary-render)
-    (if (and (numberp mevedel-view-tool-boundary-render-delay)
-             (> mevedel-view-tool-boundary-render-delay 0))
-        (let ((view-buf (current-buffer)))
-          (setq mevedel-view--tool-boundary-render-timer
-                (run-at-time
-                 mevedel-view-tool-boundary-render-delay nil
-                 (lambda ()
-                   (when (and (buffer-live-p view-buf)
-                              (buffer-live-p data-buf))
-                     (with-current-buffer view-buf
-                       (setq mevedel-view--tool-boundary-render-timer nil)
-                       (mevedel-view--render-stream-update data-buf)))))))
-      (mevedel-view--render-stream-update data-buf))))
+    (mevedel-view--schedule-render
+     'incremental data-buf mevedel-view-tool-boundary-render-delay)))
 
 (defun mevedel-view-stream-schedule ()
   "Schedule a debounced incremental render driven by the stream hook.
 
 Intended for `gptel-post-stream-hook', which fires once per streamed
 chunk in the data buffer.  Defers the incremental render by
-`mevedel-view-stream-render-delay' seconds of quiescence so the view
-rebuilds at most a few times per second rather than per token."
+`mevedel-view-stream-render-delay' seconds so chunks in the same pending
+window share one refresh instead of rebuilding the view per token."
   (when-let* ((view-buf (and (boundp 'mevedel--view-buffer)
                              mevedel--view-buffer))
               ((buffer-live-p view-buf))
@@ -1419,19 +1411,8 @@ rebuilds at most a few times per second rather than per token."
       ;; incremental markers are nil and rendering would no-op.
       (when (and (mevedel-view--in-flight-turn-start-position)
                  (markerp mevedel-view--data-turn-start))
-        (unless mevedel-view--stream-render-timer
-          (setq mevedel-view--stream-render-timer
-                (run-at-time
-                 mevedel-view-stream-render-delay nil
-                 (lambda ()
-                   (when (buffer-live-p view-buf)
-                     (with-current-buffer view-buf
-                       (setq mevedel-view--stream-render-timer nil)
-                       (when (buffer-live-p data-buf)
-                         (mevedel-view--debug-log
-                          'stream-render-fire
-                          :state (mevedel-view--debug-state data-buf))
-                         (mevedel-view--render-stream-update data-buf)))))))))))
+        (mevedel-view--schedule-render
+         'incremental data-buf mevedel-view-stream-render-delay))))
   nil)
 
 (defun mevedel-view--pending-tool-key (info)
@@ -1470,7 +1451,6 @@ debounced so bursts of tool boundary hooks coalesce."
                    :call-id (plist-get args :call-id)
                    :name name)
        :state (mevedel-view--debug-state data-buf))
-      (mevedel-view--cancel-stream-render)
       (unless (equal name "Agent")
         (let ((key (mevedel-view--pending-tool-key args))
               (label (mevedel-view--tool-status-string
@@ -1515,7 +1495,6 @@ debounced so bursts of completed tool calls coalesce."
                    :call-id (plist-get args :call-id)
                    :name name)
        :state (mevedel-view--debug-state data-buf))
-      (mevedel-view--cancel-stream-render)
       (let ((key (mevedel-view--pending-tool-key args)))
         (setq mevedel-view--pending-tool-calls
               (assoc-delete-all key mevedel-view--pending-tool-calls)))
@@ -1611,8 +1590,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
   "Stop active streaming UI and release all turn markers."
   (mevedel-view--stop-request-progress)
   (mevedel-view--stop-spinner-timer)
-  (mevedel-view--cancel-stream-render)
-  (mevedel-view--cancel-tool-boundary-render)
+  (mevedel-view--cancel-scheduled-render)
   (setq mevedel-view--pending-tool-calls nil)
   (mevedel-view--delete-pending-tool-live-lines)
   (when (markerp mevedel-view--in-flight-turn-start)
@@ -1641,8 +1619,7 @@ When NO-PROGRESS is non-nil, record no active progress state."
         (mevedel-view--debug-log
          'render-response-after-spinner
          :state (mevedel-view--debug-state data-buf start end))
-        (mevedel-view--cancel-stream-render)
-        (mevedel-view--cancel-tool-boundary-render)
+        (mevedel-view--cancel-scheduled-render)
         (setq mevedel-view--pending-tool-calls nil)
         (mevedel-view--delete-pending-tool-live-lines)
         (setq end (or (mevedel-view--append-request-summary data-buf start)

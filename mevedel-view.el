@@ -181,6 +181,10 @@
 (declare-function mevedel-view-toggle-section "mevedel-view-render" ())
 (declare-function mevedel-view-toggle-transcript "mevedel-view-render" ())
 
+;; `mevedel-view-stream'
+(declare-function mevedel-view--render-stream-update
+                  "mevedel-view-stream" (data-buf))
+
 ;; `mevedel-view-zone'
 (declare-function mevedel-view-zone-collapse-state
                   "mevedel-view-zone" (key &optional default))
@@ -871,54 +875,82 @@ Kills the associated view buffer."
 ;;; Rerender coordination
 
 
-(defvar-local mevedel-view--rerender-timer nil
-  "Buffer-local debounce timer for `mevedel-view-rerender'.
-A pending timer collapses bursts of rerender requests (e.g. from
-a sub-agent making 30 tool calls in quick succession) into a
-single full-rerender after a short quiescence window.")
+(defvar-local mevedel-view--render-timer nil
+  "Timer for the next coalesced transcript render.")
+
+(defvar-local mevedel-view--pending-render-kind nil
+  "Pending transcript render kind, either `incremental' or `full'.")
+
+(defvar-local mevedel-view--pending-render-data-buffer nil
+  "Authoritative data buffer for the pending transcript render.")
 
 (defcustom mevedel-view-rerender-debounce 0.15
-  "Seconds to wait after the last `mevedel-view-rerender' call before re-rendering.
-Bursts of requests inside this window collapse into one
-re-render; useful for smoothing out background-handle patch
-storms during multi-tool sub-agent dispatches."
+  "Seconds to wait before a queued full transcript refresh.
+Requests arriving while any transcript refresh is pending join that
+refresh; a full request upgrades a pending incremental refresh."
   :type 'number
   :group 'mevedel)
 
+(defun mevedel-view--cancel-scheduled-render ()
+  "Cancel the current view buffer's pending transcript render."
+  (when (timerp mevedel-view--render-timer)
+    (cancel-timer mevedel-view--render-timer))
+  (setq mevedel-view--render-timer nil
+        mevedel-view--pending-render-kind nil
+        mevedel-view--pending-render-data-buffer nil))
+
+(defun mevedel-view--flush-scheduled-render (view-buffer)
+  "Run VIEW-BUFFER's pending transcript render once."
+  (when (buffer-live-p view-buffer)
+    (with-current-buffer view-buffer
+      (let ((kind mevedel-view--pending-render-kind)
+            (data-buffer mevedel-view--pending-render-data-buffer))
+        (setq mevedel-view--render-timer nil
+              mevedel-view--pending-render-kind nil
+              mevedel-view--pending-render-data-buffer nil)
+        (condition-case _
+            (pcase kind
+              ('full (mevedel-view--full-rerender))
+              ('incremental
+               (when (buffer-live-p data-buffer)
+                 (mevedel-view--render-stream-update data-buffer))))
+          (error nil))))))
+
+(defun mevedel-view--schedule-render (kind data-buffer delay)
+  "Coalesce a KIND render of DATA-BUFFER after DELAY seconds.
+`full' supersedes `incremental'.  Once scheduled, later requests join
+the same refresh instead of creating independent stream, tool, and full
+render timers."
+  (unless (memq kind '(incremental full))
+    (error "Unknown render kind: %S" kind))
+  (when (buffer-live-p data-buffer)
+    (setq mevedel-view--pending-render-data-buffer data-buffer)
+    (when (or (eq kind 'full)
+              (null mevedel-view--pending-render-kind))
+      (setq mevedel-view--pending-render-kind kind))
+    (if (and (numberp delay) (> delay 0))
+        (unless mevedel-view--render-timer
+          (let ((view-buffer (current-buffer)))
+            (setq mevedel-view--render-timer
+                  (run-at-time
+                   delay nil #'mevedel-view--flush-scheduled-render
+                   view-buffer))))
+      (when (timerp mevedel-view--render-timer)
+        (cancel-timer mevedel-view--render-timer))
+      (mevedel-view--flush-scheduled-render (current-buffer)))))
+
 (defun mevedel-view-rerender (&optional buffer)
-  "Schedule a debounced re-render of BUFFER.
-Default to the current buffer.  Public re-render entry point used by
-the background handle patch path, plan-summary disk-write reconstruction,
-and any caller that
-mutates render-data and wants the visible card refreshed without
-waiting for the next stream tick.
-
-Bursts collapse into one rerender via the option
-`mevedel-view-rerender-debounce'.  When the view is mid-stream (a parent
-FSM is streaming), the debounce window also lets the incremental render
-path pick up the latest render-data on its own tick before the
-full-rerender fires.
-
-Currently the actual re-render delegates to
-`mevedel-view--full-rerender' as the guaranteed-correct path; a
-follow-up may swap to the cheaper incremental path when an
-in-flight turn boundary is established."
-  (let ((view-buf (or buffer (current-buffer))))
-    (when (buffer-live-p view-buf)
-      (with-current-buffer view-buf
-        (when (and (boundp 'mevedel--data-buffer) mevedel--data-buffer)
-          (when (timerp mevedel-view--rerender-timer)
-            (cancel-timer mevedel-view--rerender-timer))
-          (setq mevedel-view--rerender-timer
-                (run-with-idle-timer
-                 mevedel-view-rerender-debounce nil
-                 (lambda ()
-                   (when (buffer-live-p view-buf)
-                     (with-current-buffer view-buf
-                       (setq mevedel-view--rerender-timer nil)
-                       (condition-case _
-                           (mevedel-view--full-rerender)
-                         (error nil))))))))))))
+  "Schedule a coalesced full re-render of BUFFER.
+Default to the current buffer.  Full, stream, and tool-boundary requests
+share one timer, and a full request upgrades an already pending
+incremental refresh."
+  (let ((view-buffer (or buffer (current-buffer))))
+    (when (buffer-live-p view-buffer)
+      (with-current-buffer view-buffer
+        (when (and (boundp 'mevedel--data-buffer)
+                   (buffer-live-p mevedel--data-buffer))
+          (mevedel-view--schedule-render
+           'full mevedel--data-buffer mevedel-view-rerender-debounce))))))
 
 
 ;;
