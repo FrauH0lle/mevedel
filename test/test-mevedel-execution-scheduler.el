@@ -118,7 +118,24 @@
       (mevedel-execution-scheduler-release writer))
     (should-not (mevedel-execution-scheduler-release reader))
     (should (equal '(next writer) started))
-    (mevedel-execution-scheduler-release next)))
+    (mevedel-execution-scheduler-release next))
+  :doc "rejects queued work whose owner became terminal before admission"
+  (let ((scheduler (mevedel-execution-scheduler-create))
+        (owner-live-p t)
+        started rejected first queued)
+    (setq first
+          (mevedel-execution-scheduler-submit
+           scheduler 'exclusive (lambda (_lease) (push 'first started))))
+    (setq queued
+          (mevedel-execution-scheduler-submit
+           scheduler 'exclusive (lambda (_lease) (push 'queued started))
+           (lambda () owner-live-p)
+           (lambda (_lease) (push 'queued rejected))))
+    (setq owner-live-p nil)
+    (mevedel-execution-scheduler-release first)
+    (should (equal '(first) started))
+    (should (equal '(queued) rejected))
+    (should-not (mevedel-execution-scheduler-release queued))))
 
 (mevedel-deftest mevedel-execution-scheduler-cancel ()
   ,test

@@ -167,7 +167,9 @@ request or requestless wait is aborted, its transcript is finalized as
 `aborted`, its active-turn slot is released, and exactly one canonical RESULT
 with outcome `interrupted` goes to the stable spawn parent. The payload includes
 the interruption reason, bounded useful partial work when available, and the
-saved transcript path when available.
+saved transcript path when available. Request teardown cancels the active tool
+pipeline, terminates the target's child executions, and prevents its queued
+execution work from being admitted after the turn becomes terminal.
 
 Interruption never recurses. Descendant turns continue, and the target's path,
 conversation buffer, mailbox, and registry record remain retained. A later

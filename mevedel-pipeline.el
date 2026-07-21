@@ -377,10 +377,13 @@ a second outcome on a step that already fired NEXT.
 CONTEXT is the initial plist; the `:result' key holds the value passed
 to CALLBACK."
   (if (null steps)
-      (mevedel-pipeline--with-context-default-directory
-       context
-       (lambda ()
-         (funcall callback (plist-get context :result))))
+      (progn
+        (when-let* ((cancel-cell (plist-get context :cancel-cell)))
+          (setcar cancel-cell nil))
+        (mevedel-pipeline--with-context-default-directory
+         context
+         (lambda ()
+           (funcall callback (plist-get context :result)))))
     (let* ((step (car steps))
            (rest (cdr steps))
            (step-name (mevedel-pipeline--step-name step))
@@ -406,36 +409,57 @@ to CALLBACK."
             (lambda (which)
               (if settled
                   (progn
-                    (display-warning
-                     'mevedel
-                     (format "Pipeline step %s called %s after already %s; \
+                    (unless (eq settled 'cancel)
+                      (display-warning
+                       'mevedel
+                       (format "Pipeline step %s called %s after already %s; \
 ignoring duplicate outcome"
-                             step-name which settled)
-                     :warning)
+                               step-name which settled)
+                       :warning))
                     nil)
                 (setq settled which)
                 t)))
+           (cancel-cell (plist-get context :cancel-cell))
+           (clear-cancel
+            (lambda ()
+              (when cancel-cell (setcar cancel-cell nil))))
            (next-cont
             (lambda (updated-ctx)
               (when (funcall try-settle 'next)
+                (funcall clear-cancel)
                 (funcall finish-telemetry 'next)
                 (mevedel-pipeline--run rest callback updated-ctx))))
            (fail-cont
             (lambda (reason)
               (when (funcall try-settle 'fail)
+                (funcall clear-cancel)
                 (funcall finish-telemetry 'fail)
                 (mevedel-pipeline--with-context-default-directory
                  context
                  (lambda ()
                    (funcall callback
                             (mevedel-pipeline--format-context-failure
-                             context reason))))))))
+                             context reason)))))))
+           (cancel-cont
+            (lambda ()
+              (when (funcall try-settle 'cancel)
+                (funcall clear-cancel)
+                (funcall finish-telemetry 'cancelled 'request-cancelled)
+                (mevedel-pipeline--with-context-default-directory
+                 context
+                 (lambda ()
+                   (funcall callback
+                            (mevedel-pipeline--format-context-failure
+                             context "Request cancelled"))))))))
+      (when cancel-cell
+        (setcar cancel-cell cancel-cont))
       (condition-case err
           (mevedel-pipeline--with-context-default-directory
            context
            (lambda ()
              (funcall step context next-cont fail-cont)))
         (mevedel-validation-error
+         (funcall clear-cancel)
          (funcall finish-telemetry 'error 'validation)
          (mevedel-pipeline--with-context-default-directory
           context
@@ -444,6 +468,7 @@ ignoring duplicate outcome"
                      (mevedel-pipeline--format-context-failure
                       context (or (cadr err) "Validation error"))))))
         (mevedel-permission-denied
+         (funcall clear-cancel)
          (funcall finish-telemetry 'error 'permission-denied)
          (mevedel-pipeline--with-context-default-directory
           context
@@ -455,6 +480,7 @@ ignoring duplicate outcome"
                           (format "Permission denied: %s" (cadr err))
                         "Permission denied"))))))
         (mevedel-pipeline-error
+         (funcall clear-cancel)
          (funcall finish-telemetry 'error 'pipeline)
          (mevedel-pipeline--with-context-default-directory
           context
@@ -463,6 +489,7 @@ ignoring duplicate outcome"
                      (mevedel-pipeline--format-context-failure
                       context (or (cadr err) "Pipeline error"))))))
         (error
+         (funcall clear-cancel)
          (funcall finish-telemetry 'error (car-safe err))
          (mevedel-pipeline--with-context-default-directory
           context
@@ -2097,6 +2124,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (repair-entry
           (mevedel-tool-repair-consume-ledger-entry tool args))
          (steps (mevedel-pipeline--build-steps tool))
+         (cancel-cell (list nil))
          (context (list :tool tool :args args
                         :session session :workspace workspace
                         :request request :invocation invocation
@@ -2120,7 +2148,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                            nil))
                         :origin (mevedel-current-origin)
                         :buffer dispatch-buffer
-                        :default-directory workdir))
+                        :default-directory workdir
+                        :cancel-cell cancel-cell))
          (called nil)
          (once-callback
           (lambda (result)
@@ -2163,6 +2192,12 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
 delivery: %S"
                        result)
                :warning))))))
+    (when request
+      (mevedel-request-push-canceller
+       request
+       (lambda ()
+         (when-let* ((cancel (car cancel-cell)))
+           (funcall cancel)))))
     (when (and session (fboundp 'mevedel-telemetry-record))
       (mevedel-telemetry-record
        session 'tool-received

@@ -2365,6 +2365,55 @@
 		   (mevedel-pipeline-run-tool
 		    tool (lambda (r) (setq result r)) '(:msg "hello"))
 		   (should (equal result "hello")))
+		 :doc "request cancellation settles an active pipeline exactly once"
+		 (let* ((session (mevedel-session--create
+				  :name "cancel-pipeline"
+				  :permission-mode 'full-auto))
+			(tool (mevedel-tool--create
+			       :name "NeverReturns"
+			       :handler (lambda (_callback _args) nil)
+			       :read-only-p t
+			       :async-p t))
+			(callback-count 0)
+			events
+			finished
+			request
+			result)
+		   (with-temp-buffer
+		     (setq-local mevedel--session session)
+		     (setq request (mevedel-request-begin session))
+		     (cl-letf (((symbol-function 'mevedel-telemetry-start)
+				(lambda (_session event &rest props)
+				  (list :event event :props props)))
+			       ((symbol-function 'mevedel-telemetry-finish)
+				(lambda (span &rest props)
+				  (push (append span props) finished)))
+			       ((symbol-function 'mevedel-telemetry-record)
+				(lambda (_session event &rest props)
+				  (push (cons event props) events))))
+		       (mevedel-pipeline-run-tool
+			tool
+			(lambda (value)
+			  (cl-incf callback-count)
+			  (setq result value))
+			nil)
+		       (should-not result)
+		       (mevedel-request-end)
+		       (should (= 1 callback-count))
+		       (should (string-prefix-p "Error: Request cancelled" result))
+		       (should (= 1 (cl-count 'tool-received events :key #'car)))
+		       (should (= 1 (cl-count 'tool-finished events :key #'car)))
+		       (should
+			(eq 'error
+			    (plist-get (cdr (cl-find 'tool-finished events :key #'car))
+				       :outcome)))
+		       (should
+			(= 1
+			   (cl-count 'cancelled finished
+				     :key (lambda (span)
+					    (plist-get span :outcome)))))
+		       (mevedel-request-drain-cancellers request)
+		       (should (= 1 callback-count)))))
 		 :doc "each retry gets one pre-hook and one handler-specific post-hook"
 		 (let* ((attempt 0)
 			(tool (mevedel-tool--create
