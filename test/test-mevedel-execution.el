@@ -36,7 +36,7 @@
          (symbol-function 'accept-process-output))
         (original-run-at-time (symbol-function 'run-at-time))
         (mevedel-sandbox-mode 'off)
-        chunks filter settle watch done result)
+        chunks filter settle watch done result drain-just-this-one)
     (cl-letf (((symbol-function 'make-process)
                (lambda (&rest args)
                  (setq filter (plist-get args :filter))
@@ -76,7 +76,8 @@
       (funcall watch)
       (should settle)
       (cl-letf (((symbol-function 'accept-process-output)
-                 (lambda (&rest _)
+                 (lambda (_process _seconds _millisec just-this-one)
+                   (setq drain-just-this-one just-this-one)
                    (when chunks
                      (dolist (entry (nreverse chunks))
                        (funcall filter (car entry) (cdr entry)))
@@ -84,6 +85,7 @@
                      t))))
         (funcall settle))
       (should done)
+      (should (= 1 drain-just-this-one))
       (should (= 0 (plist-get result :exit-code)))
       (should (equal "recovered" (plist-get result :output)))))
   :doc "settles an exited child even when Emacs does not deliver its sentinel"
