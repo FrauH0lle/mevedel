@@ -116,6 +116,9 @@
 (defvar-local mevedel-view--spinner-owner nil
   "Subsystem that last wrote the request-progress status text.")
 
+(defvar-local mevedel-view--spinner-generation 0
+  "Generation of the latest semantic request-progress status update.")
+
 (defvar mevedel-view--status-owner-override nil
   "Dynamically bound subsystem owner for one status update.")
 
@@ -840,7 +843,9 @@ STATUS defaults to \"Thinking...\"."
      (setq mevedel-view--request-progress-suppressed nil)
      (unless mevedel-view--spinner-start-time
        (setq mevedel-view--spinner-start-time (current-time)))
-     (setq mevedel-view--spinner-status (or status "Thinking..."))
+     (cl-incf mevedel-view--spinner-generation)
+     (setq mevedel-view--spinner-status (or status "Thinking...")
+           mevedel-view--spinner-owner 'request)
      (save-excursion
        (mevedel-view--render-request-progress))
      (mevedel-view--start-spinner-timer))))
@@ -876,12 +881,38 @@ STATUS defaults to \"Thinking...\"."
      (setq mevedel-view--request-progress-suppressed nil)
      (unless mevedel-view--spinner-start-time
        (setq mevedel-view--spinner-start-time (current-time)))
+     (cl-incf mevedel-view--spinner-generation)
      (setq mevedel-view--spinner-status status
            mevedel-view--spinner-owner
            (or owner mevedel-view--status-owner-override 'request))
      (save-excursion
        (mevedel-view--render-request-progress))
      (mevedel-view--start-spinner-timer))))
+
+(defun mevedel-view--spinner-status-snapshot ()
+  "Return a snapshot of the current request-progress status."
+  (when mevedel-view--spinner-status
+    (list :generation mevedel-view--spinner-generation
+          :status mevedel-view--spinner-status
+          :owner mevedel-view--spinner-owner)))
+
+(defun mevedel-view--claim-spinner-status (snapshot status owner)
+  "Replace SNAPSHOT with STATUS owned by OWNER when it is still current.
+Return non-nil when the status was acquired."
+  (when (and snapshot owner
+             (= (plist-get snapshot :generation)
+                mevedel-view--spinner-generation))
+    (mevedel-view--update-spinner status owner)
+    t))
+
+(defun mevedel-view--restore-spinner-status (owner snapshot)
+  "Restore SNAPSHOT when OWNER still owns the request-progress status.
+Return non-nil when the status was restored."
+  (when (and snapshot owner (eq mevedel-view--spinner-owner owner))
+    (mevedel-view--update-spinner
+     (plist-get snapshot :status)
+     (or (plist-get snapshot :owner) 'request))
+    t))
 
 (defun mevedel-view--stop-spinner ()
   "Remove request progress if present."
@@ -902,6 +933,7 @@ STATUS defaults to \"Thinking...\"."
         :previous-owner mevedel-view--spinner-owner
         :previous-status mevedel-view--spinner-status
         :owner nil :status nil))
+     (cl-incf mevedel-view--spinner-generation)
      (setq mevedel-view--spinner-status nil
            mevedel-view--spinner-owner nil)
      (unless mevedel-view--pending-tool-calls

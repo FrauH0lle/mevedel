@@ -14,6 +14,10 @@
 
 (require 'mevedel-hooks)
 (require 'mevedel-plugins)
+(require 'mevedel-agent-control)
+(require 'mevedel-session-persistence)
+(require 'mevedel-view)
+(require 'mevedel-view-stream)
 
 (defvar mevedel--agent-invocation)
 
@@ -1579,6 +1583,109 @@
 			 (should (member "mevedel: PostToolUse hook: formatted result"
 					 messages)))
 		     (delete-directory root t))))
+
+(mevedel-deftest mevedel-hooks-run-event/slow-progress ()
+  ,test
+  (test)
+  :doc "slow progress restores request status without disturbing composer or agent"
+  (let* ((root (make-temp-file "mevedel-hooks-progress" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold 1)
+         (mevedel-view-spinner-animate nil)
+         (mevedel-hook-rules
+          '((PreToolUse
+             ((:matcher "Read"
+               :hooks ((:type elisp :function ignore)))))))
+         slow-callback handler-finish hook-result)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (setf (mevedel-session-agent-registry session)
+                (list (cons "/root/worker"
+                            (mevedel-agent-record--create
+                             :id "worker" :path "/root/worker"
+                             :parent-path "/root" :activity 'running))))
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create
+                         :session session :started-at (current-time))))
+          (with-current-buffer view-buf
+            (mevedel-view--start-spinner "Working...")
+            (mevedel-view-test--insert-composer-draft
+             "> quoted\nsecond line" 4))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat function &rest args)
+                       (setq slow-callback
+                             (lambda () (apply function args)))
+                       nil))
+                    ((symbol-function 'mevedel-hooks--run-handlers)
+                     (lambda (_event _handlers _payload _session _context
+                              callback _dispatch-buffer)
+                       (setq handler-finish callback))))
+            (with-current-buffer data-buf
+              (mevedel-hooks-run-event
+               'PreToolUse '(:tool-name "Read")
+               (lambda (decision) (setq hook-result decision)) session))
+            (should slow-callback)
+            (funcall slow-callback)
+            (with-current-buffer view-buf
+              (should (equal "> quoted\nsecond line"
+                             (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (should (string-match-p
+                       "Running PreToolUse hook"
+                       (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker)))
+              (should (string-match-p
+                       "1 agent running"
+                       (buffer-substring-no-properties
+                        (point-min) mevedel-view--input-marker))))
+            (funcall handler-finish nil)
+            (with-current-buffer view-buf
+              (should (equal "> quoted\nsecond line"
+                             (mevedel-view--input-text)))
+              (should (= (point) (+ (mevedel-view--input-start) 4)))
+              (should (equal "Working..." mevedel-view--spinner-status))
+              (should (eq 'request mevedel-view--spinner-owner)))
+            (should-not hook-result)))
+      (delete-directory root t)))
+
+  :doc "events without handlers keep telemetry but create no progress timer"
+  (let* ((root (make-temp-file "mevedel-hooks-no-progress" t))
+         (session (mevedel-hooks-test--session root))
+         (mevedel-hooks-slow-threshold 1)
+         (mevedel-hook-rules nil)
+         telemetry result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'run-at-time)
+                   (lambda (&rest _args)
+                     (ert-fail "Hook without handlers scheduled progress")))
+                  ((symbol-function 'mevedel-telemetry-start)
+                   (lambda (_session event &rest props)
+                     (push (cons event props) telemetry)
+                     'span))
+                  ((symbol-function 'mevedel-telemetry-finish)
+                   (lambda (_span &rest props)
+                     (push (cons 'finish props) telemetry))))
+          (mevedel-hooks-run-event
+           'PreToolUse '(:tool-name "Read")
+           (lambda (decision) (setq result decision)) session)
+          (should-not result)
+          (should (equal 0
+                         (plist-get (cdr (assq 'hook-event telemetry))
+                                    :handler-count)))
+          (should (assq 'finish telemetry)))
+      (delete-directory root t)))
+
+  :doc "a concurrent hook cannot lease another hook's temporary status"
+  (let ((mevedel-view-spinner-animate nil))
+    (mevedel-view-test--with-buffers
+      (with-current-buffer view-buf
+        (mevedel-view--start-spinner "Working...")
+        (mevedel-view--update-spinner
+         "Running PreToolUse hook..." (gensym "hook-progress-")))
+      (with-current-buffer data-buf
+        (should-not (mevedel-hooks--progress-snapshot))))))
 
 (provide 'test-mevedel-hooks)
 ;;; test-mevedel-hooks.el ends here

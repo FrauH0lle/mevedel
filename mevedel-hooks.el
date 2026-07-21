@@ -36,9 +36,6 @@
                   (plugin &optional workspace))
 (declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins"
                   (plugin-name &optional workspace))
-(declare-function mevedel-view--update-spinner
-                  "mevedel-view" (status &optional owner))
-(declare-function mevedel-view--spinner-active-p "mevedel-view" ())
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
@@ -47,10 +44,18 @@
 (declare-function mevedel-telemetry-start
                   "mevedel-telemetry" (session event &rest props))
 
+;; `mevedel-view-stream'
+(declare-function mevedel-view--claim-spinner-status
+                  "mevedel-view-stream" (snapshot status owner))
+(declare-function mevedel-view--restore-spinner-status
+                  "mevedel-view-stream" (owner snapshot))
+(declare-function mevedel-view--spinner-active-p "mevedel-view-stream" ())
+(declare-function mevedel-view--spinner-status-snapshot
+                  "mevedel-view-stream" ())
+
 (defvar gptel-model)
 (defvar read-eval)
 (defvar mevedel--view-buffer)
-(defvar mevedel-view--status-owner-override)
 
 
 ;;
@@ -1196,20 +1201,44 @@ EVENT labels each generated hook event block."
             (list :event-source (plist-get event-plist :source)))
           props))
 
-(defun mevedel-hooks--surface (_session text &optional spinner-text)
-  "Surface hook TEXT and optionally update SPINNER-TEXT."
-  (message "mevedel: %s" text)
+(defun mevedel-hooks--surface (text)
+  "Surface hook TEXT."
+  (message "mevedel: %s" text))
+
+(defun mevedel-hooks--progress-snapshot ()
+  "Return the active view progress snapshot and its buffer, or nil."
   (when-let* ((view-buffer (and (boundp 'mevedel--view-buffer)
                                 mevedel--view-buffer))
               (_ (buffer-live-p view-buffer))
-              (_ spinner-text)
-              (_ (fboundp 'mevedel-view--update-spinner))
-              (_ (fboundp 'mevedel-view--spinner-active-p)))
+              (_ (fboundp 'mevedel-view--spinner-active-p))
+              (_ (fboundp 'mevedel-view--spinner-status-snapshot)))
     (with-current-buffer view-buffer
       (when (ignore-errors (mevedel-view--spinner-active-p))
-        (ignore-errors
-          (let ((mevedel-view--status-owner-override 'hook))
-            (mevedel-view--update-spinner spinner-text)))))))
+        (when-let* ((snapshot
+                     (ignore-errors
+                       (mevedel-view--spinner-status-snapshot))))
+          (when (eq (plist-get snapshot :owner) 'request)
+            (list :buffer view-buffer :status snapshot)))))))
+
+(defun mevedel-hooks--claim-progress (lease text owner)
+  "Replace LEASE with hook progress TEXT owned by OWNER."
+  (when-let* ((view-buffer (plist-get lease :buffer))
+              (_ (buffer-live-p view-buffer))
+              (_ (fboundp 'mevedel-view--claim-spinner-status)))
+    (with-current-buffer view-buffer
+      (ignore-errors
+        (mevedel-view--claim-spinner-status
+         (plist-get lease :status) text owner)))))
+
+(defun mevedel-hooks--restore-progress (lease owner)
+  "Restore LEASE when OWNER still owns the visible progress status."
+  (when-let* ((view-buffer (plist-get lease :buffer))
+              (_ (buffer-live-p view-buffer))
+              (_ (fboundp 'mevedel-view--restore-spinner-status)))
+    (with-current-buffer view-buffer
+      (ignore-errors
+        (mevedel-view--restore-spinner-status
+         owner (plist-get lease :status))))))
 
 (defun mevedel-hooks--decision-blocking-p (decision)
   "Return non-nil when DECISION blocks the triggering operation."
@@ -1275,14 +1304,12 @@ record only that context was added, without duplicating the body."
                                           Stop StopFailure SessionEnd)))
            (mevedel-hooks--decision-blocking-p decision))
       (mevedel-hooks--surface
-       session
        (format "%s hook blocked: %s"
                (mevedel-hooks--event-display-name event)
                (or (mevedel-hooks-decision-reason decision)
                    "no reason provided"))))
      ((plist-get decision :system-message)
       (mevedel-hooks--surface
-       session
        (format "%s hook: %s"
                (mevedel-hooks--event-display-name event)
                (plist-get decision :system-message)))))))
@@ -1714,6 +1741,9 @@ decision plist."
                  :handler-count (length handlers))))
              (settled nil)
              (slow-surfaced nil)
+             (progress-lease (and handlers
+                                  (mevedel-hooks--progress-snapshot)))
+             (progress-owner (gensym "hook-progress-"))
              slow-timer)
         (cl-labels
             ((finish (decision)
@@ -1736,12 +1766,17 @@ decision plist."
 	                      (length context))))
 	                 (when (timerp slow-timer)
 	                   (cancel-timer slow-timer))
-                         (when (and slow-surfaced session
+                         (when slow-surfaced
+                           (let ((restored
+                                  (mevedel-hooks--restore-progress
+                                   progress-lease progress-owner)))
+                             (when (and session
                                     (fboundp 'mevedel-telemetry-record))
-                           (mevedel-telemetry-record
-                            session 'hook-slow-status-released
-                            :hook-event event
-                            :handler-count (length handlers)))
+                               (mevedel-telemetry-record
+                                session 'hook-slow-status-released
+                                :hook-event event
+                                :handler-count (length handlers)
+                                :restored (and restored t)))))
                          (if (buffer-live-p dispatch-buffer)
                              (with-current-buffer dispatch-buffer
 	                       (mevedel-hooks--surface-final-decision
@@ -1757,22 +1792,24 @@ decision plist."
                    mevedel-hooks-slow-threshold nil
                    (lambda ()
                      (unless settled
-                       (setq slow-surfaced t)
-                       (when (and session
-                                  (fboundp 'mevedel-telemetry-record))
-                         (mevedel-telemetry-record
-                          session 'hook-slow-status-acquired
-                          :hook-event event
-                          :handler-count (length handlers)
-                          :threshold-ms
-                          (round (* 1000 mevedel-hooks-slow-threshold))))
                        (mevedel-hooks--surface
-                        session
                         (format "%s hook still running..."
-                                (mevedel-hooks--event-display-name event))
-                        (format "Running %s hook..."
-                                (mevedel-hooks--event-display-name
-                                 event))))))))
+                                (mevedel-hooks--event-display-name event)))
+                       (when (mevedel-hooks--claim-progress
+                              progress-lease
+                              (format "Running %s hook..."
+                                      (mevedel-hooks--event-display-name
+                                       event))
+                              progress-owner)
+                         (setq slow-surfaced t)
+                         (when (and session
+                                    (fboundp 'mevedel-telemetry-record))
+                           (mevedel-telemetry-record
+                            session 'hook-slow-status-acquired
+                            :hook-event event
+                            :handler-count (length handlers)
+                            :threshold-ms
+                            (round (* 1000 mevedel-hooks-slow-threshold))))))))))
           (mevedel-hooks--run-handlers
            event handlers payload session nil #'finish dispatch-buffer))))))
 
