@@ -628,7 +628,11 @@ important failures surfaced to the user in the view or messages.
 
 Slow hook runs are surfaced after `mevedel-hooks-slow-threshold` seconds.
 If the view already has an active spinner, its status changes to show the
-running hook event; otherwise the user sees a `message`.  Blocking
+running hook event; otherwise the user sees a `message`.  The temporary
+status has a per-run ownership token.  It replaces only the progress state
+captured when the hook was dispatched, restores that state on completion,
+and cannot overwrite or restore across a newer request or agent status.
+Events with no matching handlers do not create progress activity.  Blocking
 decisions are always surfaced with the event name and hook-provided reason.
 For tool calls blocked by `PreToolUse` or `PermissionRequest`, the compact
 tool line includes a second line such as `blocked by PreToolUse: reason`.

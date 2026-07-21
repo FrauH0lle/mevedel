@@ -12,6 +12,7 @@
 (require 'mevedel-view)
 (require 'mevedel-view-stream)
 (require 'mevedel-agents)
+(require 'mevedel-agent-control)
 (require 'mevedel-agent-runtime)
 (require 'mevedel-file-state)
 (require 'mevedel-hooks)
@@ -21,6 +22,7 @@
 (require 'mevedel-preview-mode)
 (require 'mevedel-review)
 (require 'mevedel-session-persistence)
+(require 'mevedel-telemetry)
 (require 'mevedel-skills-ui)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-media)
@@ -2438,6 +2440,42 @@
 
 ;;
 ;;; Final response rendering
+
+(mevedel-deftest mevedel-view--claim-spinner-status
+  (:doc "claims only the unchanged request-progress generation")
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((owner (gensym "owner-")))
+        (mevedel-view--start-spinner "Working...")
+        (let ((snapshot (mevedel-view--spinner-status-snapshot)))
+          (should (mevedel-view--claim-spinner-status
+                   snapshot "Running hook..." owner))
+          (should (equal "Running hook..." mevedel-view--spinner-status))
+          (should (eq owner mevedel-view--spinner-owner)))
+        (let ((snapshot (mevedel-view--spinner-status-snapshot)))
+          (mevedel-view--update-spinner "Calling Read..." 'request)
+          (should-not (mevedel-view--claim-spinner-status
+                       snapshot "Stale hook..." owner))
+          (should (equal "Calling Read..." mevedel-view--spinner-status))
+          (should (eq 'request mevedel-view--spinner-owner)))))))
+
+(mevedel-deftest mevedel-view--restore-spinner-status
+  (:doc "restores only progress still owned by the caller")
+  (mevedel-view-stream-test--with-buffers
+    (with-current-buffer view-buf
+      (let ((owner (gensym "owner-")))
+        (mevedel-view--start-spinner "Working...")
+        (let ((snapshot (mevedel-view--spinner-status-snapshot)))
+          (mevedel-view--claim-spinner-status snapshot "Running hook..." owner)
+          (should (mevedel-view--restore-spinner-status owner snapshot))
+          (should (equal "Working..." mevedel-view--spinner-status))
+          (should (eq 'request mevedel-view--spinner-owner)))
+        (let ((snapshot (mevedel-view--spinner-status-snapshot)))
+          (mevedel-view--claim-spinner-status snapshot "Running hook..." owner)
+          (mevedel-view--update-spinner "Calling Bash..." 'request)
+          (should-not (mevedel-view--restore-spinner-status owner snapshot))
+          (should (equal "Calling Bash..." mevedel-view--spinner-status))
+          (should (eq 'request mevedel-view--spinner-owner)))))))
 
 (mevedel-deftest mevedel-view-stream-render-response ()
   ,test
