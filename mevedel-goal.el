@@ -202,6 +202,16 @@
   :type 'number
   :group 'mevedel)
 
+(defcustom mevedel-goal-investigation-time-budget 120
+  "Seconds allowed for a subagent started during Goal planning or review.
+The maximum leaves 30 seconds for terminal delivery within one `WaitAgent'."
+  :type '(restricted-sexp
+          :tag "Seconds from 1 through 3570"
+          :match-alternatives
+          ((lambda (value)
+             (and (integerp value) (<= 1 value 3570)))))
+  :group 'mevedel)
+
 (defcustom mevedel-goal-max-transient-retries 1
   "Maximum automatic retries for a failed read-only Goal request."
   :type 'natnum
@@ -833,21 +843,54 @@ USAGE-CONTEXT supplies request-local `:estimated-input-tokens' and
              (plist-get (mevedel-session-plan-metadata session)
                         :revision-pending)))))
 
+(defun mevedel-goal--investigation-budget ()
+  "Return the valid Goal investigation budget in seconds."
+  (unless (and (integerp mevedel-goal-investigation-time-budget)
+               (<= 1 mevedel-goal-investigation-time-budget 3570))
+    (error "Goal investigation time budget must be from 1 through 3570 seconds"))
+  mevedel-goal-investigation-time-budget)
+
+(defun mevedel-goal-investigation-contract (message &optional session)
+  "Return Goal investigation metadata for MESSAGE in SESSION, or nil."
+  (when-let* (((stringp message))
+              ((not (string-empty-p message)))
+              (session (or session mevedel--session))
+              (goal (mevedel-session-goal session))
+              ((eq (mevedel-goal-status goal) 'active))
+              (phase (mevedel-goal-phase goal))
+              ((memq phase '(planning reviewing)))
+              (seconds (mevedel-goal--investigation-budget)))
+    (list
+     :seconds seconds
+     :message
+     (format
+      "Goal %s investigation\nEvidence target (stay strictly within this scope): %s\nCompletion budget: %d seconds. Return concise evidence before the deadline; useful partial output is preserved if the budget expires."
+      phase message seconds))))
+
+(defun mevedel-goal--investigation-guidance ()
+  "Return bounded subagent guidance for a read-only Goal phase."
+  (let ((seconds (mevedel-goal--investigation-budget)))
+    (format
+     "If independent investigation is necessary, delegate one narrow evidence target at a time. Each Agent task has a %d-second completion budget. Await it with one event-driven WaitAgent(timeout_ms=%d) call; do not poll or repeatedly wait."
+     seconds (* 1000 (+ seconds 30)))))
+
 (defun mevedel-goal--planning-prompt (goal)
   "Return the planning request for GOAL."
   (format
-   "%s\n\nPlanning instructions:\n%s%s\n\nThis phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
+   "%s\n\nPlanning instructions:\n%s%s\n\n%s\n\nThis phase is read-only. End with exactly one line-oriented <proposed_plan>...</proposed_plan> block."
    (mevedel-goal-context-fragment goal mevedel--session)
    (if-let* ((findings (mevedel-goal-review-findings goal)))
        (format "Prior review findings to resolve:\n%s\n\n" findings)
      "")
-   mevedel-goal--plan-guidance))
+   mevedel-goal--plan-guidance
+   (mevedel-goal--investigation-guidance)))
 
 (defun mevedel-goal--review-prompt (goal)
   "Return the one-cycle completion review request for GOAL."
   (format
-   "%s\n\nReview instructions:\nReview the implementation against current repository evidence using this authority order: Goal objective and achievement criteria, authoritative referenced requirements, then the accepted plan as an implementation approach. Require observable evidence that the desired outcome is achieved. Completing every plan step is insufficient when the Goal remains unmet. Reasonable divergence from plan details is acceptable when the authoritative outcomes are proven.\n\nThis phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole Goal and its achievement criteria are proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
-   (mevedel-goal-context-fragment goal mevedel--session)))
+   "%s\n\nReview instructions:\nReview the implementation against current repository evidence using this authority order: Goal objective and achievement criteria, authoritative referenced requirements, then the accepted plan as an implementation approach. Require observable evidence that the desired outcome is achieved. Completing every plan step is insufficient when the Goal remains unmet. Reasonable divergence from plan details is acceptable when the authoritative outcomes are proven.\n\n%s\n\nThis phase is read-only. Do not make changes. Return exactly one structured result with a single verdict and evidence:\n<goal_review>\nverdict: complete|continue|blocked\nsummary: evidence, remaining work, or blocker\n</goal_review>\nUse complete only when the whole Goal and its achievement criteria are proven complete; use continue when another implementation cycle can make progress; use blocked only for a concrete external or decision blocker."
+   (mevedel-goal-context-fragment goal mevedel--session)
+   (mevedel-goal--investigation-guidance)))
 
 (defun mevedel-goal--recovery-prompt (goal checkpoint)
   "Return a read-only recovery audit request for GOAL and CHECKPOINT."

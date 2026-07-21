@@ -158,6 +158,12 @@ running. `/review`, `/verify`, and fork-skill workflows may keep their owning
 interaction open until a leaf result arrives, but that awaiting behavior does
 not create another agent execution mode.
 
+Goal planning and review add a turn-local wall-clock budget to every spawned
+investigation. Its task prompt names the evidence target and deadline. A timely
+result cancels the deadline; expiry interrupts through the same terminal
+boundary as `InterruptAgent`, retaining useful partial output. Agents started
+outside those two Goal phases are unchanged.
+
 ## Interrupting retained agent turns
 
 `InterruptAgent(target)` resolves only canonical or relative retained paths. It

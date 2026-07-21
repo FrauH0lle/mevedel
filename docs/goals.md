@@ -95,6 +95,12 @@ Goal phase changes do not weaken or strengthen child confinement: Bash and
 batch Eval continue to use the selected sandbox boundary, which remains visible
 in the main view's status zone.
 
+Agents started during planning or review receive one narrow evidence target and
+a configurable wall-clock completion budget. Budget expiry uses the ordinary
+agent interruption path, preserving bounded partial output and preventing later
+tool work. The phase model awaits a needed result with one event-driven
+`WaitAgent` call rather than polling.
+
 ## Commands and approval policy
 
 - `/goal <objective>` starts a supervised Goal. Each plan waits for user
