@@ -276,6 +276,12 @@ code; they do not add model-facing escalation arguments or another permission
 prompt. Live Emacs operations, long-lived language servers, hooks, and
 user-triggered Git, clipboard, and UI helpers are not external tool helpers.
 
+An exact filesystem grant may name a symlink. The launcher opens the granted
+path but mounts its canonical target, leaving the requested command and symlink
+chain unchanged while avoiding Bubblewrap mounts onto symlink entries. Beneath
+a masked parent it recreates only the link hops and empty traversal directories
+needed to reach that exact target.
+
 A justified additive filesystem request names exact absolute paths and marks
 each as read or write. Ungranted paths prompt in every permission mode;
 invocation, session, and persistent approvals use the same exact resource-grant

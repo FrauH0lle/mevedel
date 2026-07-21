@@ -760,6 +760,29 @@ exact read and write mounts follow protected masks without broadening siblings"
                                   (plist-get prepared :error))))
       (delete-directory root t)
       (delete-directory outside t)))
+  :doc "dangling symlink grant:
+`mevedel-sandbox-prepare' refuses an unresolved resource without auto fallback"
+  (let* ((root (make-temp-file "mevedel-sandbox-dangling-root-" t))
+         (resource (make-temp-file "mevedel-sandbox-dangling-resource-" t))
+         (link (file-name-concat resource "runner"))
+         (mevedel-sandbox-mode 'auto)
+         (mevedel-sandbox--probe-cache
+          (list :available t
+                :executable (or (executable-find "bwrap") "bwrap")
+                :mount-proc t)))
+    (unwind-protect
+        (progn
+          (make-symbolic-link "missing" link)
+          (let ((prepared
+                 (mevedel-sandbox-prepare
+                  (list link) root (list root)
+                  `(:file-system ((:path ,link :access read))))))
+            (should (eq 'refused (plist-get prepared :state)))
+            (should-not (plist-get prepared :command))
+            (should (string-match-p "unavailable"
+                                    (plist-get prepared :error)))))
+      (delete-directory resource t)
+      (delete-directory root t)))
   :doc "disabled backend:
 `mevedel-sandbox-prepare' executes directly with visible disclosure"
   (let ((mevedel-sandbox-mode 'off)
@@ -815,6 +838,73 @@ exact read and write mounts follow protected masks without broadening siblings"
             (kill-buffer output-buffer))
           (mevedel-sandbox-cleanup prepared)
           (delete-directory parent t)))))
+  :doc "real symlinked executable:
+a granted symlink chain starts under the original confined command"
+  (let ((mevedel-sandbox-mode 'required)
+        (mevedel-sandbox--probe-cache nil))
+    (let ((availability (mevedel-sandbox-probe)))
+      (unless (plist-get availability :available)
+        (ert-skip (or (plist-get availability :reason)
+                      "Bubblewrap unavailable")))
+      (let* ((root (make-temp-file "mevedel-sandbox-link-root-" t))
+             (resource (make-temp-file "mevedel-sandbox-link-resource-" t))
+             (hidden (file-name-concat resource "hidden"))
+             (bin (file-name-concat hidden "bin"))
+             (target (file-name-concat bin "runner"))
+             (alias (file-name-concat hidden "runner-alias"))
+             (link (file-name-concat resource "runner"))
+             (result (file-name-concat root "result"))
+             (command (list link "started" result))
+             (mevedel-protected-paths
+              `((,link . inaccessible)
+                (,(concat hidden "/**") . inaccessible)))
+             prepared output-buffer)
+        (unwind-protect
+            (progn
+              (make-directory bin t)
+              (with-temp-file target
+                (insert "#!/bin/sh\nprintf '%s' \"$1\" > \"$2\"\n"))
+              (set-file-modes target #o700)
+              (make-symbolic-link "bin/runner" alias)
+              (make-symbolic-link "hidden/runner-alias" link)
+              (setq prepared
+                    (mevedel-sandbox-prepare
+                     command root (list root)
+                     `(:file-system ((:path ,link :access read)))))
+              (should-not (plist-get prepared :error))
+              (should (equal command (plist-get prepared :original-command)))
+              (should (member (file-truename target)
+                              (plist-get prepared :command)))
+              (setq output-buffer
+                    (generate-new-buffer " *mevedel-bwrap-link-test*"))
+              (let ((status
+                     (apply #'call-process
+                            (car (plist-get prepared :command))
+                            nil output-buffer nil
+                            (cdr (plist-get prepared :command)))))
+                (unless (zerop status)
+                  (ert-fail
+                   (format "Bubblewrap exited %s: %s"
+                           status
+                           (with-current-buffer output-buffer
+                             (buffer-string))))))
+              (should (equal "started"
+                             (with-temp-buffer
+                               (insert-file-contents result)
+                               (buffer-string))))
+              (let ((facts (plist-get prepared :facts)))
+                (should (eq 'bubblewrap (plist-get facts :sandbox)))
+                (should (eq 'workspace-write (plist-get facts :filesystem)))
+                (should (memq (plist-get facts :proc) '(fresh host)))
+                (should (eq 'isolated (plist-get facts :network))))
+              (with-current-buffer output-buffer
+                (should (member (plist-get prepared :marker)
+                                (split-string (buffer-string) "\n" nil)))))
+          (when (buffer-live-p output-buffer)
+            (kill-buffer output-buffer))
+          (mevedel-sandbox-cleanup prepared)
+          (delete-directory resource t)
+          (delete-directory root t)))))
   :doc "real additive network:
 default confinement cannot reach a host listener but network escalation can"
   (let ((mevedel-sandbox-mode 'required)
