@@ -103,6 +103,7 @@ Data model
   mevedel-execution.el        bounded child-process lifecycle and session state
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
+  mevedel-sandbox-grants.el   exact FD-backed grants and symlink mount planning
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline

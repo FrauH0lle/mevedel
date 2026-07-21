@@ -22,6 +22,22 @@
                   "mevedel-permissions" ())
 (defvar mevedel-protected-paths)
 
+;; `mevedel-sandbox-grants'
+(declare-function mevedel-sandbox--additional-filesystem-mounts
+                  "mevedel-sandbox-grants" (permissions &optional first-fd))
+(declare-function mevedel-sandbox--fd-backed-command
+                  "mevedel-sandbox-grants" (command paths))
+(declare-function mevedel-sandbox--grant-paths
+                  "mevedel-sandbox-grants" (grant))
+(declare-function mevedel-sandbox--granted-path-mounts
+                  "mevedel-sandbox-grants" (arguments permissions))
+(declare-function mevedel-sandbox--open-granted-paths
+                  "mevedel-sandbox-grants" (arguments permissions))
+(declare-function mevedel-sandbox--protected-remounts
+                  "mevedel-sandbox-grants" (arguments permissions))
+(declare-function mevedel-sandbox--resolve-filesystem-permissions
+                  "mevedel-sandbox-grants" (permissions))
+
 
 ;;
 ;;; Configuration and state
@@ -610,91 +626,6 @@ has concurrent child invocations.  Return TOKEN."
     (setq mevedel-sandbox--last-facts facts)
     (list :state 'unrestricted :command command :facts facts)))
 
-(defun mevedel-sandbox--additional-filesystem-mounts
-    (permissions &optional first-fd)
-  "Return FD-backed exact mounts for normalized filesystem PERMISSIONS.
-FIRST-FD defaults to 10."
-  (let (arguments paths)
-    (dolist (grant (plist-get permissions :file-system))
-      (let ((path (plist-get grant :path))
-            (access (plist-get grant :access))
-            (fd (+ (or first-fd 10) (length paths))))
-        (unless (and (stringp path)
-                     (file-name-absolute-p path)
-                     (file-exists-p path))
-          (signal
-           'mevedel-sandbox-policy-error
-           (list (format "Additional filesystem path is unavailable: %S"
-                         path))))
-        (unless (memq access '(read write))
-          (signal
-           'mevedel-sandbox-policy-error
-           (list (format "Invalid additional filesystem access: %S"
-                         access))))
-        (setq arguments
-              (append arguments
-                      (list (if (eq access 'write)
-                                "--bind-fd"
-                              "--ro-bind-fd")
-                            (number-to-string fd) path))
-              paths (append paths (list path)))))
-    (list :arguments arguments :paths paths)))
-
-(defun mevedel-sandbox--fd-backed-command (command paths)
-  "Return COMMAND wrapped to preserve exact host PATHS on file descriptors."
-  (if (not paths)
-      command
-    (let ((bash (executable-find "bash")))
-      (unless bash
-        (signal 'mevedel-sandbox-policy-error
-                '("Additive filesystem confinement requires 'bash'")))
-      (let* ((count (length paths))
-             (open-forms
-              (cl-loop for index from 1 to count
-                       for fd from 10
-                       collect (format "exec %d<\"$%d\"" fd index)))
-             (script
-              (string-join
-               (append open-forms
-                       (list (format "shift %d" count) "exec \"$@\""))
-               "; ")))
-        (append (list bash "-p" "-c" script "mevedel-sandbox-fds")
-                paths command)))))
-
-(defun mevedel-sandbox--open-granted-parent-traversal
-    (arguments permissions)
-  "Allow traversal through masked parents in ARGUMENTS for exact PERMISSIONS."
-  (let ((updated (copy-sequence arguments))
-        (grants (plist-get permissions :file-system)))
-    (cl-loop for tail on updated
-             when (and (equal (car tail) "--perms")
-                       (equal (nth 1 tail) "000")
-                       (equal (nth 2 tail) "--tmpfs")
-                       (stringp (nth 3 tail))
-                       (cl-some
-                        (lambda (grant)
-                          (let ((parent (file-name-as-directory
-                                         (expand-file-name (nth 3 tail))))
-                                (path (expand-file-name
-                                       (plist-get grant :path))))
-                            (string-prefix-p parent path)))
-                        grants))
-             do (setcar (cdr tail) "0111"))
-    updated))
-
-(defun mevedel-sandbox--protected-remounts (arguments permissions)
-  "Return protected remount ARGUMENTS not superseded by exact PERMISSIONS."
-  (cl-loop for (option path) on arguments by #'cddr
-           unless (cl-some
-                   (lambda (grant)
-                     (and (eq (plist-get grant :access) 'write)
-                          (string=
-                           (directory-file-name (expand-file-name path))
-                           (directory-file-name
-                            (expand-file-name (plist-get grant :path))))))
-                   (plist-get permissions :file-system))
-           append (list option path)))
-
 (defun mevedel-sandbox--confined-preparation
     (command workdir writable-roots executable mount-proc-p
              additional-permissions)
@@ -702,6 +633,7 @@ FIRST-FD defaults to 10."
 MOUNT-PROC-P requests a fresh proc filesystem for the PID namespace.
 ADDITIONAL-PERMISSIONS is the validated additive execution profile."
   (require 'cl-lib)
+  (require 'mevedel-sandbox-grants)
   (let* ((canonical-workdir
           (file-name-as-directory (file-truename workdir)))
          (roots (mevedel-sandbox--canonical-directories writable-roots)))
@@ -722,11 +654,12 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
             (mevedel-sandbox--protected-restrictions
              canonical-workdir roots))
            (filesystem-permissions
-            (cl-remove-if
-             (lambda (grant)
-               (member (expand-file-name (plist-get grant :path))
-                       mevedel-sandbox-intrinsic-paths))
-             (plist-get additional-permissions :file-system)))
+            (mevedel-sandbox--resolve-filesystem-permissions
+             (cl-remove-if
+              (lambda (grant)
+                (member (expand-file-name (plist-get grant :path))
+                        mevedel-sandbox-intrinsic-paths))
+              (plist-get additional-permissions :file-system))))
            (effective-permissions
             (plist-put (copy-sequence additional-permissions)
                        :file-system filesystem-permissions))
@@ -742,16 +675,17 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
            (ancestor-permissions
             (cl-remove-if-not
              (lambda (grant)
-               (let ((grant-path
-                      (directory-file-name
-                       (expand-file-name (plist-get grant :path)))))
-                 (cl-some
-                  (lambda (protected-path)
-                    (and (not (string-equal grant-path protected-path))
-                         (string-prefix-p
-                          (file-name-as-directory grant-path)
-                          protected-path)))
-                  protected-paths)))
+               (cl-some
+                (lambda (grant-path)
+                  (let ((grant-path (directory-file-name grant-path)))
+                    (cl-some
+                     (lambda (protected-path)
+                       (and (not (string-equal grant-path protected-path))
+                            (string-prefix-p
+                             (file-name-as-directory grant-path)
+                             protected-path)))
+                     protected-paths)))
+                (mevedel-sandbox--grant-paths grant)))
              filesystem-permissions))
            (post-protection-permissions
             (cl-set-difference filesystem-permissions ancestor-permissions
@@ -785,7 +719,10 @@ ADDITIONAL-PERMISSIONS is the validated additive execution profile."
               (lambda (root) (list "--bind" root root))
               roots)
              (plist-get ancestor-mounts :arguments)
-             (mevedel-sandbox--open-granted-parent-traversal
+             (mevedel-sandbox--open-granted-paths
+              (plist-get protected :arguments)
+              effective-permissions)
+             (mevedel-sandbox--granted-path-mounts
               (plist-get protected :arguments)
               effective-permissions)
              (plist-get post-protection-mounts :arguments)
