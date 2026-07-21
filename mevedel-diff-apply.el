@@ -358,17 +358,43 @@ current line if none above."
                   (looking-at-p diff-hunk-header-re))))
     (list files-to-create files-to-remove)))
 
-(defun mevedel-diff-apply-buffer ()
+(defun mevedel-diff-apply-buffer (&optional no-prompt)
   "Apply diff using delete-and-recreate approach for overlay preservation.
 
 Compared to `diff-apply-buffer', this variant adjusts overlays in
 modified buffers and creates or removes files when required.
+
+When NO-PROMPT is non-nil, reject hunks that Emacs would offer to
+repair heuristically instead of prompting or modifying the diff.
 
 This version first trims common prefixes/suffixes from each hunk to find
 the minimal change region.  It then calculates overlay adjustments based
 on this precise region, applies the change, and deletes and re-creates
 the overlays."
   (interactive)
+  (when no-prompt
+    (save-excursion
+      (goto-char (point-min))
+      (diff-beginning-of-hunk t)
+      (while
+          (progn
+            (let* ((start (line-beginning-position))
+                   (end (min (point-max) (+ start 500)))
+                   (diagnostic
+                    (concat (buffer-substring-no-properties start end)
+                            (when (< end (point-max)) "..."))))
+              (condition-case err
+                  (cl-letf (((symbol-function 'y-or-n-p)
+                             (lambda (prompt)
+                               (error "Heuristic repair required: %s" prompt))))
+                    (diff-sanity-check-hunk))
+                (error
+                 (error "Rejected ambiguous diff hunk: %s\n%s"
+                        (error-message-string err)
+                        diagnostic))))
+            (and (not (eq (prog1 (point) (ignore-errors (diff-hunk-next)))
+                          (point)))
+                 (looking-at-p diff-hunk-header-re))))))
   (pcase-let ((buffer-edits nil)
               (failures 0)
               (diff-refine nil)
@@ -381,7 +407,7 @@ the overlays."
       (goto-char (point-min))
       (diff-beginning-of-hunk t)
       (while (pcase-let ((`(,buf ,line-offset ,pos ,src ,dst ,switched)
-                          (diff-find-source-location nil nil)))
+                          (diff-find-source-location nil nil no-prompt)))
                (cond ((and line-offset (not switched))
                       (push (list :buf buf :pos pos :src src :dst dst)
                             buffer-edits))

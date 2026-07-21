@@ -114,7 +114,9 @@ patching machinery, which needs a real source path to resolve."
                                          "/dev/null")
                              orig-file mod-file)
                        (list orig-file mod-file) nil session))))
-                (if (string-empty-p output) "" (concat output "\n"))))
+                (cond ((string-empty-p output) "")
+                      ((string-suffix-p "\n" output) output)
+                      (t (concat output "\n")))))
           (when (file-exists-p orig-file) (delete-file orig-file))
           (when (file-exists-p mod-file) (delete-file mod-file)))))))
 
@@ -663,7 +665,9 @@ invalid forms or ranges over the per-request page limit."
 (defun mevedel-tool-fs--call-process-capturing-output
     (name command read-paths &optional writable-roots session)
   "Run helper COMMAND as NAME, returning (EXIT-CODE . OUTPUT).
-READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary."
+READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary.
+OUTPUT is returned unchanged because callers such as `diff' assign
+meaning to leading and trailing whitespace."
   (require 'mevedel-execution)
   (let* ((result (mevedel-execution-run-helper
                   name command read-paths writable-roots
@@ -673,7 +677,7 @@ READ-PATHS and WRITABLE-ROOTS declare the helper's filesystem boundary."
     (when error-data
       (signal (car error-data) (cdr error-data)))
     (cons (plist-get result :exit-code)
-          (string-trim (plist-get result :output)))))
+          (plist-get result :output))))
 
 (defun mevedel-tool-fs--file-size (path)
   "Return PATH's size in bytes, or nil when unavailable."

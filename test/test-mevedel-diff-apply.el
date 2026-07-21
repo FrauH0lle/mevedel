@@ -498,6 +498,59 @@ If CONTENT-P is non-nil, return a list like ((OV-START OV-END OV-TEXT)
        (kill-buffer buf))))
   ,test
   (test)
+  :doc "`mevedel-diff-apply-buffer': noninteractive repair rejection is deterministic and side-effect free"
+  (let* ((original "alpha\nold\nomega\n")
+         (test-file (make-temp-file "mevedel-test-" nil ".txt" original))
+         (test-buffer (find-file-noselect test-file))
+         (diff-buffer (mevedel-test--create-diff-buffer
+                       "alpha\nnew\nomega\n" test-buffer))
+         first-error
+         patch-before)
+    (with-current-buffer diff-buffer
+      (let ((inhibit-read-only t))
+        (goto-char (point-min))
+        (re-search-forward "^ alpha$")
+        (beginning-of-line)
+        (delete-char 1)
+        (goto-char (point-max))
+        (dotimes (_ 1000)
+          (insert " \n"))
+        (goto-char (point-min))
+        (re-search-forward (regexp-quote "@@ -1,3 +1,3 @@"))
+        (replace-match "@@ -1,1003 +1,1003 @@" t t))
+      (setq patch-before (buffer-string)))
+    (cl-letf (((symbol-function #'mevedel-workspace)
+               (lambda (&rest _)
+                 (mevedel-workspace-get-or-create
+                  'file test-file (file-name-directory test-file)
+                  (file-name-nondirectory test-file))))
+              ((symbol-function 'y-or-n-p)
+               (lambda (&rest _) (error "Unexpected y-or-n-p")))
+              ((symbol-function 'yes-or-no-p)
+               (lambda (&rest _) (error "Unexpected yes-or-no-p"))))
+      (with-current-buffer diff-buffer
+        (let ((default-directory (temporary-file-directory)))
+          (setq first-error
+                (error-message-string
+                 (should-error (mevedel-diff-apply-buffer t))))
+          (should (equal first-error
+                         (error-message-string
+                          (should-error (mevedel-diff-apply-buffer t))))))))
+    (should (string-match-p "Rejected ambiguous diff hunk" first-error))
+    (should (string-match-p "Heuristic repair required" first-error))
+    (should (string-match-p (regexp-quote "@@ -1,1003 +1,1003 @@")
+                            first-error))
+    (should (< (length first-error) 700))
+    (should (string-match-p "\\.\\.\\." first-error))
+    (with-current-buffer diff-buffer
+      (should (equal patch-before (buffer-string))))
+    (with-current-buffer test-buffer
+      (should (equal original (buffer-string)))
+      (should-not (buffer-modified-p)))
+    (should (equal original
+                   (with-temp-buffer
+                     (insert-file-contents test-file)
+                     (buffer-string)))))
   :doc "`mevedel-diff-apply-buffer':
 Regression: one directive overlay touched by multiple hunks is moved once and saved"
   (let* ((buffer-text "header\nstart\nold-one\nmid-1\nmid-2\nmid-3\nmid-4\nmid-5\nmid-6\nmid-7\nmid-8\nold-two\nend\nfooter\n")
