@@ -55,6 +55,100 @@
            (directory-files (file-name-concat root "artifacts")
                             nil "\\`execution-")))
       (delete-directory root t)))
+  :doc "reconciles a child that exits immediately before the yield callback"
+  (let* ((root (make-temp-file "mevedel-managed-yield-race-" t))
+         (session (test-mevedel-execution--session root))
+         (original-make-process (symbol-function 'make-process))
+         (original-run-at-time (symbol-function 'run-at-time))
+         (mevedel-sandbox-mode 'off)
+         yield record observation)
+    (unwind-protect
+        (cl-letf (((symbol-function 'make-process)
+                   (lambda (&rest args)
+                     (apply original-make-process
+                            (plist-put args :sentinel #'ignore))))
+                  ((symbol-function 'run-at-time)
+                   (lambda (time repeat function &rest args)
+                     (cond
+                      ((eq function #'mevedel-execution--yield-managed)
+                       (setq record (car args)
+                             yield (lambda () (apply function args)))
+                       (funcall original-run-at-time 3600 nil #'ignore))
+                      ((and (equal time 0.1) (equal repeat 0.1))
+                       (funcall original-run-at-time 3600 nil #'ignore))
+                      (t
+                       (apply original-run-at-time
+                              time repeat function args))))))
+          (mevedel-execution-start-bash
+           (lambda (value) (setq observation value))
+           :session session :owner "main"
+           :command '("sh" "-c" "printf done")
+           :workdir root :writable-roots (list root)
+           :artifact-directory (file-name-concat root "artifacts")
+           :yield-time-ms 10)
+          (should yield)
+          (test-mevedel-execution--wait
+           (lambda ()
+             (memq (process-status
+                    (mevedel-execution--record-process record))
+                   '(exit signal))))
+          (funcall yield)
+          (test-mevedel-execution--wait (lambda () observation))
+          (should (equal "done" (plist-get observation :output)))
+          (should (eq 'completed
+                      (plist-get (plist-get observation :facts) :state)))
+          (should-not (plist-get (plist-get observation :facts)
+                                 :execution-id)))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
+  :doc "keeps completion pollable when the child exits after yielding"
+  (let* ((root (make-temp-file "mevedel-managed-after-yield-" t))
+         (gate (file-name-concat root "finish"))
+         (session (test-mevedel-execution--session root))
+         (original-run-at-time (symbol-function 'run-at-time))
+         (mevedel-sandbox-mode 'off)
+         yield initial final repeated unchanged id)
+    (unwind-protect
+        (let ((mevedel-execution-mailbox-delivery-function nil))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (time repeat function &rest args)
+                       (if (eq function #'mevedel-execution--yield-managed)
+                           (progn
+                             (setq yield
+                                   (lambda () (apply function args)))
+                             (funcall original-run-at-time
+                                      3600 nil #'ignore))
+                         (apply original-run-at-time
+                                time repeat function args)))))
+            (mevedel-execution-start-bash
+             (lambda (value) (setq initial value))
+             :session session :owner "main"
+             :command
+             (list "sh" "-c"
+                   "while test ! -e \"$1\"; do sleep .01; done; printf done"
+                   "after-yield" gate)
+             :workdir root :writable-roots (list root)
+             :artifact-directory (file-name-concat root "artifacts")
+             :yield-time-ms 10)
+            (should yield)
+            (funcall yield)
+            (should (eq 'running
+                        (plist-get (plist-get initial :facts) :state)))
+            (setq id (plist-get (plist-get initial :facts) :execution-id))
+            (write-region "" nil gate nil 'silent)
+            (setq final (test-mevedel-execution--observe session id))
+            (setq repeated
+                  (test-mevedel-execution--observe session id))
+            (should (equal "done" (plist-get final :output)))
+            (should (eq 'completed
+                        (plist-get (plist-get final :facts) :state)))
+            (should (equal final repeated))
+            (aset (plist-get repeated :output) 0 ?X)
+            (setq unchanged
+                  (test-mevedel-execution--observe session id))
+            (should (equal "done" (plist-get unchanged :output)))))
+      (mevedel-execution-teardown-session session)
+      (delete-directory root t)))
   :doc "exposes the exact Bash command in every observation"
   (let* ((root (make-temp-file "mevedel-managed-command-" t))
          (session (test-mevedel-execution--session root))
@@ -416,7 +510,7 @@
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
          (mevedel-execution--child-kill-delay 0.05)
-         initial first final id)
+         initial first final repeated id)
     (unwind-protect
         (progn
           (setq initial
@@ -438,8 +532,12 @@
           (should (plist-get final :claimed-final-p))
           (should (eq 'completed
                       (plist-get (plist-get final :facts) :state)))
+          (setq repeated
+                (test-mevedel-execution--observe session id))
+          (should (equal final repeated))
           (should-error
-           (mevedel-execution-observe session "main" id #'ignore)
+           (mevedel-execution-observe
+            session "main" "exec-unknown" #'ignore)
            :type 'mevedel-execution-not-found))
       (delete-directory root t)))
   :doc "writes repeated PTY input and returns only newly unread output"
@@ -599,16 +697,18 @@
           (should (equal "finished" (plist-get final :output)))
           (should (plist-get final :claimed-final-p)))
       (delete-directory root t)))
-  :doc "independent completion secures one mailbox event and retires the handle"
+  :doc "independent completion publishes once and remains idempotently pollable"
   (let* ((root (make-temp-file "mevedel-managed-mailbox-complete-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         events initial id)
+         events initial repeated id mailbox-calls)
     (unwind-protect
         (let ((mevedel-execution-event-functions
                (list (lambda (event) (push event events))))
               (mevedel-execution-mailbox-delivery-function
-               (lambda (_event _context) t)))
+               (lambda (_event _context)
+                 (setq mailbox-calls (1+ (or mailbox-calls 0)))
+                 t)))
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root '("sh" "-c" "sleep .05; printf done")
@@ -630,9 +730,17 @@
             (should (equal "done" (plist-get event :whole-output)))
             (should (plist-get observation :claimed-final-p)))
           (should-not (mevedel-execution-list session "main"))
-          (should-error
-           (mevedel-execution-observe session "main" id #'ignore)
-           :type 'mevedel-execution-not-found))
+          (setq repeated
+                (test-mevedel-execution--observe session id))
+          (should (equal "done" (plist-get repeated :output)))
+          (should (eq 'completed
+                      (plist-get (plist-get repeated :facts) :state)))
+          (should (= 1 mailbox-calls))
+          (should (= 1
+                     (cl-count-if
+                      (lambda (event)
+                        (eq (plist-get event :type) 'terminal))
+                      events))))
       (delete-directory root t)))
   :doc "mailbox and passive event mutations are isolated from each other"
   (let* ((root (make-temp-file "mevedel-managed-event-isolation-" t))
@@ -721,7 +829,7 @@
   (let* ((root (make-temp-file "mevedel-managed-reentrant-claim-" t))
          (session (test-mevedel-execution--session root))
          (mevedel-sandbox-mode 'off)
-         events initial id reentrant-error)
+         events initial repeated id reentrant-error)
     (unwind-protect
         (let ((mevedel-execution-event-functions
                (list (lambda (event) (push event events))))
@@ -752,9 +860,9 @@
                          (lambda (event)
                            (eq (plist-get event :type) 'terminal))
                          events))))
-          (should-error
-           (mevedel-execution-observe session "main" id #'ignore)
-           :type 'mevedel-execution-not-found))
+          (setq repeated
+                (test-mevedel-execution--observe session id))
+          (should (equal "done" (plist-get repeated :output))))
       (delete-directory root t)))
   :doc "a waiting model observer wins completion without a mailbox duplicate"
   (let* ((root (make-temp-file "mevedel-managed-model-claim-" t))

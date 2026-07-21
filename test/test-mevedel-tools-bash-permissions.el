@@ -2094,7 +2094,10 @@ default Bash keeps bare dot inspection automatic"
          (result (plist-get envelope :result)))
     (should (eq 'error (plist-get envelope :status)))
     (should (string-prefix-p "failure text\n\n<bash-execution" result))
+    (should (string-match-p "state=\"completed\"" result))
     (should-not (string-match-p "Command failed" result))
+    (should (eq 'completed
+                (plist-get (plist-get envelope :render-data) :state)))
     (should (= 7 (plist-get (plist-get envelope :render-data)
                             :exit-code))))
   :doc "keeps trusted injection output clean while retaining hidden facts"
