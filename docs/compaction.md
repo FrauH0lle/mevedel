@@ -110,10 +110,18 @@ from this baseline so the summarization call never pollutes chat usage
 estimates.
 
 The baseline uses gptel's latest request token plist (`info :tokens`)
-when available. `info :tokens-full` is only a fallback for gptel
-versions or backends that do not provide per-request usage. This avoids
-treating cumulative multi-request tool-loop usage as the current
-context footprint.
+when it is present, positive, and no larger than the active model's
+context window. Missing, zero, malformed, or over-window provider usage
+falls back to a fresh chars/4 scan of the model-visible prompt.
+`info :tokens-full` is retained only as cumulative usage telemetry; it
+is never used to decide whether to compact.
+
+Telemetry keeps the provider model, raw provider-context and cumulative usage plists,
+their normalized counts, the provider baseline status, the fresh
+visible-prompt estimate, the chosen source, the model context window,
+the baseline marker, and the request identity. This makes provider
+accounting anomalies diagnosable without allowing cumulative billing
+usage to trigger compaction.
 
 Realized request estimates are media-aware. Inline image payloads in
 OpenAI data URLs, Anthropic base64 image blocks, and Bedrock image byte
@@ -335,10 +343,15 @@ Persisted sessions use split-on-compact:
 
 1. Save and finalize the current `segment-NNNN.chat.org`.
 2. Increment `mevedel-session-current-segment`.
-3. Repoint the data buffer to the new segment file.
-4. Rebuild the buffer with segment properties, a leading
-   `#+begin_summary` block, preserved tail, and pending prompt.
-5. Save the new segment and update the sidecar.
+3. Build the new persisted contents in a temporary buffer.
+4. Publish them through a same-directory atomic rename.
+5. Repoint the data buffer's complete visited-file identity, restore any
+   unsaved pending prompt, and update the sidecar.
+
+Rotation never saves through a dynamically rebound `buffer-file-name`.
+Automatic compaction therefore cannot enter Emacs's interactive
+supersession or backup-file prompt paths while publishing the successor
+segment.
 
 Old segment files remain on disk and stay available through
 `mevedel-rewind`. The live view skips the leading summary block when
