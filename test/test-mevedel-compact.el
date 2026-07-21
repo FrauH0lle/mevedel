@@ -366,6 +366,9 @@
                                             :output 7)))))
       (mevedel--compact-record-token-baseline fsm)
       (should (= (plist-get mevedel--known-token-baseline :tokens) 22))
+      (should (eq (plist-get mevedel--known-token-baseline :source) 'tokens))
+      (should (= (plist-get mevedel--known-token-baseline :raw-tokens) 22))
+      (should (= (plist-get mevedel--known-token-baseline :raw-tokens-full) 22))
       (should (= (plist-get mevedel--known-token-baseline :input-tokens) 15))
       (should (= (plist-get mevedel--known-token-baseline :output-tokens) 7))
       (goto-char (point-max))
@@ -381,6 +384,8 @@
                              :tokens-full '(:input 1000 :output 500)))))
       (mevedel--compact-record-token-baseline fsm)
       (should (= (plist-get mevedel--known-token-baseline :tokens) 15))
+      (should (= (plist-get mevedel--known-token-baseline :raw-tokens-full)
+                 1500))
       (should (= (plist-get mevedel--known-token-baseline :input-tokens) 10))
       (should (= (plist-get mevedel--known-token-baseline :output-tokens) 5))))
 
@@ -391,7 +396,9 @@
                  :info (list :buffer chat-buffer
                              :tokens-full '(:input 10 :output 7)))))
       (mevedel--compact-record-token-baseline fsm)
-      (should (= (plist-get mevedel--known-token-baseline :tokens) 17))))
+      (should (= (plist-get mevedel--known-token-baseline :tokens) 17))
+      (should (eq (plist-get mevedel--known-token-baseline :source)
+                  'tokens-full))))
 
   :doc "ignores compaction request token usage"
   (with-temp-buffer
@@ -403,6 +410,69 @@
                              :tokens-full '(:input 10 :output 7)))))
       (mevedel--compact-record-token-baseline fsm)
       (should (null mevedel--known-token-baseline)))))
+
+(mevedel-deftest mevedel--compact-model-visible-chars
+  (:doc "counts only model-visible characters outside file-local variables")
+  (with-temp-buffer
+    (insert "abcdWXYZ")
+    (put-text-property 5 9 'gptel 'ignore)
+    (should (= 4 (mevedel--compact-model-visible-chars)))))
+
+(mevedel-deftest mevedel--compact-current-request-id
+  (:doc "returns only a live mevedel request identifier")
+  (with-temp-buffer
+    (let ((mevedel--current-request
+           (mevedel-request--create :id "request-test" :origin "/root")))
+      (should (equal "request-test" (mevedel--compact-current-request-id))))))
+
+(mevedel-deftest mevedel--compact-telemetry-inputs
+  (:doc "captures provider counts, thresholds, marker, and visible size")
+  (with-temp-buffer
+    (insert "abcdefgh")
+    (put-text-property 5 9 'gptel 'ignore)
+    (let ((mevedel--known-token-baseline
+           (list :source 'tokens :raw-tokens 21 :raw-tokens-full 25
+                 :position (copy-marker 5))))
+      (cl-letf (((symbol-function 'mevedel--compact-workload-policy)
+                 (lambda () '(:kind summary)))
+                ((symbol-function 'mevedel--compact-policy-threshold-tokens)
+                 (lambda (policy)
+                   (if (eq (plist-get policy :kind) 'summary) 80 90)))
+                ((symbol-function 'mevedel--model-context-window)
+                 (lambda (_) 1000))
+                ((symbol-function 'mevedel--compact-estimate-buffer-tokens)
+                 (lambda (_) 2)))
+        (let ((facts (mevedel--compact-telemetry-inputs
+                      25 '(:model model :kind target))))
+          (should (= 21 (plist-get facts :raw-tokens)))
+          (should (= 25 (plist-get facts :raw-tokens-full)))
+          (should (= 80 (plist-get facts :threshold)))
+          (should (= 1000 (plist-get facts :model-context-window)))
+          (should (= 8 (plist-get facts :buffer-chars-total)))
+          (should (= 4 (plist-get facts :buffer-chars-model-visible))))))))
+
+(mevedel-deftest mevedel--compact-provider-wait
+  (:doc "records provider dispatch before forwarding the FSM wait")
+  (let* ((session (mevedel-session--create :name "provider-dispatch"))
+         (buffer (generate-new-buffer " *compact-provider-dispatch*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :mevedel-request-id "request-1"
+                           :model 'model :reasoning-effort 'high)))
+         captured forwarded)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session event &rest props)
+                       (setq captured (cons event props))))
+                    ((symbol-function 'gptel--handle-wait)
+                     (lambda (value) (setq forwarded value))))
+            (mevedel--compact-provider-wait fsm))
+          (should (eq fsm forwarded))
+          (should (eq 'provider-dispatch (car captured)))
+          (should (equal "request-1"
+                         (plist-get (cdr captured) :request-id))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel--compact-queue-file-reference-reminder
   (:after-each (mevedel-workspace-clear-registry))

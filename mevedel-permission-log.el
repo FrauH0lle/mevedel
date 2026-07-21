@@ -20,9 +20,14 @@
 (declare-function mevedel-session-permission-log-pending
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 
 ;;
@@ -125,7 +130,13 @@
           (mevedel-permission-log--persist session entry)
         (setf (mevedel-session-permission-log-pending session)
               (append (mevedel-session-permission-log-pending session)
-                      (list entry)))))))
+                      (list entry))))
+      (when (fboundp 'mevedel-telemetry-record)
+        (apply #'mevedel-telemetry-record session event
+               :permission-mode-base
+               (mevedel-session-permission-mode session)
+               :permission-mode-effective (plist-get props :mode)
+               props)))))
 
 (provide 'mevedel-permission-log)
 

@@ -117,6 +117,12 @@
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-current-session
+                  "mevedel-telemetry" (&optional buffer))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec--register "mevedel-tool-exec" ())
 
@@ -1733,7 +1739,31 @@ for first-class local commands that own their dispatch semantics.
 Inline and fork contexts are callback-driven.  Inline invocation
 calls CALLBACK with a prepared body; fork invocation spawns a retained
 asynchronous agent and calls CALLBACK when that turn settles."
-  (let ((skill-name (and skill (mevedel-skill-name skill))))
+  (let* ((skill-name (and skill (mevedel-skill-name skill)))
+         (session (and (fboundp 'mevedel-telemetry-current-session)
+                       (mevedel-telemetry-current-session)))
+         (started-at (float-time))
+         (original-callback callback)
+         (callback
+          (lambda (outcome)
+            (when (and session (fboundp 'mevedel-telemetry-record))
+              (mevedel-telemetry-record
+               session 'skill-invocation-settled
+               :skill-name skill-name
+               :origin origin
+               :status (plist-get outcome :status)
+               :kind (plist-get outcome :kind)
+               :reason (plist-get outcome :reason)
+               :duration-ms (round (* 1000.0
+                                      (- (float-time) started-at)))))
+            (funcall original-callback outcome))))
+    (when (and session (fboundp 'mevedel-telemetry-record))
+      (mevedel-telemetry-record
+       session 'skill-invocation-requested
+       :skill-name skill-name
+       :origin origin
+       :context (and skill (mevedel-skill-context skill))
+       :skip-gates (and skip-gates t)))
     (cond
      ((not (mevedel-skill-p skill))
       (mevedel-skills--invoke-error

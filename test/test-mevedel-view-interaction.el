@@ -144,6 +144,31 @@
         (should (eq 'running (mevedel-agent-record-activity record)))
         (should-not (mevedel-agent-record-blockers record))))))
 
+(mevedel-deftest mevedel-view--interaction-telemetry-close
+  (:doc "records base and effective permission modes at open and close")
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :name "interaction-telemetry"
+                    :permission-mode 'full-auto))
+          events)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                   (lambda (_session event &rest props)
+                     (push (cons event props) events))))
+          (mevedel-view--interaction-register
+           '(:kind permission :id permission :origin "/root" :body "allow"))
+          (mevedel-view--interaction-unregister 'permission))
+        (dolist (event events)
+          (should (eq 'full-auto
+                      (plist-get (cdr event) :permission-mode-base)))
+          (should (eq 'full-auto
+                      (plist-get (cdr event) :permission-mode-effective))))
+        (should (assq 'interaction-opened events))
+        (should (assq 'interaction-closed events))))))
+
 (mevedel-deftest mevedel-view--interaction-delete-overlay ()
   ,test
   (test)

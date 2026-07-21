@@ -53,6 +53,8 @@ Layout:
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
+  telemetry-log.el                   ; correlated lifecycle events, one plist/line
+  diagnostics/run-*/                 ; profiler and full-suite resource reports
   goals/<goal-id>/                   ; one Goal's cycle artifacts and index
     current-plan.md                  ; mutable proposal being approved
     cycle-001-plan.md                ; immutable accepted cycle plan
@@ -76,6 +78,11 @@ conversation locations. It also records `:preset-name` and the resolved
 buffer-local mevedel variables in `:preset-settings`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
 gptel's own buffer-local settings continue to use its Org persistence.
+
+The telemetry stream and diagnostics directory are observational artifacts,
+not resumable state. They are append-only within a run and are never consulted
+to restore a session. See [`telemetry.md`](telemetry.md) for the event schema,
+redaction boundary, and profiler procedure.
 
 The Goal cycle index stores artifact references, structured review verdicts,
 provider/effort selections, hashes, and timestamps, but not plan or review

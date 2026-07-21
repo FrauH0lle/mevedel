@@ -1728,17 +1728,21 @@ The result is (WORKSPACE TEMPDIR MISSING-DIR REPLACEMENT-DIR SESSION-DIR)."
                 (mevedel-tool-repair-log-event session repair-event)
                 (mevedel-permission-log
                  session 'permission-decision :tool-name "Read")
+                (mevedel-telemetry-record
+                 session 'test-lifecycle :outcome 'buffered)
                 (with-current-buffer buf
                   (org-mode)
                   (mevedel-session-persistence-ensure-files session buf))
                 (dolist (file '("hook-log.el" "repair-log.el"
-                                "permission-log.el"))
+                                "permission-log.el" "telemetry-log.el"))
                   (should
                    (file-readable-p
                     (file-name-concat
                      (mevedel-session-save-path session) file))))
                 (should-not
-                 (mevedel-session-permission-log-pending session)))
+                 (mevedel-session-permission-log-pending session))
+                (should-not
+                 (mevedel-session-telemetry-pending session)))
             (when (buffer-live-p buf)
               (kill-buffer buf))))
       (delete-directory tempdir t)

@@ -73,6 +73,8 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/compaction.md`](docs/compaction.md) — manual and automatic
   conversation compaction, token thresholds, gptel token baseline,
   anchored summaries, tail preservation, segment integration
+- [`docs/telemetry.md`](docs/telemetry.md) — append-only lifecycle telemetry,
+  data policy, profiler artifacts, prompt guard, Goal reproduction procedure
 - [`docs/tutor.md`](docs/tutor.md) — Socratic tutor workflow, hint
   persistence
 - [`docs/commits.md`](docs/commits.md) — commit message format and
@@ -101,6 +103,7 @@ Data model
   mevedel-execution.el        bounded child-process lifecycle and session state
   mevedel-execution-scheduler.el fair session-scoped Bash admission
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
+  mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads

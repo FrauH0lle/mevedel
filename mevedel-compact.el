@@ -34,6 +34,7 @@
 (declare-function gptel--fsm-transition "ext:gptel-request"
                   (machine &optional new-state))
 (declare-function gptel--handle-wait "ext:gptel-request" (fsm))
+(declare-function gptel-backend-name "ext:gptel" (backend))
 (declare-function gptel--merge-plists "ext:gptel-request" (&rest plists))
 (declare-function gptel--model-request-params "ext:gptel-request" (model))
 (declare-function gptel--realize-query "ext:gptel-request" (fsm))
@@ -115,6 +116,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-file-interaction-read-turn
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-id "mevedel-structs" (cl-x))
+(declare-function mevedel-request-p "mevedel-structs" (cl-x))
 (declare-function mevedel-session-current-segment
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-enqueue-pending-reminder
@@ -135,12 +138,20 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-skill-invocation-record-turn
                   "mevedel-structs" (cl-x) t)
+(defvar mevedel--current-request)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-start
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--format-hook-audit-record "mevedel-utilities"
@@ -161,16 +172,45 @@
                   "mevedel-view-stream" ())
 (declare-function mevedel-view--stop-spinner "mevedel-view-stream" ())
 (declare-function mevedel-view--update-spinner
-                  "mevedel-view-stream" (status))
+                  "mevedel-view-stream" (status &optional owner))
 (declare-function mevedel-view-stream-commit-execution-row-archive
                   "mevedel-view-stream" (data-buffer plan))
 (declare-function mevedel-view-stream-execution-row-archive-text
                   "mevedel-view-stream" (plan))
 (declare-function mevedel-view-stream-prepare-execution-row-archive
                   "mevedel-view-stream" (data-buffer tool-use-ids))
+(defvar mevedel-view--status-owner-override)
 
 ;; `org'
 (declare-function org-find-property "org" (property &optional value))
+
+
+(defun mevedel--compact-provider-wait (fsm)
+  "Record and dispatch the provider request represented by FSM."
+  (let* ((info (and fsm (gptel-fsm-info fsm)))
+         (chat-buffer (and (listp info) (plist-get info :buffer))))
+    (when (and (buffer-live-p chat-buffer)
+               (fboundp 'mevedel-telemetry-record))
+      (with-current-buffer chat-buffer
+        (when (bound-and-true-p mevedel--session)
+          (mevedel-telemetry-record
+           mevedel--session 'provider-dispatch
+           :request-id (plist-get info :mevedel-request-id)
+           :backend (let ((backend (plist-get info :backend)))
+                      (or (and backend
+                               (ignore-errors
+                                 (gptel-backend-name backend)))
+                          (and (boundp 'gptel-backend)
+                               (ignore-errors
+                                 (gptel-backend-name gptel-backend)))))
+           :model (or (plist-get info :model)
+                      (and (boundp 'gptel-model) gptel-model))
+           :effort (or (plist-get info :reasoning-effort)
+                       (and (boundp 'gptel-reasoning-effort)
+                            gptel-reasoning-effort))
+           :continuation (and (mevedel--compact-continuation-wait-p fsm)
+                              t)))))
+    (gptel--handle-wait fsm)))
 
 
 (defcustom mevedel-compact-context-limit nil
@@ -406,9 +446,31 @@ count never becomes the baseline for the chat buffer."
     (with-current-buffer chat-buffer
       (setq mevedel--known-token-baseline
             (list :tokens count
+                  :source (if (plist-get info :tokens) 'tokens 'tokens-full)
+                  :raw-tokens
+                  (mevedel--compact-token-usage-count
+                   (plist-get info :tokens))
+                  :raw-tokens-full
+                  (mevedel--compact-token-usage-count
+                   (plist-get info :tokens-full))
                   :input-tokens (mevedel--compact-token-usage-input tokens)
                   :output-tokens (or (plist-get tokens :output) 0)
-                  :position (copy-marker (point-max)))))))
+                  :position (copy-marker (point-max))))
+      (when (and (bound-and-true-p mevedel--session)
+                 (fboundp 'mevedel-telemetry-record))
+        (mevedel-telemetry-record
+         mevedel--session 'token-baseline-recorded
+         :request-id (plist-get info :mevedel-request-id)
+         :token-source (if (plist-get info :tokens) 'tokens 'tokens-full)
+         :raw-tokens
+         (mevedel--compact-token-usage-count (plist-get info :tokens))
+         :raw-tokens-full
+         (mevedel--compact-token-usage-count (plist-get info :tokens-full))
+         :chosen-active-context-tokens count
+         :tokens count
+         :input-tokens (mevedel--compact-token-usage-input tokens)
+         :output-tokens (or (plist-get tokens :output) 0)
+         :buffer-position (point-max))))))
 
 (defun mevedel--estimate-tokens ()
   "Estimate the number of tokens in the current buffer.
@@ -437,6 +499,50 @@ excludes file-local variables block."
                                       pos)))))
           (setq pos next)))
       (/ total 4))))
+
+(defun mevedel--compact-model-visible-chars ()
+  "Return model-visible character count in the current buffer."
+  (let ((pos (point-min))
+        (total 0)
+        (flv-start (mevedel--file-local-variables-start)))
+    (while (< pos (point-max))
+      (let* ((next (next-single-property-change pos 'gptel nil (point-max)))
+             (end (if (and flv-start (> next flv-start)) flv-start next)))
+        (when (and (not (eq (get-text-property pos 'gptel) 'ignore))
+                   (or (null flv-start) (< pos flv-start)))
+          (cl-incf total (- end pos)))
+        (setq pos next)))
+    total))
+
+(defun mevedel--compact-current-request-id ()
+  "Return the active request identifier in the current buffer, or nil."
+  (and (bound-and-true-p mevedel--current-request)
+       (mevedel-request-p mevedel--current-request)
+       (mevedel-request-id mevedel--current-request)))
+
+(defun mevedel--compact-telemetry-inputs (estimate target-policy)
+  "Return detailed compaction telemetry for ESTIMATE and TARGET-POLICY."
+  (let* ((baseline mevedel--known-token-baseline)
+         (position (plist-get baseline :position))
+         (summary-policy (mevedel--compact-workload-policy)))
+    (list
+     :request-id (mevedel--compact-current-request-id)
+     :raw-tokens (plist-get baseline :raw-tokens)
+     :raw-tokens-full (plist-get baseline :raw-tokens-full)
+     :chosen-active-context-tokens estimate
+     :chosen-source (or (plist-get baseline :source) 'character-estimate)
+     :fresh-visible-prompt-estimate
+     (mevedel--compact-estimate-buffer-tokens (current-buffer))
+     :model-context-window
+     (mevedel--model-context-window (plist-get target-policy :model))
+     :threshold
+     (min (mevedel--compact-policy-threshold-tokens target-policy)
+          (mevedel--compact-policy-threshold-tokens summary-policy))
+     :baseline-marker-position
+     (and (integer-or-marker-p position)
+          (if (markerp position) (marker-position position) position))
+     :buffer-chars-total (buffer-size)
+     :buffer-chars-model-visible (mevedel--compact-model-visible-chars))))
 
 (defun mevedel--compact-estimate-buffer-tokens (buffer)
   "Return a fresh token estimate for BUFFER."
@@ -1101,21 +1207,44 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
   "Return automatic compaction admission for TOKEN-ESTIMATE, or nil."
   (let* ((estimate (or token-estimate (mevedel--estimate-tokens)))
          (target-policy (mevedel--compact-target-policy))
-         (admission (mevedel--compact-admission estimate target-policy)))
-    (cond
-     ((not admission) nil)
-     ((mevedel--compact-auto-eligible-p)
-      admission)
-     ((not mevedel--compact-auto-ineligible-warning-shown)
-      (setq mevedel--compact-auto-ineligible-warning-shown t)
-      (display-warning
-       'mevedel
-       (format "Auto-compaction skipped: %s"
-               (or (mevedel--compact-auto-ineligible-reason)
-                   "session is not eligible"))
-       :warning)
-      nil)
-     (t nil))))
+         (admission (mevedel--compact-admission estimate target-policy))
+         (eligible (and admission (mevedel--compact-auto-eligible-p)))
+         (ineligible-reason (and admission
+                                 (not eligible)
+                                 (mevedel--compact-auto-ineligible-reason)))
+         (decision
+          (cond
+           ((not admission) nil)
+           (eligible admission)
+           ((not mevedel--compact-auto-ineligible-warning-shown)
+            (setq mevedel--compact-auto-ineligible-warning-shown t)
+            (display-warning
+             'mevedel
+             (format "Auto-compaction skipped: %s"
+                     (or ineligible-reason "session is not eligible"))
+             :warning)
+            nil)
+           (t nil))))
+    (when (and (bound-and-true-p mevedel--session)
+               (fboundp 'mevedel-telemetry-record))
+      (apply #'mevedel-telemetry-record
+             mevedel--session 'compaction-threshold-evaluated
+             :estimate estimate
+             :estimate-source (if mevedel--known-token-baseline
+                                  'provider-baseline
+                                'characters)
+             :target-threshold
+             (mevedel--compact-policy-threshold-tokens target-policy)
+             :summary-threshold
+             (and admission
+                  (mevedel--compact-policy-threshold-tokens
+                   (plist-get admission :summary-policy)))
+             :admitted (and decision t)
+             :target-pressure (and admission
+                                   (plist-get admission :target-pressure))
+             :ineligible-reason ineligible-reason
+             (mevedel--compact-telemetry-inputs estimate target-policy)))
+    decision))
 
 (defun mevedel--compact-apply
     (summary &optional tail-text pending-text hook-audits archive-text)
@@ -1416,7 +1545,8 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
   (when-let* ((view-buffer mevedel--view-buffer)
               (_ (buffer-live-p view-buffer)))
     (with-current-buffer view-buffer
-      (mevedel-view--update-spinner "Compacting..."))))
+      (let ((mevedel-view--status-owner-override 'compaction))
+        (mevedel-view--update-spinner "Compacting...")))))
 
 (defun mevedel--compact-agent-start (target)
   "Show agent TARGET compaction progress."
@@ -1509,6 +1639,18 @@ the active main-session segment."
          (session (plist-get target :session))
          (workspace (plist-get target :workspace))
          (tokens-before (mevedel--estimate-tokens))
+         (target-policy (mevedel--compact-target-policy))
+         (telemetry-span
+          (and session
+               (fboundp 'mevedel-telemetry-start)
+               (apply #'mevedel-telemetry-start
+                      session 'compaction
+                      :trigger (if auto 'auto 'manual)
+                      :aggressive (and aggressive t)
+                      :tokens-before tokens-before
+                      :target-origin (plist-get target :origin)
+                      (mevedel--compact-telemetry-inputs
+                       tokens-before target-policy))))
          (settled nil))
     (cl-labels
         ((finish (finish-err)
@@ -1517,6 +1659,20 @@ the active main-session segment."
              (when (buffer-live-p chat-buffer)
                (with-current-buffer chat-buffer
                  (setq-local mevedel--compaction-in-flight nil)))
+             (when telemetry-span
+               (mevedel-telemetry-finish
+                telemetry-span
+                :outcome (cond
+                          ((null finish-err) 'success)
+                          ((eq finish-err :skip) 'skipped)
+                          (t 'error))
+                :tokens-after
+                (and (buffer-live-p chat-buffer)
+                     (with-current-buffer chat-buffer
+                       (ignore-errors (mevedel--estimate-tokens))))
+                :error-class
+                (and finish-err
+                     (if (symbolp finish-err) finish-err 'compaction-error))))
              (when callback (funcall callback finish-err)))))
       (setq mevedel--compact-current-request-reminder nil
             mevedel--compact-current-request-hook-context nil)
@@ -1533,7 +1689,7 @@ the active main-session segment."
         (unless limit
           (if auto
               (cl-return-from mevedel--compact-run
-                (when callback (funcall callback :skip)))
+                (finish :skip))
             (user-error "Not enough conversation content to compact")))
         (let* ((body-start (plist-get target :body-start))
                (tail-start (mevedel--compact-tail-start
@@ -1577,12 +1733,11 @@ the active main-session segment."
                (max-attempts 3))
           (when (string-blank-p old-content)
             (if auto
-                (cl-return-from mevedel--compact-run
-                  (when callback
-                    (funcall callback
-                             (if (plist-get admission :target-pressure)
-                                 "No compactable history remains at target pressure"
-                               :skip))))
+              (cl-return-from mevedel--compact-run
+                  (finish
+                   (if (plist-get admission :target-pressure)
+                       "No compactable history remains at target pressure"
+                     :skip)))
               (user-error "Not enough conversation content to compact")))
 	          (require 'mevedel-hooks)
 	          (let ((trigger (if auto "auto" "manual")))
@@ -1664,9 +1819,45 @@ the active main-session segment."
                  (send-request (system-prompt hook-audits)
                    (let ((request-stream gptel-stream)
                          (summary-parts nil)
-                         (summary-applied nil))
+                         (summary-applied nil)
+                         (summary-first-response nil)
+                         (summary-span
+                          (and session
+                               (fboundp 'mevedel-telemetry-start)
+                               (mevedel-telemetry-start
+                                session 'compaction-summary-request
+                                :attempt attempt
+                                :backend
+                                (ignore-errors
+                                  (gptel-backend-name
+                                   (plist-get policy :backend)))
+                                :model (plist-get policy :model)
+                                :effort (plist-get policy :effort)))))
                      (cl-labels
-                         ((apply-summary
+                         ((record-first-response
+                           ()
+                           (unless summary-first-response
+                             (setq summary-first-response t)
+                             (when (and session
+                                        (fboundp 'mevedel-telemetry-record))
+                               (mevedel-telemetry-record
+                                session 'compaction-summary-first-response
+                                :attempt attempt))))
+                          (finish-summary-telemetry
+                           (outcome info)
+                           (when summary-span
+                             (mevedel-telemetry-finish
+                              summary-span
+                              :outcome outcome
+                              :input-tokens
+                              (and (listp (plist-get info :tokens))
+                                   (plist-get (plist-get info :tokens) :input))
+                              :output-tokens
+                              (and (listp (plist-get info :tokens))
+                                   (plist-get (plist-get info :tokens)
+                                              :output)))
+                             (setq summary-span nil)))
+                          (apply-summary
                            (summary)
                            (unless summary-applied
                              (setq summary-applied t)
@@ -1706,6 +1897,8 @@ the active main-session segment."
                                             (with-current-buffer chat-buffer
                                               (pcase response
                                                 ('nil
+                                                 (finish-summary-telemetry
+                                                  'error info)
                                                  (fail
                                                   (format "Compaction failed: %s"
                                                           (or (plist-get info :error)
@@ -1713,12 +1906,22 @@ the active main-session segment."
                                                               "unknown error"))
                                                   t))
                                                 ('abort
+                                                 (finish-summary-telemetry
+                                                  'aborted info)
                                                  (fail "Compaction aborted" nil))
                                                 ((pred stringp)
                                                  (if (plist-get info :stream)
-                                                     (push response summary-parts)
+                                                     (progn
+                                                       (record-first-response)
+                                                       (push response
+                                                             summary-parts))
+                                                   (record-first-response)
+                                                   (finish-summary-telemetry
+                                                    'success info)
                                                    (apply-summary response)))
                                                 ('t
+                                                 (finish-summary-telemetry
+                                                  'success info)
                                                  (apply-summary
                                                   (apply #'concat
                                                          (nreverse
@@ -1731,6 +1934,11 @@ the active main-session segment."
                                         (plist-get policy :effort)))
                                    (funcall request-fn)))))
                          (error
+                          (when summary-span
+                            (mevedel-telemetry-finish
+                             summary-span :outcome 'error
+                             :error-class (car-safe request-err))
+                            (setq summary-span nil))
                           (fail (format "%s" request-err) t))))))
                  (begin-attempt ()
                    (cl-incf attempt)
@@ -1911,7 +2119,7 @@ set already stored on FSM's info plist."
       (when-let* ((status-function (plist-get target :resume-status)))
         (funcall status-function target)))
     (mevedel--compact-rebuild-info-data-from-buffer fsm buffer)
-    (gptel--handle-wait fsm)))
+    (mevedel--compact-provider-wait fsm)))
 
 (defun mevedel--compact-agent-terminal-failure (target fsm err)
   "Terminate agent FSM with compaction failure ERR."
@@ -1937,7 +2145,7 @@ set already stored on FSM's info plist."
   "Gate FSM continuation through TARGET using precomputed ADMISSION.
 PENDING-START, when non-nil, begins the continuation batch that must survive."
   (if (not admission)
-      (gptel--handle-wait fsm)
+      (mevedel--compact-provider-wait fsm)
     (let ((pending-start (or pending-start
                              (mevedel--compact-find-boundary))))
       (if (not pending-start)
@@ -1945,7 +2153,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
               (mevedel--compact-target-call
                target :fail fsm
                "No compactable history remains at target pressure")
-            (gptel--handle-wait fsm))
+            (mevedel--compact-provider-wait fsm))
         (mevedel--compact-run
          :pending-start pending-start
          :auto t
@@ -1955,7 +2163,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
          (lambda (err)
            (cond
             ((eq err :skip)
-             (gptel--handle-wait fsm))
+             (mevedel--compact-provider-wait fsm))
             (err
              (mevedel--compact-target-call target :fail fsm err))
             (t
@@ -1975,7 +2183,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
     (if (or (not (mevedel--compact-continuation-wait-p fsm))
             (not (buffer-live-p agent-buffer))
             (not (mevedel-agent-invocation-p invocation)))
-        (gptel--handle-wait fsm)
+        (mevedel--compact-provider-wait fsm)
       (with-current-buffer agent-buffer
         (let* ((target (mevedel--compact-agent-target invocation))
                (target-policy
@@ -2006,7 +2214,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
              nil fsm
              "Agent transcript is not eligible for compaction at target pressure"))
            (t
-            (gptel--handle-wait fsm))))))))
+            (mevedel--compact-provider-wait fsm))))))))
 
 (defun mevedel--compact-handle-wait (fsm)
   "Run continuation auto-compaction for FSM before `gptel--handle-wait'."
@@ -2014,7 +2222,7 @@ PENDING-START, when non-nil, begins the continuation batch that must survive."
          (chat-buffer (and (listp info) (plist-get info :buffer))))
     (if (or (not (mevedel--compact-continuation-wait-p fsm))
             (not (buffer-live-p chat-buffer)))
-        (gptel--handle-wait fsm)
+        (mevedel--compact-provider-wait fsm)
       (with-current-buffer chat-buffer
         (let* ((target-policy
                 (or (plist-get info :mevedel-compaction-target-policy)

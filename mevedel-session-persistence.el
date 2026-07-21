@@ -84,6 +84,13 @@
 (defvar mevedel-pipeline--render-data-close)
 (defvar mevedel-pipeline--render-data-open)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-start
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-records
                   "mevedel-transcript-audit" (text &optional type))
@@ -1008,6 +1015,8 @@ render time."
 
 (defun mevedel-session-persistence--flush-diagnostic-logs (session)
   "Persist SESSION diagnostics buffered before materialization."
+  (when (fboundp 'mevedel-telemetry-flush)
+    (mevedel-telemetry-flush session))
   (when (fboundp 'mevedel-hooks--persist-log-entry)
     (dolist (entry (mevedel-session-hook-log session))
       (mevedel-hooks--persist-log-entry session entry)))
@@ -2213,8 +2222,18 @@ nil if SESSION is not yet materialized."
             tmp-segment
             pending-start-marker
             pending-end-marker)
+        (let ((telemetry-span
+               (and (fboundp 'mevedel-telemetry-start)
+                    (mevedel-telemetry-start
+                     session 'segment-rotation
+                     :old-segment old-current-segment
+                     :new-segment (1+ old-current-segment)))))
         (condition-case err
             (progn
+              (when (fboundp 'mevedel-telemetry-record)
+                (mevedel-telemetry-record
+                 session 'segment-rotation-stage :stage 'old-save-start
+                 :old-segment old-current-segment))
               (mevedel-session-persistence--refresh-visited-file-modtime-or-error
                (when (and pending-text
                           (string-suffix-p
@@ -2228,6 +2247,10 @@ nil if SESSION is not yet materialized."
                   (mevedel-session-persistence--delete-trailing-text
                    pending-text)))
               (when (buffer-modified-p) (save-buffer))
+              (when (fboundp 'mevedel-telemetry-record)
+                (mevedel-telemetry-record
+                 session 'segment-rotation-stage :stage 'old-saved
+                 :old-segment old-current-segment))
               ;; 2. Advance segment counter.
               (cl-incf (mevedel-session-current-segment session))
               ;; 3. Switch buffer-file-name to the new segment.
@@ -2271,8 +2294,16 @@ nil if SESSION is not yet materialized."
                 (delete-region pending-start-marker pending-end-marker))
               (let ((buffer-file-name tmp-segment))
                 (save-buffer))
+              (when (fboundp 'mevedel-telemetry-record)
+                (mevedel-telemetry-record
+                 session 'segment-rotation-stage :stage 'new-temp-saved
+                 :new-segment (mevedel-session-current-segment session)))
               (rename-file tmp-segment new-segment t)
               (mevedel-session-persistence--set-visited-segment-file new-segment)
+              (when (fboundp 'mevedel-telemetry-record)
+                (mevedel-telemetry-record
+                 session 'segment-rotation-stage :stage 'new-published
+                 :new-segment (mevedel-session-current-segment session)))
               (set-buffer-modified-p nil)
               ;; 6. Rewrite the sidecar with the bumped current-segment.
               (setf (mevedel-session-updated-at session)
@@ -2283,6 +2314,9 @@ nil if SESSION is not yet materialized."
                (mevedel-session-persistence--build-sidecar session buffer))
               (mevedel-session-persistence--save-instructions session buffer)
               (mevedel-session-persistence--finalize-segment-file old-segment)
+              (when telemetry-span
+                (mevedel-telemetry-finish
+                 telemetry-span :outcome 'success))
               (when pending-start-marker
                 (goto-char pending-start-marker)
                 (insert pending-text)
@@ -2292,6 +2326,9 @@ nil if SESSION is not yet materialized."
                 (set-buffer-modified-p nil))
               new-segment)
           (error
+           (when telemetry-span
+             (mevedel-telemetry-finish
+              telemetry-span :outcome 'error :error-class (car-safe err)))
            (setf (mevedel-session-current-segment session) old-current-segment)
            (setf (mevedel-session-updated-at session) old-updated-at)
            (setq buffer-file-name old-segment)
@@ -2309,7 +2346,7 @@ nil if SESSION is not yet materialized."
              (delete-file tmp-segment))
            (when (and new-segment (file-exists-p new-segment))
              (delete-file new-segment))
-           (signal (car err) (cdr err))))))))
+           (signal (car err) (cdr err)))))))))
 
 (cl-defun mevedel-session-persistence-start-fresh-segment
     (session buffer &key initial-text)

@@ -2601,6 +2601,34 @@ Each binding is (NAME KEYS)."
            (test-mevedel-goal--fsm buffer 'reviewing))
           (should (eq 'complete (mevedel-goal-status goal))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
+      (delete-directory root t)))
+  :doc "persists a continue verdict before clearing review state"
+  (let* ((root (make-temp-file "mevedel-goal-continue-telemetry-" t))
+         (buffer (generate-new-buffer " *goal-continue-telemetry*"))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root)))
+         (goal (mevedel-goal--create
+                :status 'active :phase 'reviewing :objective "x"
+                :id "goal-continue" :cycle 1 :cycles '((:cycle 1))
+                :review-summary
+                '(:verdict continue :summary "One check remains.")))
+         events)
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session) goal)
+          (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session event &rest props)
+                       (push (cons event props) events))))
+            (mevedel-goal-settle-turn
+             (test-mevedel-goal--fsm buffer 'reviewing)))
+          (should (eq 'planning (mevedel-goal-phase goal)))
+          (should (= 2 (mevedel-goal-cycle goal)))
+          (let ((event (assq 'goal-review-verdict-persisted events)))
+            (should event)
+            (should (eq 'continue (plist-get (cdr event) :verdict)))
+            (should (= 1 (plist-get (cdr event) :settled-cycle)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-goal-dispatch-after-turn ()

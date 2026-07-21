@@ -78,6 +78,42 @@
   "Return updated input for hook cases."
   '(:updated-input (:command "echo rewritten")))
 
+(mevedel-deftest mevedel-hooks--telemetry-handler-id
+  (:doc "is stable for one handler and changes with its executable identity")
+  (let ((handler '(:type command :source project :command "one")))
+    (should (equal (mevedel-hooks--telemetry-handler-id handler)
+                   (mevedel-hooks--telemetry-handler-id handler)))
+    (should-not
+     (equal (mevedel-hooks--telemetry-handler-id handler)
+            (mevedel-hooks--telemetry-handler-id
+             '(:type command :source project :command "two"))))))
+
+(mevedel-deftest mevedel-hooks--run-handlers
+  (:doc "emits a paired handler lifecycle span with context size")
+  (let* ((root (make-temp-file "mevedel-hook-handler-span-" t))
+         (session (mevedel-hooks-test--session root))
+         starts finishes result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-telemetry-start)
+                   (lambda (_session event &rest props)
+                     (push (cons event props) starts)
+                     '(:span handler)))
+                  ((symbol-function 'mevedel-telemetry-finish)
+                   (lambda (_span &rest props) (push props finishes)))
+                  ((symbol-function 'mevedel-telemetry-record)
+                   (lambda (&rest _))))
+          (mevedel-hooks--run-handlers
+           'UserPromptSubmit
+           (list (list :type 'elisp :source 'project
+                       :function (lambda (_) '(:additional-context "abc"))))
+           nil session nil (lambda (decision) (setq result decision)))
+          (should (eq 'hook-handler-lifecycle (caar starts)))
+          (should (eq 'continued (plist-get (car finishes) :outcome)))
+          (should (> (plist-get (car finishes) :context-chars) 0))
+          (should (equal '("abc")
+                         (plist-get result :additional-context))))
+      (delete-directory root t))))
+
 (defvar mevedel-hooks-test--read-eval-ran nil)
 (defvar mevedel-hooks-test--native-seen-event nil)
 (defvar mevedel-hooks-test--seen-event nil)

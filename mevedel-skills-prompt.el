@@ -47,6 +47,10 @@
 ;; `mevedel-structs'
 (defvar mevedel--session)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-get
                   "mevedel-tool-registry" (name &optional category))
@@ -202,11 +206,21 @@ rendering."
   (when (and buffer (buffer-live-p buffer))
     (mevedel-skills--ensure-fresh buffer session))
   (when-let* ((skills (mevedel-skills--listing-candidates session)))
-    (concat "## Skills\n"
-            "A skill is a reusable prompt recipe available through the `Skill` tool. The active skills for this session are listed below by canonical invocation name.\n\n"
-            (mevedel-skills--format-listing skills)
-            "\n\n"
-            mevedel-skills--prompt-contract)))
+    (let* ((listing-result (mevedel-skills--format-listing-result skills))
+           (listing (plist-get listing-result :text)))
+      (when (fboundp 'mevedel-telemetry-record)
+        (mevedel-telemetry-record
+         session 'skills-roster-advertised
+         :skill-count (length skills)
+         :skill-names (mapcar #'mevedel-skill-name skills)
+         :budget-status (plist-get listing-result :status)
+         :omitted-count (plist-get listing-result :omitted)
+         :roster-chars (length listing)))
+      (concat "## Skills\n"
+              "A skill is a reusable prompt recipe available through the `Skill` tool. The active skills for this session are listed below by canonical invocation name.\n\n"
+              listing
+              "\n\n"
+              mevedel-skills--prompt-contract))))
 
 (defun mevedel-skills--skill-snapshot (session)
   "Return SESSION's current active model-visible skill snapshot."

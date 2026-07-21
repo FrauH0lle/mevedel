@@ -26,6 +26,11 @@
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-start
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-tool-registry'
 (declare-function mevedel-tool-args "mevedel-tool-registry" (cl-x) t)
 (declare-function mevedel-tool-get "mevedel-tool-registry"
@@ -810,13 +815,27 @@ Invalid or internally failed repairs return a synthetic `:result' beginning
 with `Error:' so gptel settles the call without invoking its handler."
   (let* ((name (plist-get info :name))
          (args (plist-get info :args))
-         (tool (and name (mevedel-tool-get name))))
+         (tool (and name (mevedel-tool-get name)))
+         (session (and tool (mevedel-tool-repair--current-session)))
+         (telemetry-span
+          (and session
+               (fboundp 'mevedel-telemetry-start)
+               (mevedel-telemetry-start
+                session 'tool-input-validation-repair
+                :tool-name name))))
     (when tool
       (condition-case err
           (let* ((outcome (mevedel-tool-repair-attempt tool args))
                  (status (plist-get outcome :status))
                  (final-args (plist-get outcome :args))
                  (abandoned (plist-get outcome :abandoned-repairs)))
+            (when telemetry-span
+              (mevedel-telemetry-finish
+               telemetry-span
+               :outcome status
+               :repair-count
+               (length (or (plist-get outcome :repairs) abandoned))
+               :issue-count (length (plist-get outcome :issues))))
             (mevedel-tool-repair--record-call
              (mevedel-tool-repair--make-entry
               name status args final-args
@@ -836,6 +855,10 @@ with `Error:' so gptel settles the call without invoking its handler."
                       (mevedel-tool-repair-format-audit-block
                        'abandoned abandoned)))))))
         (error
+         (when telemetry-span
+           (mevedel-telemetry-finish
+            telemetry-span :outcome 'internal-error
+            :error-class (car-safe err)))
          (mevedel-tool-repair--record-call
           (mevedel-tool-repair--make-entry
            name 'internal-error args nil nil

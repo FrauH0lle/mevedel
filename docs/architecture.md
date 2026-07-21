@@ -32,16 +32,20 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   invoked skills, session-scoped hook rules/log/context, permission
   queue, plan queue, selected preset and resolved mevedel preset settings,
   the current session-owned Goal, and a transient bounded tool-input repair
-  log. Its transient `execution-state` slot is opaque outside
+  log. Lifecycle events emitted before session materialization wait in the
+  transient `telemetry-pending` queue and flush to the diagnostic stream; the
+  queue is never persisted as resumable state. Its transient `execution-state`
+  slot is opaque outside
   `mevedel-execution.el`; process records, timers, spools, and process groups
   never enter the general session model or persisted sidecar.
 - **`mevedel-goal`**: stable identity and objective, lifecycle status,
   current phase and cycle, approval policy, owning session, accepted plan
   artifact, lightweight cycle records, structured review result and carried
   findings, and any pause or blocked reason.
-- **`mevedel-request`**: per-turn state: session, file-snapshots,
-  directive UUID, pending plan, cancellers, skill-scoped permission
-  rules, and hook rules. Skill model and effort policy is consumed before
+- **`mevedel-request`**: per-turn state: process-unique request identity,
+  owning session and agent origin, request start time, file-snapshots,
+  directive UUID, pending plan, cancellers, skill-scoped permission rules, and
+  hook rules. Skill model and effort policy is consumed before
   gptel realizes an owning request rather than stored for late mutation.
 - **`mevedel-tool`**: name, handler, description, summary, prompt,
   args, optional semantic `repair-input` callback, category,

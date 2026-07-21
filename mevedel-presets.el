@@ -562,6 +562,12 @@ alist with mevedel-specific handlers added:
                               (mevedel-request-begin
                                mevedel--session
                                mevedel--current-directive-uuid)
+                              (when (and mevedel--current-request
+                                         (fboundp 'mevedel-request-id))
+                                (plist-put
+                                 info :mevedel-request-id
+                                 (mevedel-request-id
+                                  mevedel--current-request)))
                               ;; Drain pending stash from user skill
                               ;; invocation.
                               (when (and (boundp 'mevedel--current-request)
