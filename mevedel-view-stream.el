@@ -18,6 +18,9 @@
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 (defvar gptel--request-alist)
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-path "mevedel-agents" (cl-x))
+
 ;; `mevedel-compact'
 (defvar mevedel--compaction-in-flight)
 
@@ -45,6 +48,12 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-current-session
+                  "mevedel-telemetry" (&optional buffer))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-exec'
 (declare-function mevedel-tool-exec-format-execution-metadata
@@ -103,6 +112,12 @@
 
 (defvar-local mevedel-view--spinner-status nil
   "Current base status text shown by the request-progress row.")
+
+(defvar-local mevedel-view--spinner-owner nil
+  "Subsystem that last wrote the request-progress status text.")
+
+(defvar mevedel-view--status-owner-override nil
+  "Dynamically bound subsystem owner for one status update.")
 
 (defvar-local mevedel-view--spinner-start-time nil
   "Fallback wall-clock start time for spinner elapsed display.
@@ -357,14 +372,27 @@ chunk when that stale transformer fails."
 (defun mevedel-view-stream--gptel-stream-cleanup-advice (orig-fn process status)
   "Call ORIG-FN after wrapping stream transformers for PROCESS.
 STATUS is passed through unchanged."
-  (when-let* ((entry (alist-get process gptel--request-alist))
-              (fsm (car entry))
-              (info (and (fboundp 'gptel-fsm-info)
-                         (gptel-fsm-info fsm))))
+  (let* ((entry (alist-get process gptel--request-alist))
+         (fsm (car-safe entry))
+         (info (and fsm (fboundp 'gptel-fsm-info)
+                    (ignore-errors (gptel-fsm-info fsm))))
+         (chat-buffer (plist-get info :buffer))
+         (session (and (buffer-live-p chat-buffer)
+                       (mevedel-telemetry-current-session chat-buffer))))
     (when (mevedel-view-stream--gptel-stream-info-p info)
       (mevedel-view-stream--flush-gptel-stream-insert-batch info)
-      (mevedel-view-stream--wrap-gptel-stream-transformer info)))
-  (funcall orig-fn process status))
+      (mevedel-view-stream--wrap-gptel-stream-transformer info))
+    (prog1 (funcall orig-fn process status)
+      (when (and session (fboundp 'mevedel-telemetry-record))
+        (mevedel-telemetry-record
+         session 'provider-stream-ended
+         :request-id (plist-get info :mevedel-request-id)
+         :agent-path
+         (when-let* ((invocation (plist-get info :mevedel-agent-invocation)))
+           (mevedel-agent-invocation-path invocation))
+         :provider-status status
+         :first-byte-seen
+         (and (process-get process 'mevedel-telemetry-first-byte) t))))))
 
 (defun mevedel-view-stream--gptel-stream-filter-registered-p (process)
   "Return non-nil when PROCESS has a registered gptel FSM."
@@ -418,6 +446,28 @@ OUTPUT is the stream chunk passed to gptel's process filter.
 it records PROCESS in `gptel--request-alist'.  If curl produces an
 early chunk in that gap, gptel's filter sees a nil FSM.  Preserve the
 chunk and replay it once the request entry exists."
+  (when (and (> (length output) 0)
+             (not (process-get process 'mevedel-telemetry-first-byte)))
+    (when-let* ((entry (and (boundp 'gptel--request-alist)
+                            (alist-get process gptel--request-alist)))
+                (fsm (car-safe entry))
+                (info (and (fboundp 'gptel-fsm-info)
+                           (ignore-errors (gptel-fsm-info fsm))))
+                (chat-buffer (plist-get info :buffer))
+                ((buffer-live-p chat-buffer)))
+      (process-put process 'mevedel-telemetry-first-byte t)
+      (with-current-buffer chat-buffer
+        (when (and (mevedel-telemetry-current-session chat-buffer)
+                   (fboundp 'mevedel-telemetry-record))
+          (mevedel-telemetry-record
+           (mevedel-telemetry-current-session chat-buffer)
+           'provider-first-byte
+           :request-id (plist-get info :mevedel-request-id)
+           :agent-path
+           (when-let* ((invocation
+                        (plist-get info :mevedel-agent-invocation)))
+             (mevedel-agent-invocation-path invocation))
+           :chunk-bytes (string-bytes output))))))
   (let ((pending (process-get process
                               'mevedel-view--pending-stream-output)))
     (if (mevedel-view-stream--gptel-stream-filter-registered-p process)
@@ -804,18 +854,31 @@ STATUS defaults to \"Thinking...\"."
                           'font-lock-face
                           'mevedel-view-spinner)))
 
-(defun mevedel-view--update-spinner (status)
-  "Update request progress to show STATUS text."
+(defun mevedel-view--update-spinner (status &optional owner)
+  "Update request progress to show STATUS text owned by OWNER."
   (mevedel-view--call-preserving-input-point
    (lambda ()
      (mevedel-view--debug-log
       'spinner-update
       :status status
       :state (mevedel-view--debug-state mevedel--data-buffer))
+     (when-let* ((session
+                  (and (buffer-live-p mevedel--data-buffer)
+                       (buffer-local-value 'mevedel--session
+                                           mevedel--data-buffer)))
+                 ((fboundp 'mevedel-telemetry-record)))
+       (mevedel-telemetry-record
+        session 'status-transition
+        :previous-owner mevedel-view--spinner-owner
+        :previous-status mevedel-view--spinner-status
+        :owner (or owner mevedel-view--status-owner-override 'request)
+        :status status))
      (setq mevedel-view--request-progress-suppressed nil)
      (unless mevedel-view--spinner-start-time
        (setq mevedel-view--spinner-start-time (current-time)))
-     (setq mevedel-view--spinner-status status)
+     (setq mevedel-view--spinner-status status
+           mevedel-view--spinner-owner
+           (or owner mevedel-view--status-owner-override 'request))
      (save-excursion
        (mevedel-view--render-request-progress))
      (mevedel-view--start-spinner-timer))))
@@ -829,7 +892,18 @@ STATUS defaults to \"Thinking...\"."
       :spinner (mevedel-view--debug-spinner-state)
       :state (mevedel-view--debug-state mevedel--data-buffer))
      (mevedel-view--clear-request-progress)
-     (setq mevedel-view--spinner-status nil)
+     (when-let* ((session
+                  (and (buffer-live-p mevedel--data-buffer)
+                       (buffer-local-value 'mevedel--session
+                                           mevedel--data-buffer)))
+                 ((fboundp 'mevedel-telemetry-record)))
+       (mevedel-telemetry-record
+        session 'status-transition
+        :previous-owner mevedel-view--spinner-owner
+        :previous-status mevedel-view--spinner-status
+        :owner nil :status nil))
+     (setq mevedel-view--spinner-status nil
+           mevedel-view--spinner-owner nil)
      (unless mevedel-view--pending-tool-calls
         (unless (and (boundp 'mevedel--data-buffer)
                      mevedel--data-buffer

@@ -31,6 +31,10 @@
 (defvar mevedel-tool-repair-log-limit)
 (defvar mevedel-tool-repair-persist-log)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
@@ -238,7 +242,14 @@
           (when (> (length log) mevedel-tool-repair-log-limit)
             (setq log (last log mevedel-tool-repair-log-limit)))
           (setf (mevedel-session-repair-log session) log)
-          (mevedel-tool-repair--persist-event session event))
+          (mevedel-tool-repair--persist-event session event)
+          (when (fboundp 'mevedel-telemetry-record)
+            (apply #'mevedel-telemetry-record
+                   session 'tool-input-repair
+                   :stage 'settled
+                   :repair-count (length (plist-get event :rules))
+                   :issue-count (length (plist-get event :issue-kinds))
+                   event)))
         t)
     (error
      (ignore-errors

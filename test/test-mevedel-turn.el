@@ -31,6 +31,33 @@
                    (mevedel--fsm-error-message
                     (gptel-make-fsm :info (car case)))))))
 
+(mevedel-deftest mevedel--turn-record-settlement
+  (:doc "correlates terminal provider tokens with the active request")
+  (let* ((session (mevedel-session--create :name "turn-telemetry"))
+         (request (mevedel-request--create
+                   :id "request-1" :session session :origin "/root"
+                   :started-at (current-time)))
+         (chat-buf (generate-new-buffer " *mevedel-turn-telemetry*"))
+         captured)
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request request))
+          (cl-letf (((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session event &rest props)
+                       (setq captured (cons event props)))))
+            (mevedel--turn-record-settlement
+             (gptel-make-fsm
+              :info (list :buffer chat-buf :status 200
+                          :tokens-full '(:input 10 :output 3 :cached 2)))
+             'success))
+          (should (eq 'request-settled (car captured)))
+          (should (equal "request-1" (plist-get (cdr captured) :request-id)))
+          (should (= 10 (plist-get (cdr captured) :input-tokens)))
+          (should (= 3 (plist-get (cdr captured) :output-tokens))))
+      (kill-buffer chat-buf))))
+
 (mevedel-deftest mevedel--run-turn-terminal-hook
   (:before-each (mevedel-workspace-clear-registry)
    :after-each (mevedel-workspace-clear-registry))

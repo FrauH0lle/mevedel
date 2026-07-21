@@ -50,6 +50,7 @@
 (require 'mevedel-persistence)
 (require 'mevedel-file-state)
 (require 'mevedel-models)
+(require 'mevedel-telemetry)
 (require 'mevedel-plan)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-sandbox)

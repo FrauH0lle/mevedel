@@ -60,6 +60,7 @@
                   "mevedel-permissions" (result tool-name &rest args))
 (declare-function mevedel-session-persistence--shallow-ensure-files
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-request-id "mevedel-structs" (cl-x))
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-path
                   "mevedel-agents" (cl-x) t)
@@ -75,6 +76,13 @@
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-start
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-transcript-audit'
 (declare-function mevedel-transcript-audit-spans
@@ -377,6 +385,23 @@ to CALLBACK."
            (rest (cdr steps))
            (step-name (mevedel-pipeline--step-name step))
            (settled nil)
+           (telemetry-settled nil)
+           (telemetry-span
+            (when (and (plist-get context :session)
+                       (fboundp 'mevedel-telemetry-start))
+              (mevedel-telemetry-start
+               (plist-get context :session) 'tool-pipeline-step
+               :tool-name (mevedel-tool-name (plist-get context :tool))
+               :tool-use-id (plist-get context :tool-use-id)
+               :step step-name)))
+           (finish-telemetry
+            (lambda (outcome &optional error-class)
+              (unless telemetry-settled
+                (setq telemetry-settled t)
+                (when telemetry-span
+                  (mevedel-telemetry-finish
+                   telemetry-span :outcome outcome
+                   :error-class error-class)))))
            (try-settle
             (lambda (which)
               (if settled
@@ -393,10 +418,12 @@ ignoring duplicate outcome"
            (next-cont
             (lambda (updated-ctx)
               (when (funcall try-settle 'next)
+                (funcall finish-telemetry 'next)
                 (mevedel-pipeline--run rest callback updated-ctx))))
            (fail-cont
             (lambda (reason)
               (when (funcall try-settle 'fail)
+                (funcall finish-telemetry 'fail)
                 (mevedel-pipeline--with-context-default-directory
                  context
                  (lambda ()
@@ -409,6 +436,7 @@ ignoring duplicate outcome"
            (lambda ()
              (funcall step context next-cont fail-cont)))
         (mevedel-validation-error
+         (funcall finish-telemetry 'error 'validation)
          (mevedel-pipeline--with-context-default-directory
           context
           (lambda ()
@@ -416,6 +444,7 @@ ignoring duplicate outcome"
                      (mevedel-pipeline--format-context-failure
                       context (or (cadr err) "Validation error"))))))
         (mevedel-permission-denied
+         (funcall finish-telemetry 'error 'permission-denied)
          (mevedel-pipeline--with-context-default-directory
           context
           (lambda ()
@@ -426,6 +455,7 @@ ignoring duplicate outcome"
                           (format "Permission denied: %s" (cadr err))
                         "Permission denied"))))))
         (mevedel-pipeline-error
+         (funcall finish-telemetry 'error 'pipeline)
          (mevedel-pipeline--with-context-default-directory
           context
           (lambda ()
@@ -433,6 +463,7 @@ ignoring duplicate outcome"
                      (mevedel-pipeline--format-context-failure
                       context (or (cadr err) "Pipeline error"))))))
         (error
+         (funcall finish-telemetry 'error (car-safe err))
          (mevedel-pipeline--with-context-default-directory
           context
           (lambda ()
@@ -2096,6 +2127,20 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
             (cond
              ((not called)
               (setq called t)
+              (when (and session (fboundp 'mevedel-telemetry-record))
+                (mevedel-telemetry-record
+                 session 'tool-finished
+                 :tool-name (mevedel-tool-name tool)
+                 :tool-use-id tool-use-id
+                 :request-id (and request
+                                  (fboundp 'mevedel-request-id)
+                                  (mevedel-request-id request))
+                 :outcome (if (and (stringp result)
+                                   (string-prefix-p "Error:" result))
+                              'error
+                            'success)
+                 :result-chars (and (stringp result) (length result))
+                 :result-bytes (and (stringp result) (string-bytes result))))
               (mevedel-tool-repair-record-result repair-entry result)
               (condition-case err
                   (funcall callback result)
@@ -2118,6 +2163,16 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
 delivery: %S"
                        result)
                :warning))))))
+    (when (and session (fboundp 'mevedel-telemetry-record))
+      (mevedel-telemetry-record
+       session 'tool-received
+       :tool-name (mevedel-tool-name tool)
+       :tool-use-id tool-use-id
+       :request-id (and request
+                        (fboundp 'mevedel-request-id)
+                        (mevedel-request-id request))
+       :origin (mevedel-current-origin)
+       :read-only (and (mevedel-tool-read-only-p tool) t)))
     (mevedel-pipeline--run steps once-callback context)))
 
 

@@ -97,6 +97,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-terminal-reason
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-started-at
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-relative-path
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-transcript-status
@@ -148,6 +150,10 @@
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-task'
 (declare-function mevedel-tool-task--refresh-display "mevedel-tool-task" ())
@@ -465,6 +471,24 @@
       (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
             (mevedel-agent-invocation-runtime-fsm invocation) nil
             (mevedel-agent-invocation-runtime-pending-response invocation) nil)
+      (when-let* ((session
+                   (mevedel-agent-invocation-parent-session invocation))
+                  ((fboundp 'mevedel-telemetry-record)))
+        (mevedel-telemetry-record
+         session 'agent-settled
+         :agent-id (mevedel-agent-invocation-agent-id invocation)
+         :agent-path (mevedel-agent-invocation-path invocation)
+         :agent-type
+         (and (mevedel-agent-invocation-agent invocation)
+              (mevedel-agent-name
+               (mevedel-agent-invocation-agent invocation)))
+         :outcome status
+         :duration-ms
+         (when-let* ((started-at
+                      (mevedel-agent-invocation-started-at invocation)))
+           (round
+            (* 1000.0
+               (float-time (time-subtract (current-time) started-at)))))))
       (condition-case err
           (mevedel-agent-runtime--finalize invocation status)
         (error
@@ -781,6 +805,14 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-transcript-status invocation) 'running
           (mevedel-agent-invocation-runtime-settle-callback invocation)
           on-settle)
+    (when (fboundp 'mevedel-telemetry-record)
+      (mevedel-telemetry-record
+       session 'agent-dispatch
+       :agent-id agent-id
+       :agent-path path
+       :agent-type agent-type
+       :retained (and retained-p t)
+       :parent-turn (mevedel-agent-invocation-parent-turn invocation)))
     (when skill-permission-rules
       (setf (mevedel-agent-invocation-skill-permission-rules invocation)
             skill-permission-rules))
@@ -835,6 +867,13 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
                       agent-type description invocation buffer)))
                 (unless fsm
                   (error "Agent provider request did not start"))
+                (when (fboundp 'mevedel-telemetry-record)
+                  (mevedel-telemetry-record
+                   session 'agent-request-sent
+                   :agent-id agent-id
+                   :agent-path path
+                   :agent-type agent-type
+                   :retained (and retained-p t)))
                 invocation))
           (error
            (if published-p

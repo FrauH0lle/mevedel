@@ -806,6 +806,28 @@
                   (plist-get event :failure-class)))
       (should (equal '(internal-error) (plist-get event :issue-kinds)))))
 
+  :doc "pairs pre-pipeline validation and repair telemetry"
+  (let ((session (mevedel-session--create :name "main"))
+        (tool (mevedel-tool--create
+               :name "TelemetryRepair" :category "mevedel"
+               :args '((name string :required "Name"))))
+        started finished)
+    (mevedel-tool-register tool)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-telemetry-start)
+                 (lambda (_session event &rest props)
+                   (setq started (cons event props))
+                   '(:span repair)))
+                ((symbol-function 'mevedel-telemetry-finish)
+                 (lambda (_span &rest props) (setq finished props))))
+        (mevedel-tool-repair-pre-tool-call
+         '(:name "TelemetryRepair" :args (:name "ok")))))
+    (should (eq 'tool-input-validation-repair (car started)))
+    (should (eq 'valid (plist-get finished :outcome)))
+    (should (= 0 (plist-get finished :repair-count)))
+    (should (= 0 (plist-get finished :issue-count))))
+
   :doc "consumes identical final args in original call order"
   (let ((tool
          (mevedel-tool--create
@@ -878,6 +900,24 @@
             (goto-char (point-min))
             (should (= 2 (count-lines (point-min) (point-max))))))
       (delete-directory dir t)))
+
+  :doc "forwards value-free repair outcomes into the unified telemetry stream"
+  (let ((session (mevedel-session--create :name "main"))
+        captured)
+    (cl-letf (((symbol-function 'mevedel-telemetry-record)
+               (lambda (_session event &rest props)
+                 (setq captured (cons event props)))))
+      (mevedel-tool-repair-log-event
+       session
+       '(:time "now" :origin "/root" :backend backend
+               :model model :tool "Read" :outcome repaired
+               :repair-enabled t :rules (array-to-list) :paths ((names))
+               :issue-kinds (wrong-shape) :execution executed
+               :result success)))
+    (should (eq 'tool-input-repair (car captured)))
+    (should (eq 'settled (plist-get (cdr captured) :stage)))
+    (should (= 1 (plist-get (cdr captured) :repair-count)))
+    (should (= 1 (plist-get (cdr captured) :issue-count))))
 
   :doc "logging failures never escape into validated execution"
   (let* ((dir (file-name-as-directory

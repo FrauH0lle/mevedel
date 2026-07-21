@@ -97,6 +97,13 @@
 (declare-function mevedel-session-persistence-write
                   "mevedel-session-persistence" (path plist))
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-start
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
                   "mevedel-system" (relative-path &optional replacements))
@@ -1025,21 +1032,48 @@ The request has no tools or conversational transcript insertion."
       (funcall callback
                (mevedel-goal--guardian-failure-decision
                 "Goal guardian is unavailable"))
-    (let ((done nil)
+    (let* ((done nil)
+          (session (buffer-local-value 'mevedel--session chat-buffer))
+          (telemetry-span
+           (and session
+                (fboundp 'mevedel-telemetry-start)
+                (mevedel-telemetry-start
+                 session 'guardian-request
+                 :goal-id (mevedel-goal-id goal))))
+          (first-response nil)
           (stream (buffer-local-value 'gptel-stream chat-buffer))
           chunks
           policy
           timer
           usage-context)
       (cl-labels
-          ((finish (decision)
+          ((record-first-response ()
+             (unless first-response
+               (setq first-response t)
+               (when (and session (fboundp 'mevedel-telemetry-record))
+                 (mevedel-telemetry-record
+                  session 'guardian-first-response
+                  :provider (and policy
+                                 (mevedel-goal--guardian-provider-label
+                                  policy))
+                  :effort (and policy (plist-get policy :effort))))))
+           (finish (decision)
              (unless done
                (setq done t)
                (when timer (cancel-timer timer))
+               (when telemetry-span
+                 (mevedel-telemetry-finish
+                  telemetry-span
+                  :outcome (or (plist-get decision :verdict) 'error)
+                  :provider (and policy
+                                 (mevedel-goal--guardian-provider-label
+                                  policy))
+                  :effort (and policy (plist-get policy :effort))))
                (when (buffer-live-p chat-buffer)
                  (with-current-buffer chat-buffer
                    (funcall callback decision)))))
            (settle-response (response info)
+             (record-first-response)
              (let ((decision (mevedel-goal--parse-guardian response)))
                (when (buffer-live-p chat-buffer)
                  (with-current-buffer chat-buffer
@@ -1076,9 +1110,7 @@ The request has no tools or conversational transcript insertion."
                              :effort (plist-get policy :effort)))))))))
         (condition-case err
             (progn
-              (let* ((session
-                      (buffer-local-value 'mevedel--session chat-buffer))
-                     (count
+              (let* ((count
                       (or (plist-get
                            (and session
                                 (mevedel-session-plan-metadata session))
@@ -1134,6 +1166,7 @@ The request has no tools or conversational transcript insertion."
                                (eq (car response) 'reasoning)))
                          ((and (plist-get info :stream)
                                (stringp response))
+                          (record-first-response)
                           (push response chunks))
                          ((eq response t)
                           (settle-response
@@ -1993,6 +2026,13 @@ PROMPT-SUBMISSION owns accepted hook context for the initial planning turn."
                               :started-at (format-time-string "%FT%T%z"))))))
     (setf (mevedel-session-goal mevedel--session) goal
           (mevedel-session-plan-metadata mevedel--session) nil)
+    (when (fboundp 'mevedel-telemetry-record)
+      (mevedel-telemetry-record
+       mevedel--session 'goal-start
+       :approval-policy approval-policy
+       :implementation-context (mevedel-goal-implementation-context goal)
+       :execution-home (plist-get (mevedel-goal-execution-home goal) :kind)
+       :token-budget (mevedel-goal-token-budget goal)))
     (mevedel-goal--enqueue-event-reminder
      mevedel--session "started; authoritative Goal context is attached")
     (condition-case err
@@ -2056,6 +2096,22 @@ dispatch and attach the attempt identity to the returned FSM."
               (when checkpoint-enabled
                 (mevedel-goal--checkpoint-prepare
                  checkpoint-phase checkpoint-input workload policy))
+              (when (and checkpoint-enabled
+                         (fboundp 'mevedel-telemetry-record))
+                (mevedel-telemetry-record
+                 mevedel--session 'goal-phase-dispatch
+                 :phase checkpoint-phase
+                 :workload workload
+                 :attempt-id
+                 (plist-get
+                  (mevedel-goal-checkpoint
+                   (mevedel-session-goal mevedel--session))
+                  :attempt-id)
+                 :backend (ignore-errors
+                            (gptel-backend-name
+                             (plist-get policy :backend)))
+                 :model (plist-get policy :model)
+                 :effort (plist-get policy :effort)))
               (setq-local gptel-backend (plist-get policy :backend)
                           gptel-model (plist-get policy :model)
                           gptel-reasoning-effort (plist-get policy :effort))
@@ -3148,9 +3204,13 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
     (with-current-buffer chat-buffer
       (when-let* ((goal (and (bound-and-true-p mevedel--session)
                              (mevedel-session-goal mevedel--session))))
-        (mevedel-goal--record-token-usage goal info)
-        (mevedel-goal--checkpoint-settle fsm 'settled)
-        (when (eq (mevedel-goal-status goal) 'active)
+        (let ((settled-cycle (mevedel-goal-cycle goal))
+              (review-verdict
+               (and (mevedel-goal-review-summary goal)
+                    (plist-get (mevedel-goal-review-summary goal) :verdict))))
+          (mevedel-goal--record-token-usage goal info)
+          (mevedel-goal--checkpoint-settle fsm 'settled)
+          (when (eq (mevedel-goal-status goal) 'active)
           (when (eq phase (mevedel-goal-phase goal))
             (pcase phase
               ('implementing
@@ -3204,7 +3264,32 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
                      (eq (mevedel-goal-status goal) 'active))
             (setf (mevedel-goal-status goal) 'paused
                   (mevedel-goal-pause-requested goal) nil
-                  (mevedel-goal-reason goal) "Paused by user")))))))
+                  (mevedel-goal-reason goal) "Paused by user"))
+          (when (fboundp 'mevedel-telemetry-record)
+            (when review-verdict
+              (mevedel-telemetry-record
+               mevedel--session 'goal-review-verdict-persisted
+               :settled-cycle settled-cycle
+               :verdict review-verdict
+               :resulting-status (mevedel-goal-status goal)))
+            (when (not (equal settled-cycle (mevedel-goal-cycle goal)))
+              (mevedel-telemetry-record
+               mevedel--session 'goal-cycle-changed
+               :previous-cycle settled-cycle
+               :new-cycle (mevedel-goal-cycle goal)))
+            (mevedel-telemetry-record
+             mevedel--session 'goal-phase-settled
+             :settled-phase phase
+             :attempt-id (plist-get info :mevedel-goal-attempt-id)
+             :resulting-phase (mevedel-goal-phase goal)
+             :resulting-status (mevedel-goal-status goal)
+             :review-verdict review-verdict)
+            (when (memq (mevedel-goal-status goal) '(complete blocked))
+              (mevedel-telemetry-record
+               mevedel--session 'goal-terminal-settlement
+               :settled-phase phase
+               :result (mevedel-goal-status goal)
+               :review-verdict review-verdict)))))))))
 
 (defun mevedel-goal-settle-failure (fsm &optional status)
   "Settle Goal failure for FSM with terminal STATUS in memory.
@@ -3260,7 +3345,17 @@ The post-teardown failure transaction persists this state."
              (if (eq status 'aborted)
                  "request was forcefully stopped; resume remains available"
                "request failed; Goal paused with a recoverable checkpoint")))
-          (setf (mevedel-goal-pause-requested goal) nil))))))
+          (setf (mevedel-goal-pause-requested goal) nil)
+          (when (fboundp 'mevedel-telemetry-record)
+            (mevedel-telemetry-record
+             mevedel--session 'goal-phase-settled
+             :settled-phase phase
+             :attempt-id (plist-get info :mevedel-goal-attempt-id)
+             :outcome status
+             :retry retry
+             :retry-count retry-count
+             :resulting-phase (mevedel-goal-phase goal)
+             :resulting-status (mevedel-goal-status goal))))))))
 
 (defun mevedel-goal-persist-failure (fsm)
   "Persist FSM's Goal failure after request teardown."

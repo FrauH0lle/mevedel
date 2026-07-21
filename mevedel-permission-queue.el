@@ -142,7 +142,12 @@ SESSION defaults to the current session."
                         (mevedel-permission-queue--current-session))))
     (apply #'mevedel-permission-log
            sess event
-           (apply #'mevedel-permission-queue--log-props entry props))))
+           (apply #'mevedel-permission-queue--log-props
+                  entry
+                  :queue-depth
+                  (+ (length (mevedel-session-permission-queue sess))
+                     (if (eq event 'permission-enqueued) 1 0))
+                  props))))
 
 (defun mevedel-permission--enqueue (entry &optional session)
   "Append ENTRY (a plist) to the session permission queue.

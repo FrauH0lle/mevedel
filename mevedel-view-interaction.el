@@ -29,13 +29,23 @@
 (declare-function mevedel-permission-queue--render-head
                   "mevedel-permission-queue" (&optional session))
 
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-effective
+                  "mevedel-permissions"
+                  (&optional session data-buffer surface-buffer))
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--normalize-message-text
@@ -74,13 +84,40 @@
 (defvar-local mevedel-view--interaction-overlays nil
   "Hash table of live interaction-zone overlays keyed by descriptor id.")
 
+(defvar-local mevedel-view--interaction-telemetry-opened nil
+  "Hash table of interaction lifecycle metadata retained across redraws.")
+
 
 (defun mevedel-view-interaction-initialize ()
   "Initialize interaction descriptor state in the current view buffer."
   (setq-local mevedel-view--interaction-descriptors
               (make-hash-table :test #'equal))
   (setq-local mevedel-view--interaction-overlays
+              (make-hash-table :test #'equal))
+  (setq-local mevedel-view--interaction-telemetry-opened
               (make-hash-table :test #'equal)))
+
+(defun mevedel-view--interaction-telemetry-close (id)
+  "Record and forget telemetry lifetime ID."
+  (when-let* ((metadata
+               (and (hash-table-p mevedel-view--interaction-telemetry-opened)
+                    (gethash id mevedel-view--interaction-telemetry-opened))))
+    (when-let* ((session (mevedel-view--session))
+                ((fboundp 'mevedel-telemetry-record)))
+      (mevedel-telemetry-record
+       session 'interaction-closed
+       :interaction-id id
+       :kind (plist-get metadata :kind)
+       :origin (plist-get metadata :origin)
+       :permission-mode-base (mevedel-session-permission-mode session)
+       :permission-mode-effective
+       (and (fboundp 'mevedel-permission-mode-effective)
+            (mevedel-permission-mode-effective
+             session mevedel--data-buffer (current-buffer)))
+       :duration-ms
+       (round (* 1000.0
+                 (- (float-time) (plist-get metadata :opened-at))))))
+    (remhash id mevedel-view--interaction-telemetry-opened)))
 
 (defun mevedel-view-interaction-pending-p (&optional view-buffer)
   "Return non-nil when VIEW-BUFFER has a pending user interaction.
@@ -423,6 +460,16 @@ This deletes only interaction UI overlays and never settles callbacks."
         (mevedel-permission-queue--render-head session))
       (when (mevedel-session-queued-user-messages session)
         (mevedel-view--queued-user-messages-render session)))
+    (when (hash-table-p mevedel-view--interaction-telemetry-opened)
+      (let (closed)
+        (maphash
+         (lambda (id _metadata)
+           (unless (and (hash-table-p mevedel-view--interaction-descriptors)
+                        (gethash id mevedel-view--interaction-descriptors))
+             (push id closed)))
+         mevedel-view--interaction-telemetry-opened)
+        (dolist (id closed)
+          (mevedel-view--interaction-telemetry-close id))))
     (mevedel-view--interaction-render)))
 
 (defun mevedel-view--interaction-register (descriptor)
@@ -440,6 +487,35 @@ This deletes only interaction UI overlays and never settles callbacks."
                (gethash id mevedel-view--interaction-overlays)))
          (overlay (or existing-overlay
                       (make-overlay anchor anchor (current-buffer) nil t))))
+    (unless (hash-table-p mevedel-view--interaction-telemetry-opened)
+      (setq mevedel-view--interaction-telemetry-opened
+            (make-hash-table :test #'equal)))
+    (unless (gethash id mevedel-view--interaction-telemetry-opened)
+      (puthash id
+               (list :opened-at (float-time)
+                     :kind (plist-get descriptor :kind)
+                     :origin (plist-get descriptor :origin))
+               mevedel-view--interaction-telemetry-opened)
+      (when-let* ((session (mevedel-view--session))
+                  ((fboundp 'mevedel-telemetry-record)))
+        (mevedel-telemetry-record
+         session 'interaction-opened
+         :interaction-id id
+         :kind (plist-get descriptor :kind)
+         :origin (plist-get descriptor :origin)
+         :permission-mode-base (mevedel-session-permission-mode session)
+         :permission-mode-effective
+         (and (fboundp 'mevedel-permission-mode-effective)
+              (mevedel-permission-mode-effective
+               session mevedel--data-buffer (current-buffer)))
+         :active-work-paused
+         (and (memq (plist-get descriptor :kind)
+                    '(ask permission plan preview request))
+              t)
+         :pending-count
+         (and (hash-table-p mevedel-view--interaction-descriptors)
+              (1+ (hash-table-count
+                   mevedel-view--interaction-descriptors))))))
     (unless existing-overlay
       (let ((origin (plist-get descriptor :origin))
             (kind (plist-get descriptor :kind))
@@ -460,6 +536,7 @@ This deletes only interaction UI overlays and never settles callbacks."
 
 (defun mevedel-view--interaction-unregister (id)
   "Remove interaction-zone descriptor ID and its overlay."
+  (mevedel-view--interaction-telemetry-close id)
   (when (hash-table-p mevedel-view--interaction-descriptors)
     (remhash id mevedel-view--interaction-descriptors))
   (when (hash-table-p mevedel-view--interaction-overlays)

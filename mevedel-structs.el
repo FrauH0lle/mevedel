@@ -25,6 +25,10 @@
                   "mevedel-permission-queue"
                   (origin &optional session no-render))
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
 (defun mevedel-agent-path-p (path)
   "Return non-nil when PATH is a canonical address in an agent tree."
   (and (stringp path)
@@ -225,6 +229,7 @@ workspace."
   hook-log           ; transient per-session hook execution log
   repair-log         ; transient bounded tool-input repair telemetry
   permission-log-pending ; transient diagnostics awaiting materialization
+  telemetry-pending  ; transient lifecycle telemetry awaiting materialization
   hook-context-pending ; transient hook context injected into the next prompt
   execution-state   ; transient opaque state owned by `mevedel-execution'
   ;; Persistence -- nil until lazy materialization.
@@ -501,6 +506,7 @@ Return the expanded paths activated."
 (cl-defstruct (mevedel-request (:constructor mevedel-request--create))
   "Per-request state, scoped to a single LLM request/response cycle.
 Created at request start, cleared in the termination handler."
+  id                ; process-unique request correlation id
   session           ; back-reference to mevedel-session
   file-snapshots    ; hash-table: filepath -> original content at request start
   directive-uuid    ; UUID of directive being processed, if any
@@ -615,7 +621,15 @@ the new request struct."
     (message "mevedel: stale request found, replacing")
     (mevedel-request-end t))
   (let* ((origin (mevedel-current-origin))
+         (id (format "request-%s-%s"
+                     (format-time-string "%Y%m%dT%H%M%S")
+                     (substring
+                      (secure-hash
+                       'sha1
+                       (format "%s:%s:%s" (emacs-pid) (float-time) origin))
+                      0 12)))
          (request (mevedel-request--create
+                   :id id
                    :session session
                    :file-snapshots (make-hash-table :test #'equal)
                    :directive-uuid directive-uuid
@@ -624,6 +638,13 @@ the new request struct."
     (setq mevedel--current-request request)
     (when (equal origin "/root")
       (setf (mevedel-session-agent-root-activity session) 'running))
+    (when (fboundp 'mevedel-telemetry-record)
+      (mevedel-telemetry-record
+       session 'request-queued :request-id id :origin origin
+       :permission-mode (mevedel-session-permission-mode session))
+      (mevedel-telemetry-record
+       session 'request-start :request-id id :origin origin
+       :permission-mode (mevedel-session-permission-mode session)))
     request))
 
 (defun mevedel-request-cancel (request &optional abort-plan-queue)
@@ -645,6 +666,12 @@ ABORT-PLAN-QUEUE is non-nil, abort them too."
   "Cancel the current request, then clear `mevedel--current-request'."
   (when mevedel--current-request
     (let ((request mevedel--current-request))
+      (when (fboundp 'mevedel-telemetry-record)
+        (mevedel-telemetry-record
+         (mevedel-request-session request) 'request-teardown
+         :request-id (mevedel-request-id request)
+         :origin (mevedel-request-origin request)
+         :abort-plan-queue (and abort-plan-queue t)))
       (mevedel-request-cancel request abort-plan-queue)
       (when (equal (mevedel-request-origin request) "/root")
         (setf (mevedel-session-agent-root-activity

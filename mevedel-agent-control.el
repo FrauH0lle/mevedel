@@ -96,6 +96,10 @@
 (declare-function mevedel-session-save-path
                   "mevedel-structs" (cl-x) t)
 
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+
 ;; `mevedel-utilities'
 (declare-function mevedel--head-tail-preview-parts
                   "mevedel-utilities"
@@ -129,6 +133,7 @@
   "One suspended ordinary asynchronous WaitAgent tool call."
   callback
   release
+  started-at
   timer)
 
 (cl-defstruct (mevedel-agent-record
@@ -342,8 +347,9 @@ blockers compose and stale releases cannot alter a later follow-up."
            (mevedel-agent-control--record-at-path session path))
           waiter)))
 
-(defun mevedel-agent-control-cancel-wait (session path)
-  "Cancel PATH's active wait in SESSION without invoking its callback."
+(defun mevedel-agent-control-cancel-wait (session path &optional reason)
+  "Cancel PATH's active wait in SESSION without invoking its callback.
+REASON is the wake outcome, or `cancelled' when omitted."
   (when-let* ((waiter (mevedel-agent-control--waiter session path)))
     (mevedel-agent-control--set-waiter session path nil)
     (when-let* ((timer (mevedel-agent-waiter-timer waiter))
@@ -351,13 +357,23 @@ blockers compose and stale releases cannot alter a later follow-up."
       (cancel-timer timer))
     (when-let* ((release (mevedel-agent-waiter-release waiter)))
       (funcall release))
+    (when (fboundp 'mevedel-telemetry-record)
+      (mevedel-telemetry-record
+       session 'agent-wait-ended
+       :agent-path path
+       :outcome (or reason 'cancelled)
+       :duration-ms
+       (and (numberp (mevedel-agent-waiter-started-at waiter))
+            (round (* 1000.0
+                      (- (float-time)
+                         (mevedel-agent-waiter-started-at waiter)))))))
     t))
 
 (defun mevedel-agent-control--wake (session path reason)
   "Wake PATH's waiter in SESSION with REASON exactly once."
   (when-let* ((waiter (mevedel-agent-control--waiter session path)))
     (let ((callback (mevedel-agent-waiter-callback waiter)))
-      (mevedel-agent-control-cancel-wait session path)
+      (mevedel-agent-control-cancel-wait session path reason)
       (funcall callback reason)
       t)))
 
@@ -380,13 +396,22 @@ Return the caller path when suspended, and nil after an immediate release."
     (let ((path (mevedel-agent-control-current-path session)))
       (cond
        ((mevedel-agent-control--mailbox-queue session path)
+        (when (fboundp 'mevedel-telemetry-record)
+          (mevedel-telemetry-record
+           session 'agent-wait-immediate
+           :agent-path path :outcome 'mailbox))
         (funcall callback 'mailbox)
         nil)
        ((mevedel-agent-control--waiter session path)
         (error "Agent is already waiting: %s" path))
        (t
-        (let ((waiter (mevedel-agent-waiter--create :callback callback)))
+        (let ((waiter (mevedel-agent-waiter--create
+                       :callback callback :started-at (float-time))))
           (mevedel-agent-control--set-waiter session path waiter)
+          (when (fboundp 'mevedel-telemetry-record)
+            (mevedel-telemetry-record
+             session 'agent-wait-started
+             :agent-path path :timeout-ms timeout))
           (setf (mevedel-agent-waiter-release waiter)
                 (mevedel-agent-control-block-turn session path 'waiting))
           (condition-case err

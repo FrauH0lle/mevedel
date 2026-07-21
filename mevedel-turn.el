@@ -47,8 +47,15 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-end "mevedel-structs" ())
+(declare-function mevedel-request-id "mevedel-structs" (cl-x))
+(declare-function mevedel-request-origin "mevedel-structs" (cl-x))
+(declare-function mevedel-request-started-at "mevedel-structs" (cl-x))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-view-composer'
 (declare-function mevedel-view--schedule-queued-user-message-drain
@@ -60,6 +67,41 @@
 
 ;;
 ;;; Terminal transaction
+
+(defun mevedel--turn-record-settlement (fsm outcome)
+  "Record terminal OUTCOME for FSM's active request."
+  (when-let* ((info (gptel-fsm-info fsm))
+              (chat-buffer (plist-get info :buffer))
+              ((buffer-live-p chat-buffer)))
+    (with-current-buffer chat-buffer
+      (when (and (bound-and-true-p mevedel--session)
+                 (bound-and-true-p mevedel--current-request)
+                 (fboundp 'mevedel-telemetry-record))
+        (let* ((request mevedel--current-request)
+               (tokens (or (plist-get info :tokens-full)
+                           (plist-get info :tokens)))
+               (started-at (mevedel-request-started-at request)))
+          (mevedel-telemetry-record
+           mevedel--session 'request-settled
+           :request-id (mevedel-request-id request)
+           :origin (mevedel-request-origin request)
+           :outcome outcome
+           :duration-ms (and started-at
+                             (round
+                              (* 1000.0
+                                 (float-time
+                                  (time-subtract (current-time)
+                                                 started-at)))))
+           :provider-status (plist-get info :status)
+           :token-source (if (plist-get info :tokens-full)
+                             'tokens-full
+                           'tokens)
+           :input-tokens (and (listp tokens) (plist-get tokens :input))
+           :output-tokens (and (listp tokens) (plist-get tokens :output))
+           :cached-tokens (and (listp tokens)
+                               (or (plist-get tokens :cached)
+                                   (plist-get tokens :cache-read)
+                                   (plist-get tokens :cache_read)))))))))
 
 (defun mevedel--fsm-error-message (fsm)
   "Return a compact error message for FSM, or nil."
@@ -153,6 +195,8 @@
   (mevedel--run-turn-steps
    fsm
    (list #'mevedel--turn-increment
+         (lambda (machine)
+           (mevedel--turn-record-settlement machine 'success))
          #'mevedel-goal-settle-turn
          #'mevedel--compact-record-token-baseline
          #'mevedel--turn-autosave
@@ -168,6 +212,8 @@
   (mevedel--run-turn-steps
    fsm
    (list #'mevedel--turn-increment
+         (lambda (machine)
+           (mevedel--turn-record-settlement machine status))
          #'mevedel--compact-record-token-baseline
          (lambda (machine)
            (mevedel-goal-settle-failure machine status))

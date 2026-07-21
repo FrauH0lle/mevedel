@@ -36,11 +36,21 @@
                   (plugin &optional workspace))
 (declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins"
                   (plugin-name &optional workspace))
-(declare-function mevedel-view--update-spinner "mevedel-view" (status))
+(declare-function mevedel-view--update-spinner
+                  "mevedel-view" (status &optional owner))
 (declare-function mevedel-view--spinner-active-p "mevedel-view" ())
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-start
+                  "mevedel-telemetry" (session event &rest props))
+
 (defvar gptel-model)
 (defvar read-eval)
 (defvar mevedel--view-buffer)
+(defvar mevedel-view--status-owner-override)
 
 
 ;;
@@ -1150,7 +1160,30 @@ EVENT labels each generated hook event block."
                  (> (length log) mevedel-hooks-log-limit))
         (setq log (last log mevedel-hooks-log-limit)))
       (setf (mevedel-session-hook-log session) log))
-    (mevedel-hooks--persist-log-entry session entry)))
+    (mevedel-hooks--persist-log-entry session entry)
+    (when (fboundp 'mevedel-telemetry-record)
+      (let ((handler (plist-get entry :handler)))
+        (mevedel-telemetry-record
+         session 'hook-handler
+         :hook-event (plist-get entry :event)
+         :handler-id (and handler
+                          (mevedel-hooks--telemetry-handler-id handler))
+         :handler-type (and (listp handler) (plist-get handler :type))
+         :handler-source (and (listp handler) (plist-get handler :source))
+         :status (plist-get entry :status)
+         :duration-ms (and (numberp (plist-get entry :elapsed))
+                           (round (* 1000 (plist-get entry :elapsed))))
+         :exit-status (plist-get entry :exit-status))))))
+
+(defun mevedel-hooks--telemetry-handler-id (handler)
+  "Return a stable non-payload identifier for declarative HANDLER."
+  (substring
+   (secure-hash
+    'sha256
+    (prin1-to-string
+     (mapcar (lambda (key) (cons key (plist-get handler key)))
+             '(:type :source :plugin-name :function :command))))
+   0 20))
 
 (defun mevedel-hooks--log-entry (event event-plist handler status &rest props)
   "Build a log entry for EVENT, EVENT-PLIST, HANDLER, STATUS, and PROPS."
@@ -1175,7 +1208,8 @@ EVENT labels each generated hook event block."
     (with-current-buffer view-buffer
       (when (ignore-errors (mevedel-view--spinner-active-p))
         (ignore-errors
-          (mevedel-view--update-spinner spinner-text))))))
+          (let ((mevedel-view--status-owner-override 'hook))
+            (mevedel-view--update-spinner spinner-text)))))))
 
 (defun mevedel-hooks--decision-blocking-p (decision)
   "Return non-nil when DECISION blocks the triggering operation."
@@ -1596,10 +1630,22 @@ stable public event payload."
             (puthash decision context-handlers
                      mevedel-hooks--context-handler-table))
           (funcall callback decision))
-      (let ((handler (car handlers)))
+      (let* ((handler (car handlers))
+             (handler-span
+              (and session
+                   (fboundp 'mevedel-telemetry-start)
+                   (mevedel-telemetry-start
+                    session 'hook-handler-lifecycle
+                    :hook-event event
+                    :handler-id (mevedel-hooks--telemetry-handler-id handler)
+                    :handler-type (plist-get handler :type)
+                    :handler-source (plist-get handler :source)))))
         (cl-labels
             ((advance (handler-decision)
-               (let* ((contribution
+               (let* ((context
+                       (mevedel-hooks-additional-context-string
+                        handler-decision event))
+                      (contribution
                        (mevedel-hooks--context-contribution
                         handler handler-decision))
                       (next (mevedel-hooks-merge-decisions
@@ -1611,6 +1657,15 @@ stable public event payload."
                       (next-plist
                        (mevedel-hooks--apply-decision-to-event-plist
                         event event-plist next)))
+                 (when handler-span
+                   (mevedel-telemetry-finish
+                    handler-span
+                    :outcome
+                    (if (mevedel-hooks--decision-blocking-p handler-decision)
+                        'blocked
+                      'continued)
+                    :context-chars (and context (length context))
+                    :context-deduplicated nil))
                  (mevedel-hooks--run-handlers
                   event (cdr handlers) next-plist session next callback
                   dispatch-buffer next-context-handlers))))
@@ -1651,7 +1706,14 @@ decision plist."
                      session workspace request invocation))
              (handlers (mevedel-hooks--handlers-for-event
                         event payload rules))
+             (telemetry-span
+              (when (and session (fboundp 'mevedel-telemetry-start))
+                (mevedel-telemetry-start
+                 session 'hook-event
+                 :hook-event event
+                 :handler-count (length handlers))))
              (settled nil)
+             (slow-surfaced nil)
              slow-timer)
         (cl-labels
             ((finish (decision)
@@ -1660,8 +1722,26 @@ decision plist."
                  (setq decision
                        (mevedel-hooks--sanitize-final-decision
                         event decision))
+	                 (when telemetry-span
+	                   (mevedel-telemetry-finish
+	                    telemetry-span
+	                    :outcome
+	                    (if (mevedel-hooks--decision-blocking-p decision)
+	                        'blocked
+	                      'continued)
+	                    :context-chars
+	                    (when-let* ((context
+	                                (mevedel-hooks-additional-context-string
+	                                 decision event)))
+	                      (length context))))
 	                 (when (timerp slow-timer)
 	                   (cancel-timer slow-timer))
+                         (when (and slow-surfaced session
+                                    (fboundp 'mevedel-telemetry-record))
+                           (mevedel-telemetry-record
+                            session 'hook-slow-status-released
+                            :hook-event event
+                            :handler-count (length handlers)))
                          (if (buffer-live-p dispatch-buffer)
                              (with-current-buffer dispatch-buffer
 	                       (mevedel-hooks--surface-final-decision
@@ -1677,6 +1757,15 @@ decision plist."
                    mevedel-hooks-slow-threshold nil
                    (lambda ()
                      (unless settled
+                       (setq slow-surfaced t)
+                       (when (and session
+                                  (fboundp 'mevedel-telemetry-record))
+                         (mevedel-telemetry-record
+                          session 'hook-slow-status-acquired
+                          :hook-event event
+                          :handler-count (length handlers)
+                          :threshold-ms
+                          (round (* 1000 mevedel-hooks-slow-threshold))))
                        (mevedel-hooks--surface
                         session
                         (format "%s hook still running..."

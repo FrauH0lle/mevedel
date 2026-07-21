@@ -11,6 +11,7 @@
 (require 'mevedel-execution)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
+(require 'mevedel-telemetry)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -525,6 +526,84 @@
                        (plist-get (plist-get stopped :facts) :exit-code)))
           (should (plist-get (plist-get stopped :facts) :tty)))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution--eask-command-p
+  (:doc "recognizes direct and npx Eask commands without broad false positives")
+  (progn
+    (should (mevedel-execution--eask-command-p "eask test ert"))
+    (should (mevedel-execution--eask-command-p
+             "npx @emacs-eask/cli test ert test/test-one.el"))
+    (should (mevedel-execution--eask-command-p
+             "EASK_DEBUG=1 npx @emacs-eask/cli test ert"))
+    (should-not
+     (mevedel-execution--eask-command-p "printf 'eask test ert'"))))
+
+(mevedel-deftest mevedel-execution--eask-targets
+  (:doc "retains only bounded repository-local Emacs Lisp test targets")
+  (progn
+    (should
+     (equal '("test/test-one.el" "test/nested/test-two.el")
+            (mevedel-execution--eask-targets
+             "eask test ert test/test-one.el test/nested/test-two.el")))
+    (should-not (mevedel-execution--eask-targets
+                 "eask test ert test/test-* --verbose"))))
+
+(mevedel-deftest mevedel-execution--cache-identity
+  (:doc "hashes cache roots deterministically without exposing their values")
+  (let ((process-environment (copy-sequence process-environment)))
+    (setenv "HOME" "/secret/one")
+    (let ((first (mevedel-execution--cache-identity)))
+      (should (= 64 (length first)))
+      (should-not (string-match-p "secret" first))
+      (should (equal first (mevedel-execution--cache-identity)))
+      (setenv "HOME" "/secret/two")
+      (should-not (equal first (mevedel-execution--cache-identity))))))
+
+(mevedel-deftest mevedel-execution--full-eask-command-p
+  (:doc "distinguishes a full ERT suite from focused Eask files")
+  (progn
+    (should (mevedel-execution--full-eask-command-p
+             "npx @emacs-eask/cli test ert test/test-*"))
+    (should-not (mevedel-execution--full-eask-command-p
+                 "npx @emacs-eask/cli test ert test/test-one.el"))
+    (should-not (mevedel-execution--full-eask-command-p "eask lint"))))
+
+(mevedel-deftest mevedel-execution--resource-capture
+  (:doc "wraps at most one profiled full suite with GNU time")
+  (let* ((root (make-temp-file "mevedel-resource-capture-" t))
+         (session (test-mevedel-execution--session root))
+         (mevedel-telemetry--profiler-session session)
+         (mevedel-telemetry--profiler-run-id "run-test"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'executable-find)
+                   (lambda (program)
+                     (and (equal program "time") "/usr/bin/time")))
+                  ((symbol-function 'file-truename) #'identity))
+          (let* ((command "npx @emacs-eask/cli test ert test/test-*")
+                 (capture
+                  (mevedel-execution--resource-capture session command)))
+            (should capture)
+            (should
+             (string-match-p "/usr/bin/time" (plist-get capture :command)))
+            (should (string-suffix-p
+                     "diagnostics/run-test/full-suite-time.txt"
+                     (plist-get capture :report)))
+            (should-not
+             (mevedel-execution--resource-capture session command))))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-execution--telemetry-facts
+  (:doc "keeps confinement dimensions while excluding human-readable reasons")
+  (let ((facts (mevedel-execution--telemetry-facts
+                '(:sandbox bubblewrap :filesystem workspace-write
+                  :network isolated :proc fresh :protected-paths 4
+                  :additional-filesystem-read 2
+                  :additional-filesystem-write 1
+                  :reason "private launcher output"))))
+    (should (eq 'bubblewrap (plist-get facts :sandbox)))
+    (should (= 4 (plist-get facts :protected-path-count)))
+    (should (= 2 (plist-get facts :additional-read-count)))
+    (should-not (plist-member facts :reason))))
 
 (provide 'test-mevedel-execution)
 ;;; test-mevedel-execution.el ends here

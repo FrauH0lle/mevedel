@@ -197,6 +197,8 @@
 (declare-function mevedel-session-set-queued-user-messages
                   "mevedel-structs" (session queue))
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-state-dir "mevedel-structs" (workspace))
 (defvar mevedel--agent-invocation nil)
@@ -207,6 +209,10 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel--workspace)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-prompt-transform-start
@@ -1133,6 +1139,11 @@ prompt hook when the queue drains."
               (list :input input
                     :submission submission
                     :dropped-file-grants dropped-file-grants
+                    :queued-at-time (float-time)
+                    :queued-at-goal-phase
+                    (and (mevedel-session-goal session)
+                         (mevedel-goal-phase
+                          (mevedel-session-goal session)))
                     :queued-at-turn
                     (or (mevedel-session-turn-count session) 0))))
         (when submission
@@ -1140,6 +1151,13 @@ prompt hook when the queue drains."
         (mevedel-view--set-queued-user-messages
          (append (mevedel-view--queued-user-messages session) (list entry))
          session)
+        (when (fboundp 'mevedel-telemetry-record)
+          (mevedel-telemetry-record
+           session 'user-message-queued
+           :message-hash (secure-hash 'sha256 input)
+           :message-chars (length input)
+           :queue-depth (length (mevedel-view--queued-user-messages session))
+           :enqueue-phase (plist-get entry :queued-at-goal-phase)))
         (mevedel-view-history-add input)
         (when (equal-including-properties (mevedel-view--input-text) input)
           (mevedel-view--clear-input))
@@ -2082,7 +2100,26 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                          (mevedel-view--activate-dropped-file-grants
                           dropped-file-grants session)))
                       (after-insert
-                       (lambda ()
+                      (lambda ()
+                         (when (fboundp 'mevedel-telemetry-record)
+                           (mevedel-telemetry-record
+                            session 'user-message-dequeued
+                            :message-hash (secure-hash 'sha256 input)
+                            :queue-depth-before
+                            (length (mevedel-view--queued-user-messages session))
+                            :queue-duration-ms
+                            (and (numberp (plist-get entry :queued-at-time))
+                                 (round
+                                  (* 1000.0
+                                     (- (float-time)
+                                        (plist-get entry
+                                                   :queued-at-time)))))
+                            :enqueue-phase
+                            (plist-get entry :queued-at-goal-phase)
+                            :dequeue-phase
+                            (and (mevedel-session-goal session)
+                                 (mevedel-goal-phase
+                                  (mevedel-session-goal session)))))
                          (when (eq entry
                                    (car (mevedel-view--queued-user-messages
                                          session)))
