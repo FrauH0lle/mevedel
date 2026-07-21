@@ -30,6 +30,12 @@ When ASYNC is non-nil, FUNCTION receives its result callback first."
    :async async
    :confirm t))
 
+(defun test-mevedel-goal--insert-transcript-segment (property &rest strings)
+  "Insert STRINGS as one transcript segment with gptel PROPERTY."
+  (let ((start (point)))
+    (apply #'insert strings)
+    (add-text-properties start (point) (list 'gptel property))))
+
 (defun test-mevedel-goal--emit-tool-leg
     (callback stream &optional response tokens)
   "Emit one tool-using model leg through CALLBACK.
@@ -778,16 +784,54 @@ Each binding is (NAME KEYS)."
 (mevedel-deftest mevedel-goal--parse-review ()
   ,test
   (test)
-  :doc "accepts exactly one complete, continue, or blocked review result"
+  :doc "accepts one final review result after tool and collaboration output"
   (should (equal '(:verdict continue :summary "Fix the remaining test.")
                  (mevedel-goal--parse-review
-                  "<goal_review>\nverdict: continue\nsummary: Fix the remaining test.\n</goal_review>")))
+                  (concat
+                   "I inspected the diff and asked a verifier.\n"
+                   "Tool result: the focused regression still fails.\n"
+                   "<goal_review>\n"
+                   "verdict: continue\n"
+                   "summary: Fix the remaining test.\n"
+                   "</goal_review>"))))
   :doc "rejects malformed, duplicate, or unknown verdicts"
   (dolist (text '("complete"
-                  "preface\n<goal_review>\nverdict: complete\nsummary: x\n</goal_review>"
                   "<goal_review>\nverdict: done\nsummary: x\n</goal_review>"
-                  "<goal_review>\nverdict: complete\nverdict: continue\nsummary: x\n</goal_review>"))
+                  "<goal_review>\nverdict: complete\nverdict: continue\nsummary: x\n</goal_review>"
+                  "<goal_review>\nverdict: done\nsummary: x\n</goal_review>\n<goal_review>\nverdict: complete\nsummary: y\n</goal_review>"
+                  "<goal_review>\nverdict: complete\nsummary: x\n</goal_review>\n<goal_review>\nverdict: blocked\nsummary: y\n</goal_review>"))
     (should-not (mevedel-goal--parse-review text))))
+
+(mevedel-deftest mevedel-goal--review-response-text ()
+  ,test
+  (test)
+  :doc "keeps assistant review prose while excluding tool and mailbox spans"
+  (with-temp-buffer
+    (test-mevedel-goal--insert-transcript-segment
+     'response "I will inspect the repository.")
+    (test-mevedel-goal--insert-transcript-segment
+     '(tool . "call-1")
+     "#+begin_tool (Read :file_path \"mevedel-goal.el\")\n"
+     "(:name \"Read\" :args (:file_path \"mevedel-goal.el\"))\n"
+     "<goal_review>\nverdict: done\nsummary: source example\n"
+     "</goal_review>\n#+end_tool\n")
+    (test-mevedel-goal--insert-transcript-segment
+     'response
+     "<agent-result sender=\"/root/reviewer\" recipient=\"/root\" "
+     "outcome=\"completed\">\n"
+     "<goal_review>\nverdict: done\nsummary: agent example\n"
+     "</goal_review>\n</agent-result>\n")
+    (test-mevedel-goal--insert-transcript-segment
+     'response
+     "<goal_review>\nverdict: continue\nsummary: One check remains.\n"
+     "</goal_review>")
+    (let ((text (mevedel-goal--review-response-text
+                 (point-min) (point-max))))
+      (should (string-match-p "inspect the repository" text))
+      (should-not (string-match-p "source example" text))
+      (should-not (string-match-p "agent example" text))
+      (should (equal '(:verdict continue :summary "One check remains.")
+                     (mevedel-goal--parse-review text))))))
 
 (mevedel-deftest mevedel-goal--record-phase-policy ()
   ,test
@@ -2429,7 +2473,11 @@ Each binding is (NAME KEYS)."
         (with-temp-buffer
           (setq-local mevedel--session session)
           (setf (mevedel-session-goal session) goal)
-          (insert "<goal_review>\nverdict: complete\nsummary: Tests and diff satisfy the objective.\n</goal_review>")
+          (test-mevedel-goal--insert-transcript-segment
+           'response
+           "<goal_review>\nverdict: complete\n"
+           "summary: Tests and diff satisfy the objective.\n"
+           "</goal_review>")
           (mevedel-goal--post-response (point-min) (point-max))
           (should (eq 'active (mevedel-goal-status goal)))
           (should (equal 'complete
@@ -2609,14 +2657,30 @@ Each binding is (NAME KEYS)."
                    "main" (test-mevedel-goal--workspace root)))
          (goal (mevedel-goal--create
                 :status 'active :phase 'reviewing :objective "x"
-                :id "goal-continue" :cycle 1 :cycles '((:cycle 1))
-                :review-summary
-                '(:verdict continue :summary "One check remains.")))
+                :id "goal-continue" :cycle 1 :cycles '((:cycle 1))))
          events)
     (unwind-protect
         (with-current-buffer buffer
           (setq-local mevedel--session session)
           (setf (mevedel-session-goal session) goal)
+          (test-mevedel-goal--insert-transcript-segment
+           'response "I checked the implementation with repository tools.\n")
+          (test-mevedel-goal--insert-transcript-segment
+           '(tool . "call-1")
+           "#+begin_tool (Read :file_path \"test/failing.el\")\n"
+           "(:name \"Read\" :args (:file_path \"test/failing.el\"))\n"
+           "<goal_review>\nverdict: done\nsummary: source fixture\n"
+           "</goal_review>\n#+end_tool\n")
+          (test-mevedel-goal--insert-transcript-segment
+           'response
+           "<agent-result sender=\"/root/verifier\" recipient=\"/root\" "
+           "outcome=\"completed\">\n"
+           "Verifier found one failing check.\n</agent-result>\n")
+          (test-mevedel-goal--insert-transcript-segment
+           'response
+           "<goal_review>\nverdict: continue\n"
+           "summary: One check remains.\n</goal_review>")
+          (mevedel-goal--post-response (point-min) (point-max))
           (cl-letf (((symbol-function 'mevedel-telemetry-record)
                      (lambda (_session event &rest props)
                        (push (cons event props) events))))
@@ -2624,10 +2688,20 @@ Each binding is (NAME KEYS)."
              (test-mevedel-goal--fsm buffer 'reviewing)))
           (should (eq 'planning (mevedel-goal-phase goal)))
           (should (= 2 (mevedel-goal-cycle goal)))
+          (should (equal "One check remains."
+                         (mevedel-goal-review-findings goal)))
           (let ((event (assq 'goal-review-verdict-persisted events)))
             (should event)
             (should (eq 'continue (plist-get (cdr event) :verdict)))
-            (should (= 1 (plist-get (cdr event) :settled-cycle)))))
+            (should (= 1 (plist-get (cdr event) :settled-cycle)))
+            (should (eq 'active
+                        (plist-get (cdr event) :resulting-status))))
+          (let ((event (assq 'goal-phase-settled events)))
+            (should event)
+            (should (eq 'planning
+                        (plist-get (cdr event) :resulting-phase)))
+            (should (eq 'continue
+                        (plist-get (cdr event) :review-verdict)))))
       (when (buffer-live-p buffer) (kill-buffer buffer))
       (delete-directory root t))))
 

@@ -151,6 +151,10 @@
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 
+;; `mevedel-transcript'
+(declare-function mevedel-transcript-segments
+                  "mevedel-transcript" (start end))
+
 ;; `mevedel-transcript-audit'
 (declare-function mevedel--format-hook-audit-record
                   "mevedel-transcript-audit" (record))
@@ -3132,22 +3136,40 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
   (mevedel--normalize-message-text
    (buffer-substring-no-properties start end)))
 
+(defun mevedel-goal--review-response-text (start end)
+  "Return assistant review prose between START and END."
+  (require 'mevedel-transcript)
+  (mevedel--normalize-message-text
+   (mapconcat
+    (lambda (segment)
+      (if (memq (car segment) '(response user))
+          (buffer-substring-no-properties (cadr segment) (caddr segment))
+        ""))
+    (mevedel-transcript-segments start end)
+    "\n")))
+
 (defun mevedel-goal--parse-review (text)
   "Return validated structured Goal review from TEXT, or nil."
   (let ((case-fold-search nil)
-        (text (string-trim text)))
-    (when (string-match
-           (concat "\\`" (regexp-quote mevedel-goal--review-open-tag)
-                   "[ \t]*\n"
-                   "verdict:[ \t]*\\(complete\\|continue\\|blocked\\)"
-                   "[ \t]*\n"
-                   "summary:[ \t]*\\(\\(?:.\\|\n\\)*?\\)[ \t\n]*"
-                   (regexp-quote mevedel-goal--review-close-tag) "\\'")
-           text)
-      (let ((summary (string-trim (match-string 2 text))))
-        (unless (string-blank-p summary)
-          (list :verdict (intern (match-string 1 text))
-                :summary summary))))))
+        (text (string-trim text))
+        (tag-regexp
+         (regexp-opt (list mevedel-goal--review-open-tag
+                           mevedel-goal--review-close-tag)))
+        (regexp
+         (concat "^" (regexp-quote mevedel-goal--review-open-tag)
+                 "[ \t]*\n"
+                 "verdict:[ \t]*\\(complete\\|continue\\|blocked\\)"
+                 "[ \t]*\n"
+                 "summary:[ \t]*\\(\\(?:.\\|\n\\)*?\\)[ \t\n]*"
+                 (regexp-quote mevedel-goal--review-close-tag) "\\'")))
+    (when (string-match regexp text)
+      (let ((prefix (substring text 0 (match-beginning 0)))
+            (summary (string-trim (match-string 2 text)))
+            (verdict (intern (match-string 1 text))))
+        (unless (or (string-blank-p summary)
+                    (string-match-p tag-regexp prefix)
+                    (string-match-p tag-regexp summary))
+          (list :verdict verdict :summary summary))))))
 
 (defun mevedel-goal--post-response (start end)
   "Capture phase output between START and END without settling the turn."
@@ -3193,7 +3215,8 @@ remaining budget.  Equivalent duplicate admissions pause instead of spin."
            (message "mevedel: goal paused because planning produced no plan")))
         ('reviewing
          (setf (mevedel-goal-review-summary goal)
-               (mevedel-goal--parse-review response)))))))
+               (mevedel-goal--parse-review
+                (mevedel-goal--review-response-text start end))))))))
 
 (defun mevedel-goal-settle-turn (fsm)
   "Advance Goal state after FSM reaches a successful terminal boundary."
