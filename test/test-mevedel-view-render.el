@@ -2675,7 +2675,13 @@ state of its inner sections"
     (should (string-match "…" line))
     (should (eq 'mevedel-view-tool-metadata
                 (get-text-property (match-beginning 0)
-                                   'font-lock-face line)))))
+                                   'font-lock-face line))))
+
+  :doc "tool errors use a warning marker"
+  (should (string-match-p
+           "\\`  ! Bash:"
+           (mevedel-view--rendering-header-line
+            '(:header "Bash: npx test" :status error)))))
 
 ;;; Rendering plist validation
 
@@ -2796,7 +2802,7 @@ state of its inner sections"
                 :name "StatusDispatchErr"
                 :renderer `((success . ,success-fn)
                             (error . ,error-fn)))))
-    (should (equal '(:header "error")
+    (should (equal '(:header "error" :status error)
                    (mevedel-view--invoke-renderer
                     tool nil nil "Error: bad"))))
   :doc "renderer alist honors structured error status without failure prose"
@@ -2817,7 +2823,7 @@ state of its inner sections"
          (tool (mevedel-tool--create
                 :name "StatusDefault"
                 :renderer `((default . ,default-fn)))))
-    (should (equal '(:header "default")
+    (should (equal '(:header "default" :status error)
                    (mevedel-view--invoke-renderer
                     tool nil nil "Error: bad"))))
   :doc "returns nil when tool has no renderer"
@@ -2917,6 +2923,20 @@ state of its inner sections"
                      (plist-get rendering :header)))
       (should (eq 'error (plist-get rendering :status)))
       (should (equal "plain failure" (plist-get rendering :body)))))
+  :doc "custom Bash rendering marks permission failures without render data"
+  (progn
+    (mevedel-tool-register
+     (mevedel-tool--create
+      :name "Bash"
+      :category "mevedel"
+      :display-arg :command
+      :renderer #'mevedel-tool-exec--render-bash))
+    (with-temp-buffer
+      (insert "(:name \"Bash\" :args (:command \"npx test\"))\n"
+              "Error: Permission denied\n")
+      (let ((rendering (mevedel-view--segment-rendering
+                        (current-buffer) (point-min) (point-max))))
+        (should (eq 'error (plist-get rendering :status))))))
   :doc "collapsed cached renderings omit bodies but expansion keeps them"
   (let ((mevedel-view--tool-rendering-cache (make-hash-table :test #'equal))
         (mevedel-view--render-cache-entries 0))

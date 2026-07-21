@@ -1284,9 +1284,9 @@ straight off ARGS and RESULT without needing render-data."
                 (cond
                  ((null plist) nil)
                  ((mevedel-view--rendering-plist-p plist)
-                  (if explicit-status
+                  (if (or explicit-status (eq status 'error))
                       (plist-put (copy-sequence plist)
-                                 :status explicit-status)
+                                 :status status)
                     plist))
                  (t
                   (display-warning
