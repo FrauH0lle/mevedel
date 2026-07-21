@@ -65,6 +65,22 @@
      '((:namespace interaction :id prompt :body "uvwxyz")))
     (should (eq (char-after) ?x)))
 
+  :doc "does not mutate an unchanged managed fragment"
+  (with-temp-buffer
+    (mevedel-view-zone-test--setup-markers)
+    (mevedel-view-zone-reconcile
+     'status (point-min) (point-min)
+     '((:namespace status :id tasks :body "Tasks")))
+    (let ((changes 0))
+      (add-hook 'after-change-functions
+                (lambda (&rest _ignore) (cl-incf changes)) nil t)
+      (mevedel-view-zone-reconcile
+       'status (point-min) (point-min)
+       '((:namespace status :id tasks :body "Tasks")))
+      (should (= 0 changes))
+      (should (equal "Tasks\n" (buffer-substring-no-properties
+                                  (point-min) (point-max))))))
+
   :doc "removes orphaned and duplicate stale zone text"
   (with-temp-buffer
     (mevedel-view-zone-test--setup-markers)
