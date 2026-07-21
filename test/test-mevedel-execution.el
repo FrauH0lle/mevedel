@@ -32,9 +32,11 @@
   (test)
   :doc "preserves filter output when the watchdog observes exit before delivery"
   (let ((original-make-process (symbol-function 'make-process))
+        (original-accept-process-output
+         (symbol-function 'accept-process-output))
         (original-run-at-time (symbol-function 'run-at-time))
         (mevedel-sandbox-mode 'off)
-        chunks filter watch done result)
+        chunks filter settle watch done result)
     (cl-letf (((symbol-function 'make-process)
                (lambda (&rest args)
                  (setq filter (plist-get args :filter))
@@ -48,12 +50,16 @@
                    :sentinel #'ignore))))
               ((symbol-function 'run-at-time)
                (lambda (time repeat function &rest args)
-                 (if (and (equal time 0.1) (equal repeat 0.1))
-                     (progn
-                       (setq watch (lambda () (apply function args)))
-                       (funcall original-run-at-time 3600 nil #'ignore))
+                 (cond
+                  ((and (equal time 0.1) (equal repeat 0.1))
+                   (setq watch (lambda () (apply function args)))
+                   (funcall original-run-at-time 3600 nil #'ignore))
+                  ((eq function #'mevedel-execution--finish-record)
+                   (setq settle (lambda () (apply function args)))
+                   (funcall original-run-at-time 3600 nil #'ignore))
+                  (t
                    (apply original-run-at-time
-                          time repeat function args)))))
+                          time repeat function args))))))
       (mevedel-execution-start-one-shot
        (lambda (child-result)
          (setq result child-result
@@ -64,15 +70,20 @@
        :writable-roots (list temporary-file-directory))
       (with-timeout (2 (error "Process did not exit"))
         (while (not chunks)
-          (accept-process-output nil 0.01))
+          (funcall original-accept-process-output nil 0.01))
         (while (process-live-p (caar chunks))
-          (accept-process-output nil 0.01)))
+          (funcall original-accept-process-output nil 0.01)))
       (funcall watch)
-      (dolist (entry (nreverse chunks))
-        (funcall filter (car entry) (cdr entry)))
-      (with-timeout (2 (error "One-shot process did not settle"))
-        (while (not done)
-          (accept-process-output nil 0.01)))
+      (should settle)
+      (cl-letf (((symbol-function 'accept-process-output)
+                 (lambda (&rest _)
+                   (when chunks
+                     (dolist (entry (nreverse chunks))
+                       (funcall filter (car entry) (cdr entry)))
+                     (setq chunks nil)
+                     t))))
+        (funcall settle))
+      (should done)
       (should (= 0 (plist-get result :exit-code)))
       (should (equal "recovered" (plist-get result :output)))))
   :doc "settles an exited child even when Emacs does not deliver its sentinel"

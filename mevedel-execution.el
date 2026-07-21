@@ -447,6 +447,9 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
 (defun mevedel-execution--finish-record (record status &optional error-data)
   "Settle RECORD once with STATUS and optional ERROR-DATA."
   (unless (mevedel-execution--record-finished-p record)
+    (when-let* ((process (mevedel-execution--record-process record))
+                ((memq (process-status process) '(exit signal))))
+      (while (accept-process-output process 0.01 nil t)))
     (setf (mevedel-execution--record-finished-p record) t)
     (let* ((path (mevedel-execution--record-spool-path record))
            (bytes (or (and (file-readable-p path)
