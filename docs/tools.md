@@ -438,16 +438,19 @@ terminal projection and retries it at tool and final-render boundaries.
 Agent data buffers run the final-boundary retry even when no transcript view is
 open.
 
-Terminal delivery has one claimant. A model observation that sees completion
-claims the final result and retires the handle without a mailbox duplicate. If
-a yielded process exits independently, or the user stops it outside the model
-tool, root-owned output is queued synchronously in the root mailbox without
-starting a model request. Agent-owned completion is captured by the retained
-invocation instead: it does not wake `WaitAgent`, and once the provider has
-produced its terminal response the runtime appends every captured completion
-and settles the turn directly in either arrival order. This starts no model
-request. Passive progress/view subscribers cannot acknowledge delivery, and
-finished records never appear in live execution listings.
+Terminal delivery has one publisher. The yield boundary first reconciles an
+already-exited child, so its initiating Bash call receives completion instead
+of a stale live handle. A yielded terminal result remains owner-pollable for 60
+seconds; repeated polls return the same observation without publishing another
+terminal event or mailbox message. If a yielded process exits independently,
+or the user stops it outside the model tool, root-owned output is queued
+synchronously in the root mailbox without starting a model request. Agent-owned
+completion is captured by the retained invocation instead: it does not wake
+`WaitAgent`, and once the provider has produced its terminal response the
+runtime appends every captured completion and settles the turn directly in
+either arrival order. This starts no model request. Passive progress/view
+subscribers cannot acknowledge delivery, and finished records never appear in
+live execution listings.
 
 The transcript view renders execution-only mailbox deliveries as compact Bash
 completion cards while retaining their full model-facing disclosure in the
