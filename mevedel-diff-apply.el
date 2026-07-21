@@ -375,26 +375,29 @@ the overlays."
   (when no-prompt
     (save-excursion
       (goto-char (point-min))
-      (diff-beginning-of-hunk t)
-      (while
-          (progn
-            (let* ((start (line-beginning-position))
-                   (end (min (point-max) (+ start 500)))
-                   (diagnostic
-                    (concat (buffer-substring-no-properties start end)
-                            (when (< end (point-max)) "..."))))
-              (condition-case err
-                  (cl-letf (((symbol-function 'y-or-n-p)
-                             (lambda (prompt)
-                               (error "Heuristic repair required: %s" prompt))))
-                    (diff-sanity-check-hunk))
-                (error
-                 (error "Rejected ambiguous diff hunk: %s\n%s"
-                        (error-message-string err)
-                        diagnostic))))
-            (and (not (eq (prog1 (point) (ignore-errors (diff-hunk-next)))
-                          (point)))
-                 (looking-at-p diff-hunk-header-re))))))
+      (unless (re-search-forward diff-hunk-header-re nil t)
+        (error "No diff hunks found"))
+      (let ((hunk-start (match-beginning 0)))
+        (while hunk-start
+          (goto-char hunk-start)
+          (let* ((start (line-beginning-position))
+                 (end (min (point-max) (+ start 500)))
+                 (diagnostic
+                  (concat (buffer-substring-no-properties start end)
+                          (when (< end (point-max)) "..."))))
+            (condition-case err
+                (cl-letf (((symbol-function 'y-or-n-p)
+                           (lambda (prompt)
+                             (error "Heuristic repair required: %s" prompt))))
+                  (diff-sanity-check-hunk))
+              (error
+               (error "Rejected ambiguous diff hunk: %s\n%s"
+                      (error-message-string err)
+                      diagnostic))))
+          (forward-line)
+          (setq hunk-start
+                (and (re-search-forward diff-hunk-header-re nil t)
+                     (match-beginning 0)))))))
   (pcase-let ((buffer-edits nil)
               (failures 0)
               (diff-refine nil)
