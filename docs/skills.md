@@ -286,7 +286,11 @@ by exact canonical source across the complete submission. A command occurrence
 wins over instruction occurrences of the same source. Instruction occurrences
 become inert model-visible placeholders such as
 `[skill:to-prd -- attached]`, and each unique instruction body is supplied once
-as hidden turn context. Instruction preparation always receives empty
+as hidden turn context. The attachment reminder tells the model that the host
+already attached the skill and that it must follow the skill without calling
+`Skill`. A redundant model-side call for the same canonical skill in that
+request succeeds with `already attached` and does not inject the body again.
+Instruction preparation always receives empty
 arguments and ignores `context`, model, effort, agent, and declared skill
 hooks. Its allowed-tool rules exist only while preparing body injections.
 

@@ -101,6 +101,8 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-current-origin "mevedel-structs" ())
+(declare-function mevedel-request-attached-skill-records
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-begin "mevedel-structs"
                   (session &optional directive-uuid))
 (declare-function mevedel-request-hook-rules
@@ -228,8 +230,9 @@ The stash plist keys map onto request/session state:
 - :permission-rules -> `mevedel-request-skill-permission-rules'
 - :model/:effort    -> consumed by the pre-realization prompt transform
 - :hook-rules       -> `mevedel-request-hook-rules'
-- :invoked-skills   -> appended to `mevedel-session-invoked-skills'
-                       on the request's session"
+- :invoked-skills   -> user-origin records identify skill bodies already
+                       attached to this request, and all records are appended
+                       to `mevedel-session-invoked-skills'"
   (when-let* ((ctx mevedel-skills--pending-request-context))
     (when-let* ((rules (plist-get ctx :permission-rules)))
       (setf (mevedel-request-skill-permission-rules request) rules))
@@ -237,6 +240,13 @@ The stash plist keys map onto request/session state:
       (setf (mevedel-request-hook-rules request) hooks))
     (when-let* ((skills (plist-get ctx :invoked-skills))
                 (session mevedel--session))
+      (setf (mevedel-request-attached-skill-records request)
+            (cl-remove-if-not
+             (lambda (record)
+               (and (mevedel-skill-invocation-record-p record)
+                    (eq (mevedel-skill-invocation-record-origin record)
+                        'user)))
+             skills))
       (mevedel-skills-commit-invoked-records session skills))
     (setq-local mevedel-skills--pending-request-context nil)))
 
@@ -1123,7 +1133,7 @@ original `$skill' invocation compactly."
 
 (defun mevedel-skills--inline-attachment-reminder (attachment)
   "Return system-reminder body for prepared inline skill ATTACHMENT."
-  (format "Skill `$%s` was attached by an inline user mention. Follow these instructions for this turn:\n\n%s"
+  (format "The host already attached the skill `$%s` for this request. You must follow it without calling `Skill`.\n\n%s"
           (plist-get attachment :name)
           (or (plist-get attachment :body) "")))
 
@@ -1769,6 +1779,25 @@ asynchronous agent and calls CALLBACK when that turn settles."
       (mevedel-skills--invoke-error
        skill 'unknown-skill
        "Invalid skill struct"
+       callback display-callback))
+     ((and (eq origin 'model)
+           (when-let* ((request (mevedel-skills--current-request))
+                       (source-key
+                        (mevedel-skills--source-key
+                         (mevedel-skill-source-file skill))))
+             (cl-some
+              (lambda (record)
+                (equal source-key
+                       (mevedel-skills--source-key
+                        (mevedel-skill-invocation-record-source-path record))))
+              (mevedel-request-attached-skill-records request))))
+      (mevedel-skills--invoke-done
+       skill
+       (list :status 'ok
+             :kind 'already-attached
+             :body (format
+                    "Skill '$%s' is already attached by the user for this request."
+                    skill-name))
        callback display-callback))
      ;; User-disabled skill gating.
      ((and (not skip-gates)

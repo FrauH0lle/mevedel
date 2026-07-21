@@ -516,6 +516,8 @@ Created at request start, cleared in the termination handler."
   origin            ; canonical requesting agent path
   ;; Rules accumulated by an owning skill die with the request struct.
   skill-permission-rules
+  ;; User-attached `mevedel-skill-invocation-record' structs.
+  attached-skill-records
   hook-rules)
 
 

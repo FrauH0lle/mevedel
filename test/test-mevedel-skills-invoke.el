@@ -1919,6 +1919,38 @@ description: Yell
           (should (equal "YELL loudly" received)))
       (delete-directory dir t)))
 
+  :doc "user-attached skill is an idempotent model-side success"
+  (let* ((session (mevedel-skills-test--make-session))
+         (source "/tmp/implement/SKILL.md")
+         (skill (mevedel-skill--create
+                 :name "implement"
+                 :body "BODY MUST NOT BE RETURNED"
+                 :source-file source
+                 :context 'inline
+                 :model-invocable-p nil))
+         (record (mevedel-skill-invocation-record--create
+                  :name "implement"
+                  :role 'instruction
+                  :origin 'user
+                  :source-path source
+                  :prepared-body "BODY MUST NOT BE RETURNED"))
+         (request (mevedel-request--create :session session))
+         received)
+    (setf (mevedel-session-skills session) (list skill))
+    (with-temp-buffer
+      (setq-local mevedel--session session
+                  mevedel--current-request request
+                  mevedel-skills--pending-request-context
+                  (list :invoked-skills (list record)))
+      (mevedel-skills--drain-pending-context request)
+      (mevedel-skills--invoke-handler
+       (lambda (value)
+         (setq received (test-mevedel-skills--handler-result value)))
+       '(:name "implement")))
+    (should (string-match-p "already attached" received))
+    (should-not (string-match-p "BODY MUST NOT BE RETURNED" received))
+    (should (equal (list record) (mevedel-session-invoked-skills session))))
+
   :doc "model-side inline policy is view-only render-data"
   (let* ((session (mevedel-skills-test--make-session))
          (skill (mevedel-skill--create
@@ -2592,6 +2624,10 @@ spanning lines")))
               (should (string-match-p (regexp-quote "`$beta`") text))
               (should (string-match-p "Alpha body" text))
               (should (string-match-p "Beta body" text))
+              (should (string-match-p
+                       "host already attached the skill" text))
+              (should (string-match-p
+                       "must follow it without calling `Skill`" text))
               (should (string-match-p "<system-reminder>" text)))
             (goto-char (point-min))
             (search-forward "Use [skill:alpha -- attached]")
