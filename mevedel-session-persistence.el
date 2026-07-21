@@ -2087,10 +2087,24 @@ automatic segment rotation."
 
 (defun mevedel-session-persistence--set-visited-segment-file (file)
   "Make the current buffer visit segment FILE without changing its name."
-  (setq buffer-file-name file
-        buffer-file-truename (file-truename file))
-  (when (file-exists-p file)
-    (set-visited-file-modtime)))
+  (let ((name (buffer-name)))
+    (set-visited-file-name file t)
+    (rename-buffer name t))
+  (setq buffer-file-truename (file-truename file))
+  (set-visited-file-modtime)
+  (set-buffer-modified-p nil))
+
+(defun mevedel-session-persistence--publish-segment-text (file text)
+  "Atomically write TEXT to FILE and make the current buffer visit it."
+  (let ((coding-system buffer-file-coding-system))
+    (with-temp-buffer
+      (setq buffer-file-coding-system coding-system)
+      (insert text)
+      (mevedel-session-persistence--write-current-buffer-atomically file)))
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert text))
+  (mevedel-session-persistence--set-visited-segment-file file))
 
 (defun mevedel-session-persistence--insert-segment-header (session)
   "Insert per-segment org properties at point in current buffer.
@@ -2188,12 +2202,9 @@ user\\='s view, by contrast, sees a foldable block."
 Performs the split-on-compact rotation:
   1. Saves the current segment file before replacing the live buffer.
   2. Advances `mevedel-session-current-segment' on SESSION.
-  3. Re-points BUFFER's variable `buffer-file-name' at the new segment path.
-  4. Erases BUFFER and re-builds it: per-segment org property drawer
-     followed by SUMMARY wrapped in an `#+begin_summary' block, then
-     TAIL-TEXT, ARCHIVE-TEXT, and PENDING-TEXT when supplied.
-  5. Saves the new segment file without PENDING-TEXT, then restores
-     PENDING-TEXT in the live buffer without marking it saved.
+  3. Builds the new segment in a temporary buffer.
+  4. Atomically publishes it and repoints BUFFER's visited-file state.
+  5. Restores PENDING-TEXT in the live buffer without marking it saved.
   6. Rewrites the sidecar.
   7. Sets `MEVEDEL_SEGMENT_FINALIZED_AT' on the predecessor segment.
 
@@ -2219,9 +2230,8 @@ nil if SESSION is not yet materialized."
             (tail-prompt-count
              (mevedel-session-persistence--prompt-count-in-text tail-text))
             new-segment
-            tmp-segment
-            pending-start-marker
-            pending-end-marker)
+            new-text
+            pending-position)
         (let ((telemetry-span
                (and (fboundp 'mevedel-telemetry-start)
                     (mevedel-telemetry-start
@@ -2253,58 +2263,57 @@ nil if SESSION is not yet materialized."
                  :old-segment old-current-segment))
               ;; 2. Advance segment counter.
               (cl-incf (mevedel-session-current-segment session))
-              ;; 3. Switch buffer-file-name to the new segment.
+              ;; 3. Build the new segment without changing visited-file state.
               (setq new-segment
                     (mevedel-session-persistence--segment-path
                      (mevedel-session-save-path session)
                      (mevedel-session-current-segment session)))
-              (setq tmp-segment (concat new-segment ".tmp"))
-              (setq buffer-file-name new-segment)
-              ;; 4. Erase and rebuild buffer body.
-              (let ((inhibit-read-only t))
-                (erase-buffer)
-                (mevedel-session-persistence--insert-segment-header session)
-                (when truncated-tail-p
-                  (org-entry-put (point-min) "MEVEDEL_SEGMENT_TRUNCATED_TAIL" "t"))
-                (when (> tail-prompt-count 0)
-                  (org-entry-put (point-min) "MEVEDEL_SEGMENT_TAIL_PROMPTS"
-                                 (number-to-string tail-prompt-count)))
-                (goto-char (point-max))
-                (unless (bolp) (insert "\n"))
-                (insert "\n")
-                (when-let* ((goal (mevedel-session-goal session)))
-                  (require 'mevedel-goal)
-                  (insert (mevedel-goal-context-fragment goal session t)
-                          "\n\n"))
-                (insert (mevedel-session-persistence--summary-block summary))
-                (when tail-text
-                  (unless (bolp) (insert "\n"))
-                  (insert tail-text))
-                (when archive-text
-                  (insert archive-text))
-                (when pending-text
-                  (unless (bolp) (insert "\n"))
-                  (setq pending-start-marker (copy-marker (point) nil))
-                  (insert pending-text)
-                  (setq pending-end-marker (copy-marker (point) nil)))
-                (insert "\n"))
-              (set-buffer-modified-p t)
-              ;; 5. Save the new segment via a temp file, then atomically publish it.
-              (when (and pending-start-marker pending-end-marker)
-                (delete-region pending-start-marker pending-end-marker))
-              (let ((buffer-file-name tmp-segment))
-                (save-buffer))
+              (let ((coding-system buffer-file-coding-system))
+                (setq new-text
+                      (with-temp-buffer
+                        (setq buffer-file-coding-system coding-system)
+                        (org-mode)
+                        ;; 4. Build the persisted body in isolation.
+                        (mevedel-session-persistence--insert-segment-header
+                         session)
+                        (when truncated-tail-p
+                          (org-entry-put
+                           (point-min) "MEVEDEL_SEGMENT_TRUNCATED_TAIL" "t"))
+                        (when (> tail-prompt-count 0)
+                          (org-entry-put
+                           (point-min) "MEVEDEL_SEGMENT_TAIL_PROMPTS"
+                           (number-to-string tail-prompt-count)))
+                        (goto-char (point-max))
+                        (unless (bolp) (insert "\n"))
+                        (insert "\n")
+                        (when-let* ((goal (mevedel-session-goal session)))
+                          (require 'mevedel-goal)
+                          (insert
+                           (mevedel-goal-context-fragment goal session t)
+                           "\n\n"))
+                        (insert
+                         (mevedel-session-persistence--summary-block summary))
+                        (when tail-text
+                          (unless (bolp) (insert "\n"))
+                          (insert tail-text))
+                        (when archive-text
+                          (insert archive-text))
+                        (when pending-text
+                          (unless (bolp) (insert "\n"))
+                          (setq pending-position (point)))
+                        (insert "\n")
+                        (buffer-string))))
+              ;; 5. Atomically publish, then repoint the canonical live buffer.
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
-                 session 'segment-rotation-stage :stage 'new-temp-saved
+                 session 'segment-rotation-stage :stage 'new-publish-start
                  :new-segment (mevedel-session-current-segment session)))
-              (rename-file tmp-segment new-segment t)
-              (mevedel-session-persistence--set-visited-segment-file new-segment)
+              (mevedel-session-persistence--publish-segment-text
+               new-segment new-text)
               (when (fboundp 'mevedel-telemetry-record)
                 (mevedel-telemetry-record
                  session 'segment-rotation-stage :stage 'new-published
                  :new-segment (mevedel-session-current-segment session)))
-              (set-buffer-modified-p nil)
               ;; 6. Rewrite the sidecar with the bumped current-segment.
               (setf (mevedel-session-updated-at session)
                     (format-time-string "%FT%H-%M-%S"))
@@ -2317,8 +2326,8 @@ nil if SESSION is not yet materialized."
               (when telemetry-span
                 (mevedel-telemetry-finish
                  telemetry-span :outcome 'success))
-              (when pending-start-marker
-                (goto-char pending-start-marker)
+              (when pending-position
+                (goto-char pending-position)
                 (insert pending-text)
                 ;; The pending prompt belongs to the in-flight request.
                 ;; The DONE autosave will commit it together with the
@@ -2331,10 +2340,10 @@ nil if SESSION is not yet materialized."
               telemetry-span :outcome 'error :error-class (car-safe err)))
            (setf (mevedel-session-current-segment session) old-current-segment)
            (setf (mevedel-session-updated-at session) old-updated-at)
-           (setq buffer-file-name old-segment)
            (let ((inhibit-read-only t))
              (erase-buffer)
              (insert old-text))
+           (mevedel-session-persistence--set-visited-segment-file old-segment)
            (goto-char (min old-point (point-max)))
            (set-buffer-modified-p old-modified-p)
            (ignore-errors
@@ -2342,8 +2351,6 @@ nil if SESSION is not yet materialized."
               (mevedel-session-persistence--sidecar-path
                (mevedel-session-save-path session))
               (mevedel-session-persistence--build-sidecar session buffer)))
-           (when (and tmp-segment (file-exists-p tmp-segment))
-             (delete-file tmp-segment))
            (when (and new-segment (file-exists-p new-segment))
              (delete-file new-segment))
            (signal (car err) (cdr err)))))))))
@@ -2368,9 +2375,8 @@ absolute path on success, nil if SESSION is not yet materialized."
             (old-point (point))
             (old-modified-p (buffer-modified-p))
             new-segment
-            tmp-segment
-            initial-start-marker
-            initial-end-marker)
+            new-text
+            initial-position)
         (unless old-segment
           (error "No current segment file"))
         (condition-case err
@@ -2384,26 +2390,21 @@ absolute path on success, nil if SESSION is not yet materialized."
                     (mevedel-session-persistence--segment-path
                      (mevedel-session-save-path session)
                      (mevedel-session-current-segment session)))
-              (setq tmp-segment (concat new-segment ".tmp"))
-              (setq buffer-file-name new-segment)
-              (let ((inhibit-read-only t))
-                (erase-buffer)
-                (mevedel-session-persistence--insert-segment-header session)
-                (goto-char (point-max))
-                (when (and initial-text
-                           (not (string-empty-p initial-text)))
-                  (unless (bolp) (insert "\n"))
-                  (setq initial-start-marker (copy-marker (point) nil))
-                  (insert initial-text)
-                  (setq initial-end-marker (copy-marker (point) nil))))
-              (set-buffer-modified-p t)
-              (when (and initial-start-marker initial-end-marker)
-                (delete-region initial-start-marker initial-end-marker))
-              (let ((buffer-file-name tmp-segment))
-                (save-buffer))
-              (rename-file tmp-segment new-segment t)
-              (mevedel-session-persistence--set-visited-segment-file new-segment)
-              (set-buffer-modified-p nil)
+              (let ((coding-system buffer-file-coding-system))
+                (setq new-text
+                      (with-temp-buffer
+                        (setq buffer-file-coding-system coding-system)
+                        (org-mode)
+                        (mevedel-session-persistence--insert-segment-header
+                         session)
+                        (goto-char (point-max))
+                        (when (and initial-text
+                                   (not (string-empty-p initial-text)))
+                          (unless (bolp) (insert "\n"))
+                          (setq initial-position (point)))
+                        (buffer-string))))
+              (mevedel-session-persistence--publish-segment-text
+               new-segment new-text)
               (setf (mevedel-session-updated-at session)
                     (format-time-string "%FT%H-%M-%S"))
               (mevedel-session-persistence-write
@@ -2412,8 +2413,8 @@ absolute path on success, nil if SESSION is not yet materialized."
                (mevedel-session-persistence--build-sidecar session buffer))
               (mevedel-session-persistence--save-instructions session buffer)
               (mevedel-session-persistence--finalize-segment-file old-segment)
-              (when initial-start-marker
-                (goto-char initial-start-marker)
+              (when initial-position
+                (goto-char initial-position)
                 (insert initial-text)
                 (set-buffer-modified-p nil))
               (goto-char (point-max))
@@ -2425,10 +2426,10 @@ absolute path on success, nil if SESSION is not yet materialized."
           (error
            (setf (mevedel-session-current-segment session) old-current-segment)
            (setf (mevedel-session-updated-at session) old-updated-at)
-           (setq buffer-file-name old-segment)
            (let ((inhibit-read-only t))
              (erase-buffer)
              (insert old-text))
+           (mevedel-session-persistence--set-visited-segment-file old-segment)
            (goto-char (min old-point (point-max)))
            (set-buffer-modified-p old-modified-p)
            (ignore-errors
@@ -2436,8 +2437,6 @@ absolute path on success, nil if SESSION is not yet materialized."
               (mevedel-session-persistence--sidecar-path
                (mevedel-session-save-path session))
               (mevedel-session-persistence--build-sidecar session buffer)))
-           (when (and tmp-segment (file-exists-p tmp-segment))
-             (delete-file tmp-segment))
            (when (and new-segment (file-exists-p new-segment))
              (delete-file new-segment))
            (signal (car err) (cdr err))))))))

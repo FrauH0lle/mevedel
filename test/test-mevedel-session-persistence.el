@@ -1060,6 +1060,59 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                     (buffer-string)))))
       (when (file-exists-p path) (delete-file path)))))
 
+(mevedel-deftest mevedel-session-persistence--set-visited-segment-file ()
+  ,test
+  (test)
+  :doc "sets canonical visited-file identity without renaming the live buffer"
+  (let* ((directory (make-temp-file "mevedel-segment-identity-" t))
+         (old-path (file-name-concat directory "segment-0001.chat.org"))
+         (new-path (file-name-concat directory "segment-0002.chat.org"))
+         (buffer (generate-new-buffer "*test-segment-identity*")))
+    (unwind-protect
+        (progn
+          (write-region "old" nil old-path nil 'silent)
+          (write-region "new" nil new-path nil 'silent)
+          (with-current-buffer buffer
+            (set-visited-file-name old-path t)
+            (insert "new")
+            (let ((name (buffer-name)))
+              (mevedel-session-persistence--set-visited-segment-file new-path)
+              (should (equal name (buffer-name))))
+            (should (equal new-path buffer-file-name))
+            (should (equal (file-truename new-path) buffer-file-truename))
+            (should (verify-visited-file-modtime buffer))
+            (should-not (buffer-modified-p))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-directory-p directory) (delete-directory directory t)))))
+
+(mevedel-deftest mevedel-session-persistence--publish-segment-text ()
+  ,test
+  (test)
+  :doc "atomically publishes text and installs matching live-buffer state"
+  (let* ((directory (make-temp-file "mevedel-segment-publish-" t))
+         (old-path (file-name-concat directory "segment-0001.chat.org"))
+         (new-path (file-name-concat directory "segment-0002.chat.org"))
+         (buffer (generate-new-buffer "*test-segment-publish*")))
+    (unwind-protect
+        (progn
+          (write-region "old" nil old-path nil 'silent)
+          (with-current-buffer buffer
+            (set-visited-file-name old-path t)
+            (insert "old")
+            (set-buffer-modified-p nil)
+            (mevedel-session-persistence--publish-segment-text
+             new-path "replacement")
+            (should (equal "replacement" (buffer-string)))
+            (should (equal new-path buffer-file-name))
+            (should (verify-visited-file-modtime buffer)))
+          (should
+           (equal "replacement"
+                  (with-temp-buffer
+                    (insert-file-contents new-path)
+                    (buffer-string)))))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-directory-p directory) (delete-directory directory t)))))
+
 ;;
 ;;; Phase 2: ID generation, paths, lazy materialization
 
@@ -3043,6 +3096,38 @@ workspace tree."
           (with-current-buffer buf
             (should (string-suffix-p "Pending prompt\n" (buffer-string)))
             (should (verify-visited-file-modtime buf))))
+      (test-mevedel-session-persistence--cleanup tempdir)))
+  :doc "noninteractive publication:
+rotation never saves through a rebound temporary visited filename or prompts"
+  (cl-destructuring-bind (session . tempdir)
+      (test-mevedel-session-persistence--make-materialized-session)
+    (unwind-protect
+        (let* ((buf (get-buffer "*test-data-buf*"))
+               (original-save-buffer (symbol-function 'save-buffer))
+               new-path)
+          (with-current-buffer buf
+            (goto-char (point-max))
+            (insert "unsaved transcript\n"))
+          (cl-letf (((symbol-function 'ask-user-about-supersession-threat)
+                     (lambda (&rest _) (error "Supersession prompt")))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (error "yes-or-no prompt")))
+                    ((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (error "y-or-n prompt")))
+                    ((symbol-function 'save-buffer)
+                     (lambda (&rest args)
+                       (when (and buffer-file-name
+                                  (string-suffix-p ".tmp" buffer-file-name))
+                         (error "Temporary visited-file save"))
+                       (apply original-save-buffer args))))
+            (setq new-path
+                  (mevedel-session-persistence-rotate-segment
+                   session buf "Noninteractive summary.")))
+          (with-current-buffer buf
+            (should (equal new-path buffer-file-name))
+            (should (equal (file-truename new-path) buffer-file-truename))
+            (should (verify-visited-file-modtime buf))
+            (should-not (buffer-modified-p))))
       (test-mevedel-session-persistence--cleanup tempdir)))
   :doc "signals a controlled error when current segment differs on disk"
   (cl-destructuring-bind (session . tempdir)

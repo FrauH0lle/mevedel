@@ -349,15 +349,44 @@
     (should (= (mevedel--compact-estimate-data-tokens data)
                (/ (length payload) 4)))))
 
+(mevedel-deftest mevedel--compact-token-usage-input ()
+  ,test
+  (test)
+  :doc "sums valid prompt token fields"
+  (should (= 10 (mevedel--compact-token-usage-input
+                 '(:input 1 :cached 2 :cache-read 3 :cache_read 4))))
+  :doc "treats absent optional fields as zero"
+  (should (= 4 (mevedel--compact-token-usage-input '(:input 4))))
+  :doc "rejects absent, malformed, and negative usage"
+  (dolist (tokens '(nil (:output 4) (:input "4") (:input -1)
+                         (:input . 4)))
+    (should-not (mevedel--compact-token-usage-input tokens))))
+
+(mevedel-deftest mevedel--compact-token-usage-count ()
+  ,test
+  (test)
+  :doc "adds valid output usage to prompt usage"
+  (should (= 12 (mevedel--compact-token-usage-count
+                 '(:input 4 :cached 3 :output 5))))
+  :doc "treats an absent output field as zero"
+  (should (= 4 (mevedel--compact-token-usage-count '(:input 4))))
+  :doc "rejects absent, malformed, and negative usage"
+  (dolist (tokens '(nil (:output 5) (:input "4") (:input -1)
+                         (:input 4 :output "5") (:input 4 :output -1)
+                         (:input . 4)))
+    (should-not (mevedel--compact-token-usage-count tokens))))
+
 (mevedel-deftest mevedel--compact-record-token-baseline ()
   ,test
   (test)
   :doc "records gptel-reported tokens as estimate baseline"
   (with-temp-buffer
     (insert "abcd")
-    (let* ((chat-buffer (current-buffer))
+    (let* ((gptel-model nil)
+           (chat-buffer (current-buffer))
            (fsm (gptel-make-fsm
                  :info (list :buffer chat-buffer
+                             :model 'provider-model
                              :tokens '(:input 10
                                        :cached 5
                                        :output 7)
@@ -366,9 +395,16 @@
                                             :output 7)))))
       (mevedel--compact-record-token-baseline fsm)
       (should (= (plist-get mevedel--known-token-baseline :tokens) 22))
-      (should (eq (plist-get mevedel--known-token-baseline :source) 'tokens))
-      (should (= (plist-get mevedel--known-token-baseline :raw-tokens) 22))
-      (should (= (plist-get mevedel--known-token-baseline :raw-tokens-full) 22))
+      (should (eq (plist-get mevedel--known-token-baseline :source)
+                  'provider-context))
+      (should (eq (plist-get mevedel--known-token-baseline :model)
+                  'provider-model))
+      (should (= (plist-get mevedel--known-token-baseline
+                            :provider-context-tokens)
+                 22))
+      (should (= (plist-get mevedel--known-token-baseline
+                            :cumulative-usage-tokens)
+                 22))
       (should (= (plist-get mevedel--known-token-baseline :input-tokens) 15))
       (should (= (plist-get mevedel--known-token-baseline :output-tokens) 7))
       (goto-char (point-max))
@@ -384,21 +420,79 @@
                              :tokens-full '(:input 1000 :output 500)))))
       (mevedel--compact-record-token-baseline fsm)
       (should (= (plist-get mevedel--known-token-baseline :tokens) 15))
-      (should (= (plist-get mevedel--known-token-baseline :raw-tokens-full)
+      (should (= (plist-get mevedel--known-token-baseline
+                            :cumulative-usage-tokens)
                  1500))
       (should (= (plist-get mevedel--known-token-baseline :input-tokens) 10))
       (should (= (plist-get mevedel--known-token-baseline :output-tokens) 5))))
 
-  :doc "falls back to tokens-full when latest request tokens are absent"
+  :doc "missing provider context:
+falls back to the fresh visible prompt and never cumulative tool-loop usage"
   (with-temp-buffer
-    (let* ((chat-buffer (current-buffer))
+    (insert (make-string 400 ?x))
+    (let* ((gptel-model nil)
+           (mevedel-compact-context-limit 258000)
+           (chat-buffer (current-buffer))
            (fsm (gptel-make-fsm
                  :info (list :buffer chat-buffer
-                             :tokens-full '(:input 10 :output 7)))))
+                             :tokens-full '(:input 9396000 :output 0)))))
       (mevedel--compact-record-token-baseline fsm)
-      (should (= (plist-get mevedel--known-token-baseline :tokens) 17))
+      (should (= (plist-get mevedel--known-token-baseline :tokens) 100))
       (should (eq (plist-get mevedel--known-token-baseline :source)
-                  'tokens-full))))
+                  'fresh-estimate))
+      (should-not (plist-get mevedel--known-token-baseline
+                             :provider-context-tokens))
+      (should (eq (plist-get mevedel--known-token-baseline
+                             :provider-context-status)
+                  'missing))
+      (should (= (plist-get mevedel--known-token-baseline
+                            :cumulative-usage-tokens)
+                 9396000))
+      (should (= (plist-get mevedel--known-token-baseline
+                            :fresh-visible-prompt-estimate)
+                 100))
+      (should (< (mevedel--estimate-tokens)
+                 (mevedel--compact-threshold-tokens)))))
+
+  :doc "invalid provider context:
+zero and over-window provider values use a fresh visible-prompt estimate"
+  (dolist (provider-count '(0 300000))
+    (with-temp-buffer
+      (insert (make-string 400 ?x))
+      (let* ((gptel-model nil)
+             (mevedel-compact-context-limit 258000)
+             (chat-buffer (current-buffer))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer chat-buffer
+                               :tokens `(:input ,provider-count :output 0)
+                               :tokens-full '(:input 9000000 :output 0)))))
+        (mevedel--compact-record-token-baseline fsm)
+        (should (= (plist-get mevedel--known-token-baseline :tokens) 100))
+        (should (eq (plist-get mevedel--known-token-baseline :source)
+                    'fresh-estimate))
+        (should (eq (plist-get mevedel--known-token-baseline
+                               :provider-context-status)
+                    (if (zerop provider-count) 'zero 'over-window))))))
+
+  :doc "partial provider context:
+missing or zero prompt-side usage cannot become the active baseline"
+  (dolist (case '(((:output 500) missing)
+                  ((:input 0 :output 500) zero)
+                  ((:input "bad" :output 500) missing)))
+    (with-temp-buffer
+      (insert (make-string 400 ?x))
+      (let* ((gptel-model nil)
+             (mevedel-compact-context-limit 258000)
+             (chat-buffer (current-buffer))
+             (fsm (gptel-make-fsm
+                   :info (list :buffer chat-buffer :tokens (car case)))))
+        (mevedel--compact-record-token-baseline fsm)
+        (should (= 100 (plist-get mevedel--known-token-baseline :tokens)))
+        (should (eq 'fresh-estimate
+                    (plist-get mevedel--known-token-baseline :source)))
+        (should (eq (cadr case)
+                    (plist-get mevedel--known-token-baseline
+                               :provider-context-status))))))
 
   :doc "ignores compaction request token usage"
   (with-temp-buffer
@@ -431,7 +525,15 @@
     (insert "abcdefgh")
     (put-text-property 5 9 'gptel 'ignore)
     (let ((mevedel--known-token-baseline
-           (list :source 'tokens :raw-tokens 21 :raw-tokens-full 25
+           (list :source 'provider-context
+                 :provider-context-usage '(:input 18 :output 3)
+                 :cumulative-usage '(:input 20 :output 5)
+                 :provider-context-tokens 21
+                 :cumulative-usage-tokens 25
+                 :provider-context-status 'valid
+                 :fresh-visible-prompt-estimate 2
+                 :model 'provider-model
+                 :model-context-window 900
                  :position (copy-marker 5))))
       (cl-letf (((symbol-function 'mevedel--compact-workload-policy)
                  (lambda () '(:kind summary)))
@@ -444,8 +546,19 @@
                  (lambda (_) 2)))
         (let ((facts (mevedel--compact-telemetry-inputs
                       25 '(:model model :kind target))))
-          (should (= 21 (plist-get facts :raw-tokens)))
-          (should (= 25 (plist-get facts :raw-tokens-full)))
+          (should (= 21 (plist-get facts :provider-context-tokens)))
+          (should (= 25 (plist-get facts :cumulative-usage-tokens)))
+          (should (equal '(:input 18 :output 3)
+                         (plist-get facts :provider-context-usage)))
+          (should (equal '(:input 20 :output 5)
+                         (plist-get facts :cumulative-usage)))
+          (should (eq 'valid (plist-get facts :provider-context-status)))
+          (should (eq 'provider-model
+                      (plist-get facts :provider-context-model)))
+          (should (= 900 (plist-get facts :provider-context-window)))
+          (should (eq 'provider-context (plist-get facts :chosen-source)))
+          (should (eq 'model (plist-get facts :target-model)))
+          (should (= 2 (plist-get facts :fresh-visible-prompt-estimate)))
           (should (= 80 (plist-get facts :threshold)))
           (should (= 1000 (plist-get facts :model-context-window)))
           (should (= 8 (plist-get facts :buffer-chars-total)))

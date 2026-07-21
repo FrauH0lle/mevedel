@@ -410,20 +410,22 @@ thousands of tokens, sometimes as a float."
 
 (defun mevedel--compact-token-usage-count (tokens)
   "Return total prompt/output TOKENS from a gptel token-usage plist."
-  (when (listp tokens)
-    (+ (or (plist-get tokens :input) 0)
-       (or (plist-get tokens :cached) 0)
-       (or (plist-get tokens :cache-read) 0)
-       (or (plist-get tokens :cache_read) 0)
-       (or (plist-get tokens :output) 0))))
+  (when-let* ((input (mevedel--compact-token-usage-input tokens))
+              (output (or (plist-get tokens :output) 0))
+              ((and (numberp output) (>= output 0))))
+    (+ input output)))
 
 (defun mevedel--compact-token-usage-input (tokens)
   "Return input/cached prompt TOKENS from a gptel token-usage plist."
-  (when (listp tokens)
-    (+ (or (plist-get tokens :input) 0)
-       (or (plist-get tokens :cached) 0)
-       (or (plist-get tokens :cache-read) 0)
-       (or (plist-get tokens :cache_read) 0))))
+  (let ((keys '(:input :cached :cache-read :cache_read)))
+    (when (and (proper-list-p tokens)
+               (cl-some (lambda (key) (plist-member tokens key)) keys))
+      (let ((values
+             (mapcar (lambda (key) (or (plist-get tokens key) 0)) keys)))
+        (when (cl-every (lambda (value)
+                          (and (numberp value) (>= value 0)))
+                        values)
+          (apply #'+ values))))))
 
 (defun mevedel--compact-compaction-context-p (info)
   "Return non-nil when INFO belongs to a compaction request."
@@ -432,45 +434,82 @@ thousands of tokens, sometimes as a float."
          (plist-get context :mevedel-compaction))))
 
 (defun mevedel--compact-record-token-baseline (fsm)
-  "Record API-reported token usage from FSM for future estimates.
+  "Record FSM's active-context baseline for future estimates.
 
 Compaction requests are ignored so the summary request's own token
 count never becomes the baseline for the chat buffer."
   (when-let* ((info (and fsm (gptel-fsm-info fsm)))
               ((not (mevedel--compact-compaction-context-p info)))
               (chat-buffer (plist-get info :buffer))
-              ((buffer-live-p chat-buffer))
-              (tokens (or (plist-get info :tokens)
-                          (plist-get info :tokens-full)))
-              (count (mevedel--compact-token-usage-count tokens)))
+              ((buffer-live-p chat-buffer)))
     (with-current-buffer chat-buffer
-      (setq mevedel--known-token-baseline
-            (list :tokens count
-                  :source (if (plist-get info :tokens) 'tokens 'tokens-full)
-                  :raw-tokens
-                  (mevedel--compact-token-usage-count
-                   (plist-get info :tokens))
-                  :raw-tokens-full
-                  (mevedel--compact-token-usage-count
-                   (plist-get info :tokens-full))
-                  :input-tokens (mevedel--compact-token-usage-input tokens)
-                  :output-tokens (or (plist-get tokens :output) 0)
-                  :position (copy-marker (point-max))))
-      (when (and (bound-and-true-p mevedel--session)
-                 (fboundp 'mevedel-telemetry-record))
-        (mevedel-telemetry-record
-         mevedel--session 'token-baseline-recorded
-         :request-id (plist-get info :mevedel-request-id)
-         :token-source (if (plist-get info :tokens) 'tokens 'tokens-full)
-         :raw-tokens
-         (mevedel--compact-token-usage-count (plist-get info :tokens))
-         :raw-tokens-full
-         (mevedel--compact-token-usage-count (plist-get info :tokens-full))
-         :chosen-active-context-tokens count
-         :tokens count
-         :input-tokens (mevedel--compact-token-usage-input tokens)
-         :output-tokens (or (plist-get tokens :output) 0)
-         :buffer-position (point-max))))))
+      (let* ((provider-usage (plist-get info :tokens))
+             (cumulative-usage (plist-get info :tokens-full))
+             (provider-input
+              (mevedel--compact-token-usage-input provider-usage))
+             (provider-count
+              (mevedel--compact-token-usage-count provider-usage))
+             (cumulative-count
+              (mevedel--compact-token-usage-count cumulative-usage))
+             (fresh-estimate
+              (mevedel--compact-estimate-buffer-tokens chat-buffer))
+             (model (or (plist-get info :model) gptel-model))
+             (context-window
+              (or (mevedel--model-context-window model)
+                  mevedel-compact-context-limit
+                  128000))
+             (provider-status
+              (cond
+               ((null provider-count) 'missing)
+               ((or (null provider-input) (<= provider-input 0)) 'zero)
+               ((> provider-count context-window) 'over-window)
+               (t 'valid)))
+             (source (if (eq provider-status 'valid)
+                         'provider-context
+                       'fresh-estimate))
+             (chosen (if (eq source 'provider-context)
+                         provider-count
+                       fresh-estimate))
+             (request-id (plist-get info :mevedel-request-id)))
+        (setq mevedel--known-token-baseline
+              (list :tokens chosen
+                    :source source
+                    :request-id request-id
+                    :model model
+                    :provider-context-usage (copy-tree provider-usage)
+                    :cumulative-usage (copy-tree cumulative-usage)
+                    :provider-context-tokens provider-count
+                    :cumulative-usage-tokens cumulative-count
+                    :provider-context-status provider-status
+                    :fresh-visible-prompt-estimate fresh-estimate
+                    :model-context-window context-window
+                    :input-tokens
+                    (mevedel--compact-token-usage-input provider-usage)
+                    :output-tokens
+                    (and (numberp (plist-get provider-usage :output))
+                         (plist-get provider-usage :output))
+                    :position (copy-marker (point-max))))
+        (when (and (bound-and-true-p mevedel--session)
+                   (fboundp 'mevedel-telemetry-record))
+          (mevedel-telemetry-record
+           mevedel--session 'token-baseline-recorded
+           :request-id request-id
+           :model model
+           :provider-context-usage provider-usage
+           :cumulative-usage cumulative-usage
+           :provider-context-tokens provider-count
+           :cumulative-usage-tokens cumulative-count
+           :provider-context-status provider-status
+           :fresh-visible-prompt-estimate fresh-estimate
+           :chosen-active-context-tokens chosen
+           :chosen-source source
+           :model-context-window context-window
+           :baseline-marker-position (point-max)
+           :input-tokens
+           (mevedel--compact-token-usage-input provider-usage)
+           :output-tokens
+           (and (numberp (plist-get provider-usage :output))
+                (plist-get provider-usage :output))))))))
 
 (defun mevedel--estimate-tokens ()
   "Estimate the number of tokens in the current buffer.
@@ -527,12 +566,19 @@ excludes file-local variables block."
          (summary-policy (mevedel--compact-workload-policy)))
     (list
      :request-id (mevedel--compact-current-request-id)
-     :raw-tokens (plist-get baseline :raw-tokens)
-     :raw-tokens-full (plist-get baseline :raw-tokens-full)
+     :baseline-request-id (plist-get baseline :request-id)
+     :provider-context-model (plist-get baseline :model)
+     :provider-context-window (plist-get baseline :model-context-window)
+     :provider-context-usage (plist-get baseline :provider-context-usage)
+     :cumulative-usage (plist-get baseline :cumulative-usage)
+     :provider-context-tokens (plist-get baseline :provider-context-tokens)
+     :cumulative-usage-tokens (plist-get baseline :cumulative-usage-tokens)
+     :provider-context-status (plist-get baseline :provider-context-status)
      :chosen-active-context-tokens estimate
-     :chosen-source (or (plist-get baseline :source) 'character-estimate)
+     :chosen-source (or (plist-get baseline :source) 'fresh-estimate)
      :fresh-visible-prompt-estimate
      (mevedel--compact-estimate-buffer-tokens (current-buffer))
+     :target-model (plist-get target-policy :model)
      :model-context-window
      (mevedel--model-context-window (plist-get target-policy :model))
      :threshold
@@ -1230,9 +1276,9 @@ The plist contains `:begin', `:body-begin', `:body-end' and `:end'."
       (apply #'mevedel-telemetry-record
              mevedel--session 'compaction-threshold-evaluated
              :estimate estimate
-             :estimate-source (if mevedel--known-token-baseline
-                                  'provider-baseline
-                                'characters)
+             :estimate-source
+             (or (plist-get mevedel--known-token-baseline :source)
+                 'fresh-estimate)
              :target-threshold
              (mevedel--compact-policy-threshold-tokens target-policy)
              :summary-threshold
