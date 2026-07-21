@@ -35,6 +35,11 @@ pipeline handles all cross-cutting concerns; handlers contain no
 boilerplate for validation, hooks, permissions, snapshots, or
 persistence.
 
+Request teardown cancels the currently active pipeline step. The tool callback
+then receives one canonical error result, `tool-finished` records one error,
+and the open step span records one cancelled terminal outcome. A late async
+continuation from the cancelled primitive is ignored.
+
 Tool-result media has one focused boundary in `mevedel-tool-media.el`.
 It validates and sanitizes captured media records, stores their bytes behind
 opaque transcript references, restores trusted records during replay, removes
@@ -478,7 +483,8 @@ starvation. Main and sub-agent owners share their session's scheduler, while
 separate sessions remain independent. A command releases its scheduler lease
 when it finishes, aborts, or yields; a yielded operating-system process keeps
 running under its original owner and resource boundary without blocking later
-admission.
+admission. Before starting queued work, admission rechecks that a retained agent
+owner is still active and settles rejected work without spawning a process.
 
 At most 64 managed Bash processes may be live in one session. The sixty-fifth
 is refused before spawn without evicting existing work. Foreground work remains

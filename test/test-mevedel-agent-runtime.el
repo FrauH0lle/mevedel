@@ -646,7 +646,94 @@
            (mevedel-agent-invocation-runtime-settled-p invocation))
           (should-not
            (mevedel-agent-invocation-terminal-reason invocation)))
-      (kill-buffer buffer))))
+      (kill-buffer buffer)))
+
+  :doc "settles active and queued parallel Bash exactly once on interruption"
+  (let* ((root (make-temp-file "mevedel-agent-interrupt-bash-" t))
+         (child (generate-new-buffer " *agent-interrupt-bash*"))
+         (parent (generate-new-buffer " *agent-interrupt-parent*"))
+         (session
+          (mevedel-session-create
+           "main"
+           (mevedel-workspace--create
+            :type 'test :id root :root root :name "interrupt")
+           root))
+         (invocation (mevedel-agent-runtime-test--invocation child))
+         (active-path (file-name-concat root "active"))
+         (queued-one-path (file-name-concat root "queued-one"))
+         (queued-two-path (file-name-concat root "queued-two"))
+         (artifact-directory (file-name-concat root "artifacts"))
+         (mevedel-sandbox-mode 'off)
+         callbacks
+         settled)
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-parent-session invocation) session
+                (mevedel-agent-invocation-parent-data-buffer invocation) parent
+                (mevedel-agent-invocation-runtime-settle-callback invocation)
+                (lambda (&rest _)
+                  (setq settled (1+ (or settled 0)))))
+          (with-current-buffer child
+            (setq-local mevedel--session session)
+            (setq-local mevedel--agent-invocation invocation)
+            (let ((request (mevedel-request-begin session)))
+              (dolist (command
+                       (list
+                        (list "sh" "-c"
+                              "touch \"$1\"; while :; do sleep 1; done"
+                              "agent-active" active-path)
+                        (list "sh" "-c" "touch \"$1\""
+                              "agent-queued-one" queued-one-path)
+                        (list "sh" "-c" "touch \"$1\""
+                              "agent-queued-two" queued-two-path)))
+                (let ((label (nth 3 command)))
+                  (mevedel-execution-start-bash
+                   (lambda (value) (push (cons label value) callbacks))
+                   :session session :data-buffer child
+                   :owner "/root/explore" :owner-context invocation
+                   :request request :command command :workdir root
+                   :writable-roots (list root)
+                   :artifact-directory artifact-directory
+                   :yield-time-ms nil)))))
+          (with-timeout (5 (error "Timed out waiting for active Bash"))
+            (while (not (file-exists-p active-path))
+              (accept-process-output nil 0.01)))
+          (cl-letf (((symbol-function
+                      'mevedel-session-persistence--update-transcript-entry)
+                     #'ignore)
+                    ((symbol-function 'mevedel-agent-conversation-save)
+                     #'ignore)
+                    ((symbol-function
+                      'mevedel-agent-conversation-record-activity)
+                     #'ignore)
+                    ((symbol-function
+                      'mevedel-agent-conversation-final-activity)
+                     (lambda (&rest _) '(:status aborted)))
+                    ((symbol-function 'mevedel-agent-conversation-refresh)
+                     #'ignore)
+                    ((symbol-function
+                      'mevedel-session-persistence--write-sidecar-now)
+                     #'ignore)
+                    ((symbol-function 'mevedel-agent-runtime--run-stop-hook)
+                     #'ignore))
+            (mevedel-agent-runtime-interrupt invocation "stop batch"))
+          (should (= 1 settled))
+          (should (= 3 (length callbacks)))
+          (should (= 3 (length (delete-dups (mapcar #'car callbacks)))))
+          (dolist (entry callbacks)
+            (let ((facts (plist-get (cdr entry) :facts)))
+              (should (eq 'completed (plist-get facts :state)))
+              (should (memq (plist-get facts :termination)
+                            '(aborted owner-stopped)))
+              (should (eq 'failure (plist-get facts :outcome)))))
+          (should-not (file-exists-p queued-one-path))
+          (should-not (file-exists-p queued-two-path))
+          (should-not
+           (mevedel-execution-owner-live-p session "/root/explore")))
+      (mevedel-execution-teardown-session session)
+      (when (buffer-live-p child) (kill-buffer child))
+      (when (buffer-live-p parent) (kill-buffer parent))
+      (delete-directory root t))))
 
 (provide 'test-mevedel-agent-runtime)
 

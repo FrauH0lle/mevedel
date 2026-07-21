@@ -22,6 +22,8 @@
   scheduler
   mode
   start
+  admit-p
+  reject
   state)
 
 (defun mevedel-execution-scheduler-create ()
@@ -35,19 +37,48 @@
            (zerop
             (mevedel-execution-scheduler-active-readers scheduler)))))
 
+(defun mevedel-execution-scheduler--deactivate (lease)
+  "Release active LEASE without admitting queued work; return its scheduler."
+  (let ((scheduler
+         (mevedel-execution-scheduler--lease-scheduler lease))
+        (mode (mevedel-execution-scheduler--lease-mode lease)))
+    (if (eq mode 'read)
+        (cl-decf (mevedel-execution-scheduler-active-readers scheduler))
+      (setf (mevedel-execution-scheduler-writer-p scheduler) nil))
+    (setf (mevedel-execution-scheduler--lease-state lease) 'released)
+    scheduler))
+
 (defun mevedel-execution-scheduler--start-active (lease)
   "Invoke active LEASE's start function without stranding admission on error."
-  (let ((completed-p nil))
-    (unwind-protect
-        (progn
+  (if (and (mevedel-execution-scheduler--lease-admit-p lease)
+           (not
+            (condition-case err
+                (funcall
+                 (mevedel-execution-scheduler--lease-admit-p lease))
+              (error
+               (message "mevedel: execution admission check failed: %S" err)
+               nil))))
+      (let ((scheduler (mevedel-execution-scheduler--deactivate lease)))
+        (when-let* ((reject
+                     (mevedel-execution-scheduler--lease-reject lease)))
           (condition-case err
-              (funcall (mevedel-execution-scheduler--lease-start lease) lease)
-            (t
-             (mevedel-execution-scheduler-release lease)
-             (message "mevedel: execution scheduler start failed: %S" err)))
-          (setq completed-p t))
-      (unless completed-p
-        (mevedel-execution-scheduler-release lease)))))
+              (funcall reject lease)
+            (error
+             (message "mevedel: execution scheduler rejection failed: %S"
+                      err))))
+        (mevedel-execution-scheduler--drain scheduler))
+    (let ((completed-p nil))
+      (unwind-protect
+          (progn
+            (condition-case err
+                (funcall
+                 (mevedel-execution-scheduler--lease-start lease) lease)
+              (t
+               (mevedel-execution-scheduler-release lease)
+               (message "mevedel: execution scheduler start failed: %S" err)))
+            (setq completed-p t))
+        (unless completed-p
+          (mevedel-execution-scheduler-release lease))))))
 
 (defun mevedel-execution-scheduler--activate (lease)
   "Activate queued LEASE and invoke its start function."
@@ -88,15 +119,19 @@
           (dolist (reader pending)
             (mevedel-execution-scheduler-release reader)))))))
 
-(defun mevedel-execution-scheduler-submit (scheduler mode start)
+(defun mevedel-execution-scheduler-submit
+    (scheduler mode start &optional admit-p reject)
   "Submit START to SCHEDULER in read or exclusive MODE.
 
-START is called with its lease when admitted.  Return the opaque lease."
+START is called with its lease when admitted.  ADMIT-P is rechecked immediately
+before START; when it returns nil, REJECT receives the released lease instead.
+Return the opaque lease."
   (unless (memq mode '(read exclusive))
     (error "Unknown execution scheduler mode: %S" mode))
   (let ((lease
          (mevedel-execution-scheduler--lease-create
-          :scheduler scheduler :mode mode :start start :state 'queued)))
+          :scheduler scheduler :mode mode :start start
+          :admit-p admit-p :reject reject :state 'queued)))
     (if (and (null (mevedel-execution-scheduler-queue scheduler))
              (mevedel-execution-scheduler--startable-p scheduler mode))
         (mevedel-execution-scheduler--activate lease)
@@ -108,13 +143,7 @@ START is called with its lease when admitted.  Return the opaque lease."
 (defun mevedel-execution-scheduler-release (lease)
   "Release active LEASE exactly once."
   (when (eq (mevedel-execution-scheduler--lease-state lease) 'active)
-    (let ((scheduler
-           (mevedel-execution-scheduler--lease-scheduler lease))
-          (mode (mevedel-execution-scheduler--lease-mode lease)))
-      (if (eq mode 'read)
-          (cl-decf (mevedel-execution-scheduler-active-readers scheduler))
-        (setf (mevedel-execution-scheduler-writer-p scheduler) nil))
-      (setf (mevedel-execution-scheduler--lease-state lease) 'released)
+    (let ((scheduler (mevedel-execution-scheduler--deactivate lease)))
       (mevedel-execution-scheduler--drain scheduler)
       t)))
 

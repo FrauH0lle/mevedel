@@ -14,6 +14,11 @@
   (require 'cl-lib)
   (require 'subr-x))
 
+;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
+(declare-function mevedel-agent-invocation-runtime-settled-p
+                  "mevedel-agents" (cl-x) t)
+
 ;; `mevedel-execution-scheduler'
 (declare-function mevedel-execution-scheduler-cancel
                   "mevedel-execution-scheduler" (lease))
@@ -22,7 +27,8 @@
 (declare-function mevedel-execution-scheduler-release
                   "mevedel-execution-scheduler" (lease))
 (declare-function mevedel-execution-scheduler-submit
-                  "mevedel-execution-scheduler" (scheduler mode start))
+                  "mevedel-execution-scheduler"
+                  (scheduler mode start &optional admit-p reject))
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox--record-launch-failure
@@ -1167,6 +1173,7 @@ delivery and retire the private handle while preserving retained artifacts."
                  (mevedel-sandbox-launch-failed-p preparation child-result))))
       (if (and launch-failed
                (plist-get preparation :fallback-p)
+               (not (mevedel-execution--record-stop-p record))
                (not (mevedel-execution--record-yielded-p record)))
           (mevedel-execution--restart-unconfined
            record (mevedel-sandbox--record-launch-failure child-result))
@@ -1316,6 +1323,22 @@ delivery and retire the private handle while preserving retained artifacts."
      (error "Unknown sandbox preparation state: %s"
             (plist-get preparation :state)))))
 
+(defun mevedel-execution--owner-admissible-p (owner-context)
+  "Return non-nil when OWNER-CONTEXT may still start queued execution work."
+  (not (and owner-context
+            (fboundp 'mevedel-agent-invocation-p)
+            (mevedel-agent-invocation-p owner-context)
+            (mevedel-agent-invocation-runtime-settled-p owner-context))))
+
+(defun mevedel-execution--reject-owner-record (record lease)
+  "Settle RECORD rejected from LEASE because its owner is terminal."
+  (setf (mevedel-execution--record-scheduler-lease record) lease
+        (mevedel-execution--record-error-data record)
+        '(mevedel-execution-error "Execution owner is terminal")
+        (mevedel-execution--record-exit-code record) -1
+        (mevedel-execution--record-termination record) 'owner-stopped)
+  (mevedel-execution--finish-managed record))
+
 (defun mevedel-execution--abort-request-record (record)
   "Abort queued or foreground RECORD for its originating request."
   (unless (or (mevedel-execution--record-finished-p record)
@@ -1438,7 +1461,12 @@ terminal settlement."
                          (mevedel-execution--record-exit-code record) -1
                          (mevedel-execution--record-termination record)
                          'spawn-failed)
-                   (mevedel-execution--finish-managed record)))))))
+                   (mevedel-execution--finish-managed record))))
+              (lambda ()
+                (mevedel-execution--owner-admissible-p owner-context))
+              (lambda (rejected-lease)
+                (mevedel-execution--reject-owner-record
+                 record rejected-lease)))))
         (unless (or (mevedel-execution--record-finished-p record)
                     (mevedel-execution--record-scheduler-lease record))
           (setf (mevedel-execution--record-scheduler-lease record) lease)))
@@ -1664,15 +1692,24 @@ after WAIT-MS while the process remains live."
   "Immediately kill and forget RECORD because of lifecycle REASON."
   (let ((managed-live-p (mevedel-execution--managed-live-p record)))
     (unless (mevedel-execution--record-finished-p record)
-      (setf (mevedel-execution--record-finished-p record) t
-            (mevedel-execution--record-stop-p record) t
+      (setf (mevedel-execution--record-stop-p record) t
             (mevedel-execution--record-termination record) reason)
-      (when-let* ((lease (mevedel-execution--record-scheduler-lease record)))
+      (when managed-live-p
+        (setf (mevedel-execution--record-error-data record)
+              '(mevedel-execution-error "Execution owner was stopped")
+              (mevedel-execution--record-exit-code record) -1)
+        (when (mevedel-execution--record-yielded-p record)
+          (setf (mevedel-execution--record-delivery-state record) 'discarded)))
+      (when-let* ((lease
+                   (mevedel-execution--record-scheduler-lease record)))
         (mevedel-execution-scheduler-cancel lease))
       (mevedel-execution--signal-record record 'KILL)
-      (when-let* ((preparation
-                  (mevedel-execution--record-sandbox-preparation record)))
-        (mevedel-sandbox-cleanup preparation)))
+      (if managed-live-p
+          (mevedel-execution--finish-managed record)
+        (setf (mevedel-execution--record-finished-p record) t)
+        (when-let* ((preparation
+                    (mevedel-execution--record-sandbox-preparation record)))
+          (mevedel-sandbox-cleanup preparation))))
     (when-let* ((function
                 (mevedel-execution--record-teardown-function record)))
       (setf (mevedel-execution--record-teardown-function record) nil)
