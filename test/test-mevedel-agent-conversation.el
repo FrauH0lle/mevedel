@@ -70,6 +70,21 @@
 					(buffer-local-value 'gptel-system-prompt buffer))))
 		     (kill-buffer buffer))))
 
+(mevedel-deftest mevedel-agent-conversation--reject-terminal-tool-call ()
+		 ,test
+		 (test)
+		 :doc "allows live turns and stops tool work after terminal settlement"
+		 (let ((mevedel--agent-invocation
+			(mevedel-agent-invocation--create)))
+		   (should-not
+		    (mevedel-agent-conversation--reject-terminal-tool-call))
+		   (setf (mevedel-agent-invocation-runtime-settled-p
+			  mevedel--agent-invocation)
+			 t)
+		   (should
+		    (equal '(:stop t :stop-reason "Agent turn already settled")
+			   (mevedel-agent-conversation--reject-terminal-tool-call)))))
+
 (mevedel-deftest mevedel-agent-conversation-final-response ()
 		 ,test
 		 (test)

@@ -431,6 +431,7 @@ and render-data markers are runtime-only caches for cheap live updates."
   runtime-fsm
   runtime-settle-callback
   runtime-pending-response
+  runtime-budget-timer
   (runtime-execution-results nil :type list)
   (runtime-settled-p nil :type boolean))
 

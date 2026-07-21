@@ -511,7 +511,75 @@
       (should (equal '(completed) finalizations))
       (should-not
        (mevedel-agent-runtime-queue-execution-completion
-        invocation "/root/explore" "duplicate")))))
+       invocation "/root/explore" "duplicate")))))
+
+(mevedel-deftest mevedel-agent-runtime-bound-turn ()
+  ,test
+  (test)
+  :doc "cancels the deadline when a bounded turn completes in time"
+  (let* ((invocation (mevedel-agent-runtime-test--invocation))
+         timer-callback
+         timer-args
+         cancelled)
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_seconds _repeat callback &rest args)
+                 (setq timer-callback callback
+                       timer-args args)
+                 'budget-timer))
+              ((symbol-function 'cancel-timer)
+               (lambda (timer) (setq cancelled timer)))
+              ((symbol-function 'mevedel-agent-runtime--finalize) #'ignore))
+      (mevedel-agent-runtime-bound-turn invocation 30)
+      (mevedel-agent-runtime--settle invocation "done")
+      (should (eq 'budget-timer cancelled))
+      (should-not
+       (mevedel-agent-invocation-runtime-budget-timer invocation))
+      (apply timer-callback timer-args)
+      (should
+       (mevedel-agent-invocation-runtime-settled-p invocation))))
+
+  :doc "budget expiry interrupts once and preserves useful partial output"
+  (let* ((buffer (generate-new-buffer " *agent-runtime-budget*"))
+         (invocation (mevedel-agent-runtime-test--invocation buffer))
+         (fsm (gptel-make-fsm
+               :state 'WAIT :info (list :buffer buffer :callback #'ignore)))
+         (gptel--request-alist
+          (list (cons 'process (cons fsm #'ignore))))
+         timer-callback
+         timer-args
+         callback-response
+         abort-count)
+    (unwind-protect
+        (progn
+          (setf (mevedel-agent-invocation-runtime-fsm invocation) fsm
+                (mevedel-agent-invocation-runtime-settle-callback invocation)
+                (lambda (_invocation response _event)
+                  (setq callback-response response)))
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (_seconds _repeat callback &rest args)
+                       (setq timer-callback callback timer-args args)
+                       'budget-timer))
+                    ((symbol-function 'mevedel-agent-runtime--partial-text)
+                     (lambda (&rest _) "bounded useful evidence"))
+                    ((symbol-function 'mevedel-agent-runtime--finalize)
+                     (lambda (inv status)
+                       (setf (mevedel-agent-invocation-transcript-status inv)
+                             status)))
+                    ((symbol-function 'gptel-abort)
+                     (lambda (_buffer)
+                       (setq abort-count (1+ (or abort-count 0))))))
+            (mevedel-agent-runtime-bound-turn invocation 20)
+            (apply timer-callback timer-args))
+          (should (= 1 abort-count))
+          (should (string-match-p "budget expired after 20 seconds"
+                                  callback-response))
+          (should (string-match-p "bounded useful evidence"
+                                  callback-response))
+          (should (eq 'aborted
+                      (mevedel-agent-invocation-transcript-status invocation)))
+          (apply timer-callback timer-args)
+          (should (= 1 abort-count)))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-agent-runtime--finalize ()
   ,test

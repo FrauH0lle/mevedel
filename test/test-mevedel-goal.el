@@ -494,6 +494,10 @@ Each binding is (NAME KEYS)."
                "## Assumptions"
                "inapplicable sections"
                "authoritative PRD, specification, or ticket"
+               "one narrow evidence target"
+               "120-second completion budget"
+               "one event-driven WaitAgent(timeout_ms=150000)"
+               "do not poll"
                "exactly one line-oriented <proposed_plan>"))
       (should (string-match-p (regexp-quote needle) prompt)))
     (should-not (string-match-p "decision-complete" prompt))))
@@ -539,8 +543,52 @@ Each binding is (NAME KEYS)."
                "observable evidence"
                "Completing every plan step is insufficient"
                "Reasonable divergence from plan details is acceptable"
+               "one narrow evidence target"
+               "one event-driven WaitAgent(timeout_ms=150000)"
                "verdict: complete|continue|blocked"))
       (should (string-match-p (regexp-quote needle) prompt)))))
+
+(mevedel-deftest mevedel-goal-investigation-contract ()
+  ,test
+  (test)
+  :doc "states the evidence target and budget only during planning and review"
+  (let* ((session (mevedel-session--create))
+         (goal (mevedel-goal--create
+                :status 'active :phase 'planning))
+         (mevedel-goal-investigation-time-budget 45))
+    (setf (mevedel-session-goal session) goal)
+    (let ((contract
+           (mevedel-goal-investigation-contract
+            "Trace the request callback." session)))
+      (should (= 45 (plist-get contract :seconds)))
+      (should (string-match-p "Evidence target.*Trace the request callback"
+                              (plist-get contract :message)))
+      (should (string-match-p "Completion budget: 45 seconds"
+                              (plist-get contract :message))))
+    (setf (mevedel-goal-phase goal) 'reviewing)
+    (should (mevedel-goal-investigation-contract "Review one edge" session))
+    (setf (mevedel-goal-phase goal) 'implementing)
+    (should-not
+     (mevedel-goal-investigation-contract "Implement the change" session))
+    (setf (mevedel-goal-phase goal) 'planning)
+    (should-not (mevedel-goal-investigation-contract "" session))
+    (should-not (mevedel-goal-investigation-contract nil session))
+    (setf (mevedel-goal-phase goal) 'planning
+          (mevedel-goal-status goal) 'paused)
+    (should-not
+     (mevedel-goal-investigation-contract "Inspect while paused" session))))
+
+(mevedel-deftest mevedel-goal--investigation-budget ()
+  ,test
+  (test)
+  :doc "fits every supported budget and delivery margin in one WaitAgent call"
+  (let ((mevedel-goal-investigation-time-budget 3570))
+    (should (= 3570 (mevedel-goal--investigation-budget)))
+    (should (string-match-p "WaitAgent(timeout_ms=3600000)"
+                            (mevedel-goal--investigation-guidance))))
+  (dolist (invalid '(0 3571 1.5))
+    (let ((mevedel-goal-investigation-time-budget invalid))
+      (should-error (mevedel-goal--investigation-budget)))))
 
 (mevedel-deftest mevedel-goal--enqueue-event-reminder ()
   ,test

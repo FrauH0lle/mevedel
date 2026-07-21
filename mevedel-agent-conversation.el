@@ -60,6 +60,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-render-data-start-marker
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-runtime-settled-p
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-sidecar-dirty
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-started-at
@@ -168,6 +170,13 @@ A non-positive value saves immediately.  Terminal paths always save now."
 (defvar-local mevedel--agent-invocation nil
   "Invocation that owns this retained agent conversation buffer.")
 
+(defun mevedel-agent-conversation--reject-terminal-tool-call (&rest _)
+  "Stop a tool call after the current retained invocation has settled."
+  (when (and (mevedel-agent-invocation-p mevedel--agent-invocation)
+             (mevedel-agent-invocation-runtime-settled-p
+              mevedel--agent-invocation))
+    '(:stop t :stop-reason "Agent turn already settled")))
+
 
 ;;
 ;;; Buffer lifecycle
@@ -228,6 +237,8 @@ A non-positive value saves immediately.  Terminal paths always save now."
       (setq-local mevedel--agent-invocation invocation)
       (when (require 'mevedel-skills-prompt nil t)
         (mevedel-skills-install-activation-hook))
+      (add-hook 'gptel-pre-tool-call-functions
+                #'mevedel-agent-conversation--reject-terminal-tool-call -110 t)
       (require 'mevedel-tool-repair)
       (add-hook 'gptel-pre-tool-call-functions
                 #'mevedel-tool-repair-pre-tool-call -100 t)

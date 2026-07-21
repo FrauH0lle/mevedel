@@ -83,6 +83,8 @@
                   "mevedel-agents" (invocation))
 (declare-function mevedel-agent-invocation-runtime-execution-results
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-runtime-budget-timer
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-fsm
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-runtime-pending-response
@@ -471,6 +473,10 @@
       (setf (mevedel-agent-invocation-runtime-settled-p invocation) t
             (mevedel-agent-invocation-runtime-fsm invocation) nil
             (mevedel-agent-invocation-runtime-pending-response invocation) nil)
+      (when-let* ((timer
+                   (mevedel-agent-invocation-runtime-budget-timer invocation)))
+        (cancel-timer timer)
+        (setf (mevedel-agent-invocation-runtime-budget-timer invocation) nil))
       (when-let* ((session
                    (mevedel-agent-invocation-parent-session invocation))
                   ((fboundp 'mevedel-telemetry-record)))
@@ -500,6 +506,24 @@
       (when callback
         (funcall callback invocation visible event))
       visible)))
+
+(defun mevedel-agent-runtime--budget-expired (invocation seconds)
+  "Interrupt INVOCATION after its completion budget of SECONDS expires."
+  (setf (mevedel-agent-invocation-runtime-budget-timer invocation) nil)
+  (unless (mevedel-agent-invocation-runtime-settled-p invocation)
+    (mevedel-agent-runtime-interrupt
+     invocation (format "Goal investigation budget expired after %d seconds"
+                        seconds))))
+
+(defun mevedel-agent-runtime-bound-turn (invocation seconds)
+  "Bound INVOCATION to SECONDS and return it."
+  (unless (and (integerp seconds) (> seconds 0))
+    (error "Agent completion budget must be positive"))
+  (setf (mevedel-agent-invocation-runtime-budget-timer invocation)
+        (run-at-time seconds nil
+                     #'mevedel-agent-runtime--budget-expired
+                     invocation seconds))
+  invocation)
 
 (defun mevedel-agent-runtime--handle-provider-result (invocation response)
   "Settle INVOCATION from provider RESPONSE, or hold for yielded Bash."
