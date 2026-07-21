@@ -24,7 +24,8 @@
 (declare-function mevedel-abort "mevedel-chat" (&optional buf))
 
 ;; `mevedel-diff-apply'
-(declare-function mevedel-diff-apply-buffer "mevedel-diff-apply" ())
+(declare-function mevedel-diff-apply-buffer "mevedel-diff-apply"
+                  (&optional no-prompt))
 
 ;; `mevedel-file-state'
 (declare-function mevedel-session-record-file-access
@@ -333,7 +334,7 @@ string so the LLM still sees a descriptive failure."
               (if apply-fn
                   (funcall apply-fn)
                 (with-current-buffer diff-buffer
-                  (mevedel-diff-apply-buffer)))
+                  (mevedel-diff-apply-buffer t)))
               (when-let* ((session (buffer-local-value 'mevedel--session
                                                        data-buffer)))
                 (mevedel-session-record-file-access session path 'modify)))
@@ -345,7 +346,7 @@ string so the LLM still sees a descriptive failure."
         (ignore-errors (delete-file temp-file))))
     (funcall callback
              (if err-string
-                 (format "Error auto-applying changes to %s: %s"
+                 (format "Error: Auto-applying changes to %s failed: %s"
                          path err-string)
                (list :result (format "Changes auto-applied to %s" path)
                      :render-data (list :kind 'diff

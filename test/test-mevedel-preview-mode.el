@@ -690,6 +690,77 @@ cleanup."
 (mevedel-deftest mevedel-preview-mode--auto-apply ()
   ,test
   (test)
+  :doc "default auto-apply never prompts while applying a valid trailing-context patch"
+  (let* ((tmp (make-temp-file "mev-auto-src-" nil ".txt"
+                              "before\nnew\n\n"))
+         (real (make-temp-file "mev-auto-dst-" nil ".txt"
+                               "before\nold\n\n"))
+         (chat (mevedel-preview-test--make-auto-apply-buffer real))
+         result)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (&rest _) (error "Unexpected y-or-n-p")))
+                    ((symbol-function 'yes-or-no-p)
+                     (lambda (&rest _) (error "Unexpected yes-or-no-p"))))
+            (with-current-buffer chat
+              (mevedel-preview-mode--auto-apply
+               tmp real (lambda (value) (setq result value)) nil "Edit")))
+          (should (listp result))
+          (should (equal "before\nnew\n\n"
+                         (with-temp-buffer
+                           (insert-file-contents real)
+                           (buffer-string)))))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (file-exists-p tmp) (delete-file tmp))
+      (when (file-exists-p real) (delete-file real))))
+  :doc "ambiguous default auto-apply fails deterministically without prompting or changing the target"
+  (let* ((real (make-temp-file "mev-auto-dst-" nil ".txt"
+                               "before\nold\nafter\n"))
+         (chat (mevedel-preview-test--make-auto-apply-buffer real))
+         (setup (symbol-function 'mevedel-tool-fs--setup-diff-buffer))
+         results)
+    (unwind-protect
+        (cl-labels
+            ((attempt ()
+               (let ((tmp (make-temp-file "mev-auto-src-" nil ".txt"
+                                          "before\nnew\nafter\n"))
+                     result)
+                 (cl-letf (((symbol-function
+                             'mevedel-tool-fs--setup-diff-buffer)
+                            (lambda (&rest args)
+                              (let ((buffer (apply setup args)))
+                                (with-current-buffer buffer
+                                  (let ((inhibit-read-only t))
+                                    (goto-char (point-min))
+                                    (re-search-forward "^ before$")
+                                    (beginning-of-line)
+                                    (delete-char 1)))
+                                buffer)))
+                           ((symbol-function 'y-or-n-p)
+                            (lambda (&rest _) (error "Unexpected y-or-n-p")))
+                           ((symbol-function 'yes-or-no-p)
+                            (lambda (&rest _) (error "Unexpected yes-or-no-p"))))
+                   (with-current-buffer chat
+                     (mevedel-preview-mode--auto-apply
+                      tmp real (lambda (value) (setq result value)) nil
+                      "Edit")))
+                 result)))
+          (push (attempt) results)
+          (push (attempt) results)
+          (should (equal (car results) (cadr results)))
+          (should (string-prefix-p "Error:" (car results)))
+          (should (string-match-p "Rejected ambiguous diff hunk"
+                                  (car results)))
+          (should (string-match-p (regexp-quote "@@ -1,3 +1,3 @@")
+                                  (car results)))
+          (should (< (length (car results)) 800))
+          (should (equal "before\nold\nafter\n"
+                         (with-temp-buffer
+                           (insert-file-contents real)
+                           (buffer-string)))))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (when (file-exists-p real) (delete-file real))))
   :doc "applies temp-file to path, fires callback with (:result :render-data) plist"
   (let* ((tmp (make-temp-file "mev-auto-src-" nil ".txt" "new body\n"))
          (real (make-temp-file "mev-auto-dst-" nil ".txt" "old body\n"))
@@ -732,7 +803,8 @@ cleanup."
              (lambda () (signal 'error '("boom")))
              "Write"))
           (should (stringp result))
-          (should (string-match-p "Error auto-applying" result))
+          (should (string-prefix-p "Error:" result))
+          (should (string-match-p "Auto-applying" result))
           (should (string-match-p "boom" result))
           ;; Temp file still cleaned up on error
           (should-not (file-exists-p tmp)))

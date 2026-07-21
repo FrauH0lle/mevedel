@@ -42,7 +42,7 @@
                  '(:exit-code 7 :output " helper output \n"))))
       (let ((mevedel--session session))
         (should
-         (equal '(7 . "helper output")
+         (equal '(7 . " helper output \n")
                 (mevedel-tool-fs--call-process-capturing-output
                  "media-helper" '("helper" "--flag") '("/input")
                  '("/artifacts"))))))
@@ -71,7 +71,14 @@
     (should (= 2 (length (nth 2 captured))))
     (should (eq session (nth 5 captured)))
     (should (eq :owner (nth 6 captured)))
-    (should (equal "/root" (nth 7 captured)))))
+    (should (equal "/root" (nth 7 captured))))
+  :doc "preserves a trailing blank context line in unified output"
+  (cl-letf (((symbol-function 'mevedel-execution-run-helper)
+             (lambda (&rest _)
+               '(:exit-code 1 :output "@@ -1 +1 @@\n-old\n+new\n \n"))))
+    (should
+     (equal "@@ -1 +1 @@\n-old\n+new\n \n"
+            (mevedel-tools--generate-diff "old\n\n" "new\n\n" "file.el")))))
 
 
 ;;

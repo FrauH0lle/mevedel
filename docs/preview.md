@@ -7,6 +7,11 @@ on `mevedel-preview-mode--effective-mode`:
 - `auto` / `full-auto` → `--auto-apply` (runs `apply-fn`
   immediately, still produces a persistent diff summary in the view)
 
+Automatic application validates every hunk without prompting. A hunk that
+would require Emacs' heuristic whitespace or word-wrap repair is rejected
+before files change. The tool receives an `Error:` result with a 500-character
+excerpt of the offending hunk for diagnosis and audit.
+
 `mevedel-preview-mode` is a buffer-local minor mode with a lighter
 ` Preview[N]`. Prefix `C-c p`: `n`/`p` navigate, `a` approve-all,
 `r` reject-all. Per-overlay: approve (`C-c C-c`/`a`/`RET`), reject
