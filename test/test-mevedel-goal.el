@@ -280,5 +280,73 @@
     (should (equal '((:input "steer first"))
                    (mevedel-session-queued-user-messages session)))))
 
+(mevedel-deftest mevedel-goal-edit
+  (:doc "rotates identity, retains the run, and refreshes an in-flight Goal")
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-1" :objective "Old" :status 'active
+                :token-budget 100 :tokens-used 20
+                :time-used-seconds 30 :turns-run 4
+                :plan-reference "accepted-plan.md"
+                :created-at "created" :updated-at "old-update"))
+         (buffer (generate-new-buffer " *mevedel-goal-edit*"))
+         saved scheduled refreshed)
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) goal)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session
+                        mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (with-current-buffer buffer
+            (should-error (mevedel-goal-edit "  ") :type 'user-error))
+          (should (equal "goal-1" (mevedel-goal-id goal)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (&rest _) (setq saved t)))
+                    ((symbol-function 'mevedel-goal--new-id)
+                     (lambda () "goal-2"))
+                    ((symbol-function 'mevedel-goal-active-context)
+                     (lambda (_session) "updated context"))
+                    ((symbol-function 'mevedel-agent-control-steer-user)
+                     (lambda (actual-session message)
+                       (setq refreshed (list actual-session message))))
+                    ((symbol-function 'run-at-time)
+                     (lambda (&rest args) (setq scheduled args))))
+            (with-current-buffer buffer
+              (should (eq goal (mevedel-goal-edit "  New objective  ")))))
+          (should saved)
+          (should scheduled)
+          (should (equal (list session "updated context") refreshed))
+          (should (equal "goal-2" (mevedel-goal-id goal)))
+          (should (equal "New objective" (mevedel-goal-objective goal)))
+          (should (eq 'active (mevedel-goal-status goal)))
+          (should (= 100 (mevedel-goal-token-budget goal)))
+          (should (= 20 (mevedel-goal-tokens-used goal)))
+          (should (= 30 (mevedel-goal-time-used-seconds goal)))
+          (should (= 4 (mevedel-goal-turns-run goal)))
+          (should (equal "accepted-plan.md"
+                         (mevedel-goal-plan-reference goal)))
+          (should (equal "created" (mevedel-goal-created-at goal)))
+          (should-not (equal "old-update" (mevedel-goal-updated-at goal)))
+          (should (= 1 (length (mevedel-session-pending-reminders session))))
+          (should (string-match-p
+                   "New objective"
+                   (car (mevedel-session-pending-reminders session))))
+          (with-current-buffer buffer
+            (should (eq 'request
+                        (mevedel-goal-continue-if-idle session buffer))))
+          (should-error
+           (mevedel-tool-goal-update 'complete nil session "goal-1"))
+          (mevedel-goal-settle-turn
+           (gptel-make-fsm
+            :info (list :buffer buffer :mevedel-goal-id "goal-1"
+                        :tokens-full '(:input 3 :output 2))))
+          (should (= 25 (mevedel-goal-tokens-used goal)))
+          (should (= 5 (mevedel-goal-turns-run goal)))
+          (should (equal "Goal status changed to complete"
+                         (mevedel-tool-goal-update
+                          'complete nil session "goal-2"))))
+      (kill-buffer buffer))))
+
 (provide 'test-mevedel-goal)
 ;;; test-mevedel-goal.el ends here

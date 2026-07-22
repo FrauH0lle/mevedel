@@ -51,6 +51,7 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
+(declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-start "mevedel-goal"
@@ -649,10 +650,16 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (force-mode-line-update t))
 
 (defun mevedel-menu--goal-start ()
-  "Prompt for and start a supervised Goal."
+  "Prompt for and start a Goal."
   (interactive)
   (mevedel-menu--goal-call
    #'mevedel-goal-start (read-string "Goal objective: ")))
+
+(defun mevedel-menu--goal-edit ()
+  "Prompt for and replace the current Goal objective."
+  (interactive)
+  (mevedel-menu--goal-call
+   #'mevedel-goal-edit (read-string "New Goal objective: ")))
 
 (defun mevedel-menu--select-preset ()
   "Select and apply a preset to the current session only."
@@ -874,6 +881,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("p" "Pause" (lambda () (interactive)
                      (mevedel-menu--goal-call #'mevedel-goal-pause))
      :inapt-if-not mevedel-menu--goal-active-p)
+    ("e" "Edit objective" mevedel-menu--goal-edit
+     :inapt-if-not mevedel-menu--current-goal)
     ("r" "Resume" (lambda () (interactive)
                       (mevedel-menu--goal-call #'mevedel-goal-resume))
      :inapt-if-not mevedel-menu--goal-resumable-p)

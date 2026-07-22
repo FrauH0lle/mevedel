@@ -2139,7 +2139,7 @@ spanning lines")))
                  (lambda (area) (setq opened area))))
         (mevedel-cmd--goal nil))
       (should (eq 'goal opened))))
-  :doc "dispatches pause, resume with steering, and clear"
+  :doc "dispatches edit, pause, resume with steering, and clear"
   (with-temp-buffer
     (let ((goal (mevedel-goal--create
                  :id "g1" :objective "Old" :status 'paused))
@@ -2148,14 +2148,19 @@ spanning lines")))
                   (mevedel-session--create :name "main" :goal goal))
       (cl-letf (((symbol-function 'mevedel-goal-pause)
                  (lambda () (push '(pause) calls)))
+                ((symbol-function 'mevedel-goal-edit)
+                 (lambda (value) (push (list 'edit value) calls)))
                 ((symbol-function 'mevedel-goal-resume)
                  (lambda (value) (push (list 'resume value) calls)))
                 ((symbol-function 'mevedel-goal-clear)
                  (lambda () (push '(clear) calls))))
+        (mevedel-cmd--goal "edit New objective")
         (mevedel-cmd--goal "pause")
         (mevedel-cmd--goal "resume new evidence")
         (mevedel-cmd--goal "clear"))
-      (should (equal '((clear) (resume "new evidence") (pause)) calls)))))
+      (should (equal '((clear) (resume "new evidence") (pause)
+                       (edit "New objective"))
+                     calls)))))
 
 (mevedel-deftest mevedel-cmd--plan ()
   ,test

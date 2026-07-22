@@ -27,6 +27,16 @@ remaining budget, and any accepted-plan reference. It is never inserted into
 the visible or persisted transcript. Ordinary user messages during a Goal are
 steering turns and receive the same context and accounting as automatic turns.
 
+`/goal edit <objective>` revises the live objective and rotates the Goal ID
+while retaining status, budget, accounting, accepted-plan reference, and
+creation time. The revised objective has highest authority; an accepted Plan
+remains binding only where consistent with it. Stale `UpdateGoal` calls from an
+already-running turn are rejected, but that turn is still charged to the
+revised Goal. At a supported in-flight steering boundary, mevedel also sends
+the refreshed Goal context on a best-effort basis. The next prompt consumes one
+objective-updated reminder, and an active Goal schedules continuation behind
+the current request gate.
+
 When a Goal references an accepted Plan, each turn validates the reference
 against the session's accepted-path metadata, immutable artifact, and stored
 hash. A valid artifact receives exact read authority for that request. A
@@ -79,6 +89,7 @@ persists the final accounting.
 - `/goal <objective>` starts a Goal and schedules its first turn.
 - Bare `/goal` opens the Goal cockpit.
 - `/goal pause` pauses after the current request.
+- `/goal edit <objective>` replaces the objective without resetting the run.
 - `/goal resume [steering]` resumes, queueing steering before continuation.
 - `/goal clear` removes Goal state while preserving transcript and artifacts.
 

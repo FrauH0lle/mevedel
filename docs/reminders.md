@@ -101,6 +101,8 @@ guidance in the rejection reminder.
 - **Compact file-reference:** compaction queues reminders for file
   references whose contents were not retained; the `pending-events`
   reminder consumes the session FIFO on the next prompt.
+- **Goal objective update:** `/goal edit` queues one event containing the
+  revised objective and its authority over conflicting accepted-plan text.
 - **Token usage:** `mevedel-reminders-make-token-usage` reports high
   context pressure using the compaction token state, with sparse
   repeat firing.

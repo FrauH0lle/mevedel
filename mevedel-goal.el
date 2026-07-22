@@ -18,6 +18,11 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-steer-user
+                  "mevedel-agent-control"
+                  (session message &optional before-wake metadata))
+
 ;; `mevedel-chat'
 (declare-function mevedel--submit-generated-turn
                   "mevedel-chat" (prompt &optional display-text
@@ -361,6 +366,30 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
   (setq mevedel-goal--transient-retries 0)
   (mevedel-goal--persist mevedel--session (current-buffer))
   nil)
+
+(defun mevedel-goal-edit (objective)
+  "Replace the current Goal OBJECTIVE and rotate its identity."
+  (interactive "sNew Goal objective: ")
+  (setq objective (mevedel-goal--validate-objective objective))
+  (let* ((session mevedel--session)
+         (goal (mevedel-goal--current)))
+    (setf (mevedel-goal-id goal) (mevedel-goal--new-id)
+          (mevedel-goal-objective goal) objective)
+    (mevedel-goal--touch goal)
+    (mevedel-session-enqueue-pending-reminder
+     session
+     (format "Goal objective updated to: %s. The revised objective has highest authority; any accepted plan remains binding only where consistent."
+             objective))
+    (mevedel-goal--persist session (current-buffer))
+    (when (and (eq (mevedel-goal-status goal) 'active)
+               mevedel--current-request)
+      (require 'mevedel-agent-control)
+      (ignore-errors
+        (mevedel-agent-control-steer-user
+         session (mevedel-goal-active-context session))))
+    (when (eq (mevedel-goal-status goal) 'active)
+      (mevedel-goal--schedule-continuation session (current-buffer)))
+    goal))
 
 (defun mevedel-goal-pause-runtime-failure (buffer reason)
   "Pause BUFFER's active Goal with runtime failure REASON."
