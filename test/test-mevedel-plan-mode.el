@@ -7,6 +7,7 @@
 (require 'mevedel-plan)
 (require 'mevedel-plan-mode)
 (require 'mevedel-interaction-prompt)
+(require 'mevedel-permissions)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)

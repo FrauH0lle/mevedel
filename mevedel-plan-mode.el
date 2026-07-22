@@ -540,7 +540,7 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
         (format "Could not persist started plan implementation: %s"
                 (error-message-string err)))))))
 
-(cl-defun mevedel-plan-mode--dispatch-accepted (session chat-buffer)
+(defun mevedel-plan-mode--dispatch-accepted (session chat-buffer)
   "Prepare and dispatch SESSION's accepted plan from CHAT-BUFFER."
   (condition-case err
       (let* ((record
@@ -564,91 +564,107 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
         (cl-remf record :failure)
         (mevedel-plan--metadata-put session :implementation-retry record)
         (mevedel-plan-mode--persist session chat-buffer)
-        (when (eq (plist-get record :step) 'prepare-worktree)
-          (unless (eq location 'worktree)
-            (error "Invalid accepted plan Worktree step"))
-          (setq record
-                (mevedel-plan-mode--prepare-worktree
-                 session chat-buffer record)))
-        (when (eq (plist-get record :step) 'prepare-target)
-          (unless (eq location 'worktree)
-            (error "Invalid accepted plan target step"))
-          (setq record
-                (mevedel-plan-mode--prepare-worktree-target
-                 session chat-buffer record)))
-        (when (eq (plist-get record :step) 'prepare-summary)
-          (unless (eq context 'summary)
-            (error "Invalid accepted plan summary step"))
-          (cl-return-from mevedel-plan-mode--dispatch-accepted
-            (mevedel-plan-mode--prepare-summary
-             session chat-buffer record)))
-        (when (eq (plist-get record :step) 'prepare-context)
-          (unless (and (eq location 'here) (eq context 'fresh))
-            (error "Invalid accepted plan preparation step"))
-          ;; Persist the next step as part of the segment rotation's sidecar
-          ;; transaction so resume cannot rotate the planning segment twice.
-          (setq record (plist-put record :step 'submit))
-          (mevedel-plan--metadata-put session :implementation-retry record)
-          (condition-case rotation-error
-              (with-current-buffer chat-buffer
-                (require 'mevedel-session-persistence)
-                (unless
-                    (mevedel-session-persistence-start-fresh-segment
-                     session chat-buffer
-                     :initial-text (or (and (boundp 'gptel-prompt-prefix-alist)
-                                            (alist-get
-                                             major-mode
-                                             gptel-prompt-prefix-alist))
-                                       ""))
-                  (error "Could not start a fresh conversation segment"))
-                (mevedel--run-session-start-hooks "clear"))
-            (error
-             (setq record (plist-put record :step 'prepare-context))
-             (mevedel-plan--metadata-put
-              session :implementation-retry record)
-             (signal (car rotation-error) (cdr rotation-error)))))
-        (when (and (eq location 'here)
-                   (eq context 'summary)
-                   (not (equal (plist-get record :summary)
-                               (with-current-buffer chat-buffer
-                                 (mevedel--compact-previous-summary)))))
-          (error "Prepared plan summary does not match the current segment"))
-        (let* ((target-buffer
-                (if (eq location 'worktree)
-                    (mevedel-plan-mode--worktree-target-buffer record)
-                  chat-buffer))
-               (accepted
-                (plist-get record
-                           (if (eq location 'worktree)
-                               :target-accepted
-                             :accepted)))
-               (body (mevedel-plan-mode--accepted-body accepted))
-               (prompt (mevedel-plan-mode--implementation-prompt
-                        accepted body))
-               (view-buffer
-                (mevedel-view--interaction-target-buffer target-buffer)))
-          (with-current-buffer view-buffer
-            (mevedel-view--run-prompt-submit-hook
-             prompt "Implement accepted plan"
-             (lambda (submission)
-               (condition-case dispatch-error
-                   (progn
-                     (with-current-buffer target-buffer
-                       (mevedel--implement-plan
-                        (list :context 'current
-                              :plan-file
-                              (plist-get accepted :absolute-path)
-                              :permission-mode (plist-get selection :mode)
-                              :prompt-submission submission)))
-                     (mevedel-plan-mode--implementation-started
-                      session chat-buffer))
+        (let (result)
+          (while record
+            (pcase (plist-get record :step)
+              ('prepare-worktree
+               (unless (eq location 'worktree)
+                 (error "Invalid accepted plan Worktree step"))
+               (setq record
+                     (mevedel-plan-mode--prepare-worktree
+                      session chat-buffer record)))
+              ('prepare-target
+               (unless (eq location 'worktree)
+                 (error "Invalid accepted plan target step"))
+               (setq record
+                     (mevedel-plan-mode--prepare-worktree-target
+                      session chat-buffer record)))
+              ('prepare-summary
+               (unless (eq context 'summary)
+                 (error "Invalid accepted plan summary step"))
+               (setq result
+                     (mevedel-plan-mode--prepare-summary
+                      session chat-buffer record)
+                     record nil))
+              ('prepare-context
+               (unless (and (eq location 'here) (eq context 'fresh))
+                 (error "Invalid accepted plan preparation step"))
+               ;; Persist the next step as part of the segment rotation's
+               ;; sidecar transaction so resume cannot rotate twice.
+               (setq record (plist-put record :step 'submit))
+               (mevedel-plan--metadata-put
+                session :implementation-retry record)
+               (condition-case rotation-error
+                   (with-current-buffer chat-buffer
+                     (require 'mevedel-session-persistence)
+                     (unless
+                         (mevedel-session-persistence-start-fresh-segment
+                          session chat-buffer
+                          :initial-text
+                          (or (and (boundp 'gptel-prompt-prefix-alist)
+                                   (alist-get major-mode
+                                              gptel-prompt-prefix-alist))
+                              ""))
+                       (error "Could not start a fresh conversation segment"))
+                     (mevedel--run-session-start-hooks "clear"))
                  (error
-                  (mevedel-plan-mode--implementation-failed
-                   session chat-buffer
-                   (error-message-string dispatch-error)))))
-             (lambda ()
-               (mevedel-plan-mode--implementation-failed
-                session chat-buffer "Prompt submission was blocked"))))))
+                  (setq record (plist-put record :step 'prepare-context))
+                  (mevedel-plan--metadata-put
+                   session :implementation-retry record)
+                  (signal (car rotation-error) (cdr rotation-error)))))
+              ('submit
+               (when (and (eq location 'here)
+                          (eq context 'summary)
+                          (not (equal
+                                (plist-get record :summary)
+                                (with-current-buffer chat-buffer
+                                  (mevedel--compact-previous-summary)))))
+                 (error
+                  "Prepared plan summary does not match the current segment"))
+               (let* ((target-buffer
+                       (if (eq location 'worktree)
+                           (mevedel-plan-mode--worktree-target-buffer record)
+                         chat-buffer))
+                      (accepted
+                       (plist-get record
+                                  (if (eq location 'worktree)
+                                      :target-accepted
+                                    :accepted)))
+                      (body (mevedel-plan-mode--accepted-body accepted))
+                      (prompt (mevedel-plan-mode--implementation-prompt
+                               accepted body))
+                      (view-buffer
+                       (mevedel-view--interaction-target-buffer
+                        target-buffer)))
+                 (setq
+                  result
+                  (with-current-buffer view-buffer
+                    (mevedel-view--run-prompt-submit-hook
+                     prompt "Implement accepted plan"
+                     (lambda (submission)
+                       (condition-case dispatch-error
+                           (progn
+                             (with-current-buffer target-buffer
+                               (mevedel--implement-plan
+                                (list
+                                 :context 'current
+                                 :plan-file
+                                 (plist-get accepted :absolute-path)
+                                 :permission-mode
+                                 (plist-get selection :mode)
+                                 :prompt-submission submission)))
+                             (mevedel-plan-mode--implementation-started
+                              session chat-buffer))
+                         (error
+                          (mevedel-plan-mode--implementation-failed
+                           session chat-buffer
+                           (error-message-string dispatch-error)))))
+                     (lambda ()
+                       (mevedel-plan-mode--implementation-failed
+                        session chat-buffer
+                        "Prompt submission was blocked"))))
+                  record nil))))
+          result)))
     (error
      (mevedel-plan-mode--implementation-failed
       session chat-buffer (error-message-string err)))))
