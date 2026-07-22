@@ -536,7 +536,7 @@
          (data-buffer (generate-new-buffer " *plan-goal-data*"))
          (view-buffer (generate-new-buffer " *plan-goal-view*"))
          (mevedel-goal-token-budget 1234)
-         hook-input hook-display implementation)
+         hook-input hook-display implementation reserved-id)
     (unwind-protect
         (progn
           (with-current-buffer data-buffer
@@ -551,7 +551,18 @@
                        (funcall callback
                                 (mevedel-prompt-submission-create
                                  :input input :state 'committed))))
-                    ((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function 'mevedel-plan-mode--persist)
+                     (lambda (saved-session _buffer)
+                       (when (and (not (mevedel-session-goal saved-session))
+                                  (plist-get
+                                   (mevedel-session-plan-metadata saved-session)
+                                   :implementation-retry))
+                         (setq reserved-id
+                               (plist-get
+                                (plist-get
+                                 (mevedel-session-plan-metadata saved-session)
+                                 :implementation-retry)
+                                :goal-id)))))
                     ((symbol-function 'mevedel-session-persistence-save)
                      #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
@@ -566,6 +577,7 @@
                  (accepted (plist-get metadata :accepted-absolute-path)))
             (should (equal mevedel-plan-mode--accepted-goal-objective
                            (mevedel-goal-objective goal)))
+            (should (equal reserved-id (mevedel-goal-id goal)))
             (should (equal (plist-get metadata :accepted-path)
                            (mevedel-goal-plan-reference goal)))
             (should (= 1234 (mevedel-goal-token-budget goal)))
@@ -774,7 +786,8 @@
          (selection '(:location worktree :context fresh
                       :execution goal :mode full-auto :branch "plan/goal"))
          (record
-          (list :step 'submit :selection selection :goal-token-budget 7000
+          (list :step 'submit :selection selection :goal-id "reserved-goal"
+                :goal-token-budget 7000
                 :target-save-path target-save :target-session-id "target"
                 :target-directory default-directory
                 :target-accepted
@@ -831,6 +844,184 @@
         (when (buffer-live-p buffer) (kill-buffer buffer)))
       (delete-directory target-save t)
       (delete-directory source-save t)))
+
+  :doc "reuses a matching Goal left durable before source retry cleanup"
+  (let* ((save-dir (make-temp-file "mevedel-plan-goal-crash-" t))
+         (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
+         (body "Crash-window plan")
+         (goal (mevedel-goal--create
+                :id "reserved" :status 'active
+                :plan-reference "plans/accepted.md"))
+         (record
+          (list :step 'submit :goal-id "reserved"
+                :selection '(:location here :context current
+                              :execution goal :mode auto)
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path accepted-path
+                      :hash (mevedel-plan-hash body))))
+         (session
+          (mevedel-session--create
+           :name "main" :save-path save-dir :goal goal
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (data-buffer (generate-new-buffer " *plan-goal-crash-data*"))
+         (view-buffer (generate-new-buffer " *plan-goal-crash-view*"))
+         implemented)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory accepted-path) t)
+          (write-region body nil accepted-path nil 'silent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel-goal-create)
+                     (lambda (&rest _) (ert-fail "Constructed duplicate Goal")))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (_) (setq implemented t))))
+            (mevedel-plan-mode--dispatch-accepted session data-buffer))
+          (should implemented)
+          (should (eq goal (mevedel-session-goal session)))
+          (should-not
+           (plist-member (mevedel-session-plan-metadata session)
+                         :implementation-retry)))
+      (kill-buffer view-buffer)
+      (kill-buffer data-buffer)
+      (delete-directory save-dir t)))
+
+  :doc "leaves a different unfinished target Goal untouched and retryable"
+  (let* ((save-dir (make-temp-file "mevedel-plan-goal-conflict-" t))
+         (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
+         (body "Conflicting Goal plan")
+         (goal (mevedel-goal--create
+                :id "other" :status 'paused :reason "owned"
+                :plan-reference "plans/other.md"))
+         (record
+          (list :step 'submit :goal-id "reserved"
+                :selection '(:location here :context current
+                              :execution goal :mode auto)
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path accepted-path
+                      :hash (mevedel-plan-hash body))))
+         (session
+          (mevedel-session--create
+           :name "main" :save-path save-dir :goal goal
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (data-buffer (generate-new-buffer " *plan-goal-conflict-data*"))
+         (view-buffer (generate-new-buffer " *plan-goal-conflict-view*")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory accepted-path) t)
+          (write-region body nil accepted-path nil 'silent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (_) (ert-fail "Started conflicting Goal"))))
+            (mevedel-plan-mode--dispatch-accepted session data-buffer))
+          (should (eq goal (mevedel-session-goal session)))
+          (should (eq 'paused (mevedel-goal-status goal)))
+          (should (equal "owned" (mevedel-goal-reason goal)))
+          (should
+           (string-match-p
+            "unfinished Goal other; expected reserved Goal reserved"
+            (plist-get
+             (plist-get (mevedel-session-plan-metadata session)
+                        :implementation-retry)
+             :failure))))
+      (kill-buffer view-buffer)
+      (kill-buffer data-buffer)
+      (delete-directory save-dir t)))
+
+  :doc "pauses after kickoff startup failure and resumes held input first"
+  (let* ((save-dir (make-temp-file "mevedel-plan-goal-kickoff-" t))
+         (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
+         (body "Kickoff failure plan")
+         (record
+          (list :step 'submit :goal-id "reserved"
+                :selection '(:location here :context current
+                              :execution goal :mode auto)
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path accepted-path
+                      :hash (mevedel-plan-hash body))))
+         (session
+          (mevedel-session--create
+           :name "main" :save-path save-dir
+           :queued-user-messages
+           '((:input "steer first" :queued-at-goal-id "reserved"))
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (data-buffer (generate-new-buffer " *plan-goal-kickoff-data*"))
+         (view-buffer (generate-new-buffer " *plan-goal-kickoff-view*"))
+         scheduled)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory accepted-path) t)
+          (write-region body nil accepted-path nil 'silent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function 'mevedel-session-persistence-save)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (_) (error "Transport offline"))))
+            (mevedel-plan-mode--dispatch-accepted session data-buffer))
+          (let ((goal (mevedel-session-goal session)))
+            (should (eq 'paused (mevedel-goal-status goal)))
+            (should (equal "Transport offline" (mevedel-goal-reason goal)))
+            (should-not
+             (plist-member (mevedel-session-plan-metadata session)
+                           :implementation-retry))
+            (should
+             (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+            (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                       #'ignore)
+                      ((symbol-function 'run-at-time)
+                       (lambda (_delay _repeat function &rest args)
+                         (push (cons function args) scheduled))))
+              (with-current-buffer data-buffer
+                (mevedel-goal-resume))
+              (should (eq 'active (mevedel-goal-status goal)))
+              (should (eq 'queued-user-message
+                          (mevedel-goal-continue-if-idle
+                           session data-buffer))))
+            (should
+             (seq-some
+              (lambda (call)
+                (eq #'mevedel-view--run-queued-user-message-drain
+                    (car call)))
+              scheduled))
+            (should (equal "steer first"
+                           (plist-get
+                            (car (mevedel-session-queued-user-messages session))
+                            :input)))))
+      (kill-buffer view-buffer)
+      (kill-buffer data-buffer)
+      (delete-directory save-dir t)))
 
   :doc "Here/Summary caches one zero-tail compaction across dispatch retry"
   (let* ((save-dir (make-temp-file "mevedel-plan-summary-" t))
@@ -1440,7 +1631,19 @@
                 (plist-get
                  (mevedel-plan-mode--implementation-record
                   '(:location worktree :context summary) accepted)
-                 :step)))))
+                 :step))))
+
+  :doc "reserves an identity only for Goal execution"
+  (let* ((accepted '(:path "accepted.md" :absolute-path "/tmp/accepted.md"
+                     :hash "h"))
+         (goal-record
+          (mevedel-plan-mode--implementation-record
+           '(:location here :context current :execution goal) accepted))
+         (direct-record
+          (mevedel-plan-mode--implementation-record
+           '(:location here :context current :execution direct) accepted)))
+    (should (stringp (plist-get goal-record :goal-id)))
+    (should-not (plist-member direct-record :goal-id))))
 
 (mevedel-deftest mevedel-plan-mode--accepted-body
   (:doc "reads a matching immutable artifact and rejects a bad hash")
@@ -1520,6 +1723,60 @@
     (should-not
      (plist-member (mevedel-session-plan-metadata session)
                    :implementation-retry))))
+
+(mevedel-deftest mevedel-plan-mode--goal-handoff-complete
+  (:doc "restores retry state when its durable cleanup fails")
+  ,test
+  (test)
+  (let* ((retry '(:step submit :goal-id "reserved"))
+         (metadata (list :status 'accepted :implementation-retry retry))
+         (session (mevedel-session--create
+                   :name "main" :plan-metadata metadata)))
+    (cl-letf (((symbol-function 'mevedel-plan-mode--persist)
+               (lambda (&rest _) (error "Disk unavailable"))))
+      (should-error
+       (mevedel-plan-mode--goal-handoff-complete session (current-buffer))))
+    (should (eq metadata (mevedel-session-plan-metadata session)))
+    (should (eq retry
+                (plist-get (mevedel-session-plan-metadata session)
+                           :implementation-retry)))))
+
+(mevedel-deftest mevedel-plan-mode--ensure-goal
+  (:doc "reuses only the reserved Goal identity and accepted-plan reference")
+  ,test
+  (test)
+  (let* ((goal (mevedel-goal--create
+                :id "reserved" :status 'active
+                :plan-reference "plans/accepted.md"))
+         (session (mevedel-session--create :name "target" :goal goal))
+         (buffer (generate-new-buffer " *mevedel-plan-existing-goal*"))
+         persisted)
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'mevedel-plan-mode--persist)
+                     (lambda (&rest _) (setq persisted t)))
+                    ((symbol-function 'mevedel-goal-create)
+                     (lambda (&rest _) (ert-fail "Constructed duplicate Goal"))))
+            (should
+             (eq goal
+                 (mevedel-plan-mode--ensure-goal
+                  '(:goal-id "reserved")
+                  '(:path "plans/accepted.md") session buffer)))
+            (should persisted)
+            (setf (mevedel-goal-plan-reference goal) "plans/other.md")
+            (let ((message
+                   (condition-case err
+                       (progn
+                         (mevedel-plan-mode--ensure-goal
+                          '(:goal-id "reserved")
+                          '(:path "plans/accepted.md") session buffer)
+                         nil)
+                     (error (error-message-string err)))))
+              (should (string-match-p "reserved Goal reserved" message))
+              (should (eq goal (mevedel-session-goal session))))))
+      (kill-buffer buffer))))
 
 (mevedel-deftest mevedel-plan-mode--approval-entry
   (:doc "builds one root interaction with a callable outcome callback")
@@ -1661,6 +1918,7 @@
                     (list :selection
                           '(:location worktree :context fresh
                             :execution goal :mode full-auto)
+                          :goal-id "reserved-goal"
                           :goal-token-budget 4321
                           :accepted
                           (list :path "plans/source.md"
@@ -1676,6 +1934,11 @@
                           'mevedel-goal-token-budget target-buffer)))
               (should (eq 'source-preset
                           (mevedel-session-preset-name target-session)))
+              (should (equal
+                       "reserved-goal"
+                       (plist-get
+                        (mevedel-session-plan-metadata target-session)
+                        :implementation-goal-id)))
               (should (equal "/tmp/target-accepted.md"
                              (plist-get
                               (plist-get prepared :target-accepted)

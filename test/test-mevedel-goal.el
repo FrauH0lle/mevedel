@@ -42,6 +42,19 @@
     (should (equal (mevedel-goal-created-at goal)
                    (mevedel-goal-updated-at goal)))))
 
+(mevedel-deftest mevedel-goal-start
+  (:doc "rejects source and prepared-target Plan handoff reservations")
+  (dolist (metadata
+           '((:implementation-retry (:goal-id "reserved"))
+             (:implementation-goal-id "reserved")))
+    (let ((session (mevedel-session--create
+                    :name "main" :plan-metadata metadata)))
+      (with-temp-buffer
+        (setq-local mevedel--session session)
+        (should-error (mevedel-goal-start "Competing Goal")
+                      :type 'user-error))
+      (should-not (mevedel-session-goal session)))))
+
 (mevedel-deftest mevedel-goal-active-context
   (:doc "pauses and persists before dispatch when an accepted plan mutates")
   (progn
@@ -332,7 +345,9 @@
                 :time-used-seconds 0 :turns-run 0
                 :created-at "now" :updated-at "now"))
          scheduled)
-    (setf (mevedel-session-goal session) goal)
+    (setf (mevedel-session-goal session) goal
+          (mevedel-session-plan-metadata session)
+          '(:status accepted :implementation-goal-id "goal-1"))
     (with-temp-buffer
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-session-persistence-save) #'ignore)
@@ -342,6 +357,9 @@
     (should scheduled)
     (should (eq 'active (mevedel-goal-status goal)))
     (should-not (mevedel-goal-reason goal))
+    (should-not
+     (plist-member (mevedel-session-plan-metadata session)
+                   :implementation-goal-id))
     (should (equal '((:input "steer first"))
                    (mevedel-session-queued-user-messages session)))
     (setf (mevedel-goal-status goal) 'budget-limited)

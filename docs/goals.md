@@ -145,6 +145,21 @@ session's permission mode and Goal state remain unchanged. Derived artifact
 authority exists only while the target Goal is unfinished and never alters
 user grants.
 
+Plan approval reserves the Goal identity before asynchronous preparation. The
+source retry record blocks a competing Here Goal; a prepared Worktree target
+holds the same kickoff reservation locally. Recovery reuses completed summary,
+segment, Worktree, settings, mode, artifact, and Goal construction steps. A
+durable Goal is recognized only by the reserved ID together with its accepted
+plan reference, so an unrelated unfinished target Goal is never overwritten.
+
+After durable construction, Plan recovery is cleared before the explicit
+kickoff. If startup then fails, the Goal is paused with the concrete error and
+`/goal resume` uses the normal continuation path. User input owned by that Goal
+remains queued while paused; on resume it runs before a generic continuation.
+During a Here handoff the same ordering keeps the prepared kickoff first and
+post-acceptance input second. Worktree source input never transfers to or
+steers the target Goal.
+
 The cockpit and status surface show only objective, status/reason, accounting,
 elapsed time, and accepted-plan reference. Their redraws preserve the active
 composer draft.
