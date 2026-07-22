@@ -338,6 +338,19 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (should (= 25 (mevedel-goal-tokens-used goal)))
     (should (= 7 (mevedel-goal-time-used-seconds goal)))
     (should (= 2 (mevedel-goal-turns-run goal))))
+  :doc "round-trips a budget-limited Goal with its exact usage and reason"
+  (let ((goal (mevedel-session-persistence--goal-from-plist
+               '(:id "g2" :objective "Ship" :status budget-limited
+                 :reason "Token budget reached: 110/100 tokens used"
+                 :token-budget 100 :tokens-used 110
+                 :time-used-seconds 9 :turns-run 3
+                 :plan-reference nil
+                 :created-at "created" :updated-at "updated"))))
+    (should (eq 'budget-limited (mevedel-goal-status goal)))
+    (should (= 100 (mevedel-goal-token-budget goal)))
+    (should (= 110 (mevedel-goal-tokens-used goal)))
+    (should (equal "Token budget reached: 110/100 tokens used"
+                   (mevedel-goal-reason goal))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-persistence--goal-from-plist nil))
   :doc "rejects old, incomplete, and unsafe Goal records"

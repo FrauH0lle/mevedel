@@ -44,7 +44,8 @@
 
 (mevedel-deftest mevedel-goal-active-context
   (:doc "pauses and persists before dispatch when an accepted plan mutates")
-  (let* ((root (make-temp-file "mevedel-goal-plan-" t))
+  (progn
+   (let* ((root (make-temp-file "mevedel-goal-plan-" t))
          (plan-file (file-name-concat root "accepted-plan.md"))
          (session (mevedel-session--create :name "main" :save-path root))
          (goal (mevedel-goal--create
@@ -68,7 +69,20 @@
           (should saved)
           (should (eq 'paused (mevedel-goal-status goal)))
           (should (string-match-p "hash" (mevedel-goal-reason goal))))
-      (delete-directory root t))))
+      (delete-directory root t)))
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-1" :objective "Ship" :status 'active
+                :tokens-used 7 :time-used-seconds 0 :turns-run 1
+                :created-at "now" :updated-at "now"))
+         replacements)
+    (setf (mevedel-session-goal session) goal)
+    (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+               (lambda (_path values) (setq replacements values) "context")))
+      (should (equal "context" (mevedel-goal-active-context session))))
+    (should (equal "unbounded" (cdr (assoc "token-budget" replacements))))
+    (should (equal "unbounded"
+                   (cdr (assoc "tokens-remaining" replacements)))))))
 
 (mevedel-deftest mevedel-goal-capture-request
   (:doc "attributes root requests and excludes child and compaction requests")
@@ -154,7 +168,8 @@
 
 (mevedel-deftest mevedel-goal-settle-turn
   (:doc "charges provider tokens, elapsed time, and one turn to an attributed Goal")
-  (let* ((session (mevedel-session--create :name "main"))
+  (progn
+   (let* ((session (mevedel-session--create :name "main"))
          (goal (mevedel-goal--create
                 :id "goal-1" :objective "Ship" :status 'active
                 :tokens-used 2 :time-used-seconds 1 :turns-run 3
@@ -173,7 +188,57 @@
           (should (= 15 (mevedel-goal-tokens-used goal)))
           (should (>= (mevedel-goal-time-used-seconds goal) 3))
           (should (= 4 (mevedel-goal-turns-run goal))))
-      (kill-buffer buffer))))
+      (kill-buffer buffer)))
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-2" :objective "Ship" :status 'active
+                :token-budget 100 :tokens-used 49
+                :time-used-seconds 0 :turns-run 0
+                :created-at "now" :updated-at "now"))
+         (buffer (generate-new-buffer " *mevedel-goal-budget-crossing*"))
+         (fsm (gptel-make-fsm
+               :info (list :buffer buffer :mevedel-goal-id "goal-2"
+                           :tokens-full '(:input 40 :output 11 :cached 500)))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) goal)
+          (with-current-buffer buffer (setq-local mevedel--session session))
+          (mevedel-goal-settle-turn fsm)
+          (should (= 100 (mevedel-goal-tokens-used goal)))
+          (should (eq 'budget-limited (mevedel-goal-status goal)))
+          (should (string-match-p "100/100" (mevedel-goal-reason goal)))
+          (should (equal '("50%" "80%" "100%")
+                         (mapcar
+                          (lambda (reminder)
+                            (and (string-match "\\(50%\\|80%\\|100%\\)"
+                                               reminder)
+                                 (match-string 1 reminder)))
+                          (mevedel-session-pending-reminders session))))
+          (mevedel-goal-settle-turn
+           (gptel-make-fsm
+            :info (list :buffer buffer :mevedel-goal-id "goal-2"
+                        :tokens-full '(:input 1 :output 0))))
+          (should (= 3 (length (mevedel-session-pending-reminders session)))))
+      (kill-buffer buffer)))
+  (dolist (status '(complete blocked))
+    (let* ((session (mevedel-session--create :name "main"))
+           (goal (mevedel-goal--create
+                  :id "goal-3" :objective "Ship" :status status
+                  :reason (and (eq status 'blocked) "Need access")
+                  :token-budget 100 :tokens-used 99
+                  :time-used-seconds 0 :turns-run 0
+                  :created-at "now" :updated-at "now"))
+           (buffer (generate-new-buffer " *mevedel-goal-budget-terminal*")))
+      (unwind-protect
+          (progn
+            (setf (mevedel-session-goal session) goal)
+            (with-current-buffer buffer (setq-local mevedel--session session))
+            (mevedel-goal-settle-turn
+             (gptel-make-fsm
+              :info (list :buffer buffer :mevedel-goal-id "goal-3"
+                          :tokens-full '(:input 1 :output 0))))
+            (should (eq status (mevedel-goal-status goal))))
+        (kill-buffer buffer))))))
 
 (mevedel-deftest mevedel-goal-settle-failure
   (:doc "retries one transient failure and pauses on the next or a terminal failure")
@@ -278,7 +343,76 @@
     (should (eq 'active (mevedel-goal-status goal)))
     (should-not (mevedel-goal-reason goal))
     (should (equal '((:input "steer first"))
-                   (mevedel-session-queued-user-messages session)))))
+                   (mevedel-session-queued-user-messages session)))
+    (setf (mevedel-goal-status goal) 'budget-limited)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (should-error (mevedel-goal-resume) :type 'user-error))))
+
+(mevedel-deftest mevedel-goal-set-budget
+  (:doc "adjusts durable limits, emits reminders, and reactivates limited Goals")
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-1" :objective "Ship" :status 'active
+                :token-budget 100 :tokens-used 60
+                :time-used-seconds 1 :turns-run 2
+                :created-at "now" :updated-at "now"))
+         (buffer (generate-new-buffer " *mevedel-goal-budget*"))
+         (saved 0)
+         (scheduled 0))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) goal)
+          (with-current-buffer buffer
+            (setq-local mevedel--session session
+                        mevedel--current-request
+                        (mevedel-request--create :session session)))
+          (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                     (lambda (&rest _) (cl-incf saved)))
+                    ((symbol-function 'run-at-time)
+                     (lambda (&rest _) (cl-incf scheduled))))
+            (with-current-buffer buffer
+              (dolist (invalid '("" "0" "-1" "many"))
+                (should-error (mevedel-goal-set-budget invalid)
+                              :type 'user-error))
+              (mevedel-goal-set-budget "50")
+              (should (eq 'budget-limited (mevedel-goal-status goal)))
+              (should (string-match-p "100.*50.*60.*0.*budget-limited"
+                                      (car (last
+                                            (mevedel-session-pending-reminders
+                                             session)))))
+              (mevedel-goal-set-budget "80")
+              (should (eq 'active (mevedel-goal-status goal)))
+              (should-not (mevedel-goal-reason goal))
+              (should (eq 'request
+                          (mevedel-goal-continue-if-idle session buffer)))
+              (mevedel-goal-set-budget "none")
+              (should-not (mevedel-goal-token-budget goal))))
+          (should (= 3 saved))
+          (should (= 1 scheduled))
+          (should (= 3 (length (mevedel-session-pending-reminders session))))
+          (should (string-match-p
+                   "80.*unbounded.*60.*unbounded.*active"
+                   (car (last (mevedel-session-pending-reminders session))))))
+      (kill-buffer buffer))))
+
+(mevedel-deftest mevedel-goal-tool-result-budget-warning
+  (:doc "returns the 100% tool-boundary warning once for known provider usage")
+  (let* ((session (mevedel-session--create :name "main"))
+         (goal (mevedel-goal--create
+                :id "goal-1" :objective "Ship" :status 'active
+                :token-budget 100 :tokens-used 90
+                :time-used-seconds 0 :turns-run 0
+                :created-at "now" :updated-at "now"))
+         (fsm (gptel-make-fsm
+               :info '(:mevedel-goal-id "goal-1"
+                       :tokens-full (:input 7 :output 3 :cached 1000)))))
+    (setf (mevedel-session-goal session) goal)
+    (should (string-match-p
+             "stop new substantive work"
+             (mevedel-goal-tool-result-budget-warning session fsm)))
+    (should-not (mevedel-goal-tool-result-budget-warning session fsm))
+    (should (= 90 (mevedel-goal-tokens-used goal)))))
 
 (mevedel-deftest mevedel-goal-edit
   (:doc "rotates identity, retains the run, and refreshes an in-flight Goal")

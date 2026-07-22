@@ -90,6 +90,9 @@
   "Continue working toward the active Goal."
   "Ordinary user-role trigger used for initial and automatic Goal turns.")
 
+(defconst mevedel-goal--budget-thresholds '(50 80 100)
+  "Percentage crossings that produce Goal budget reminders.")
+
 (defvar-local mevedel-goal--transient-retries 0
   "Transient Goal failures retried since the last successful turn.")
 
@@ -240,7 +243,9 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
        "prompts/goals/active-context.md"
        `(("objective" . ,(mevedel-goal-objective goal))
          ("tokens-used" . ,(number-to-string used))
-         ("token-budget" . ,(if budget (number-to-string budget) "none"))
+         ("token-budget" . ,(if budget
+                                (number-to-string budget)
+                              "unbounded"))
          ("tokens-remaining" . ,(if budget
                                      (number-to-string (max 0 (- budget used)))
                                    "unbounded"))
@@ -347,6 +352,8 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
   (let ((goal (mevedel-goal--current)))
     (when (eq (mevedel-goal-status goal) 'complete)
       (user-error "Completed Goal cannot be resumed"))
+    (when (eq (mevedel-goal-status goal) 'budget-limited)
+      (user-error "Raise or remove the Goal budget before resuming"))
     (setf (mevedel-goal-status goal) 'active
           (mevedel-goal-reason goal) nil)
     (mevedel-goal--touch goal)
@@ -356,6 +363,50 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
                     (list (list :input (string-trim steering))))))
     (mevedel-goal--persist mevedel--session (current-buffer))
     (mevedel-goal--schedule-continuation mevedel--session (current-buffer))
+    goal))
+
+(defun mevedel-goal-set-budget (value)
+  "Set the current Goal token budget from positive integer or string VALUE.
+The string `none' removes the limit."
+  (interactive "sGoal token budget (positive integer or none): ")
+  (let* ((text (and (stringp value) (string-trim value)))
+         (budget
+          (cond
+           ((and text (string-equal (downcase text) "none")) nil)
+           ((and text
+                 (string-match-p (rx string-start (+ digit) string-end)
+                                 text)
+                 (> (string-to-number text) 0))
+            (string-to-number text))
+           ((and (integerp value) (> value 0)) value)
+           (t (user-error "Goal budget must be a positive integer or none"))))
+         (goal (mevedel-goal--current))
+         (old (mevedel-goal-token-budget goal))
+         (used (mevedel-goal-tokens-used goal))
+         reactivated)
+    (setf (mevedel-goal-token-budget goal) budget)
+    (cond
+     ((and budget (>= used budget)
+           (not (memq (mevedel-goal-status goal) '(blocked complete))))
+      (setf (mevedel-goal-status goal) 'budget-limited
+            (mevedel-goal-reason goal)
+            (format "Token budget reached: %d/%d tokens used" used budget)))
+     ((and (eq (mevedel-goal-status goal) 'budget-limited)
+           (or (null budget) (< used budget)))
+      (setq reactivated t)
+      (setf (mevedel-goal-status goal) 'active
+            (mevedel-goal-reason goal) nil)))
+    (mevedel-goal--touch goal)
+    (mevedel-session-enqueue-pending-reminder
+     mevedel--session
+     (format
+      "Goal token budget changed from %s to %s; tokens used: %d; remaining: %s; status: %s."
+      (or old "unbounded") (or budget "unbounded") used
+      (if budget (max 0 (- budget used)) "unbounded")
+      (mevedel-goal-status goal)))
+    (mevedel-goal--persist mevedel--session (current-buffer))
+    (when reactivated
+      (mevedel-goal--schedule-continuation mevedel--session (current-buffer)))
     goal))
 
 (defun mevedel-goal-clear ()
@@ -439,19 +490,81 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
                     plan-path))
             (setf (gptel-fsm-info fsm) info)))))))
 
-(defun mevedel-goal--request-token-count (info)
-  "Return normalized input plus output tokens for request INFO."
+(defun mevedel-goal--known-token-count (info)
+  "Return known normalized input plus output tokens from request INFO."
   (let ((usage (or (plist-get info :tokens-full)
                    (plist-get info :tokens))))
-    (or (and (listp usage)
-             (let ((count (+ (or (plist-get usage :input) 0)
-                             (or (plist-get usage :output) 0))))
-               (and (> count 0) count)))
+    (when (listp usage)
+      (let ((count (+ (or (plist-get usage :input) 0)
+                      (or (plist-get usage :output) 0))))
+        (and (> count 0) count)))))
+
+(defun mevedel-goal--request-token-count (info)
+  "Return normalized input plus output tokens for request INFO."
+  (or (mevedel-goal--known-token-count info)
         (plist-get info :mevedel-goal-estimated-tokens)
-        1)))
+      1))
+
+(defun mevedel-goal--budget-threshold-crossed-p
+    (before after budget percentage)
+  "Return non-nil when BEFORE..AFTER crosses PERCENTAGE of BUDGET."
+  (and (< (* before 100) (* budget percentage))
+       (>= (* after 100) (* budget percentage))))
+
+(defun mevedel-goal--emit-budget-crossings (fsm session goal before)
+  "Queue newly crossed budget reminders for GOAL after charging FSM.
+BEFORE is the durable usage before the charge."
+  (when-let* ((budget (mevedel-goal-token-budget goal)))
+    (let* ((info (gptel-fsm-info fsm))
+           (after (mevedel-goal-tokens-used goal))
+           (warned (plist-get info :mevedel-goal-budget-warnings)))
+      (dolist (percentage mevedel-goal--budget-thresholds)
+        (when (and (not (memq percentage warned))
+                   (mevedel-goal--budget-threshold-crossed-p
+                    before after budget percentage))
+          (push percentage warned)
+          (mevedel-session-enqueue-pending-reminder
+           session
+           (format
+            "Goal token budget crossed %d%%: %d/%d tokens used; %d remain."
+            percentage after budget (max 0 (- budget after))))))
+      (plist-put info :mevedel-goal-budget-warnings warned)
+      (setf (gptel-fsm-info fsm) info))))
+
+(defun mevedel-goal--settle-budget (fsm session goal before)
+  "Apply post-charge budget policy to GOAL for FSM in SESSION."
+  (mevedel-goal--emit-budget-crossings fsm session goal before)
+  (when (and (eq (mevedel-goal-status goal) 'active)
+             (mevedel-goal--budget-exhausted-p goal))
+    (setf (mevedel-goal-status goal) 'budget-limited
+          (mevedel-goal-reason goal)
+          (format "Token budget reached: %d/%d tokens used"
+                  (mevedel-goal-tokens-used goal)
+                  (mevedel-goal-token-budget goal)))
+    (mevedel-goal--touch goal)))
+
+(defun mevedel-goal-tool-result-budget-warning (session fsm)
+  "Return and record the one-shot 100% tool warning for SESSION's FSM."
+  (when-let* ((info (gptel-fsm-info fsm))
+              ((plist-get info :mevedel-goal-id))
+              (goal (mevedel-session-goal session))
+              (budget (mevedel-goal-token-budget goal))
+              (current (mevedel-goal--known-token-count info))
+              (before (mevedel-goal-tokens-used goal))
+              (after (+ before current))
+              ((not (memq 100
+                          (plist-get info :mevedel-goal-budget-warnings))))
+              ((mevedel-goal--budget-threshold-crossed-p
+                before after budget 100)))
+    (plist-put info :mevedel-goal-budget-warnings
+               (cons 100 (plist-get info :mevedel-goal-budget-warnings)))
+    (setf (gptel-fsm-info fsm) info)
+    (format
+     "Goal token budget reached (%d/%d tokens currently known). Stop new substantive work and wrap up the current response; do not create a separate wrap-up turn."
+     after budget)))
 
 (defun mevedel-goal--settle-accounting (fsm)
-  "Charge FSM to its attributed Goal and return that Goal, or nil."
+  "Charge FSM and return its session, Goal, and prior usage, or nil."
   (let* ((info (gptel-fsm-info fsm))
          (captured-id (plist-get info :mevedel-goal-id))
          (buffer (plist-get info :buffer)))
@@ -459,23 +572,24 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
       (with-current-buffer buffer
         (when-let* ((goal (and mevedel--session
                                (mevedel-session-goal mevedel--session))))
-          (cl-incf (mevedel-goal-tokens-used goal)
-                   (mevedel-goal--request-token-count info))
-          (cl-incf (mevedel-goal-time-used-seconds goal)
-                   (max 0 (round (- (float-time)
-                                    (or (plist-get info
-                                                   :mevedel-goal-started-at)
-                                        (float-time))))))
-          (cl-incf (mevedel-goal-turns-run goal))
-          (mevedel-goal--touch goal)
-          (when (fboundp 'mevedel-telemetry-record)
-            (mevedel-telemetry-record
-             mevedel--session 'goal-turn-settled
-             :captured-goal-id captured-id
-             :goal-id (mevedel-goal-id goal)
-             :tokens-used (mevedel-goal-tokens-used goal)
-             :turns-run (mevedel-goal-turns-run goal)))
-          goal)))))
+          (let ((before (mevedel-goal-tokens-used goal)))
+            (cl-incf (mevedel-goal-tokens-used goal)
+                     (mevedel-goal--request-token-count info))
+            (cl-incf (mevedel-goal-time-used-seconds goal)
+                     (max 0 (round (- (float-time)
+                                      (or (plist-get
+                                           info :mevedel-goal-started-at)
+                                          (float-time))))))
+            (cl-incf (mevedel-goal-turns-run goal))
+            (mevedel-goal--touch goal)
+            (when (fboundp 'mevedel-telemetry-record)
+              (mevedel-telemetry-record
+               mevedel--session 'goal-turn-settled
+               :captured-goal-id captured-id
+               :goal-id (mevedel-goal-id goal)
+               :tokens-used (mevedel-goal-tokens-used goal)
+               :turns-run (mevedel-goal-turns-run goal)))
+            (list mevedel--session goal before)))))))
 
 (defun mevedel-goal--fsm-failure-reason (fsm status)
   "Return a concrete failure reason from FSM and terminal STATUS."
@@ -500,21 +614,29 @@ Return `dispatched' on dispatch or the deterministic blocking gate symbol."
 
 (defun mevedel-goal-settle-turn (fsm)
   "Charge successful Goal turn FSM."
-  (when (mevedel-goal--settle-accounting fsm)
-    (setq mevedel-goal--transient-retries 0)))
+  (when-let* ((settled (mevedel-goal--settle-accounting fsm)))
+    (let ((session (nth 0 settled))
+          (goal (nth 1 settled))
+          (before (nth 2 settled)))
+      (setq mevedel-goal--transient-retries 0)
+      (mevedel-goal--settle-budget fsm session goal before))))
 
 (defun mevedel-goal-settle-failure (fsm &optional status)
   "Charge failed Goal turn FSM and pause or retain it for one retry."
-  (when-let* ((goal (mevedel-goal--settle-accounting fsm)))
-    (when (eq (mevedel-goal-status goal) 'active)
-      (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
-        (if (and (mevedel-goal--transient-failure-p reason)
-                 (< mevedel-goal--transient-retries
-                    mevedel-goal-max-transient-retries))
-            (cl-incf mevedel-goal--transient-retries)
-          (setf (mevedel-goal-status goal) 'paused
-                (mevedel-goal-reason goal) reason)
-          (mevedel-goal--touch goal))))))
+  (when-let* ((settled (mevedel-goal--settle-accounting fsm)))
+    (let ((session (nth 0 settled))
+          (goal (nth 1 settled))
+          (before (nth 2 settled)))
+      (when (eq (mevedel-goal-status goal) 'active)
+        (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
+          (if (and (mevedel-goal--transient-failure-p reason)
+                   (< mevedel-goal--transient-retries
+                      mevedel-goal-max-transient-retries))
+              (cl-incf mevedel-goal--transient-retries)
+            (setf (mevedel-goal-status goal) 'paused
+                  (mevedel-goal-reason goal) reason)
+            (mevedel-goal--touch goal))))
+      (mevedel-goal--settle-budget fsm session goal before))))
 
 (defun mevedel-goal-persist-failure (fsm)
   "Persist Goal failure state after FSM teardown steps."

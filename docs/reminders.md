@@ -103,6 +103,11 @@ guidance in the rejection reminder.
   reminder consumes the session FIFO on the next prompt.
 - **Goal objective update:** `/goal edit` queues one event containing the
   revised objective and its authority over conflicting accepted-plan text.
+- **Goal token budget:** turn settlement queues one-shot 50%, 80%, and 100%
+  crossing events. Budget changes queue one event containing old and new
+  limits, current usage, remaining tokens, and resulting status. The tool
+  pipeline can also append the 100% warning directly to one tool result so an
+  in-flight turn can wrap up without an extra request.
 - **Token usage:** `mevedel-reminders-make-token-usage` reports high
   context pressure using the compaction token state, with sparse
   repeat firing.

@@ -587,10 +587,12 @@ active and idle, the session continues with a generic continuation turn until
 the model calls `UpdateGoal` with `complete` or `blocked`. Goal state never
 changes tool permissions.
 
-Bare `/goal` opens the Goal cockpit. Use `/goal edit <objective>`, `/goal pause`,
-`/goal resume [steering]`, and `/goal clear` to manage it. Editing rotates the
-Goal ID without resetting its accounting. Clear preserves the transcript,
-accepted Plan artifacts, and filesystem changes.
+Bare `/goal` opens the Goal cockpit. Use `/goal edit <objective>`,
+`/goal budget <N|none>`, `/goal pause`, `/goal resume [steering]`, and
+`/goal clear` to manage it. Editing rotates the Goal ID without resetting its
+accounting. The budget limits continuation between turns without aborting
+in-flight work. Clear preserves the transcript, accepted Plan artifacts, and
+filesystem changes.
 
 ### Review and Verify Commands
 

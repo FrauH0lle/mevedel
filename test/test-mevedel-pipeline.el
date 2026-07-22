@@ -546,7 +546,7 @@
 			       :name "ReadTool"
 			       :read-only-p t))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 10))
+		   (should (= (length steps) 11))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
@@ -555,14 +555,15 @@
 		   (should (eq (nth 5 steps) #'mevedel-pipeline--step-render-transform))
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-specialist-nudges))
 		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-media-data)))
+		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "write tool includes snapshot step"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WriteTool"
 			       :read-only-p nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= (length steps) 11))
+		   (should (= (length steps) 12))
 		   (should (eq (nth 0 steps) #'mevedel-pipeline--step-validate))
 		   (should (eq (nth 1 steps) #'mevedel-pipeline--step-pre-tool-hooks))
 		   (should (eq (nth 2 steps) #'mevedel-pipeline--step-permission))
@@ -572,15 +573,16 @@
 		   (should (eq (nth 6 steps) #'mevedel-pipeline--step-render-transform))
 		   (should (eq (nth 7 steps) #'mevedel-pipeline--step-specialist-nudges))
 		   (should (eq (nth 8 steps) #'mevedel-pipeline--step-post-tool-hooks))
-		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-attach-render-data))
-		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-media-data)))
+		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 10 steps) #'mevedel-pipeline--step-attach-render-data))
+		   (should (eq (nth 11 steps) #'mevedel-pipeline--step-attach-media-data)))
 		 :doc "includes persist step when max-result-size is set"
 		 (let* ((tool (mevedel-tool--create
 			       :name "WithPersist"
 			       :read-only-p t
 			       :max-result-size 1000))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 12 (length steps)))
+		   (should (= 13 (length steps)))
 		   (should (eq (nth 4 steps)
 			       #'mevedel-pipeline--step-repair-reminder))
 		   (should (eq (nth 5 steps)
@@ -592,6 +594,8 @@
 			       #'mevedel-pipeline--step-post-tool-hooks))
 		   (should (eq (nth 9 steps) #'mevedel-pipeline--step-persist))
 		   (should (eq (nth 10 steps)
+		               #'mevedel-pipeline--step-goal-budget-warning))
+		   (should (eq (nth 11 steps)
 			       #'mevedel-pipeline--step-attach-render-data))
 			   (should (eq (car (last steps))
 			       #'mevedel-pipeline--step-attach-media-data)))
@@ -601,12 +605,26 @@
 			       :read-only-p t
 			       :max-result-size nil))
 			(steps (mevedel-pipeline--build-steps tool)))
-		   (should (= 10 (length steps)))
+		   (should (= 11 (length steps)))
 		   (should-not (memq #'mevedel-pipeline--step-persist steps))
 		   (should (memq #'mevedel-pipeline--step-specialist-nudges steps))
 		   (should (memq #'mevedel-pipeline--step-attach-render-data steps))
 		   (should (memq #'mevedel-pipeline--step-attach-media-data steps))
 		   (should (memq #'mevedel-pipeline--step-post-tool-hooks steps))))
+
+(mevedel-deftest mevedel-pipeline--step-goal-budget-warning ()
+  ,test (test)
+  :doc "appends a model-visible budget warning after the final persisted result"
+  (let (out)
+    (cl-letf (((symbol-function 'mevedel-goal-tool-result-budget-warning)
+               (lambda (_session _fsm) "Wrap up now.")))
+      (mevedel-pipeline--step-goal-budget-warning
+       '(:result "tool output" :session session :fsm fsm)
+       (lambda (context) (setq out context)) #'ignore))
+    (should (string-match-p
+             (regexp-quote
+              "tool output\n\n<system-reminder>\nWrap up now.")
+             (plist-get out :result)))))
 
 
 ;;

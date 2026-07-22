@@ -258,6 +258,16 @@
                             "Provider credits exhausted" "400/1000"
                             "Turns: 3" "Elapsed: 12s" "plans/accepted.md"))
             (should (string-match-p (regexp-quote needle) text))))))))
+  :doc "shows an unbounded Goal budget consistently"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-goal session)
+          (mevedel-goal--create
+           :status 'active :tokens-used 3 :turns-run 0
+           :time-used-seconds 0))
+    (with-current-buffer view-buf
+      (should (string-match-p
+               "Budget: 3 tokens / unbounded"
+               (mevedel-menu--goal-description)))))
 
 (mevedel-deftest mevedel-menu--preset-description ()
   ,test
@@ -403,6 +413,16 @@
                (lambda (&rest args) (setq call args))))
       (mevedel-menu--goal-edit))
     (should (equal (cdr call) '("Revised")))))
+
+(mevedel-deftest mevedel-menu--goal-budget ()
+  ,test (test)
+  :doc "adjusts a Goal budget from prompted input"
+  (let (call)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "12000"))
+              ((symbol-function 'mevedel-menu--goal-call)
+               (lambda (&rest args) (setq call args))))
+      (mevedel-menu--goal-budget))
+    (should (equal (cdr call) '("12000")))))
 
 (mevedel-deftest mevedel-menu--select-preset ()
   ,test

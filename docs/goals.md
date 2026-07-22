@@ -10,7 +10,8 @@ review are ordinary model work.
 The session sidecar stores a strict Goal record containing:
 
 - a unique ID and free-form objective;
-- `active`, `paused`, `blocked`, or `complete` status plus an optional reason;
+- `active`, `paused`, `blocked`, `budget-limited`, or `complete` status plus an
+  optional reason;
 - token, elapsed-time, and turn accounting;
 - an optional token budget and accepted-plan reference; and
 - creation and update timestamps.
@@ -45,7 +46,31 @@ dispatch; transcript prose is never a fallback source of Plan authority.
 
 Child-agent, compaction, and control requests are not Goal turns. A root turn
 captures its Goal identity at request start and charges tokens, wall time, and
-one turn at canonical success or failure settlement.
+one turn at canonical success or failure settlement. Token accounting uses
+normalized provider input plus output usage, excluding cached-input counts,
+with the request estimate as fallback.
+
+## Token budget
+
+The optional token budget is the user-selected runaway bound. Request context
+and the cockpit display bounded usage as used/limit and otherwise say
+`unbounded`. Charging a turn emits one-shot 50%, 80%, and 100% crossing
+reminders. These need no durable reminder ledger because settlement compares
+usage immediately before and after the monotonic charge.
+
+Crossing the limit never aborts an in-flight request or tool. When provider
+usage is already known at a tool-result boundary, the first 100% crossing adds
+one hidden warning asking the model to stop new substantive work and wrap up
+the current response. It does not create a budget-exempt wrap-up turn. At
+settlement, an otherwise-active Goal at or above the limit becomes
+`budget-limited`; a `complete` or `blocked` decision from that turn wins.
+
+`/goal budget <N|none>` replaces or removes the durable limit and queues one
+reminder with the old limit, new limit, usage, remaining tokens, and resulting
+status. Lowering the limit to current usage immediately limits a nonterminal
+Goal. Raising it above usage or removing it from a budget-limited Goal
+reactivates the Goal and schedules continuation behind the ordinary request
+gate.
 
 ## Continuation
 
@@ -89,6 +114,7 @@ persists the final accounting.
 - `/goal <objective>` starts a Goal and schedules its first turn.
 - Bare `/goal` opens the Goal cockpit.
 - `/goal pause` pauses after the current request.
+- `/goal budget <N|none>` replaces or removes the token limit.
 - `/goal edit <objective>` replaces the objective without resetting the run.
 - `/goal resume [steering]` resumes, queueing steering before continuation.
 - `/goal clear` removes Goal state while preserving transcript and artifacts.

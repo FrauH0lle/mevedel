@@ -54,6 +54,7 @@
 (declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
+(declare-function mevedel-goal-set-budget "mevedel-goal" (value))
 (declare-function mevedel-goal-start "mevedel-goal"
                   (objective))
 
@@ -377,7 +378,7 @@
                       (format " — %s" reason) ""))
           (format "Budget: %d%s" (mevedel-goal-tokens-used goal)
                   (if budget (format "/%d tokens" budget)
-                    " tokens / unlimited"))
+                    " tokens / unbounded"))
           (format "Turns: %d · Elapsed: %ds"
                   (mevedel-goal-turns-run goal)
                   (mevedel-goal-time-used-seconds goal))
@@ -661,6 +662,13 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
   (mevedel-menu--goal-call
    #'mevedel-goal-edit (read-string "New Goal objective: ")))
 
+(defun mevedel-menu--goal-budget ()
+  "Prompt for and replace the current Goal token budget."
+  (interactive)
+  (mevedel-menu--goal-call
+   #'mevedel-goal-set-budget
+   (read-string "Goal token budget (positive integer or none): ")))
+
 (defun mevedel-menu--select-preset ()
   "Select and apply a preset to the current session only."
   (interactive)
@@ -882,6 +890,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
                      (mevedel-menu--goal-call #'mevedel-goal-pause))
      :inapt-if-not mevedel-menu--goal-active-p)
     ("e" "Edit objective" mevedel-menu--goal-edit
+     :inapt-if-not mevedel-menu--current-goal)
+    ("b" "Set budget" mevedel-menu--goal-budget
      :inapt-if-not mevedel-menu--current-goal)
     ("r" "Resume" (lambda () (interactive)
                       (mevedel-menu--goal-call #'mevedel-goal-resume))
