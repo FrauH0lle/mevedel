@@ -3181,7 +3181,7 @@ missing or zero prompt-side usage cannot become the active baseline"
 (mevedel-deftest mevedel--compact-apply ()
   ,test
   (test)
-  :doc "rotates the persisted segment and includes hook audits"
+  :doc "rotates without carrying Goal state and includes hook audits"
   (let* ((tempdir (make-temp-file "mevedel-compact-apply-" t))
          (workspace (mevedel-workspace-get-or-create
                      'project "compact-apply" tempdir "compact-apply"))
@@ -3203,6 +3203,11 @@ missing or zero prompt-side usage cannot become the active baseline"
             (put-text-property begin (point) 'gptel
                                '(tool . "archived-call")))
           (setq-local mevedel--session session)
+          (setf (mevedel-session-goal session)
+                (mevedel-goal--create
+                 :id "goal-compact" :objective "Finish the work"
+                 :status 'active :tokens-used 0 :time-used-seconds 0
+                 :turns-run 0))
           (mevedel-session-persistence-ensure-files session buffer)
           (let* ((plan
                   (mevedel-view-stream-prepare-execution-row-archive
@@ -3227,6 +3232,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                                          'gptel (buffer-string))))
           (should (string-match-p "tail" (buffer-string)))
           (should (string-match-p "pending\n\\'" (buffer-string)))
+          (should-not (mevedel-session-pending-reminders session))
           (let* ((ids
                   (mevedel--compact-archived-tool-use-ids
                    (point-min) (point-max)))
@@ -3740,7 +3746,16 @@ missing or zero prompt-side usage cannot become the active baseline"
     (should (string-match-p "Create a new anchored summary" prompt))
     (should (string-match-p "## Skills Invoked" prompt))
     (should (string-match-p "- (none)" prompt))
-    (should (string-match-p "Do NOT call any tools" prompt)))
+    (should (string-match-p "Do NOT call any tools" prompt))
+    (should (string-match-p "unresolved user requests" prompt))
+    (should (string-match-p "actionable next steps" prompt))
+    (should (string-match-p
+             "satisfied user request only as its resulting current state"
+             prompt))
+    (should (string-match-p "repeat the original" prompt))
+    (should (string-match-p "standing instruction" prompt))
+    (should (string-match-p
+             "Do not summarize Goal lifecycle state" prompt)))
 
   :doc "updates with previous summary and manual instructions"
   (let ((prompt (mevedel--compact-prompt "old summary" "focus tests" nil)))
@@ -3748,6 +3763,8 @@ missing or zero prompt-side usage cannot become the active baseline"
     (should (string-match-p "previous summary is authoritative retained context" prompt))
     (should (string-match-p "Do NOT replace it with only the recent conversation" prompt))
     (should (string-match-p "Do not discard previous-summary details" prompt))
+    (should (string-match-p
+             "Retire satisfied requests from the previous summary" prompt))
     (should (string-match-p "<previous-summary>" prompt))
     (should (string-match-p "old summary" prompt))
     (should (string-match-p "## Additional Instructions" prompt))

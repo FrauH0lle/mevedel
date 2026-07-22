@@ -50,6 +50,13 @@ one turn at canonical success or failure settlement. Token accounting uses
 normalized provider input plus output usage, excluding cached-input counts,
 with the request estimate as fallback.
 
+Compaction does not copy Goal state into summaries or segment snapshots and
+does not queue a static Goal reminder. Ordinary steering remains ordinary
+conversation history: unresolved requests may survive as actionable summary
+steps, while satisfied requests retire to outcome or evidence under completed
+work. Fresh request-local Goal context remains the only model-visible Goal
+authority.
+
 ## Token budget
 
 The optional token budget is the user-selected runaway bound. Request context

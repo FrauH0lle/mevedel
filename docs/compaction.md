@@ -303,20 +303,22 @@ kept, stale or contradicted details removed, and new facts merged in.
 This is important because older segment contents are no longer present
 in the model-visible prompt except through the previous summary.
 
+User messages remain ordinary conversation history. Unresolved requests are
+retained as actionable next steps; once the history shows a request is
+satisfied, later summaries retain only its resulting state, outcome, or
+evidence under completed work. This rule also applies when updating an older
+summary, so repeated compaction cannot revive completed steering as a standing
+instruction. There is no separate carry-forward path for raw or injected user
+messages. Recent-tail preservation is unchanged.
+
 Skill invocation records from the session are appended to the prompt so
 summaries can preserve user-side and model-side skill usage.
 
-When a session owns a Goal, every new segment begins with a
-`<goal-context authority="compaction-snapshot">` pointer block generated
-directly from the persisted Goal sidecar. It records the compaction-time
-objective, lifecycle state, policy, artifact pointers, budget, and execution
-home before the summary and preserved tail. Segment rotation regenerates this
-snapshot on every compaction; it is orientation, not later lifecycle truth.
-Every phase request carries a fresh `authority="session-sidecar"` fragment,
-which supersedes earlier snapshots. Neither the summary nor transcript prose
-is parsed to reconstruct Goal state. The anchored summary remains working
-memory for discoveries, constraints, decisions, progress, evidence, and next
-steps.
+Compaction neither snapshots Goal state into the segment nor queues a static
+Goal reminder. The durable Goal record remains the sole authority and is
+rendered only as fresh request-local context. Summaries may retain discoveries,
+constraints, decisions, progress, evidence, and unresolved next steps, but not
+Goal lifecycle state.
 
 ## Tail preservation
 
