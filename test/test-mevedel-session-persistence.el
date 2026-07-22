@@ -761,6 +761,30 @@ ROOT is a temporary directory owned and cleaned up by the caller."
          (session (plist-get result :session)))
     (should (equal metadata (mevedel-session-plan-metadata session))))
 
+  :doc "preserves a prepared standalone Plan Worktree target"
+  (let* ((retry
+          '(:step submit
+            :selection (:location worktree :context fresh
+                        :execution direct :mode full-auto
+                        :branch "plan/topic")
+            :accepted-path "plans/source.md"
+            :accepted-absolute-path "/tmp/source/plans/source.md"
+            :accepted-hash "abc"
+            :target-directory "/tmp/repo/.worktrees/topic/"
+            :target-save-path "/tmp/repo/.mevedel/target/"
+            :target-session-id "target-id"
+            :target-accepted-path "plans/accepted.md"
+            :target-accepted-absolute-path
+            "/tmp/repo/.mevedel/target/plans/accepted.md"
+            :target-accepted-hash "abc"))
+         (metadata (list :status 'accepted :implementation-retry retry))
+         (result
+          (mevedel-session-persistence-deserialize
+           (test-mevedel-session-persistence--complete-sidecar
+            (list :plan-metadata metadata))))
+         (session (plist-get result :session)))
+    (should (equal metadata (mevedel-session-plan-metadata session))))
+
   :doc "preserves automatic revision metadata and compact cycle audit evidence"
   (let* ((input-hash (secure-hash 'sha256 "# Original"))
          (replacement-hash (secure-hash 'sha256 "# Revised"))
