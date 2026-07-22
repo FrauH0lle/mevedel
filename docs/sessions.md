@@ -93,6 +93,18 @@ selected context and permission mode, and the first incomplete step for
 handoff, so retry repeats neither a finished Fresh rotation nor a successful
 summary request.  The record is cleared only after request startup.
 
+Plan approval can instead select Worktree/Fresh.  Before acceptance, `RET`
+collects and validates the branch name; cancelling the minibuffer leaves the
+approval pending.  A dirty source checkout remains eligible, but the approval
+warns that the linked worktree starts at `HEAD` and excludes uncommitted
+changes.  Preparation never copies, stashes, or applies those changes.
+The source keeps its approval archive, permission mode, and durable retry
+record.  The new session inherits the source preset and model settings, gets
+the selected permission mode, and owns a byte-identical immutable accepted
+artifact.  Completed Worktree creation and target-artifact steps are recorded
+by target session identity and path, so retry restores that same target and
+does not create another worktree, session, or artifact.
+
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted
 to restore a session. See [`telemetry.md`](telemetry.md) for the event schema,

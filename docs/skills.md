@@ -148,6 +148,9 @@ Worktree isolation has split surfaces:
 - `/worktree create [NAME] [--for "purpose"] [--clean]`
   creates a new branch and linked checkout under `.worktrees/`, opens a
   fresh session there, and does not auto-send a model prompt.
+- Standalone Plan approval can select Worktree/Fresh. It validates the branch
+  before acceptance and then reuses the same worktree-session creation path;
+  dirty source changes remain only in the source checkout.
 - `git-worktree` is model-visible but not user-invocable. It embeds
   best-effort read-only Git detection and tells the model how to mirror
   `/worktree` defaults when the user explicitly requested isolation.
