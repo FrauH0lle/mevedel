@@ -524,28 +524,28 @@ missing or zero prompt-side usage cannot become the active baseline"
   (with-temp-buffer
     (insert "abcdefgh")
     (put-text-property 5 9 'gptel 'ignore)
-    (let ((mevedel--known-token-baseline
-           (list :source 'provider-context
-                 :provider-context-usage '(:input 18 :output 3)
-                 :cumulative-usage '(:input 20 :output 5)
-                 :provider-context-tokens 21
-                 :cumulative-usage-tokens 25
-                 :provider-context-status 'valid
-                 :fresh-visible-prompt-estimate 2
-                 :model 'provider-model
-                 :model-context-window 900
-                 :position (copy-marker 5))))
+    (let* ((target-model (make-symbol "model"))
+           (mevedel--known-token-baseline
+            (list :source 'provider-context
+                  :provider-context-usage '(:input 18 :output 3)
+                  :cumulative-usage '(:input 20 :output 5)
+                  :provider-context-tokens 21
+                  :cumulative-usage-tokens 25
+                  :provider-context-status 'valid
+                  :fresh-visible-prompt-estimate 2
+                  :model 'provider-model
+                  :model-context-window 900
+                  :position (copy-marker 5))))
+      (put target-model :context-window 1)
       (cl-letf (((symbol-function 'mevedel--compact-workload-policy)
                  (lambda () '(:kind summary)))
                 ((symbol-function 'mevedel--compact-policy-threshold-tokens)
                  (lambda (policy)
                    (if (eq (plist-get policy :kind) 'summary) 80 90)))
-                ((symbol-function 'mevedel--model-context-window)
-                 (lambda (_) 1000))
                 ((symbol-function 'mevedel--compact-estimate-buffer-tokens)
                  (lambda (_) 2)))
         (let ((facts (mevedel--compact-telemetry-inputs
-                      25 '(:model model :kind target))))
+                      25 (list :model target-model :kind 'target))))
           (should (= 21 (plist-get facts :provider-context-tokens)))
           (should (= 25 (plist-get facts :cumulative-usage-tokens)))
           (should (equal '(:input 18 :output 3)
@@ -557,7 +557,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                       (plist-get facts :provider-context-model)))
           (should (= 900 (plist-get facts :provider-context-window)))
           (should (eq 'provider-context (plist-get facts :chosen-source)))
-          (should (eq 'model (plist-get facts :target-model)))
+          (should (eq target-model (plist-get facts :target-model)))
           (should (= 2 (plist-get facts :fresh-visible-prompt-estimate)))
           (should (= 80 (plist-get facts :threshold)))
           (should (= 1000 (plist-get facts :model-context-window)))
