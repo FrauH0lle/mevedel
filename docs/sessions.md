@@ -122,7 +122,9 @@ uses the short Goal implementation label.
 The source retry record is the durable handoff reservation. Its preallocated
 Goal ID plus the target accepted-plan reference identify a construction that
 survived a crash, allowing retry to reuse it without duplicating the Goal. A
-different unfinished target Goal remains a conflict. Worktree targets persist
+different unfinished target Goal remains a conflict. A matching Goal restored
+as paused is reactivated without scheduling; the surviving Plan handoff still
+owns the explicit kickoff. Worktree targets keep
 a temporary copy of the kickoff reservation so target input queues locally;
 source input stays in the source session. Here input likewise queues behind the
 kickoff. If kickoff startup fails after Plan recovery is cleared, the target

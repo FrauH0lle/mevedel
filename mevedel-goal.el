@@ -3,17 +3,16 @@
 ;;; Commentary:
 
 ;; Owns the phase-free Goal record, request-local context, root-turn
-;; attribution, deterministic idle continuation, and the shared single Plan
-;; approval interaction.  Planning and review are ordinary conversation work;
-;; only UpdateGoal may mark an active Goal complete or blocked.
+;; attribution, and deterministic idle continuation.  Planning and review are
+;; ordinary conversation work; only UpdateGoal may mark an active Goal
+;; complete or blocked.
 
 ;;; Code:
 
-(require 'cl-lib)
-(require 'subr-x)
-
 (eval-when-compile
-  (require 'mevedel-structs))
+  (require 'cl-lib)
+  (require 'mevedel-structs)
+  (require 'subr-x))
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
@@ -28,21 +27,17 @@
                   "mevedel-chat" (prompt &optional display-text
                                           prompt-submission))
 
-;; `mevedel-interaction-prompt'
-(declare-function mevedel--prompt--settle
-                  "mevedel-interaction-prompt" (overlay outcome))
-
 ;; `mevedel-plan'
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
-
-;; `mevedel-queue'
-(declare-function mevedel-queue--current-session "mevedel-queue" ())
-(declare-function mevedel-queue--unregister-entry-interaction
-                  "mevedel-queue" (entry))
 
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
+
+;; `mevedel-structs'
+(defvar mevedel--current-request)
+(defvar mevedel--session)
+(defvar mevedel--view-buffer)
 
 ;; `mevedel-system'
 (declare-function mevedel-system-render-prompt-file
@@ -52,22 +47,17 @@
 (declare-function mevedel-telemetry-record
                   "mevedel-telemetry" (session event &rest props))
 
-;; `mevedel-view-composer'
-(declare-function mevedel-view--run-queued-user-message-drain
-                  "mevedel-view-composer" (data-buffer))
-
 ;; `mevedel-tools'
 (declare-function mevedel-tools--buffer-local-agent-invocation
                   "mevedel-tools" (buffer))
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view--run-queued-user-message-drain
+                  "mevedel-view-composer" (data-buffer))
+
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view-interaction-pending-p
                   "mevedel-view-interaction" (&optional view-buffer))
-(defvar mevedel--view-buffer)
-
-;; `mevedel-structs'
-(defvar mevedel--current-request)
-(defvar mevedel--session)
 
 
 ;;
@@ -80,11 +70,6 @@
   :group 'mevedel)
 
 (make-variable-buffer-local 'mevedel-goal-token-budget)
-
-(defcustom mevedel-goal-max-transient-retries 1
-  "Number of automatic retries after a transient Goal turn failure."
-  :type 'natnum
-  :group 'mevedel)
 
 (defconst mevedel-goal--continuation-trigger
   "Continue working toward the active Goal."
@@ -100,7 +85,7 @@
 ;;
 ;;; Durable record
 
-(defun mevedel-goal--new-id ()
+(defun mevedel-goal-new-id ()
   "Return a fresh versioned Goal identifier."
   (format "%s-%06x" (format-time-string "%Y%m%d-%H%M%S")
           (random #x1000000)))
@@ -138,7 +123,7 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
     (error "Goal token budget must be a positive integer or nil"))
   (let* ((now (format-time-string "%FT%T%z"))
          (goal (mevedel-goal--create
-                :id (or id (mevedel-goal--new-id))
+                :id (or id (mevedel-goal-new-id))
                 :objective objective
                 :status 'active
                 :token-budget mevedel-goal-token-budget
@@ -154,6 +139,29 @@ session-relative accepted-plan artifact.  ID may preallocate the Goal identity."
     (when (fboundp 'mevedel-telemetry-record)
       (mevedel-telemetry-record session 'goal-start :goal-id (mevedel-goal-id goal)))
     goal))
+
+(defun mevedel-goal-ensure (objective session plan-reference id)
+  "Return the durable Goal identified by ID and PLAN-REFERENCE in SESSION.
+Create it for OBJECTIVE when absent.  A matching Goal restored as paused is
+reactivated without scheduling because its caller owns the prepared kickoff."
+  (let ((current (mevedel-session-goal session)))
+    (cond
+     ((and current
+           (equal id (mevedel-goal-id current))
+           (equal plan-reference (mevedel-goal-plan-reference current)))
+      (unless (memq (mevedel-goal-status current) '(active paused))
+        (error "Reserved Goal %s has terminal status %s"
+               id (mevedel-goal-status current)))
+      (setf (mevedel-goal-status current) 'active
+            (mevedel-goal-reason current) nil)
+      (mevedel-goal--touch current)
+      (mevedel-goal--persist session (current-buffer))
+      current)
+     ((and current (not (eq (mevedel-goal-status current) 'complete)))
+      (error "Target session has unfinished Goal %s; expected reserved Goal %s for %s"
+             (mevedel-goal-id current) id plan-reference))
+     (t
+      (mevedel-goal-create objective session plan-reference id)))))
 
 (defun mevedel-goal--current ()
   "Return the current session Goal or signal `user-error'."
@@ -431,7 +439,7 @@ The string `none' removes the limit."
   (setq objective (mevedel-goal--validate-objective objective))
   (let* ((session mevedel--session)
          (goal (mevedel-goal--current)))
-    (setf (mevedel-goal-id goal) (mevedel-goal--new-id)
+    (setf (mevedel-goal-id goal) (mevedel-goal-new-id)
           (mevedel-goal-objective goal) objective)
     (mevedel-goal--touch goal)
     (mevedel-session-enqueue-pending-reminder
@@ -533,8 +541,12 @@ BEFORE is the durable usage before the charge."
           (mevedel-session-enqueue-pending-reminder
            session
            (format
-            "Goal token budget crossed %d%%: %d/%d tokens used; %d remain."
-            percentage after budget (max 0 (- budget after))))))
+            "Goal token budget crossed %d%%: %d/%d tokens used; %d remain. %s"
+            percentage after budget (max 0 (- budget after))
+            (pcase percentage
+              (50 "Prioritize the remaining requirements.")
+              (80 "Reassess the remaining work and avoid low-value detours.")
+              (_ "Stop new substantive work and wrap up the current response."))))))
       (plist-put info :mevedel-goal-budget-warnings warned)
       (setf (gptel-fsm-info fsm) info))))
 
@@ -637,8 +649,7 @@ BEFORE is the durable usage before the charge."
       (when (eq (mevedel-goal-status goal) 'active)
         (let ((reason (mevedel-goal--fsm-failure-reason fsm status)))
           (if (and (mevedel-goal--transient-failure-p reason)
-                   (< mevedel-goal--transient-retries
-                      mevedel-goal-max-transient-retries))
+                   (< mevedel-goal--transient-retries 1))
               (cl-incf mevedel-goal--transient-retries)
             (setf (mevedel-goal-status goal) 'paused
                   (mevedel-goal-reason goal) reason)
@@ -662,82 +673,6 @@ BEFORE is the durable usage before the charge."
     (with-current-buffer buffer
       (mevedel-goal--schedule-continuation mevedel--session buffer))))
 
-(defun mevedel-goal-dispatch-after-failure (fsm)
-  "Schedule a permitted Goal retry after failed FSM teardown."
-  (mevedel-goal-dispatch-after-turn fsm))
-
-
-;;
-;;; Shared single Plan approval interaction
-
-(defun mevedel-plan-approval--current-session ()
-  "Resolve the session that owns the pending Plan approval."
-  (mevedel-queue--current-session))
-
-(defun mevedel-plan-approval--deliver (entry outcome phase &optional retain)
-  "Deliver OUTCOME to ENTRY during PHASE.
-When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
-  (condition-case err
-      (progn
-        (when-let* ((callback (plist-get entry :callback)))
-          (funcall callback outcome))
-        (mevedel-queue--unregister-entry-interaction entry)
-        t)
-    (error
-     (display-warning 'mevedel
-                      (format "Plan approval %s callback error: %S" phase err)
-                      :warning)
-     (unless retain (mevedel-queue--unregister-entry-interaction entry))
-     nil)))
-
-(defun mevedel-plan-approval-present (entry &optional session)
-  "Replace SESSION's pending Plan approval with ENTRY and render it."
-  (let ((session (or session (mevedel-plan-approval--current-session))))
-    (if (not session)
-        (mevedel-plan-approval--deliver entry 'aborted "no-session")
-      (setq entry (plist-put (copy-sequence entry) :session session))
-      (when-let* ((previous (mevedel-session-pending-plan-approval session)))
-        (setf (mevedel-session-pending-plan-approval session) nil)
-        (mevedel-plan-approval--deliver previous 'superseded "supersede"))
-      (setf (mevedel-session-pending-plan-approval session) entry)
-      (mevedel-plan-approval-render session))))
-
-(defun mevedel-plan-approval-render (&optional session)
-  "Render SESSION's pending Plan approval."
-  (when-let* ((session (or session (mevedel-plan-approval--current-session)))
-              (entry (mevedel-session-pending-plan-approval session)))
-    (condition-case err
-        (if-let* ((renderer (plist-get entry :renderer)))
-            (funcall renderer entry)
-          (error "Plan approval has no renderer"))
-      (error
-       (display-warning 'mevedel
-                        (format "Plan approval render error: %S" err)
-                        :warning)
-       (mevedel-plan-approval-abort session)))))
-
-(defun mevedel-plan-approval-settle (entry outcome)
-  "Settle pending Plan approval ENTRY with OUTCOME."
-  (let* ((session (plist-get entry :session))
-         (pending (and session
-                       (mevedel-session-pending-plan-approval session))))
-    (when (and (proper-list-p outcome)
-               (plist-get outcome :accept)
-               (mevedel-session-queued-user-messages session))
-      (user-error "Resolve queued messages before implementing the plan"))
-    (if (not (eq entry pending))
-        (display-warning 'mevedel
-                         "Plan approval: stale settlement ignored" :warning)
-      (when (mevedel-plan-approval--deliver entry outcome "settle" t)
-        (when (eq entry (mevedel-session-pending-plan-approval session))
-          (setf (mevedel-session-pending-plan-approval session) nil))))))
-
-(defun mevedel-plan-approval-abort (&optional session outcome)
-  "Settle SESSION's pending Plan approval with OUTCOME or `aborted'."
-  (when-let* ((session (or session (mevedel-plan-approval--current-session)))
-              (entry (mevedel-session-pending-plan-approval session)))
-    (setf (mevedel-session-pending-plan-approval session) nil)
-    (mevedel-plan-approval--deliver entry (or outcome 'aborted) "abort")))
 
 
 (provide 'mevedel-goal)

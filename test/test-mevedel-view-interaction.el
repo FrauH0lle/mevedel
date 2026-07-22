@@ -845,6 +845,12 @@
                 (list :body "# Plan"
                             :chat-buffer data-buf
                             :session session
+                            :renderer
+                            (lambda (entry)
+                              (mevedel-view--interaction-register
+                               (list :kind 'plan :id 'plan
+                                     :entry entry :activate #'ignore
+                                     :body "# Plan")))
                             :callback
                             (lambda (outcome)
                               (push outcome plan-outcomes))))

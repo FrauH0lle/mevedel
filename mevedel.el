@@ -52,6 +52,7 @@
 (require 'mevedel-models)
 (require 'mevedel-telemetry)
 (require 'mevedel-plan)
+(require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-sandbox)

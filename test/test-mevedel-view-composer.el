@@ -2391,11 +2391,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
          (mevedel-session--create
           :name "target"
           :plan-metadata '(:implementation-goal-id "target-goal"))))
-    (should (equal "here-goal"
-                   (mevedel-view--reserved-goal-handoff-id here)))
-    (should-not (mevedel-view--reserved-goal-handoff-id source))
-    (should (equal "target-goal"
-                   (mevedel-view--reserved-goal-handoff-id target)))
     (should (mevedel-view--queued-user-message-auto-drain-blocked-p here))
     (should-not
      (mevedel-view--queued-user-message-auto-drain-blocked-p source))

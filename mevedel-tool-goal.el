@@ -9,18 +9,17 @@
 
 (eval-when-compile
   (require 'mevedel-tool-registry)
-  (require 'mevedel-structs))
-
-(require 'subr-x)
+  (require 'mevedel-structs)
+  (require 'subr-x))
 
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
-;; `mevedel-tools'
-(defvar mevedel-tools--current-fsm)
-
 ;; `mevedel-structs'
 (defvar mevedel--session)
+
+;; `mevedel-tools'
+(defvar mevedel-tools--current-fsm)
 
 (defun mevedel-tool-goal-update
     (status summary &optional session captured-id)

@@ -267,25 +267,5 @@ Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
      session current accepted skip-verification)
     (list :current current :accepted accepted)))
 
-(defun mevedel-plan-implementation-input
-    (context current-artifact permission-mode goal-context)
-  "Return a validated implementation input plist.
-CONTEXT is `full' or `focused', CURRENT-ARTIFACT is returned by
-`mevedel-plan-write-current', PERMISSION-MODE is the implementation permission
-mode.  GOAL-CONTEXT is the authoritative persisted lifecycle fragment."
-  (unless (memq context '(full focused))
-    (error "Unknown implementation context: %s" context))
-  (unless (memq permission-mode '(ask auto full-auto))
-    (error "Unknown implementation permission mode: %s" permission-mode))
-  (unless (and (stringp goal-context) (not (string-blank-p goal-context)))
-    (error "Implementation requires Goal context"))
-  (let ((path (plist-get current-artifact :absolute-path)))
-    (unless (and path (file-exists-p path))
-      (error "Current plan artifact does not exist"))
-    (list :context context
-          :plan-file path
-          :permission-mode permission-mode
-          :goal-context goal-context)))
-
 (provide 'mevedel-plan)
 ;;; mevedel-plan.el ends here

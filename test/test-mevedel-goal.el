@@ -55,6 +55,36 @@
                       :type 'user-error))
       (should-not (mevedel-session-goal session)))))
 
+(mevedel-deftest mevedel-goal-ensure
+  (:doc "reactivates only the matching reserved Goal without scheduling")
+  (let* ((goal (mevedel-goal--create
+                :id "reserved" :status 'paused :reason "session resumed"
+                :plan-reference "plans/accepted.md"))
+         (session (mevedel-session--create :name "target" :goal goal))
+         saved scheduled)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-session-persistence-save)
+                 (lambda (&rest _) (setq saved t)))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest _) (setq scheduled t)))
+                ((symbol-function 'mevedel-goal-create)
+                 (lambda (&rest _) (ert-fail "Constructed duplicate Goal"))))
+        (should
+         (eq goal
+             (mevedel-goal-ensure
+              "Objective" session "plans/accepted.md" "reserved")))))
+    (should saved)
+    (should-not scheduled)
+    (should (eq 'active (mevedel-goal-status goal)))
+    (should-not (mevedel-goal-reason goal))
+    (setf (mevedel-goal-plan-reference goal) "plans/other.md")
+    (should-error
+     (with-temp-buffer
+       (mevedel-goal-ensure
+        "Objective" session "plans/accepted.md" "reserved")))
+    (should (eq goal (mevedel-session-goal session)))))
+
 (mevedel-deftest mevedel-goal-active-context
   (:doc "pauses and persists before dispatch when an accepted plan mutates")
   (progn
@@ -227,6 +257,12 @@
                                                reminder)
                                  (match-string 1 reminder)))
                           (mevedel-session-pending-reminders session))))
+          (should (string-match-p
+                   "Prioritize the remaining requirements"
+                   (nth 0 (mevedel-session-pending-reminders session))))
+          (should (string-match-p
+                   "avoid low-value detours"
+                   (nth 1 (mevedel-session-pending-reminders session))))
           (mevedel-goal-settle-turn
            (gptel-make-fsm
             :info (list :buffer buffer :mevedel-goal-id "goal-2"
@@ -455,7 +491,7 @@
           (should (equal "goal-1" (mevedel-goal-id goal)))
           (cl-letf (((symbol-function 'mevedel-session-persistence-save)
                      (lambda (&rest _) (setq saved t)))
-                    ((symbol-function 'mevedel-goal--new-id)
+                    ((symbol-function 'mevedel-goal-new-id)
                      (lambda () "goal-2"))
                     ((symbol-function 'mevedel-goal-active-context)
                      (lambda (_session) "updated context"))

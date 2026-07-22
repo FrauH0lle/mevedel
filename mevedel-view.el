@@ -46,10 +46,6 @@
 (declare-function mevedel-executions-list-open
                   "mevedel-executions-list" (&optional context))
 
-;; `mevedel-goal'
-(declare-function mevedel-plan-approval-abort
-                  "mevedel-goal" (&optional session outcome))
-
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
 (declare-function mevedel-menu-open "mevedel-menu" (area))
@@ -61,6 +57,10 @@
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-abort-all
                   "mevedel-permission-queue" (&optional session))
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-plan-mode" (&optional session outcome))
 
 ;; `mevedel-sandbox'
 (declare-function mevedel-sandbox-status-text "mevedel-sandbox" (facts))

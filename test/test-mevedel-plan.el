@@ -238,30 +238,5 @@
                              (plist-get accepted :path))))))
       (delete-directory save-dir t))))
 
-(mevedel-deftest mevedel-plan-implementation-input
-  (:doc "builds and validates explicit implementation input")
-  ,test
-  (test)
-  (let ((path (make-temp-file "mevedel-plan-input-")))
-    (unwind-protect
-        (let ((input
-               (mevedel-plan-implementation-input
-                'focused (list :absolute-path path)
-                'auto "Goal ID: g1")))
-          (should (equal 'focused (plist-get input :context)))
-          (should (equal path (plist-get input :plan-file)))
-          (should (equal 'auto
-                         (plist-get input :permission-mode)))
-          (should-error
-           (mevedel-plan-implementation-input
-            'unknown (list :absolute-path path) 'ask "Goal ID: g1"))
-          (should-error
-           (mevedel-plan-implementation-input
-            'focused (list :absolute-path path) 'ask nil))
-          (should-error
-           (mevedel-plan-implementation-input
-            'full (list :absolute-path path) 'ask nil)))
-      (delete-file path))))
-
 (provide 'test-mevedel-plan)
 ;;; test-mevedel-plan.el ends here

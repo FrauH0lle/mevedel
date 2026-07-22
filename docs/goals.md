@@ -61,9 +61,11 @@ authority.
 
 The optional token budget is the user-selected runaway bound. Request context
 and the cockpit display bounded usage as used/limit and otherwise say
-`unbounded`. Charging a turn emits one-shot 50%, 80%, and 100% crossing
-reminders. These need no durable reminder ledger because settlement compares
-usage immediately before and after the monotonic charge.
+`unbounded`. Charging a turn emits one-shot crossing reminders: at 50% the
+model should prioritize the remaining requirements, at 80% it should reassess
+the remaining work and avoid low-value detours, and at 100% it should stop new
+substantive work and wrap up. These need no durable reminder ledger because
+settlement compares usage immediately before and after the monotonic charge.
 
 Crossing the limit never aborts an in-flight request or tool. When provider
 usage is already known at a tool-result boundary, the first 100% crossing adds
@@ -151,6 +153,8 @@ holds the same kickoff reservation locally. Recovery reuses completed summary,
 segment, Worktree, settings, mode, artifact, and Goal construction steps. A
 durable Goal is recognized only by the reserved ID together with its accepted
 plan reference, so an unrelated unfinished target Goal is never overwritten.
+A matching Goal restored as paused after a crash is reactivated without
+scheduling; the still-owned Plan handoff supplies its one explicit kickoff.
 
 After durable construction, Plan recovery is cleared before the explicit
 kickoff. If startup then fails, the Goal is paused with the concrete error and

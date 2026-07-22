@@ -18,10 +18,6 @@
 (declare-function mevedel-agent-invocation-parent-data-buffer
 		  "mevedel-agents" (cl-x) t)
 
-;; `mevedel-goal'
-(declare-function mevedel-plan-approval-render "mevedel-goal"
-		  (&optional session))
-
 ;; `mevedel-interaction-prompt'
 (defvar mevedel--prompt-overlays)
 
@@ -33,6 +29,10 @@
 (declare-function mevedel-permission-mode-effective
 		  "mevedel-permissions"
 		  (&optional session data-buffer surface-buffer))
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-render "mevedel-plan-mode"
+		  (&optional session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-pending-plan-approval
@@ -464,7 +464,7 @@ This deletes only interaction UI overlays and never settles callbacks."
     (mevedel-view--interaction-clear-for-rebuild)
     (when-let* ((session (mevedel-view--session)))
       (when (mevedel-session-pending-plan-approval session)
-        (require 'mevedel-goal)
+        (require 'mevedel-plan-mode)
         (mevedel-plan-approval-render session))
       (when (mevedel-session-permission-queue session)
         (require 'mevedel-permission-queue)

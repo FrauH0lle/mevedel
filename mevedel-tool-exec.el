@@ -82,10 +82,6 @@
                   "mevedel-permission-prompt"
                   (content cont &optional count entry))
 
-;; `mevedel-plan-mode'
-(declare-function mevedel-plan-mode-active-p
-                  "mevedel-plan-mode" (&optional session))
-
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
                   (entry &optional session))
@@ -131,6 +127,10 @@
                   "mevedel-permissions" ())
 (defvar mevedel-permission-mode)
 (defvar mevedel-permission-rules)
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-active-p
+                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--tool-results-dir
