@@ -45,11 +45,8 @@
 (defvar mevedel--pending-model-input)
 
 ;; `mevedel-goal'
-(declare-function mevedel-goal-approval-request-pending-p
-		  "mevedel-goal" (&optional session))
 (declare-function mevedel-goal-start "mevedel-goal"
-		  (objective &optional display-text approval-policy
-			     submission))
+		  (objective &optional prompt-submission))
 
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-additional-context-string
@@ -189,7 +186,6 @@
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-begin "mevedel-structs"
 		  (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" nil)
@@ -1122,9 +1118,7 @@ means a failed attempt leaves the exact source attached for a retry."
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (or (mevedel-session-pending-plan-approval sess)
-        (and (fboundp 'mevedel-goal-approval-request-pending-p)
-             (mevedel-goal-approval-request-pending-p sess)))))
+    (mevedel-session-pending-plan-approval sess)))
 
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
@@ -1189,9 +1183,9 @@ prompt hook when the queue drains."
                     :submission submission
                     :dropped-file-grants dropped-file-grants
                     :queued-at-time (float-time)
-                    :queued-at-goal-phase
+                    :queued-at-goal-id
                     (and (mevedel-session-goal session)
-                         (mevedel-goal-phase
+                         (mevedel-goal-id
                           (mevedel-session-goal session)))
                     :queued-at-turn
                     (or (mevedel-session-turn-count session) 0))))
@@ -1206,7 +1200,7 @@ prompt hook when the queue drains."
            :message-hash (secure-hash 'sha256 input)
            :message-chars (length input)
            :queue-depth (length (mevedel-view--queued-user-messages session))
-           :enqueue-phase (plist-get entry :queued-at-goal-phase)))
+           :enqueue-goal-id (plist-get entry :queued-at-goal-id)))
         (mevedel-view-history-add input)
         (when (equal-including-properties (mevedel-view--input-text) input)
           (mevedel-view--clear-input))
@@ -1761,13 +1755,8 @@ fork."
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (let ((slash-parsed (mevedel-skills--parse-slash-line input)))
-      (if (or (buffer-local-value 'mevedel--current-request
-                                  mevedel--data-buffer)
-              (with-current-buffer mevedel--data-buffer
-                (and (fboundp 'mevedel-goal-approval-request-pending-p)
-                     (mevedel-goal-approval-request-pending-p
-                      (and (bound-and-true-p mevedel--session)
-                           mevedel--session)))))
+      (if (buffer-local-value 'mevedel--current-request
+                              mevedel--data-buffer)
           (if (and slash-parsed
                    (mevedel-skills-local-command-active-request-p
                     (nth 0 slash-parsed) (nth 1 slash-parsed)))
@@ -1834,11 +1823,7 @@ fork."
 INPUT is the original composer text, including the slash command."
   (let* ((view-buffer (current-buffer))
          (data-buffer mevedel--data-buffer)
-         (parts (split-string args "[ \t\n]+" t))
-         (automatic (equal (car parts) "auto"))
-         (objective (if automatic
-                        (string-join (cdr parts) " ")
-                      args)))
+         (objective args))
     (when (string-blank-p objective)
       (user-error "Goal objective must not be blank"))
     (mevedel-view--run-prompt-submit-hook
@@ -1853,10 +1838,7 @@ INPUT is the original composer text, including the slash command."
          (with-current-buffer data-buffer
            (require 'mevedel-goal)
            (mevedel-goal-start
-            (mevedel-prompt-submission-input submission)
-            (mevedel-prompt-submission-input submission)
-            (if automatic 'automatic 'supervised)
-            submission)))))))
+            (mevedel-prompt-submission-input submission) submission)))))))
 
 (defun mevedel-view--fork-if-pending ()
   "Materialize the fork if the data buffer is in rewind preview state.
@@ -2178,11 +2160,11 @@ removed only when the resulting prompt reaches its transcript commit boundary."
                                      (- (float-time)
                                         (plist-get entry
                                                    :queued-at-time)))))
-                            :enqueue-phase
-                            (plist-get entry :queued-at-goal-phase)
-                            :dequeue-phase
+                            :enqueue-goal-id
+                            (plist-get entry :queued-at-goal-id)
+                            :dequeue-goal-id
                             (and (mevedel-session-goal session)
-                                 (mevedel-goal-phase
+                                 (mevedel-goal-id
                                   (mevedel-session-goal session)))))
                          (when (eq entry
                                    (car (mevedel-view--queued-user-messages

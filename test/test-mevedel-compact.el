@@ -1823,14 +1823,18 @@ missing or zero prompt-side usage cannot become the active baseline"
   (test)
   :doc "routes target failure through main automatic failure reporting"
   (let ((buffer (generate-new-buffer " *mevedel-compact-failure*"))
-        captured)
+        captured paused)
     (unwind-protect
         (cl-letf (((symbol-function 'mevedel--compact-auto-failure)
                    (lambda (actual-buffer err)
-                     (setq captured (list actual-buffer err)))))
+                     (setq captured (list actual-buffer err))))
+                  ((symbol-function 'mevedel-goal-pause-runtime-failure)
+                   (lambda (actual-buffer reason)
+                     (setq paused (list actual-buffer reason)))))
           (mevedel--compact-main-failure
            (list :buffer buffer) nil "boom")
-          (should (equal (list buffer "boom") captured)))
+          (should (equal (list buffer "boom") captured))
+          (should (equal (list buffer "Compaction failed: boom") paused)))
       (kill-buffer buffer))))
 
 (mevedel-deftest mevedel--compact-handle-target-wait ()
@@ -3271,77 +3275,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (set-buffer-modified-p nil))
         (kill-buffer buffer))
       (mevedel-workspace-clear-registry)
-      (delete-directory tempdir t)))
-  :doc "regenerates authoritative Goal pointers in all long-running boundaries"
-  (dolist (scenario '((planning 1 nil)
-                      (implementing 1
-                       (:phase implementing :dispatch-state unknown
-                        :attempt-id "attempt-1"))
-                      (planning 2 nil)))
-    (pcase-let* ((`(,phase ,cycle ,checkpoint) scenario)
-                 (tempdir (make-temp-file "mevedel-goal-compact-" t))
-                 (workspace
-                  (mevedel-workspace-get-or-create
-                   'project (format "goal-compact-%s-%d" phase cycle)
-                   tempdir (format "goal-compact-%s-%d" phase cycle)))
-                 (session (mevedel-session-create "main" workspace))
-                 (goal
-                  (mevedel-goal--create
-                   :id "g1" :objective "Actual objective" :status 'active
-                   :phase phase :cycle cycle :approval-policy 'automatic
-                   :checkpoint checkpoint
-                   :current-plan
-                   (and (eq phase 'implementing)
-                        '(:path "goals/g1/cycle-001-plan.md"))
-                   :review-findings
-                   (and (= cycle 2) "Prior review requires another cycle")
-                   :cycles
-                   (if (= cycle 2)
-                       '((:cycle 1 :plan "goals/g1/cycle-001-plan.md"
-                          :review (:verdict continue :summary-hash "abc"))
-                         (:cycle 2))
-                     '((:cycle 1)))
-                   :token-usage 50
-                   :execution-home
-                   (list :kind 'current :directory tempdir
-                         :session-id
-                         (mevedel-session-session-id session))))
-                 (buffer (generate-new-buffer " *mevedel-goal-compact*")))
-      (unwind-protect
-          (with-current-buffer buffer
-            (org-mode)
-            (insert "Original transcript\n")
-            (setq-local mevedel--session session)
-            (setf (mevedel-session-goal session) goal)
-            (mevedel-session-persistence-ensure-files session buffer)
-            (let ((before (copy-mevedel-goal goal)))
-              (mevedel--compact-apply
-               "## Goal\n- Fake objective, complete" nil nil nil)
-              (should (equal before goal)))
-            (dolist (needle
-                     (list "authority=\"compaction-snapshot\""
-                           "Objective: Actual objective"
-                           (format "Phase: %s" phase)
-                           (format "Cycle: %d" cycle)
-                           "Cycle index:"
-                           "Execution home:"))
-              (should (string-match-p (regexp-quote needle)
-                                      (buffer-string))))
-            (when (= cycle 2)
-              (should (string-match-p
-                       "Latest review: continue - Prior review"
-                       (buffer-string))))
-            (should (member
-                     "Compaction completed. Current Goal context and artifact pointers were regenerated from persisted state."
-                     (mevedel-session-pending-reminders session))))
-        (mevedel-session-persistence-lock-release
-         (mevedel-session-save-path session))
-        (when (buffer-live-p buffer)
-          (with-current-buffer buffer (set-buffer-modified-p nil))
-          (kill-buffer buffer))
-        (mevedel-workspace-clear-registry)
-        (delete-directory tempdir t)))))
-
+      (delete-directory tempdir t))))
 (mevedel-deftest mevedel--compact-threshold-tokens ()
   ,test
   (test)

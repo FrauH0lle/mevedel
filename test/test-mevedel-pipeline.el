@@ -1372,42 +1372,6 @@
 			   (should (eq 'permission-enqueued
 				       (plist-get (nth 1 entries) :event)))))
 		     (delete-directory dir t)))
-		 :doc "fails with Permission denied for mutation during Goal planning"
-		 (let* ((tool (mevedel-tool--create
-			       :name "Edit"
-			       :read-only-p nil
-			       :groups '(edit)))
-			(session (mevedel-session--create
-			          :name "goal" :permission-mode 'full-auto))
-			(ctx (list :tool tool :args nil :session session))
-			(mevedel-permission-rules nil)
-			(mevedel-protected-paths nil)
-			fail-reason)
-		   (setf (mevedel-session-goal session)
-			 (mevedel-goal--create
-			  :objective "test" :status 'active :phase 'planning))
-		   (mevedel-pipeline--step-permission
-		    ctx #'ignore (lambda (r) (setq fail-reason r)))
-		   (should (equal fail-reason "Permission denied")))
-		 :doc "Goal inspection routes Bash and Eval through normal policy"
-		 (let* ((session (mevedel-session--create
-				  :name "goal" :permission-mode 'full-auto))
-			(mevedel-permission-rules nil)
-			(mevedel-protected-paths nil))
-		   (setf (mevedel-session-goal session)
-			 (mevedel-goal--create
-			  :objective "test" :status 'active :phase 'planning))
-		   (dolist (case '(("Bash" (:command "pwd"))
-				   ("Eval" (:expression "(+ 1 1)" :mode "live"))))
-		     (let ((tool (mevedel-tool-ensure (car case)))
-			   next-called
-			   fail-reason)
-		       (mevedel-pipeline--step-permission
-			(list :tool tool :args (cadr case) :session session)
-			(lambda (_context) (setq next-called t))
-			(lambda (reason) (setq fail-reason reason)))
-		       (should next-called)
-		       (should-not fail-reason))))
 		 :doc "guardian context is advisory and includes deterministic confinement facts"
 		 (let* ((session (mevedel-session--create
 				  :name "guardian" :permission-mode 'ask))
@@ -2302,16 +2266,11 @@
 			(mevedel-permission-rules nil)
 			(mevedel-protected-paths nil)
 			(mevedel-permission-mode 'ask))
-		   ;; Parent enters Goal planning mid-conversation; the sub-agent's
-		   ;; next pipeline entry must observe the read-only phase.
-		   (setf (mevedel-session-permission-mode parent-session) 'full-auto
-			 (mevedel-session-goal parent-session)
-			 (mevedel-goal--create
-			  :objective "test" :status 'active :phase 'planning))
-		   (let (fail-reason)
-		     (mevedel-pipeline--step-permission
-		      ctx #'ignore (lambda (r) (setq fail-reason r)))
-		     (should (equal fail-reason "Permission denied"))))
+			   (setf (mevedel-session-permission-mode parent-session) 'full-auto)
+			   (let (next-called)
+			     (mevedel-pipeline--step-permission
+			      ctx (lambda (_context) (setq next-called t)) #'ignore)
+			     (should next-called)))
 
 		 :doc "tripwire warning fires when non-read-only tool runs without session"
 		 (let* ((tool (mevedel-tool--create :name "Edit" :read-only-p nil))

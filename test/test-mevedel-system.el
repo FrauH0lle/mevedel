@@ -82,10 +82,7 @@
              (file-name-directory (locate-library "mevedel"))
              "docs" "guardian-prompts.md"))
            (buffer-string))))
-    (dolist
-        (prompt-path
-         '("prompts/permissions/bash-guardian-system.md"
-           "prompts/goals/goal-guardian-system.md"))
+    (dolist (prompt-path '("prompts/permissions/bash-guardian-system.md"))
       (let ((prompt (mevedel-system-render-prompt-file prompt-path)))
         (should
          (string-match-p

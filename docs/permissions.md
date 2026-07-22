@@ -90,16 +90,8 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
 - Step 2 (deny) is absolute — any bucket's `deny` wins.
 - Step 5 (allow/ask) is innermost-first — the first bucket yielding any
   decision wins.
-- Goal planning and review deny the native `edit` tool group before allow rules
-  are considered. This restriction is independent of the session permission
-  mode, so skill, session, persistent, and default allow rules cannot bypass
-  it. Bash and Eval remain available through their normal permission policy;
-  an inspection phase is not an OS-enforced read-only environment.
-- Automatic Goal guardians receive no tools at all and trust clear references
-  to existing PRDs or tickets rather than inspecting them. Guardian approval
-  changes lifecycle state only; it never raises the session permission mode.
-  Fully unattended implementation therefore still requires an explicit
-  `full-auto` selection.
+- Goals use the same tool permission policy as ordinary root conversation
+  turns. Goal lifecycle state never raises the session permission mode.
 - Standalone Plan approval applies the selected Ask, Auto, or Full Auto mode to
   the session that performs Direct implementation. Here changes the source
   session; Worktree leaves the source mode unchanged and applies the selection
@@ -369,7 +361,7 @@ snapshot.
 `mevedel-permission-guardian` can add model-reviewed risk guidance to
 Bash prompts. Outside `full-auto`, it is advisory only: the normal
 permission chain still decides `allow` / `ask` / `deny`, explicit deny
-rules still win, Goal phase restrictions and protected-path policy are
+rules still win and protected-path policy is
 unchanged, and the user remains authoritative. The reviewer receives the
 normalized command class, parser, reasons, identified resources, and pending
 confinement facts. Its normalized response contains only risk,
@@ -440,9 +432,7 @@ injection-resistance instructions, evaluation criteria, and response contract.
 The user message contains the Bash command and deterministic analysis as
 untrusted evidence. The request does not inherit the session's coding-assistant
 system prompt, transcript, tools, memories, skills, or workspace instructions.
-The permission guardian owns this complete prompt contract independently of
-the Goal guardian because their review criteria, authority, and response
-formats differ. It evaluates the command's intrinsic effects without receiving
+It evaluates the command's intrinsic effects without receiving
 the user's request or conversation context; authorization and user intent
 remain the deterministic permission system's responsibility. Its policy
 therefore never weakens a severe classification merely because an action may

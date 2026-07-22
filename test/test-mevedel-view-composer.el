@@ -2366,16 +2366,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 (mevedel-deftest mevedel-view--queued-user-message-auto-drain-blocked-p ()
   ,test
   (test)
-  :doc "blocks fallback drainage for plan approval and guardian review"
+  :doc "blocks fallback drainage only for a pending Plan approval"
   (let ((session (mevedel-session--create
                   :name "main" :pending-plan-approval 'plan)))
     (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
-    (setf (mevedel-session-pending-plan-approval session) nil
-          (mevedel-session-plan-metadata session) '(:guardian-pending t))
-    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
-    (setf (mevedel-session-plan-metadata session) '(:revision-pending t))
-    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
-    (setf (mevedel-session-plan-metadata session) nil)
+    (setf (mevedel-session-pending-plan-approval session) nil)
     (should-not
      (mevedel-view--queued-user-message-auto-drain-blocked-p session))))
 
@@ -2854,64 +2849,6 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
           (should-not (mevedel-session-queued-user-messages session)))
       (delete-directory root t)))
 
-  :doc "plain input during guardian review joins the intervention queue"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-guardian" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           send-called)
-      (setf (mevedel-session-plan-metadata session)
-            '(:guardian-pending t))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session
-                    mevedel--current-request nil))
-      (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq send-called t)))
-                ((symbol-function
-                  'mevedel-view--schedule-late-queued-user-message-drain)
-                 #'ignore))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "stop before implementing")
-          (mevedel-view-send)))
-      (should-not send-called)
-      (should (equal "stop before implementing"
-                     (plist-get
-                      (car (mevedel-session-queued-user-messages session))
-                      :input)))))
-
-  :doc "plain input during planner revision joins the intervention queue"
-  (mevedel-view-test--with-buffers
-    (let* ((ws (mevedel-workspace--create
-                :type 'test :id "vq-revision" :root "/tmp/vq" :name "vq"
-                :file-cache (mevedel-file-cache--create
-                             :table (make-hash-table :test #'equal)
-                             :order nil :total-bytes 0)))
-           (session (mevedel-session-create "main" ws))
-           send-called)
-      (setf (mevedel-session-plan-metadata session)
-            '(:revision-pending t))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session
-                    mevedel--current-request nil))
-      (cl-letf (((symbol-function 'gptel-send)
-                 (lambda (&rest _) (setq send-called t)))
-                ((symbol-function
-                  'mevedel-view--schedule-late-queued-user-message-drain)
-                 #'ignore))
-        (with-current-buffer view-buf
-          (goto-char (mevedel-view--input-start))
-          (insert "change the approach")
-          (mevedel-view-send)))
-      (should-not send-called)
-      (should (equal "change the approach"
-                     (plist-get
-                      (car (mevedel-session-queued-user-messages session))
-                      :input)))))
-
   :doc "queued message stays visible across incremental in-flight rendering"
   (mevedel-view-test--with-buffers
     (let* ((ws (mevedel-workspace--create
@@ -3367,26 +3304,24 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display &optional policy submission)
+                 (lambda (objective submission)
                    (setq started
-                         (list objective display policy
-                               (mevedel-prompt-submission-context
-                                submission))
+                         (list objective
+                               (mevedel-prompt-submission-context submission))
                          started-buffer (current-buffer)))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal "/goal draft" "draft")))
       (should (eq data-buf started-buffer))
-      (should (equal '("expanded" "expanded" supervised "hook context")
-                     started))))
-  :doc "strips the auto selector and starts an automatic Goal"
+      (should (equal '("expanded" "hook context") started))))
+  :doc "treats the former auto selector as ordinary objective text"
   (mevedel-view-test--with-buffers
     (let ((session (mevedel-session--create :name "main"))
           started)
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (cl-letf (((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                 (lambda (objective _input callback)
-                   (should (equal "ship it" objective))
+                (lambda (objective _input callback)
+                   (should (equal "auto ship it" objective))
                    (funcall
                     callback
                     (mevedel-prompt-submission-create
@@ -3396,55 +3331,11 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                 ((symbol-function 'mevedel-view--fork-if-pending) #'ignore)
                 ((symbol-function 'mevedel-view--clear-input) #'ignore)
                 ((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display policy &optional submission)
-                   (setq started
-                         (list objective display policy
-                               (and submission
-                                    (mevedel-prompt-submission-context
-                                     submission)))))))
+                 (lambda (objective _submission) (setq started objective))))
         (with-current-buffer view-buf
           (mevedel-view--send-local-goal
            "/goal auto ship it" "auto ship it")))
-      (should (equal '("ship it" "ship it" automatic nil) started))))
-
-  :doc "/goal persists consumed start context across a full rerender"
-  (mevedel-view-test--with-buffers
-    (let* ((workspace (mevedel-workspace--create
-                       :type 'test :id "goal-context" :root "/tmp"
-                       :name "goal-context"))
-           (session (mevedel-session-create "main" workspace)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session
-                    mevedel--workspace workspace)
-        (mevedel-hooks-record-session-context
-         session '(:additional-context ("goal startup context"))
-         'SessionStart))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session
-                    mevedel--workspace workspace))
-      (cl-letf (((symbol-function 'mevedel-goal-start)
-                 (lambda (_objective display _policy submission)
-                   (mevedel--submit-generated-turn
-                    "planning prompt" display submission)))
-                ((symbol-function 'mevedel--gptel-send-request) #'ignore))
-        (with-current-buffer view-buf
-          (mevedel-view--send-local-goal "/goal ship it" "ship it")))
-      (should-not (mevedel-session-hook-context-pending session))
-      (with-current-buffer data-buf
-        (should (string-match-p "goal startup context" (buffer-string))))
-      (with-current-buffer view-buf
-        (mevedel-view--full-rerender)
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should (string-match-p "hook context added" text))
-          (should-not (string-match-p "goal startup context" text)))
-        (goto-char (point-min))
-        (search-forward "hook context added")
-        (mevedel-view-toggle-section)
-        (should (string-match-p
-                 "goal startup context"
-                 (buffer-substring-no-properties
-                  (point-min) mevedel-view--input-marker)))))))
+      (should (equal "auto ship it" started)))))
 
 (mevedel-deftest mevedel-view-send/user-prompt-hooks ()
   ,test
@@ -3673,11 +3564,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                      (lambda (&rest _)
                        (push 'fork events)))
                     ((symbol-function 'mevedel-goal-start)
-                     (lambda (objective display &optional policy submission)
-                       (push (list
-                              objective display policy
-                              (mevedel-prompt-submission-context
-                               submission))
+                     (lambda (objective submission)
+                       (push (list objective
+                                   (mevedel-prompt-submission-context submission))
                              events))))
             (with-current-buffer view-buf
               (goto-char (mevedel-view--input-start))
@@ -3686,13 +3575,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
               (should (equal "draft" mevedel-view-test--seen-prompt))
               (setq events (nreverse events))
               (should (eq 'fork (car events)))
-              (should (equal "rewritten prompt" (cadr (cadr events))))
-              (should (string-match-p "rewritten prompt"
-                                      (car (cadr events))))
-              (should-not (string-match-p "hook policy context"
-                                          (car (cadr events))))
+              (should (equal "rewritten prompt" (car (cadr events))))
               (should (string-match-p "hook policy context"
-                                      (nth 3 (cadr events))))
+                                      (cadr (cadr events))))
               (should (string-empty-p (mevedel-view--input-text)))))
           (with-current-buffer view-buf
             (let ((text (buffer-substring-no-properties

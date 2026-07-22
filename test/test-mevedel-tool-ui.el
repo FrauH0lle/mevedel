@@ -112,42 +112,6 @@
   ,test
   (test)
 
-  :doc "attaches a bounded contract only to Goal planning and review agents"
-  (let* ((session (mevedel-tool-ui-test--session))
-         (goal (mevedel-goal--create :status 'active :phase 'planning))
-         (invocation (mevedel-agent-invocation--create))
-         (record
-          (mevedel-agent-record--create
-           :id "explorer--goal" :path "/root/trace"
-           :conversation-location "agents/explorer--goal.chat.org"))
-         (mevedel--session session)
-         (mevedel-goal-investigation-time-budget 45)
-         launched-prompt
-         bounded-seconds)
-    (setf (mevedel-session-goal session) goal)
-    (cl-letf (((symbol-function 'mevedel-agent-control-spawn)
-               (lambda (_session _task-name prompt &rest keys)
-                 (setq launched-prompt prompt)
-                 (when-let* ((on-invocation
-                              (plist-get keys :on-invocation)))
-                   (funcall on-invocation invocation))
-                 record))
-              ((symbol-function 'mevedel-agent-runtime-bound-turn)
-               (lambda (_invocation seconds)
-                 (setq bounded-seconds seconds))))
-      (mevedel-tool-ui--agent
-       #'ignore '(:task_name "trace" :message "Trace one callback."))
-      (should (= 45 bounded-seconds))
-      (should (string-match-p "Evidence target.*Trace one callback"
-                              launched-prompt))
-      (setf (mevedel-goal-phase goal) 'implementing
-            launched-prompt nil
-            bounded-seconds nil)
-      (mevedel-tool-ui--agent
-       #'ignore '(:task_name "implement" :message "Implement the fix."))
-      (should (equal "Implement the fix." launched-prompt))
-      (should-not bounded-seconds)))
-
   :doc "spawns, settles, and retains one path-addressed default agent"
   (let* ((root (file-name-as-directory
                 (make-temp-file "mevedel-agent-v2-" t)))

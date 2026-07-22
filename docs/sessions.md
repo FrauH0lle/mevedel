@@ -117,23 +117,10 @@ not resumable state. They are append-only within a run and are never consulted
 to restore a session. See [`telemetry.md`](telemetry.md) for the event schema,
 redaction boundary, and profiler procedure.
 
-The Goal cycle index stores artifact references, structured review verdicts,
-provider/effort selections, hashes, and timestamps, but not plan or review
-bodies. Accepted plans are copied to sequential cycle files without overwrite;
-the mutable current plan is reused only while preparing the next acceptance.
-The Goal itself remains in the session sidecar, including its current cycle,
-carried review findings, pause or blocked reason, and its current write-ahead
-phase checkpoint. The checkpoint records the exact request input, resolved
-provider and effort, plan reference, attempt identity, dispatch state, retry
-count, whether request startup began, and prior settled boundary before
-transport starts.
-
-Goal sidecars also hold the optional aggregate token budget, charged usage,
-the last admitted continuation key, one execution-home record, and the selected
-`full` or `focused` implementation context. Provider usage is authoritative
-when available; otherwise the existing chat estimator accounts for request
-growth. Budget exhaustion and duplicate continuation state both persist a
-paused Goal, never a completion verdict.
+The Goal remains in the session sidecar as a strict phase-free record: identity,
+objective, status/reason, token/time/turn accounting, optional budget, optional
+accepted-plan reference, and timestamps. Provider usage is authoritative when
+available; otherwise the request estimator supplies the charge.
 
 Worktree sessions are ordinary sessions whose `:working-directory` is a
 Git linked worktree under the same workspace, created by `/worktree
@@ -143,28 +130,6 @@ history. Unless `--clean` is used, the new data buffer starts with a
 visible setup-context user turn explaining the source session, source
 directory, worktree directory, branch, purpose, and warnings. That turn is
 not sent automatically.
-
-A Goal chooses one execution home. The default is its current session checkout.
-A supervised approval can instead select `worktree`; an automatic Goal captures
-that choice when it starts. mevedel then creates one `goal/<goal-id>` worktree.
-A durable lock bit is set on first approval, so later cycles cannot change the
-execution home even after their prior plan reference is retired.
-A persisted `prepared` handoff gates source continuation while the target Goal
-and accepted plan are saved; the handoff becomes `complete` when source
-ownership is released. Only the target session can continue, and its
-owner/session/directory tuple gates every implementation, review, recovery, and
-automatic transition. Normal rewind forks clear both Goal ownership and handoff
-pointers. `/goal clear` removes lifecycle state without deleting the worktree.
-An ordinary transfer error restores and persists source ownership, removes the
-unused target worktree and branch, and leaves the same Goal eligible to retry.
-If restored source ownership cannot be persisted, the prepared source gate and
-target worktree are retained instead; mevedel reports the dual-state recovery
-location rather than deleting the only durable target.
-
-Full implementation preserves the existing transcript. Focused implementation
-starts a fresh request with the current system prompt, authoritative Goal
-objective, and accepted plan. Worktree Goals begin focused; supervised approval
-may explicitly select full context.
 
 When a saved session's working directory no longer exists, resume prompts
 for an existing replacement inside the workspace and persists that directory
@@ -200,9 +165,8 @@ system prompt dynamically.
 
 ### Resume contract
 
-On-disk state normally reflects a completed turn boundary. Goal requests add a
-write-ahead boundary before dispatch and settle it after success or failure;
-pending tool calls themselves remain non-recoverable. Abort/error teardown is
+On-disk state normally reflects a completed turn boundary. Pending tool calls
+remain non-recoverable. Abort/error teardown is
 an explicit save boundary after prompts, agents, and the current request have
 been cleared, so resumed sessions do not resurrect aborted runtime state.
 Managed execution registries are likewise transient: resume never reattaches
@@ -214,17 +178,10 @@ older copy as archived/superseded. Structured execution rows in later segments
 provide the same successor evidence, including rows retained in a compacted
 tail; a row with no successor becomes `lost`.
 
-An unfinished persisted Goal is always restored `paused`, with an explicit
-restoration reason; opening a session never dispatches a Goal phase. `/goal
-resume` is required to continue. Planning and review can be requested again
-only after that explicit action. A saved `implementing` phase is treated as
-potentially partial: resume advances to read-only review of repository evidence
-instead of blindly replaying mutations. Planning and review may replay their
-exact checkpoint input with policy resolved anew; uncertain implementation
-always enters a read-only repository recovery audit. Normal rewind forks copy session preset
-settings but clear Goal ownership, leaving the parent as the sole owner.
-An interrupted automatic guardian can be retried from the persisted plan on
-explicit resume; every failure still fails closed to user approval.
+An active persisted Goal is restored `paused`, with an explicit session-resumed
+reason; opening a session never dispatches Goal work. `/goal resume` is required
+to continue. Normal rewind forks copy session preset settings but clear Goal
+state.
 
 ### Rewind
 

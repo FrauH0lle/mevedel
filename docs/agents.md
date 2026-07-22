@@ -78,35 +78,11 @@ children as compact path and role references. Later WAIT boundaries add a
 child created in the same turn exactly once. Peers and deeper descendants are
 not injected; `ListAgents` is the explicit full-tree discovery surface.
 
-Interactive implementation planning is the first phase of `/goal <objective>`,
-not a planner sub-agent. The Goal controller keeps planning and review
-read-only, extracts `<proposed_plan>` blocks, asks for approval, and routes an
-accepted plan through implementation and review in its recorded execution-home
-session. Current-checkout Goals remain in place. Worktree Goals transfer once
-to a `goal/<goal-id>` linked-worktree session; the source keeps only a handoff
-pointer and cannot continue the Goal.
-Every Goal phase request begins with the same deterministic context fragment
-generated from persisted session state. Planning, guardian, implementation,
-review, and recovery then add only their phase-specific instructions.
-For `/goal auto <objective>`, each proposal first goes through an internal
-`goal-guardian` workload request. That request has no tools and is not inserted
-as a conversational turn. Its `approve`, `revise`, or `ask` decision is
-persisted and shown as an audit disclosure. `Revise` permits at most two
-automatic planning corrections and guardian re-reviews; `ask`, failures, and
-unresolved final review return the latest valid plan to the normal approval
-interaction.
-
-The controller persists a write-ahead checkpoint before each of those phase
-requests. Read-only planning, guardian, and review attempts are safe to retry.
-Implementation is deliberately asymmetric: if its outcome is not known, resume
-audits the current repository against the accepted plan and never resends the
-mutation request.
-
-All automatic phase handoffs share one continuation gate. It requires a
-settled checkpoint, an idle request and interaction surface, no queued user
-intervention, any required guardian approval, and remaining Goal token budget.
-The admitted durable state is recorded before dispatch so duplicate callbacks
-cannot start the same phase twice.
+A Goal runs in the root session conversation rather than through a special
+agent or phase machine. Child-agent turns are excluded from Goal accounting.
+Each active root turn receives request-local Goal context, while the existing
+agent tree, capacity, and permission rules remain unchanged. Queued user
+messages steer the Goal before its next automatic continuation.
 
 Each agent's `:tools` resolved via `mevedel-tool-resolve-gptel` at
 invocation time. Registered buffer-locally via `gptel-agent--agents` per
@@ -157,12 +133,6 @@ invokes `WaitAgent`; a caller that does not may finish while descendants keep
 running. `/review`, `/verify`, and fork-skill workflows may keep their owning
 interaction open until a leaf result arrives, but that awaiting behavior does
 not create another agent execution mode.
-
-Goal planning and review add a turn-local wall-clock budget to every spawned
-investigation. Its task prompt names the evidence target and deadline. A timely
-result cancels the deadline; expiry interrupts through the same terminal
-boundary as `InterruptAgent`, retaining useful partial output. Agents started
-outside those two Goal phases are unchanged.
 
 ## Interrupting retained agent turns
 

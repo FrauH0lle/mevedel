@@ -267,68 +267,33 @@
                  (regexp-quote "Plan/full-auto · idle")
                  (mevedel-view--status-strip))))))
 
-  :doc "status strip shows the Goal phase's actual provider and effort"
+  :doc "status strip shows phase-free Goal status and turn accounting"
   (mevedel-view-test--with-buffers
     (let* ((goal (mevedel-goal--create
-                  :status 'active :phase 'planning :cycle 1
-                  :cycles '((:cycle 1 :providers
-                             ((planning :provider "Planner:glm"
-                                        :effort high))))))
+                  :status 'active :turns-run 5))
            (session (mevedel-session--create
                      :name "main" :goal goal :preset-name 'team)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
         (let ((line (mevedel-view--status-strip)))
-          (should (string-match-p "planning · Planner:glm/high" line))
+          (should (string-match-p "active · 5 turns" line))
           (should (string-match-p "preset team" line))
           (dolist (area '(goal preset))
             (should (text-property-any
                      0 (length line) 'mevedel-view-cockpit-area area line)))))))
 
-  :doc "status strip distinguishes planner revisions from guardian re-reviews"
-  (mevedel-view-test--with-buffers
-    (let* ((goal
-            (mevedel-goal--create
-             :status 'active :phase 'awaiting-approval :cycle 1
-             :cycles
-             '((:cycle 1 :providers
-                ((planning :provider "Planner:model" :effort high)
-                 (goal-guardian :provider "Guardian:model" :effort low))))))
-           (session (mevedel-session--create :name "main" :goal goal)))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setf (mevedel-session-plan-metadata session)
-              '(:revision-count 0 :revision-pending t))
-        (should
-         (string-match-p
-          (regexp-quote "revising plan 1/2 · Planner:model/high")
-          (mevedel-view--status-strip)))
-        (setf (mevedel-session-plan-metadata session)
-              '(:revision-count 1 :guardian-pending t))
-        (should
-         (string-match-p
-          (regexp-quote
-           "guardian reviewing revision 1/2 · Guardian:model/low")
-          (mevedel-view--status-strip))))))
-
   :doc "status strip shows completion and the restored session model"
   (mevedel-view-test--with-buffers
     (let* ((goal (mevedel-goal--create
-                  :status 'complete :phase 'reviewing :cycle 1
-                  :cycles '((:cycle 1 :providers
-                             ((review :provider "Reviewer:model"
-                                      :effort high))))))
+                  :status 'complete :turns-run 3))
            (session (mevedel-session--create :name "main" :goal goal)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session
                     gptel-model 'gpt-5.6-sol))
       (with-current-buffer view-buf
         (let ((line (mevedel-view--status-strip)))
-          (should (string-match-p "complete · gpt-5.6-sol" line))
-          (should-not (string-match-p "reviewing" line))
-          (should-not (string-match-p "Reviewer:model/high" line))))))
+          (should (string-match-p "complete · 3 turns · gpt-5.6-sol" line))))))
 
   :doc "status strip routes click targets to cockpit surfaces"
   (mevedel-view-test--with-buffers
@@ -439,11 +404,8 @@
   (mevedel-view-test--with-buffers
     (let* ((goal
             (mevedel-goal--create
-             :status 'active :phase 'awaiting-approval :cycle 1
-             :cycles '((:cycle 1))))
+             :status 'active :turns-run 1))
            (session (mevedel-session--create :name "main" :goal goal)))
-      (setf (mevedel-session-plan-metadata session)
-            '(:revision-count 1 :guardian-pending t))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -467,7 +429,7 @@
                             (mevedel-view--input-start) (point-max))))
             (should
              (string-match-p
-              "guardian reviewing revision 1/2"
+              "active · 1 turns"
               (mevedel-view--status-strip)))
             (should (string-match-p
                      "Executions: 1 live"

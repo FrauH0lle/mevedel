@@ -38,10 +38,9 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   slot is opaque outside
   `mevedel-execution.el`; process records, timers, spools, and process groups
   never enter the general session model or persisted sidecar.
-- **`mevedel-goal`**: stable identity and objective, lifecycle status,
-  current phase and cycle, approval policy, owning session, accepted plan
-  artifact, lightweight cycle records, structured review result and carried
-  findings, and any pause or blocked reason.
+- **`mevedel-goal`**: identity, objective, lifecycle status and reason,
+  token/time/turn accounting, optional budget and accepted-plan reference,
+  and timestamps.
 - **`mevedel-request`**: per-turn state: process-unique request identity,
   owning session and agent origin, request start time, file-snapshots,
   directive UUID, pending plan, cancellers, skill-scoped permission rules,

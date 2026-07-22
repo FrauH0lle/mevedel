@@ -242,38 +242,27 @@
 (mevedel-deftest mevedel-menu--goal-description ()
   ,test
   (test)
-  :doc "shows lifecycle, policy, artifacts, guardian, and recovery state"
+  :doc "shows Goal lifecycle, accounting, and accepted-plan reference"
   (mevedel-menu-test--with-buffers
     (let ((goal
            (mevedel-goal--create
             :id "g1" :objective "Ship the feature" :status 'paused
-            :phase 'implementing :cycle 2 :approval-policy 'automatic
-            :implementation-context 'focused :token-budget 1000
-            :token-usage 400 :reason "Provider credits exhausted"
-            :current-plan '(:path "goals/g1/cycle-002-plan.md")
-            :review-findings "One test remains"
-            :checkpoint '(:dispatch-state failed)
-            :owner-session (mevedel-session-session-id session)
-            :execution-home
-            (list :kind 'worktree :directory "/tmp/goal/"
-                  :session-id (mevedel-session-session-id session))
-            :cycles '((:cycle 2 :guardian-audits
-                       ((:verdict ask :reason "Needs confirmation")))))))
+            :token-budget 1000 :tokens-used 400
+            :time-used-seconds 12 :turns-run 3
+            :reason "Provider credits exhausted"
+            :plan-reference "plans/accepted.md")))
       (setf (mevedel-session-goal session) goal)
       (with-current-buffer view-buf
         (let ((text (mevedel-menu--goal-description)))
-          (dolist (needle '("Ship the feature" "paused / implementing"
-                            "Approval: automatic · Tool permissions: ask"
-                            "400/1000"
-                            "worktree" "focused" "cycle-002-plan.md"
-                            "One test remains" "Needs confirmation"
-                            "failed — Provider credits exhausted"))
+          (dolist (needle '("Ship the feature" "Status: paused"
+                            "Provider credits exhausted" "400/1000"
+                            "Turns: 3" "Elapsed: 12s" "plans/accepted.md"))
             (should (string-match-p (regexp-quote needle) text))))))))
 
 (mevedel-deftest mevedel-menu--preset-description ()
   ,test
   (test)
-  :doc "shows resolved workload routing and actual phase provider effort"
+  :doc "shows resolved workload routing without Goal-only workloads"
   (mevedel-menu-test--with-model-backends
     (mevedel-menu-test--with-buffers
       (with-current-buffer data-buf
@@ -282,19 +271,12 @@
                     mevedel-model-tiers
                     '((strong :provider "Balanced:balanced-model"))
                     mevedel-model-workloads
-                    '((planning :tier strong) (implementation)))
-        (setf (mevedel-session-preset-name session) 'my-team
-              (mevedel-session-goal session)
-              (mevedel-goal--create
-               :status 'active :phase 'planning :cycle 1
-               :cycles '((:cycle 1 :providers
-                          ((planning :provider "Fast:fast-model"
-                                     :effort high)))))))
+                    '((planning :tier strong)))
+        (setf (mevedel-session-preset-name session) 'my-team))
       (with-current-buffer view-buf
         (let ((text (mevedel-menu--preset-description)))
           (dolist (needle '("Preset: my-team" "planning"
-                            "Balanced:balanced-model"
-                            "actual Fast:fast-model / effort high"))
+                            "Balanced:balanced-model"))
             (should (string-match-p (regexp-quote needle) text))))))))
 
 (mevedel-deftest mevedel-menu--goal-resumable-p ()
@@ -306,11 +288,7 @@
     (dolist (entry '((active . nil) (paused . t) (blocked . t)
                      (complete . nil)))
       (setf (mevedel-session-goal session)
-            (mevedel-goal--create
-             :status (car entry)
-             :owner-session (mevedel-session-session-id session)
-             :execution-home
-             (list :session-id (mevedel-session-session-id session))))
+            (mevedel-goal--create :status (car entry)))
       (with-current-buffer view-buf
         (should (eq (and (mevedel-menu--goal-resumable-p) t)
                     (cdr entry)))))))
@@ -326,14 +304,9 @@
 
 (mevedel-deftest mevedel-menu--goal-active-p ()
   ,test (test)
-  :doc "requires active status and local ownership"
+  :doc "requires active status"
   (mevedel-menu-test--with-buffers
-    (setf (mevedel-session-session-id session) "s1")
-    (let ((goal (mevedel-goal--create
-                 :status 'active
-                 :owner-session (mevedel-session-session-id session)
-                 :execution-home
-                 (list :session-id (mevedel-session-session-id session)))))
+    (let ((goal (mevedel-goal--create :status 'active)))
       (setf (mevedel-session-goal session) goal)
       (with-current-buffer view-buf (should (mevedel-menu--goal-active-p)))
       (setf (mevedel-goal-status goal) 'paused)
@@ -352,22 +325,6 @@
       (setf (mevedel-goal-status (mevedel-session-goal session)) 'complete)
       (should-not (mevedel-menu--goal-start-inapt-p)))))
 
-(mevedel-deftest mevedel-menu--goal-editable-p ()
-  ,test (test)
-  :doc "rejects complete and non-owned Goals"
-  (mevedel-menu-test--with-buffers
-    (setf (mevedel-session-session-id session) "s1")
-    (let ((goal (mevedel-goal--create
-                 :status 'paused
-                 :owner-session (mevedel-session-session-id session)
-                 :execution-home
-                 (list :session-id (mevedel-session-session-id session)))))
-      (setf (mevedel-session-goal session) goal)
-      (with-current-buffer view-buf (should (mevedel-menu--goal-editable-p)))
-      (setf (mevedel-goal-status goal) 'complete)
-      (with-current-buffer view-buf
-        (should-not (mevedel-menu--goal-editable-p))))))
-
 (mevedel-deftest mevedel-menu--goal-clearable-p ()
   ,test (test)
   :doc "rejects clear while a request is active"
@@ -380,16 +337,12 @@
 
 (mevedel-deftest mevedel-menu--owned-goal ()
   ,test (test)
-  :doc "returns only a Goal owned by the current session"
+  :doc "returns the current session's direct Goal"
   (mevedel-menu-test--with-buffers
-    (setf (mevedel-session-session-id session) "s1"
-          (mevedel-session-goal session)
-          (mevedel-goal--create
-           :owner-session "s1" :execution-home '(:session-id "s1")))
-    (with-current-buffer view-buf (should (mevedel-menu--owned-goal)))
-    (setf (mevedel-goal-owner-session (mevedel-session-goal session)) "s2")
-    (with-current-buffer view-buf
-      (should-not (mevedel-menu--owned-goal)))))
+    (let ((goal (mevedel-goal--create :id "g1")))
+      (setf (mevedel-session-goal session) goal)
+      (with-current-buffer view-buf
+        (should (eq goal (mevedel-menu--owned-goal)))))))
 
 (mevedel-deftest mevedel-menu--open-goal ()
   ,test (test)
@@ -430,89 +383,13 @@
 
 (mevedel-deftest mevedel-menu--goal-start ()
   ,test (test)
-  :doc "starts a supervised Goal from prompted input"
+  :doc "starts a Goal from prompted input"
   (let (call)
     (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Ship"))
               ((symbol-function 'mevedel-menu--goal-call)
                (lambda (&rest args) (setq call args))))
       (mevedel-menu--goal-start))
     (should (equal (cdr call) '("Ship")))))
-
-(mevedel-deftest mevedel-menu--goal-start-auto ()
-  ,test (test)
-  :doc "starts an automatic Goal explicitly"
-  (let (call)
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Ship"))
-              ((symbol-function 'mevedel-menu--goal-call)
-               (lambda (&rest args) (setq call args))))
-      (mevedel-menu--goal-start-auto))
-    (should (equal (cdr call) '("Ship" "Ship" automatic)))))
-
-(mevedel-deftest mevedel-menu--goal-edit ()
-  ,test (test)
-  :doc "routes edited objective input"
-  (let (call)
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "New"))
-              ((symbol-function 'mevedel-menu--goal-call)
-               (lambda (&rest args) (setq call args)))
-              ((symbol-function 'mevedel-menu--current-goal) (lambda () nil)))
-      (mevedel-menu--goal-edit))
-    (should (equal (cdr call) '("New")))))
-
-(mevedel-deftest mevedel-menu--goal-set-budget ()
-  ,test (test)
-  :doc "routes parsed token budget input"
-  (let (call)
-    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "500"))
-              ((symbol-function 'mevedel-menu--goal-call)
-               (lambda (&rest args) (setq call args))))
-      (mevedel-menu--goal-set-budget))
-    (should (equal (cdr call) '(500)))))
-
-(mevedel-deftest mevedel-menu--goal-approval-toggle-description ()
-  ,test (test)
-  :doc "shows the current and next approval policies"
-  (mevedel-menu-test--with-buffers
-    (setf (mevedel-session-goal session)
-          (mevedel-goal--create
-           :status 'active :approval-policy 'supervised
-           :owner-session (mevedel-session-session-id session)
-           :execution-home
-           (list :session-id (mevedel-session-session-id session))))
-    (with-current-buffer view-buf
-      (should (equal "Approval: supervised → automatic"
-                     (mevedel-menu--goal-approval-toggle-description))))
-    (setf (mevedel-goal-approval-policy (mevedel-session-goal session))
-          'automatic)
-    (with-current-buffer view-buf
-      (should (equal "Approval: automatic → supervised"
-                     (mevedel-menu--goal-approval-toggle-description))))))
-
-(mevedel-deftest mevedel-menu--goal-toggle-approval-policy ()
-  ,test (test)
-  :doc "routes the inverse policy in data and preserves a multiline draft"
-  (mevedel-menu-test--with-buffers
-    (setf (mevedel-session-goal session)
-          (mevedel-goal--create
-           :status 'active :approval-policy 'supervised
-           :owner-session (mevedel-session-session-id session)
-           :execution-home
-           (list :session-id (mevedel-session-session-id session))))
-    (with-current-buffer view-buf
-      (goto-char (point-max))
-      (insert "> draft\nsecond line"))
-    (let (called-buffer policy)
-      (cl-letf (((symbol-function 'mevedel-goal-set-approval-policy)
-                 (lambda (value)
-                   (setq called-buffer (current-buffer)
-                         policy value))))
-        (with-current-buffer view-buf
-          (mevedel-menu--goal-toggle-approval-policy)))
-      (should (eq data-buf called-buffer))
-      (should (eq 'automatic policy))
-      (with-current-buffer view-buf
-        (should (string-suffix-p "> draft\nsecond line"
-                                 (buffer-string)))))))
 
 (mevedel-deftest mevedel-menu--select-preset ()
   ,test

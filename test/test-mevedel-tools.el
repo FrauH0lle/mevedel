@@ -19,6 +19,7 @@
 (require 'mevedel-transcript-audit)
 (require 'mevedel-tools)
 (require 'mevedel-tool-task)
+(require 'mevedel-tool-goal)
 (require 'mevedel-tool-ui)
 (require 'mevedel-tool-web)
 (require 'mevedel-tool-introspect)
@@ -698,7 +699,8 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
 
 (mevedel-deftest mevedel-tools--handle-plan-tool-filter
   (:before-each (progn (mevedel-tool-clear-registry)
-                       (mevedel-tool-fs--register))
+                       (mevedel-tool-fs--register)
+                       (mevedel-tool-goal--register))
    :after-each (mevedel-tool-clear-registry))
   ,test
   (test)
@@ -726,6 +728,47 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                            nil)))
             (should (= 1 (length payload)))
             (should (equal "Read" (plist-get (car payload) :name)))))
+      (kill-buffer buf)))
+
+  :doc "exposes UpdateGoal only to a root request with an active Goal"
+  (let* ((session (mevedel-tools-test--make-session))
+         (goal (mevedel-goal--create :id "g1" :status 'active))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (update (mevedel-tool-gptel-tool
+                  (mevedel-tool-get "UpdateGoal" "mevedel"))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) goal)
+          (plist-put (gptel-fsm-info fsm) :tools (list update))
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should (equal '("UpdateGoal")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools))))
+          (setf (mevedel-goal-status goal) 'paused)
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should-not (plist-get (gptel-fsm-info fsm) :tools)))
+      (kill-buffer buf)))
+
+  :doc "hides UpdateGoal from a retained-agent buffer without an FSM marker"
+  (let* ((session (mevedel-tools-test--make-session))
+         (goal (mevedel-goal--create :id "g1" :status 'active))
+         (invocation (mevedel-agent-invocation--create
+                      :parent-session session))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (update (mevedel-tool-gptel-tool
+                  (mevedel-tool-get "UpdateGoal" "mevedel"))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-goal session) goal)
+          (with-current-buffer buf
+            (setq-local mevedel--agent-invocation invocation))
+          (plist-put (gptel-fsm-info fsm) :tools (list update))
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should-not (plist-get (gptel-fsm-info fsm) :tools)))
       (kill-buffer buf)))
 
   :doc "uses a retained agent's parent Plan session"

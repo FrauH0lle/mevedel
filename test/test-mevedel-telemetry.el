@@ -45,7 +45,8 @@
   (let* ((root (make-temp-file "mevedel-telemetry-" t))
          (session (test-mevedel-telemetry--session root))
          (goal (mevedel-goal--create
-                :id "goal-1" :status 'active :phase 'implementing :cycle 2)))
+                :id "goal-1" :status 'active
+                :tokens-used 21 :turns-run 2)))
     (unwind-protect
         (progn
           (setf (mevedel-session-goal session) goal)
@@ -67,8 +68,9 @@
             (should (equal "telemetry-test" (plist-get entry :session-id)))
             (should (= 7 (plist-get entry :turn)))
             (should (equal "goal-1" (plist-get entry :goal-id)))
-            (should (eq 'implementing (plist-get entry :goal-phase)))
-            (should (= 2 (plist-get entry :goal-cycle)))
+            (should (eq 'active (plist-get entry :goal-status)))
+            (should (= 21 (plist-get entry :goal-tokens-used)))
+            (should (= 2 (plist-get entry :goal-turns-run)))
             (should (numberp (plist-get entry :elapsed-ms)))
             (should (stringp (plist-get entry :time)))
             (should (equal "bounded\nvalue" (plist-get entry :safe-note)))

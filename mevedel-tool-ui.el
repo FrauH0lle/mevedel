@@ -36,14 +36,6 @@
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
 
-;; `mevedel-agent-runtime'
-(declare-function mevedel-agent-runtime-bound-turn
-                  "mevedel-agent-runtime" (invocation seconds))
-
-;; `mevedel-goal'
-(declare-function mevedel-goal-investigation-contract
-                  "mevedel-goal" (message &optional session))
-
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
@@ -83,22 +75,14 @@
         (effort (plist-get args :effort)))
     (require 'json)
     (require 'mevedel-agent-control)
-    (let* ((contract
-            (when (fboundp 'mevedel-goal-investigation-contract)
-              (mevedel-goal-investigation-contract message mevedel--session)))
-           (record
+    (let* ((record
             (mevedel-agent-control-spawn
              mevedel--session task-name
-             (or (plist-get contract :message) message)
+             message
              :role role
              :fork-turns fork-turns
              :model model
-             :effort effort
-             :on-invocation
-             (when contract
-               (lambda (invocation)
-                 (mevedel-agent-runtime-bound-turn
-                  invocation (plist-get contract :seconds))))))
+             :effort effort))
            (path (mevedel-agent-record-path record)))
       (mevedel-tool-ui--deliver-result
        callback

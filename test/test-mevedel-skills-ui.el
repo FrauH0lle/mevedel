@@ -2098,34 +2098,32 @@ spanning lines")))
 (mevedel-deftest mevedel-cmd--goal ()
   ,test
   (test)
-  :doc "starts a supervised Goal from a nonblank objective"
+  :doc "starts a Goal from a nonblank objective"
   (with-temp-buffer
     (setq-local mevedel--session (mevedel-session--create :name "main"))
     (let (started)
       (cl-letf (((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display)
-                   (setq started (list objective display)))))
+                 (lambda (objective) (setq started objective))))
         (should (eq 'mevedel-view-sent (mevedel-cmd--goal "Fix it"))))
-      (should (equal '("Fix it" "Fix it") started))))
-  :doc "starts automatic Goals explicitly without changing permission mode"
+      (should (equal "Fix it" started))))
+  :doc "treats former subcommand words as ordinary objective text"
   (with-temp-buffer
     (let ((session (mevedel-session--create
                     :name "main" :permission-mode 'auto))
           started)
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-goal-start)
-                 (lambda (objective display policy)
-                   (setq started (list objective display policy)))))
+                 (lambda (objective) (setq started objective))))
         (should (eq 'mevedel-view-sent
                     (mevedel-cmd--goal "auto Ship safely"))))
-      (should (equal '("Ship safely" "Ship safely" automatic) started))
+      (should (equal "auto Ship safely" started))
       (should (eq 'auto
                   (mevedel-session-permission-mode session)))))
   :doc "bare command opens the Goal cockpit with a current Goal"
   (with-temp-buffer
     (require 'mevedel-menu)
     (let* ((goal (mevedel-goal--create
-                  :objective "Fix it" :status 'active :phase 'planning))
+                  :objective "Fix it" :status 'active))
            (session (mevedel-session--create :name "main" :goal goal))
            opened)
       (setq-local mevedel--session session)
@@ -2141,58 +2139,23 @@ spanning lines")))
                  (lambda (area) (setq opened area))))
         (mevedel-cmd--goal nil))
       (should (eq 'goal opened))))
-  :doc "dispatches edit, pause, resume, and clear as lifecycle actions"
+  :doc "dispatches pause, resume with steering, and clear"
   (with-temp-buffer
     (let ((goal (mevedel-goal--create
-                 :id "g1" :objective "Old" :status 'paused
-                 :phase 'planning :cycle 1))
+                 :id "g1" :objective "Old" :status 'paused))
           calls)
       (setq-local mevedel--session
                   (mevedel-session--create :name "main" :goal goal))
-      (cl-letf (((symbol-function 'mevedel-goal-edit)
-                 (lambda (value) (push (list 'edit value) calls)))
-                ((symbol-function 'mevedel-goal-pause)
+      (cl-letf (((symbol-function 'mevedel-goal-pause)
                  (lambda () (push '(pause) calls)))
                 ((symbol-function 'mevedel-goal-resume)
                  (lambda (value) (push (list 'resume value) calls)))
                 ((symbol-function 'mevedel-goal-clear)
                  (lambda () (push '(clear) calls))))
-        (mevedel-cmd--goal "edit New objective")
         (mevedel-cmd--goal "pause")
         (mevedel-cmd--goal "resume new evidence")
         (mevedel-cmd--goal "clear"))
-      (should (equal '((clear) (resume "new evidence") (pause)
-                       (edit "New objective"))
-                     calls))))
-  :doc "reports and changes the current Goal approval policy"
-  (with-temp-buffer
-    (let* ((goal (mevedel-goal--create
-                  :id "g1" :objective "Old" :status 'active
-                  :phase 'planning :approval-policy 'supervised :cycle 1))
-           (session (mevedel-session--create :name "main" :goal goal))
-           calls messages)
-      (setq-local mevedel--session session)
-      (cl-letf (((symbol-function 'mevedel-goal-set-approval-policy)
-                 (lambda (policy) (push policy calls)))
-                ((symbol-function 'message)
-                 (lambda (format-string &rest args)
-                   (push (apply #'format format-string args) messages))))
-        (mevedel-cmd--goal "approval")
-        (mevedel-cmd--goal "approval automatic")
-        (mevedel-cmd--goal "approval supervised"))
-      (should (equal '(supervised automatic) calls))
-      (should (equal '("mevedel: Goal approval policy is supervised")
-                     messages))))
-  :doc "rejects unknown Goal approval policy spellings"
-  (with-temp-buffer
-    (setq-local mevedel--session
-                (mevedel-session--create
-                 :name "main"
-                 :goal (mevedel-goal--create
-                        :id "g1" :status 'active :phase 'planning
-                        :approval-policy 'supervised)))
-    (should-error (mevedel-cmd--goal "approval auto")
-                  :type 'user-error)))
+      (should (equal '((clear) (resume "new evidence") (pause)) calls)))))
 
 (mevedel-deftest mevedel-cmd--plan ()
   ,test

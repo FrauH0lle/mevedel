@@ -79,10 +79,6 @@
 (declare-function mevedel-execution-teardown-all "mevedel-execution"
 		  nil)
 
-;; `mevedel-goal'
-(declare-function mevedel-goal-context-fragment "mevedel-goal"
-		  (goal &optional session snapshot))
-
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks--persist-log-entry "mevedel-hooks"
 		  (session entry))
@@ -116,33 +112,17 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-goal-approval-policy "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-continuation-key "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-execution-home "mevedel-structs" (cl-x)
-		  t)
+(declare-function mevedel-goal-created-at "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-implementation-context
-		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-owner-session "mevedel-structs" (cl-x)
-		  t)
-(declare-function mevedel-goal-pause-requested "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-plan-reference "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-review-findings "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x)
-		  t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-time-used-seconds "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-updated-at "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session--create "mevedel-structs"
 		  (&rest slots))
 (declare-function mevedel-session-agent-turn-capacity
@@ -158,8 +138,6 @@
 (declare-function mevedel-session-forked-from-turn "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-goal-handoff "mevedel-structs"
-		  (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-log-pending
 		  "mevedel-structs" (cl-x) t)
@@ -357,7 +335,7 @@ add more, and we don't want to act on actions we don't understand).")
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
     :prompt-index :file-snapshots :agent-transcripts :agent-registry
-    :agent-turn-capacity :plan-metadata :goal :goal-handoff :messages)
+    :agent-turn-capacity :plan-metadata :goal :messages)
   "Keys required in every current-version session sidecar.")
 
 
@@ -466,151 +444,72 @@ containment semantics as session creation."
   (list :id (mevedel-goal-id goal)
         :objective (mevedel-goal-objective goal)
         :status (mevedel-goal-status goal)
-        :phase (mevedel-goal-phase goal)
-        :approval-policy (mevedel-goal-approval-policy goal)
-        :owner-session (mevedel-goal-owner-session goal)
-        :execution-home (mevedel-goal-execution-home goal)
-        :implementation-context (mevedel-goal-implementation-context goal)
-        :pause-requested (mevedel-goal-pause-requested goal)
-        :current-plan (mevedel-goal-current-plan goal)
-        :review-summary (mevedel-goal-review-summary goal)
-        :cycle (mevedel-goal-cycle goal)
-        :cycles (mevedel-goal-cycles goal)
-        :review-findings (mevedel-goal-review-findings goal)
         :reason (mevedel-goal-reason goal)
-        :checkpoint (mevedel-goal-checkpoint goal)
         :token-budget (mevedel-goal-token-budget goal)
-        :token-usage (mevedel-goal-token-usage goal)
-        :continuation-key (mevedel-goal-continuation-key goal)))
+        :tokens-used (mevedel-goal-tokens-used goal)
+        :time-used-seconds (mevedel-goal-time-used-seconds goal)
+        :turns-run (mevedel-goal-turns-run goal)
+        :plan-reference (mevedel-goal-plan-reference goal)
+        :created-at (mevedel-goal-created-at goal)
+        :updated-at (mevedel-goal-updated-at goal)))
 
 (defun mevedel-session-persistence--goal-from-plist (plist)
   "Reconstruct a `mevedel-goal' from PLIST, or nil."
   (when plist
-    (let ((id (plist-get plist :id))
-          (objective (plist-get plist :objective))
-          (status (plist-get plist :status))
-          (phase (plist-get plist :phase))
-          (policy (plist-get plist :approval-policy))
-          (owner (plist-get plist :owner-session))
-          (cycle (plist-get plist :cycle))
-          (cycles (plist-get plist :cycles)))
+    (let ((keys '(:id :objective :status :reason :token-budget :tokens-used
+                  :time-used-seconds :turns-run :plan-reference
+                  :created-at :updated-at)))
       (unless
           (and (proper-list-p plist)
-               (cl-every
-                (lambda (key) (plist-member plist key))
-                '(:id :objective :status :phase :approval-policy :owner-session
-                  :execution-home :implementation-context :cycle :cycles
-                  :token-budget :token-usage :continuation-key))
-               (stringp id)
-               (string-match-p "\\`[[:alnum:]_.-]+\\'" id)
-               (not (member id '("." "..")))
-               (stringp objective)
-               (not (string-blank-p objective))
-               (memq status '(active paused blocked complete))
-               (memq phase '(planning awaiting-approval
-                              implementing reviewing))
-               (memq policy '(supervised automatic))
-               (stringp owner)
-               (let ((home (plist-get plist :execution-home)))
-                 (and (proper-list-p home)
-                      (plist-member home :locked)
-                      (memq (plist-get home :locked) '(nil t))
-                      (memq (plist-get home :kind) '(current worktree))
-                      (stringp (plist-get home :directory))
-                      (file-name-absolute-p
-                       (plist-get home :directory))
-                      (stringp (plist-get home :session-id))
-                      (equal owner (plist-get home :session-id))
-                      (or (eq (plist-get home :kind) 'current)
-                          (null (plist-get home :branch))
-                          (stringp (plist-get home :branch)))))
-               (memq (plist-get plist :implementation-context)
-                     '(full focused))
-               (integerp cycle)
-               (> cycle 0)
-               (proper-list-p cycles)
-               (cl-every
-                (lambda (record)
-                  (and (proper-list-p record)
-                       (integerp (plist-get record :cycle))
-                       (> (plist-get record :cycle) 0)))
-                cycles)
-               (cl-find cycle cycles
-                        :key (lambda (record) (plist-get record :cycle)))
-               (or (null (plist-get plist :current-plan))
-                   (proper-list-p (plist-get plist :current-plan)))
-               (or (null (plist-get plist :review-summary))
-                   (proper-list-p (plist-get plist :review-summary)))
-               (or (null (plist-get plist :review-findings))
-                   (stringp (plist-get plist :review-findings)))
-               (or (null (plist-get plist :reason))
-                   (stringp (plist-get plist :reason)))
+               (cl-evenp (length plist))
+               (= (length plist) (* 2 (length keys)))
+               (cl-every (lambda (key) (plist-member plist key)) keys)
+               (cl-loop for (key _) on plist by #'cddr
+                        always (memq key keys))
+               (stringp (plist-get plist :id))
+               (string-match-p "\\`[[:alnum:]_.-]+\\'"
+                               (plist-get plist :id))
+               (not (member (plist-get plist :id) '("." "..")))
+               (stringp (plist-get plist :objective))
+               (not (string-blank-p (plist-get plist :objective)))
+               (memq (plist-get plist :status)
+                     '(active paused blocked budget-limited complete))
+               (let ((reason (plist-get plist :reason))
+                     (status (plist-get plist :status)))
+                 (if (memq status '(paused blocked budget-limited))
+                     (and (stringp reason) (not (string-blank-p reason)))
+                   (null reason)))
                (or (null (plist-get plist :token-budget))
                    (and (integerp (plist-get plist :token-budget))
                         (> (plist-get plist :token-budget) 0)))
-               (natnump (or (plist-get plist :token-usage) 0))
-               (or (null (plist-get plist :continuation-key))
-                   (stringp (plist-get plist :continuation-key)))
-               (or (null (plist-get plist :checkpoint))
-                   (let ((checkpoint (plist-get plist :checkpoint)))
-                     (and (proper-list-p checkpoint)
-                          (cl-every
-                           (lambda (key) (plist-member checkpoint key))
-                           '(:phase :cycle :input :workload :provider :effort
-                             :plan-reference :attempt :attempt-id :retry-count
-                             :dispatch-state :request-started
-                             :last-settled-boundary :prepared-at))
-                          (memq (plist-get checkpoint :phase)
-                                '(planning guardian implementing reviewing))
-                          (integerp (plist-get checkpoint :cycle))
-                          (> (plist-get checkpoint :cycle) 0)
-                          (memq (plist-get checkpoint :workload)
-                                '(planning goal-guardian implementation review))
-                          (stringp (plist-get checkpoint :provider))
-                          (or (null (plist-get checkpoint :plan-reference))
-                              (stringp
-                               (plist-get checkpoint :plan-reference)))
-                          (integerp (plist-get checkpoint :attempt))
-                          (> (plist-get checkpoint :attempt) 0)
-                          (stringp (plist-get checkpoint :attempt-id))
-                          (integerp (plist-get checkpoint :retry-count))
-                          (>= (plist-get checkpoint :retry-count) 0)
-                          (memq (plist-get checkpoint :dispatch-state)
-                                '(prepared started unknown failed settled))
-                          (memq (plist-get checkpoint :request-started)
-                                '(nil t))
-                          (or (null (plist-get checkpoint
-                                               :last-settled-boundary))
-                              (proper-list-p
-                               (plist-get checkpoint
-                                          :last-settled-boundary)))
-                          (stringp (plist-get checkpoint :prepared-at))
-                          (or (stringp (plist-get checkpoint :input))
-                              (and (proper-list-p
-                                    (plist-get checkpoint :input))
-                                   (plist-get checkpoint :input))))))
-               (memq (plist-get plist :pause-requested) '(nil t)))
+               (natnump (plist-get plist :tokens-used))
+               (natnump (plist-get plist :time-used-seconds))
+               (natnump (plist-get plist :turns-run))
+               (or (null (plist-get plist :plan-reference))
+                   (let ((reference (plist-get plist :plan-reference)))
+                     (and (stringp reference)
+                          (not (string-empty-p reference))
+                          (not (file-name-absolute-p reference))
+                          (equal reference
+                                 (file-relative-name
+                                  (expand-file-name reference "/") "/"))
+                          (not (string-prefix-p "../" reference))
+                          (not (equal reference "..")))))
+               (stringp (plist-get plist :created-at))
+               (stringp (plist-get plist :updated-at)))
         (error "Invalid Goal sidecar")))
     (mevedel-goal--create
      :id (plist-get plist :id)
      :objective (plist-get plist :objective)
      :status (plist-get plist :status)
-     :phase (plist-get plist :phase)
-     :approval-policy (plist-get plist :approval-policy)
-     :owner-session (plist-get plist :owner-session)
-     :execution-home (copy-tree (plist-get plist :execution-home))
-     :implementation-context (plist-get plist :implementation-context)
-     :pause-requested (plist-get plist :pause-requested)
-     :current-plan (copy-tree (plist-get plist :current-plan))
-     :review-summary (copy-tree (plist-get plist :review-summary))
-     :cycle (plist-get plist :cycle)
-     :cycles (copy-tree (plist-get plist :cycles))
-     :review-findings (plist-get plist :review-findings)
      :reason (plist-get plist :reason)
-     :checkpoint (copy-tree (plist-get plist :checkpoint))
      :token-budget (plist-get plist :token-budget)
-     :token-usage (or (plist-get plist :token-usage) 0)
-     :continuation-key (plist-get plist :continuation-key))))
+     :tokens-used (plist-get plist :tokens-used)
+     :time-used-seconds (plist-get plist :time-used-seconds)
+     :turns-run (plist-get plist :turns-run)
+     :plan-reference (plist-get plist :plan-reference)
+     :created-at (plist-get plist :created-at)
+     :updated-at (plist-get plist :updated-at))))
 
 
 ;;
@@ -708,7 +607,6 @@ The resulting plist is round-trippable via
    :plan-metadata          (mevedel-session-plan-metadata session)
    :goal                   (when-let* ((goal (mevedel-session-goal session)))
                              (mevedel-session-persistence--goal-to-plist goal))
-   :goal-handoff           (mevedel-session-goal-handoff session)
    ;; Root's reverse-order unread queue.  Child queues live on their explicit
    ;; registry records and all queues become FIFO only at delivery time.
    :messages
@@ -739,15 +637,6 @@ The resulting plist is round-trippable via
                    (cl-every (lambda (key) (plist-member prompt key))
                              '(:turn :file-turn :cum-turn)))
         (error "Invalid session prompt entry: %S" prompt))))
-  (when-let* ((handoff (plist-get plist :goal-handoff)))
-    (unless (and (proper-list-p handoff)
-                 (stringp (plist-get handoff :goal-id))
-                 (stringp (plist-get handoff :target-session-id))
-                 (stringp (plist-get handoff :target-directory))
-                 (memq (plist-get handoff :state) '(prepared complete))
-                 (file-name-absolute-p
-                  (plist-get handoff :target-directory)))
-      (error "Invalid Goal handoff")))
   plist)
 
 (defun mevedel-session-persistence-deserialize (plist)
@@ -845,10 +734,10 @@ their hygiene filters."
                      :file-snapshots   (plist-get plist :file-snapshots)
                      :plan-metadata    (plist-get plist :plan-metadata)
                      :goal
-                     (mevedel-session-persistence--goal-from-plist
-                      (plist-get plist :goal))
-                     :goal-handoff (copy-tree
-                                    (plist-get plist :goal-handoff))
+                     (condition-case nil
+                         (mevedel-session-persistence--goal-from-plist
+                          (plist-get plist :goal))
+                       (error nil))
                      :agent-transcripts
                      (mevedel-session-persistence--sanitize-agent-transcripts
                       (plist-get plist :agent-transcripts))
@@ -858,32 +747,12 @@ their hygiene filters."
                      :messages
                      (mevedel-agent-persistence-sanitize-mailbox
                       (plist-get plist :messages) "/root"))))
-    (when-let* ((goal (mevedel-session-goal session)))
-      (unless (equal (mevedel-session-session-id session)
-                     (mevedel-goal-owner-session goal))
-        (error "Goal owner does not match session")))
     (when-let* ((goal (mevedel-session-goal session))
-                ((not (eq (mevedel-goal-status goal) 'complete))))
-      (let ((prior-status (mevedel-goal-status goal))
-            (prior-reason (mevedel-goal-reason goal)))
-        (when (eq prior-status 'blocked)
-          (setf (mevedel-goal-phase goal) 'planning
-                (mevedel-goal-review-findings goal)
-                (string-join
-                 (delq nil (list (mevedel-goal-review-findings goal)
-                                  prior-reason))
-                 "\n")))
+                ((eq (mevedel-goal-status goal) 'active)))
         (setf (mevedel-goal-status goal) 'paused
-              (mevedel-goal-pause-requested goal) nil
-              (mevedel-goal-reason goal)
-              (cond
-               ((and (stringp prior-reason)
-                     (string-prefix-p "Session restored paused" prior-reason))
-                prior-reason)
-               ((and (stringp prior-reason)
-                     (not (string-blank-p prior-reason)))
-                (format "Session restored paused: %s" prior-reason))
-               (t "Session restored paused; use /goal resume to continue")))))
+              (mevedel-goal-reason goal) "session resumed"
+              (mevedel-goal-updated-at goal)
+              (format-time-string "%FT%T%z")))
     (list :session             session
           :first-user-message  (plist-get plist :first-user-message)
           :latest-user-message latest-user-message
@@ -2325,11 +2194,6 @@ nil if SESSION is not yet materialized."
                         (goto-char (point-max))
                         (unless (bolp) (insert "\n"))
                         (insert "\n")
-                        (when-let* ((goal (mevedel-session-goal session)))
-                          (require 'mevedel-goal)
-                          (insert
-                           (mevedel-goal-context-fragment goal session t)
-                           "\n\n"))
                         (insert
                          (mevedel-session-persistence--summary-block summary))
                         (when tail-text
@@ -3929,8 +3793,7 @@ mail are deliberately absent from the returned session."
           :pending-plan-approval nil
           :plan-metadata
           (copy-tree (mevedel-session-plan-metadata session) t)
-          :goal nil
-          :goal-handoff nil)))
+          :goal nil)))
     (when picked-cum-turn
       (mevedel-session-persistence--prune-agent-transcripts-after-fork
        child picked-cum-turn)

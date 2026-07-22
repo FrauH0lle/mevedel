@@ -26,11 +26,11 @@
 (defvar mevedel-sandbox-mode)
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-id "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-p "mevedel-structs" (cl-x))
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x))
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x))
+(declare-function mevedel-goal-tokens-used "mevedel-structs" (cl-x))
+(declare-function mevedel-goal-turns-run "mevedel-structs" (cl-x))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x))
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x))
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x))
@@ -241,9 +241,9 @@ symbol instead of their printed representation."
      (when preset (list :preset preset))
      (when goal
        (list :goal-id (mevedel-goal-id goal)
-             :goal-cycle (mevedel-goal-cycle goal)
-             :goal-phase (mevedel-goal-phase goal)
-             :goal-status (mevedel-goal-status goal)))
+             :goal-status (mevedel-goal-status goal)
+             :goal-tokens-used (mevedel-goal-tokens-used goal)
+             :goal-turns-run (mevedel-goal-turns-run goal)))
      (mevedel-telemetry--safe-props props))))
 
 

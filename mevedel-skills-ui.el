@@ -68,12 +68,11 @@
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
 (declare-function mevedel-goal-description "mevedel-goal" (&optional goal))
-(declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-start
                   "mevedel-goal"
-                  (objective &optional display-text approval-policy submission))
+                  (objective))
 
 ;; `mevedel-mention-bindings'
 (declare-function mevedel-mention-bindings-ranges
@@ -135,7 +134,6 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
@@ -302,37 +300,16 @@ Routes through the lifecycle-aware permission transition path."
   (let* ((args (string-trim (or args "")))
          (parts (split-string args "[ \t\n]+" t))
          (action (car parts))
-         (rest (string-join (cdr parts) " "))
-         (goal (and (bound-and-true-p mevedel--session)
-                    (mevedel-session-goal mevedel--session))))
+         (rest (string-join (cdr parts) " ")))
     (pcase action
       ((or 'nil "")
        (require 'mevedel-menu)
        (mevedel-menu-open 'goal))
-      ("edit"
-       (unless goal (user-error "No current Goal"))
-       (mevedel-goal-edit
-        (if (string-blank-p rest)
-            (read-string "Goal objective: " (mevedel-goal-objective goal))
-          rest)))
       ("pause" (mevedel-goal-pause))
       ("resume" (mevedel-goal-resume rest))
       ("clear" (mevedel-goal-clear))
-      ("approval"
-       (unless goal (user-error "No current Goal"))
-       (if (string-blank-p rest)
-           (message "mevedel: Goal approval policy is %s"
-                    (mevedel-goal-approval-policy goal))
-         (unless (member rest '("supervised" "automatic"))
-           (user-error "Unknown Goal approval policy: %s" rest))
-         (mevedel-goal-set-approval-policy (intern rest))))
-      ("auto"
-       (when (string-blank-p rest)
-         (user-error "Automatic Goal objective must not be blank"))
-       (mevedel-goal-start rest rest 'automatic)
-       'mevedel-view-sent)
       (_
-       (mevedel-goal-start args args)
+       (mevedel-goal-start args)
        'mevedel-view-sent))))
 
 (defun mevedel-cmd--auto (_args)

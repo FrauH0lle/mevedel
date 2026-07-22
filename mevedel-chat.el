@@ -73,10 +73,6 @@
 		  (continue fsm))
 
 ;; `mevedel-goal'
-(declare-function mevedel-goal--post-response "mevedel-goal"
-		  (start end))
-(declare-function mevedel-goal-restore-pending-approval "mevedel-goal"
-		  (&optional session chat-buffer))
 (declare-function mevedel-plan-approval-abort "mevedel-goal"
 		  (&optional session outcome))
 
@@ -184,8 +180,6 @@
 (declare-function mevedel-slash-capf "mevedel-skills-ui" nil)
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-pause-requested "mevedel-structs"
-		  (cl-x) t)
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-drain-cancellers "mevedel-structs"
@@ -465,14 +459,10 @@ session struct. SOURCE is `startup' or `resume' as a string."
               #'mevedel-session-persistence--release-on-kill nil t)
     (add-hook 'kill-buffer-hook
               #'mevedel--run-session-end-hooks nil t)
-    ;; Goal phase capture runs after normal rendering so a newly proposed
-    ;; plan approval cannot be cleared by interaction-zone rebuilding.
     (add-hook 'gptel-post-response-functions
               #'mevedel-view-stream-render-response nil t)
     (add-hook 'gptel-post-response-functions
               #'mevedel-plan-mode--post-response t t)
-    (add-hook 'gptel-post-response-functions
-              #'mevedel-goal--post-response t t)
     ;; Repair raw model input before view hooks observe the call and before
     ;; gptel maps the arguments into the pipeline wrapper.
     (require 'mevedel-tool-repair)
@@ -515,8 +505,6 @@ session struct. SOURCE is `startup' or `resume' as a string."
     (mevedel-view--ensure buf)
     (when (fboundp 'mevedel-plan-mode-restore-pending-approval)
       (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
-    (when (fboundp 'mevedel-goal-restore-pending-approval)
-      (mevedel-goal-restore-pending-approval mevedel--session buf))
     (mevedel--run-session-start-hooks source)))
 
 (defun mevedel--chat-buffer-setup (buf workspace session-name &optional working-directory)
@@ -1258,8 +1246,9 @@ BUF defaults to the current buffer if not specified."
                                (mevedel-session-goal mevedel--session)))
                     ((eq (mevedel-goal-status goal) 'active)))
           (setf (mevedel-goal-status goal) 'paused
-                (mevedel-goal-pause-requested goal) nil
-                (mevedel-goal-reason goal) "Active request aborted by user"))
+                (mevedel-goal-reason goal) "interrupted by user"
+                (mevedel-goal-updated-at goal)
+                (format-time-string "%FT%T%z")))
         (when (bound-and-true-p mevedel--current-request)
           (mevedel-request-end))
         (when (and (bound-and-true-p mevedel--session)

@@ -47,9 +47,6 @@
                   "mevedel-executions-list" (&optional context))
 
 ;; `mevedel-goal'
-(declare-function mevedel-goal-approval-status
-                  "mevedel-goal" (&optional session))
-(declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
 (declare-function mevedel-plan-approval-abort
                   "mevedel-goal" (&optional session outcome))
 
@@ -72,7 +69,6 @@
 (defvar mevedel-sandbox-state-change-hook)
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-state-label "mevedel-structs"
                   (&optional buffer))
@@ -798,37 +794,13 @@ Kills the associated view buffer."
                       "model none"
                     model-label))
            (goal (and session (mevedel-session-goal session)))
-           (goal-phase (and goal (mevedel-goal-phase goal)))
-           (approval-status
-            (and goal
-                 (mevedel-goal-approval-status session)))
-           (goal-workload
-            (or (plist-get approval-status :workload)
-                (pcase goal-phase
-                  ('implementing 'implementation)
-                  ('reviewing 'review)
-                  ('awaiting-approval 'goal-guardian)
-                  (_ goal-phase))))
-           (cycle-record (and goal (mevedel-goal-cycle-record goal)))
-           (actual (and goal-workload
-                        (alist-get goal-workload
-                                   (plist-get cycle-record :providers))))
            (phase-model
-            (cond
-             ((and goal (eq (mevedel-goal-status goal) 'complete))
-              (format "complete · %s" model))
-             ((and approval-status actual)
-              (format "%s · %s/%s"
-                      (plist-get approval-status :label)
-                      (plist-get actual :provider)
-                      (or (plist-get actual :effort) "default")))
-             (approval-status
-              (format "%s · %s" (plist-get approval-status :label) model))
-             (actual
-              (format "%s · %s/%s"
-                      goal-phase (plist-get actual :provider)
-                      (or (plist-get actual :effort) "default")))
-             (t model)))
+            (if goal
+                (format "%s · %d turns · %s"
+                        (mevedel-goal-status goal)
+                        (mevedel-goal-turns-run goal)
+                        model)
+              model))
            (preset-name (and session (mevedel-session-preset-name session)))
            (tool-count (mevedel-tools-active-count data-buffer))
            (tools (format "%d tool%s"

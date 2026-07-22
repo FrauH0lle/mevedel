@@ -192,7 +192,6 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :agent-turn-capacity 3
                :plan-metadata nil
                :goal nil
-               :goal-handoff nil
                :messages nil)))
     (while plist
       (setq sidecar (plist-put sidecar (pop plist) (pop plist))))
@@ -305,104 +304,60 @@ ROOT is a temporary directory owned and cleaned up by the caller."
 (mevedel-deftest mevedel-session-persistence--goal-to-plist ()
   ,test
   (test)
-  :doc "captures lifecycle position, cycle metadata, and blocked reason"
+  :doc "captures the strict phase-free Goal schema"
   (let* ((goal (mevedel-goal--create
                 :id "g1" :objective "Ship" :status 'blocked
-                :phase 'reviewing :approval-policy 'supervised
-                :owner-session "main" :cycle 2
-                :execution-home '(:kind current :directory "/tmp/"
-                                  :session-id "main" :locked t)
-                :implementation-context 'full
-                :cycles '((:cycle 1) (:cycle 2))
-                :token-budget 1000 :token-usage 345
-                :continuation-key "key"
-                :checkpoint
-                '(:phase reviewing :cycle 2 :input "Exact review"
-                  :workload review :provider "openai:model" :effort high
-                  :plan-reference nil
-                  :attempt 1 :attempt-id "g1/2/reviewing/1"
-                  :retry-count 0 :dispatch-state started :request-started t
-                  :last-settled-boundary nil :prepared-at "2026-01-01T00:00:00Z")
-                :reason "Need an API credential."))
+                :reason "Need an API credential."
+                :token-budget 1000 :tokens-used 345
+                :time-used-seconds 12 :turns-run 4
+                :plan-reference "plans/accepted.md"
+                :created-at "created" :updated-at "updated"))
          (plist (mevedel-session-persistence--goal-to-plist goal)))
     (should (equal "g1" (plist-get plist :id)))
     (should (eq 'blocked (plist-get plist :status)))
-    (should (= 2 (plist-get plist :cycle)))
     (should (= 1000 (plist-get plist :token-budget)))
-    (should (= 345 (plist-get plist :token-usage)))
-    (should (eq 'current
-                (plist-get (plist-get plist :execution-home) :kind)))
-    (should (eq t (plist-get (plist-get plist :execution-home) :locked)))
-    (should (eq 'full (plist-get plist :implementation-context)))
-    (should (equal "Exact review"
-                   (plist-get (plist-get plist :checkpoint) :input)))
+    (should (= 345 (plist-get plist :tokens-used)))
+    (should (= 12 (plist-get plist :time-used-seconds)))
+    (should (= 4 (plist-get plist :turns-run)))
+    (should (equal "plans/accepted.md" (plist-get plist :plan-reference)))
     (should (equal "Need an API credential." (plist-get plist :reason)))))
 
 (mevedel-deftest mevedel-session-persistence--goal-from-plist ()
   ,test
   (test)
-  :doc "rebuilds a Goal without sharing mutable recovery records"
-  (let* ((cycles '((:cycle 1 :plan "cycle-001-plan.md")))
-         (checkpoint
-          '(:phase planning :cycle 1 :input "Exact planning"
-            :workload planning :provider "p:m" :effort nil
-            :plan-reference nil
-            :attempt 1 :attempt-id "g1/1/planning/1"
-            :retry-count 0 :dispatch-state settled :request-started t
-            :last-settled-boundary nil :prepared-at "2026-01-01T00:00:00Z"))
-         (goal (mevedel-session-persistence--goal-from-plist
-                (list :id "g1" :objective "Ship" :status 'active
-                      :phase 'planning :approval-policy 'supervised
-                      :owner-session "main"
-                      :execution-home '(:kind current :directory "/tmp/"
-                                        :session-id "main" :locked t)
-                      :implementation-context 'full
-                      :cycle 1 :cycles cycles :checkpoint checkpoint
-                      :token-budget 1000 :token-usage 25
-                      :continuation-key "key"))))
+  :doc "rebuilds the current strict Goal schema"
+  (let ((goal (mevedel-session-persistence--goal-from-plist
+               '(:id "g1" :objective "Ship" :status active :reason nil
+                 :token-budget 1000 :tokens-used 25
+                 :time-used-seconds 7 :turns-run 2
+                 :plan-reference "plans/accepted.md"
+                 :created-at "created" :updated-at "updated"))))
     (should (mevedel-goal-p goal))
     (should (equal "Ship" (mevedel-goal-objective goal)))
-    (should (equal cycles (mevedel-goal-cycles goal)))
-    (should-not (eq cycles (mevedel-goal-cycles goal)))
-    (should (equal checkpoint (mevedel-goal-checkpoint goal)))
-    (should-not (eq checkpoint (mevedel-goal-checkpoint goal)))
     (should (= 1000 (mevedel-goal-token-budget goal)))
-    (should (= 25 (mevedel-goal-token-usage goal)))
-    (should (eq 'current
-                (plist-get (mevedel-goal-execution-home goal) :kind)))
-    (should (eq t
-                (plist-get (mevedel-goal-execution-home goal) :locked)))
-    (should (eq 'full (mevedel-goal-implementation-context goal)))
-    (should (equal "key" (mevedel-goal-continuation-key goal))))
+    (should (= 25 (mevedel-goal-tokens-used goal)))
+    (should (= 7 (mevedel-goal-time-used-seconds goal)))
+    (should (= 2 (mevedel-goal-turns-run goal))))
   :doc "keeps sessions without a Goal empty"
   (should-not (mevedel-session-persistence--goal-from-plist nil))
-  :doc "rejects unsafe IDs and malformed lifecycle state"
+  :doc "rejects old, incomplete, and unsafe Goal records"
   (let ((valid '(:id "g1" :objective "Ship" :status active
-                 :phase planning :approval-policy supervised
-                 :owner-session "main"
-                 :execution-home (:kind current :directory "/tmp/"
-                                  :session-id "main" :locked t)
-                 :implementation-context full
-                 :cycle 1 :cycles ((:cycle 1))
-                 :token-budget nil :token-usage 0
-                 :continuation-key nil)))
+                 :reason nil :token-budget nil :tokens-used 0
+                 :time-used-seconds 0 :turns-run 0 :plan-reference nil
+                 :created-at "created" :updated-at "updated")))
     (dolist (change '((:id "../escape")
                       (:status unknown)
-                      (:phase editing)
-                      (:cycle 0)
-                      (:cycles ((:cycle "one")))
-                      (:execution-home
-                       (:kind current :directory "/tmp/" :session-id "main"))
-                      (:execution-home
-                       (:kind current :directory "/tmp/" :session-id "main"
-                        :locked yes))
-                      (:checkpoint (:phase planning))
+                      (:tokens-used -1)
+                      (:plan-reference "../escape.md")
                       (:reason 42)))
       (let ((plist (copy-tree valid)))
         (setq plist (plist-put plist (car change) (cadr change)))
         (should-error
          (mevedel-session-persistence--goal-from-plist plist)
-         :type 'error)))))
+         :type 'error)))
+    (should-error
+     (mevedel-session-persistence--goal-from-plist
+      '(:id "old" :objective "Ship" :status active :phase planning)))))
 
 
 ;;
@@ -470,10 +425,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
                           (mevedel-model-workloads
-                           (planning :tier strong)))
-                        (mevedel-session-goal-handoff session)
-                        '(:goal-id "g1" :target-session-id "target"
-                          :target-directory "/tmp/target/" :state complete)))
+                           (planning :tier strong)))))
                (plist (mevedel-session-persistence-serialize
                        session
                        :first-user-message "Refactor X"
@@ -513,10 +465,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (= 2 (length (plist-get plist :tasks))))
           (should (plist-get plist :workspace))
           (should (plist-get plist :prompt-index))
-          (should (plist-get plist :file-snapshots))
-          (should (equal "target"
-                         (plist-get (plist-get plist :goal-handoff)
-                                    :target-session-id))))
+          (should (plist-get plist :file-snapshots)))
       (when (file-directory-p root)
         (delete-directory root t))))
   :doc "fork fields default nil for a non-fork session"
@@ -786,157 +735,28 @@ ROOT is a temporary directory owned and cleaned up by the caller."
          (session (plist-get result :session)))
     (should (equal metadata (mevedel-session-plan-metadata session))))
 
-  :doc "preserves automatic revision metadata and compact cycle audit evidence"
-  (let* ((input-hash (secure-hash 'sha256 "# Original"))
-         (replacement-hash (secure-hash 'sha256 "# Revised"))
-         (plan-metadata
-          `(:path "goals/g1/current-plan.md"
-            :hash ,replacement-hash
-            :status presented
-            :revision-count 1
-            :revision-pending nil
-            :guardian-pending t))
-         (goal
-          `(:id "g1" :objective "Ship" :status active
-            :phase awaiting-approval :approval-policy automatic
-            :owner-session "test-session"
-            :execution-home (:kind current :directory "/tmp/"
-                             :session-id "test-session" :locked t)
-            :implementation-context full
-            :cycle 1
-            :cycles
-            ((:cycle 1
-              :plan-revisions
-              ((:revision 1
-                :input-plan-hash ,input-hash
-                :replacement-plan-hash ,replacement-hash
-                :verdict revise
-                :reason "Add recovery coverage"
-                :feedback ("Cover restart")
-                :guardian-provider "guardian"
-                :guardian-effort high
-                :planner-provider "planner"
-                :planner-effort medium
-                :settlement-state settled
-                :started-at "2026-01-01T00:00:00Z"
-                :settled-at "2026-01-01T00:01:00Z"))))
-            :token-budget nil :token-usage 0
-            :continuation-key nil))
+  :doc "demotes a persisted active Goal to paused on session resume"
+  (let* ((goal '(:id "g1" :objective "Ship" :status active :reason nil
+                 :token-budget nil :tokens-used 9 :time-used-seconds 4
+                 :turns-run 2 :plan-reference nil
+                 :created-at "created" :updated-at "updated"))
          (result
           (mevedel-session-persistence-deserialize
            (test-mevedel-session-persistence--complete-sidecar
-            (list :plan-metadata plan-metadata :goal goal))))
-         (session (plist-get result :session))
-         (restored-goal (mevedel-session-goal session)))
-    (should (equal plan-metadata
-                   (mevedel-session-plan-metadata session)))
-    (should
-     (equal (plist-get (car (mevedel-goal-cycles restored-goal))
-                       :plan-revisions)
-            (plist-get (car (plist-get goal :cycles))
-                       :plan-revisions))))
-  :doc "round-tripped revision state does not share mutable records"
-  (let* ((records
-          '((:cycle 1 :plan-revisions
-             ((:revision 1 :settlement-state started)))))
-         (goal
-          (mevedel-session-persistence--goal-from-plist
-           `(:id "g1" :objective "Ship" :status active
-             :phase awaiting-approval :approval-policy automatic
-             :owner-session "test-session"
-             :execution-home (:kind current :directory "/tmp/"
-                              :session-id "test-session" :locked t)
-             :implementation-context full
-             :cycle 1 :cycles ,records
-             :token-budget nil :token-usage 0
-             :continuation-key nil))))
-    (setf (plist-get
-           (car (plist-get (car (mevedel-goal-cycles goal))
-                           :plan-revisions))
-           :settlement-state)
-          'failed)
-    (should
-     (eq 'started
-         (plist-get (car (plist-get (car records) :plan-revisions))
-                    :settlement-state))))
-  :doc "persists and restores a blocked Goal reason through an on-disk sidecar"
-  (let ((root (make-temp-file "mevedel-goal-sidecar-" t))
-        (path (make-temp-file "mevedel-goal-sidecar-" nil ".el")))
-    (unwind-protect
-        (let* ((source (test-mevedel-session-persistence--make-session root))
-               (_ (setf (mevedel-session-goal source)
-                        (mevedel-goal--create
-                         :id "blocked-goal" :objective "Ship"
-                         :status 'blocked :phase 'reviewing
-                         :approval-policy 'supervised
-                         :owner-session "main-2026-04-23T14-30-a9f2" :cycle 1
-                         :execution-home
-                         '(:kind current :directory "/tmp/"
-                           :session-id "main-2026-04-23T14-30-a9f2" :locked t)
-                         :implementation-context 'full
-                         :cycles '((:cycle 1))
-                         :reason "Need an API credential.")))
-               (_ (mevedel-session-persistence-write
-                   path (mevedel-session-persistence-serialize source)))
-               (result
-                (mevedel-session-persistence-deserialize
-                 (mevedel-session-persistence-read path)))
-               (goal (mevedel-session-goal (plist-get result :session))))
-          (should (eq 'paused (mevedel-goal-status goal)))
-          (should (eq 'planning (mevedel-goal-phase goal)))
-          (should (equal "Need an API credential."
-                         (mevedel-goal-review-findings goal)))
-          (should (equal
-                   "Session restored paused: Need an API credential."
-                   (mevedel-goal-reason goal))))
-      (when (file-directory-p root)
-        (delete-directory root t))
-      (when (file-exists-p path)
-        (delete-file path))))
-  :doc "restoration reason remains stable across repeated reopen cycles"
-  (let* ((goal '(:id "g1" :objective "Ship" :status active
-                 :phase planning :approval-policy supervised
-                 :owner-session "test-session"
-                 :execution-home (:kind current :directory "/tmp/"
-                                  :session-id "test-session" :locked t)
-                 :implementation-context full
-                 :cycle 1 :cycles ((:cycle 1))
-                 :token-budget nil :token-usage 0
-                 :continuation-key nil))
-         (first (mevedel-session-persistence-deserialize
-                 (test-mevedel-session-persistence--complete-sidecar
-                  (list :goal goal))))
-         (first-session (plist-get first :session))
-         (reason (mevedel-goal-reason
-                  (mevedel-session-goal first-session)))
-         (second
+            (list :goal goal))))
+         (restored (mevedel-session-goal (plist-get result :session))))
+    (should (eq 'paused (mevedel-goal-status restored)))
+    (should (equal "session resumed" (mevedel-goal-reason restored)))
+    (should (= 9 (mevedel-goal-tokens-used restored))))
+
+  :doc "loads an old Goal schema as no Goal"
+  (let* ((old '(:id "g1" :objective "Ship" :status active
+                :phase planning :approval-policy supervised))
+         (result
           (mevedel-session-persistence-deserialize
            (test-mevedel-session-persistence--complete-sidecar
-            (list :goal
-                  (mevedel-session-persistence--goal-to-plist
-                   (mevedel-session-goal first-session)))))))
-    (should (equal reason
-                   (mevedel-goal-reason
-                    (mevedel-session-goal (plist-get second :session))))))
-  :doc "restores every unfinished status paused while leaving complete terminal"
-  (dolist (case '((active . paused) (paused . paused)
-                  (blocked . paused) (complete . complete)))
-    (let* ((goal (list :id "g1" :objective "Ship" :status (car case)
-                       :phase 'planning :approval-policy 'supervised
-                       :owner-session "test-session"
-                       :execution-home
-                       '(:kind current :directory "/tmp/"
-                         :session-id "test-session" :locked t)
-                       :implementation-context 'full
-                       :cycle 1 :cycles '((:cycle 1))
-                       :token-budget nil :token-usage 0
-                       :continuation-key nil))
-           (result
-            (mevedel-session-persistence-deserialize
-             (test-mevedel-session-persistence--complete-sidecar
-              (list :goal goal))))
-           (restored (mevedel-session-goal (plist-get result :session))))
-      (should (eq (cdr case) (mevedel-goal-status restored)))))
+            (list :goal old)))))
+    (should-not (mevedel-session-goal (plist-get result :session))))
   :doc "drops permission rules with unknown actions"
   (let* ((plist (list :version (mevedel-version)
                       :session-name "x"
@@ -5291,13 +5111,9 @@ The result is a plist whose :tempdir owns every created file."
                         (mevedel-session-goal session)
                         (mevedel-goal--create
                          :id "parent-goal" :objective "Ship"
-                         :status 'active :phase 'planning
-                         :approval-policy 'supervised :cycle 1
-                         :execution-home
-                         '(:kind current :directory "/tmp/"
-                           :session-id "parent" :locked t)
-                         :implementation-context 'full
-                         :cycles '((:cycle 1)))
+                         :status 'active :tokens-used 0
+                         :time-used-seconds 0 :turns-run 0
+                         :created-at "created" :updated-at "updated")
                         (mevedel-session-execution-state session)
                         'source-execution-state))
                (before (mevedel-session-persistence-serialize session))
