@@ -48,6 +48,13 @@ generated summary is anchored in the new segment and cached in the Plan retry
 record before rotation persists the sidecar.  A later startup failure can
 therefore retry implementation without another summary request.
 
+Worktree/Summary uses the same private target adapter and summary request, but
+its apply operation only caches the portable summary.  It neither replaces nor
+rotates the source transcript and does not begin a source context epoch.  The
+summary is instead installed as the leading canonical summary block of the
+clean worktree target, with source-checkout paths rewritten relative to the
+repository root.
+
 When `PreCompact` adds hook context, the hook audit surface is stored as
 an ignored side channel next to the compaction summary, not in the
 model-visible summary text.  The expanded audit detail shows the
@@ -55,8 +62,9 @@ model-visible summary text.  The expanded audit detail shows the
 Each summary request retry is a new compaction attempt and reruns
 `PreCompact`; hook context from one failed attempt is not reused by the next.
 
-After a successful root summary is applied, mevedel runs `PostCompact` and
-then begins a `SessionStart(compact)` context epoch. Manual compaction leaves
+After a successful root summary whose target opts into a new context epoch is
+applied, mevedel runs `PostCompact` and then begins a
+`SessionStart(compact)` context epoch. Manual compaction leaves
 the resulting context for the next accepted input. Automatic compaction adds
 it to the already-pending request and resumes that same request without
 rerunning `UserPromptSubmit`. Failed or blocked compaction runs neither event.

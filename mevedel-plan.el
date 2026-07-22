@@ -51,6 +51,8 @@
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-save
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence--summary-block
+                  "mevedel-session-persistence" (summary))
 (declare-function mevedel-session-persistence-restore
                   "mevedel-session-persistence" (session-dir))
 (declare-function mevedel-session-persistence-start-fresh-segment
@@ -252,7 +254,7 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
          (and (or (and (eq location 'here)
                        (memq context '(current fresh summary)))
                   (and (eq location 'worktree)
-                       (eq context 'fresh)))
+                       (memq context '(fresh summary))))
               (eq (plist-get selection :execution) 'direct)
               (memq (plist-get selection :mode)
                     mevedel-plan-mode--implementation-modes)))))
@@ -309,7 +311,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 (defun mevedel-plan-mode--next-context (location context)
   "Return the implementation context after CONTEXT at LOCATION."
   (if (eq location 'worktree)
-      'fresh
+      (if (eq context 'fresh) 'summary 'fresh)
     (or (cadr (memq context '(current fresh summary))) 'current)))
 
 (defun mevedel-plan-mode--next-location (selection)
@@ -317,7 +319,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (if (eq (plist-get selection :location) 'here)
       (progn
         (plist-put selection :location 'worktree)
-        (unless (eq (plist-get selection :context) 'fresh)
+        (when (eq (plist-get selection :context) 'current)
           (plist-put selection :context 'fresh)))
     (plist-put selection :location 'here))
   selection)
@@ -327,7 +329,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (pcase context
     ('current "keep the complete planning transcript")
     ('fresh "start with setup context and the accepted plan")
-    ('summary "generate a compact handoff, then start fresh (another model request)")))
+    ('summary "generate a compact handoff, then start with it and the accepted plan")))
 
 (defun mevedel-plan-mode--implementation-prompt
     (accepted-artifact plan-markdown)
@@ -344,12 +346,12 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 
 (defun mevedel-plan-mode--implementation-record (selection accepted)
   "Return retry state for SELECTION and ACCEPTED artifact."
-  (list :step (if (eq (plist-get selection :location) 'worktree)
-                  'prepare-worktree
-                (pcase (plist-get selection :context)
-                  ('fresh 'prepare-context)
-                  ('summary 'prepare-summary)
-                  (_ 'submit)))
+  (list :step (pcase (plist-get selection :context)
+                ('summary 'prepare-summary)
+                ('fresh (if (eq (plist-get selection :location) 'worktree)
+                            'prepare-worktree
+                          'prepare-context))
+                (_ 'submit))
         :selection (copy-tree selection)
         :accepted-path (plist-get accepted :path)
         :accepted-absolute-path (plist-get accepted :absolute-path)
@@ -393,7 +395,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
          (result
           (with-current-buffer chat-buffer
             (mevedel-worktree-create-session
-             branch "Accepted Plan implementation" nil)))
+             branch "Accepted Plan implementation"
+             (eq (plist-get selection :context) 'summary))))
          (target-buffer (plist-get result :buffer))
          (target-session
           (buffer-local-value 'mevedel--session target-buffer))
@@ -447,6 +450,18 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
       (require 'mevedel-permissions)
       (mevedel-preset-restore-session target-session target-buffer)
       (mevedel-permission-mode-transition mode)
+      (when-let* (((eq (plist-get selection :context) 'summary))
+                  (summary (plist-get record :summary)))
+        (let ((current (mevedel--compact-previous-summary)))
+          (cond
+           ((equal current summary))
+           (current (error "Prepared Worktree summary does not match target"))
+           (t
+            (let ((inhibit-read-only t))
+              (goto-char (point-max))
+              (unless (bolp) (insert "\n"))
+              (insert
+               (mevedel-session-persistence--summary-block summary)))))))
       (mevedel-plan-mode--persist target-session target-buffer))
     (setq prepared (plist-put prepared :step 'submit))
     (setq prepared (plist-put prepared :target-accepted-path
@@ -459,13 +474,16 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
     (mevedel-plan-mode--persist session chat-buffer)
     prepared))
 
-(defun mevedel-plan-mode--summary-instructions ()
-  "Return compaction guidance for an implementation handoff."
+(defun mevedel-plan-mode--summary-instructions (&optional portable-paths)
+  "Return compaction guidance for an implementation handoff.
+When PORTABLE-PATHS is non-nil, require repository-relative file references."
   (concat
    "Create a portable implementation handoff that preserves requirements, "
    "repository discoveries, rationale, constraints, unresolved risks, and "
    "next steps. Do not reproduce the accepted plan; it will be supplied "
-   "separately in full after this summary."))
+   "separately in full after this summary."
+   (when portable-paths
+     " Express repository-local file references relative to the repository root.")))
 
 (defun mevedel-plan-mode--summary-without-plan (summary plan)
   "Return SUMMARY without an exact duplicate of PLAN."
@@ -477,7 +495,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   "Aggressively compact CHAT-BUFFER and cache the result in SESSION RECORD."
   (require 'mevedel-compact)
   (with-current-buffer chat-buffer
-    (let* ((plan (mevedel-plan-mode--accepted-body record))
+    (let* ((selection (plist-get record :selection))
+           (worktree-p (eq (plist-get selection :location) 'worktree))
+           (plan (mevedel-plan-mode--accepted-body record))
            (target (mevedel--compact-main-target))
            (apply-function (plist-get target :apply)))
       (setq target
@@ -486,26 +506,41 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
              (lambda (active-target summary &rest args)
                (let ((prepared (copy-tree record)))
                  (setq prepared (plist-put prepared :summary summary))
-                 (setq prepared (plist-put prepared :step 'submit))
+                 (setq prepared
+                       (plist-put prepared :step
+                                  (if worktree-p 'prepare-worktree 'submit)))
                  (cl-remf prepared :failure)
                  (mevedel-plan--metadata-put
                   session :implementation-retry prepared)
-                 (condition-case apply-error
-                     (apply apply-function active-target summary args)
-                   (error
-                    (setq prepared (plist-put prepared :step 'prepare-summary))
-                    (mevedel-plan--metadata-put
-                     session :implementation-retry prepared)
-                    (signal (car apply-error) (cdr apply-error))))))))
+                 (if worktree-p
+                     (mevedel-plan-mode--persist session chat-buffer)
+                   (condition-case apply-error
+                       (apply apply-function active-target summary args)
+                     (error
+                      (setq prepared (plist-put prepared :step 'prepare-summary))
+                      (mevedel-plan--metadata-put
+                       session :implementation-retry prepared)
+                      (signal (car apply-error) (cdr apply-error)))))))))
+      (when worktree-p
+        (setq target (plist-put target :begin-context-epoch nil))
+        (setq target (plist-put target :warn-on-completion nil)))
       (mevedel--compact-run
        :aggressive t
-       :instructions (mevedel-plan-mode--summary-instructions)
+       :instructions (mevedel-plan-mode--summary-instructions worktree-p)
        :prepared-summary (plist-get record :summary)
        :summary-ready
        (lambda (summary)
-         (let ((prepared (copy-tree record))
-               (summary (mevedel-plan-mode--summary-without-plan
-                         summary plan)))
+         (let* ((prepared (copy-tree record))
+                (summary (mevedel-plan-mode--summary-without-plan
+                          summary plan))
+                (summary
+                 (if worktree-p
+                     (string-replace
+                      (file-name-as-directory
+                       (expand-file-name
+                        (mevedel-session-working-directory session)))
+                      "" summary)
+                   summary)))
            (setq prepared (plist-put prepared :summary summary))
            (setq prepared (plist-put prepared :step 'prepare-summary))
            (cl-remf prepared :failure)
@@ -622,7 +657,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
              (mevedel-plan--metadata-put
               session :implementation-retry record)
              (signal (car rotation-error) (cdr rotation-error)))))
-        (when (and (eq context 'summary)
+        (when (and (eq location 'here)
+                   (eq context 'summary)
                    (not (equal (plist-get record :summary)
                                (with-current-buffer chat-buffer
                                  (mevedel--compact-previous-summary)))))

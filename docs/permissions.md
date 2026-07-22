@@ -100,6 +100,11 @@ session rules, persistent rules, defcustom `mevedel-permission-rules`.
   changes lifecycle state only; it never raises the session permission mode.
   Fully unattended implementation therefore still requires an explicit
   `full-auto` selection.
+- Standalone Plan approval applies the selected Ask, Auto, or Full Auto mode to
+  the session that performs Direct implementation. Here changes the source
+  session; Worktree leaves the source mode unchanged and applies the selection
+  only after the target session and accepted artifact are prepared. Summary
+  generation does not raise either session's permission mode.
 
 ## Rule format
 
