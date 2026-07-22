@@ -2334,65 +2334,13 @@ Each binding is (NAME KEYS)."
         (mevedel-goal-settle-failure fsm 'error)
         (should (eq 'paused (mevedel-goal-status goal)))))))
 
-(mevedel-deftest mevedel-goal--insert-and-send ()
-  ,test
-  (test)
-  :doc "returns its FSM while persisting hook context in the transcript"
-  (with-temp-buffer
-    (org-mode)
-    (setq-local gptel-response-separator "\n\n"
-                gptel-prompt-prefix-alist '((org-mode . "* User\n"))
-                gptel-prompt-transform-functions '(transform)
-                gptel-stream t)
-    (let ((fsm (gptel-make-fsm))
-          model-input
-          request-args)
-      (cl-letf (((symbol-function 'gptel-request)
-                 (lambda (&optional _prompt &rest args)
-                   (setq model-input mevedel--pending-model-input
-                         request-args args)
-                   fsm)))
-        (should
-         (eq fsm
-             (mevedel-goal--insert-and-send
-              "Planning prompt" "Goal"
-              (mevedel-prompt-submission-create
-               :context "<hook-context>ctx</hook-context>"
-               :state 'committed)))))
-      (should (string-match-p "Planning prompt" (buffer-string)))
-      (should (string-match-p "hook-context" (buffer-string)))
-      (should (string-match-p "hook-context" model-input))
-      (should (equal '(transform) (plist-get request-args :transforms)))))
-
-  :doc "commits inserted context before a synchronous request failure"
-  (with-temp-buffer
-    (org-mode)
-    (let* ((session (mevedel-session--create :name "goal-context"))
-           (context-entries '((:event SessionStart :body "goal context")))
-           (submission
-            (mevedel-prompt-submission-create
-             :context "<hook-context>goal context</hook-context>"
-             :session session
-             :context-entries context-entries)))
-      (setq-local mevedel--session session
-                  gptel-response-separator "\n\n"
-                  gptel-prompt-prefix-alist '((org-mode . "* User\n")))
-      (setf (mevedel-session-hook-context-pending session) context-entries)
-      (cl-letf (((symbol-function 'gptel-request)
-                 (lambda (&rest _) (error "Request startup failed"))))
-        (should-error
-         (mevedel-goal--insert-and-send
-          "Planning prompt" "Goal" submission)))
-      (should-not (mevedel-session-hook-context-pending session))
-      (should (string-match-p "goal context" (buffer-string))))))
-
 (mevedel-deftest mevedel-goal--dispatch-gptel ()
   ,test
   (test)
   :doc "sends a phase under the caller's policy and tags the request"
   (with-temp-buffer
     (let ((fsm (test-mevedel-goal--fsm (current-buffer) nil)))
-      (cl-letf (((symbol-function 'mevedel-goal--insert-and-send)
+      (cl-letf (((symbol-function 'mevedel--submit-generated-turn)
                  (lambda (&rest _) fsm)))
         (should (eq fsm
                     (mevedel-goal--dispatch-gptel

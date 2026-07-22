@@ -11,6 +11,7 @@
 (require 'mevedel)
 (require 'mevedel-permission-queue)
 (require 'mevedel-goal)
+(require 'mevedel-prompt-submission)
 (require 'mevedel-view-zone)
 (require 'helpers
          (file-name-concat
@@ -392,6 +393,58 @@
           (should (plist-get request-args :stream)))
         (should-not mevedel--pending-model-input)))))
 
+(mevedel-deftest mevedel--submit-generated-turn ()
+  ,test
+  (test)
+  :doc "returns its FSM while persisting hook context in the transcript"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local gptel-response-separator "\n\n"
+                gptel-prompt-prefix-alist '((org-mode . "* User\n"))
+                gptel-prompt-transform-functions '(transform)
+                gptel-stream t)
+    (let ((fsm (gptel-make-fsm))
+          model-input
+          request-args)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&optional _prompt &rest args)
+                   (setq model-input mevedel--pending-model-input
+                         request-args args)
+                   fsm)))
+        (should
+         (eq fsm
+             (mevedel--submit-generated-turn
+              "Planning prompt" "Goal"
+              (mevedel-prompt-submission-create
+               :context "<hook-context>ctx</hook-context>"
+               :state 'committed)))))
+      (should (string-match-p "Planning prompt" (buffer-string)))
+      (should (string-match-p "hook-context" (buffer-string)))
+      (should (string-match-p "hook-context" model-input))
+      (should (equal '(transform) (plist-get request-args :transforms)))))
+
+  :doc "commits inserted context before a synchronous request failure"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((session (mevedel-session--create :name "goal-context"))
+           (context-entries '((:event SessionStart :body "goal context")))
+           (submission
+            (mevedel-prompt-submission-create
+             :context "<hook-context>goal context</hook-context>"
+             :session session
+             :context-entries context-entries)))
+      (setq-local mevedel--session session
+                  gptel-response-separator "\n\n"
+                  gptel-prompt-prefix-alist '((org-mode . "* User\n")))
+      (setf (mevedel-session-hook-context-pending session) context-entries)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _) (error "Request startup failed"))))
+        (should-error
+         (mevedel--submit-generated-turn
+          "Planning prompt" "Goal" submission)))
+      (should-not (mevedel-session-hook-context-pending session))
+      (should (string-match-p "goal context" (buffer-string))))))
+
 (mevedel-deftest mevedel--implement-plan ()
   ,test
   (test)
@@ -467,6 +520,35 @@
           (should (string-match-p "# Focused plan" prompt))
           (should-not (string-match-p "Unrelated prior transcript" prompt)))
       (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (file-exists-p plan-file) (delete-file plan-file))))
+  :doc "submits Here/Current as one ordinary generated turn"
+  (let ((plan-file (make-temp-file "mevedel-plan-current-"))
+        sent-prompt sent-display sent-submission)
+    (unwind-protect
+        (progn
+          (write-region "# Current plan" nil plan-file nil 'silent)
+          (with-temp-buffer
+            (org-mode)
+            (let ((submission
+                   (mevedel-prompt-submission-create
+                    :input "Accepted plan artifact: /accepted.md\n\n# Current plan"
+                    :state 'committed)))
+              (cl-letf (((symbol-function
+                          'mevedel--implementation-permission-mode-apply)
+                         #'ignore)
+                        ((symbol-function 'mevedel--submit-generated-turn)
+                         (lambda (prompt display accepted)
+                           (setq sent-prompt prompt
+                                 sent-display display
+                                 sent-submission accepted))))
+                (mevedel--implement-plan
+                 (list :context 'current :plan-file plan-file
+                       :permission-mode 'auto
+                       :prompt-submission submission)))
+              (should (equal (mevedel-prompt-submission-input submission)
+                             sent-prompt))
+              (should (equal "Implement accepted plan" sent-display))
+              (should (eq submission sent-submission)))))
       (when (file-exists-p plan-file) (delete-file plan-file)))))
 
 (mevedel-deftest mevedel--send-plan-implementation-turn ()

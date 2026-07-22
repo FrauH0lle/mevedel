@@ -5,7 +5,10 @@
 ;;; Code:
 
 (require 'mevedel-plan)
+(require 'mevedel-interaction-prompt)
+(require 'mevedel-prompt-submission)
 (require 'mevedel-structs)
+(require 'mevedel-view-composer)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -56,6 +59,168 @@
     (mevedel-plan-mode-exit session)
     (should-not (mevedel-session-plan-mode session))
     (should (eq 'auto (mevedel-session-permission-mode session)))))
+
+(mevedel-deftest mevedel-plan-mode--default-selection
+  (:doc "defaults to Here, Current, Direct, and the underlying mode")
+  ,test
+  (test)
+  (let ((session (mevedel-session--create
+                  :name "test" :permission-mode 'auto)))
+    (should (equal '(:location here :context current
+                     :execution direct :mode auto)
+                   (mevedel-plan-mode--default-selection session)))
+    (should (eq 'auto (mevedel-session-permission-mode session)))))
+
+(mevedel-deftest mevedel-plan-mode--render-approval
+  (:doc "renders compact Direct axes without applying Mode before acceptance")
+  ,test
+  (test)
+  (let* ((session (mevedel-session--create
+                   :name "test" :permission-mode 'auto))
+         (data-buffer (generate-new-buffer " *plan-approval-data*"))
+         (view-buffer (generate-new-buffer " *plan-approval-view*"))
+         (selection (mevedel-plan-mode--default-selection session))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         descriptor outcome rerendered)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-view--fontify-as)
+                   (lambda (text _mode) text))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value)
+                     (make-overlay (point-min) (point-min))))
+                  ((symbol-function 'mevedel--prompt--settle)
+                   (lambda (_overlay value) (setq outcome value)))
+                  ((symbol-function 'mevedel-plan-approval-render)
+                   (lambda (&rest _) (setq rerendered t))))
+          (mevedel-plan-mode--render-approval entry)
+          (let ((body (plist-get descriptor :body))
+                (keymap (plist-get descriptor :keymap)))
+            (dolist (text '("Location   Here" "Context    Current"
+                            "Execution  Direct" "Mode       auto"))
+              (should (string-match-p text body)))
+            (call-interactively (lookup-key keymap (kbd "m")))
+            (should rerendered)
+            (should (eq 'full-auto (plist-get selection :mode)))
+            (should (eq 'auto (mevedel-session-permission-mode session)))
+            (call-interactively (lookup-key keymap (kbd "RET")))
+            (should (equal '(:accept t
+                             :selection (:location here :context current
+                                         :execution direct :mode full-auto))
+                           outcome))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
+
+(mevedel-deftest mevedel-plan-mode--post-response
+  (:doc "only root-assistant prose creates one proposal per rendered turn")
+  ,test
+  (test)
+  (let* ((save-dir (make-temp-file "mevedel-plan-proposal-" t))
+         (session (mevedel-session--create
+                   :name "test" :save-path save-dir :plan-mode t))
+         entries)
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (let ((start (point)))
+            (insert "<proposed_plan>\n# Root\n<detail>keep</detail>\n</proposed_plan>\n")
+            (add-text-properties start (point) '(gptel response)))
+          (let ((start (point)))
+            (insert "<proposed_plan>\n# Tool\n</proposed_plan>\n")
+            (add-text-properties start (point) '(gptel (tool . "call-1"))))
+          (cl-letf (((symbol-function 'mevedel-plan-approval-present)
+                     (lambda (entry &optional _session) (push entry entries))))
+            (mevedel-plan-mode--post-response (point-min) (point-max))
+            (mevedel-plan-mode--post-response (point-min) (point-max)))
+          (should (= 1 (length entries)))
+          (should (equal "# Root\n<detail>keep</detail>"
+                         (plist-get (car entries) :body)))
+          (should (equal '(:location here :context current
+                           :execution direct :mode ask)
+                         (plist-get (car entries) :selection)))
+          (should (equal 'proposed
+                         (plist-get (mevedel-session-plan-metadata session)
+                                    :status))))
+      (delete-directory save-dir t)))
+
+  :doc "tool output alone cannot create a proposal"
+  (let ((session (mevedel-session--create :name "test" :plan-mode t))
+        presented)
+    (with-temp-buffer
+      (setq-local mevedel--session session)
+      (insert "<proposed_plan>\n# Tool only\n</proposed_plan>")
+      (add-text-properties (point-min) (point-max)
+                           '(gptel (tool . "call-1")))
+      (cl-letf (((symbol-function 'mevedel-plan-approval-present)
+                 (lambda (&rest _) (setq presented t))))
+        (mevedel-plan-mode--post-response (point-min) (point-max)))
+      (should-not presented)))
+
+  :doc "injected agent output cannot create a proposal"
+  (let ((session (mevedel-session--create :name "test" :plan-mode t))
+        presented)
+    (with-temp-buffer
+      (insert "<agent-result sender=\"/root/worker\" recipient=\"/root\">\n"
+              "<proposed_plan>\n# Agent only\n</proposed_plan>\n"
+              "</agent-result>\n")
+      (add-text-properties (point-min) (point-max) '(gptel response))
+      (setq-local mevedel--session session)
+      (cl-letf (((symbol-function 'mevedel-plan-approval-present)
+                 (lambda (&rest _) (setq presented t))))
+        (mevedel-plan-mode--post-response (point-min) (point-max)))
+      (should-not presented))))
+
+(mevedel-deftest mevedel-plan-mode--approval-callback
+  (:doc "accepts immutably and starts one canonical Direct turn")
+  ,test
+  (test)
+  (let* ((save-dir (make-temp-file "mevedel-plan-direct-" t))
+         (session (mevedel-session--create
+                   :name "test" :save-path save-dir
+                   :permission-mode 'auto :plan-mode t))
+         (data-buffer (generate-new-buffer " *plan-direct-data*"))
+         (view-buffer (generate-new-buffer " *plan-direct-view*"))
+         hook-input implementation)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session
+                        mevedel-permission-mode 'auto))
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_buffer) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (setq hook-input input)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (action) (setq implementation action))))
+            (mevedel-plan-mode--approval-callback
+             "# Accepted\n\nDo it." data-buffer session
+             '(:accept t
+               :selection (:location here :context current
+                           :execution direct :mode full-auto))))
+          (let* ((metadata (mevedel-session-plan-metadata session))
+                 (accepted (plist-get metadata :accepted-absolute-path)))
+            (should-not (mevedel-session-plan-mode session))
+            (should (eq 'full-auto
+                        (mevedel-session-permission-mode session)))
+            (should (eq 'approved (plist-get metadata :status)))
+            (should-not (plist-member metadata :verification-pending))
+            (should (file-exists-p accepted))
+            (should (string-match-p (regexp-quote accepted) hook-input))
+            (should (string-match-p "# Accepted" hook-input))
+            (should (eq 'current (plist-get implementation :context)))
+            (should (equal accepted
+                           (plist-get implementation :plan-file)))
+            (should-not (mevedel-session-goal session))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-validate
   (:doc "normalizes nonblank plans and rejects invalid input")
@@ -196,6 +361,8 @@
                   (mevedel-plan-archive-accepted
                    artifact session "goals/g1/cycle-001-plan.md")))
             (should (file-exists-p (plist-get accepted :absolute-path)))
+            (should (equal (plist-get artifact :hash)
+                           (plist-get accepted :hash)))
             (should (equal "goals/g1/cycle-001-plan.md"
                            (plist-get accepted :path)))
             (should
