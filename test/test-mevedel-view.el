@@ -256,6 +256,17 @@
                  (regexp-quote "ask · idle · model none · 0 tools")
                  line)))))
 
+  :doc "status strip shows Plan together with its permission policy"
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :name "main" :permission-mode 'full-auto :plan-mode t)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (should (string-match-p
+                 (regexp-quote "Plan/full-auto · idle")
+                 (mevedel-view--status-strip))))))
+
   :doc "status strip shows the Goal phase's actual provider and effort"
   (mevedel-view-test--with-buffers
     (let* ((goal (mevedel-goal--create

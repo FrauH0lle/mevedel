@@ -62,6 +62,9 @@
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
+;; `mevedel-plan'
+(declare-function mevedel-plan-mode-exit "mevedel-plan" (&optional session))
+
 ;; `mevedel-presets'
 (declare-function mevedel-preset-restore-session
                   "mevedel-presets" (session &optional buffer))
@@ -2038,6 +2041,8 @@ PROMPT-SUBMISSION owns accepted hook context for the initial planning turn."
   (setq approval-policy (or approval-policy 'supervised))
   (unless (memq approval-policy '(supervised automatic))
     (error "Unknown Goal approval policy: %s" approval-policy))
+  (when (fboundp 'mevedel-plan-mode-exit)
+    (mevedel-plan-mode-exit mevedel--session))
   (mevedel-session-persistence-ensure-files
    mevedel--session (current-buffer))
   (let ((previous-goal (mevedel-session-goal mevedel--session))

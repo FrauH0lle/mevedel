@@ -608,6 +608,20 @@
   (let ((r (mevedel-reminders-make-mode-constraints)))
     (should (equal 5 (mevedel-reminder-interval r)))))
 
+(mevedel-deftest mevedel-reminders-make-plan-mode
+  (:doc "fires every turn only while Plan mode is active")
+  ,test
+  (test)
+  (let* ((session (mevedel-session--create :name "main" :plan-mode t))
+         (reminder (mevedel-reminders-make-plan-mode)))
+    (should (funcall (mevedel-reminder-trigger reminder) session))
+    (should-not (mevedel-reminder-interval reminder))
+    (should (string-match-p
+             "Bash is limited"
+             (funcall (mevedel-reminder-content reminder) session)))
+    (setf (mevedel-session-plan-mode session) nil)
+    (should-not (funcall (mevedel-reminder-trigger reminder) session))))
+
 (mevedel-deftest mevedel-reminders-make-full-auto-mode
   (:after-each (mevedel-workspace-clear-registry))
   ,test
@@ -1561,6 +1575,7 @@
       (should (memq 'treesitter-available types))
       (should (memq 'elisp-introspection-available types))
       (should (memq 'mode-constraints types))
+      (should (memq 'plan-mode types))
       (should (memq 'diagnostics types))
       (should (memq 'edited-file types))
       (should (memq 'deferred-tools-roster types))
@@ -1585,6 +1600,7 @@
            (treesitter-count (cl-count 'treesitter-available types))
            (elisp-count (cl-count 'elisp-introspection-available types))
            (mode-count (cl-count 'mode-constraints types))
+           (plan-mode-count (cl-count 'plan-mode types))
            (diag-count (cl-count 'diagnostics types))
            (edit-count (cl-count 'edited-file types))
            (roster-count (cl-count 'deferred-tools-roster types))
@@ -1601,6 +1617,7 @@
       (should (= 1 treesitter-count))
       (should (= 1 elisp-count))
       (should (= 1 mode-count))
+      (should (= 1 plan-mode-count))
       (should (= 1 diag-count))
       (should (= 1 edit-count))
       (should (= 1 roster-count))

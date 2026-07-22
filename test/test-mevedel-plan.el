@@ -12,6 +12,51 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-plan-mode-active-p
+  (:doc "reads Plan state from the explicit or current session")
+  ,test
+  (test)
+  (let ((session (mevedel-session--create :name "test" :plan-mode t)))
+    (should (mevedel-plan-mode-active-p session))
+    (let ((mevedel--session session))
+      (should (mevedel-plan-mode-active-p)))))
+
+(mevedel-deftest mevedel-plan-mode-enter
+  (:doc "enters Plan without changing the underlying permission mode")
+  ,test
+  (test)
+  (let ((session (mevedel-session--create
+                  :name "test" :permission-mode 'full-auto)))
+    (mevedel-plan-mode-enter session)
+    (should (mevedel-session-plan-mode session))
+    (should (eq 'full-auto (mevedel-session-permission-mode session))))
+
+  :doc "rejects every unfinished Goal status without changing state"
+  (dolist (status '(active paused blocked))
+    (let ((session
+           (mevedel-session--create
+            :name "test" :permission-mode 'auto
+            :goal (mevedel-goal--create :status status))))
+      (should-error (mevedel-plan-mode-enter session) :type 'user-error)
+      (should-not (mevedel-session-plan-mode session))
+      (should (eq 'auto (mevedel-session-permission-mode session)))))
+
+  :doc "allows a completed Goal to remain as history"
+  (let ((session
+         (mevedel-session--create
+          :name "test" :goal (mevedel-goal--create :status 'complete))))
+    (should (mevedel-plan-mode-enter session))))
+
+(mevedel-deftest mevedel-plan-mode-exit
+  (:doc "leaves Plan without changing the underlying permission mode")
+  ,test
+  (test)
+  (let ((session (mevedel-session--create
+                  :name "test" :permission-mode 'auto :plan-mode t)))
+    (mevedel-plan-mode-exit session)
+    (should-not (mevedel-session-plan-mode session))
+    (should (eq 'auto (mevedel-session-permission-mode session)))))
+
 (mevedel-deftest mevedel-plan-validate
   (:doc "normalizes nonblank plans and rejects invalid input")
   ,test

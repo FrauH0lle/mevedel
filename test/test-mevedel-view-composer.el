@@ -266,7 +266,13 @@
   (let ((prompt (mevedel-view--input-prompt-string 'full-auto)))
     (should (string= "\n[full-auto] > " prompt))
     (should (eq 'mevedel-view-permission-mode-full-auto
-                (get-text-property 2 'font-lock-face prompt)))))
+                (get-text-property 2 'font-lock-face prompt))))
+
+  :doc "Plan shows the retained permission mode"
+  (let ((mevedel--session
+         (mevedel-session--create :name "main" :plan-mode t)))
+    (should (string= "\n[Plan · full-auto] > "
+                     (mevedel-view--input-prompt-string 'full-auto)))))
 
 (mevedel-deftest mevedel-view--next-permission-mode
   (:doc "cycles permission modes in view order")
@@ -281,9 +287,13 @@
   (should (eq 'full-auto
               (mevedel-view--next-permission-mode 'auto)))
 
-  :doc "full-auto mode wraps to ask"
-  (should (eq 'ask
+  :doc "full-auto mode moves to Plan"
+  (should (eq 'plan
               (mevedel-view--next-permission-mode 'full-auto)))
+
+  :doc "Plan wraps to ask"
+  (should (eq 'ask
+              (mevedel-view--next-permission-mode 'plan)))
 
   :doc "nil mode starts at auto"
   (should (eq 'auto
@@ -312,6 +322,8 @@
             (with-current-buffer view-buf
               (setq-local mevedel--session session)
               (setq-local mevedel-permission-mode 'ask)
+              (goto-char (mevedel-view--input-start))
+              (insert "> first\nsecond")
               (should (eq 'auto
                           (mevedel-view-cycle-permission-mode)))
               (should (eq 'auto
@@ -325,21 +337,37 @@
               (should (string= "\n[auto] > "
                                (buffer-substring-no-properties
                                 mevedel-view--input-marker
-                                (mevedel-view--input-start)))))
+                                (mevedel-view--input-start))))
+              (should (equal "> first\nsecond"
+                             (mevedel-view--input-text))))
             (with-current-buffer view-buf
               (should (eq 'full-auto
                           (mevedel-view-cycle-permission-mode)))
               (should (memq 'full-auto-mode
                             (mapcar #'mevedel-reminder-type
                                     (mevedel-session-reminders session))))
+              (should (eq 'plan
+                          (mevedel-view-cycle-permission-mode)))
+              (should (mevedel-session-plan-mode session))
+              (should (eq 'full-auto
+                          (mevedel-session-permission-mode session)))
+              (should (string= "\n[Plan · full-auto] > "
+                               (buffer-substring-no-properties
+                                mevedel-view--input-marker
+                                (mevedel-view--input-start))))
+              (should (equal "> first\nsecond"
+                             (mevedel-view--input-text)))
               (should (eq 'ask
                           (mevedel-view-cycle-permission-mode)))
+              (should-not (mevedel-session-plan-mode session))
               (let ((types (mapcar #'mevedel-reminder-type
                                    (mevedel-session-reminders session))))
                 (should-not (memq 'full-auto-mode types))
                 (should (memq 'full-auto-mode-exit types)))
               (should (eq 'ask
-                          (mevedel-session-permission-mode session))))))
+                          (mevedel-session-permission-mode session)))
+              (should (equal "> first\nsecond"
+                             (mevedel-view--input-text))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt

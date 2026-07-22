@@ -952,6 +952,20 @@ Each binding is (NAME KEYS)."
             (should (eq 'auto
                         (mevedel-session-permission-mode session)))))
       (delete-directory root t)))
+  :doc "starting a Goal exits Plan without changing its permission policy"
+  (let* ((root (make-temp-file "mevedel-goal-plan-start-" t))
+         (session (mevedel-session-create
+                   "main" (test-mevedel-goal--workspace root))))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setf (mevedel-session-plan-mode session) t
+                (mevedel-session-permission-mode session) 'auto)
+          (let ((mevedel-goal-dispatch-function #'ignore))
+            (mevedel-goal-start "Ship"))
+          (should-not (mevedel-session-plan-mode session))
+          (should (eq 'auto (mevedel-session-permission-mode session))))
+      (delete-directory root t)))
   :doc "rejects a blank objective and declined unfinished replacement"
   (let* ((root (make-temp-file "mevedel-goal-replace-" t))
          (session (mevedel-session-create

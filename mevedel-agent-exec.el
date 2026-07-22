@@ -148,6 +148,8 @@
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject
                   "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-plan-tool-filter
+                  "mevedel-tools" (fsm))
 
 (defvar mevedel-agent-exec-debug nil
   "Non-nil enables request-driver lifecycle diagnostics.")
@@ -293,6 +295,7 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
 (defvar mevedel-agent-exec--handlers
   `((WAIT ,#'mevedel-tools--handle-agent-roster-inject
      ,#'mevedel-tools--handle-message-inject
+     ,#'mevedel-tools--handle-plan-tool-filter
      ,#'mevedel-agent-exec--handle-wait-activity
      ,#'mevedel--compact-handle-agent-wait)
     (TPRE ,#'gptel--handle-token-usage

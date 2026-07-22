@@ -22,6 +22,10 @@
 (declare-function mevedel-goal-read-only-phase-p
                   "mevedel-goal" (&optional session))
 
+;; `mevedel-plan'
+(declare-function mevedel-plan-mode-active-p "mevedel-plan" (&optional session))
+(declare-function mevedel-plan-mode-exit "mevedel-plan" (&optional session))
+
 ;; `mevedel-reminders'
 (declare-function mevedel-session-ensure-reminder
                   "mevedel-reminders" (session reminder))
@@ -274,6 +278,9 @@ Runs mode-specific lifecycle hooks."
     (if (not session)
         (set-default-toplevel-value 'mevedel-permission-mode target)
       (with-current-buffer data-buf
+        (when (and (fboundp 'mevedel-plan-mode-active-p)
+                   (mevedel-plan-mode-active-p session))
+          (mevedel-plan-mode-exit session))
         (let ((previous (mevedel-permission-mode--effective-session-mode
                          session)))
           (mevedel-permission-mode-set-raw target)
@@ -1046,6 +1053,17 @@ happen for a non-read-only tool."
               (mevedel-agent-invocation-parent-session
                mevedel--agent-invocation))))))
 
+(defun mevedel-permission--plan-mode-p (&optional session)
+  "Return non-nil when the owning session is in Plan mode."
+  (when (fboundp 'mevedel-plan-mode-active-p)
+    (mevedel-plan-mode-active-p
+     (or session
+         (and (boundp 'mevedel--session) mevedel--session)
+         (and (boundp 'mevedel--agent-invocation)
+              mevedel--agent-invocation
+              (mevedel-agent-invocation-parent-session
+               mevedel--agent-invocation))))))
+
 (cl-defun mevedel-permission--preflight
     (tool-name &key tool-struct path pattern domain name content
                invocation-rules request-rules session-rules persistent-rules
@@ -1092,8 +1110,11 @@ RESOURCE-GRANTS define the filesystem boundary."
          (early-decision
           (cond
            (deny-bucket
-            (mevedel-permission--decision
+           (mevedel-permission--decision
              'deny 'deny-rule :bucket deny-bucket))
+           ((and native-edit-p
+                 (mevedel-permission--plan-mode-p session))
+            (mevedel-permission--decision 'deny 'plan-mode))
            ((and native-edit-p
                  (mevedel-permission--goal-read-only-phase-p session))
             (mevedel-permission--decision 'deny 'goal-phase)))))
@@ -1148,7 +1169,7 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       Goal planning/review phase + native edit tool -> deny
+       Plan mode or Goal planning/review phase + native edit tool -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.
