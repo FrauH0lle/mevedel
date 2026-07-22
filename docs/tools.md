@@ -25,8 +25,9 @@ flowchart TD
     K --> L[Specialist nudges]
     L --> M[PostToolUse or failure hooks]
     M --> N[Re-persist capped result]
-    N --> O[Attach render-data]
-    O --> P[Attach media data]
+    N --> O[Append Goal budget warning when crossed]
+    O --> P[Attach render-data]
+    P --> Q[Attach media data]
 ```
 
 Synchronous handlers receive `(args)` and asynchronous handlers receive
@@ -217,6 +218,12 @@ Post-use hooks imply handler execution. A successful handler emits only
 `PostToolUse`; an explicit error result, invalid return, or handler signal is
 normalized and emits only `PostToolUseFailure`. Validation failures,
 permission failures, and aborted permission interactions emit neither event.
+
+For an attributed root Goal turn, the final model-visible result receives one
+100% budget warning when cumulative provider-reported input plus output usage
+first reaches the Goal limit. This runs after final oversized-result
+persistence, so the warning remains visible even when the original result was
+capped. It is advisory: the current request and tool pipeline continue.
 
 ### Hazard: post-handler steps must read from context, not buffer-local
 

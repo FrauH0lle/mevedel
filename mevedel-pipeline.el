@@ -6,7 +6,7 @@
 ;; invocation runs through a standard pipeline: validate -> pre-tool-hooks ->
 ;; permission -> snapshot -> handler -> repair-reminder -> render-transform ->
 ;; persist -> specialist-nudges -> post-hooks -> re-persist ->
-;; attach-render-data -> attach-media.
+;; Goal-budget-warning -> attach-render-data -> attach-media.
 ;; Tool handlers that need user confirmation of a file change call
 ;; `mevedel-preview-mode-add-preview' directly; there is no explicit
 ;; confirm step in the pipeline.
@@ -73,6 +73,10 @@
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
+
+;; `mevedel-goal'
+(declare-function mevedel-goal-tool-result-budget-warning
+                  "mevedel-goal" (session fsm))
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel--snapshot-file-if-needed "mevedel-tool-fs" (filepath))
@@ -2028,6 +2032,25 @@ explicit `:updated-result' changes the model-visible tool result."
      (plist-get context :request)
      (plist-get context :invocation))))
 
+(defun mevedel-pipeline--step-goal-budget-warning (context next _fail)
+  "Append an early Goal budget warning to CONTEXT, then call NEXT."
+  (let ((result (plist-get context :result))
+        (session (plist-get context :session))
+        (fsm (plist-get context :fsm)))
+    (if (and (stringp result) session fsm)
+        (progn
+          (require 'mevedel-goal)
+          (if-let* ((warning
+                     (mevedel-goal-tool-result-budget-warning session fsm)))
+              (funcall
+               next
+               (plist-put
+                context :result
+                (format "%s\n\n<system-reminder>\n%s\n</system-reminder>"
+                        result warning)))
+            (funcall next context)))
+      (funcall next context))))
+
 
 ;;
 ;;; Specialist tool nudges
@@ -2056,13 +2079,15 @@ Returns a list of step functions based on TOOL's behavioral flags:
   10. post-tool-hooks    -- always included
   11. persist            -- included when max-result-size is set; bounds
                             hook-updated results
-  12. attach-render-data -- always included; no-op when handler returned
+  12. Goal budget warning -- appends one early 100% warning when crossed
+  13. attach-render-data -- always included; no-op when handler returned
                             neither render-data nor explicit status
-  13. attach-media-data  -- always included; no-op when handler returned
+  14. attach-media-data  -- always included; no-op when handler returned
                              no media"
   (let ((steps nil))
     (push #'mevedel-pipeline--step-attach-media-data steps)
     (push #'mevedel-pipeline--step-attach-render-data steps)
+    (push #'mevedel-pipeline--step-goal-budget-warning steps)
     (when (mevedel-tool-max-result-size tool)
       (push #'mevedel-pipeline--step-persist steps))
     (push #'mevedel-pipeline--step-post-tool-hooks steps)
@@ -2120,6 +2145,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                    (or session-dir workspace-root default-directory)))
          (request (mevedel-pipeline--current-request))
          (invocation (mevedel-pipeline--current-invocation))
+         (fsm (and (boundp 'mevedel-tools--current-fsm)
+                   mevedel-tools--current-fsm))
          (tool-use-id (mevedel-pipeline--current-tool-use-id tool args))
          (repair-entry
           (mevedel-tool-repair-consume-ledger-entry tool args))
@@ -2127,7 +2154,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
          (cancel-cell (list nil))
          (context (list :tool tool :args args
                         :session session :workspace workspace
-                        :request request :invocation invocation
+                        :request request :invocation invocation :fsm fsm
                         :tool-use-id tool-use-id
                         :repair-entry repair-entry
                         :input-repairs (plist-get repair-entry :repairs)
