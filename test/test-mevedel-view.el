@@ -762,18 +762,18 @@
                             :callback
                             (lambda (outcome)
                               (push (cons 'permission outcome) outcomes)))))
-          (setf (mevedel-session-plan-queue session)
-                (list (list :body "# Plan"
+          (setf (mevedel-session-pending-plan-approval session)
+                (list :body "# Plan"
                             :chat-buffer data-buf
                             :session session
                             :callback
                             (lambda (outcome)
-                              (push (cons 'plan outcome) outcomes)))))
+                              (push (cons 'plan outcome) outcomes))))
           (kill-buffer view-buf)
           (should-not (buffer-live-p view-buf))
           (should-not (buffer-live-p data-buf))
           (should (null (mevedel-session-permission-queue session)))
-          (should (null (mevedel-session-plan-queue session)))
+          (should (null (mevedel-session-pending-plan-approval session)))
           (should (equal '((plan . aborted) (permission . aborted))
                          outcomes)))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))
@@ -831,18 +831,18 @@
                             :callback
                             (lambda (outcome)
                               (push (cons 'permission outcome) outcomes)))))
-          (setf (mevedel-session-plan-queue session)
-                (list (list :body "# Plan"
+          (setf (mevedel-session-pending-plan-approval session)
+                (list :body "# Plan"
                             :chat-buffer data-buf
                             :session session
                             :callback
                             (lambda (outcome)
-                              (push (cons 'plan outcome) outcomes)))))
+                              (push (cons 'plan outcome) outcomes))))
           (kill-buffer data-buf)
           (should-not (buffer-live-p data-buf))
           (should-not (buffer-live-p view-buf))
           (should (null (mevedel-session-permission-queue session)))
-          (should (null (mevedel-session-plan-queue session)))
+          (should (null (mevedel-session-pending-plan-approval session)))
           (should (equal '((plan . aborted) (permission . aborted))
                          outcomes)))
       (when (buffer-live-p view-buf) (kill-buffer view-buf))

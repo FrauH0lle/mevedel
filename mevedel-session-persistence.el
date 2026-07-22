@@ -3886,7 +3886,7 @@ mail are deliberately absent from the returned session."
           :invoked-skills
           (copy-tree (mevedel-session-invoked-skills session) t)
           :permission-queue nil
-          :plan-queue nil
+          :pending-plan-approval nil
           :plan-metadata
           (copy-tree (mevedel-session-plan-metadata session) t)
           :goal nil

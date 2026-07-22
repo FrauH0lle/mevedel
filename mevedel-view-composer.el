@@ -189,7 +189,8 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pop-dropped-file-grants
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-queued-user-messages
@@ -1073,7 +1074,7 @@ means a failed attempt leaves the exact source attached for a retry."
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (or (mevedel-session-plan-queue sess)
+    (or (mevedel-session-pending-plan-approval sess)
         (and (fboundp 'mevedel-goal-approval-request-pending-p)
              (mevedel-goal-approval-request-pending-p sess)))))
 

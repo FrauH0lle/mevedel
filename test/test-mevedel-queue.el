@@ -22,7 +22,7 @@
    :name "test"
    :workspace nil
    :permission-queue nil
-   :plan-queue nil))
+   :pending-plan-approval nil))
 
 (defun test-mevedel-queue--spec (rendered-cell outcomes-cell &optional error-on)
   "Return a queue spec that records into RENDERED-CELL and OUTCOMES-CELL.

@@ -2330,9 +2330,9 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
   (test)
   :doc "blocks fallback drainage for plan approval and guardian review"
   (let ((session (mevedel-session--create
-                  :name "main" :plan-queue '(plan))))
+                  :name "main" :pending-plan-approval 'plan)))
     (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
-    (setf (mevedel-session-plan-queue session) nil
+    (setf (mevedel-session-pending-plan-approval session) nil
           (mevedel-session-plan-metadata session) '(:guardian-pending t))
     (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
     (setf (mevedel-session-plan-metadata session) '(:revision-pending t))
@@ -3059,8 +3059,8 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
         (setq-local mevedel--current-request nil))
       (with-current-buffer view-buf
         (setq-local mevedel--session session))
-      (setf (mevedel-session-plan-queue session)
-            (list (list :body "# Plan" :origin "main")))
+      (setf (mevedel-session-pending-plan-approval session)
+            (list :body "# Plan" :origin "main"))
       (setf (mevedel-session-queued-user-messages session)
             (list (list :input "new feedback"
                         :model-input "new feedback prepared")))

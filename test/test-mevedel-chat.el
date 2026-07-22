@@ -855,16 +855,16 @@
 				       :callback
 				       (lambda (outcome)
 					 (push (cons 'permission outcome) outcomes)))))
-		     (setf (mevedel-session-plan-queue session)
-			   (list (list :body "# Plan"
+		     (setf (mevedel-session-pending-plan-approval session)
+			   (list :body "# Plan"
 				       :chat-buffer (current-buffer)
 				       :session session
 				       :callback
 				       (lambda (outcome)
-					 (push (cons 'plan outcome) outcomes)))))
+					 (push (cons 'plan outcome) outcomes))))
 		     (mevedel-abort (current-buffer))
 		     (should (null (mevedel-session-permission-queue session)))
-		     (should (null (mevedel-session-plan-queue session)))
+		     (should (null (mevedel-session-pending-plan-approval session)))
 		     (should (null mevedel--current-request))
 		     (should (equal '((plan . aborted) (permission . aborted))
 				    outcomes))))
@@ -965,7 +965,7 @@
                               :permission-mode 'ask
                               :permission-rules nil
                               :permission-queue nil
-                              :plan-queue nil))
+                              :pending-plan-approval nil))
                     (buffer (generate-new-buffer " *mev-chat-mode*"))
                     (refreshed 0))
                (unwind-protect
@@ -992,7 +992,7 @@
                               :permission-mode 'full-auto
                               :permission-rules nil
                               :permission-queue nil
-                              :plan-queue nil))
+                              :pending-plan-approval nil))
                     (buffer (generate-new-buffer " *mev-chat-mode*"))
                     (refreshed 0))
                (unwind-protect
@@ -1019,7 +1019,7 @@
                               :permission-mode nil
                               :permission-rules nil
                               :permission-queue nil
-                              :plan-queue nil))
+                              :pending-plan-approval nil))
                     (buffer (generate-new-buffer " *mev-chat-mode*"))
                     (mevedel-permission-mode 'ask)
                     (refreshed 0))

@@ -554,7 +554,7 @@
                       :permission-rules nil
                       :permission-mode 'ask
                       :permission-queue nil
-                      :plan-queue nil))
+                      :pending-plan-approval nil))
             outcomes)
         (with-current-buffer data-buf
           (setq-local mevedel--session session)
@@ -834,20 +834,20 @@
                        :permission-rules nil
                        :permission-mode 'ask
                        :permission-queue nil
-                       :plan-queue nil))
+                       :pending-plan-approval nil))
              (plan-outcomes nil)
              (permission-outcomes nil))
         (with-current-buffer data-buf
           (setq-local mevedel--session session))
         (with-current-buffer view-buf
           (setq-local mevedel--session session)
-          (setf (mevedel-session-plan-queue session)
-                (list (list :body "# Plan"
+          (setf (mevedel-session-pending-plan-approval session)
+                (list :body "# Plan"
                             :chat-buffer data-buf
                             :session session
                             :callback
                             (lambda (outcome)
-                              (push outcome plan-outcomes)))))
+                              (push outcome plan-outcomes))))
           (setf (mevedel-session-permission-queue session)
                 (list (list :kind 'generic
                             :tool-name "Read"
@@ -880,7 +880,7 @@
                        :permission-rules nil
                        :permission-mode 'ask
                        :permission-queue nil
-                       :plan-queue nil))
+                       :pending-plan-approval nil))
              (agent (mevedel-agent--create :name "verifier"))
              (inv (mevedel-agent-invocation-create agent))
              (agent-buf (generate-new-buffer " *test-agent-perm*"))

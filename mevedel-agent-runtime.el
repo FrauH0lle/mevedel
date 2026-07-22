@@ -144,7 +144,7 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-end
-                  "mevedel-structs" (&optional abort-plan-queue))
+                  "mevedel-structs" (&optional abort-plan-approval))
 (declare-function mevedel-session-agent-transcripts
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-p "mevedel-structs" (cl-x))

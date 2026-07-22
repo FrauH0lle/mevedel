@@ -99,29 +99,23 @@
                  (mevedel-view-agent--handle-badge '(:status banana)))))
 
 (mevedel-deftest mevedel-view-agent--blocked-reason
-  (:doc "reports the root interaction queue blocking a canonical path")
+  (:doc "reports a permission queue blocking a canonical path")
   ,test
   (test)
 
-  :doc "prefers a pending permission over a pending plan"
+  :doc "reports a pending permission"
   (let ((session (mevedel-view-agent-test--session)))
     (setf (mevedel-session-permission-queue session)
-          '((:origin "/root/worker"))
-          (mevedel-session-plan-queue session)
           '((:origin "/root/worker")))
     (should
      (equal "permission"
             (mevedel-view-agent--blocked-reason
              "/root/worker" session))))
 
-  :doc "reports plan blocking and ignores unrelated paths"
+  :doc "ignores unrelated paths"
   (let ((session (mevedel-view-agent-test--session)))
-    (setf (mevedel-session-plan-queue session)
+    (setf (mevedel-session-permission-queue session)
           '((:origin "/root/worker")))
-    (should
-     (equal "plan"
-            (mevedel-view-agent--blocked-reason
-             "/root/worker" session)))
     (should-not
      (mevedel-view-agent--blocked-reason "/root/other" session))))
 

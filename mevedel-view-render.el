@@ -55,7 +55,8 @@
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -1421,9 +1422,8 @@ buffer's font-lock refontification cycles."
     (list :permission-origins
           (mevedel-view--queue-origin-fingerprint
            (mevedel-session-permission-queue session))
-          :plan-origins
-          (mevedel-view--queue-origin-fingerprint
-           (mevedel-session-plan-queue session))
+          :plan-pending
+          (and (mevedel-session-pending-plan-approval session) t)
           :agent-registry
           (mapcar (lambda (entry)
                     (let ((record (cdr entry)))

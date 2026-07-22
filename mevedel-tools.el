@@ -84,8 +84,6 @@
                   "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-goal'
-(declare-function mevedel-plan-queue-sweep-agent
-                  "mevedel-goal" (origin &optional session))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-origin
@@ -694,10 +692,8 @@ model-visible communication in conversation history."
             (parent-session
              (mevedel-agent-invocation-parent-session ctx)))
         (when (and agent-path parent-session)
-          (mevedel-permission-queue-sweep-origin agent-path parent-session))
-        (when (and agent-path parent-session
-                   (fboundp 'mevedel-plan-queue-sweep-agent))
-          (mevedel-plan-queue-sweep-agent agent-path parent-session))))))
+          (mevedel-permission-queue-sweep-origin
+           agent-path parent-session))))))
 
 
 (provide 'mevedel-tools)

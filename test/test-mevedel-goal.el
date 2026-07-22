@@ -1025,7 +1025,8 @@ Each binding is (NAME KEYS)."
            (entry (list :body "# Plan" :callback #'ignore))
            (metadata '(:status presented))
            (session (mevedel-session--create
-                     :name "main" :goal previous :plan-queue (list entry)
+                     :name "main" :goal previous
+                     :pending-plan-approval entry
                      :plan-metadata metadata))
            (mevedel--session session))
       (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
@@ -1034,7 +1035,7 @@ Each binding is (NAME KEYS)."
         (should-error (mevedel-goal-start "New")))
       (should (eq previous (mevedel-session-goal session)))
       (should (eq 'awaiting-approval (mevedel-goal-phase previous)))
-      (should (equal (list entry) (mevedel-session-plan-queue session)))
+      (should (eq entry (mevedel-session-pending-plan-approval session)))
       (should (eq metadata (mevedel-session-plan-metadata session)))))
 
 (mevedel-deftest mevedel-goal-description ()
@@ -1199,13 +1200,13 @@ Each binding is (NAME KEYS)."
           (mevedel-view--setup view-buffer data-buffer)
           (with-current-buffer data-buffer
             (mevedel-goal-present-plan "# Plan" data-buffer)
-            (should (mevedel-session-plan-queue session))
+            (should (mevedel-session-pending-plan-approval session))
             (let ((mevedel-goal-guardian-function
                    (lambda (_goal plan _buffer _callback)
                      (setq guarded plan))))
               (mevedel-goal-set-approval-policy 'automatic))
             (should (equal "# Plan" guarded))
-            (should-not (mevedel-session-plan-queue session))
+            (should-not (mevedel-session-pending-plan-approval session))
             (should (mevedel-goal-approval-request-pending-p session))
             (should (eq 'active (mevedel-goal-status goal)))
             (should (eq 'awaiting-approval (mevedel-goal-phase goal)))))
@@ -1431,10 +1432,10 @@ Each binding is (NAME KEYS)."
             (test-mevedel-goal--own goal session root)
             (setf (mevedel-session-goal session) goal)
             (mevedel-plan-write-current "# Plan" session (current-buffer))
-            (cl-letf (((symbol-function 'mevedel-queue--render-head)
+            (cl-letf (((symbol-function 'mevedel-plan-approval--render-entry)
                        #'ignore))
               (mevedel-goal-resume))
-            (should (= 1 (length (mevedel-session-plan-queue session))))
+            (should (mevedel-session-pending-plan-approval session))
             (should (eq 'active (mevedel-goal-status goal)))))
       (delete-directory root t)))
   :doc "presents the previous plan when a planner revision was interrupted"
@@ -2627,8 +2628,8 @@ Each binding is (NAME KEYS)."
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
-          (cl-letf (((symbol-function 'mevedel-plan-queue--enqueue)
-                     (lambda (entry) (setq queued entry))))
+          (cl-letf (((symbol-function 'mevedel-plan-approval-present)
+                     (lambda (entry &optional _session) (setq queued entry))))
             (mevedel-goal-present-plan
              "# Plan\n\nDo it." (current-buffer) "Need scope"))
           (should (file-exists-p
@@ -2636,6 +2637,63 @@ Each binding is (NAME KEYS)."
           (should (equal "# Plan\n\nDo it." (plist-get queued :body)))
           (should (equal "Need scope" (plist-get queued :guardian-reason))))
       (delete-directory root t))))
+
+(mevedel-deftest mevedel-plan-approval-present ()
+  ,test
+  (test)
+  :doc "replaces the sole pending approval and supersedes its callback"
+  (let* ((session (mevedel-session--create :name "main"))
+         (outcomes nil)
+         rendered)
+    (cl-letf (((symbol-function 'mevedel-plan-approval--render-entry)
+               (lambda (entry) (setq rendered entry))))
+      (mevedel-plan-approval-present
+       (list :body "# First"
+             :callback (lambda (outcome) (push outcome outcomes)))
+       session)
+      (mevedel-plan-approval-present (list :body "# Second") session))
+    (should (equal '(superseded) outcomes))
+    (should (eq rendered
+                (mevedel-session-pending-plan-approval session)))
+    (should (equal "# Second" (plist-get rendered :body)))
+    (should (eq session (plist-get rendered :session)))))
+
+(mevedel-deftest mevedel-plan-approval-settle ()
+  ,test
+  (test)
+  :doc "settles the current approval once and clears it"
+  (let* ((session (mevedel-session--create :name "main"))
+         outcomes
+         (entry (list :session session
+                      :callback (lambda (outcome) (push outcome outcomes)))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-approval-settle entry 'accepted)
+    (mevedel-plan-approval-settle entry 'accepted-again)
+    (should (equal '(accepted) outcomes))
+    (should-not (mevedel-session-pending-plan-approval session)))
+
+  :doc "retains the current approval when its callback fails"
+  (let* ((session (mevedel-session--create :name "main"))
+         (entry (list :session session
+                      :callback (lambda (_outcome) (error "Failed"))))
+         (warning-minimum-level :emergency))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-approval-settle entry 'accepted)
+    (should (eq entry
+                (mevedel-session-pending-plan-approval session)))))
+
+(mevedel-deftest mevedel-plan-approval-abort ()
+  ,test
+  (test)
+  :doc "clears and aborts the sole pending approval"
+  (let* ((session (mevedel-session--create :name "main"))
+         outcome
+         (entry (list :session session
+                      :callback (lambda (value) (setq outcome value)))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-approval-abort session)
+    (should (eq 'aborted outcome))
+    (should-not (mevedel-session-pending-plan-approval session))))
 
 (mevedel-deftest mevedel-goal-restore-pending-approval ()
   ,test
@@ -2651,8 +2709,8 @@ Each binding is (NAME KEYS)."
       (setq-local mevedel--session session)
       (cl-letf (((symbol-function 'mevedel-plan-current-body)
                  (lambda (&optional _session) "# Pending"))
-                ((symbol-function 'mevedel-plan-queue--enqueue)
-                 (lambda (entry) (setq queued entry))))
+                ((symbol-function 'mevedel-plan-approval-present)
+                 (lambda (entry &optional _session) (setq queued entry))))
         (mevedel-goal-restore-pending-approval session (current-buffer)))
       (should (equal "# Pending" (plist-get queued :body)))
       (should (string-match-p "interrupted"
@@ -2938,7 +2996,7 @@ Each binding is (NAME KEYS)."
                          (plist-get (mevedel-goal-cycle-record goal) :plan))))
       (delete-directory root t))))
 
-(mevedel-deftest mevedel-plan-queue--entry-execution-home ()
+(mevedel-deftest mevedel-plan-approval--entry-execution-home ()
   ,test
   (test)
   :doc "reads the Goal default until the approval entry overrides it"
@@ -2948,23 +3006,23 @@ Each binding is (NAME KEYS)."
          (session (mevedel-session--create :name "main" :goal goal))
          (entry (list :session session)))
     (should (eq 'current
-                (mevedel-plan-queue--entry-execution-home entry)))
+                (mevedel-plan-approval--entry-execution-home entry)))
     (mevedel-queue--entry-metadata-put entry :execution-home 'worktree)
     (should (eq 'worktree
-                (mevedel-plan-queue--entry-execution-home entry)))))
+                (mevedel-plan-approval--entry-execution-home entry)))))
 
-(mevedel-deftest mevedel-plan-queue--entry-execution-home-mutable-p ()
+(mevedel-deftest mevedel-plan-approval--entry-execution-home-mutable-p ()
   ,test
   (test)
   :doc "allows home selection only before the first accepted plan"
   (let* ((goal (mevedel-goal--create))
          (session (mevedel-session--create :name "main" :goal goal))
          (entry (list :session session)))
-    (should (mevedel-plan-queue--entry-execution-home-mutable-p entry))
+    (should (mevedel-plan-approval--entry-execution-home-mutable-p entry))
     (setf (plist-get (mevedel-goal-execution-home goal) :locked) t)
-    (should-not (mevedel-plan-queue--entry-execution-home-mutable-p entry))))
+    (should-not (mevedel-plan-approval--entry-execution-home-mutable-p entry))))
 
-(mevedel-deftest mevedel-plan-queue--cycle-entry-execution-home ()
+(mevedel-deftest mevedel-plan-approval--cycle-entry-execution-home ()
   ,test
   (test)
   :doc "toggles current and worktree while rerendering the same entry"
@@ -2972,32 +3030,32 @@ Each binding is (NAME KEYS)."
          (session (mevedel-session--create :name "main" :goal goal))
          (entry (list :session session))
          rendered)
-    (cl-letf (((symbol-function 'mevedel-plan-queue--render-entry)
+    (cl-letf (((symbol-function 'mevedel-plan-approval--render-entry)
                (lambda (candidate) (setq rendered candidate))))
-      (mevedel-plan-queue--cycle-entry-execution-home entry)
+      (mevedel-plan-approval--cycle-entry-execution-home entry)
       (should (eq 'worktree
-                  (mevedel-plan-queue--entry-execution-home entry)))
+                  (mevedel-plan-approval--entry-execution-home entry)))
       (should (eq entry rendered))
-      (mevedel-plan-queue--cycle-entry-execution-home entry)
+      (mevedel-plan-approval--cycle-entry-execution-home entry)
       (should (eq 'current
-                  (mevedel-plan-queue--entry-execution-home entry)))
+                  (mevedel-plan-approval--entry-execution-home entry)))
       (setf (plist-get (mevedel-goal-execution-home goal) :locked) t)
       (should-error
-       (mevedel-plan-queue--cycle-entry-execution-home entry)
+       (mevedel-plan-approval--cycle-entry-execution-home entry)
        :type 'user-error))))
 
-(mevedel-deftest mevedel-plan-queue--keys-line ()
+(mevedel-deftest mevedel-plan-approval--keys-line ()
   ,test
   (test)
   :doc "shows full/focused context, permission mode, and execution home"
   (let ((text (substring-no-properties
-               (mevedel-plan-queue--keys-line
+               (mevedel-plan-approval--keys-line
                 'auto 'worktree t))))
     (dolist (needle '("implement (full)" "implement (focused)"
                       "mode: auto" "home: worktree"))
       (should (string-match-p (regexp-quote needle) text)))
     (let ((locked (substring-no-properties
-                   (mevedel-plan-queue--keys-line
+                   (mevedel-plan-approval--keys-line
                     'ask 'worktree nil))))
       (should (string-match-p "home: worktree (locked)" locked))
       (should-not (string-match-p "w home" locked)))))
@@ -4570,7 +4628,7 @@ Each binding is (NAME KEYS)."
             (mevedel-session-permission-queue session) '(permission))
       (should (mevedel-goal--pending-interaction-p session))
       (setf (mevedel-session-permission-queue session) nil
-            (mevedel-session-plan-queue session) '(plan))
+            (mevedel-session-pending-plan-approval session) 'plan)
       (should (mevedel-goal--pending-interaction-p session))))
   :doc "delegates live view interaction state to its owner"
   (let ((view (generate-new-buffer " *guardian-prompt-hook*")))

@@ -50,8 +50,8 @@
 (declare-function mevedel-goal-approval-status
                   "mevedel-goal" (&optional session))
 (declare-function mevedel-goal-cycle-record "mevedel-goal" (goal))
-(declare-function mevedel-plan-queue-abort-all
-                  "mevedel-goal" (&optional session))
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-goal" (&optional session outcome))
 
 ;; `mevedel-menu'
 (declare-function mevedel-menu "mevedel-menu" ())
@@ -690,8 +690,8 @@ kill hook sees nil and exits without re-entering this function."
         (with-current-buffer db
           (when (fboundp 'mevedel-permission-queue-abort-all)
             (mevedel-permission-queue-abort-all mevedel--session))
-          (when (fboundp 'mevedel-plan-queue-abort-all)
-            (mevedel-plan-queue-abort-all mevedel--session))
+          (when (fboundp 'mevedel-plan-approval-abort)
+            (mevedel-plan-approval-abort mevedel--session))
           (setq mevedel--view-buffer nil))
         (kill-buffer db)))))
 
@@ -707,8 +707,8 @@ Kills the associated view buffer."
     (mevedel-agent-control-teardown-session mevedel--session))
   (when (fboundp 'mevedel-permission-queue-abort-all)
     (mevedel-permission-queue-abort-all mevedel--session))
-  (when (fboundp 'mevedel-plan-queue-abort-all)
-    (mevedel-plan-queue-abort-all mevedel--session))
+  (when (fboundp 'mevedel-plan-approval-abort)
+    (mevedel-plan-approval-abort mevedel--session))
   (when-let* ((vb mevedel--view-buffer)
               (_ (buffer-live-p vb)))
     (with-current-buffer vb

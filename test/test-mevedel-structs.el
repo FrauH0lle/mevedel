@@ -430,16 +430,16 @@
                         :callback
                         (lambda (outcome)
                           (push (cons 'permission outcome) outcomes)))))
-      (setf (mevedel-session-plan-queue session)
-            (list (list :body "# Plan"
+      (setf (mevedel-session-pending-plan-approval session)
+            (list :body "# Plan"
                         :chat-buffer (current-buffer)
                         :session session
                         :callback
                         (lambda (outcome)
-                          (push (cons 'plan outcome) outcomes)))))
+                          (push (cons 'plan outcome) outcomes))))
       (mevedel-request-begin session)
       (should (null (mevedel-session-permission-queue session)))
-      (should (null (mevedel-session-plan-queue session)))
+      (should (null (mevedel-session-pending-plan-approval session)))
       (should (equal '((plan . aborted) (permission . aborted))
                      outcomes)))))
 
@@ -610,13 +610,13 @@
                         (lambda (outcome)
                           (push (cons 'agent-permission outcome)
                                 outcomes)))))
-      (setf (mevedel-session-plan-queue session)
-            (list (list :body "# Plan"
+      (setf (mevedel-session-pending-plan-approval session)
+            (list :body "# Plan"
                         :chat-buffer (current-buffer)
                         :session session
                         :callback
                         (lambda (outcome)
-                          (push (cons 'plan outcome) outcomes)))))
+                          (push (cons 'plan outcome) outcomes))))
       (cl-letf (((symbol-function 'mevedel-permission-queue--render-entry)
                  #'ignore))
         (mevedel-request-end))
@@ -624,7 +624,7 @@
       (should (equal "/root/verifier"
                      (plist-get (car (mevedel-session-permission-queue session))
                                 :origin)))
-      (should (mevedel-session-plan-queue session))
+      (should (mevedel-session-pending-plan-approval session))
       (should (equal '((main-permission . aborted))
                      outcomes))
       (mevedel-request-end)
