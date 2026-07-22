@@ -67,6 +67,7 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
+(declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-description "mevedel-goal" (&optional goal))
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
@@ -306,6 +307,7 @@ Routes through the lifecycle-aware permission transition path."
        (require 'mevedel-menu)
        (mevedel-menu-open 'goal))
       ("pause" (mevedel-goal-pause))
+      ("edit" (mevedel-goal-edit rest))
       ("resume" (mevedel-goal-resume rest))
       ("clear" (mevedel-goal-clear))
       (_

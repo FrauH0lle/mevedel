@@ -295,10 +295,13 @@
 
 (mevedel-deftest mevedel-menu--current-goal ()
   ,test (test)
-  :doc "returns the owning session Goal"
+  :doc "returns the owning session Goal during an active request"
   (mevedel-menu-test--with-buffers
     (let ((goal (mevedel-goal--create :id "g1")))
       (setf (mevedel-session-goal session) goal)
+      (with-current-buffer data-buf
+        (setq-local mevedel--current-request
+                    (mevedel-request--create :session session)))
       (with-current-buffer view-buf
         (should (eq goal (mevedel-menu--current-goal)))))))
 
@@ -390,6 +393,16 @@
                (lambda (&rest args) (setq call args))))
       (mevedel-menu--goal-start))
     (should (equal (cdr call) '("Ship")))))
+
+(mevedel-deftest mevedel-menu--goal-edit ()
+  ,test (test)
+  :doc "edits a Goal from prompted input"
+  (let (call)
+    (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "Revised"))
+              ((symbol-function 'mevedel-menu--goal-call)
+               (lambda (&rest args) (setq call args))))
+      (mevedel-menu--goal-edit))
+    (should (equal (cdr call) '("Revised")))))
 
 (mevedel-deftest mevedel-menu--select-preset ()
   ,test
