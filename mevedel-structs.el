@@ -17,8 +17,8 @@
 (defvar mevedel--agent-invocation)
 
 ;; `mevedel-goal'
-(declare-function mevedel-plan-queue-abort-all
-                  "mevedel-goal" (&optional session))
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-goal" (&optional session outcome))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-origin
@@ -263,12 +263,8 @@ workspace."
   ;; sidecar; empty at every completed-turn boundary because
   ;; pending tool calls are not recoverable.
   permission-queue
-  ;; Plan approval FIFO queue.  Same FIFO machinery as
-  ;; permission-queue but a separate slot since approval outcomes
-  ;; (`implement' / `feedback' / `aborted')
-  ;; differ from permission outcomes and never coalesce.
-  ;; Transient.
-  plan-queue
+  ;; The single transient Plan approval interaction descriptor, or nil.
+  pending-plan-approval
   ;; Plan artifact metadata.  Goal plan paths are recorded here.
   plan-metadata
   ;; The session-owned current `mevedel-goal', or nil.
@@ -649,22 +645,22 @@ the new request struct."
        :permission-mode (mevedel-session-permission-mode session)))
     request))
 
-(defun mevedel-request-cancel (request &optional abort-plan-queue)
+(defun mevedel-request-cancel (request &optional abort-plan-approval)
   "Cancel REQUEST and its owned pending interactions.
 Queued permission prompts are swept only for REQUEST's owner.  Plan
 approvals normally outlive the request that presented them; when
-ABORT-PLAN-QUEUE is non-nil, abort them too."
+ABORT-PLAN-APPROVAL is non-nil, abort it too."
   (when request
     (let ((session (mevedel-request-session request))
           (origin (or (mevedel-request-origin request) "/root")))
       (mevedel-request-drain-cancellers request)
       (when (fboundp 'mevedel-permission-queue-sweep-origin)
         (mevedel-permission-queue-sweep-origin origin session))
-      (when (and abort-plan-queue
-                 (fboundp 'mevedel-plan-queue-abort-all))
-        (mevedel-plan-queue-abort-all session)))))
+      (when (and abort-plan-approval
+                 (fboundp 'mevedel-plan-approval-abort))
+        (mevedel-plan-approval-abort session)))))
 
-(defun mevedel-request-end (&optional abort-plan-queue)
+(defun mevedel-request-end (&optional abort-plan-approval)
   "Cancel the current request, then clear `mevedel--current-request'."
   (when mevedel--current-request
     (let ((request mevedel--current-request))
@@ -673,8 +669,8 @@ ABORT-PLAN-QUEUE is non-nil, abort them too."
          (mevedel-request-session request) 'request-teardown
          :request-id (mevedel-request-id request)
          :origin (mevedel-request-origin request)
-         :abort-plan-queue (and abort-plan-queue t)))
-      (mevedel-request-cancel request abort-plan-queue)
+         :abort-plan-approval (and abort-plan-approval t)))
+      (mevedel-request-cancel request abort-plan-approval)
       (when (equal (mevedel-request-origin request) "/root")
         (setf (mevedel-session-agent-root-activity
                (mevedel-request-session request))

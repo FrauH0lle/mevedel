@@ -19,7 +19,7 @@
                   "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-goal'
-(declare-function mevedel-plan-queue--render-head
+(declare-function mevedel-plan-approval-render
                   "mevedel-goal" (&optional session))
 
 ;; `mevedel-interaction-prompt'
@@ -37,7 +37,8 @@
 ;; `mevedel-structs'
 (declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
@@ -209,7 +210,8 @@ silently placing controls in a data buffer."
        mevedel-view--interaction-descriptors))
     (let ((session (mevedel-view--session)))
       (when session
-        (setq plans (max plans (length (mevedel-session-plan-queue session))))
+        (when (mevedel-session-pending-plan-approval session)
+          (setq plans (max plans 1)))
         (setq permissions
               (max permissions
                    (length (mevedel-session-permission-queue session))))
@@ -452,9 +454,9 @@ This deletes only interaction UI overlays and never settles callbacks."
   (unless mevedel-view--agent-transcript-p
     (mevedel-view--interaction-clear-for-rebuild)
     (when-let* ((session (mevedel-view--session)))
-      (when (mevedel-session-plan-queue session)
+      (when (mevedel-session-pending-plan-approval session)
         (require 'mevedel-goal)
-        (mevedel-plan-queue--render-head session))
+        (mevedel-plan-approval-render session))
       (when (mevedel-session-permission-queue session)
         (require 'mevedel-permission-queue)
         (mevedel-permission-queue--render-head session))

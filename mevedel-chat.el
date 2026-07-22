@@ -171,6 +171,8 @@
 (declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
 
 ;; `mevedel-goal'
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-goal" (&optional session outcome))
 (declare-function mevedel-goal--post-response
                   "mevedel-goal" (start end))
 (declare-function mevedel-goal-restore-pending-approval
@@ -1191,8 +1193,8 @@ BUF defaults to the current buffer if not specified."
         ;; have a chance to settle first.
         (when (fboundp 'mevedel-permission-queue-abort-all)
           (mevedel-permission-queue-abort-all))
-        (when (fboundp 'mevedel-plan-queue-abort-all)
-          (mevedel-plan-queue-abort-all)))
+        (when (fboundp 'mevedel-plan-approval-abort)
+          (mevedel-plan-approval-abort)))
       ;; Phase 2: loop `gptel-abort'.  It only cancels one request per
       ;; call, so continue until no request owned by this root buffer remains.
       ;; Retained agent turns own separate buffers and continue independently.

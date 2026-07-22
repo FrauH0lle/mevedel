@@ -44,7 +44,7 @@
    :permission-rules rules
    :permission-mode 'ask
    :permission-queue nil
-   :plan-queue nil))
+   :pending-plan-approval nil))
 
 (defun test-pq--read-permission-log (session)
   "Read SESSION's permission log entries."

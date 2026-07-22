@@ -62,9 +62,6 @@
                   "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 
-;; `mevedel-plan'
-(defvar mevedel-plan-queue--spec)
-
 ;; `mevedel-presets'
 (declare-function mevedel-preset-restore-session
                   "mevedel-presets" (session &optional buffer))
@@ -80,6 +77,8 @@
                   (entry key))
 (declare-function mevedel-queue--entry-metadata-put "mevedel-queue"
                   (entry key value))
+(declare-function mevedel-queue--unregister-entry-interaction
+                  "mevedel-queue" (entry))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-reminders-make-plan-reference
@@ -130,7 +129,7 @@
 (declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request--create "mevedel-structs" (&rest args))
 (declare-function mevedel-request-cancel "mevedel-structs"
-                  (request &optional abort-plan-queue))
+                  (request &optional abort-plan-approval))
 (declare-function mevedel-session-enqueue-pending-reminder
                   "mevedel-structs" (session body))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
@@ -142,7 +141,8 @@
 (declare-function mevedel-session-pending-reminders
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-queued-user-messages
@@ -1825,7 +1825,7 @@ still-current candidate reviewed in CHAT-BUFFER."
           (mevedel-goal-pause-requested goal) nil
           (mevedel-goal-reason goal)
           "Goal objective edited; use /goal resume to replan")
-    (mevedel-plan-queue-abort-all mevedel--session)
+    (mevedel-plan-approval-abort mevedel--session)
     (mevedel-goal--enqueue-event-reminder
      mevedel--session "objective edited; replan before implementation")
     (mevedel-goal--save-session-state mevedel--session (current-buffer))
@@ -1890,9 +1890,7 @@ still-current candidate reviewed in CHAT-BUFFER."
       (when (and (eq policy 'automatic)
                  (eq (mevedel-goal-status goal) 'active)
                  (eq (mevedel-goal-phase goal) 'awaiting-approval))
-        (when (mevedel-session-plan-queue mevedel--session)
-          (mevedel-queue--abort-all
-           mevedel-plan-queue--spec 'policy-changed mevedel--session))
+        (mevedel-plan-approval-abort mevedel--session 'policy-changed)
         (unless (mevedel-goal-approval-request-pending-p mevedel--session)
           (mevedel-goal--apply-automatic-approval-policy
            goal (current-buffer)))))
@@ -1904,7 +1902,7 @@ still-current candidate reviewed in CHAT-BUFFER."
   (mevedel-goal--current)
   (when (bound-and-true-p mevedel--current-request)
     (user-error "Wait for or abort the active request before clearing Goal"))
-  (mevedel-plan-queue-abort-all mevedel--session)
+  (mevedel-plan-approval-abort mevedel--session)
   (mevedel-goal--enqueue-event-reminder
    mevedel--session "cleared; transcript and artifacts were preserved")
   (setf (mevedel-session-goal mevedel--session) nil
@@ -2098,7 +2096,7 @@ PROMPT-SUBMISSION owns accepted hook context for the initial planning turn."
       (setf (mevedel-session-goal mevedel--session) previous-goal
             (mevedel-session-plan-metadata mevedel--session)
             previous-plan-metadata)
-      (mevedel-plan-queue-abort-all mevedel--session)
+      (mevedel-plan-approval-abort mevedel--session)
       (setf (mevedel-session-goal mevedel--session) goal
             (mevedel-session-plan-metadata mevedel--session) nil))
     goal))
@@ -2251,38 +2249,56 @@ hook context until the turn is inserted."
     (mevedel--gptel-send-request
      (and hook-context stored-prompt))))
 
-(defun mevedel-plan-queue--current-session ()
-  "Resolve the session struct that owns the plan approval FIFO."
+(defun mevedel-plan-approval--current-session ()
+  "Resolve the session struct that owns the pending Plan approval."
   (mevedel-queue--current-session))
 
-(defvar mevedel-plan-queue--spec
-  (mevedel-queue-spec--create
-   :name 'plan-queue
-   :get (lambda (session) (mevedel-session-plan-queue session))
-   :set (lambda (session queue)
-          (setf (mevedel-session-plan-queue session) queue))
-   :render #'mevedel-plan-queue--render-entry
-   :settle (lambda (entry outcome)
-             (when-let* ((callback (plist-get entry :callback)))
-               (funcall callback outcome)))
-   :retain-on-settle-error t
-   :entry-origin (lambda (entry) (plist-get entry :origin)))
-  "Shared FIFO spec for plan approval confirmations.")
+(defun mevedel-plan-approval--deliver (entry outcome phase &optional retain)
+  "Deliver OUTCOME to ENTRY during PHASE.
+When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
+  (condition-case err
+      (progn
+        (when-let* ((callback (plist-get entry :callback)))
+          (funcall callback outcome))
+        (mevedel-queue--unregister-entry-interaction entry)
+        t)
+    (error
+     (display-warning
+      'mevedel
+      (format "plan approval: %s callback error: %S" phase err)
+      :warning)
+     (unless retain
+       (mevedel-queue--unregister-entry-interaction entry))
+     nil)))
 
-(defun mevedel-plan-queue--get (&optional session)
-  "Return SESSION's plan queue."
-  (when-let* ((sess (or session (mevedel-plan-queue--current-session))))
-    (mevedel-queue--get mevedel-plan-queue--spec sess)))
+(defun mevedel-plan-approval-present (entry &optional session)
+  "Replace SESSION's pending Plan approval with ENTRY and render it."
+  (let ((session (or session (mevedel-plan-approval--current-session))))
+    (if (not session)
+        (progn
+          (display-warning 'mevedel "Plan approval presented with no session"
+                           :warning)
+          (mevedel-plan-approval--deliver entry 'aborted "no-session"))
+      (let ((entry (plist-put (copy-sequence entry) :session session)))
+        (when-let* ((previous
+                    (mevedel-session-pending-plan-approval session)))
+          (setf (mevedel-session-pending-plan-approval session) nil)
+          (mevedel-plan-approval--deliver
+           previous 'superseded "supersede"))
+        (setf (mevedel-session-pending-plan-approval session) entry)
+        (mevedel-plan-approval-render session)))))
 
-(defun mevedel-plan-queue--enqueue (entry)
-  "Append plan approval ENTRY to the session FIFO and render the head."
-  (mevedel-queue--enqueue mevedel-plan-queue--spec entry))
-
-(defun mevedel-plan-queue--render-head (&optional session)
-  "Render the current head of SESSION's plan approval FIFO."
-  (mevedel-queue--render-head mevedel-plan-queue--spec
-                              (or session
-                                  (mevedel-plan-queue--current-session))))
+(defun mevedel-plan-approval-render (&optional session)
+  "Render SESSION's pending Plan approval."
+  (when-let* ((session (or session
+                           (mevedel-plan-approval--current-session)))
+              (entry (mevedel-session-pending-plan-approval session)))
+    (condition-case err
+        (mevedel-plan-approval--render-entry entry)
+      (error
+       (display-warning
+        'mevedel (format "plan approval: render error: %S" err) :warning)
+       (mevedel-plan-approval-abort session)))))
 
 (defun mevedel-goal--ensure-implementation-allowed (entry outcome)
   "Signal when ENTRY may not be implemented with OUTCOME yet."
@@ -2292,19 +2308,28 @@ hook context until the turn is inserted."
     (user-error
      "Resolve queued messages before implementing the plan (edit or clear the queued message batch)")))
 
-(defun mevedel-plan-queue--on-head-outcome (entry outcome)
-  "Settle plan approval ENTRY with OUTCOME and render the next head."
+(defun mevedel-plan-approval-settle (entry outcome)
+  "Settle pending Plan approval ENTRY with OUTCOME."
   (mevedel-goal--ensure-implementation-allowed entry outcome)
-  (mevedel-queue--pop mevedel-plan-queue--spec entry outcome))
+  (let* ((session (plist-get entry :session))
+         (pending (and session
+                       (mevedel-session-pending-plan-approval session))))
+    (if (not (eq entry pending))
+        (display-warning
+         'mevedel "Plan approval: stale interaction settlement ignored"
+         :warning)
+      (when (mevedel-plan-approval--deliver entry outcome "settle" t)
+        (when (eq entry (mevedel-session-pending-plan-approval session))
+          (setf (mevedel-session-pending-plan-approval session) nil))))))
 
-(defun mevedel-plan-queue-abort-all (&optional session)
-  "Flush SESSION's plan FIFO, firing `aborted' on every entry."
-  (mevedel-queue--abort-all mevedel-plan-queue--spec 'aborted session))
-
-(defun mevedel-plan-queue-sweep-agent (origin &optional session)
-  "Abort queued SESSION plans whose `:origin' matches ORIGIN."
-  (mevedel-queue--sweep-origin
-   mevedel-plan-queue--spec origin 'aborted session))
+(defun mevedel-plan-approval-abort (&optional session outcome)
+  "Settle SESSION's pending Plan approval with OUTCOME or `aborted'."
+  (when-let* ((session (or session
+                           (mevedel-plan-approval--current-session)))
+              (entry (mevedel-session-pending-plan-approval session)))
+    (setf (mevedel-session-pending-plan-approval session) nil)
+    (mevedel-plan-approval--deliver
+     entry (or outcome 'aborted) "abort")))
 
 (defconst mevedel-goal--implementation-modes
   '(ask auto full-auto)
@@ -2323,22 +2348,22 @@ hook context until the turn is inserted."
          (tail (memq mode modes)))
     (or (cadr tail) (car modes))))
 
-(defun mevedel-plan-queue--entry-implementation-mode (entry)
+(defun mevedel-plan-approval--entry-implementation-mode (entry)
   "Return ENTRY's selected implementation permission mode."
   (or (mevedel-queue--entry-metadata-get entry :implementation-mode)
       (when-let* ((session (plist-get entry :session)))
         (mevedel-session-permission-mode session))
       'ask))
 
-(defun mevedel-plan-queue--cycle-entry-implementation-mode (entry)
+(defun mevedel-plan-approval--cycle-entry-implementation-mode (entry)
   "Cycle ENTRY's implementation mode and rerender the plan prompt."
   (mevedel-queue--entry-metadata-put
    entry :implementation-mode
    (mevedel-goal--next-implementation-mode
-    (mevedel-plan-queue--entry-implementation-mode entry)))
-  (mevedel-plan-queue--render-entry entry))
+    (mevedel-plan-approval--entry-implementation-mode entry)))
+  (mevedel-plan-approval--render-entry entry))
 
-(defun mevedel-plan-queue--entry-execution-home (entry)
+(defun mevedel-plan-approval--entry-execution-home (entry)
   "Return ENTRY's selected Goal execution-home kind."
   (or (mevedel-queue--entry-metadata-get entry :execution-home)
       (when-let* ((session (plist-get entry :session))
@@ -2346,24 +2371,24 @@ hook context until the turn is inserted."
         (plist-get (mevedel-goal-execution-home goal) :kind))
       'current))
 
-(defun mevedel-plan-queue--cycle-entry-execution-home (entry)
+(defun mevedel-plan-approval--cycle-entry-execution-home (entry)
   "Toggle ENTRY's implementation home and rerender the plan prompt."
-  (unless (mevedel-plan-queue--entry-execution-home-mutable-p entry)
+  (unless (mevedel-plan-approval--entry-execution-home-mutable-p entry)
     (user-error "Goal execution home is locked after first approval"))
   (mevedel-queue--entry-metadata-put
    entry :execution-home
-   (if (eq (mevedel-plan-queue--entry-execution-home entry) 'current)
+   (if (eq (mevedel-plan-approval--entry-execution-home entry) 'current)
        'worktree
      'current))
-  (mevedel-plan-queue--render-entry entry))
+  (mevedel-plan-approval--render-entry entry))
 
-(defun mevedel-plan-queue--entry-execution-home-mutable-p (entry)
+(defun mevedel-plan-approval--entry-execution-home-mutable-p (entry)
   "Return non-nil when ENTRY may select the Goal execution home."
   (when-let* ((session (plist-get entry :session))
               (goal (mevedel-session-goal session)))
     (not (plist-get (mevedel-goal-execution-home goal) :locked))))
 
-(defun mevedel-plan-queue--keys-line
+(defun mevedel-plan-approval--keys-line
     (implementation-mode execution-home home-mutable-p)
   "Return plan key help for IMPLEMENTATION-MODE and EXECUTION-HOME.
 HOME-MUTABLE-P means the first approval may still select another home."
@@ -2388,14 +2413,14 @@ HOME-MUTABLE-P means the first approval may still select another home."
    (propertize "q" 'font-lock-face 'help-key-binding)
    " cancel\n"))
 
-(defun mevedel-plan-queue--display-body (plan-markdown)
+(defun mevedel-plan-approval--display-body (plan-markdown)
   "Return PLAN-MARKDOWN fontified for the plan approval interaction zone."
   (if (fboundp 'mevedel-view--fontify-as)
       (mevedel-view--fontify-as plan-markdown 'markdown-mode)
     plan-markdown))
 
-(defun mevedel-plan-queue--render-entry (entry)
-  "Render plan approval queue ENTRY in the interaction zone."
+(defun mevedel-plan-approval--render-entry (entry)
+  "Render Plan approval ENTRY in the interaction zone."
   (require 'mevedel-interaction-prompt)
   (let ((plan-markdown (plist-get entry :body))
         (chat-buffer (plist-get entry :chat-buffer))
@@ -2407,8 +2432,8 @@ HOME-MUTABLE-P means the first approval may still select another home."
          (implementation-outcome (context)
            (list :context context
                  :execution-home
-                 (mevedel-plan-queue--entry-execution-home entry)
-                 :mode (mevedel-plan-queue--entry-implementation-mode
+                 (mevedel-plan-approval--entry-execution-home entry)
+                 :mode (mevedel-plan-approval--entry-implementation-mode
                         entry)))
          (implement-plan ()
            (interactive)
@@ -2422,10 +2447,10 @@ HOME-MUTABLE-P means the first approval may still select another home."
              (settle outcome)))
          (cycle-implementation-mode ()
            (interactive)
-           (mevedel-plan-queue--cycle-entry-implementation-mode entry))
+           (mevedel-plan-approval--cycle-entry-implementation-mode entry))
          (cycle-execution-home ()
            (interactive)
-           (mevedel-plan-queue--cycle-entry-execution-home entry))
+           (mevedel-plan-approval--cycle-entry-execution-home entry))
          (reject-plan-feedback ()
            (interactive)
            (settle 'feedback-draft))
@@ -2452,12 +2477,12 @@ HOME-MUTABLE-P means the first approval may still select another home."
                       (propertize "Automatic approval escalated\n"
                                   'font-lock-face 'warning)
                       reason "\n\n"))
-                   (mevedel-plan-queue--display-body plan-markdown)
+                   (mevedel-plan-approval--display-body plan-markdown)
                    "\n\n"
-                   (mevedel-plan-queue--keys-line
-                    (mevedel-plan-queue--entry-implementation-mode entry)
-                    (mevedel-plan-queue--entry-execution-home entry)
-                    (mevedel-plan-queue--entry-execution-home-mutable-p
+                   (mevedel-plan-approval--keys-line
+                    (mevedel-plan-approval--entry-implementation-mode entry)
+                    (mevedel-plan-approval--entry-execution-home entry)
+                    (mevedel-plan-approval--entry-execution-home-mutable-p
                      entry))
                    (propertize
                     "\n" 'font-lock-face
@@ -2479,8 +2504,7 @@ HOME-MUTABLE-P means the first approval may still select another home."
                   (mevedel-view--interaction-register
                    (list :kind 'plan
                          :id interaction-id
-                         :count (length (mevedel-plan-queue--get
-                                         (plist-get entry :session)))
+                         :count 1
                          :body body
                          :priority 200
                          :keymap keymap
@@ -2488,13 +2512,13 @@ HOME-MUTABLE-P means the first approval may still select another home."
                          :entry entry
                          :activate
                          (lambda (outcome)
-                           (mevedel-plan-queue--on-head-outcome
+                           (mevedel-plan-approval-settle
                             entry outcome)))))
             (overlay-put overlay 'mevedel-plan t)
             (overlay-put overlay 'mevedel-user-request t)
             (overlay-put overlay 'mevedel--callback
                          (lambda (outcome)
-                           (mevedel-plan-queue--on-head-outcome
+                           (mevedel-plan-approval-settle
                             entry outcome)))
             (overlay-put overlay 'keymap keymap)
             (when (and (overlay-buffer overlay)
@@ -2810,7 +2834,7 @@ Return `(:buffer BUFFER :accepted ARTIFACT)' for the sole target owner."
            (mevedel-goal--save-session-state
             mevedel--session chat-buffer)
            (message "mevedel: goal paused at plan approval"))
-          ('policy-changed nil)
+          ((or 'policy-changed 'superseded) nil)
           (_
            (message "mevedel: unknown plan outcome %S" outcome)))))))
 
@@ -2845,7 +2869,7 @@ when non-nil, explains why automatic approval escalated."
          plan-markdown mevedel--session chat-buffer
          (when-let* ((goal (mevedel-session-goal mevedel--session)))
            (mevedel-goal--current-plan-relative-path goal)))
-        (mevedel-plan-queue--enqueue
+        (mevedel-plan-approval-present
          (mevedel-goal--approval-entry
           plan-markdown chat-buffer mevedel--session guardian-reason))))))
 
@@ -2862,11 +2886,11 @@ when non-nil, explains why automatic approval escalated."
                  (and (eq (mevedel-goal-status goal) 'active)
                       (eq (mevedel-goal-phase goal) 'awaiting-approval)))
                (eq (plist-get metadata :status) 'presented)
-               (null (mevedel-session-plan-queue session)))
+               (null (mevedel-session-pending-plan-approval session)))
       (when-let* ((plan-markdown
                    (mevedel-plan-current-body session))
                   ((not (string-blank-p plan-markdown))))
-        (mevedel-plan-queue--enqueue
+        (mevedel-plan-approval-present
          (mevedel-goal--approval-entry
           plan-markdown chat-buffer session
           (when (plist-get metadata :guardian-pending)
@@ -2876,7 +2900,7 @@ when non-nil, explains why automatic approval escalated."
   "Return non-nil when SESSION has queued or visible user interaction."
   (or (mevedel-session-queued-user-messages session)
       (mevedel-session-permission-queue session)
-      (mevedel-session-plan-queue session)
+      (mevedel-session-pending-plan-approval session)
       (and (boundp 'mevedel--view-buffer)
            (buffer-live-p mevedel--view-buffer)
            (mevedel-view-interaction-pending-p mevedel--view-buffer))))

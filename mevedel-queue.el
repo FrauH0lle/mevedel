@@ -2,10 +2,8 @@
 
 ;;; Commentary:
 
-;; Private FIFO machinery shared by the permission and plan approval
-;; queues.  Queue semantics live here; permission/plan modules provide
-;; session-slot accessors, renderers, callback settlement, and optional
-;; coalescing.
+;; Private FIFO machinery for permission prompts.  Plan approval reuses the
+;; entry UI metadata helpers but owns no queue.
 
 ;;; Code:
 

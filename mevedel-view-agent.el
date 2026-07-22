@@ -60,8 +60,6 @@
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-queue
                   "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-queue
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
@@ -236,15 +234,10 @@ badges promptly."
 (defun mevedel-view-agent--blocked-reason (path session)
   "Return the visible blocked reason for canonical PATH in SESSION, or nil."
   (when (and path session)
-    (cond
-     ((cl-some (lambda (entry)
-                 (equal (plist-get entry :origin) path))
-               (mevedel-session-permission-queue session))
-      "permission")
-     ((cl-some (lambda (entry)
-                 (equal (plist-get entry :origin) path))
-               (mevedel-session-plan-queue session))
-      "plan"))))
+    (when (cl-some (lambda (entry)
+                     (equal (plist-get entry :origin) path))
+                   (mevedel-session-permission-queue session))
+      "permission")))
 
 
 ;;;; Aggregate state and keymaps
