@@ -1670,7 +1670,7 @@ AUTO is non-nil for automatic compaction."
 
 (cl-defun mevedel--compact-run
     (&key aggressive instructions pending-start callback auto
-          admission target)
+          admission target prepared-summary summary-ready)
   "Run compaction in the current chat buffer.
 AGGRESSIVE drops the preserved tail.  INSTRUCTIONS are manual summary
 instructions.  PENDING-START marks an inserted-but-unsent prompt region.
@@ -1678,7 +1678,9 @@ CALLBACK receives (ERR) when compaction settles.  AUTO marks an
 auto-compaction call.  ADMISSION carries the pre-resolved summarizer
 policy and whether the active model crossed its own threshold.  TARGET
 is the private adapter for a persisted agent transcript; nil selects
-the active main-session segment."
+the active main-session segment.  PREPARED-SUMMARY skips the model
+request.  SUMMARY-READY may persist or normalize a completed summary
+before it is applied."
   (let* ((chat-buffer (current-buffer))
          (target (or target (mevedel--compact-main-target)))
          (invocation (plist-get target :invocation))
@@ -1868,7 +1870,8 @@ the active main-session segment."
                          (summary-applied nil)
                          (summary-first-response nil)
                          (summary-span
-                          (and session
+                          (and (not prepared-summary)
+                               session
                                (fboundp 'mevedel-telemetry-start)
                                (mevedel-telemetry-start
                                 session 'compaction-summary-request
@@ -1909,6 +1912,9 @@ the active main-session segment."
                              (setq summary-applied t)
                              (condition-case apply-err
                                  (progn
+                                    (when summary-ready
+                                      (setq summary
+                                            (funcall summary-ready summary)))
                                    (when archived-tool-use-ids
                                      (require 'mevedel-view-stream)
                                      (setq target
@@ -1978,7 +1984,9 @@ the active main-session segment."
                                         (plist-get policy :model))
                                        (gptel-reasoning-effort
                                         (plist-get policy :effort)))
-                                   (funcall request-fn)))))
+                                   (if prepared-summary
+                                       (apply-summary prepared-summary)
+                                     (funcall request-fn))))))
                          (error
                           (when summary-span
                             (mevedel-telemetry-finish

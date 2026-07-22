@@ -2619,6 +2619,37 @@ missing or zero prompt-side usage cannot become the active baseline"
       (should-not result)
       (should (equal (nreverse events) '(PreCompact PostCompact)))))
 
+  :doc "applies a prepared summary without another model request"
+  (test-mevedel-compact--with-persisted-buffer (chat-buf session)
+    (let (applied result)
+      (insert "Prompt\n")
+      (insert (propertize "Response\n" 'gptel 'response))
+      (let ((target (mevedel--compact-main-target)))
+        (setq target
+              (plist-put target :apply
+                         (lambda (_target summary &rest _)
+                           (setq applied summary))))
+        (setq target (plist-put target :complete (lambda (&rest _))))
+        (cl-letf (((symbol-function 'mevedel-system-render-prompt-file)
+                   (lambda (&rest _) "system prompt"))
+                  ((symbol-function 'mevedel-hooks-run-event)
+                   (lambda (_event _payload callback &rest _)
+                     (funcall callback nil)))
+                  ((symbol-function 'mevedel--run-session-start-hooks)
+                   #'ignore)
+                  ((symbol-function 'gptel-request)
+                   (lambda (&rest _)
+                     (ert-fail "Prepared summary sent another request")))
+                  ((symbol-function 'message) #'ignore))
+          (mevedel--compact-run
+           :target target
+           :aggressive t
+           :prepared-summary "cached"
+           :summary-ready (lambda (summary) (concat summary " ready"))
+           :callback (lambda (err) (setq result err)))))
+      (should-not result)
+      (should (equal applied "cached ready"))))
+
   :doc "blocked compaction emits neither PostCompact nor SessionStart"
   (test-mevedel-compact--with-persisted-buffer (chat-buf session)
     (let (events result)

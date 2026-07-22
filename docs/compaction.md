@@ -39,6 +39,15 @@ original request continues and the spinner returns to `Thinking...`.
 The slash/manual command remains useful when the user wants to compact
 with custom instructions.
 
+Standalone Plan's Here/Summary context uses the same aggressive root
+compaction runner before implementation.  Its guidance asks for a portable
+handoff without the accepted plan, sets the preserved tail to zero, and then
+submits the immutable accepted path, the full accepted plan, and the
+implementation instruction through the ordinary request lifecycle.  The
+generated summary is anchored in the new segment and cached in the Plan retry
+record before rotation persists the sidecar.  A later startup failure can
+therefore retry implementation without another summary request.
+
 When `PreCompact` adds hook context, the hook audit surface is stored as
 an ignored side channel next to the compaction summary, not in the
 model-visible summary text.  The expanded audit detail shows the

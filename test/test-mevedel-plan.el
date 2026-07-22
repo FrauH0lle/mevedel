@@ -17,6 +17,7 @@
           (file-name-directory
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
+(require 'mevedel-compact)
 
 (mevedel-deftest mevedel-plan-mode-active-p
   (:doc "reads Plan state from the explicit or current session")
@@ -151,13 +152,18 @@
               (should (string-match-p text body)))
             (call-interactively (lookup-key keymap (kbd "c")))
             (should (eq 'fresh (plist-get selection :context)))
+            (call-interactively (lookup-key keymap (kbd "c")))
+            (should (eq 'summary (plist-get selection :context)))
+            (should (string-match-p
+                     "another model request"
+                     (mevedel-plan-mode--context-description 'summary)))
             (call-interactively (lookup-key keymap (kbd "m")))
             (should rerendered)
             (should (eq 'full-auto (plist-get selection :mode)))
             (should (eq 'auto (mevedel-session-permission-mode session)))
             (call-interactively (lookup-key keymap (kbd "RET")))
             (should (equal '(:accept t
-                             :selection (:location here :context fresh
+                             :selection (:location here :context summary
                                          :execution direct :mode full-auto))
                            outcome))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
@@ -522,7 +528,136 @@
                             :implementation-retry)))
             (should (eq 'prepare-context (plist-get retry :step)))
             (should (equal "Rotation failed" (plist-get retry :failure)))))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "Here/Summary caches one zero-tail compaction across dispatch retry"
+  (let* ((save-dir (make-temp-file "mevedel-plan-summary-" t))
+         (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
+         (body "# Accepted plan\n\nImplement the endpoint.")
+         (selection '(:location here :context summary
+                      :execution direct :mode auto))
+         (record
+          (list :step 'prepare-summary :selection selection
+                :accepted-path "plans/accepted.md"
+                :accepted-absolute-path accepted-path
+                :accepted-hash (mevedel-plan-hash body)))
+         (session
+          (mevedel-session--create
+           :name "test" :save-path save-dir
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (data-buffer (generate-new-buffer " *plan-summary-data*"))
+         (view-buffer (generate-new-buffer " *plan-summary-view*"))
+         (summary-runs 0)
+         (compact-runs 0)
+         (apply-attempts 0)
+         (attempts 0)
+         anchored-summary
+         persisted
+         prompts)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory accepted-path) t)
+          (write-region body nil accepted-path nil 'silent)
+          (cl-letf (((symbol-function 'mevedel-plan-mode--persist)
+                     (lambda (&rest _)
+                       (push (copy-tree
+                              (mevedel-session-plan-metadata session))
+                             persisted)))
+                    ((symbol-function 'mevedel--compact-main-target)
+                     (lambda ()
+                       (list :apply
+                             (lambda (_target summary &rest _)
+                               (cl-incf apply-attempts)
+                               (when (= apply-attempts 1)
+                                 (error "Rotation failed"))
+                               (setq anchored-summary summary)
+                               t))))
+                    ((symbol-function 'mevedel--compact-previous-summary)
+                     (lambda () anchored-summary))
+                    ((symbol-function 'mevedel--compact-run)
+                     (lambda (&rest args)
+                       (cl-incf compact-runs)
+                       (should (plist-get args :aggressive))
+                       (should (string-match-p
+                                "Do not reproduce the accepted plan"
+                                (plist-get args :instructions)))
+                       (let* ((prepared (plist-get args :prepared-summary))
+                              (summary
+                               (or prepared
+                                   (progn
+                                     (cl-incf summary-runs)
+                                     (concat
+                                      "# Handoff\n\nDiscovery.\n\n" body))))
+                              (summary
+                               (funcall (plist-get args :summary-ready)
+                                        summary))
+                              (target (plist-get args :target)))
+                         (condition-case err
+                             (progn
+                               (funcall (plist-get target :apply)
+                                        target summary nil nil nil nil 0)
+                               (funcall (plist-get args :callback) nil))
+                           (error
+                            (funcall (plist-get args :callback)
+                                     (error-message-string err)))))))
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_buffer) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (push input prompts)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (_action)
+                       (cl-incf attempts)
+                       (when (= attempts 1)
+                         (error "Request startup failed"))
+                       'started)))
+            (mevedel-plan-mode--dispatch-accepted session data-buffer)
+            (let ((retry
+                   (plist-get (mevedel-session-plan-metadata session)
+                              :implementation-retry)))
+              (should (= 1 summary-runs))
+              (should (eq 'prepare-summary (plist-get retry :step)))
+              (should (plist-get retry :summary))
+              (should-not (string-search body (plist-get retry :summary)))
+              (should
+               (seq-some
+                (lambda (metadata)
+                  (let ((saved (plist-get metadata :implementation-retry)))
+                    (and (eq 'prepare-summary (plist-get saved :step))
+                         (plist-get saved :summary))))
+                persisted)))
+            (mevedel-retry-plan-implementation session data-buffer)
+            (should (= 2 compact-runs))
+            (should (= 1 summary-runs))
+            (should (= 1 attempts))
+            (should (equal anchored-summary
+                           (plist-get
+                            (plist-get (mevedel-session-plan-metadata session)
+                                       :implementation-retry)
+                            :summary)))
+            (mevedel-retry-plan-implementation session data-buffer)
+            (should (= 2 attempts))
+            (should-not
+             (plist-member (mevedel-session-plan-metadata session)
+                           :implementation-retry))
+            (dolist (prompt prompts)
+              (let ((path-position
+                     (string-search accepted-path prompt))
+                    (plan-position (string-search body prompt))
+                    (instruction-position
+                     (string-search "Implementation instructions:" prompt)))
+                (should path-position)
+                (should plan-position)
+                (should instruction-position)
+                (should (< path-position plan-position instruction-position))
+                (should-not (string-search anchored-summary prompt)))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))))
 
 (mevedel-deftest mevedel-plan-validate
   (:doc "normalizes nonblank plans and rejects invalid input")

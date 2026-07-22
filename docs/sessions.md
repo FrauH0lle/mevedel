@@ -81,14 +81,17 @@ buffer-local mevedel variables in `:preset-settings`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
 gptel's own buffer-local settings continue to use its Org persistence.
 
-Standalone Plan state lives in the same sidecar and session directory.  A
-Here/Fresh acceptance finalizes the planning segment through the `/clear`
-rotation path, records a `SessionStart(clear)` context snapshot, and submits
-the immutable accepted path and full plan through the ordinary prompt and
-request lifecycle.  If preparation or request startup fails, the sidecar keeps
-the accepted artifact, selected context and permission mode, and the first
-incomplete step for `mevedel-retry-plan-implementation`.  A retry reuses a
-completed Fresh rotation and clears this record only after request startup.
+Standalone Plan state lives in the same sidecar and session directory.
+Here/Fresh finalizes the planning segment through the `/clear` rotation path
+and records a `SessionStart(clear)` context snapshot.  Here/Summary instead
+uses aggressive root compaction with no preserved tail and records the compact
+handoff in the new segment.  Both contexts then submit the immutable accepted
+path and full plan through the ordinary prompt and request lifecycle.  If
+preparation or request startup fails, the sidecar keeps the accepted artifact,
+selected context and permission mode, and the first incomplete step for
+`mevedel-retry-plan-implementation`.  It also keeps a completed Summary
+handoff, so retry repeats neither a finished Fresh rotation nor a successful
+summary request.  The record is cleared only after request startup.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted

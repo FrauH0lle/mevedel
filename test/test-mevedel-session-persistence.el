@@ -747,11 +747,12 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   :doc "preserves an accepted standalone Plan implementation retry"
   (let* ((retry
           '(:step submit
-            :selection (:location here :context fresh
+            :selection (:location here :context summary
                         :execution direct :mode auto)
             :accepted-path "plans/accepted.md"
             :accepted-absolute-path "/tmp/session/plans/accepted.md"
-            :accepted-hash "abc" :failure "Transport refused"))
+            :accepted-hash "abc" :summary "# Handoff"
+            :failure "Transport refused"))
          (metadata (list :status 'accepted :implementation-retry retry))
          (result
           (mevedel-session-persistence-deserialize
