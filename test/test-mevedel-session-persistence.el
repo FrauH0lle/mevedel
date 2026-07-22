@@ -744,6 +744,22 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (delete-directory root t))
       (mevedel-workspace-clear-registry)))
 
+  :doc "preserves an accepted standalone Plan implementation retry"
+  (let* ((retry
+          '(:step submit
+            :selection (:location here :context fresh
+                        :execution direct :mode auto)
+            :accepted-path "plans/accepted.md"
+            :accepted-absolute-path "/tmp/session/plans/accepted.md"
+            :accepted-hash "abc" :failure "Transport refused"))
+         (metadata (list :status 'accepted :implementation-retry retry))
+         (result
+          (mevedel-session-persistence-deserialize
+           (test-mevedel-session-persistence--complete-sidecar
+            (list :plan-metadata metadata))))
+         (session (plist-get result :session)))
+    (should (equal metadata (mevedel-session-plan-metadata session))))
+
   :doc "preserves automatic revision metadata and compact cycle audit evidence"
   (let* ((input-hash (secure-hash 'sha256 "# Original"))
          (replacement-hash (secure-hash 'sha256 "# Revised"))

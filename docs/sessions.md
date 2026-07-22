@@ -50,6 +50,8 @@ Layout:
   segment-0001.chat.org              ; finalized at compact #1
   segment-0002.chat.org              ; finalized at compact #2
   segment-0003.chat.org              ; current/live
+  plans/current.md                   ; mutable standalone Plan draft/proposal
+  plans/accepted-*.md                ; immutable accepted standalone plans
   hook-log.el                        ; one hook execution plist per line
   permission-log.el                  ; permission/request diagnostic plists
   repair-log.el                      ; redacted tool-input validation telemetry
@@ -78,6 +80,15 @@ conversation locations. It also records `:preset-name` and the resolved
 buffer-local mevedel variables in `:preset-settings`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
 gptel's own buffer-local settings continue to use its Org persistence.
+
+Standalone Plan state lives in the same sidecar and session directory.  A
+Here/Fresh acceptance finalizes the planning segment through the `/clear`
+rotation path, records a `SessionStart(clear)` context snapshot, and submits
+the immutable accepted path and full plan through the ordinary prompt and
+request lifecycle.  If preparation or request startup fails, the sidecar keeps
+the accepted artifact, selected context and permission mode, and the first
+incomplete step for `mevedel-retry-plan-implementation`.  A retry reuses a
+completed Fresh rotation and clears this record only after request startup.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted

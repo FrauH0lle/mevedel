@@ -149,13 +149,15 @@
             (dolist (text '("Location   Here" "Context    Current"
                             "Execution  Direct" "Mode       auto"))
               (should (string-match-p text body)))
+            (call-interactively (lookup-key keymap (kbd "c")))
+            (should (eq 'fresh (plist-get selection :context)))
             (call-interactively (lookup-key keymap (kbd "m")))
             (should rerendered)
             (should (eq 'full-auto (plist-get selection :mode)))
             (should (eq 'auto (mevedel-session-permission-mode session)))
             (call-interactively (lookup-key keymap (kbd "RET")))
             (should (equal '(:accept t
-                             :selection (:location here :context current
+                             :selection (:location here :context fresh
                                          :execution direct :mode full-auto))
                            outcome))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
@@ -349,6 +351,7 @@
                        (funcall callback
                                 (mevedel-prompt-submission-create
                                  :input input :state 'committed))))
+                    ((symbol-function 'mevedel-plan-mode--persist) #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action) (setq implementation action))))
             (mevedel-plan-mode--approval-callback
@@ -369,6 +372,7 @@
             (should (eq 'current (plist-get implementation :context)))
             (should (equal accepted
                            (plist-get implementation :plan-file)))
+            (should-not (plist-member metadata :implementation-retry))
             (should-not (mevedel-session-goal session))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
@@ -407,6 +411,118 @@
       (should (mevedel-session-plan-mode session))
       (should (eq 'draft (plist-get metadata :status)))
       (should-not (plist-member metadata :selection)))))
+
+(mevedel-deftest mevedel-plan-mode--dispatch-accepted
+  (:doc "Here/Fresh rotates once, runs setup hooks, and retries only submission")
+  ,test
+  (test)
+  (let* ((save-dir (make-temp-file "mevedel-plan-fresh-" t))
+         (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
+         (current-path (file-name-concat save-dir "plans" "current.md"))
+         (body "# Immutable accepted plan")
+         (selection '(:location here :context fresh
+                      :execution direct :mode full-auto))
+         (record
+          (list :step 'prepare-context :selection selection
+                :accepted-path "plans/accepted.md"
+                :accepted-absolute-path accepted-path
+                :accepted-hash (mevedel-plan-hash body)))
+         (session
+          (mevedel-session--create
+           :name "test" :save-path save-dir :permission-mode 'full-auto
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (data-buffer (generate-new-buffer " *plan-fresh-data*"))
+         (view-buffer (generate-new-buffer " *plan-fresh-view*"))
+         (rotations 0)
+         (attempts 0)
+         hook-source
+         prompts)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory accepted-path) t)
+          (write-region body nil accepted-path nil 'silent)
+          (write-region "# Mutable replacement" nil current-path nil 'silent)
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session
+                        gptel-prompt-prefix-alist '((fundamental-mode . "> "))))
+          (cl-letf (((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function
+                      'mevedel-session-persistence-start-fresh-segment)
+                     (lambda (&rest _)
+                       (cl-incf rotations)
+                       "segment-0002.chat.org"))
+                    ((symbol-function 'mevedel--run-session-start-hooks)
+                     (lambda (source) (setq hook-source source)))
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_buffer) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (push input prompts)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (action)
+                       (cl-incf attempts)
+                       (should (eq 'current (plist-get action :context)))
+                       (should (eq 'full-auto
+                                   (plist-get action :permission-mode)))
+                       (should (equal accepted-path
+                                      (plist-get action :plan-file)))
+                       (when (= attempts 1)
+                         (error "Transport refused"))
+                       'started)))
+            (mevedel-plan-mode--dispatch-accepted session data-buffer)
+            (let ((retry
+                   (plist-get (mevedel-session-plan-metadata session)
+                              :implementation-retry)))
+              (should (= 1 rotations))
+              (should (equal "clear" hook-source))
+              (should (eq 'submit (plist-get retry :step)))
+              (should (equal "Transport refused" (plist-get retry :failure)))
+              (should (eq 'accepted
+                          (plist-get (mevedel-session-plan-metadata session)
+                                     :status))))
+            (mevedel-retry-plan-implementation session data-buffer)
+            (should (= 1 rotations))
+            (should (= 2 attempts))
+            (should-not
+             (plist-member (mevedel-session-plan-metadata session)
+                           :implementation-retry))
+            (dolist (prompt prompts)
+              (should (string-match-p "# Immutable accepted plan" prompt))
+              (should-not (string-match-p "Mutable replacement" prompt)))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))
+
+  :doc "a failed Fresh rotation remains retryable at the preparation step"
+  (let* ((record
+          '(:step prepare-context
+            :selection (:location here :context fresh
+                        :execution direct :mode auto)
+            :accepted-path "plans/accepted.md"
+            :accepted-absolute-path "/tmp/accepted.md"
+            :accepted-hash "hash"))
+         (session
+          (mevedel-session--create
+           :name "test"
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (data-buffer (generate-new-buffer " *plan-fresh-failure*")))
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                  ((symbol-function
+                    'mevedel-session-persistence-start-fresh-segment)
+                   (lambda (&rest _) (error "Rotation failed"))))
+          (mevedel-plan-mode--dispatch-accepted session data-buffer)
+          (let ((retry
+                 (plist-get (mevedel-session-plan-metadata session)
+                            :implementation-retry)))
+            (should (eq 'prepare-context (plist-get retry :step)))
+            (should (equal "Rotation failed" (plist-get retry :failure)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
 (mevedel-deftest mevedel-plan-validate
   (:doc "normalizes nonblank plans and rejects invalid input")
