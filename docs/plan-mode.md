@@ -76,10 +76,24 @@ selected permission mode, and inherited Goal budget. The source session keeps
 its original permission mode and remains otherwise unchanged. Later Goal turns
 derive exact read authority only for the validated target-local artifact.
 
-Acceptance is final even if preparation or request startup fails. The source
-session persists a bounded retry record, and
-`mevedel-retry-plan-implementation` resumes from the completed preparation
-step instead of recreating artifacts, summaries, or worktrees.
+Acceptance is final even if preparation fails. The source session persists a
+bounded retry record, and `mevedel-retry-plan-implementation` resumes from the
+completed preparation step instead of recreating artifacts, summaries, or
+worktrees. Goal execution reserves and persists its Goal ID in that record.
+A retry reuses a target Goal only when both the reserved ID and target-local
+accepted-plan reference match; a different unfinished Goal remains untouched
+and is reported as a conflict.
+
+Goal construction is the Plan recovery boundary. Once the target Goal is
+durable, the source retry is cleared before kickoff. A kickoff startup failure
+therefore pauses the Goal with its runtime reason and is resumed with ordinary
+`/goal resume`, not Plan retry. Direct retains request-startup retry behavior.
+
+For Here + Goal, non-command input submitted after acceptance queues behind the
+reserved kickoff. After that turn it runs as Goal steering before automatic
+continuation. A Worktree source remains independent; its input stays ordinary
+source-session work, while input entered in the prepared target queues behind
+that target's kickoff. Paused kickoff-owned input remains held until resume.
 
 Plan activity, proposal identity, selection, artifact descriptors, and retry
 state persist in session metadata. Resume reconstructs an approval only when

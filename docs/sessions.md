@@ -87,7 +87,9 @@ preparation or request startup fails, the sidecar keeps the accepted artifact,
 selected context and permission mode, and the first incomplete step for
 `mevedel-retry-plan-implementation`.  It also keeps a completed Summary
 handoff, so retry repeats neither a finished Fresh rotation nor a successful
-summary request.  The record is cleared only after request startup.
+summary request.  Direct clears the record after request startup. Goal instead
+stores a reserved Goal ID before preparation and clears the record after the
+matching Goal is durably constructed, before kickoff.
 
 Plan approval can instead select Worktree/Fresh or Worktree/Summary.  Before acceptance, `RET`
 collects and validates the branch name; cancelling the minibuffer leaves the
@@ -116,6 +118,15 @@ its relative accepted-plan reference; the source session never owns or
 transfers the Worktree Goal. The first turn stores the full artifact path, plan
 content, and compact kickoff in the target transcript while the rendered view
 uses the short Goal implementation label.
+
+The source retry record is the durable handoff reservation. Its preallocated
+Goal ID plus the target accepted-plan reference identify a construction that
+survived a crash, allowing retry to reuse it without duplicating the Goal. A
+different unfinished target Goal remains a conflict. Worktree targets persist
+a temporary copy of the kickoff reservation so target input queues locally;
+source input stays in the source session. Here input likewise queues behind the
+kickoff. If kickoff startup fails after Plan recovery is cleared, the target
+Goal is paused and its owned queue remains held for `/goal resume`.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted

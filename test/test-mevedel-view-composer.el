@@ -2366,17 +2366,77 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
 (mevedel-deftest mevedel-view--queued-user-message-auto-drain-blocked-p ()
   ,test
   (test)
-  :doc "blocks fallback drainage only for a pending Plan approval"
+  :doc "blocks fallback drainage for approval and Goal handoff ownership"
   (let ((session (mevedel-session--create
                   :name "main" :pending-plan-approval 'plan)))
     (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
     (setf (mevedel-session-pending-plan-approval session) nil)
+    (should-not
+     (mevedel-view--queued-user-message-auto-drain-blocked-p session)))
+  (let ((here
+         (mevedel-session--create
+          :name "here"
+          :plan-metadata
+          '(:implementation-retry
+            (:goal-id "here-goal"
+             :selection (:location here :execution goal)))))
+        (source
+         (mevedel-session--create
+          :name "source"
+          :plan-metadata
+          '(:implementation-retry
+            (:goal-id "target-goal"
+             :selection (:location worktree :execution goal)))))
+        (target
+         (mevedel-session--create
+          :name "target"
+          :plan-metadata '(:implementation-goal-id "target-goal"))))
+    (should (equal "here-goal"
+                   (mevedel-view--reserved-goal-handoff-id here)))
+    (should-not (mevedel-view--reserved-goal-handoff-id source))
+    (should (equal "target-goal"
+                   (mevedel-view--reserved-goal-handoff-id target)))
+    (should (mevedel-view--queued-user-message-auto-drain-blocked-p here))
+    (should-not
+     (mevedel-view--queued-user-message-auto-drain-blocked-p source))
+    (should (mevedel-view--queued-user-message-auto-drain-blocked-p target)))
+  (let* ((goal (mevedel-goal--create :id "goal" :status 'paused))
+         (session
+          (mevedel-session--create
+           :name "paused" :goal goal
+           :queued-user-messages
+           '((:input "held" :queued-at-goal-id "goal")))))
+    (should (mevedel-view--queued-user-message-auto-drain-blocked-p session))
+    (setf (mevedel-goal-status goal) 'active)
     (should-not
      (mevedel-view--queued-user-message-auto-drain-blocked-p session))))
 
 (mevedel-deftest mevedel-view-send/queued-user-messages ()
   ,test
   (test)
+
+  :doc "Here Goal reservation queues post-acceptance input under its identity"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "handoff"
+            :plan-metadata
+            '(:implementation-retry
+              (:goal-id "reserved"
+               :selection (:location here :execution goal))))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (cl-letf (((symbol-function 'gptel-send)
+                 (lambda (&rest _) (ert-fail "Replaced reserved kickoff")))
+                ((symbol-function 'run-at-time)
+                 (lambda (&rest _) 'fake-timer)))
+        (with-current-buffer view-buf
+          (goto-char (mevedel-view--input-start))
+          (insert "steer after kickoff")
+          (mevedel-view-send))
+        (let ((entry (car (mevedel-session-queued-user-messages session))))
+          (should (equal "steer after kickoff" (plist-get entry :input)))
+          (should (equal "reserved" (plist-get entry :queued-at-goal-id)))))))
 
   :doc "plain input during WaitAgent is injected before its resumed sample"
   (mevedel-view-test--with-buffers

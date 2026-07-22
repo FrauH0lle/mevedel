@@ -186,6 +186,8 @@
 (defvar mevedel-slash-commands)
 
 ;; `mevedel-structs'
+(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-begin "mevedel-structs"
 		  (session &optional directive-uuid))
 (declare-function mevedel-request-end "mevedel-structs" nil)
@@ -201,6 +203,8 @@
 (declare-function mevedel-session-pending-plan-approval
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-plan-metadata "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pop-dropped-file-grants
@@ -1118,7 +1122,26 @@ means a failed attempt leaves the exact source attached for a retry."
 (defun mevedel-view--queued-user-message-auto-drain-blocked-p (&optional session)
   "Return non-nil when SESSION queued messages should wait for user action."
   (when-let* ((sess (or session (mevedel-view--session))))
-    (mevedel-session-pending-plan-approval sess)))
+    (or (mevedel-session-pending-plan-approval sess)
+        (mevedel-view--reserved-goal-handoff-id sess)
+        (when-let* ((goal (mevedel-session-goal sess))
+                    ((eq (mevedel-goal-status goal) 'paused))
+                    (entry (car (mevedel-session-queued-user-messages sess))))
+          (equal (mevedel-goal-id goal)
+                 (plist-get entry :queued-at-goal-id))))))
+
+(defun mevedel-view--reserved-goal-handoff-id (&optional session)
+  "Return SESSION's Goal handoff reservation, or nil.
+The source retry reserves only a Here handoff.  Worktree targets carry their
+own reservation while their prepared kickoff has not started."
+  (when-let* ((sess (or session (mevedel-view--session))))
+    (let* ((metadata (mevedel-session-plan-metadata sess))
+           (retry (plist-get metadata :implementation-retry))
+           (selection (plist-get retry :selection)))
+      (or (and (eq (plist-get selection :execution) 'goal)
+               (eq (plist-get selection :location) 'here)
+               (plist-get retry :goal-id))
+          (plist-get metadata :implementation-goal-id)))))
 
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
@@ -1184,9 +1207,10 @@ prompt hook when the queue drains."
                     :dropped-file-grants dropped-file-grants
                     :queued-at-time (float-time)
                     :queued-at-goal-id
-                    (and (mevedel-session-goal session)
-                         (mevedel-goal-id
-                          (mevedel-session-goal session)))
+                    (or (and (mevedel-session-goal session)
+                             (mevedel-goal-id
+                              (mevedel-session-goal session)))
+                        (mevedel-view--reserved-goal-handoff-id session))
                     :queued-at-turn
                     (or (mevedel-session-turn-count session) 0))))
         (when submission
@@ -1755,8 +1779,10 @@ fork."
     (when (string-empty-p input)
       (user-error "Nothing to send"))
     (let ((slash-parsed (mevedel-skills--parse-slash-line input)))
-      (if (buffer-local-value 'mevedel--current-request
-                              mevedel--data-buffer)
+      (if (or (buffer-local-value 'mevedel--current-request
+                                  mevedel--data-buffer)
+              (and (not slash-parsed)
+                   (mevedel-view--reserved-goal-handoff-id session)))
           (if (and slash-parsed
                    (mevedel-skills-local-command-active-request-p
                     (nth 0 slash-parsed) (nth 1 slash-parsed)))
