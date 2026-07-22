@@ -37,6 +37,11 @@ plan on later turns when it may still be relevant. The Goal controller owns
 planning and review prompts directly; their read-only restriction is enforced
 by the permission system rather than by a reminder.
 
+Standalone Plan Direct handoff does not use this reminder. Here and Worktree
+targets receive the immutable artifact path and full accepted plan in the
+canonical implementation prompt; Summary contexts additionally receive their
+cached handoff before that prompt.
+
 ### Accepted-plan verification reminder
 
 Accepting a plan marks verification as pending in `plan-metadata`.

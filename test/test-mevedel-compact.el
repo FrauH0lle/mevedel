@@ -1618,7 +1618,9 @@ missing or zero prompt-side usage cannot become the active baseline"
                         session '(:additional-context ("fresh context"))
                         'SessionStart))))
             (mevedel--compact-begin-root-context-epoch
-             (list :buffer buffer :session session) nil))
+             (list :buffer buffer :session session
+                   :begin-context-epoch t)
+             nil))
           (should (equal "compact" source))
           (should (mevedel-session-hook-context-pending session))
           (with-current-buffer buffer
@@ -1642,7 +1644,9 @@ missing or zero prompt-side usage cannot become the active baseline"
                         session '(:additional-context ("fresh context"))
                         'SessionStart))))
             (mevedel--compact-begin-root-context-epoch
-             (list :buffer buffer :session session) t))
+             (list :buffer buffer :session session
+                   :begin-context-epoch t)
+             t))
           (should-not (mevedel-session-hook-context-pending session))
           (with-current-buffer buffer
             (should (string-match-p

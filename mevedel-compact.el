@@ -1604,7 +1604,7 @@ HOOK-AUDITS are stored beside SUMMARY.  Return the recovery archive path."
 (defun mevedel--compact-begin-root-context-epoch (target auto)
   "Begin TARGET's root compact epoch.
 When AUTO is non-nil, attach the new context to the pending request."
-  (unless (plist-get target :invocation)
+  (when (plist-get target :begin-context-epoch)
     (let ((buffer (plist-get target :buffer))
           (session (plist-get target :session)))
       (when (and session (buffer-live-p buffer))
@@ -1653,6 +1653,7 @@ AUTO is non-nil for automatic compaction."
           :previous-summary (mevedel--compact-previous-summary)
           :prompt-session session
           :eligible-p (mevedel--compact-current-persisted-p)
+          :begin-context-epoch t
           :apply #'mevedel--compact-main-apply
           :start #'mevedel--compact-main-start
           :complete #'mevedel--compact-main-complete
