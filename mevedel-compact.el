@@ -997,6 +997,8 @@ manual user instructions.  SESSION supplies invoked skill records."
             "Do NOT replace it with only the recent conversation.\n"
             "Your output must merge BOTH sources: keep still-true details from the previous summary, "
             "remove stale or contradicted details, and add new facts from the recent conversation.\n"
+            "Retire satisfied requests from the previous summary when the recent history proves them complete; "
+            "keep only their resulting state, outcome, or evidence under Progress/Done.\n"
             "If the recent conversation is a separate completed task, preserve the older completed "
             "task under Progress/Critical Context/Relevant Files instead of dropping it.\n\n"
             "<previous-summary>\n" previous-summary "\n</previous-summary>\n")
@@ -1306,17 +1308,11 @@ hidden execution records replacing compacted tool rows."
       (user-error "Session is not materialized on disk"))
     (remove-text-properties 0 (length summary) '(gptel nil face nil) summary)
     (setq summary (mevedel--compact-append-hook-audits summary hook-audits))
-    (let ((path
-           (mevedel-session-persistence-rotate-segment
-            session (current-buffer) summary
-            :tail-text tail-text
-            :pending-text pending-text
-            :archive-text archive-text)))
-      (when (and path (mevedel-session-goal session))
-        (mevedel-session-enqueue-pending-reminder
-         session
-         "Compaction completed. Current Goal context and artifact pointers were regenerated from persisted state."))
-      path)))
+    (mevedel-session-persistence-rotate-segment
+     session (current-buffer) summary
+     :tail-text tail-text
+     :pending-text pending-text
+     :archive-text archive-text)))
 
 (defun mevedel--compact-preserved-tail-turn-count (tail-start limit aggressive)
   "Return the number of complete user-authored requests in retained tail.

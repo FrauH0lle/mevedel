@@ -56,6 +56,15 @@ Output exactly this Markdown structure and keep the section order unchanged.
 Rules:
 - Keep every section, even when empty.
 - Use terse bullets, not prose paragraphs.
+- Keep unresolved user requests as actionable next steps until the history
+  contains concrete evidence that they are satisfied.
+- Represent a satisfied user request only as its resulting current state,
+  outcome, or evidence under Progress/Done. Do not repeat the original
+  satisfied request as a constraint, standing instruction, or next step.
+- Apply this rule to both recent history and any previous summary, in every
+  conversation whether or not a Goal is active.
+- Do not summarize Goal lifecycle state or copy request-local Goal context.
+  The Goal section describes current conversation work, not durable Goal state.
 {{PREVIOUS_SUMMARY_RULE}}- Preserve exact file paths, commands, error strings, and identifiers when known.
 - Preserve discoveries, constraints, decisions, evidence, completed work,
   remaining work, and verification results needed by later Goal cycles.
