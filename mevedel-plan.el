@@ -12,8 +12,12 @@
   (require 'cl-lib)
   (require 'mevedel-structs))
 
+;; `gptel'
+(defvar gptel-prompt-prefix-alist)
+
 ;; `mevedel-chat'
 (declare-function mevedel--implement-plan "mevedel-chat" (action-plist))
+(declare-function mevedel--run-session-start-hooks "mevedel-chat" (source))
 
 ;; `mevedel-goal'
 (declare-function mevedel-plan-approval-present
@@ -36,6 +40,10 @@
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence-ensure-files
                   "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-save
+                  "mevedel-session-persistence" (session buffer))
+(declare-function mevedel-session-persistence-start-fresh-segment
+                  "mevedel-session-persistence" (session buffer &rest args))
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
@@ -213,7 +221,7 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
   "Return non-nil when SELECTION is a supported Phase 1 selection."
   (and (proper-list-p selection)
        (eq (plist-get selection :location) 'here)
-       (eq (plist-get selection :context) 'current)
+       (memq (plist-get selection :context) '(current fresh))
        (eq (plist-get selection :execution) 'direct)
        (memq (plist-get selection :mode)
              mevedel-plan-mode--implementation-modes)))
@@ -267,6 +275,16 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (or (cadr (memq mode mevedel-plan-mode--implementation-modes))
       (car mevedel-plan-mode--implementation-modes)))
 
+(defun mevedel-plan-mode--next-context (context)
+  "Return the Here implementation context after CONTEXT."
+  (if (eq context 'current) 'fresh 'current))
+
+(defun mevedel-plan-mode--context-description (context)
+  "Return the compact UI description for CONTEXT."
+  (pcase context
+    ('current "keep the complete planning transcript")
+    ('fresh "start with setup context and the accepted plan")))
+
 (defun mevedel-plan-mode--implementation-prompt
     (accepted-artifact plan-markdown)
   "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
@@ -274,6 +292,160 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
    "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
    (plist-get accepted-artifact :absolute-path)
    plan-markdown))
+
+(defun mevedel-plan-mode--persist (session chat-buffer)
+  "Persist SESSION from CHAT-BUFFER."
+  (require 'mevedel-session-persistence)
+  (mevedel-session-persistence-save session chat-buffer))
+
+(defun mevedel-plan-mode--implementation-record (selection accepted)
+  "Return retry state for SELECTION and ACCEPTED artifact."
+  (list :step (if (eq (plist-get selection :context) 'fresh)
+                  'prepare-context
+                'submit)
+        :selection (copy-tree selection)
+        :accepted-path (plist-get accepted :path)
+        :accepted-absolute-path (plist-get accepted :absolute-path)
+        :accepted-hash (plist-get accepted :hash)))
+
+(defun mevedel-plan-mode--accepted-body (record)
+  "Return RECORD's validated immutable accepted-plan body."
+  (let ((path (plist-get record :accepted-absolute-path))
+        (hash (plist-get record :accepted-hash)))
+    (unless (and (stringp path) (file-exists-p path) (stringp hash))
+      (error "Accepted plan artifact is unavailable"))
+    (with-temp-buffer
+      (insert-file-contents path)
+      (let ((body (mevedel--normalize-message-text (buffer-string))))
+        (unless (equal hash (mevedel-plan-hash body))
+          (error "Accepted plan artifact hash does not match"))
+        body))))
+
+(defun mevedel-plan-mode--implementation-failed
+    (session chat-buffer reason)
+  "Keep SESSION retryable after REASON from CHAT-BUFFER."
+  (when-let* ((record (copy-tree
+                       (plist-get (mevedel-session-plan-metadata session)
+                                  :implementation-retry))))
+    (setq record (plist-put record :failure reason))
+    (mevedel-plan--metadata-put session :implementation-retry record)
+    (condition-case err
+        (mevedel-plan-mode--persist session chat-buffer)
+      (error
+       (display-warning
+        'mevedel
+        (format "Could not persist plan implementation retry: %s"
+                (error-message-string err))))))
+  (message
+   "mevedel: Implementation did not start: %s; retry with M-x mevedel-retry-plan-implementation"
+   reason)
+  nil)
+
+(defun mevedel-plan-mode--implementation-started (session chat-buffer)
+  "Clear SESSION's retry state after request startup from CHAT-BUFFER."
+  (let ((metadata (copy-sequence
+                   (or (mevedel-session-plan-metadata session) nil))))
+    (cl-remf metadata :implementation-retry)
+    (setf (mevedel-session-plan-metadata session) metadata)
+    (condition-case err
+        (mevedel-plan-mode--persist session chat-buffer)
+      (error
+       (display-warning
+        'mevedel
+        (format "Could not persist started plan implementation: %s"
+                (error-message-string err)))))))
+
+(defun mevedel-plan-mode--dispatch-accepted (session chat-buffer)
+  "Prepare and dispatch SESSION's accepted plan from CHAT-BUFFER."
+  (condition-case err
+      (let* ((record
+              (copy-tree
+               (or (plist-get (mevedel-session-plan-metadata session)
+                              :implementation-retry)
+                   (error "No accepted plan implementation to retry"))))
+             (selection (plist-get record :selection))
+             (context (plist-get selection :context)))
+        (unless (mevedel-plan-mode--selection-valid-p selection)
+          (error "Invalid accepted plan implementation selection"))
+        (unless (memq (plist-get record :step) '(prepare-context submit))
+          (error "Invalid accepted plan implementation step"))
+        (cl-remf record :failure)
+        (mevedel-plan--metadata-put session :implementation-retry record)
+        (mevedel-plan-mode--persist session chat-buffer)
+        (when (eq (plist-get record :step) 'prepare-context)
+          (unless (eq context 'fresh)
+            (error "Invalid accepted plan preparation step"))
+          ;; Persist the next step as part of the segment rotation's sidecar
+          ;; transaction so resume cannot rotate the planning segment twice.
+          (setq record (plist-put record :step 'submit))
+          (mevedel-plan--metadata-put session :implementation-retry record)
+          (condition-case rotation-error
+              (with-current-buffer chat-buffer
+                (require 'mevedel-session-persistence)
+                (unless
+                    (mevedel-session-persistence-start-fresh-segment
+                     session chat-buffer
+                     :initial-text (or (alist-get major-mode
+                                                  gptel-prompt-prefix-alist)
+                                       ""))
+                  (error "Could not start a fresh conversation segment"))
+                (mevedel--run-session-start-hooks "clear"))
+            (error
+             (setq record (plist-put record :step 'prepare-context))
+             (mevedel-plan--metadata-put
+              session :implementation-retry record)
+             (signal (car rotation-error) (cdr rotation-error)))))
+        (let* ((body (mevedel-plan-mode--accepted-body record))
+               (accepted
+                (list :path (plist-get record :accepted-path)
+                      :absolute-path
+                      (plist-get record :accepted-absolute-path)
+                      :hash (plist-get record :accepted-hash)))
+               (prompt (mevedel-plan-mode--implementation-prompt
+                        accepted body))
+               (view-buffer
+                (mevedel-view--interaction-target-buffer chat-buffer)))
+          (with-current-buffer view-buffer
+            (mevedel-view--run-prompt-submit-hook
+             prompt "Implement accepted plan"
+             (lambda (submission)
+               (condition-case dispatch-error
+                   (progn
+                     (with-current-buffer chat-buffer
+                       (mevedel--implement-plan
+                        (list :context 'current
+                              :plan-file
+                              (plist-get record :accepted-absolute-path)
+                              :permission-mode (plist-get selection :mode)
+                              :prompt-submission submission)))
+                     (mevedel-plan-mode--implementation-started
+                      session chat-buffer))
+                 (error
+                  (mevedel-plan-mode--implementation-failed
+                   session chat-buffer
+                   (error-message-string dispatch-error)))))
+             (lambda ()
+               (mevedel-plan-mode--implementation-failed
+                session chat-buffer "Prompt submission was blocked"))))))
+    (error
+     (mevedel-plan-mode--implementation-failed
+      session chat-buffer (error-message-string err)))))
+
+(defun mevedel-retry-plan-implementation (&optional session chat-buffer)
+  "Retry SESSION's accepted plan implementation from CHAT-BUFFER."
+  (interactive)
+  (let* ((session (mevedel-plan--current-session session))
+         (chat-buffer
+          (or chat-buffer
+              (and (boundp 'mevedel--data-buffer)
+                   (buffer-live-p mevedel--data-buffer)
+                   mevedel--data-buffer)
+              (current-buffer))))
+    (unless (and session
+                 (plist-get (mevedel-session-plan-metadata session)
+                            :implementation-retry))
+      (user-error "No accepted plan implementation to retry"))
+    (mevedel-plan-mode--dispatch-accepted session chat-buffer)))
 
 (defun mevedel-plan-mode--accept
     (plan-markdown chat-buffer session selection)
@@ -285,25 +457,15 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (let* ((mode (plist-get selection :mode))
          (artifacts (mevedel-plan-accept
                      plan-markdown session chat-buffer t))
-         (accepted (plist-get artifacts :accepted))
-         (prompt (mevedel-plan-mode--implementation-prompt
-                  accepted plan-markdown))
-         (view-buffer (mevedel-view--interaction-target-buffer chat-buffer)))
+         (accepted (plist-get artifacts :accepted)))
     (mevedel-plan--metadata-put session :selection selection)
+    (mevedel-plan--metadata-put
+     session :implementation-retry
+     (mevedel-plan-mode--implementation-record selection accepted))
     (mevedel-plan-mode--deactivate session)
     (with-current-buffer chat-buffer
       (mevedel-permission-mode-transition mode))
-    (with-current-buffer view-buffer
-      (mevedel-view--run-prompt-submit-hook
-       prompt "Implement accepted plan"
-       (lambda (submission)
-         (when (buffer-live-p chat-buffer)
-           (with-current-buffer chat-buffer
-             (mevedel--implement-plan
-              (list :context 'current
-                    :plan-file (plist-get accepted :absolute-path)
-                    :permission-mode mode
-                    :prompt-submission submission)))))))))
+    (mevedel-plan-mode--dispatch-accepted session chat-buffer)))
 
 (defun mevedel-plan-mode--feedback-draft (chat-buffer session)
   "Insert an editable replacement-plan request for CHAT-BUFFER SESSION."
@@ -370,6 +532,14 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
            (mevedel-plan--metadata-put
             (plist-get entry :session) :selection selection)
            (mevedel-plan-approval-render (plist-get entry :session)))
+         (cycle-context ()
+           (interactive)
+           (plist-put selection :context
+                      (mevedel-plan-mode--next-context
+                       (plist-get selection :context)))
+           (mevedel-plan--metadata-put
+            (plist-get entry :session) :selection selection)
+           (mevedel-plan-approval-render (plist-get entry :session)))
          (feedback () (interactive) (settle 'feedback-draft))
          (cancel () (interactive) (settle 'aborted)))
       (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
@@ -377,14 +547,17 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
           (let* ((keymap (make-sparse-keymap))
                  (body
                   (format
-                   "\n%s\n\nLocation   Here\nContext    Current — keep the complete planning transcript\nExecution  Direct\nMode       %s\n\n%s\n"
+                   "\n%s\n\nLocation   Here\nContext    %s — %s\nExecution  Direct\nMode       %s\n\n%s\n"
                    (if (fboundp 'mevedel-view--fontify-as)
                        (mevedel-view--fontify-as
                         (plist-get entry :body) 'markdown-mode)
                      (plist-get entry :body))
+                   (capitalize (symbol-name (plist-get selection :context)))
+                   (mevedel-plan-mode--context-description
+                    (plist-get selection :context))
                    (plist-get selection :mode)
                    (concat
-                    "Keys: RET implement  TAB/m mode  "
+                    "Keys: RET implement  c context  TAB/m mode  "
                     "f feedback draft  q cancel"))))
             (define-key keymap (kbd "RET") #'accept)
             (define-key keymap (kbd "<return>") #'accept)
@@ -392,6 +565,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (define-key keymap (kbd "TAB") #'cycle-mode)
             (define-key keymap (kbd "<tab>") #'cycle-mode)
             (define-key keymap (kbd "m") #'cycle-mode)
+            (define-key keymap (kbd "c") #'cycle-context)
             (define-key keymap (kbd "f") #'feedback)
             (define-key keymap (kbd "q") #'cancel)
             (define-key keymap (kbd "C-g") #'cancel)

@@ -268,6 +268,7 @@ warnings.
 - `mevedel-add/remove/list-project-roots`
 - `mevedel-toggle-tasks` / `mevedel-toggle-hints`
 - `mevedel-display-hints` / `mevedel-clear-hints`
+- `mevedel-retry-plan-implementation`
 
 ## Code style
 
