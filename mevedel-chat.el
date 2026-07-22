@@ -31,13 +31,14 @@
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-position "cl-seq" (cl-item cl-seq &rest cl-keys))
-(declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-remove-if-not "cl-seq"
+		  (cl-pred cl-list &rest cl-keys))
 (declare-function cl-sort "cl-seq" (cl-seq cl-pred &rest cl-keys))
 
 ;; `gptel'
-(declare-function gptel-markdown-cycle-block "ext:gptel" ())
+(declare-function gptel-markdown-cycle-block "ext:gptel" nil)
 (declare-function gptel-mode "ext:gptel" (&optional arg))
-(declare-function gptel-send "ext:gptel" ())
+(declare-function gptel-send "ext:gptel" nil)
 (defvar gptel--markdown-block-map)
 (defvar gptel-default-mode)
 (defvar gptel-display-buffer-action)
@@ -65,80 +66,140 @@
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
+		  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-compact'
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
-                  (continue fsm))
+		  (continue fsm))
+
+;; `mevedel-goal'
+(declare-function mevedel-goal--post-response "mevedel-goal"
+		  (start end))
+(declare-function mevedel-goal-restore-pending-approval "mevedel-goal"
+		  (&optional session chat-buffer))
+(declare-function mevedel-plan-approval-abort "mevedel-goal"
+		  (&optional session outcome))
 
 ;; `mevedel-hooks'
-(declare-function mevedel-hooks-event-plist
-                  "mevedel-hooks" (event &optional session workspace &rest extra))
-(declare-function mevedel-hooks-record-session-context
-                  "mevedel-hooks" (session decision &optional event))
-(declare-function mevedel-hooks-run-event
-                  "mevedel-hooks"
-                  (event event-plist callback
-                         &optional session workspace request invocation))
-
-;; `mevedel-plugins'
-(declare-function mevedel-plugins-notify-pending-consent
-                  "mevedel-plugins" (&optional workspace))
+(declare-function mevedel-hooks-event-plist "mevedel-hooks"
+		  (event &optional session workspace &rest extra))
+(declare-function mevedel-hooks-record-session-context "mevedel-hooks"
+		  (session decision &optional event))
+(declare-function mevedel-hooks-run-event "mevedel-hooks"
+		  (event event-plist callback &optional session
+			 workspace request invocation))
 
 ;; `mevedel-overlays'
-(declare-function mevedel--child-instructions "mevedel-overlays" (instruction))
-(declare-function mevedel--delete-instruction "mevedel-overlays" (instruction))
-(declare-function mevedel--directive-llm-prompt "mevedel-overlays" (directive))
-(declare-function mevedel--directive-text "mevedel-overlays" (directive))
+(declare-function mevedel--child-instructions "mevedel-overlays"
+		  (instruction))
+(declare-function mevedel--delete-instruction "mevedel-overlays"
+		  (instruction))
+(declare-function mevedel--directive-llm-prompt "mevedel-overlays"
+		  (directive))
+(declare-function mevedel--directive-text "mevedel-overlays"
+		  (directive))
 (declare-function mevedel--directivep "mevedel-overlays" (instruction))
-(declare-function mevedel--find-directive-by-uuid "mevedel-overlays" (uuid))
-(declare-function mevedel--highest-priority-instruction "mevedel-overlays" (instructions &optional non-processing))
-(declare-function mevedel--instructions-at "mevedel-overlays" (position &optional type))
-(declare-function mevedel--topmost-instruction "mevedel-overlays" (instruction type))
-(declare-function mevedel--update-instruction-overlay "mevedel-overlays" (instruction &optional force))
+(declare-function mevedel--find-directive-by-uuid "mevedel-overlays"
+		  (uuid))
+(declare-function mevedel--highest-priority-instruction
+		  "mevedel-overlays"
+		  (instructions &optional non-processing))
+(declare-function mevedel--instructions-at "mevedel-overlays"
+		  (position &optional type))
+(declare-function mevedel--topmost-instruction "mevedel-overlays"
+		  (instruction type))
+(declare-function mevedel--update-instruction-overlay
+		  "mevedel-overlays" (instruction &optional force))
+
+;; `mevedel-permissions'
+(declare-function mevedel-permission-mode-set-raw
+		  "mevedel-permissions" (mode))
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
+		  "mevedel-pipeline" (render-data))
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode--post-response "mevedel-plan-mode"
+		  (start end))
+(declare-function mevedel-plan-mode-restore-pending-approval
+		  "mevedel-plan-mode" (&optional session chat-buffer))
+
+;; `mevedel-plugins'
+(declare-function mevedel-plugins-notify-pending-consent
+		  "mevedel-plugins" (&optional workspace))
 
 ;; `mevedel-presets'
-(declare-function mevedel-preset--build-handlers "mevedel-presets" (handlers))
-(declare-function mevedel-preset-apply
-                  "mevedel-presets" (name &optional buffer))
-(declare-function mevedel-preset-restore-session
-                  "mevedel-presets" (session &optional buffer))
+(declare-function mevedel-preset--build-handlers "mevedel-presets"
+		  (handlers))
+(declare-function mevedel-preset-apply "mevedel-presets"
+		  (name &optional buffer))
+(declare-function mevedel-preset-restore-session "mevedel-presets"
+		  (session &optional buffer))
 (defvar mevedel-action-preset-alist)
 (defvar mevedel-default-chat-preset)
 
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-commit
-                  "mevedel-prompt-submission" (submission))
+		  "mevedel-prompt-submission" (submission))
 (declare-function mevedel-prompt-submission-context
-                  "mevedel-prompt-submission" (cl-x) t)
+		  "mevedel-prompt-submission" (cl-x) t)
 (declare-function mevedel-prompt-submission-input
-                  "mevedel-prompt-submission" (cl-x) t)
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-set-raw
-                  "mevedel-permissions" (mode))
+		  "mevedel-prompt-submission" (cl-x) t)
 
 ;; `mevedel-reminders'
-(declare-function mevedel-reminders-install-defaults "mevedel-reminders" (session))
+(declare-function mevedel-reminders-install-defaults
+		  "mevedel-reminders" (session))
 (defvar mevedel--session)
 (defvar mevedel-permission-mode)
 
+;; `mevedel-session-persistence'
+(declare-function
+ mevedel-session-persistence--install-gptel-save-state-advice
+ "mevedel-session-persistence" nil)
+(declare-function mevedel-session-persistence--release-on-kill
+		  "mevedel-session-persistence" nil)
+(declare-function mevedel-session-persistence-fork-now
+		  "mevedel-session-persistence" (buffer))
+(declare-function mevedel-session-persistence-header-segment
+		  "mevedel-session-persistence" nil)
+(declare-function mevedel-session-persistence-save
+		  "mevedel-session-persistence" (session buffer))
+
+;; `mevedel-skills-core'
+(declare-function mevedel-skills--release-on-kill
+		  "mevedel-skills-core" nil)
+(declare-function mevedel-skills-install "mevedel-skills-core"
+		  (session &optional buffer))
+
+;; `mevedel-skills-prompt'
+(declare-function mevedel-skills-install-activation-hook
+		  "mevedel-skills-prompt" nil)
+(declare-function mevedel-skills-install-reminder
+		  "mevedel-skills-prompt" (session))
+
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills--refresh-view-input-prompt
+		  "mevedel-skills-ui" nil)
+(declare-function mevedel-slash-capf "mevedel-skills-ui" nil)
+
 ;; `mevedel-structs'
-(declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-pause-requested "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-drain-cancellers "mevedel-structs" (request))
-(declare-function mevedel-request-end "mevedel-structs" ())
-(declare-function mevedel-request-file-snapshots "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-drain-cancellers "mevedel-structs"
+		  (request))
+(declare-function mevedel-request-end "mevedel-structs" nil)
+(declare-function mevedel-request-file-snapshots "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session-create "mevedel-structs"
-                  (name workspace &optional working-directory))
+		  (name workspace &optional working-directory))
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-working-directory "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -146,65 +207,16 @@
 (declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
 (defvar mevedel--current-request)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--install-gptel-save-state-advice
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence--release-on-kill
-                  "mevedel-session-persistence" ())
-(declare-function mevedel-session-persistence-save
-                  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-fork-now
-                  "mevedel-session-persistence" (buffer))
-(declare-function mevedel-session-persistence-header-segment
-                  "mevedel-session-persistence" ())
-
-;; `mevedel-skills-core'
-(declare-function mevedel-skills--release-on-kill
-                  "mevedel-skills-core" ())
-(declare-function mevedel-skills-install "mevedel-skills-core"
-                  (session &optional buffer))
-
-;; `mevedel-skills-prompt'
-(declare-function mevedel-skills-install-activation-hook
-                  "mevedel-skills-prompt" ())
-(declare-function mevedel-skills-install-reminder
-                  "mevedel-skills-prompt" (session))
-
-;; `mevedel-skills-ui'
-(declare-function mevedel-skills--refresh-view-input-prompt
-                  "mevedel-skills-ui" ())
-(declare-function mevedel-slash-capf "mevedel-skills-ui" ())
-
 ;; `mevedel-tool-fs'
-(declare-function mevedel-tools--generate-diff "mevedel-tool-fs" (original modified filepath))
-
-;; `mevedel-goal'
-(declare-function mevedel-plan-approval-abort
-                  "mevedel-goal" (&optional session outcome))
-(declare-function mevedel-goal--post-response
-                  "mevedel-goal" (start end))
-(declare-function mevedel-goal-restore-pending-approval
-                  "mevedel-goal" (&optional session chat-buffer))
-
-;; `mevedel-plan'
-(declare-function mevedel-plan-mode--post-response
-                  "mevedel-plan" (start end))
-(declare-function mevedel-plan-mode-restore-pending-approval
-                  "mevedel-plan" (&optional session chat-buffer))
+(declare-function mevedel-tools--generate-diff "mevedel-tool-fs"
+		  (original modified filepath))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
-                  "mevedel-utilities" (start end))
+		  "mevedel-utilities" (start end))
 (declare-function mevedel--optimize-transcript-buffer
-                  "mevedel-utilities" ())
-(declare-function mevedel--transcript-org-mode
-                  "mevedel-utilities" ())
-
-;; `mevedel-view-composer'
-(declare-function mevedel-view--begin-external-turn
-                  "mevedel-view-composer"
-                  (display-text data-turn-start &optional kind hook-context
-                                no-spinner))
+		  "mevedel-utilities" nil)
+(declare-function mevedel--transcript-org-mode "mevedel-utilities" nil)
 
 ;; `mevedel-view'
 (declare-function mevedel-view--ensure "mevedel-view" (data-buf))
@@ -212,18 +224,28 @@
 (defvar mevedel--data-buffer)
 (defvar mevedel--view-buffer)
 
+;; `mevedel-view-composer'
+(declare-function mevedel-view--begin-external-turn
+		  "mevedel-view-composer"
+		  (display-text data-turn-start &optional kind
+				hook-context no-spinner))
+
 ;; `mevedel-view-stream'
-(declare-function mevedel-view-stream-post-tool "mevedel-view-stream" (args))
-(declare-function mevedel-view-stream-pre-tool "mevedel-view-stream" (args))
+(declare-function mevedel-view-stream-post-tool "mevedel-view-stream"
+		  (args))
+(declare-function mevedel-view-stream-pre-tool "mevedel-view-stream"
+		  (args))
 (declare-function mevedel-view-stream-render-response
-                  "mevedel-view-stream" (start end))
-(declare-function mevedel-view-stream-schedule "mevedel-view-stream" ())
+		  "mevedel-view-stream" (start end))
+(declare-function mevedel-view-stream-schedule "mevedel-view-stream"
+		  nil)
 (declare-function mevedel-view-stream-spinner-hook
-                  "mevedel-view-stream" (info))
-(declare-function mevedel-view-stream-stop "mevedel-view-stream" ())
+		  "mevedel-view-stream" (info))
+(declare-function mevedel-view-stream-stop "mevedel-view-stream" nil)
 
 ;; `mevedel-workspace'
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
+(declare-function mevedel-workspace "mevedel-workspace"
+		  (&optional buffer))
 (defvar mevedel--workspace)
 (defvar mevedel-workspace-additional-roots)
 
@@ -232,13 +254,12 @@
 
 ;; `org-element'
 (declare-function org-element-cache-reset "ext:org-element"
-                  (&optional all no-persistence))
+		  (&optional all no-persistence))
 (defvar org-element-cache-persistent)
 (defvar org-element-use-cache)
 
 ;; `org-src'
 (declare-function org-escape-code-in-string "ext:org-src" (s))
-
 
 ;;
 ;;; Customization

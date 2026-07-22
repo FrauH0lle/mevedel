@@ -919,7 +919,7 @@
 		 ,test
 		 (test)
 
-		 :doc "flushes permission and plan queues"
+		 :doc "flushes permission queues and the pending plan approval"
 		 (with-temp-buffer
 		   (let* ((workspace (mevedel-workspace--create
 				      :type 'project

@@ -616,9 +616,14 @@
          (reminder (mevedel-reminders-make-plan-mode)))
     (should (funcall (mevedel-reminder-trigger reminder) session))
     (should-not (mevedel-reminder-interval reminder))
-    (should (string-match-p
-             "Bash is limited"
-             (funcall (mevedel-reminder-content reminder) session)))
+    (let ((content (funcall (mevedel-reminder-content reminder) session)))
+      (dolist (text '("Bash is limited"
+                      "implementation request"
+                      "Explore available evidence"
+                      "genuine user preferences"
+                      "replaces the previous proposal completely"
+                      "Do not ask whether you should proceed"))
+        (should (string-match-p text content))))
     (setf (mevedel-session-plan-mode session) nil)
     (should-not (funcall (mevedel-reminder-trigger reminder) session))))
 
@@ -856,7 +861,17 @@
           '(:path "plans/current.md" :status accepted :accepted-turn 5))
     (should-not (funcall (mevedel-reminder-trigger r) session))
     (setf (mevedel-session-turn-count session) 6)
-    (should (funcall (mevedel-reminder-trigger r) session))))
+    (should (funcall (mevedel-reminder-trigger r) session)))
+
+  :doc "stays suppressed during a standalone Plan conversation"
+  (let ((session
+         (mevedel-session--create
+          :name "main" :plan-mode t :turn-count 2
+          :plan-metadata '(:status accepted :accepted-turn 1))))
+    (should-not
+     (funcall (mevedel-reminder-trigger
+               (mevedel-reminders-make-plan-reference))
+              session))))
 
 
 (mevedel-deftest mevedel-reminders-make-task-nudge

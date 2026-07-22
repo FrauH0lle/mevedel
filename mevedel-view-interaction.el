@@ -11,50 +11,54 @@
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-control-block-turn
-                  "mevedel-agent-control" (session path activity))
+		  "mevedel-agent-control" (session path activity))
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
-                  "mevedel-agents" (cl-x) t)
+		  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-goal'
-(declare-function mevedel-plan-approval-render
-                  "mevedel-goal" (&optional session))
+(declare-function mevedel-plan-approval-render "mevedel-goal"
+		  (&optional session))
 
 ;; `mevedel-interaction-prompt'
 (defvar mevedel--prompt-overlays)
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue--render-head
-                  "mevedel-permission-queue" (&optional session))
+		  "mevedel-permission-queue" (&optional session))
 
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-effective
-                  "mevedel-permissions"
-                  (&optional session data-buffer surface-buffer))
+		  "mevedel-permissions"
+		  (&optional session data-buffer surface-buffer))
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-permission-queue "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-queued-user-messages "mevedel-structs" (cl-x) t)
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-permission-queue "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-queued-user-messages
+		  "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
 ;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-record
-                  "mevedel-telemetry" (session event &rest props))
+(declare-function mevedel-telemetry-record "mevedel-telemetry"
+		  (session event &rest props))
 
 ;; `mevedel-utilities'
-(declare-function mevedel--normalize-message-text
-                  "mevedel-utilities" (text))
+(declare-function mevedel--normalize-message-text "mevedel-utilities"
+		  (text))
 
 ;; `mevedel-view'
-(declare-function mevedel-view--display-fragment-keymap "mevedel-view" (&rest maps))
-(declare-function mevedel-view--status-anchor "mevedel-view" ())
+(declare-function mevedel-view--display-fragment-keymap "mevedel-view"
+		  (&rest maps))
+(declare-function mevedel-view--status-anchor "mevedel-view" nil)
 (declare-function mevedel-view--zone-separator "mevedel-view" (label))
 (defvar mevedel-view--interaction-marker)
 
@@ -62,19 +66,24 @@
 (defvar mevedel-view--agent-transcript-p)
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--input-marker-position "mevedel-view-composer" ())
-(declare-function mevedel-view--queued-user-messages-render "mevedel-view-composer" (&optional session))
-(declare-function mevedel-view--session "mevedel-view-composer" ())
+(declare-function mevedel-view--input-marker-position
+		  "mevedel-view-composer" nil)
+(declare-function mevedel-view--queued-user-messages-render
+		  "mevedel-view-composer" (&optional session))
+(declare-function mevedel-view--session "mevedel-view-composer" nil)
 (defvar mevedel-view--prompt-hook-pending)
 
 ;; `mevedel-view-stream'
-(declare-function mevedel-view--request-progress-region-start "mevedel-view-stream" ())
+(declare-function mevedel-view--request-progress-region-start
+		  "mevedel-view-stream" nil)
 
 ;; `mevedel-view-zone'
-(declare-function mevedel-view-zone-fragment-bounds "mevedel-view-zone" (namespace id))
-(declare-function mevedel-view-zone-reconcile "mevedel-view-zone" (namespace start end fragments))
-(declare-function mevedel-view-zone-region "mevedel-view-zone" (namespace))
-
+(declare-function mevedel-view-zone-fragment-bounds
+		  "mevedel-view-zone" (namespace id))
+(declare-function mevedel-view-zone-reconcile "mevedel-view-zone"
+		  (namespace start end fragments))
+(declare-function mevedel-view-zone-region "mevedel-view-zone"
+		  (namespace))
 
 ;;
 ;;; State

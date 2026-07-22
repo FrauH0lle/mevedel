@@ -30,7 +30,7 @@ Defined in `mevedel-structs.el` / `mevedel-tool-registry.el`:
   transient unpublished agent reservations, root activity and tree capacity, mention
   dedup, queued follow-up user messages, skills, session persistence metadata, agent transcript index,
   invoked skills, session-scoped hook rules/log/context, permission
-  queue, plan queue, selected preset and resolved mevedel preset settings,
+  queue, one pending plan approval, selected preset and resolved mevedel preset settings,
   the current session-owned Goal, and a transient bounded tool-input repair
   log. Lifecycle events emitted before session materialization wait in the
   transient `telemetry-pending` queue and flush to the diagnostic stream; the

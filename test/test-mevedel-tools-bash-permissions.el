@@ -16,6 +16,7 @@
 (require 'mevedel-models)
 (require 'mevedel-pipeline)
 (require 'mevedel-plan)
+(require 'mevedel-plan-mode)
 (require 'mevedel-permission-log)
 (require 'mevedel-sandbox)
 (require 'helpers

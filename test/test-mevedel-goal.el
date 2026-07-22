@@ -2620,6 +2620,121 @@ Each binding is (NAME KEYS)."
     (should (equal "# Second" (plist-get rendered :body)))
     (should (eq session (plist-get rendered :session)))))
 
+(mevedel-deftest mevedel-plan-approval--current-session ()
+  ,test
+  (test)
+  :doc "delegates session ownership resolution to the shared queue"
+  (let ((session (mevedel-session--create :name "main")))
+    (cl-letf (((symbol-function 'mevedel-queue--current-session)
+               (lambda () session)))
+      (should (eq session (mevedel-plan-approval--current-session))))))
+
+(mevedel-deftest mevedel-plan-approval--deliver ()
+  ,test
+  (test)
+  :doc "delivers one outcome and unregisters the interaction"
+  (let (outcome unregistered)
+    (cl-letf (((symbol-function 'mevedel-queue--unregister-entry-interaction)
+               (lambda (entry) (setq unregistered entry))))
+      (let ((entry (list :callback (lambda (value) (setq outcome value)))))
+        (should (mevedel-plan-approval--deliver entry 'accepted "test"))
+        (should (eq 'accepted outcome))
+        (should (eq entry unregistered)))))
+
+  :doc "retains the interaction after a callback error when requested"
+  (let (unregistered)
+    (cl-letf (((symbol-function 'mevedel-queue--unregister-entry-interaction)
+               (lambda (_) (setq unregistered t))))
+      (should-not
+       (mevedel-plan-approval--deliver
+        (list :callback (lambda (_) (error "Failed")))
+        'accepted "test" t))
+      (should-not unregistered))))
+
+(mevedel-deftest mevedel-plan-approval-render ()
+  ,test
+  (test)
+  :doc "uses an entry renderer and aborts a renderer that fails"
+  (let* ((session (mevedel-session--create :name "main"))
+         rendered aborted
+         (entry (list :renderer (lambda (value) (setq rendered value)))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-approval-render session)
+    (should (eq entry rendered))
+    (setf (plist-get entry :renderer) (lambda (_) (error "Failed")))
+    (cl-letf (((symbol-function 'mevedel-plan-approval-abort)
+               (lambda (&rest _) (setq aborted t))))
+      (mevedel-plan-approval-render session))
+    (should aborted)))
+
+(mevedel-deftest mevedel-plan-approval--entry-implementation-mode ()
+  ,test
+  (test)
+  :doc "prefers entry metadata, then session mode, then ask"
+  (let* ((session
+          (mevedel-session--create :name "main" :permission-mode 'auto))
+         (entry (list :session session)))
+    (should (eq 'auto
+                (mevedel-plan-approval--entry-implementation-mode entry)))
+    (mevedel-queue--entry-metadata-put
+     entry :implementation-mode 'full-auto)
+    (should (eq 'full-auto
+                (mevedel-plan-approval--entry-implementation-mode entry)))))
+
+(mevedel-deftest mevedel-plan-approval--cycle-entry-implementation-mode ()
+  ,test
+  (test)
+  :doc "cycles entry-local implementation mode and rerenders"
+  (let* ((session
+          (mevedel-session--create :name "main" :permission-mode 'ask))
+         (entry (list :session session))
+         rendered)
+    (cl-letf (((symbol-function 'mevedel-plan-approval--render-entry)
+               (lambda (value) (setq rendered value))))
+      (mevedel-plan-approval--cycle-entry-implementation-mode entry))
+    (should (eq 'auto
+                (mevedel-plan-approval--entry-implementation-mode entry)))
+    (should (eq entry rendered))))
+
+(mevedel-deftest mevedel-plan-approval--display-body ()
+  ,test
+  (test)
+  :doc "uses the Markdown fontifier when the view provides it"
+  (cl-letf (((symbol-function 'mevedel-view--fontify-as)
+             (lambda (text mode) (format "%s:%s" mode text))))
+    (should (equal "markdown-mode:# Plan"
+                   (mevedel-plan-approval--display-body "# Plan")))))
+
+(mevedel-deftest mevedel-plan-approval--render-entry ()
+  ,test
+  (test)
+  :doc "registers one keyed Plan interaction in the target view"
+  (let* ((session
+          (mevedel-session--create
+           :name "main" :goal (mevedel-goal--create)))
+         (chat-buffer (generate-new-buffer " *mevedel-goal-plan-data*"))
+         (view-buffer (generate-new-buffer " *mevedel-goal-plan-view*"))
+         (entry (list :body "# Plan" :chat-buffer chat-buffer
+                      :session session))
+         descriptor overlay)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_) view-buffer))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value
+                           overlay (with-current-buffer view-buffer
+                                     (make-overlay (point-min) (point-min))))
+                     overlay)))
+          (mevedel-plan-approval--render-entry entry)
+          (should (eq 'plan (plist-get descriptor :kind)))
+          (should (string-match-p "# Plan" (plist-get descriptor :body)))
+          (should (keymapp (plist-get descriptor :keymap)))
+          (should (overlay-get overlay 'mevedel-plan)))
+      (when overlay (delete-overlay overlay))
+      (kill-buffer view-buffer)
+      (kill-buffer chat-buffer))))
+
 (mevedel-deftest mevedel-plan-approval-settle ()
   ,test
   (test)

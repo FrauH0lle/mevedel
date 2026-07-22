@@ -11,6 +11,7 @@
 (require 'mevedel-reminders)
 (require 'mevedel-goal)
 (require 'mevedel-plan)
+(require 'mevedel-plan-mode)
 (require 'helpers
          (file-name-concat
           (file-name-directory
