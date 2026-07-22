@@ -53,8 +53,6 @@
 		  "mevedel-review" (text))
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-request-started-at "mevedel-structs" (cl-x)
 		  t)
 (declare-function mevedel-session-agent-registry "mevedel-structs"
@@ -756,8 +754,7 @@ through font-lock refontification cycles.  Returns S."
     (when (and (fboundp 'mevedel-plan-strip-proposed)
                (mevedel-view--strip-proposed-plans-p text))
       (setq text (mevedel-plan-strip-proposed text)))
-    (replace-regexp-in-string
-     "^</?\\(?:proposed_plan\\|goal_review\\)>[ \t]*\n?" "" text)))
+    (replace-regexp-in-string "^</?proposed_plan>[ \t]*\n?" "" text)))
 
 (defmacro mevedel-view--with-render-temp-buffer (&rest body)
   "Run BODY in a temporary buffer with user mode hooks suppressed."
@@ -2062,10 +2059,7 @@ Active planning hides incomplete streamed blocks.  Complete protocol blocks
 stay hidden on later full rerenders without session-global hash history."
   (or (and (boundp 'mevedel--session)
            mevedel--session
-           (or (mevedel-session-plan-mode mevedel--session)
-               (when-let* ((goal (mevedel-session-goal mevedel--session)))
-                 (and (eq (mevedel-goal-status goal) 'active)
-                      (eq (mevedel-goal-phase goal) 'planning)))))
+           (mevedel-session-plan-mode mevedel--session))
       (and (fboundp 'mevedel-plan-extract-proposed)
            (mevedel-plan-extract-proposed text))))
 

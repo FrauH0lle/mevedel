@@ -24,6 +24,9 @@
 ;; `gptel-agent'
 (declare-function gptel-agent-read-file "ext:gptel-agent" (agent-file &optional templates metadata-only))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-active-context "mevedel-goal" (session))
+
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-prompt-section
                   "mevedel-skills-prompt" (session &optional buffer))
@@ -591,6 +594,13 @@ present."
 (mevedel-define-prompt-section skills
   :order 50
   :producer #'mevedel-system--skills-prompt)
+
+(mevedel-define-prompt-section active-goal
+  :order 60
+  :producer (lambda (context)
+              (when (fboundp 'mevedel-goal-active-context)
+                (when-let* ((session (mevedel-system-context-session context)))
+                  (mevedel-goal-active-context session)))))
 
 
 ;;

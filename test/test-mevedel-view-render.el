@@ -176,46 +176,6 @@
                        (mapcar (lambda (turn) (plist-get turn :role))
                                turns))))))
 
-  :doc "guardian audit does not absorb the following Goal turn"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data data-buf "Planning complete.\n" 'response)
-    (mevedel-view-test--insert-data
-     data-buf
-     (mevedel-pipeline--format-render-data-block
-      '(:kind request-summary :elapsed-seconds 19))
-     'ignore)
-    (mevedel-view-test--insert-data
-     data-buf
-     (mevedel--format-hook-audit-record
-      '(:type goal-guardian :verdict approve :reason "Safe"))
-     'ignore)
-    (mevedel-view-test--insert-data
-     data-buf "Implementation instructions:\nDo nothing.\n" nil)
-    (mevedel-view-test--insert-data
-     data-buf
-     (mevedel-pipeline--format-render-data-block
-      '(:kind user-display :text "Implement accepted plan"))
-     'ignore)
-    (mevedel-view-test--insert-data data-buf "Implementation complete.\n"
-                                    'response)
-    (mevedel-view-test--insert-data
-     data-buf
-     (mevedel-pipeline--format-render-data-block
-      '(:kind request-summary :elapsed-seconds 7))
-     'ignore)
-    (with-current-buffer data-buf
-      (let* ((segments (mevedel-transcript-segments (point-min) (point-max)))
-             (turns (mevedel-view--group-into-turns segments data-buf)))
-        (should (equal '(assistant user assistant)
-                       (mapcar (lambda (turn) (plist-get turn :role))
-                               turns)))
-        (should (equal '(1 0 1)
-                       (mapcar
-                        (lambda (turn)
-                          (cl-count 'request-summary
-                                    (plist-get turn :segments) :key #'car))
-                        turns))))))
-
   :doc "scaffolding-only gap after response is still absorbed"
   (mevedel-view-test--with-buffers
     (mevedel-view-test--insert-data data-buf "First answer.\n" 'response)
@@ -1101,34 +1061,7 @@
                    (point-min) mevedel-view--input-marker)))
         (should (string-match-p "Read files" text))
         (should (string-match-p "Assistant" text))
-        (should (string-match-p "Calling Read" text)))))
-
-  :doc "restores Goal display text and hides protocol wrapper tags"
-  (mevedel-view-test--with-buffers
-    (mevedel-view-test--insert-data
-     data-buf
-     (concat "<goal-context authority=\"session-sidecar\">\n"
-             "Objective: Dry-run Goal\n"
-             "</goal-context>\n\n"
-             "Planning instructions:\nDo nothing.\n")
-     nil)
-    (with-current-buffer data-buf
-      (let ((start (point)))
-        (insert (mevedel-pipeline--format-render-data-block
-                 '(:kind user-display :text "Dry-run Goal")))
-        (add-text-properties start (point) '(gptel ignore))))
-    (mevedel-view-test--insert-data
-     data-buf
-     "<goal_review>\nverdict: complete\nsummary: Done.\n</goal_review>\n"
-     'response)
-    (with-current-buffer view-buf
-      (mevedel-view--full-rerender)
-      (let ((text (buffer-substring-no-properties
-                   (point-min) mevedel-view--input-marker)))
-        (should (string-match-p "Dry-run Goal" text))
-        (should-not (string-match-p "Planning instructions" text))
-        (should (string-match-p "verdict: complete" text))
-        (should-not (string-match-p "goal_review" text))))))
+        (should (string-match-p "Calling Read" text))))))
 
 
 (mevedel-deftest mevedel-view--rebase-data-sources ()
@@ -3816,17 +3749,13 @@ state of its inner sections"
 (mevedel-deftest mevedel-view--visible-response-text ()
   ,test
   (test)
-  :doc "Goal protocol blocks stay out of rendered responses"
+  :doc "proposed Plan protocol blocks stay out of rendered responses"
   (let ((text
          (mevedel-view--visible-response-text
           (concat "Implemented.\n<proposed_plan>\n"
-                  "Transition to review.\n</proposed_plan>\n"
-                  "<goal_review>\nverdict: complete\n"
-                  "summary: Done.\n</goal_review>\n"))))
+                  "Transition to review.\n</proposed_plan>\n"))))
     (should-not (string-match-p "Transition to review" text))
-    (should (string-match-p "verdict: complete" text))
-    (should-not (string-match-p "proposed_plan" text))
-    (should-not (string-match-p "goal_review" text))))
+    (should-not (string-match-p "proposed_plan" text))))
 
 (mevedel-deftest mevedel-view--render-mailbox-block
   (:doc "renders pure mailbox deliveries as message cards")
@@ -4324,48 +4253,6 @@ state of its inner sections"
                            data-buf (point-min) (point-max))))
               (should (equal "plain media" (plist-get parsed :result))))))
       (delete-directory tmpdir t))))
-
-(mevedel-deftest mevedel-view--format-hook-audit-block ()
-  ,test
-  (test)
-  :doc "renders Goal guardian decisions as compact expandable disclosures"
-  (should
-   (equal "  \u25c7 Goal guardian: approve\n"
-          (mevedel-view--format-hook-audit-block
-           '(:type goal-guardian :verdict approve :reason "Safe"
-             :provider "P:M" :effort high :at "now")
-           nil)))
-  (let ((expanded
-         (mevedel-view--format-hook-audit-block
-          '(:type goal-guardian :verdict ask :reason "Need scope"
-            :provider "P:M" :effort high :at "now")
-          t)))
-    (dolist (needle '("Goal guardian: ask" "Need scope" "P:M" "high" "now"))
-      (should (string-match-p (regexp-quote needle) expanded)))))
-
-(mevedel-deftest mevedel-view--render-assistant-turn/guardian-audit ()
-  ,test
-  (test)
-  :doc "renders standalone guardian audit data without exposing it as reasoning"
-  (let ((data-buf (generate-new-buffer " *guardian-render-data*"))
-        audit-start)
-    (unwind-protect
-        (with-temp-buffer
-          (with-current-buffer data-buf
-            (insert "Planning complete.\n")
-            (setq audit-start (point))
-              (insert
-               (mevedel--format-hook-audit-record
-                '(:type goal-guardian :verdict approve :reason "Safe"
-                  :provider "P:M" :effort high :at "now"))))
-          (mevedel-view--render-assistant-turn
-           `((response 1 ,audit-start)
-             (ignored ,audit-start
-                      ,(with-current-buffer data-buf (point-max))))
-           data-buf)
-          (should (string-match-p "Goal guardian: approve" (buffer-string)))
-          (should-not (string-match-p "Thinking" (buffer-string))))
-      (kill-buffer data-buf))))
 
 (provide 'test-mevedel-view-render)
 ;;; test-mevedel-view-render.el ends here

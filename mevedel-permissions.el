@@ -18,10 +18,6 @@
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
 
-;; `mevedel-goal'
-(declare-function mevedel-goal-read-only-phase-p
-                  "mevedel-goal" (&optional session))
-
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode-active-p
                   "mevedel-plan-mode" (&optional session))
@@ -44,6 +40,8 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-request-skill-permission-rules
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-goal-plan-read-path
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-active-dropped-file-grants
                   "mevedel-structs" (cl-x) t)
@@ -942,7 +940,11 @@ hook boundary before it enters the shared queue."
                  (mevedel-permission--load-persistent-rules workspace)))
         resource-grants
         (or resource-grants
-            (append (and session (mevedel-session-resource-grants session))
+            (append (when-let* ((path (and request
+                                           (mevedel-request-goal-plan-read-path
+                                            request))))
+                      (list (list :path path :access 'read)))
+                    (and session (mevedel-session-resource-grants session))
                     (and workspace
                          (mevedel-permission--load-persistent-resource-grants
                           workspace))))
@@ -1044,17 +1046,6 @@ happen for a non-read-only tool."
           :resource-access (plist-get context :resource-access)
           :resource-grants (plist-get context :resource-grants))))
 
-(defun mevedel-permission--goal-read-only-phase-p (&optional session)
-  "Return non-nil when the owning session's Goal phase is read-only."
-  (when (fboundp 'mevedel-goal-read-only-phase-p)
-    (mevedel-goal-read-only-phase-p
-     (or session
-         (and (boundp 'mevedel--session) mevedel--session)
-         (and (boundp 'mevedel--agent-invocation)
-              mevedel--agent-invocation
-              (mevedel-agent-invocation-parent-session
-               mevedel--agent-invocation))))))
-
 (defun mevedel-permission--plan-mode-p (&optional session)
   "Return non-nil when the owning session is in Plan mode."
   (when (fboundp 'mevedel-plan-mode-active-p)
@@ -1116,10 +1107,7 @@ RESOURCE-GRANTS define the filesystem boundary."
              'deny 'deny-rule :bucket deny-bucket))
            ((and native-edit-p
                  (mevedel-permission--plan-mode-p session))
-            (mevedel-permission--decision 'deny 'plan-mode))
-           ((and native-edit-p
-                 (mevedel-permission--goal-read-only-phase-p session))
-            (mevedel-permission--decision 'deny 'goal-phase)))))
+            (mevedel-permission--decision 'deny 'plan-mode)))))
     (list :tool-name tool-name
           :tool tool-struct
           :content content
@@ -1171,7 +1159,7 @@ The decision chain:
   1. Extract specifier values via tool-struct getters when missing
   2. Resolve absolute decisions across all buckets:
        any bucket yields `deny' -> deny;
-       Plan mode or Goal planning/review phase + native edit tool -> deny
+       Plan mode + native edit tool -> deny
   3. Call the tool checker, when present, to decide command authority
   4. Resolve allow/ask rules innermost-first:
        invocation -> request -> session -> persistent -> defcustom.

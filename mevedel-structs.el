@@ -269,35 +269,26 @@ workspace."
   ;; Plan artifact metadata.  Goal plan paths are recorded here.
   plan-metadata
   ;; The session-owned current `mevedel-goal', or nil.
-  goal
-  ;; Durable pointer left by a Goal transferred to another session.
-  goal-handoff)
+  goal)
 
 
 ;;
 ;;; Goal struct
 
-(cl-defstruct (mevedel-goal (:constructor mevedel-goal--create))
-  "A session-owned completion contract and its current lifecycle position."
-  id                 ; stable string identifier
+(cl-defstruct (mevedel-goal (:constructor mevedel-goal--create)
+                            (:copier nil))
+  "Session-owned durable objective driving automatic continuation."
+  id                 ; versioned string identity
   objective          ; non-empty free-form string
-  status             ; active, paused, blocked, or complete
-  phase              ; planning, awaiting-approval, implementing, or reviewing
-  approval-policy    ; supervised or automatic
-  owner-session      ; owning session id/name
-  execution-home     ; plist naming current checkout or owned worktree
-  implementation-context ; full or focused
-  current-plan       ; current accepted/presented artifact plist
-  review-summary     ; latest structured review result plist
-  cycle              ; current one-based cycle number
-  cycles             ; lightweight cycle index records
-  review-findings    ; findings carried into the next planning cycle
-  reason             ; pause or blocked reason
-  pause-requested    ; pause continuation after the active request settles
-  checkpoint         ; durable write-ahead phase dispatch/settlement record
-  token-budget       ; optional aggregate provider-token ceiling
-  token-usage        ; aggregate tokens charged to all Goal workloads
-  continuation-key)  ; last durably admitted continuation state
+  status             ; active, paused, blocked, budget-limited, or complete
+  reason             ; non-empty string for paused/blocked/budget-limited
+  token-budget       ; positive integer or nil
+  tokens-used        ; non-negative integer
+  time-used-seconds  ; non-negative integer
+  turns-run          ; non-negative integer
+  plan-reference     ; normalized relative accepted-plan path or nil
+  created-at         ; ISO timestamp
+  updated-at)        ; ISO timestamp
 
 
 ;;
@@ -511,6 +502,8 @@ Created at request start, cleared in the termination handler."
   cancellers        ; list of zero-arg thunks; each drains a primitive's pending overlays with 'aborted
   started-at        ; wall-clock time when the request began
   origin            ; canonical requesting agent path
+  ;; Exact read-only accepted-plan authority derived for an active Goal turn.
+  goal-plan-read-path
   ;; Rules accumulated by an owning skill die with the request struct.
   skill-permission-rules
   ;; User-attached `mevedel-skill-invocation-record' structs.

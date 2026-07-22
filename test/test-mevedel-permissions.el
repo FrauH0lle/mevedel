@@ -9,7 +9,6 @@
 (require 'mevedel-tool-registry)
 (require 'mevedel-agents)
 (require 'mevedel-reminders)
-(require 'mevedel-goal)
 (require 'mevedel-plan)
 (require 'mevedel-plan-mode)
 (require 'helpers
@@ -19,29 +18,6 @@
                load-file-name
                byte-compile-current-file))
           "helpers"))
-
-(defmacro test-mevedel-permissions--with-goal-phase (phase &rest body)
-  "Run BODY with an active Goal in PHASE as the current session."
-  (declare (indent 1))
-  `(let* ((mevedel--session
-           (mevedel-session--create :name "goal" :permission-mode 'full-auto))
-          (goal (mevedel-goal--create
-                 :objective "test" :status 'active :phase ,phase)))
-     (setf (mevedel-session-goal mevedel--session) goal)
-     ,@body))
-
-(mevedel-deftest mevedel-permission--goal-read-only-phase-p ()
-  ,test
-  (test)
-  :doc "uses the explicit owning session when enforcing Goal phase policy"
-  (let ((session (mevedel-session--create :name "main"))
-        received)
-    (cl-letf (((symbol-function 'mevedel-goal-read-only-phase-p)
-               (lambda (candidate)
-                 (setq received candidate)
-                 t)))
-      (should (mevedel-permission--goal-read-only-phase-p session)))
-    (should (eq session received))))
 
 (mevedel-deftest mevedel-permission--plan-mode-p ()
   ,test
@@ -355,37 +331,7 @@
       (should (eq 'deny
                   (mevedel-permission-decision-raw-outcome decision)))
       (should (eq 'deny-rule (plist-get decision :via)))
-      (should (eq :session (plist-get decision :bucket)))))
-
-  :doc "Goal inspection denies native edits before protected-path prompting"
-  (test-mevedel-permissions--with-goal-phase 'planning
-    (let ((tool (mevedel-tool--create
-                 :name "Edit" :read-only-p nil :groups '(edit)))
-          (mevedel-permission-rules nil)
-          (mevedel-protected-paths '(("**/.git/**" . read-only))))
-      (let* ((context
-              (mevedel-permission--preflight
-               "Edit" :tool-struct tool :path "/repo/.git/config"
-               :mode 'full-auto))
-             (decision (plist-get context :early-decision)))
-        (should (eq 'deny
-                    (mevedel-permission-decision-raw-outcome decision)))
-        (should (eq 'goal-phase (plist-get decision :via)))))))
-
-  :doc "automatic plan revision denies native edits while awaiting approval"
-  (test-mevedel-permissions--with-goal-phase 'awaiting-approval
-    (setf (mevedel-session-plan-metadata mevedel--session)
-          '(:revision-pending t))
-    (let* ((tool (mevedel-tool--create
-                  :name "Write" :read-only-p nil :groups '(edit)))
-           (context
-            (mevedel-permission--preflight
-             "Write" :tool-struct tool :path "/repo/file.el"
-             :mode 'full-auto))
-           (decision (plist-get context :early-decision)))
-      (should (eq 'deny
-                  (mevedel-permission-decision-raw-outcome decision)))
-      (should (eq 'goal-phase (plist-get decision :via)))))
+      (should (eq :session (plist-get decision :bucket))))))
 
 (mevedel-deftest mevedel-check-permission-async-with-metadata ()
   ,test
@@ -482,27 +428,6 @@
                   :path "/repo/.git/config"
                   :mode 'full-auto)
                 'ask)))
-  :doc "Goal inspection denies native edits before protected-path prompts"
-  (test-mevedel-permissions--with-goal-phase 'reviewing
-    (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths '(("**/.git/**" . read-only)))
-          (mock-tool (mevedel-tool--create
-                      :name "Edit" :read-only-p nil :groups '(edit))))
-      (should (eq (mevedel-check-permission "Edit"
-                    :tool-struct mock-tool
-                    :path "/repo/.git/config"
-                    :mode 'full-auto)
-                  'deny))))
-  :doc "Goal inspection keeps read-only protected paths as ask"
-  (test-mevedel-permissions--with-goal-phase 'planning
-    (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths '(("**/.git/**" . read-only)))
-          (mock-tool (mevedel-tool--create :name "Read" :read-only-p t)))
-      (should (eq (mevedel-check-permission "Read"
-                    :tool-struct mock-tool
-                    :path "/repo/.git/config"
-                    :mode 'full-auto)
-                  'ask))))
   :doc "tool check-permission returning allow is respected"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)
@@ -548,16 +473,6 @@
                   :tool-struct mock-tool
                   :mode 'ask)
                 'ask)))
-  :doc "Goal planning denies mutation even under full-auto"
-  (test-mevedel-permissions--with-goal-phase 'planning
-    (let ((mevedel-permission-rules nil)
-          (mevedel-protected-paths nil)
-          (mock-tool (mevedel-tool--create
-                      :name "Edit" :read-only-p nil :groups '(edit))))
-      (should (eq (mevedel-check-permission "Edit"
-                    :tool-struct mock-tool
-                    :mode 'full-auto)
-                  'deny))))
   :doc "Plan mode denies native edits even under full-auto"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
@@ -632,6 +547,28 @@
                  :workspace-root "/project"
                  :resource-grants '((:path "/etc/passwd" :access read)))
                 'allow)))
+  :doc "active Goal request grants only exact accepted-plan reads"
+  (let* ((mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (request (mevedel-request--create
+                   :goal-plan-read-path "/sessions/accepted-plan.md"))
+         (read (mevedel-tool--create :name "Read" :read-only-p t))
+         (write (mevedel-tool--create :name "Write" :read-only-p nil))
+         (check
+          (lambda (tool path)
+            (let ((context
+                   (mevedel-permission--invocation-context
+                    :tool tool :request request :path path
+                    :workspace-root "/project" :mode 'ask)))
+              (apply #'mevedel-check-permission
+                     (mevedel-tool-name tool)
+                     (mevedel-permission--checker-args context))))))
+    (should (eq 'allow
+                (funcall check read "/sessions/accepted-plan.md")))
+    (should (eq 'ask
+                (funcall check read "/sessions/sibling.md")))
+    (should (eq 'ask
+                (funcall check write "/sessions/accepted-plan.md"))))
   :doc "resource grant has distinct decision metadata"
   (let* ((mevedel-permission-rules nil)
          (mevedel-protected-paths nil)
@@ -1622,8 +1559,9 @@ must restore the prior value to avoid cross-test pollution."
 
   :doc "retains the pipeline permission-request boundary"
   (let* ((request #'ignore)
+         (tool (mevedel-tool--create :name "Bash" :read-only-p nil))
          (context (mevedel-permission--invocation-context
-                   :tool-name "Bash" :permission-request request)))
+                   :tool tool :permission-request request)))
     (should (eq request (plist-get context :permission-request)))))
 
 (mevedel-deftest mevedel-permission--checker-args ()
@@ -1866,21 +1804,7 @@ must restore the prior value to avoid cross-test pollution."
                  "Bash"
                  :pattern "rm /tmp/foo"
                  :session-rules
-                 '(("Bash" :pattern "rm *" :action ask))))))
-
-  :doc "Goal planning routes Bash through normal policy despite mutation capability"
-  (test-mevedel-permissions--with-goal-phase 'planning
-    (let ((mevedel-permission-rules nil)
-          (bash (mevedel-tool--create
-                 :name "Bash" :read-only-p nil :groups '(eval))))
-      (should (eq 'allow
-                  (mevedel-check-permission
-                   "Bash"
-                   :tool-struct bash
-                   :pattern "echo hi"
-                   :invocation-rules '(("Bash" :action allow))
-                   :session-rules '(("Bash" :action allow))
-                   :mode 'full-auto))))))
+                 '(("Bash" :pattern "rm *" :action ask)))))))
 
 (mevedel-deftest mevedel-check-permission/workspace-root ()
   ,test
@@ -1917,25 +1841,6 @@ must restore the prior value to avoid cross-test pollution."
                      :path child
                      :workspace-root root
                      :mode 'ask)))
-      (delete-directory root t)))
-
-  :doc "Goal review denies native edits inside the workspace"
-  (let* ((root (file-name-as-directory
-                (make-temp-file "mevedel-workspace-plan-" t)))
-         (child (file-name-concat root "file.el"))
-         (mevedel-permission-rules nil)
-         (mevedel-protected-paths nil)
-         (mock-tool (mevedel-tool--create
-                     :name "Edit" :read-only-p nil :groups '(edit))))
-    (unwind-protect
-        (test-mevedel-permissions--with-goal-phase 'reviewing
-          (should (eq 'deny
-                      (mevedel-check-permission
-                       "Edit"
-                       :tool-struct mock-tool
-                       :path child
-                       :workspace-root root
-                       :mode 'full-auto))))
       (delete-directory root t)))
 
   :doc "additional allowed roots are treated as inside the workspace boundary"

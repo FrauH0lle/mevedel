@@ -3389,50 +3389,6 @@
           (should (string-match-p "Normal" text))
           (should (string-match-p "After" text))))))
 
-  :doc "strips proposed-plan tags from visible Goal planning responses"
-  (mevedel-view-stream-test--with-buffers
-    (let ((session
-           (mevedel-session--create
-            :name "test"
-            :workspace nil
-            :permission-mode 'ask
-            :goal (mevedel-goal--create
-                   :status 'active
-                   :phase 'planning))))
-      (with-current-buffer data-buf
-        (setq-local mevedel--session session))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session))
-      (mevedel-view-stream-test--insert-data
-       data-buf
-       "Normal\n<proposed_plan>\n# Plan\n</proposed_plan>\nAfter\n"
-       'response)
-      (with-current-buffer data-buf
-        (mevedel-view-stream-render-response (point-min) (point-max)))
-      (with-current-buffer view-buf
-        (let ((text (buffer-substring-no-properties
-                     (point-min) mevedel-view--input-marker)))
-          (should-not (string-match-p "<proposed_plan>" text))
-	  (should-not (string-match-p "# Plan" text))
-	  (should (string-match-p "Normal" text))
-	  (should (string-match-p "After" text))))))
-
-  :doc "strips an incomplete proposed-plan block during Goal planning"
-  (mevedel-view-stream-test--with-buffers
-    (let ((session
-           (mevedel-session--create
-            :name "test"
-            :workspace nil
-            :permission-mode 'ask
-            :goal (mevedel-goal--create
-                   :status 'active
-                   :phase 'planning))))
-      (with-current-buffer view-buf
-        (setq-local mevedel--session session)
-        (should (equal "Normal"
-                       (mevedel-view--visible-response-text
-                        "Normal\n<proposed_plan>\n# Streaming\n"))))))
-
   :doc "keeps historical proposed-plan protocol hidden after Goal planning"
   (mevedel-view-stream-test--with-buffers
     (let* ((tmp (make-temp-file "mevedel-view-plan-" t))

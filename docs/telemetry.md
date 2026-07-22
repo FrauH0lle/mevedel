@@ -43,8 +43,8 @@ span identifiers.
 
 The event stream covers:
 
-- Goal start, phase dispatch and settlement, guardian calls, review verdict
-  persistence, cycle changes, retries, and terminal settlement;
+- Goal start, continuation dispatch, root-turn settlement, accounting, retries,
+  and terminal status changes;
 - request queueing, provider dispatch, first response, stream end, callback
   settlement, cancellation, and teardown;
 - every tool pipeline step, permission queue transition, interaction lifetime,
@@ -55,7 +55,7 @@ The event stream covers:
   slow-hook status ownership;
 - agent dispatch, provider send, first response, settlement, waits, and UI
   status ownership transitions;
-- queued user messages with enqueue/dequeue Goal phases and dwell time;
+- queued user messages with enqueue/dequeue events and dwell time;
 - compaction threshold inputs, provider summary work, hook work, segment-save
   stages, publication, and total duration;
 - skill-roster advertisement and model/user skill invocation outcomes; and

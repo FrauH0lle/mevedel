@@ -120,6 +120,7 @@ created as a side effect of registration and handles serialization."
     ("Edit" "Glob" "Grep" "MkDir" "Read" "Write"
      mevedel-tool-fs mevedel-tool-fs--register)
     ("GetHints" "RecordHint" mevedel-tool-tutor mevedel-tool-tutor--register)
+    ("UpdateGoal" mevedel-tool-goal mevedel-tool-goal--register)
     ("Imenu" "Treesitter" "XrefDefinitions" "XrefReferences"
      mevedel-tool-code mevedel-tool-code--register)
     ("ListSkills" "Skill" mevedel-tool-skills mevedel-tool-skills--register)

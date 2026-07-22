@@ -29,13 +29,11 @@ flowchart TD
 
 ### Plan-file reference reminder
 
-Accepted plans are recorded in session `plan-metadata` and persisted as
-immutable `goals/<goal-id>/cycle-NNN-plan.md` artifacts under the session
-directory. The mutable proposal remains at `current-plan.md`. The one-shot
-`plan-reference` reminder surfaces bounded contents of the approved
-plan on later turns when it may still be relevant. The Goal controller owns
-planning and review prompts directly; their read-only restriction is enforced
-by the permission system rather than by a reminder.
+Accepted plans are recorded in session `plan-metadata` and persisted as an
+immutable accepted artifact under the session directory. The mutable proposal
+remains at `current-plan.md`. The one-shot `plan-reference` reminder surfaces
+bounded contents of the approved plan on later turns when it may still be
+relevant.
 
 Standalone Plan Direct handoff does not use this reminder. Here and Worktree
 targets receive the immutable artifact path and full accepted plan in the
@@ -103,11 +101,6 @@ guidance in the rejection reminder.
 - **Compact file-reference:** compaction queues reminders for file
   references whose contents were not retained; the `pending-events`
   reminder consumes the session FIFO on the next prompt.
-- **Goal lifecycle event:** material transitions such as start, pause, resume,
-  plan acceptance, review outcome, budget exhaustion, and compaction enqueue a
-  one-shot event. These reminders only orient the next request; the Goal
-  sidecar and its generated context fragment remain authoritative, and
-  reminder delivery never changes controller state.
 - **Token usage:** `mevedel-reminders-make-token-usage` reports high
   context pressure using the compaction token state, with sparse
   repeat firing.

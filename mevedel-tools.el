@@ -28,6 +28,7 @@
 (require 'mevedel-tool-code)
 (require 'mevedel-tool-exec)
 (require 'mevedel-tool-fs)
+(require 'mevedel-tool-goal)
 (require 'mevedel-tool-introspect)
 (require 'mevedel-goal)
 (require 'mevedel-tool-skills)
@@ -109,6 +110,7 @@
   (mevedel-tool-code--register)
   (mevedel-tool-tutor--register)
   (mevedel-tool-exec--register)
+  (mevedel-tool-goal--register)
   (mevedel-tool-ui--register)
   (mevedel-tool-skills--register)
   (mevedel-tool-task--register)
@@ -133,7 +135,7 @@
       (plist-put data :tools parsed))))
 
 (defun mevedel-tools--handle-plan-tool-filter (fsm)
-  "Remove native edit schemas from Plan-mode request FSM."
+  "Apply Plan and active-Goal request-time tool visibility to FSM."
   (let* ((info (gptel-fsm-info fsm))
          (invocation (plist-get info :mevedel-agent-invocation))
          (buffer (plist-get info :buffer))
@@ -142,14 +144,26 @@
                    (mevedel-agent-invocation-parent-session invocation))
               (and (buffer-live-p buffer)
                    (buffer-local-value 'mevedel--session buffer))))
-         (tools (plist-get info :tools)))
-    (when (and session (mevedel-session-plan-mode session) tools)
+         (tools (plist-get info :tools))
+         (active-root-goal-p
+          (and session
+               (not (or invocation
+                        (mevedel-tools--buffer-local-agent-invocation buffer)))
+               (when-let* ((goal (mevedel-session-goal session)))
+                 (eq (mevedel-goal-status goal) 'active)))))
+    (when tools
       (let ((filtered
              (cl-remove-if
               (lambda (tool)
-                (when-let* ((registered
-                             (mevedel-tool-get (gptel-tool-name tool))))
-                  (memq 'edit (mevedel-tool-groups registered))))
+                (let ((name (gptel-tool-name tool)))
+                  (or (and (equal name "UpdateGoal")
+                           (not active-root-goal-p))
+                      (and session
+                           (mevedel-session-plan-mode session)
+                           (when-let* ((registered
+                                       (mevedel-tool-get name)))
+                             (memq 'edit
+                                   (mevedel-tool-groups registered)))))))
               tools)))
         (unless (= (length filtered) (length tools))
           (plist-put info :tools filtered)

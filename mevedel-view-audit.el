@@ -160,16 +160,6 @@ When EXPANDED is non-nil, include ordered handler details."
   "Return display text for hook audit RECORD.
 When EXPANDED is non-nil, include record details."
   (pcase (plist-get record :type)
-    ('goal-guardian
-     (concat
-      (format "  \u25c7 Goal guardian: %s\n"
-              (or (plist-get record :verdict) 'ask))
-      (when expanded
-        (concat
-         "    Reason: " (or (plist-get record :reason) "unavailable") "\n"
-         "    Provider: " (or (plist-get record :provider) "unavailable") "\n"
-         "    Effort: " (format "%s" (or (plist-get record :effort) "default"))
-         "\n    At: " (or (plist-get record :at) "unknown") "\n"))))
     ('tool-input-repair
      (condition-case nil
          (progn

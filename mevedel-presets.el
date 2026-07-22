@@ -50,6 +50,9 @@
 (declare-function mevedel--compact-record-token-baseline
                   "mevedel-compact" (fsm))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-capture-request "mevedel-goal" (fsm))
+
 ;; `mevedel-models'
 (declare-function mevedel-model-merge-tiers
                   "mevedel-models" (additions current))
@@ -571,6 +574,7 @@ alist with mevedel-specific handlers added:
                                  info :mevedel-request-id
                                  (mevedel-request-id
                                   mevedel--current-request)))
+                              (mevedel-goal-capture-request fsm)
                               ;; Drain pending stash from user skill
                               ;; invocation.
                               (when (and (boundp 'mevedel--current-request)

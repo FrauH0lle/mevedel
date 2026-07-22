@@ -37,8 +37,8 @@ Key features:
 - Retained asynchronous child agents plus focused explorer, verifier, and
   reviewer workflows via
   [gptel-agent](https://github.com/karthink/gptel-agent).
-- Supervised Goals (`/goal <objective>`) for read-only planning, explicit
-  approval, implementation, and read-only review in one session-owned cycle.
+- Durable Goals (`/goal <objective>`) that keep one objective in every root
+  turn and continue automatically while the session is idle.
 - Skills (`SKILL.md` packages) for reusable `$skill` commands and prompt bundles,
   scanned from user / project / bundled directories.
 - Persistent sessions per workspace with resume, rewind to any prior prompt,
@@ -122,8 +122,8 @@ the chat buffer, only what is defined by the directive and its references.
 4. Type in the composer at the bottom of the view; use `/help` for local slash
    commands.
 5. Run `/init` or `M-x mevedel-init` to bootstrap or improve project guidance.
-6. Use `/goal <objective>` for supervised work, or `/goal auto <objective>`
-   for guardian-approved automatic plan continuation.
+6. Use `/goal <objective>` for durable automatic continuation toward one
+   objective.
 7. Use `/review` or `/verify` to inspect changes before committing.
 
 ### Workflow map
@@ -578,21 +578,18 @@ keys are `$skill-name` symbols.
 
 ### Goals
 
-See [`docs/goals.md`](docs/goals.md) for the authoritative lifecycle,
-continuation, recovery, execution-home, and model-routing contract.
+See [`docs/goals.md`](docs/goals.md) for the authoritative context,
+continuation, accounting, failure, and recovery contract.
 
-`/goal <objective>` starts a supervised Goal in the current session. Each cycle
-plans, waits for approval, implements, and reviews until the complete objective
-is done or blocked. `/goal auto <objective>` sends each plan through a tool-free
-guardian and continues when it approves. Automatic Goals never change tool
-permissions; fully unattended mutation still requires selecting `full-auto`.
+`/goal <objective>` starts a Goal in the current session. Every ordinary root
+turn receives request-local Goal context and is accounted to the Goal. While
+active and idle, the session continues with a generic continuation turn until
+the model calls `UpdateGoal` with `complete` or `blocked`. Goal state never
+changes tool permissions.
 
-Bare `/goal` opens the Goal cockpit for status and lifecycle actions, including
-starting a Goal when none exists. Use `/goal pause`, `/goal resume [context]`,
-`/goal approval [supervised|automatic]`, `/goal edit <objective>`, and
-`/goal clear` to manage it. The Goal cockpit's `o` key toggles approval policy.
-Clear preserves the transcript, plan artifacts, worktrees, and filesystem
-changes.
+Bare `/goal` opens the Goal cockpit. Use `/goal pause`, `/goal resume [steering]`,
+and `/goal clear` to manage it. Clear preserves the transcript, accepted Plan
+artifacts, and filesystem changes.
 
 ### Review and Verify Commands
 
@@ -743,7 +740,7 @@ the same alist shape, for example `(("~/public-metadata/**" . read-only)
 **Bash guardian** (`mevedel-permission-guardian`): optional, advisory-only risk
 guidance shown in Bash permission prompts. It can use the current gptel model or
 a custom function, and never overrides explicit deny rules, filesystem resource
-authority, Goal phase restrictions, or the user's decision.
+authority, or the user's decision.
 `mevedel-permission-guardian-timeout` caps how long the prompt waits for
 guidance.
 

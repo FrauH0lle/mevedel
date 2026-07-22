@@ -86,6 +86,10 @@
                          &optional session workspace request invocation))
 (declare-function mevedel-hooks-take-session-context "mevedel-hooks" (session))
 
+;; `mevedel-goal'
+(declare-function mevedel-goal-pause-runtime-failure
+                  "mevedel-goal" (buffer reason))
+
 ;; `mevedel-mentions'
 (declare-function mevedel--transform-expand-mentions "mevedel-mentions" (fsm))
 
@@ -2193,7 +2197,10 @@ set already stored on FSM's info plist."
 
 (defun mevedel--compact-main-failure (target _fsm err)
   "Surface automatic main TARGET compaction failure ERR."
-  (mevedel--compact-auto-failure (plist-get target :buffer) err))
+  (let ((buffer (plist-get target :buffer)))
+    (mevedel-goal-pause-runtime-failure
+     buffer (format "Compaction failed: %s" err))
+    (mevedel--compact-auto-failure buffer err)))
 
 (defun mevedel--compact-handle-target-wait
     (fsm target admission &optional pending-start)

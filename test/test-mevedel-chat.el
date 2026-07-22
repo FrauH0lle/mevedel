@@ -961,9 +961,8 @@
                                   (session (mevedel-session-create "main" workspace))
                                   (goal (mevedel-goal--create
                                          :id "g1" :objective "Ship"
-                                         :status 'active :phase 'implementing
-                                         :approval-policy 'supervised
-                                         :cycle 1 :cycles '((:cycle 1))))
+                                         :status 'active :tokens-used 0
+                                         :time-used-seconds 0 :turns-run 0))
                                   saved)
                              (setf (mevedel-session-goal session) goal)
                              (setq-local mevedel--session session)
@@ -979,7 +978,7 @@
                                             saved))
                              (should (null mevedel--current-request))
                              (should (eq 'paused (mevedel-goal-status goal)))
-                             (should (equal "Active request aborted by user"
+                             (should (equal "interrupted by user"
                                             (mevedel-goal-reason goal)))))
 
 			 :doc "does not rewrite a Goal already paused for another reason"
@@ -989,8 +988,6 @@
 			                      :root "/tmp/abort-paused/" :name "paused"))
 			          (goal (mevedel-goal--create
 			                 :id "g1" :objective "Ship" :status 'paused
-			                 :phase 'planning :approval-policy 'supervised
-			                 :cycle 1 :cycles '((:cycle 1))
 			                 :reason "Waiting for review"))
 			          (session (mevedel-session-create "main" workspace)))
 			     (setf (mevedel-session-goal session) goal)

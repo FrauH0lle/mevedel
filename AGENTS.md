@@ -45,7 +45,7 @@ lazily — read them when planning work in the relevant area. The
   `:groups`, renderers and render-data side channel, oversized result
   persistence
 - [`docs/permissions.md`](docs/permissions.md) — 9-step decision chain,
-  bucket precedence, Goal phase restrictions, Bash/Eval specifics,
+  bucket precedence, Bash/Eval specifics,
   sub-agent permission propagation, example config
 - [`docs/guardian-prompts.md`](docs/guardian-prompts.md) — trusted guardian
   prompts, untrusted evidence boundaries, response contracts, examples
@@ -67,8 +67,8 @@ lazily — read them when planning work in the relevant area. The
 - [`docs/reminders.md`](docs/reminders.md) — system-reminder injection,
   implemented reminder surface, and candidate reminder backlog grouped
   by implementation readiness
-- [`docs/goals.md`](docs/goals.md) — Goal lifecycle, approval policy,
-  continuation, recovery, model routing, execution home, and context
+- [`docs/goals.md`](docs/goals.md) — Goal context, continuation, accounting,
+  failures, commands, recovery, and accepted-plan authority
 - [`docs/sessions.md`](docs/sessions.md) — on-disk layout, segment
   persistence contract, resume/rewind/fork, locking, auto-cleanup,
   defcustoms
@@ -159,7 +159,7 @@ Prompt / presets / agents
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-persistence.el durable agent registry codec and cold hydration
   mevedel-agent-runtime.el    retained agent request lifecycle and settlement
-  mevedel-goal.el             supervised Goal controller and shared plan approval interaction
+  mevedel-goal.el             phase-free Goal continuation and shared plan approval interaction
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
