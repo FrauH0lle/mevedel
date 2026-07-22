@@ -57,10 +57,6 @@ Layout:
   repair-log.el                      ; redacted tool-input validation telemetry
   telemetry-log.el                   ; correlated lifecycle events, one plist/line
   diagnostics/run-*/                 ; profiler and full-suite resource reports
-  goals/<goal-id>/                   ; one Goal's cycle artifacts and index
-    current-plan.md                  ; mutable proposal being approved
-    cycle-001-plan.md                ; immutable accepted cycle plan
-    cycles.el                        ; lightweight cycle metadata
   file-history/                      ; per-session backup store
     4f1e8c9a3b2d6e57@v1
     4f1e8c9a3b2d6e57@v2
@@ -99,11 +95,12 @@ approval pending.  A dirty source checkout remains eligible, but the approval
 warns that the linked worktree starts at `HEAD` and excludes uncommitted
 changes.  Preparation never copies, stashes, or applies those changes.
 The source keeps its approval archive, permission mode, and durable retry
-record.  The new session inherits the source preset and model settings, gets
-the selected permission mode, and owns a byte-identical immutable accepted
-artifact.  Completed Worktree creation and target-artifact steps are recorded
-by target session identity and path, so retry restores that same target and
-does not create another worktree, session, or artifact.
+record.  The new session inherits the source preset, model settings, and
+ordinary Goal budget, gets the selected permission mode, and owns a
+byte-identical immutable accepted artifact. Completed Worktree creation and
+target-artifact steps are recorded by target session identity and path, so
+retry restores that same target and does not create another worktree, session,
+or artifact.
 
 Worktree/Summary runs the same summary producer against the source transcript
 without compacting or rotating it.  The cached handoff converts source-checkout
@@ -111,6 +108,14 @@ file references to repository-relative paths, and the new clean target segment
 stores that summary before the target artifact path, full plan, and Direct
 implementation instruction.  Retry reuses the summary, validated branch,
 worktree, target artifact, inherited settings, and selected mode.
+
+When approval selects Goal instead of Direct, Goal construction happens only
+after the chosen segment, summary, Worktree, target settings, and target-local
+accepted artifact exist. The prepared target session owns the Goal record and
+its relative accepted-plan reference; the source session never owns or
+transfers the Worktree Goal. The first turn stores the full artifact path, plan
+content, and compact kickoff in the target transcript while the rendered view
+uses the short Goal implementation label.
 
 The telemetry stream and diagnostics directory are observational artifacts,
 not resumable state. They are append-only within a run and are never consulted

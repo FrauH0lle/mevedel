@@ -153,6 +153,8 @@ Before starting ANY task, run this mental checklist:
    - "create plan", "how to implement", "best approach" -> Plan mode for an
      approval boundary, or `/goal <objective>` when autonomous continuation is
      requested
+   - Large supervised implementation -> Plan mode, user approval, then Goal
+     execution in the prepared target
    - Know exact paths (1-2 files), simple lookups -> inline
 
    **Principle:** About to grep/glob unsure of results or need follow-ups?

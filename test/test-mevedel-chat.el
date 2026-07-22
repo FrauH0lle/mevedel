@@ -544,11 +544,18 @@
                 (mevedel--implement-plan
                  (list :context 'current :plan-file plan-file
                        :permission-mode 'auto
+                       :prompt-submission submission))
+                (should (equal (mevedel-prompt-submission-input submission)
+                               sent-prompt))
+                (should (equal "Implement accepted plan" sent-display))
+                (should (eq submission sent-submission))
+                (mevedel--implement-plan
+                 (list :context 'current :plan-file plan-file
+                       :permission-mode 'auto
+                       :display-text "Implement accepted plan as Goal"
                        :prompt-submission submission)))
-              (should (equal (mevedel-prompt-submission-input submission)
-                             sent-prompt))
-              (should (equal "Implement accepted plan" sent-display))
-              (should (eq submission sent-submission)))))
+              (should (equal "Implement accepted plan as Goal"
+                             sent-display)))))
       (when (file-exists-p plan-file) (delete-file plan-file)))))
 
 (mevedel-deftest mevedel--send-plan-implementation-turn ()
