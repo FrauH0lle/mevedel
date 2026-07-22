@@ -448,132 +448,30 @@
 (mevedel-deftest mevedel--implement-plan ()
   ,test
   (test)
-  :doc "sends an accepted plan with the current conversation context"
-  (let ((plan-file (make-temp-file "mevedel-plan-"))
-        (buffer (generate-new-buffer " *mevedel-plan-implementation*"))
-        (fsm (gptel-make-fsm))
-        sent)
-    (unwind-protect
-        (progn
-          (write-region "# Plan\n\nDo it." nil plan-file nil 'silent)
-          (with-current-buffer buffer
-            (org-mode)
-            (setq-local gptel-response-separator "\n\n")
-            (setq-local gptel-prompt-prefix-alist
-                        '((org-mode . "* User\n")))
-            (insert "* User\nPlanning context.\n")
-            (cl-letf (((symbol-function 'gptel-request)
-                       (lambda (&optional _prompt &rest _)
-                         (setq sent (buffer-string))
-                         fsm))
-                      ((symbol-function
-                        'mevedel--implementation-permission-mode-apply)
-                       #'ignore))
-              (should
-               (eq fsm
-                   (mevedel--implement-plan
-                    (list :context 'full
-                          :plan-file plan-file
-                          :permission-mode 'ask
-                          :goal-context
-                          "Goal ID: g1\nObjective: Ship safely"))))))
-          (should (string-match-p "Planning context" sent))
-          (should (string-match-p "Goal ID: g1" sent))
-          (should (string-match-p "Implementation instructions" sent))
-          (should
-           (string-match-p
-            "Goal objective and achievement criteria are authoritative"
-            sent))
-          (should
-           (string-match-p "authoritative referenced requirements" sent))
-          (should
-           (string-match-p "accepted plan is an implementation approach" sent))
-          (should
-           (string-match-p "Reasonable divergence from plan details" sent))
-          (should (string-match-p "# Plan" sent)))
-      (when (buffer-live-p buffer) (kill-buffer buffer))
-      (when (file-exists-p plan-file) (delete-file plan-file))))
-  :doc "sends only authoritative Goal context and plan in focused context"
-  (let ((plan-file (make-temp-file "mevedel-plan-focused-"))
-        (buffer (generate-new-buffer " *mevedel-plan-focused*"))
-        prompt)
-    (unwind-protect
-        (progn
-          (write-region "# Focused plan" nil plan-file nil 'silent)
-          (with-current-buffer buffer
-            (org-mode)
-            (insert "Unrelated prior transcript")
-            (cl-letf (((symbol-function
-                        'mevedel--send-plan-implementation-turn)
-                       (lambda (request _display _send)
-                         (setq prompt request)))
-                      ((symbol-function
-                        'mevedel--implementation-permission-mode-apply)
-                       #'ignore))
-              (mevedel--implement-plan
-               (list :context 'focused :plan-file plan-file
-                     :permission-mode 'ask
-                     :goal-context
-                     "Goal ID: g1\nObjective: Ship safely\nCycle: 1"))))
-          (should (string-match-p "Ship safely" prompt))
-          (should (string-match-p "Goal ID: g1" prompt))
-          (should (string-match-p "# Focused plan" prompt))
-          (should-not (string-match-p "Unrelated prior transcript" prompt)))
-      (when (buffer-live-p buffer) (kill-buffer buffer))
-      (when (file-exists-p plan-file) (delete-file plan-file))))
-  :doc "submits Here/Current as one ordinary generated turn"
-  (let ((plan-file (make-temp-file "mevedel-plan-current-"))
-        sent-prompt sent-display sent-submission)
-    (unwind-protect
-        (progn
-          (write-region "# Current plan" nil plan-file nil 'silent)
-          (with-temp-buffer
-            (org-mode)
-            (let ((submission
-                   (mevedel-prompt-submission-create
-                    :input "Accepted plan artifact: /accepted.md\n\n# Current plan"
-                    :state 'committed)))
-              (cl-letf (((symbol-function
-                          'mevedel--implementation-permission-mode-apply)
-                         #'ignore)
-                        ((symbol-function 'mevedel--submit-generated-turn)
-                         (lambda (prompt display accepted)
-                           (setq sent-prompt prompt
-                                 sent-display display
-                                 sent-submission accepted))))
-                (mevedel--implement-plan
-                 (list :context 'current :plan-file plan-file
-                       :permission-mode 'auto
-                       :prompt-submission submission))
-                (should (equal (mevedel-prompt-submission-input submission)
-                               sent-prompt))
-                (should (equal "Implement accepted plan" sent-display))
-                (should (eq submission sent-submission))
-                (mevedel--implement-plan
-                 (list :context 'current :plan-file plan-file
-                       :permission-mode 'auto
-                       :display-text "Implement accepted plan as Goal"
-                       :prompt-submission submission)))
-              (should (equal "Implement accepted plan as Goal"
-                             sent-display)))))
-      (when (file-exists-p plan-file) (delete-file plan-file)))))
-
-(mevedel-deftest mevedel--send-plan-implementation-turn ()
-  ,test
-  (test)
-  :doc "removes the inserted turn and rerenders after synchronous send failure"
+  :doc "submits the accepted current-context prompt with compact display text"
   (with-temp-buffer
-    (insert "existing")
-    (let ((rerendered nil))
-      (cl-letf (((symbol-function 'mevedel--insert-plan-implementation-turn)
-                 (lambda (&rest _) (insert " generated")))
-                ((symbol-function 'mevedel-view--full-rerender)
-                 (lambda () (setq rerendered t))))
-        (should-error
-         (mevedel--send-plan-implementation-turn
-          "prompt" "display" (lambda () (error "Send failed"))))
-        (should (equal "existing" (buffer-string)))
-        (should rerendered)))))
+    (org-mode)
+    (let ((submission
+           (mevedel-prompt-submission-create
+            :input "Accepted plan artifact: /accepted.md\n\n# Current plan"
+            :state 'committed))
+          sent-prompt sent-display sent-submission)
+      (cl-letf (((symbol-function
+                  'mevedel--implementation-permission-mode-apply)
+                 #'ignore)
+                ((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (prompt display accepted)
+                   (setq sent-prompt prompt
+                         sent-display display
+                         sent-submission accepted))))
+        (mevedel--implement-plan
+         (list :permission-mode 'auto
+               :display-text "Implement accepted plan as Goal"
+               :prompt-submission submission)))
+      (should (equal (mevedel-prompt-submission-input submission)
+                     sent-prompt))
+      (should (equal "Implement accepted plan as Goal" sent-display))
+      (should (eq submission sent-submission)))))
 
 
 ;;

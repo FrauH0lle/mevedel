@@ -67,8 +67,8 @@
 
 ;; `mevedel-goal'
 (declare-function mevedel-goal-clear "mevedel-goal" ())
-(declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-description "mevedel-goal" (&optional goal))
+(declare-function mevedel-goal-edit "mevedel-goal" (objective))
 (declare-function mevedel-goal-pause "mevedel-goal" ())
 (declare-function mevedel-goal-resume "mevedel-goal" (&optional input))
 (declare-function mevedel-goal-set-budget "mevedel-goal" (value))
@@ -97,6 +97,10 @@
 
 ;; `mevedel-permissions'
 (defvar mevedel-permission-mode)
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-enter
+                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-plugins'
 (declare-function mevedel-plugin-name "mevedel-plugins" (cl-x) t)
@@ -129,10 +133,6 @@
                   "mevedel-skills-invoke" (text lookup &optional allow-root))
 (declare-function mevedel-skills-prepare-user-input
                   "mevedel-skills-invoke" (text session))
-
-;; `mevedel-plan-mode'
-(declare-function mevedel-plan-mode-enter
-                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)

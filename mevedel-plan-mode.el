@@ -1,8 +1,8 @@
-;;; mevedel-plan-mode.el -- Plan conversation and implementation handoff -*- lexical-binding: t -*-
+;;; mevedel-plan-mode.el -- Plan conversation and proposal UI -*- lexical-binding: t -*-
 
 ;;; Commentary:
 
-;; Sticky Plan conversations, proposal interaction, and accepted-plan dispatch.
+;; Sticky Plan conversations and proposal approval interaction.
 
 ;;; Code:
 
@@ -10,43 +10,9 @@
   (require 'cl-lib)
   (require 'mevedel-structs))
 
-;; `gptel'
-(defvar gptel-prompt-prefix-alist)
-
-;; `mevedel-chat'
-(declare-function mevedel--implement-plan "mevedel-chat"
-		  (action-plist))
-(declare-function mevedel--run-session-start-hooks "mevedel-chat"
-		  (source))
-
-;; `mevedel-compact'
-(declare-function mevedel--compact-main-target "mevedel-compact" nil)
-(declare-function mevedel--compact-previous-summary "mevedel-compact"
-		  nil)
-(declare-function mevedel--compact-run "mevedel-compact" (&rest args))
-
-;; `mevedel-goal'
-(declare-function mevedel-goal--new-id "mevedel-goal" nil)
-(declare-function mevedel-goal-create "mevedel-goal"
-		  (objective &optional session plan-reference id))
-(declare-function mevedel-goal-pause-runtime-failure "mevedel-goal"
-		  (buffer reason))
-(declare-function mevedel-plan-approval-abort "mevedel-goal"
-		  (&optional session outcome))
-(declare-function mevedel-plan-approval-present "mevedel-goal"
-		  (entry &optional session))
-(declare-function mevedel-plan-approval-render "mevedel-goal"
-		  (&optional session))
-(declare-function mevedel-plan-approval-settle "mevedel-goal"
-		  (entry outcome))
-
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle "mevedel-interaction-prompt"
 		  (overlay outcome))
-
-;; `mevedel-permissions'
-(declare-function mevedel-permission-mode-transition
-		  "mevedel-permissions" (mode))
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-accept "mevedel-plan"
@@ -58,30 +24,23 @@
 		  (&optional session))
 (declare-function mevedel-plan-hash "mevedel-plan" (plan-markdown))
 
-;; `mevedel-presets'
-(declare-function mevedel-preset-restore-session "mevedel-presets"
-		  (session &optional buffer))
+;; `mevedel-plan-handoff'
+(declare-function mevedel-plan-handoff-selection-valid-p
+                  "mevedel-plan-handoff" (selection))
+(declare-function mevedel-plan-handoff-start "mevedel-plan-handoff"
+                  (session chat-buffer selection accepted goal-token-budget))
+(defvar mevedel-plan-handoff-implementation-modes)
 
-;; `mevedel-session-persistence'
-(declare-function mevedel-session-persistence--summary-block
-		  "mevedel-session-persistence" (summary))
-(declare-function mevedel-session-persistence-ensure-files
-		  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-restore
-		  "mevedel-session-persistence" (session-dir))
-(declare-function mevedel-session-persistence-save
-		  "mevedel-session-persistence" (session buffer))
-(declare-function mevedel-session-persistence-start-fresh-segment
-		  "mevedel-session-persistence"
-		  (session buffer &rest args))
+;; `mevedel-queue'
+(declare-function mevedel-queue--current-session "mevedel-queue" ())
+(declare-function mevedel-queue--unregister-entry-interaction
+                  "mevedel-queue" (entry))
 
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
 		  "mevedel-skills-ui" nil)
 
 ;; `mevedel-structs'
-(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-plan-reference "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
@@ -119,10 +78,6 @@
 		  nil)
 (declare-function mevedel-view--input-start "mevedel-view-composer"
 		  nil)
-(declare-function mevedel-view--run-prompt-submit-hook
-		  "mevedel-view-composer"
-		  (input display-text callback &optional
-			 blocked-callback prior-context))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-register
@@ -134,12 +89,6 @@
 (declare-function mevedel-view--fontify-as "mevedel-view-markdown"
 		  (text mode))
 
-;; `mevedel-view-stream'
-(declare-function mevedel-view--stop-request-progress
-		  "mevedel-view-stream" nil)
-(declare-function mevedel-view--update-spinner "mevedel-view-stream"
-		  (status &optional owner))
-
 ;; `mevedel-worktree'
 (declare-function mevedel-worktree--collect-status "mevedel-worktree"
 		  (&optional context))
@@ -147,23 +96,6 @@
 		  "mevedel-worktree" (session purpose))
 (declare-function mevedel-worktree--validate-branch-name
 		  "mevedel-worktree" (name &optional directory))
-(declare-function mevedel-worktree-create-session "mevedel-worktree"
-		  (&optional branch purpose clean))
-
-(defconst mevedel-plan-mode--implementation-modes '(ask auto full-auto)
-  "Permission modes selectable for accepted Plan implementation.")
-
-(defconst mevedel-plan-mode--accepted-goal-objective
-  (concat
-   "Implement the accepted plan referenced by this Goal. Read it before acting. "
-   "Treat its stated outcomes, constraints, and acceptance criteria as the "
-   "completion contract; its implementation mechanics remain revisable. Use "
-   "its named validation commands and artifacts to verify progress, and keep "
-   "the Goal active until current evidence proves the full contract. Where the "
-   "mechanics are silent or conflict with current repository evidence, preserve "
-   "the completion contract and use the safest effective implementation.")
-  "Deterministic objective for a Goal created from an accepted Plan.")
-
 
 ;;
 ;;; Plan conversation mode
@@ -222,19 +154,6 @@
     (mevedel-skills--refresh-view-input-prompt))
   (force-mode-line-update t))
 
-(defun mevedel-plan-mode--selection-valid-p (selection)
-  "Return non-nil when SELECTION is a supported Plan handoff selection."
-  (and (proper-list-p selection)
-       (let ((location (plist-get selection :location))
-             (context (plist-get selection :context)))
-         (and (or (and (eq location 'here)
-                       (memq context '(current fresh summary)))
-                  (and (eq location 'worktree)
-                       (memq context '(fresh summary))))
-              (memq (plist-get selection :execution) '(direct goal))
-              (memq (plist-get selection :mode)
-                    mevedel-plan-mode--implementation-modes)))))
-
 (defun mevedel-plan-mode--demote-proposal (session discard-selection)
   "Make SESSION's proposal a draft.
 When DISCARD-SELECTION is non-nil, discard its approval selection too."
@@ -256,7 +175,6 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                    'proposed)))
     (mevedel-plan-mode--demote-proposal session nil)
     (when (mevedel-session-pending-plan-approval session)
-      (require 'mevedel-goal)
       (mevedel-plan-approval-abort session 'invalidated))
     t))
 
@@ -281,8 +199,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 
 (defun mevedel-plan-mode--next-mode (mode)
   "Return the Plan implementation mode after MODE."
-  (or (cadr (memq mode mevedel-plan-mode--implementation-modes))
-      (car mevedel-plan-mode--implementation-modes)))
+  (require 'mevedel-plan-handoff)
+  (or (cadr (memq mode mevedel-plan-handoff-implementation-modes))
+      (car mevedel-plan-handoff-implementation-modes)))
 
 (defun mevedel-plan-mode--next-execution (execution)
   "Return the Plan execution choice after EXECUTION."
@@ -322,545 +241,20 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (and (boundp 'mevedel-goal-token-budget)
        (buffer-local-value 'mevedel-goal-token-budget buffer)))
 
-(defun mevedel-plan-mode--implementation-prompt
-    (accepted-artifact plan-markdown)
-  "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
-  (format
-   "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
-   (plist-get accepted-artifact :absolute-path)
-   plan-markdown))
-
-(defun mevedel-plan-mode--goal-kickoff-prompt
-    (accepted-artifact plan-markdown)
-  "Return the Goal kickoff for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
-  (format
-   "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
-   (plist-get accepted-artifact :absolute-path)
-   plan-markdown))
-
-(defun mevedel-plan-mode--persist (session chat-buffer)
-  "Persist SESSION from CHAT-BUFFER."
-  (require 'mevedel-session-persistence)
-  (mevedel-session-persistence-save session chat-buffer))
-
-(defun mevedel-plan-mode--implementation-record
-    (selection accepted &optional goal-token-budget)
-  "Return retry state for SELECTION and ACCEPTED artifact."
-  (let ((record
-         (list :step (pcase (plist-get selection :context)
-                       ('summary 'prepare-summary)
-                       ('fresh
-                        (if (eq (plist-get selection :location) 'worktree)
-                            'prepare-worktree
-                          'prepare-context))
-                       (_ 'submit))
-               :selection (copy-tree selection)
-               :accepted (copy-tree accepted)
-               :goal-token-budget goal-token-budget)))
-    (when (eq (plist-get selection :execution) 'goal)
-      (require 'mevedel-goal)
-      (setq record (plist-put record :goal-id (mevedel-goal--new-id))))
-    record))
-
-(defun mevedel-plan-mode--accepted-body (artifact)
-  "Return ARTIFACT's validated immutable accepted-plan body."
-  (let ((path (plist-get artifact :absolute-path))
-        (hash (plist-get artifact :hash)))
-    (unless (and (stringp path) (file-exists-p path) (stringp hash))
-      (error "Accepted plan artifact is unavailable"))
-    (with-temp-buffer
-      (insert-file-contents path)
-      (let ((body (mevedel--normalize-message-text (buffer-string))))
-        (unless (equal hash (mevedel-plan-hash body))
-          (error "Accepted plan artifact hash does not match"))
-        body))))
-
-(defun mevedel-plan-mode--worktree-target-buffer (record)
-  "Return RECORD's prepared Worktree target buffer."
-  (let ((save-path (plist-get record :target-save-path))
-        (session-id (plist-get record :target-session-id)))
-    (unless (and (stringp save-path) (file-directory-p save-path)
-                 (stringp session-id))
-      (error "Prepared Worktree session is unavailable"))
-    (require 'mevedel-session-persistence)
-    (let* ((buffer (mevedel-session-persistence-restore save-path))
-           (session (buffer-local-value 'mevedel--session buffer)))
-      (unless (equal session-id (mevedel-session-session-id session))
-        (error "Prepared Worktree session identity does not match"))
-      (unless (file-equal-p (plist-get record :target-directory)
-                            (mevedel-session-working-directory session))
-        (error "Prepared Worktree directory does not match"))
-      buffer)))
-
-(defun mevedel-plan-mode--prepare-worktree (session chat-buffer record)
-  "Create RECORD's Worktree target and persist its identity in SESSION."
-  (require 'mevedel-worktree)
-  (let* ((selection (plist-get record :selection))
-         (branch (plist-get selection :branch))
-         (result
-          (with-current-buffer chat-buffer
-            (mevedel-worktree-create-session
-             branch "Accepted Plan implementation"
-             (eq (plist-get selection :context) 'summary))))
-         (target-buffer (plist-get result :buffer))
-         (target-session
-          (buffer-local-value 'mevedel--session target-buffer))
-         (target-save-path
-          (with-current-buffer target-buffer
-            (mevedel-session-persistence-ensure-files
-             target-session target-buffer)))
-         (prepared (copy-tree record)))
-    (unless (equal branch (plist-get result :branch))
-      (error "Created Worktree branch does not match the accepted branch"))
-    (setq prepared (plist-put prepared :step 'prepare-target))
-    (setq prepared (plist-put prepared :target-directory
-                              (plist-get result :directory)))
-    (setq prepared (plist-put prepared :target-save-path target-save-path))
-    (setq prepared
-          (plist-put prepared :target-session-id
-                     (mevedel-session-session-id target-session)))
-    (mevedel-plan--metadata-put session :implementation-retry prepared)
-    (mevedel-plan-mode--persist session chat-buffer)
-    prepared))
-
-(defun mevedel-plan-mode--prepare-worktree-target
-    (session chat-buffer record)
-  "Prepare RECORD's target artifact, settings, and Mode for SESSION."
-  (let* ((selection (plist-get record :selection))
-         (mode (plist-get selection :mode))
-         (target-buffer (mevedel-plan-mode--worktree-target-buffer record))
-         (target-session
-          (buffer-local-value 'mevedel--session target-buffer))
-         (_body
-          (mevedel-plan-mode--accepted-body (plist-get record :accepted)))
-         (source-artifact (plist-get record :accepted))
-         (accepted
-          (mevedel-plan-archive-accepted
-           source-artifact target-session
-           (file-name-concat "plans" "accepted.md")))
-         (prepared (copy-tree record)))
-    (setf (mevedel-session-preset-name target-session)
-          (mevedel-session-preset-name session)
-          (mevedel-session-preset-settings target-session)
-          (copy-tree (mevedel-session-preset-settings session))
-          (mevedel-session-plan-metadata target-session)
-          (append
-           (list :status 'accepted
-                 :accepted-path (plist-get accepted :path)
-                 :accepted-absolute-path (plist-get accepted :absolute-path)
-                 :accepted-hash (plist-get accepted :hash))
-           (and (eq (plist-get selection :execution) 'goal)
-                (list :implementation-goal-id
-                      (plist-get record :goal-id)))))
-    (with-current-buffer target-buffer
-      (when (eq (plist-get selection :execution) 'goal)
-        (setq-local mevedel-goal-token-budget
-                    (plist-get record :goal-token-budget)))
-      (require 'mevedel-presets)
-      (require 'mevedel-permissions)
-      (mevedel-preset-restore-session target-session target-buffer)
-      (mevedel-permission-mode-transition mode)
-      (when-let* (((eq (plist-get selection :context) 'summary))
-                  (summary (plist-get record :summary)))
-        (let ((current (mevedel--compact-previous-summary)))
-          (cond
-           ((equal current summary))
-           (current (error "Prepared Worktree summary does not match target"))
-           (t
-            (let ((inhibit-read-only t))
-              (goto-char (point-max))
-              (unless (bolp) (insert "\n"))
-              (insert
-               (mevedel-session-persistence--summary-block summary)))))))
-      (mevedel-plan-mode--persist target-session target-buffer))
-    (setq prepared (plist-put prepared :step 'submit))
-    (setq prepared (plist-put prepared :target-accepted accepted))
-    (mevedel-plan--metadata-put session :implementation-retry prepared)
-    (mevedel-plan-mode--persist session chat-buffer)
-    prepared))
-
-(defun mevedel-plan-mode--summary-instructions (&optional portable-paths)
-  "Return compaction guidance for an implementation handoff.
-When PORTABLE-PATHS is non-nil, require repository-relative file references."
-  (concat
-   "Create a portable implementation handoff that preserves requirements, "
-   "repository discoveries, rationale, constraints, unresolved risks, and "
-   "next steps. Do not reproduce the accepted plan; it will be supplied "
-   "separately in full after this summary."
-   (when portable-paths
-     " Express repository-local file references relative to the repository root.")))
-
-(defun mevedel-plan-mode--summary-without-plan (summary plan)
-  "Return SUMMARY without an exact duplicate of PLAN."
-  (string-replace plan
-                  "(Accepted plan omitted; supplied separately.)"
-                  summary))
-
-(defun mevedel-plan-mode--prepare-summary (session chat-buffer record)
-  "Aggressively compact CHAT-BUFFER and cache the result in SESSION RECORD."
-  (require 'mevedel-compact)
-  (with-current-buffer chat-buffer
-    (let* ((selection (plist-get record :selection))
-           (worktree-p (eq (plist-get selection :location) 'worktree))
-           (plan
-            (mevedel-plan-mode--accepted-body (plist-get record :accepted)))
-           (target (mevedel--compact-main-target))
-           (apply-function (plist-get target :apply)))
-      (setq target
-            (plist-put
-             target :apply
-             (lambda (active-target summary &rest args)
-               (let ((prepared (copy-tree record)))
-                 (setq prepared (plist-put prepared :summary summary))
-                 (setq prepared
-                       (plist-put prepared :step
-                                  (if worktree-p 'prepare-worktree 'submit)))
-                 (cl-remf prepared :failure)
-                 (mevedel-plan--metadata-put
-                  session :implementation-retry prepared)
-                 (if worktree-p
-                     (mevedel-plan-mode--persist session chat-buffer)
-                   (condition-case apply-error
-                       (apply apply-function active-target summary args)
-                     (error
-                      (setq prepared (plist-put prepared :step 'prepare-summary))
-                      (mevedel-plan--metadata-put
-                       session :implementation-retry prepared)
-                      (signal (car apply-error) (cdr apply-error)))))))))
-      (when worktree-p
-        (setq target (plist-put target :begin-context-epoch nil))
-        (setq target (plist-put target :warn-on-completion nil)))
-      (mevedel--compact-run
-       :aggressive t
-       :instructions (mevedel-plan-mode--summary-instructions worktree-p)
-       :prepared-summary (plist-get record :summary)
-       :summary-ready
-       (lambda (summary)
-         (let* ((prepared (copy-tree record))
-                (summary (mevedel-plan-mode--summary-without-plan
-                          summary plan))
-                (summary
-                 (if worktree-p
-                     (string-replace
-                      (file-name-as-directory
-                       (expand-file-name
-                        (mevedel-session-working-directory session)))
-                      "" summary)
-                   summary)))
-           (setq prepared (plist-put prepared :summary summary))
-           (setq prepared (plist-put prepared :step 'prepare-summary))
-           (cl-remf prepared :failure)
-           (mevedel-plan--metadata-put
-            session :implementation-retry prepared)
-           (mevedel-plan-mode--persist session chat-buffer)
-           summary))
-       :target target
-       :callback
-       (lambda (err)
-         (if err
-             (mevedel-plan-mode--implementation-failed
-              session chat-buffer (format "%s" err))
-           (mevedel-plan-mode--dispatch-accepted session chat-buffer)))))))
-
-(defun mevedel-plan-mode--implementation-failed
-    (session chat-buffer reason)
-  "Keep SESSION retryable after REASON from CHAT-BUFFER."
-  (when-let* ((view-buffer
-               (ignore-errors
-                 (mevedel-view--interaction-target-buffer chat-buffer)))
-              ((fboundp 'mevedel-view--stop-request-progress)))
-    (with-current-buffer view-buffer
-      (mevedel-view--stop-request-progress)))
-  (when-let* ((record (copy-tree
-                       (plist-get (mevedel-session-plan-metadata session)
-                                  :implementation-retry))))
-    (setq record (plist-put record :failure reason))
-    (mevedel-plan--metadata-put session :implementation-retry record)
-    (condition-case err
-        (mevedel-plan-mode--persist session chat-buffer)
-      (error
-       (display-warning
-        'mevedel
-        (format "Could not persist plan implementation retry: %s"
-                (error-message-string err))))))
-  (message
-   "mevedel: Implementation did not start: %s; retry with M-x mevedel-retry-plan-implementation"
-   reason)
-  nil)
-
-(defun mevedel-plan-mode--implementation-started (session chat-buffer)
-  "Clear SESSION's retry state after request startup from CHAT-BUFFER."
-  (let ((metadata (copy-sequence
-                   (or (mevedel-session-plan-metadata session) nil))))
-    (cl-remf metadata :implementation-retry)
-    (setf (mevedel-session-plan-metadata session) metadata)
-    (condition-case err
-        (mevedel-plan-mode--persist session chat-buffer)
-      (error
-       (display-warning
-        'mevedel
-        (format "Could not persist started plan implementation: %s"
-                (error-message-string err)))))))
-
-(defun mevedel-plan-mode--goal-handoff-complete (session chat-buffer)
-  "Durably clear SESSION's Plan retry before Goal kickoff from CHAT-BUFFER."
-  (let* ((old-metadata (mevedel-session-plan-metadata session))
-         (metadata (copy-sequence (or old-metadata nil))))
-    (cl-remf metadata :implementation-retry)
-    (setf (mevedel-session-plan-metadata session) metadata)
-    (condition-case err
-        (mevedel-plan-mode--persist session chat-buffer)
-      (error
-       (setf (mevedel-session-plan-metadata session) old-metadata)
-       (signal (car err) (cdr err))))))
-
-(defun mevedel-plan-mode--ensure-goal
-    (record accepted target-session target-buffer)
-  "Return RECORD's durable Goal in TARGET-SESSION and TARGET-BUFFER.
-ACCEPTED names the target-owned immutable plan artifact."
-  (require 'mevedel-goal)
-  (let* ((goal-id (plist-get record :goal-id))
-         (plan-reference (plist-get accepted :path))
-         (current (mevedel-session-goal target-session)))
-    (unless (and (stringp goal-id) (not (string-empty-p goal-id)))
-      (error "Accepted Goal handoff has no reserved identity"))
-    (cond
-     ((and current
-           (equal goal-id (mevedel-goal-id current))
-           (equal plan-reference (mevedel-goal-plan-reference current)))
-      ;; A previous constructor save may have completed just before the
-      ;; source retry cleanup failed or the process stopped.
-      (with-current-buffer target-buffer
-        (mevedel-plan-mode--persist target-session target-buffer))
-      current)
-     ((and current (not (eq (mevedel-goal-status current) 'complete)))
-      (error "Target session has unfinished Goal %s; expected reserved Goal %s for %s"
-             (mevedel-goal-id current) goal-id plan-reference))
-     (t
-      (with-current-buffer target-buffer
-        (setq-local mevedel-goal-token-budget
-                    (plist-get record :goal-token-budget))
-        (mevedel-goal-create
-         mevedel-plan-mode--accepted-goal-objective
-         target-session plan-reference goal-id))))))
-
-(defun mevedel-plan-mode--clear-target-goal-reservation
-    (target-session target-buffer)
-  "Clear TARGET-SESSION's Worktree Goal reservation in TARGET-BUFFER."
-  (let ((metadata (copy-sequence
-                   (or (mevedel-session-plan-metadata target-session) nil))))
-    (when (plist-member metadata :implementation-goal-id)
-      (cl-remf metadata :implementation-goal-id)
-      (setf (mevedel-session-plan-metadata target-session) metadata)
-      (mevedel-plan-mode--persist target-session target-buffer))))
-
-(defun mevedel-plan-mode--dispatch-accepted (session chat-buffer)
-  "Prepare and dispatch SESSION's accepted plan from CHAT-BUFFER."
-  (condition-case err
-      (let* ((record
-              (copy-tree
-               (or (plist-get (mevedel-session-plan-metadata session)
-                              :implementation-retry)
-                   (error "No accepted plan implementation to retry"))))
-             (selection (plist-get record :selection))
-             (location (plist-get selection :location))
-             (context (plist-get selection :context))
-             (execution (plist-get selection :execution)))
-        (unless (mevedel-plan-mode--selection-valid-p selection)
-          (error "Invalid accepted plan implementation selection"))
-        (unless (memq (plist-get record :step)
-                      '(prepare-context prepare-summary prepare-worktree
-                        prepare-target submit))
-          (error "Invalid accepted plan implementation step"))
-        (when (eq location 'worktree)
-          (let ((branch (plist-get selection :branch)))
-            (when (or (not (stringp branch)) (string-empty-p branch))
-              (error "Accepted Worktree implementation lacks a branch"))))
-        (cl-remf record :failure)
-        (mevedel-plan--metadata-put session :implementation-retry record)
-        (mevedel-plan-mode--persist session chat-buffer)
-        (let (result)
-          (while record
-            (pcase (plist-get record :step)
-              ('prepare-worktree
-               (unless (eq location 'worktree)
-                 (error "Invalid accepted plan Worktree step"))
-               (setq record
-                     (mevedel-plan-mode--prepare-worktree
-                      session chat-buffer record)))
-              ('prepare-target
-               (unless (eq location 'worktree)
-                 (error "Invalid accepted plan target step"))
-               (setq record
-                     (mevedel-plan-mode--prepare-worktree-target
-                      session chat-buffer record)))
-              ('prepare-summary
-               (unless (eq context 'summary)
-                 (error "Invalid accepted plan summary step"))
-               (setq result
-                     (mevedel-plan-mode--prepare-summary
-                      session chat-buffer record)
-                     record nil))
-              ('prepare-context
-               (unless (and (eq location 'here) (eq context 'fresh))
-                 (error "Invalid accepted plan preparation step"))
-               ;; Persist the next step as part of the segment rotation's
-               ;; sidecar transaction so resume cannot rotate twice.
-               (setq record (plist-put record :step 'submit))
-               (mevedel-plan--metadata-put
-                session :implementation-retry record)
-               (condition-case rotation-error
-                   (with-current-buffer chat-buffer
-                     (require 'mevedel-session-persistence)
-                     (unless
-                         (mevedel-session-persistence-start-fresh-segment
-                          session chat-buffer
-                          :initial-text
-                          (or (and (boundp 'gptel-prompt-prefix-alist)
-                                   (alist-get major-mode
-                                              gptel-prompt-prefix-alist))
-                              ""))
-                       (error "Could not start a fresh conversation segment"))
-                     (mevedel--run-session-start-hooks "clear"))
-                 (error
-                  (setq record (plist-put record :step 'prepare-context))
-                  (mevedel-plan--metadata-put
-                   session :implementation-retry record)
-                  (signal (car rotation-error) (cdr rotation-error)))))
-              ('submit
-               (when (and (eq location 'here)
-                          (eq context 'summary)
-                          (not (equal
-                                (plist-get record :summary)
-                                (with-current-buffer chat-buffer
-                                  (mevedel--compact-previous-summary)))))
-                 (error
-                  "Prepared plan summary does not match the current segment"))
-               (let* ((target-buffer
-                       (if (eq location 'worktree)
-                           (mevedel-plan-mode--worktree-target-buffer record)
-                         chat-buffer))
-                      (target-session
-                       (buffer-local-value 'mevedel--session target-buffer))
-                      (accepted
-                       (plist-get record
-                                  (if (eq location 'worktree)
-                                      :target-accepted
-                                    :accepted)))
-                      (body (mevedel-plan-mode--accepted-body accepted))
-                      (prompt
-                       (if (eq execution 'goal)
-                           (mevedel-plan-mode--goal-kickoff-prompt
-                            accepted body)
-                         (mevedel-plan-mode--implementation-prompt
-                          accepted body)))
-                      (display-text
-                       (if (eq execution 'goal)
-                           "Implement accepted plan as Goal"
-                         "Implement accepted plan"))
-                      (view-buffer
-                       (mevedel-view--interaction-target-buffer
-                        target-buffer)))
-                 (setq
-                  result
-                  (with-current-buffer view-buffer
-                    (mevedel-view--run-prompt-submit-hook
-                     prompt display-text
-                     (lambda (submission)
-                       (let ((goal-handoff-complete nil))
-                         (condition-case dispatch-error
-                             (progn
-                               (when (eq execution 'goal)
-                                 (mevedel-plan-mode--ensure-goal
-                                  record accepted target-session
-                                  target-buffer)
-                                 (mevedel-plan-mode--goal-handoff-complete
-                                  session chat-buffer)
-                                 (setq goal-handoff-complete t)
-                                 (mevedel-plan-mode--clear-target-goal-reservation
-                                  target-session target-buffer))
-                               (with-current-buffer target-buffer
-                                 (mevedel--implement-plan
-                                  (list
-                                   :context 'current
-                                   :plan-file
-                                   (plist-get accepted :absolute-path)
-                                   :permission-mode
-                                   (plist-get selection :mode)
-                                   :display-text display-text
-                                   :prompt-submission submission)))
-                               (unless (eq execution 'goal)
-                                 (mevedel-plan-mode--implementation-started
-                                  session chat-buffer)))
-                           (error
-                            (let ((reason
-                                   (error-message-string dispatch-error)))
-                              (if goal-handoff-complete
-                                  (progn
-                                    (mevedel-goal-pause-runtime-failure
-                                     target-buffer reason)
-                                    (message
-                                     "mevedel: Goal kickoff did not start: %s; resume with /goal resume"
-                                     reason))
-                                (mevedel-plan-mode--implementation-failed
-                                 session chat-buffer reason)))))))
-                     (lambda ()
-                       (mevedel-plan-mode--implementation-failed
-                        session chat-buffer
-                        "Prompt submission was blocked"))))
-                  record nil))))
-          result)))
-    (error
-     (mevedel-plan-mode--implementation-failed
-      session chat-buffer (error-message-string err)))))
-
-(defun mevedel-retry-plan-implementation (&optional session chat-buffer)
-  "Retry SESSION's accepted plan implementation from CHAT-BUFFER."
-  (interactive)
-  (let* ((session (mevedel-plan-mode--current-session session))
-         (chat-buffer
-          (or chat-buffer
-              (and (boundp 'mevedel--data-buffer)
-                   (buffer-live-p mevedel--data-buffer)
-                   mevedel--data-buffer)
-              (current-buffer))))
-    (unless (and session
-                 (plist-get (mevedel-session-plan-metadata session)
-                            :implementation-retry))
-      (user-error "No accepted plan implementation to retry"))
-    (mevedel-plan-mode--dispatch-accepted session chat-buffer)))
 
 (defun mevedel-plan-mode--accept
     (plan-markdown chat-buffer session selection)
   "Accept PLAN-MARKDOWN and dispatch SELECTION from CHAT-BUFFER SESSION."
-  (require 'mevedel-permissions)
-  (require 'mevedel-view-composer)
-  (unless (mevedel-plan-mode--selection-valid-p selection)
+  (require 'mevedel-plan-handoff)
+  (unless (mevedel-plan-handoff-selection-valid-p selection)
     (error "Unsupported Plan implementation selection: %S" selection))
-  (let* ((mode (plist-get selection :mode))
-         (artifacts (mevedel-plan-accept
+  (let* ((artifacts (mevedel-plan-accept
                      plan-markdown session chat-buffer t))
          (accepted (plist-get artifacts :accepted)))
-    (mevedel-plan--metadata-put session :selection selection)
-    (mevedel-plan--metadata-put
-     session :implementation-retry
-     (mevedel-plan-mode--implementation-record
-      selection accepted
-      (mevedel-plan-mode--effective-goal-budget chat-buffer)))
-    (when (eq (plist-get selection :execution) 'goal)
-      (mevedel-plan-mode--persist session chat-buffer))
     (mevedel-plan-mode--deactivate session)
-    (when-let* ((view-buffer
-                 (ignore-errors
-                   (mevedel-view--interaction-target-buffer chat-buffer)))
-                ((fboundp 'mevedel-view--update-spinner)))
-      (with-current-buffer view-buffer
-        (mevedel-view--update-spinner
-         "Preparing implementation..." 'plan-preparation)))
-    (when (eq (plist-get selection :location) 'here)
-      (with-current-buffer chat-buffer
-        (mevedel-permission-mode-transition mode)))
-    (mevedel-plan-mode--dispatch-accepted session chat-buffer)))
+    (mevedel-plan-handoff-start
+     session chat-buffer selection accepted
+     (mevedel-plan-mode--effective-goal-budget chat-buffer))))
 
 (defun mevedel-plan-mode--feedback-draft (chat-buffer session)
   "Insert an editable replacement-plan request for CHAT-BUFFER SESSION."
@@ -1058,6 +452,7 @@ ACCEPTED names the target-owned immutable plan artifact."
 (defun mevedel-plan-mode-restore-pending-approval
     (&optional session chat-buffer)
   "Restore SESSION's genuine pending Plan proposal in CHAT-BUFFER."
+  (require 'mevedel-plan-handoff)
   (let* ((session (mevedel-plan-mode--current-session session))
          (chat-buffer (or chat-buffer (current-buffer)))
          (metadata (and session (mevedel-session-plan-metadata session)))
@@ -1076,12 +471,11 @@ ACCEPTED names the target-owned immutable plan artifact."
                (integerp (nth 1 proposal-id))
                (stringp (nth 2 proposal-id))
                (equal hash (nth 2 proposal-id))
-               (mevedel-plan-mode--selection-valid-p selection)
+               (mevedel-plan-handoff-selection-valid-p selection)
                (stringp plan)
                (equal hash (mevedel-plan-hash plan)))))
     (cond
      ((and valid (not (mevedel-session-pending-plan-approval session)))
-      (require 'mevedel-goal)
       (mevedel-plan-approval-present
        (mevedel-plan-mode--approval-entry
         plan chat-buffer session selection)
@@ -1093,6 +487,79 @@ ACCEPTED names the target-owned immutable plan artifact."
            (not valid))
       (mevedel-plan-mode--demote-proposal session nil)
       nil))))
+
+;;
+;;; Shared single Plan approval interaction
+
+(defun mevedel-plan-approval--current-session ()
+  "Resolve the session that owns the pending Plan approval."
+  (mevedel-queue--current-session))
+
+(defun mevedel-plan-approval--deliver (entry outcome phase &optional retain)
+  "Deliver OUTCOME to ENTRY during PHASE.
+When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
+  (condition-case err
+      (progn
+        (when-let* ((callback (plist-get entry :callback)))
+          (funcall callback outcome))
+        (mevedel-queue--unregister-entry-interaction entry)
+        t)
+    (error
+     (display-warning 'mevedel
+                      (format "Plan approval %s callback error: %S" phase err)
+                      :warning)
+     (unless retain (mevedel-queue--unregister-entry-interaction entry))
+     nil)))
+
+(defun mevedel-plan-approval-present (entry &optional session)
+  "Replace SESSION's pending Plan approval with ENTRY and render it."
+  (let ((session (or session (mevedel-plan-approval--current-session))))
+    (if (not session)
+        (mevedel-plan-approval--deliver entry 'aborted "no-session")
+      (setq entry (plist-put (copy-sequence entry) :session session))
+      (when-let* ((previous (mevedel-session-pending-plan-approval session)))
+        (setf (mevedel-session-pending-plan-approval session) nil)
+        (mevedel-plan-approval--deliver previous 'superseded "supersede"))
+      (setf (mevedel-session-pending-plan-approval session) entry)
+      (mevedel-plan-approval-render session))))
+
+(defun mevedel-plan-approval-render (&optional session)
+  "Render SESSION's pending Plan approval."
+  (when-let* ((session (or session (mevedel-plan-approval--current-session)))
+              (entry (mevedel-session-pending-plan-approval session)))
+    (condition-case err
+        (if-let* ((renderer (plist-get entry :renderer)))
+            (funcall renderer entry)
+          (error "Plan approval has no renderer"))
+      (error
+       (display-warning 'mevedel
+                        (format "Plan approval render error: %S" err)
+                        :warning)
+       (mevedel-plan-approval-abort session)))))
+
+(defun mevedel-plan-approval-settle (entry outcome)
+  "Settle pending Plan approval ENTRY with OUTCOME."
+  (let* ((session (plist-get entry :session))
+         (pending (and session
+                       (mevedel-session-pending-plan-approval session))))
+    (when (and (proper-list-p outcome)
+               (plist-get outcome :accept)
+               (mevedel-session-queued-user-messages session))
+      (user-error "Resolve queued messages before implementing the plan"))
+    (if (not (eq entry pending))
+        (display-warning 'mevedel
+                         "Plan approval: stale settlement ignored" :warning)
+      (when (mevedel-plan-approval--deliver entry outcome "settle" t)
+        (when (eq entry (mevedel-session-pending-plan-approval session))
+          (setf (mevedel-session-pending-plan-approval session) nil))))))
+
+(defun mevedel-plan-approval-abort (&optional session outcome)
+  "Settle SESSION's pending Plan approval with OUTCOME or `aborted'."
+  (when-let* ((session (or session (mevedel-plan-approval--current-session)))
+              (entry (mevedel-session-pending-plan-approval session)))
+    (setf (mevedel-session-pending-plan-approval session) nil)
+    (mevedel-plan-approval--deliver entry (or outcome 'aborted) "abort")))
+
 
 (provide 'mevedel-plan-mode)
 ;;; mevedel-plan-mode.el ends here

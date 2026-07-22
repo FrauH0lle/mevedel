@@ -108,6 +108,7 @@ Data model
   mevedel-sandbox-grants.el   exact FD-backed grants and symlink mount planning
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
   mevedel-plan.el             lifecycle-neutral plan data and artifacts
+  mevedel-plan-handoff.el     durable accepted-plan preparation and kickoff
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads
@@ -133,7 +134,7 @@ Chat / view
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
-  mevedel-plan-mode.el        Plan conversations, proposal UI, implementation handoff
+  mevedel-plan-mode.el        Plan conversations and proposal approval UI
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-render.el      transcript rendering, folding, source mapping, navigation
   mevedel-view-stream.el      streaming, request progress, and gptel stream integration
@@ -159,7 +160,7 @@ Prompt / presets / agents
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-persistence.el durable agent registry codec and cold hydration
   mevedel-agent-runtime.el    retained agent request lifecycle and settlement
-  mevedel-goal.el             phase-free Goal continuation and shared plan approval interaction
+  mevedel-goal.el             phase-free Goal continuation controller
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
@@ -315,7 +316,9 @@ warnings.
 ## Testing conventions
 
 - **Framework**: ERT via `mevedel-deftest` macro (`test/helpers.el`)
-- **Naming**: `test/test-mevedel-{module}.el` matches source
+- **Naming**: the primary `test/test-mevedel-{module}.el` matches source.
+  Focused `test/test-mevedel-{module}-{subject}.el` supplements are allowed
+  when a single-function suite would make the primary file unwieldy.
 - **One deftest per function**: all cases in one macro call; label with
   `:doc` strings. Rare exceptions (e.g. `test-mevedel-diff-apply.el`)
   where setup differs drastically.

@@ -8,9 +8,8 @@
 ;; Supports multiple concurrent sessions per workspace (switch via
 ;; `mevedel-switch-session').
 ;;
-;; Also hosts `mevedel-implement-plan' and related plan-execution
-;; commands, which feed the plan text from disk into a fresh chat
-;; session before triggering the first request.
+;; Also submits accepted Plan prompt transactions through the ordinary
+;; request path after `mevedel-plan-handoff' has prepared their context.
 
 ;;; Code:
 
@@ -72,10 +71,6 @@
 (declare-function mevedel--compact-transform-auto "mevedel-compact"
 		  (continue fsm))
 
-;; `mevedel-goal'
-(declare-function mevedel-plan-approval-abort "mevedel-goal"
-		  (&optional session outcome))
-
 ;; `mevedel-hooks'
 (declare-function mevedel-hooks-event-plist "mevedel-hooks"
 		  (event &optional session workspace &rest extra))
@@ -116,6 +111,8 @@
 		  "mevedel-pipeline" (render-data))
 
 ;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-abort "mevedel-plan-mode"
+		  (&optional session outcome))
 (declare-function mevedel-plan-mode--post-response "mevedel-plan-mode"
 		  (start end))
 (declare-function mevedel-plan-mode-restore-pending-approval
@@ -1402,10 +1399,6 @@ with NO-SPINNER forwarded when non-nil."
          no-spinner)))
     data-turn-start))
 
-(defun mevedel--insert-plan-implementation-turn (prompt display-text)
-  "Insert PROMPT as a user turn and notify the view with DISPLAY-TEXT."
-  (mevedel--insert-local-user-turn prompt display-text))
-
 (defun mevedel--submit-generated-turn
     (prompt &optional display-text prompt-submission)
   "Insert and send generated PROMPT through the canonical request path.
@@ -1427,20 +1420,6 @@ accepted hook context until the turn is inserted."
     (mevedel--gptel-send-request
      (and hook-context stored-prompt))))
 
-(defun mevedel--send-plan-implementation-turn (prompt display-text sender)
-  "Insert a plan turn and call SENDER, rolling the turn back on error."
-  (let ((start (point-max)))
-    (condition-case err
-        (progn
-          (mevedel--insert-plan-implementation-turn prompt display-text)
-          (funcall sender))
-      (error
-       (let ((inhibit-read-only t))
-         (delete-region start (point-max)))
-       (when (fboundp 'mevedel-view--full-rerender)
-         (mevedel-view--full-rerender))
-       (signal (car err) (cdr err))))))
-
 (defun mevedel--gptel-send-request (&optional model-input)
   "Send the current gptel prompt and return its standard send FSM.
 MODEL-INPUT replaces the stored prompt for this request only."
@@ -1458,69 +1437,28 @@ MODEL-INPUT replaces the stored prompt for this request only."
   "Implement the plan described by ACTION-PLIST.
 
 ACTION-PLIST is a plist with keys:
-  :context       - `full' or `focused'
-  :plan-file     - Path to the saved plan file
   :permission-mode - Permission mode for implementation
-  :goal-context   - Optional authoritative persisted Goal context
   :display-text   - Optional compact transcript display text
-  :prompt-submission - Accepted prompt transaction for Direct execution
-
-For `full', the plan is inserted into the chat buffer as a user message and
-sent as a standard gptel request, including full conversation context.
-
-For `focused', a fresh `gptel-request' is fired with Goal context and the plan,
-without prior conversation context."
+  :prompt-submission - Accepted prompt transaction."
   (require 'mevedel-utilities)
-  (let* ((plan-file (plist-get action-plist :plan-file))
-         (permission-mode (plist-get action-plist :permission-mode))
-         (context (plist-get action-plist :context))
-         (goal-context (plist-get action-plist :goal-context))
+  (let* ((permission-mode (plist-get action-plist :permission-mode))
          (display-text (or (plist-get action-plist :display-text)
                            "Implement accepted plan"))
          (prompt-submission (plist-get action-plist :prompt-submission))
-         (chat-buffer (current-buffer))
-         (plan-content (with-temp-buffer
-                         (insert-file-contents plan-file)
-                         (buffer-string)))
-         (prompt
-          (if prompt-submission
-              (mevedel-prompt-submission-input prompt-submission)
-            (if goal-context
-                (format "%s\n\nImplementation instructions:\nThe Goal objective and achievement criteria are authoritative, followed by authoritative referenced requirements. The accepted plan is an implementation approach. Implement it against the current repository state while preserving those outcomes. Reasonable divergence from plan details is allowed when repository evidence supports a safer or more effective route, but do not change the Goal, its criteria, or referenced requirements.\n\nAccepted plan:\n%s"
-                        goal-context plan-content)
-              (format "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
-                      plan-file plan-content)))))
-    (with-current-buffer chat-buffer
-      (condition-case err
-          (progn
-            (mevedel--implementation-permission-mode-apply permission-mode)
-            ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
-            (mevedel--close-unclosed-blocks)
-            (pcase context
-              ('current
-               (mevedel--submit-generated-turn
-                prompt display-text prompt-submission))
-              ('full
-               (mevedel--send-plan-implementation-turn
-                prompt display-text
-                #'mevedel--gptel-send-request))
-              ('focused
-               (mevedel--send-plan-implementation-turn
-                prompt "Implement accepted plan with cleared context"
-                (lambda ()
-                  (mevedel-with-preset 'mevedel-implement
-                    (gptel-request prompt
-                      :buffer chat-buffer
-                      :stream gptel-stream
-                      :transforms (remove #'mevedel--compact-transform-auto
-                                          gptel-prompt-transform-functions)
-                      :fsm (gptel-make-fsm
-                            :handlers gptel-send--handlers))))))
-              (_
-               (error "Unknown implementation context: %s" context))))
-        (error
-         (mevedel--implementation-permission-mode-restore)
-         (signal (car err) (cdr err)))))))
+         (prompt (and prompt-submission
+                      (mevedel-prompt-submission-input prompt-submission))))
+    (unless prompt
+      (error "Implementation requires an accepted prompt submission"))
+    (condition-case err
+        (progn
+          (mevedel--implementation-permission-mode-apply permission-mode)
+          ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
+          (mevedel--close-unclosed-blocks)
+          (mevedel--submit-generated-turn
+           prompt display-text prompt-submission))
+      (error
+       (mevedel--implementation-permission-mode-restore)
+       (signal (car err) (cdr err))))))
 
 (provide 'mevedel-chat)
 

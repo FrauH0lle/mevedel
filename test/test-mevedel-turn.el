@@ -265,7 +265,7 @@
                  (push 'goal-failure events)))
               ((symbol-function 'mevedel-goal-persist-failure)
                (lambda (_fsm) (push 'goal-save events)))
-              ((symbol-function 'mevedel-goal-dispatch-after-failure)
+              ((symbol-function 'mevedel-goal-dispatch-after-turn)
                (lambda (_fsm) (push 'goal-retry events)))
               ((symbol-function 'mevedel--turn-autosave)
                (lambda (_fsm) (setq saved t)))

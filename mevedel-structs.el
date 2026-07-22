@@ -16,14 +16,14 @@
                   "mevedel-agents" (invocation))
 (defvar mevedel--agent-invocation)
 
-;; `mevedel-goal'
-(declare-function mevedel-plan-approval-abort
-                  "mevedel-goal" (&optional session outcome))
-
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission-queue-sweep-origin
                   "mevedel-permission-queue"
                   (origin &optional session no-render))
+
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-plan-mode" (&optional session outcome))
 
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-record

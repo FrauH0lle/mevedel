@@ -99,6 +99,10 @@
 		  "mevedel-permissions" (mode))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-plan-handoff'
+(declare-function mevedel-plan-handoff-reserved-goal-id
+		  "mevedel-plan-handoff" (&optional session))
+
 ;; `mevedel-plan-mode'
 (declare-function mevedel-plan-mode--invalidate-proposal
 		  "mevedel-plan-mode" (&optional session))
@@ -203,8 +207,6 @@
 (declare-function mevedel-session-pending-plan-approval
 		  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs"
-		  (cl-x) t)
-(declare-function mevedel-session-plan-metadata "mevedel-structs"
 		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pop-dropped-file-grants
@@ -459,8 +461,6 @@ rows remain visually distinct from the editable composer."
            `(font-lock-face ,face)
            text)
           text)))))
-
-
 
 
 ;;
@@ -1131,17 +1131,10 @@ means a failed attempt leaves the exact source attached for a retry."
                  (plist-get entry :queued-at-goal-id))))))
 
 (defun mevedel-view--reserved-goal-handoff-id (&optional session)
-  "Return SESSION's Goal handoff reservation, or nil.
-The source retry reserves only a Here handoff.  Worktree targets carry their
-own reservation while their prepared kickoff has not started."
-  (when-let* ((sess (or session (mevedel-view--session))))
-    (let* ((metadata (mevedel-session-plan-metadata sess))
-           (retry (plist-get metadata :implementation-retry))
-           (selection (plist-get retry :selection)))
-      (or (and (eq (plist-get selection :execution) 'goal)
-               (eq (plist-get selection :location) 'here)
-               (plist-get retry :goal-id))
-          (plist-get metadata :implementation-goal-id)))))
+  "Return SESSION's Goal handoff reservation, or nil."
+  (require 'mevedel-plan-handoff)
+  (mevedel-plan-handoff-reserved-goal-id
+   (or session (mevedel-view--session))))
 
 (defun mevedel-view--queued-user-message-preview (input)
   "Return a one-line preview for queued INPUT."
