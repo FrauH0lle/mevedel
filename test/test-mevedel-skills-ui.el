@@ -1378,7 +1378,7 @@ spanning lines")))
         (should capf)
         (should (member "plan" cands))
         (should (member "plugin" cands))
-        (should (string-match-p "no args" (funcall annot "plan")))
+        (should (string-match-p "optional prompt" (funcall annot "plan")))
         (should (string-match-p "list" (funcall annot "plugin"))))))
 
   :doc "slash root returns local commands only"

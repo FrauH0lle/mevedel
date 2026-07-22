@@ -85,8 +85,9 @@
                   (mode &optional prompt display-text hook-context))
 (defvar mevedel-permission-mode)
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-mode-enter "mevedel-plan" (&optional session))
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-enter
+                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-plugins'
 (declare-function mevedel-plugins-count-label "mevedel-plugins"
@@ -542,7 +543,7 @@
 (defun mevedel-menu--enter-plan ()
   "Enter Plan mode for the current cockpit session."
   (interactive)
-  (require 'mevedel-plan)
+  (require 'mevedel-plan-mode)
   (mevedel-cockpit-call-in-data
    (mevedel-menu--context) #'mevedel-plan-mode-enter)
   (force-mode-line-update t))

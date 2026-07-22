@@ -82,8 +82,9 @@
                   "mevedel-permission-prompt"
                   (content cont &optional count entry))
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-mode-active-p "mevedel-plan" (&optional session))
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-active-p
+                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"

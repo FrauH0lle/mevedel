@@ -22,9 +22,11 @@
 (declare-function mevedel-goal-read-only-phase-p
                   "mevedel-goal" (&optional session))
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-mode-active-p "mevedel-plan" (&optional session))
-(declare-function mevedel-plan-mode-exit "mevedel-plan" (&optional session))
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-active-p
+                  "mevedel-plan-mode" (&optional session))
+(declare-function mevedel-plan-mode-exit
+                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-reminders'
 (declare-function mevedel-session-ensure-reminder

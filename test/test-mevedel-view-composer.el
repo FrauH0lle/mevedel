@@ -303,6 +303,16 @@
   (should (eq 'auto
               (mevedel-view--next-permission-mode 'bogus))))
 
+(mevedel-deftest mevedel-view--plan-mode-p
+  (:doc "reads Plan state from the current view session")
+  ,test
+  (test)
+  (let ((mevedel--session
+         (mevedel-session--create :name "main" :plan-mode t)))
+    (should (mevedel-view--plan-mode-p))
+    (setf (mevedel-session-plan-mode mevedel--session) nil)
+    (should-not (mevedel-view--plan-mode-p))))
+
 (mevedel-deftest mevedel-view-cycle-permission-mode
   (:doc "cycles the current session mode and refreshes the prompt")
   ,test
@@ -3688,6 +3698,42 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
             (let ((text (buffer-substring-no-properties
                          (point-min) mevedel-view--input-marker)))
               (should-not (string-match-p "/goal draft" text)))))
+      (delete-directory root t)))
+
+  :doc "/plan PROMPT enters Plan and submits PROMPT through UserPromptSubmit"
+  (let* ((root (make-temp-file "mevedel-view-plan-command" t))
+         (workspace (mevedel-workspace-get-or-create
+                     'project "view-plan-command" root "view-plan-command"))
+         (session (mevedel-session-create "main" workspace root))
+         (mevedel-hook-rules
+          '((UserPromptSubmit
+             ((:matcher "*"
+                        :hooks ((:type elisp
+                                       :function
+                                       mevedel-view-test--rewrite-prompt-hook-with-context)))))))
+         (mevedel-view-test--seen-prompt nil)
+         sent)
+    (unwind-protect
+        (mevedel-view-test--with-buffers
+          (with-current-buffer data-buf
+            (setq-local mevedel--session session
+                        mevedel--workspace workspace))
+          (with-current-buffer view-buf
+            (setq-local mevedel--session session))
+          (cl-letf (((symbol-function 'gptel-send)
+                     (lambda (&rest _) (setq sent t))))
+            (with-current-buffer view-buf
+              (goto-char (mevedel-view--input-start))
+              (insert "/plan refactor X")
+              (mevedel-view-send)
+              (should sent)
+              (should (equal "refactor X" mevedel-view-test--seen-prompt))
+              (should (equal "/plan refactor X"
+                             (car (mevedel-view-history--entries))))
+              (should (string-empty-p (mevedel-view--input-text))))
+            (should (mevedel-session-plan-mode session))
+            (with-current-buffer data-buf
+              (should (string-match-p "rewritten prompt" (buffer-string))))))
       (delete-directory root t)))
 
   :doc "blocking UserPromptSubmit prevents expanded inline skill send"

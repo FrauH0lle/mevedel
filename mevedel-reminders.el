@@ -524,7 +524,7 @@ sessions rather than spamming every turn."
    :trigger #'mevedel-session-plan-mode
    :content
    (lambda (_session)
-     "Plan mode is active. Inspect and discuss the project without editing files. Bash is limited to commands classified as read-only; Eval and other tools retain normal permission policy. When the plan is complete, emit exactly one line-oriented <proposed_plan>...</proposed_plan> block.")))
+     "Plan mode is active. Inspect and discuss the project without editing files. Bash is limited to commands classified as read-only; Eval and other tools retain normal permission policy. Treat an implementation request as a request to produce or revise the plan, not to edit. Explore available evidence before asking questions; ask only about genuine user preferences that repository evidence cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. When the plan is complete, emit exactly one line-oriented <proposed_plan>...</proposed_plan> block.")))
 
 (defun mevedel-reminders-make-full-auto-mode (&optional interval)
   "Create the `full-auto-mode' reminder with INTERVAL.
@@ -586,8 +586,7 @@ sparsely while that mode remains active."
                        (or (not (integerp accepted-turn))
                            (> (or (mevedel-session-turn-count session) 0)
                               accepted-turn)))
-                     (not (eq (mevedel-reminders--session-mode session)
-                              'plan))
+                     (not (mevedel-session-plan-mode session))
                      (mevedel-reminders--plan-reference-content session))))
    :content (lambda (session)
               (let ((path (or (mevedel-reminders--plan-path session)

@@ -48,220 +48,253 @@
 
 (require 'mevedel-transcript)
 
-;; `mevedel-agent-control'
-(declare-function mevedel-agent-control-active-turn-p
-                  "mevedel-agent-control" (session))
-
-;; `mevedel-agent-persistence'
-(declare-function mevedel-agent-persistence-deserialize-registry
-                  "mevedel-agent-persistence" (raw))
-(declare-function mevedel-agent-persistence-restore-tree
-                  "mevedel-agent-persistence"
-                  (session root-buffer readonly-p))
-(declare-function mevedel-agent-persistence-sanitize-mailbox
-                  "mevedel-agent-persistence" (raw recipient))
-(declare-function mevedel-agent-persistence-serialize-registry
-                  "mevedel-agent-persistence" (session))
-(declare-function mevedel-agent-persistence-transcript-path-p
-                  "mevedel-agent-persistence" (path save-path))
-
-;; `mevedel-execution'
-(declare-function mevedel-execution-relocate-artifacts
-                  "mevedel-execution" (session old-root new-root))
-(declare-function mevedel-execution-session-live-p
-                  "mevedel-execution" (session))
-(declare-function mevedel-execution-teardown-all
-                  "mevedel-execution" ())
-
-;; `mevedel-goal'
-(declare-function mevedel-goal-context-fragment
-                  "mevedel-goal" (goal &optional session snapshot))
-
-;; `mevedel-pipeline'
-(declare-function mevedel-pipeline-extract-render-data
-                  "mevedel-pipeline" (result))
-(declare-function mevedel-pipeline-reconcile-lost-executions
-                  "mevedel-pipeline" (buffer &optional successor-execution-ids))
-(defvar mevedel-pipeline--render-data-close)
-(defvar mevedel-pipeline--render-data-open)
-
-;; `mevedel-telemetry'
-(declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
-(declare-function mevedel-telemetry-record
-                  "mevedel-telemetry" (session event &rest props))
-(declare-function mevedel-telemetry-start
-                  "mevedel-telemetry" (session event &rest props))
-
-;; `mevedel-transcript-audit'
-(declare-function mevedel-transcript-audit-records
-                  "mevedel-transcript-audit" (text &optional type))
-
-;; `mevedel-transcript-restore'
-(declare-function mevedel-transcript-restore-gptel-state
-                  "mevedel-transcript-restore" ())
-(declare-function mevedel-transcript-restore-properties
-                  "mevedel-transcript-restore" (&optional only-if-missing))
-(declare-function mevedel-transcript-restore-sanitize-bounds
-                  "mevedel-transcript-restore" ())
-
-;; `mevedel-structs'
-(declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-goal-approval-policy "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-continuation-key "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-execution-home "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-implementation-context "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-owner-session "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-pause-requested "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-review-findings "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-agent-turn-capacity
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-goal-handoff "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-log-pending
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-task-status-notes
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-session-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-created-at "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-updated-at "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-current-segment "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-forked-from-session-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-forked-from-turn "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-preset-settings "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-prompt-index "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-file-snapshots "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-task--create "mevedel-structs" (&rest slots))
-(declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-blocks "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-completed-turn "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-description "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-metadata "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-normalize-owner
-                  "mevedel-structs" (owner agent-registry))
-(declare-function mevedel-task-owner "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-prune-dangling-dependencies
-                  "mevedel-structs" (tasks))
-(declare-function mevedel-task-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
-
-;; `mevedel-hooks'
-(declare-function mevedel-hooks--persist-log-entry
-                  "mevedel-hooks" (session entry))
-
-;; `mevedel-permission-log'
-(declare-function mevedel-permission-log--persist
-                  "mevedel-permission-log" (session entry))
-
-;; `mevedel-reminders'
-(declare-function mevedel-reminders-clone-list
-                  "mevedel-reminders" (reminders))
-
-;; `mevedel-tool-repair'
-(declare-function mevedel-tool-repair--persist-event
-                  "mevedel-tool-repair-diagnostics" (session event))
-
-;; `mevedel-view-history'
-(declare-function mevedel-view-history-load
-                  "mevedel-view-history" (&optional session))
-(declare-function mevedel-view-history-save
-                  "mevedel-view-history" (&optional view-buffer))
-(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
-(declare-function mevedel-workspace-get-or-create "mevedel-structs"
-                  (type id root name))
-(declare-function mevedel-workspace "mevedel-workspace" (&optional buffer))
-(declare-function mevedel-workspace-ensure-generated-state-ignored
-                  "mevedel-workspace" (workspace))
-(declare-function mevedel-request-file-snapshots
-                  "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-buffer-name
-                  "mevedel-structs" (session-name workspace))
-(declare-function mevedel--chat-buffer-init-common
-                  "mevedel-chat" (buf workspace source))
-(declare-function mevedel--chat-buffer-disable-org-element-cache
-                  "mevedel-chat" ())
-(declare-function mevedel--normalize-session-directory
-                  "mevedel-chat" (directory workspace))
-(defvar mevedel--agent-invocation)
-(defvar mevedel--current-request)
-(defvar mevedel--session)
-(defvar mevedel--workspace)
-(defvar mevedel-permission-mode)
-(defvar mevedel-workspace-additional-roots)
-(defvar gptel-mode)
-(defvar gptel-display-buffer-action)
-(defvar gptel--preset)
-(defvar gptel-system-prompt)
-(declare-function gptel-get-preset "ext:gptel" (name))
-(declare-function gptel--get-buffer-bounds "ext:gptel" ())
-(declare-function gptel--save-state "ext:gptel" ())
-(declare-function advice-member-p "nadvice" (advice symbol))
-(declare-function advice-add "nadvice" (symbol where function &optional props))
-(defvar so-long-predicate)
-(declare-function gptel-mode "ext:gptel" (&optional arg))
-(declare-function gptel-org--restore-state "ext:gptel-org" ())
-;; `org'
-(defvar org-agenda-file-menu-enabled)
-(declare-function org-entry-delete "ext:org" (pom property))
-(declare-function org-entry-get
-                  "ext:org" (pom property &optional inherit literal-nil))
-(declare-function org-entry-put "ext:org" (epom property value))
-
-;; `mevedel-view'
-(declare-function mevedel-view--full-rerender "mevedel-view" ())
-(defvar mevedel--data-buffer)
-(defvar mevedel--view-buffer)
-
-;; `mevedel-view-render'
-(declare-function mevedel-view--rebase-data-sources
-                  "mevedel-view-render" (delta))
-
-;; `mevedel-view-agent'
-(declare-function mevedel-view-reset-agent-ephemeral-state
-                  "mevedel-view-agent" (&optional view-buffer))
-(defvar mevedel-view--agent-transcript-p)
-
 ;; `diff'
 (declare-function diff "diff" (old new &optional switches no-async))
 
 ;; `mevedel'
 (declare-function mevedel-version "mevedel" (&optional here message))
 
+;; `mevedel-agent-control'
+(declare-function mevedel-agent-control-active-turn-p
+		  "mevedel-agent-control" (session))
+
+;; `mevedel-agent-persistence'
+(declare-function mevedel-agent-persistence-deserialize-registry
+		  "mevedel-agent-persistence" (raw))
+(declare-function mevedel-agent-persistence-restore-tree
+		  "mevedel-agent-persistence"
+		  (session root-buffer readonly-p))
+(declare-function mevedel-agent-persistence-sanitize-mailbox
+		  "mevedel-agent-persistence" (raw recipient))
+(declare-function mevedel-agent-persistence-serialize-registry
+		  "mevedel-agent-persistence" (session))
+(declare-function mevedel-agent-persistence-transcript-path-p
+		  "mevedel-agent-persistence" (path save-path))
+
+;; `mevedel-execution'
+(declare-function mevedel-execution-relocate-artifacts
+		  "mevedel-execution" (session old-root new-root))
+(declare-function mevedel-execution-session-live-p "mevedel-execution"
+		  (session))
+(declare-function mevedel-execution-teardown-all "mevedel-execution"
+		  nil)
+
+;; `mevedel-goal'
+(declare-function mevedel-goal-context-fragment "mevedel-goal"
+		  (goal &optional session snapshot))
+
+;; `mevedel-hooks'
+(declare-function mevedel-hooks--persist-log-entry "mevedel-hooks"
+		  (session entry))
+
+;; `mevedel-permission-log'
+(declare-function mevedel-permission-log--persist
+		  "mevedel-permission-log" (session entry))
+
 ;; `mevedel-persistence'
-(declare-function mevedel--write-instructions-file
-                  "mevedel-persistence"
-                  (path &optional base-directory write-empty quiet
-                        include-original-content))
 (declare-function mevedel--load-instructions-file
-                  "mevedel-persistence"
-                  (path &optional base-directory confirm quiet workspace))
+		  "mevedel-persistence"
+		  (path &optional base-directory confirm quiet
+			workspace))
+(declare-function mevedel--write-instructions-file
+		  "mevedel-persistence"
+		  (path &optional base-directory write-empty quiet
+			include-original-content))
+
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-extract-render-data
+		  "mevedel-pipeline" (result))
+(declare-function mevedel-pipeline-reconcile-lost-executions
+		  "mevedel-pipeline"
+		  (buffer &optional successor-execution-ids))
+(defvar mevedel-pipeline--render-data-close)
+(defvar mevedel-pipeline--render-data-open)
+
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-clone-list "mevedel-reminders"
+		  (reminders))
+
+;; `mevedel-structs'
+(declare-function mevedel-goal--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-goal-approval-policy "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-goal-checkpoint "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-continuation-key "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-goal-current-plan "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycle "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-cycles "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-execution-home "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-goal-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-implementation-context
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-owner-session "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-goal-pause-requested "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-reason "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-review-findings "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-goal-review-summary "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-budget "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-token-usage "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session--create "mevedel-structs"
+		  (&rest slots))
+(declare-function mevedel-session-agent-turn-capacity
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-created-at "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-session-current-segment "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-file-snapshots "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-forked-from-session-id
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-forked-from-turn "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal-handoff "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-log-pending
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-mode "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-permission-rules "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-preset-name "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-session-preset-settings "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-prompt-index "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-resource-grants "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-session-id "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-session-task-status-notes "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-tasks "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-turn-count "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-session-updated-at "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-session-working-directory "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task--create "mevedel-structs" (&rest slots))
+(declare-function mevedel-task-blocked-by "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-blocks "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-completed-turn "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-task-description "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-normalize-owner "mevedel-structs"
+		  (owner agent-registry))
+(declare-function mevedel-task-owner "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-prune-dangling-dependencies
+		  "mevedel-structs" (tasks))
+(declare-function mevedel-task-status "mevedel-structs" (cl-x) t)
+(declare-function mevedel-task-subject "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-id "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-type "mevedel-structs" (cl-x) t)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-finish "mevedel-telemetry"
+		  (span &rest props))
+(declare-function mevedel-telemetry-record "mevedel-telemetry"
+		  (session event &rest props))
+(declare-function mevedel-telemetry-start "mevedel-telemetry"
+		  (session event &rest props))
+
+;; `mevedel-tool-repair'
+(declare-function mevedel-tool-repair--persist-event
+		  "mevedel-tool-repair-diagnostics" (session event))
+
+;; `mevedel-transcript-audit'
+(declare-function mevedel-transcript-audit-records
+		  "mevedel-transcript-audit" (text &optional type))
+
+;; `mevedel-transcript-restore'
+(declare-function mevedel-transcript-restore-gptel-state
+		  "mevedel-transcript-restore" nil)
+(declare-function mevedel-transcript-restore-properties
+		  "mevedel-transcript-restore"
+		  (&optional only-if-missing))
+(declare-function mevedel-transcript-restore-sanitize-bounds
+		  "mevedel-transcript-restore" nil)
+
+;; `mevedel-view'
+(declare-function mevedel-view--full-rerender "mevedel-view" nil)
+(defvar mevedel--data-buffer)
+(defvar mevedel--view-buffer)
+
+;; `mevedel-view-agent'
+(declare-function mevedel-view-reset-agent-ephemeral-state
+		  "mevedel-view-agent" (&optional view-buffer))
+(defvar mevedel-view--agent-transcript-p)
+
+;; `mevedel-view-history'
+(declare-function advice-add "nadvice"
+		  (symbol where function &optional props))
+(declare-function advice-member-p "nadvice" (advice symbol))
+(declare-function gptel--get-buffer-bounds "ext:gptel" nil)
+(declare-function gptel--save-state "ext:gptel" nil)
+(declare-function gptel-get-preset "ext:gptel" (name))
+(declare-function gptel-mode "ext:gptel" (&optional arg))
+(declare-function gptel-org--restore-state "ext:gptel-org" nil)
+(declare-function mevedel--chat-buffer-disable-org-element-cache
+		  "mevedel-chat" nil)
+(declare-function mevedel--chat-buffer-init-common "mevedel-chat"
+		  (buf workspace source))
+(declare-function mevedel--normalize-session-directory "mevedel-chat"
+		  (directory workspace))
+(declare-function mevedel-request-file-snapshots "mevedel-structs"
+		  (cl-x) t)
+(declare-function mevedel-session-buffer-name "mevedel-structs"
+		  (session-name workspace))
+(declare-function mevedel-view-history-load "mevedel-view-history"
+		  (&optional session))
+(declare-function mevedel-view-history-save "mevedel-view-history"
+		  (&optional view-buffer))
+(declare-function mevedel-workspace "mevedel-workspace"
+		  (&optional buffer))
+(declare-function mevedel-workspace-ensure-generated-state-ignored
+		  "mevedel-workspace" (workspace))
+(declare-function mevedel-workspace-get-or-create "mevedel-structs"
+		  (type id root name))
+(declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
+(defvar gptel--preset)
+(defvar gptel-display-buffer-action)
+(defvar gptel-mode)
+(defvar gptel-system-prompt)
+(defvar mevedel--agent-invocation)
+(defvar mevedel--current-request)
+(defvar mevedel--session)
+(defvar mevedel--workspace)
+(defvar mevedel-permission-mode)
+(defvar mevedel-workspace-additional-roots)
+(defvar so-long-predicate)
+
+;; `mevedel-view-render'
+(declare-function mevedel-view--rebase-data-sources
+		  "mevedel-view-render" (delta))
+
+;; `org'
+(declare-function org-entry-delete "ext:org" (pom property))
+(declare-function org-entry-get "ext:org"
+		  (pom property &optional inherit literal-nil))
+(declare-function org-entry-put "ext:org" (epom property value))
+(defvar org-agenda-file-menu-enabled)
 
 ;;
 ;;; Customization

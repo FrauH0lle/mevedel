@@ -96,6 +96,22 @@
           (should (= 2 (mevedel-tools-active-count buf))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 
+(mevedel-deftest mevedel-tools--request-data-set-tools ()
+  ,test
+  (test)
+  :doc "rewrites generic and nested provider tool payloads"
+  (cl-letf (((symbol-function 'gptel--parse-tools)
+             (lambda (&rest _) '(:parsed t))))
+    (let* ((data (list :tools 'old))
+           (info (list :data data :backend 'backend :tools '(one))))
+      (mevedel-tools--request-data-set-tools info)
+      (should (equal '(:parsed t) (plist-get data :tools))))
+    (let* ((config (list :tools 'old))
+           (data (list :toolConfig config))
+           (info (list :data data :backend 'backend :tools '(one))))
+      (mevedel-tools--request-data-set-tools info)
+      (should (equal '(:parsed t) (plist-get config :tools))))))
+
 (mevedel-deftest mevedel-tools--ctx-deferred-set
   (:after-each (mevedel-workspace-clear-registry))
   ,test

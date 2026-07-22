@@ -54,6 +54,8 @@ lazily — read them when planning work in the relevant area. The
   tree-wide capacity, and task status
 - [`docs/preview.md`](docs/preview.md) — inline diff overlay,
   keybindings, mode dispatch, handler return shape
+- [`docs/plan-mode.md`](docs/plan-mode.md) — sticky Plan conversations,
+  proposal approval axes, tool boundary, implementation handoff, recovery
 - [`docs/mentions.md`](docs/mentions.md) — `@ref`/`@file`/`@agent`/`@mcp`
   expansion, dedup, completion CAPFs
 - [`docs/skills.md`](docs/skills.md) — SKILL.md discovery, slash
@@ -105,6 +107,7 @@ Data model
   mevedel-sandbox.el          optional Bubblewrap child-process confinement
   mevedel-sandbox-grants.el   exact FD-backed grants and symlink mount planning
   mevedel-telemetry.el        append-only lifecycle events and profiler capture
+  mevedel-plan.el             lifecycle-neutral plan data and artifacts
   mevedel-permissions.el      9-step permission decision chain
   mevedel-pipeline.el         tool execution pipeline
   mevedel-tool-media.el       tool media storage, scrubbing, provider payloads
@@ -130,6 +133,7 @@ Chat / view
   mevedel-view.el             view mode, zones, and session coordination
   mevedel-view-agent.el       agent transcript inspection, status rows, refresh
   mevedel-view-composer.el    composer editing, submission, queueing, fork/send flow
+  mevedel-plan-mode.el        Plan conversations, proposal UI, implementation handoff
   mevedel-view-interaction.el interaction registration, ordering, callback overlays, redraw
   mevedel-view-render.el      transcript rendering, folding, source mapping, navigation
   mevedel-view-stream.el      streaming, request progress, and gptel stream integration
@@ -155,7 +159,7 @@ Prompt / presets / agents
   mevedel-agent-exec.el       sub-agent request runner and FSM handlers
   mevedel-agent-persistence.el durable agent registry codec and cold hydration
   mevedel-agent-runtime.el    retained agent request lifecycle and settlement
-  mevedel-goal.el             supervised Goal controller and plan approval queue
+  mevedel-goal.el             supervised Goal controller and shared plan approval interaction
   mevedel-review.el           /review picker, reviewer output parsing, parent transcript injection
 
 Tools (each dispatches through mevedel-pipeline)
@@ -265,6 +269,7 @@ warnings.
 - `mevedel-diff-apply-buffer` / `mevedel-ediff-patch`
 - `mevedel-compact`
 - `mevedel-review` / `mevedel-verify`
+- `/plan` / `/plan PROMPT` / `mevedel-retry-plan-implementation`
 - `mevedel-add/remove/list-project-roots`
 - `mevedel-toggle-tasks` / `mevedel-toggle-hints`
 - `mevedel-display-hints` / `mevedel-clear-hints`

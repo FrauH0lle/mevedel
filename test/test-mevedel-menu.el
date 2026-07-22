@@ -705,6 +705,28 @@
                      "b Previous display"))
       (should-not (string-match-p (regexp-quote stale) text)))))
 
+(mevedel-deftest mevedel-menu--mode-plan-description ()
+  ,test
+  (test)
+  :doc "marks Plan as current without hiding its workflow description"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-plan-mode session) t)
+    (with-current-buffer view-buf
+      (let ((text (substring-no-properties
+                   (mevedel-menu--mode-plan-description))))
+        (should (string-match-p "Plan" text))
+        (should (string-match-p "current" text))
+        (should (string-match-p "without direct edits" text))))))
+
+(mevedel-deftest mevedel-menu--enter-plan ()
+  ,test
+  (test)
+  :doc "enters Plan through the cockpit's authoritative data buffer"
+  (mevedel-menu-test--with-buffers
+    (with-current-buffer view-buf
+      (mevedel-menu--enter-plan))
+    (should (mevedel-session-plan-mode session))))
+
 (mevedel-deftest mevedel-menu--mode-symbol ()
   ,test
   (test)

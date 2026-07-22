@@ -129,8 +129,9 @@
 (declare-function mevedel-skills-prepare-user-input
                   "mevedel-skills-invoke" (text session))
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-mode-enter "mevedel-plan" (&optional session))
+;; `mevedel-plan-mode'
+(declare-function mevedel-plan-mode-enter
+                  "mevedel-plan-mode" (&optional session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-objective "mevedel-structs" (cl-x) t)
@@ -205,7 +206,7 @@
     ("model" . " [command] model name")
     ("compact" . " [command] optional summary guidance")
     ("goal" . " [command] objective | auto OBJECTIVE | approval [POLICY] | edit | pause | resume | clear")
-    ("plan" . " [command] no args; enter Plan mode")
+    ("plan" . " [command] optional prompt; enter Plan mode")
     ("mode" . " [command] ask | auto | full-auto")
     ("skills" . " [command] list | help NAME | enable NAME | disable NAME")
     ("tools" . " [command] list")
@@ -288,10 +289,10 @@ Routes through the lifecycle-aware permission transition path."
      'mode "Current permission mode: %s" mevedel-permission-mode)))
 
 (defun mevedel-cmd--plan (args)
-  "Enter Plan mode; ARGS must be empty."
+  "Enter Plan mode; composer-owned nonblank ARGS are submitted as a turn."
   (unless (string-blank-p (or args ""))
     (user-error "/plan takes no arguments"))
-  (require 'mevedel-plan)
+  (require 'mevedel-plan-mode)
   (mevedel-plan-mode-enter)
   (message "mevedel: Plan mode on"))
 

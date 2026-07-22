@@ -11,7 +11,8 @@
 (eval-when-compile (require 'cl-lib))
 
 ;; `cl-extra'
-(declare-function cl-some "cl-extra" (predicate sequence &rest more-sequences))
+(declare-function cl-some "cl-extra"
+		  (predicate sequence &rest more-sequences))
 (declare-function cl-subseq "cl-extra" (seq start &optional end))
 
 ;; `cl-macs'
@@ -23,40 +24,46 @@
 
 ;; `mevedel-agent-control'
 (declare-function mevedel-agent-record-activity
-                  "mevedel-agent-control" (cl-x) t)
+		  "mevedel-agent-control" (cl-x) t)
 (declare-function mevedel-agent-record-conversation-location
-                  "mevedel-agent-control" (cl-x) t)
+		  "mevedel-agent-control" (cl-x) t)
 
 ;; `mevedel-agents'
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-transcript-status
-                  "mevedel-agents" (cl-x) t)
+		  "mevedel-agents" (cl-x) t)
 
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
-                  "mevedel-pipeline" (render-data))
+		  "mevedel-pipeline" (render-data))
 (declare-function mevedel-pipeline--strip-render-data-blocks
-                  "mevedel-pipeline" (string))
+		  "mevedel-pipeline" (string))
 (declare-function mevedel-pipeline-extract-render-data
-                  "mevedel-pipeline"
-                  (result-string &optional session expected-tool-use-id
-                                 allow-payload-tool-use-id))
+		  "mevedel-pipeline"
+		  (result-string &optional session
+				 expected-tool-use-id
+				 allow-payload-tool-use-id))
+
+;; `mevedel-plan'
+(declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
+(declare-function mevedel-plan-strip-proposed "mevedel-plan" (text))
 
 ;; `mevedel-review'
 (declare-function mevedel-review-strip-user-action-blocks
-                  "mevedel-review" (text))
+		  "mevedel-review" (text))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-phase "mevedel-structs" (cl-x) t)
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
-(declare-function mevedel-request-started-at "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-agent-registry
-                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-request-started-at "mevedel-structs" (cl-x)
+		  t)
+(declare-function mevedel-session-agent-registry "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
-(declare-function mevedel-session-permission-queue
-                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
-                  "mevedel-structs" (cl-x) t)
+		  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-permission-queue "mevedel-structs"
+		  (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
@@ -64,44 +71,44 @@
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 
-;; `mevedel-plan'
-(declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
-(declare-function mevedel-plan-strip-proposed "mevedel-plan" (text))
-
 ;; `mevedel-tool-registry'
-(declare-function mevedel-tool-display-string
-                  "mevedel-tool-registry" (tool-name args))
-(declare-function mevedel-tool-get
-                  "mevedel-tool-registry" (name &optional category))
+(declare-function mevedel-tool-display-string "mevedel-tool-registry"
+		  (tool-name args))
+(declare-function mevedel-tool-get "mevedel-tool-registry"
+		  (name &optional category))
 (declare-function mevedel-tool-name "mevedel-tool-registry" (cl-x) t)
-(declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x) t)
+(declare-function mevedel-tool-renderer "mevedel-tool-registry" (cl-x)
+		  t)
 
 ;; `mevedel-tool-task'
-(declare-function mevedel-toggle-tasks "mevedel-tool-task" ())
+(declare-function mevedel-toggle-tasks "mevedel-tool-task" nil)
 
 ;; `mevedel-tool-ui'
-(declare-function mevedel-tool-ui--render-agent
-                  "mevedel-tool-ui" (name args result render-data))
+(declare-function mevedel-tool-ui--render-agent "mevedel-tool-ui"
+		  (name args result render-data))
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript--mailbox-any-block-at-point
-                  "mevedel-transcript" (limit))
+		  "mevedel-transcript" (limit))
 (declare-function mevedel-transcript--mailbox-find-close
-                  "mevedel-transcript" (open-regexp close-tag limit))
+		  "mevedel-transcript" (open-regexp close-tag limit))
 (declare-function mevedel-transcript--org-tool-block-parts
-                  "mevedel-transcript" (start end))
+		  "mevedel-transcript" (start end))
 (declare-function mevedel-transcript--skip-leading-properties-drawer
-                  "mevedel-transcript" (pos))
+		  "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--skip-leading-summary-block
-                  "mevedel-transcript" (pos))
-(declare-function mevedel-transcript--tool-id-in-range
-                  "mevedel-transcript" (start end))
+		  "mevedel-transcript" (pos))
 (declare-function mevedel-transcript--tool-block-bounds-for-run
-                  "mevedel-transcript" (seg-start seg-end &optional limit))
-(declare-function mevedel-transcript-segments
-                  "mevedel-transcript" (start end))
+		  "mevedel-transcript"
+		  (seg-start seg-end &optional limit))
+(declare-function mevedel-transcript--tool-id-in-range
+		  "mevedel-transcript" (start end))
+(declare-function mevedel-transcript-segments "mevedel-transcript"
+		  (start end))
 
 ;; `mevedel-transcript-audit'
+
+
 (autoload 'mevedel--strip-hook-audit-blocks "mevedel-transcript-audit")
 (declare-function mevedel-transcript-audit-only-p
                   "mevedel-transcript-audit" (text))
