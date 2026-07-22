@@ -110,6 +110,14 @@
 (defvar mevedel-action-preset-alist)
 (defvar mevedel-default-chat-preset)
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-commit
+                  "mevedel-prompt-submission" (submission))
+(declare-function mevedel-prompt-submission-context
+                  "mevedel-prompt-submission" (cl-x) t)
+(declare-function mevedel-prompt-submission-input
+                  "mevedel-prompt-submission" (cl-x) t)
+
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-set-raw
                   "mevedel-permissions" (mode))
@@ -177,6 +185,10 @@
                   "mevedel-goal" (start end))
 (declare-function mevedel-goal-restore-pending-approval
                   "mevedel-goal" (&optional session chat-buffer))
+
+;; `mevedel-plan'
+(declare-function mevedel-plan-mode--post-response
+                  "mevedel-plan" (start end))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -434,6 +446,8 @@ session struct. SOURCE is `startup' or `resume' as a string."
     ;; plan approval cannot be cleared by interaction-zone rebuilding.
     (add-hook 'gptel-post-response-functions
               #'mevedel-view-stream-render-response nil t)
+    (add-hook 'gptel-post-response-functions
+              #'mevedel-plan-mode--post-response t t)
     (add-hook 'gptel-post-response-functions
               #'mevedel-goal--post-response t t)
     ;; Repair raw model input before view hooks observe the call and before
@@ -1378,6 +1392,27 @@ with NO-SPINNER forwarded when non-nil."
   "Insert PROMPT as a user turn and notify the view with DISPLAY-TEXT."
   (mevedel--insert-local-user-turn prompt display-text))
 
+(defun mevedel--submit-generated-turn
+    (prompt &optional display-text prompt-submission)
+  "Insert and send generated PROMPT through the canonical request path.
+DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
+accepted hook context until the turn is inserted."
+  (when prompt-submission
+    (require 'mevedel-prompt-submission))
+  (let* ((hook-context
+          (and prompt-submission
+               (mevedel-prompt-submission-context prompt-submission)))
+         (stored-prompt
+          (if hook-context
+              (concat prompt "\n\n" hook-context)
+            prompt)))
+    (mevedel--insert-local-user-turn
+     stored-prompt display-text nil hook-context)
+    (when prompt-submission
+      (mevedel-prompt-submission-commit prompt-submission))
+    (mevedel--gptel-send-request
+     (and hook-context stored-prompt))))
+
 (defun mevedel--send-plan-implementation-turn (prompt display-text sender)
   "Insert a plan turn and call SENDER, rolling the turn back on error."
   (let ((start (point-max)))
@@ -1412,7 +1447,8 @@ ACTION-PLIST is a plist with keys:
   :context       - `full' or `focused'
   :plan-file     - Path to the saved plan file
   :permission-mode - Permission mode for implementation
-  :goal-context   - Authoritative persisted lifecycle context
+  :goal-context   - Optional authoritative persisted Goal context
+  :prompt-submission - Accepted prompt transaction for Direct execution
 
 For `full', the plan is inserted into the chat buffer as a user message and
 sent as a standard gptel request, including full conversation context.
@@ -1424,13 +1460,19 @@ without prior conversation context."
          (permission-mode (plist-get action-plist :permission-mode))
          (context (plist-get action-plist :context))
          (goal-context (plist-get action-plist :goal-context))
+         (prompt-submission (plist-get action-plist :prompt-submission))
          (chat-buffer (current-buffer))
          (plan-content (with-temp-buffer
                          (insert-file-contents plan-file)
                          (buffer-string)))
          (prompt
-          (format "%s\n\nImplementation instructions:\nThe Goal objective and achievement criteria are authoritative, followed by authoritative referenced requirements. The accepted plan is an implementation approach. Implement it against the current repository state while preserving those outcomes. Reasonable divergence from plan details is allowed when repository evidence supports a safer or more effective route, but do not change the Goal, its criteria, or referenced requirements.\n\nAccepted plan:\n%s"
-                  goal-context plan-content)))
+          (if prompt-submission
+              (mevedel-prompt-submission-input prompt-submission)
+            (if goal-context
+                (format "%s\n\nImplementation instructions:\nThe Goal objective and achievement criteria are authoritative, followed by authoritative referenced requirements. The accepted plan is an implementation approach. Implement it against the current repository state while preserving those outcomes. Reasonable divergence from plan details is allowed when repository evidence supports a safer or more effective route, but do not change the Goal, its criteria, or referenced requirements.\n\nAccepted plan:\n%s"
+                        goal-context plan-content)
+              (format "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
+                      plan-file plan-content)))))
     (with-current-buffer chat-buffer
       (condition-case err
           (progn
@@ -1438,6 +1480,9 @@ without prior conversation context."
             ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
             (mevedel--close-unclosed-blocks)
             (pcase context
+              ('current
+               (mevedel--submit-generated-turn
+                prompt "Implement accepted plan" prompt-submission))
               ('full
                (mevedel--send-plan-implementation-turn
                 prompt "Implement accepted plan"

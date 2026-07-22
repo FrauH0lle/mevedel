@@ -3414,7 +3414,7 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                     mevedel--workspace workspace))
       (cl-letf (((symbol-function 'mevedel-goal-start)
                  (lambda (_objective display _policy submission)
-                   (mevedel-goal--insert-and-send
+                   (mevedel--submit-generated-turn
                     "planning prompt" display submission)))
                 ((symbol-function 'mevedel--gptel-send-request) #'ignore))
         (with-current-buffer view-buf

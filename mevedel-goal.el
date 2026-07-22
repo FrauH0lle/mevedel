@@ -46,6 +46,9 @@
 (declare-function mevedel--insert-local-user-turn
                   "mevedel-chat"
                   (prompt &optional display-text kind hook-context no-spinner))
+(declare-function mevedel--submit-generated-turn
+                  "mevedel-chat"
+                  (prompt &optional display-text prompt-submission))
 (defvar mevedel--current-request)
 (defvar mevedel--session)
 
@@ -2109,7 +2112,7 @@ PROMPT-SUBMISSION owns accepted hook context for the initial planning turn."
 (defun mevedel-goal--dispatch-gptel
     (phase prompt display-text &optional prompt-submission)
   "Dispatch PHASE with PROMPT, showing DISPLAY-TEXT in the transcript."
-  (let ((fsm (mevedel-goal--insert-and-send
+  (let ((fsm (mevedel--submit-generated-turn
               prompt display-text prompt-submission)))
     (when fsm
       (setf (gptel-fsm-info fsm)
@@ -2233,27 +2236,6 @@ dispatch and attach the attempt identity to the returned FSM."
                 phase prompt display-text prompt-submission))
      phase prompt)))
 
-(defun mevedel-goal--insert-and-send
-    (prompt &optional display-text prompt-submission)
-  "Insert PROMPT as a user turn in the current data buffer and send it.
-DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
-hook context until the turn is inserted."
-  (when prompt-submission
-    (require 'mevedel-prompt-submission))
-  (let* ((hook-context
-          (and prompt-submission
-               (mevedel-prompt-submission-context prompt-submission)))
-         (stored-prompt
-         (if hook-context
-             (concat prompt "\n\n" hook-context)
-           prompt)))
-    (mevedel--insert-local-user-turn
-     stored-prompt display-text nil hook-context)
-    (when prompt-submission
-      (mevedel-prompt-submission-commit prompt-submission))
-    (mevedel--gptel-send-request
-     (and hook-context stored-prompt))))
-
 (defun mevedel-plan-approval--current-session ()
   "Resolve the session struct that owns the pending Plan approval."
   (mevedel-queue--current-session))
@@ -2299,7 +2281,9 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
                            (mevedel-plan-approval--current-session)))
               (entry (mevedel-session-pending-plan-approval session)))
     (condition-case err
-        (mevedel-plan-approval--render-entry entry)
+        (if-let* ((renderer (plist-get entry :renderer)))
+            (funcall renderer entry)
+          (mevedel-plan-approval--render-entry entry))
       (error
        (display-warning
         'mevedel (format "plan approval: render error: %S" err) :warning)
@@ -2307,7 +2291,9 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
 
 (defun mevedel-goal--ensure-implementation-allowed (entry outcome)
   "Signal when ENTRY may not be implemented with OUTCOME yet."
-  (when (and (mevedel-goal--approval-outcome-p outcome)
+  (when (and (or (mevedel-goal--approval-outcome-p outcome)
+                 (and (proper-list-p outcome)
+                      (plist-get outcome :accept)))
              (mevedel-session-queued-user-messages
               (plist-get entry :session)))
     (user-error
