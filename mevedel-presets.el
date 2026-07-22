@@ -100,6 +100,8 @@
                   "mevedel-tools" (fsm))
 (declare-function mevedel-tools--handle-message-inject
                   "mevedel-tools" (fsm))
+(declare-function mevedel-tools--handle-plan-tool-filter
+                  "mevedel-tools" (fsm))
 
 ;; `mevedel-turn'
 (declare-function mevedel--complete-turn "mevedel-turn" (fsm))
@@ -530,7 +532,8 @@ alist with mevedel-specific handlers added:
               (append
                (list #'mevedel-tools--handle-agent-roster-inject
                      #'mevedel-tools--handle-message-inject
-                     #'mevedel-tools--handle-deferred-inject)
+                     #'mevedel-tools--handle-deferred-inject
+                     #'mevedel-tools--handle-plan-tool-filter)
                (cdr wait-entry)))))
   ;; 1c. Begin the mevedel-request on the first WAIT entry.  WAIT is
   ;; re-entered after each tool call loop, so the guard on

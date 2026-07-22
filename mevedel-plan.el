@@ -15,10 +15,18 @@
 (declare-function mevedel-session-persistence-ensure-files
                   "mevedel-session-persistence" (session buffer))
 
+;; `mevedel-skills-ui'
+(declare-function mevedel-skills--refresh-view-input-prompt
+                  "mevedel-skills-ui" ())
+
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
+(defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
 ;; `mevedel-utilities'
@@ -34,6 +42,49 @@
 (defconst mevedel-plan--relative-current-path
   (file-name-concat "plans" "current.md")
   "Relative path of the mutable current plan under a session directory.")
+
+
+;;
+;;; Plan conversation mode
+
+(defun mevedel-plan--current-session (&optional session)
+  "Return SESSION or the session reachable from the current buffer."
+  (or session
+      (and (boundp 'mevedel--session) mevedel--session)
+      (and (boundp 'mevedel--data-buffer)
+           (buffer-live-p mevedel--data-buffer)
+           (buffer-local-value 'mevedel--session mevedel--data-buffer))))
+
+(defun mevedel-plan-mode-active-p (&optional session)
+  "Return non-nil when SESSION is in a Plan conversation."
+  (when-let* ((session (mevedel-plan--current-session session)))
+    (mevedel-session-plan-mode session)))
+
+(defun mevedel-plan-mode-enter (&optional session)
+  "Enter a sticky Plan conversation for SESSION."
+  (interactive)
+  (let ((session (mevedel-plan--current-session session)))
+    (unless session
+      (user-error "No mevedel session for Plan mode"))
+    (when-let* ((goal (mevedel-session-goal session)))
+      (unless (eq (mevedel-goal-status goal) 'complete)
+        (user-error "Finish or clear the current Goal before entering Plan")))
+    (setf (mevedel-session-plan-mode session) t)
+    (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+      (mevedel-skills--refresh-view-input-prompt))
+    (force-mode-line-update t)
+    t))
+
+(defun mevedel-plan-mode-exit (&optional session)
+  "Leave the Plan conversation for SESSION."
+  (interactive)
+  (let ((session (mevedel-plan--current-session session)))
+    (when session
+      (setf (mevedel-session-plan-mode session) nil)
+      (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+        (mevedel-skills--refresh-view-input-prompt))
+      (force-mode-line-update t))
+    nil))
 
 (defun mevedel-plan-validate (plan-markdown)
   "Return normalized PLAN-MARKDOWN or signal when it is invalid."

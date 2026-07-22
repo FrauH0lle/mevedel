@@ -23,6 +23,7 @@
 ;;    :task-status-notes ((nil :note "..." :updated-turn 12) ...)
 ;;    :forked-from-session-id nil :forked-from-turn nil
 ;;    :permission-mode ask
+;;    :plan-mode nil
 ;;    :permission-rules ((TOOL-NAME ...) ...)
 ;;    :resource-grants ((:path "/abs/path" :access read) ...)
 ;;    :additional-roots (("name" . "/abs/path") ...)
@@ -132,6 +133,7 @@
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-working-directory "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-rules "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-resource-grants "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-permission-log-pending
@@ -317,7 +319,7 @@ add more, and we don't want to act on actions we don't understand).")
     :created-at :updated-at :current-segment :total-turn-count
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
-    :permission-mode :permission-rules :resource-grants
+    :permission-mode :plan-mode :permission-rules :resource-grants
     :preset-name :preset-settings
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
@@ -654,6 +656,7 @@ The resulting plist is round-trippable via
    :forked-from-session-id (mevedel-session-forked-from-session-id session)
    :forked-from-turn       (mevedel-session-forked-from-turn session)
    :permission-mode        permission-mode
+   :plan-mode              (and (mevedel-session-plan-mode session) t)
    :permission-rules       (mevedel-session-permission-rules session)
    :resource-grants        (mevedel-session-resource-grants session)
    :preset-name            (mevedel-session-preset-name session)
@@ -689,6 +692,8 @@ The resulting plist is round-trippable via
   (unless (memq (plist-get plist :permission-mode) '(ask auto full-auto))
     (error "Invalid persisted permission mode: %S"
            (plist-get plist :permission-mode)))
+  (unless (booleanp (plist-get plist :plan-mode))
+    (error "Invalid persisted Plan mode: %S" (plist-get plist :plan-mode)))
   (unless (and (integerp (plist-get plist :agent-turn-capacity))
                (> (plist-get plist :agent-turn-capacity) 0))
     (error "Invalid persisted agent turn capacity: %S"
@@ -784,6 +789,7 @@ their hygiene filters."
                      :permission-rules rules
                      :resource-grants  resource-grants
                      :permission-mode  (plist-get plist :permission-mode)
+                     :plan-mode        (plist-get plist :plan-mode)
                      :preset-name      (plist-get plist :preset-name)
                      :preset-settings  (copy-tree
                                         (plist-get plist :preset-settings))
@@ -3814,6 +3820,7 @@ mail are deliberately absent from the returned session."
           :resource-grants
           (copy-tree (mevedel-session-resource-grants session) t)
           :permission-mode (mevedel-session-permission-mode session)
+          :plan-mode (mevedel-session-plan-mode session)
           :preset-name (mevedel-session-preset-name session)
           :preset-settings
           (copy-tree (mevedel-session-preset-settings session) t)

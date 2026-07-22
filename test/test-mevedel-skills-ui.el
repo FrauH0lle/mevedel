@@ -1357,7 +1357,7 @@ spanning lines")))
 (mevedel-deftest mevedel-slash-capf ()
   ,test
   (test)
-  :doc "global commands expose Goal and omit the superseded Plan entry point"
+  :doc "global commands expose the Goal and Plan entry points"
   (let ((session (mevedel-skills-test--make-session)))
     (should (eq 'mevedel-plugins-slash-command
                 (cdr (assoc "plugin" mevedel-slash-commands))))
@@ -1365,7 +1365,8 @@ spanning lines")))
                 (cdr (assoc "skills" mevedel-slash-commands))))
     (should (eq 'mevedel-cmd--goal
                 (cdr (assoc "goal" mevedel-slash-commands))))
-    (should-not (assoc "plan" mevedel-slash-commands))
+    (should (eq 'mevedel-cmd--plan
+                (cdr (assoc "plan" mevedel-slash-commands))))
     (mevedel-skills-test--with-chat-buffer session
       (insert "### /pl")
       (goto-char (point-max))
@@ -1375,7 +1376,9 @@ spanning lines")))
              (annot (and capf (plist-get (nthcdr 3 capf)
                                          :annotation-function))))
         (should capf)
+        (should (member "plan" cands))
         (should (member "plugin" cands))
+        (should (string-match-p "no args" (funcall annot "plan")))
         (should (string-match-p "list" (funcall annot "plugin"))))))
 
   :doc "slash root returns local commands only"
@@ -2190,6 +2193,25 @@ spanning lines")))
                         :approval-policy 'supervised)))
     (should-error (mevedel-cmd--goal "approval auto")
                   :type 'user-error)))
+
+(mevedel-deftest mevedel-cmd--plan ()
+  ,test
+  (test)
+  :doc "enters Plan without changing the session permission policy"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create
+                    :name "main" :permission-mode 'auto)))
+      (setq-local mevedel--session session)
+      (mevedel-cmd--plan nil)
+      (should (mevedel-session-plan-mode session))
+      (should (eq 'auto (mevedel-session-permission-mode session)))))
+
+  :doc "rejects arguments without changing Plan state"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create :name "main")))
+      (setq-local mevedel--session session)
+      (should-error (mevedel-cmd--plan "later") :type 'user-error)
+      (should-not (mevedel-session-plan-mode session)))))
 
 (mevedel-deftest mevedel-cmd--auto ()
   ,test

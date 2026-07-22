@@ -85,6 +85,9 @@
                   (mode &optional prompt display-text hook-context))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-plan'
+(declare-function mevedel-plan-mode-enter "mevedel-plan" (&optional session))
+
 ;; `mevedel-plugins'
 (declare-function mevedel-plugins-count-label "mevedel-plugins"
                   (&optional workspace))
@@ -125,6 +128,7 @@
                   (&optional buffer))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 
@@ -265,11 +269,16 @@
   (let ((context (mevedel-menu--context)))
     (mevedel-menu--state-description
      "Mode"
-     (mevedel-menu--mode-label
-      (mevedel-menu--mode-symbol
-       (mevedel-cockpit-context-session context)
-       (mevedel-cockpit-context-data-buffer context)
-       (mevedel-cockpit-context-view-buffer context))))))
+     (let* ((session (mevedel-cockpit-context-session context))
+            (permission
+             (mevedel-menu--mode-label
+              (mevedel-menu--mode-symbol
+               session
+               (mevedel-cockpit-context-data-buffer context)
+               (mevedel-cockpit-context-view-buffer context)))))
+       (if (mevedel-session-plan-mode session)
+           (format "Plan/%s" permission)
+         permission)))))
 
 (defun mevedel-menu--model-description ()
   "Return the top-level model row description."
@@ -465,11 +474,13 @@
 (defun mevedel-menu--mode-choice-description (mode detail)
   "Return the MODE surface row with DETAIL and current-state marker."
   (let* ((context (mevedel-menu--context))
-         (current (eq mode
-                      (mevedel-menu--mode-symbol
-                       (mevedel-cockpit-context-session context)
-                       (mevedel-cockpit-context-data-buffer context)
-                       (mevedel-cockpit-context-view-buffer context))))
+         (session (mevedel-cockpit-context-session context))
+         (current (and (not (mevedel-session-plan-mode session))
+                       (eq mode
+                           (mevedel-menu--mode-symbol
+                            session
+                            (mevedel-cockpit-context-data-buffer context)
+                            (mevedel-cockpit-context-view-buffer context)))))
          (label (mevedel-menu--mode-label mode)))
     (format "%-7s %-7s %s"
             (if current (mevedel-menu--value label) label)
@@ -489,6 +500,16 @@
 (defun mevedel-menu--mode-full-auto-description ()
   "Return the full-auto mode row description."
   (mevedel-menu--mode-choice-description 'full-auto "auto-allow tools"))
+
+(defun mevedel-menu--mode-plan-description ()
+  "Return the Plan mode row description."
+  (let* ((session (mevedel-cockpit-context-session
+                   (mevedel-menu--context)))
+         (current (mevedel-session-plan-mode session)))
+    (format "%-7s %-7s %s"
+            (if current (mevedel-menu--value "Plan") "Plan")
+            (if current (mevedel-menu--value "current" 'warning) "")
+            "inspect and discuss without direct edits")))
 
 
 ;;
@@ -516,6 +537,14 @@
   (require 'mevedel-permissions)
   (mevedel-cockpit-call-in-data
    (mevedel-menu--context) #'mevedel-permission-mode-transition mode)
+  (force-mode-line-update t))
+
+(defun mevedel-menu--enter-plan ()
+  "Enter Plan mode for the current cockpit session."
+  (interactive)
+  (require 'mevedel-plan)
+  (mevedel-cockpit-call-in-data
+   (mevedel-menu--context) #'mevedel-plan-mode-enter)
   (force-mode-line-update t))
 
 
@@ -912,7 +941,8 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
     ("a" mevedel-menu--mode-auto-description
      (lambda () (interactive) (mevedel-menu--set-mode 'auto)))
     ("f" mevedel-menu--mode-full-auto-description
-     (lambda () (interactive) (mevedel-menu--set-mode 'full-auto)))]
+     (lambda () (interactive) (mevedel-menu--set-mode 'full-auto)))
+    ("p" mevedel-menu--mode-plan-description mevedel-menu--enter-plan)]
    ["Navigation"
     :pad-keys t
     ("b" "Back" mevedel-menu)]]

@@ -7,8 +7,10 @@
 (require 'mevedel-permissions)
 (require 'mevedel-structs)
 (require 'mevedel-tool-registry)
+(require 'mevedel-agents)
 (require 'mevedel-reminders)
 (require 'mevedel-goal)
+(require 'mevedel-plan)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -39,6 +41,21 @@
                  t)))
       (should (mevedel-permission--goal-read-only-phase-p session)))
     (should (eq session received))))
+
+(mevedel-deftest mevedel-permission--plan-mode-p ()
+  ,test
+  (test)
+  :doc "uses an explicit root session"
+  (let ((session (mevedel-session--create :name "main" :plan-mode t)))
+    (should (mevedel-permission--plan-mode-p session)))
+
+  :doc "uses a retained agent's parent session"
+  (let ((session (mevedel-session--create :name "main" :plan-mode t)))
+    (with-temp-buffer
+      (setq-local mevedel--agent-invocation
+                  (mevedel-agent-invocation--create
+                   :parent-session session))
+      (should (mevedel-permission--plan-mode-p)))))
 
 
 ;;
@@ -261,6 +278,19 @@
   (dolist (mode '(default accept-edits trust-all edits))
     (should-error (mevedel-permission-mode-parse-user-input mode)
                   :type 'user-error)))
+
+(mevedel-deftest mevedel-permission-mode-transition ()
+  ,test
+  (test)
+  :doc "an explicit permission choice exits Plan"
+  (with-temp-buffer
+    (let ((session (mevedel-session--create
+                    :name "main" :permission-mode 'auto :plan-mode t)))
+      (setq-local mevedel--session session
+                  mevedel-permission-mode 'auto)
+      (mevedel-permission-mode-transition 'ask)
+      (should-not (mevedel-session-plan-mode session))
+      (should (eq 'ask (mevedel-session-permission-mode session))))))
 
 (mevedel-deftest mevedel-permission--mode-decision ()
   ,test
@@ -527,6 +557,17 @@
                     :tool-struct mock-tool
                     :mode 'full-auto)
                   'deny))))
+  :doc "Plan mode denies native edits even under full-auto"
+  (let* ((mevedel-permission-rules nil)
+         (mevedel-protected-paths nil)
+         (session (mevedel-session--create :name "plan" :plan-mode t))
+         (mock-tool (mevedel-tool--create
+                     :name "Edit" :read-only-p nil :groups '(edit))))
+    (should (eq (mevedel-check-permission "Edit"
+                  :tool-struct mock-tool
+                  :session session
+                  :mode 'full-auto)
+                'deny)))
   :doc "read-only tool allowed in ask mode"
   (let ((mevedel-permission-rules nil)
         (mevedel-protected-paths nil)

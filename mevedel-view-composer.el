@@ -191,6 +191,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pop-dropped-file-grants
                   "mevedel-structs" (session paths))
 (declare-function mevedel-session-queued-user-messages
@@ -382,9 +383,15 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
      ('full-auto 'mevedel-view-permission-mode-full-auto)
      (_ 'mevedel-view-permission-mode-ask))))
 
+(defun mevedel-view--plan-mode-p ()
+  "Return non-nil when the current view's session is in Plan mode."
+  (and (boundp 'mevedel--session)
+       mevedel--session
+       (mevedel-session-plan-mode mevedel--session)))
+
 (defconst mevedel-view--permission-mode-cycle
-  '(ask auto full-auto)
-  "Permission modes cycled by `mevedel-view-cycle-permission-mode'.")
+  '(ask auto full-auto plan)
+  "Workflow states cycled by `mevedel-view-cycle-permission-mode'.")
 
 (defun mevedel-view--next-permission-mode (&optional mode)
   "Return the permission mode after MODE in the view cycle.
@@ -401,24 +408,37 @@ Nil and unknown modes are treated as `ask'."
 The prompt starts with a blank separator line so status and interaction
 rows remain visually distinct from the editable composer."
   (let ((mode (or mode (mevedel-view--effective-permission-mode))))
-    (if (eq mode 'ask)
+    (if (mevedel-view--plan-mode-p)
+        (pcase-let* ((`(,label ,_) (mevedel-view--permission-mode-display mode))
+                     (text (format "\n[Plan · %s] %s"
+                                   label mevedel-view--input-prompt)))
+          (add-text-properties
+           0 (length text)
+           '(font-lock-face mevedel-view-input-prompt)
+           text)
+          (add-text-properties
+           2 (+ 9 (length label))
+           '(font-lock-face mevedel-view-plan-mode)
+           text)
+          text)
+      (if (eq mode 'ask)
         (propertize (concat "\n" mevedel-view--input-prompt)
                     'font-lock-face 'mevedel-view-input-prompt)
-      (pcase-let* ((`(,label ,face)
-                    (mevedel-view--permission-mode-display mode))
-                   (text (format "\n[%s] %s"
-                                 label mevedel-view--input-prompt))
-                   (label-start 2)
-                   (label-end (+ label-start (length label))))
-        (add-text-properties
-         0 (length text)
-         '(font-lock-face mevedel-view-input-prompt)
-         text)
-        (add-text-properties
-         label-start label-end
-         `(font-lock-face ,face)
-         text)
-        text))))
+        (pcase-let* ((`(,label ,face)
+                      (mevedel-view--permission-mode-display mode))
+                     (text (format "\n[%s] %s"
+                                   label mevedel-view--input-prompt))
+                     (label-start 2)
+                     (label-end (+ label-start (length label))))
+          (add-text-properties
+           0 (length text)
+           '(font-lock-face mevedel-view-input-prompt)
+           text)
+          (add-text-properties
+           label-start label-end
+           `(font-lock-face ,face)
+           text)
+          text)))))
 
 
 
@@ -976,15 +996,23 @@ follows `mevedel-view--input-marker'."
                            (buffer-local-value 'mevedel--session data-buf)))))
     (unless (and data-buf session)
       (user-error "No mevedel session for permission mode cycling"))
-    (let* ((current (or (mevedel-session-permission-mode session)
-                        'ask))
+    (let* ((current (if (mevedel-session-plan-mode session)
+                        'plan
+                      (or (mevedel-session-permission-mode session) 'ask)))
            (next (mevedel-view--next-permission-mode current)))
-      (require 'mevedel-permissions)
       (with-current-buffer data-buf
-        (mevedel-permission-mode-transition next))
+        (if (eq next 'plan)
+            (progn
+              (require 'mevedel-plan)
+              (mevedel-plan-mode-enter session))
+          (require 'mevedel-permissions)
+          (mevedel-permission-mode-transition next)))
       (mevedel-view-refresh-input-prompt)
-      (pcase-let ((`(,label ,_) (mevedel-view--permission-mode-display next)))
-        (message "mevedel: permission mode %s" label))
+      (message "mevedel: %s"
+               (if (eq next 'plan)
+                   "Plan mode"
+                 (format "permission mode %s"
+                         (car (mevedel-view--permission-mode-display next)))))
       next)))
 
 (defun mevedel-view--input-text ()

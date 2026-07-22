@@ -122,6 +122,39 @@
           (length (and (boundp 'gptel-tools) gptel-tools)))
       0)))
 
+(defun mevedel-tools--request-data-set-tools (info)
+  "Serialize INFO's active tools back into its provider request data."
+  (let* ((data (plist-get info :data))
+         (parsed (gptel--parse-tools (plist-get info :backend)
+                                     (plist-get info :tools)))
+         (tool-config (plist-get data :toolConfig)))
+    (if (and (listp tool-config) (plist-member tool-config :tools))
+        (plist-put tool-config :tools parsed)
+      (plist-put data :tools parsed))))
+
+(defun mevedel-tools--handle-plan-tool-filter (fsm)
+  "Remove native edit schemas from Plan-mode request FSM."
+  (let* ((info (gptel-fsm-info fsm))
+         (invocation (plist-get info :mevedel-agent-invocation))
+         (buffer (plist-get info :buffer))
+         (session
+          (or (and (mevedel-agent-invocation-p invocation)
+                   (mevedel-agent-invocation-parent-session invocation))
+              (and (buffer-live-p buffer)
+                   (buffer-local-value 'mevedel--session buffer))))
+         (tools (plist-get info :tools)))
+    (when (and session (mevedel-session-plan-mode session) tools)
+      (let ((filtered
+             (cl-remove-if
+              (lambda (tool)
+                (when-let* ((registered
+                             (mevedel-tool-get (gptel-tool-name tool))))
+                  (memq 'edit (mevedel-tool-groups registered))))
+              tools)))
+        (unless (= (length filtered) (length tools))
+          (plist-put info :tools filtered)
+          (mevedel-tools--request-data-set-tools info))))))
+
 
 ;;
 ;;; Deferred Tool Loading (ToolSearch)
@@ -351,12 +384,8 @@ Each WAIT cycle:
   4. Inject newly-pending tools with an initial TTL of
      `mevedel-deferred-tool-ttl'.
   5. Clear `deferred-used' and `deferred-pending'.
-  6. Re-serialize `info :data :tools' via `gptel--parse-tools' when
-     anything changed, keeping the payload backend-agnostic.
-
-NOTE: This assumes tools are at (plist-get data :tools) which holds
-for OpenAI, Anthropic, Ollama, and Gemini backends.  Bedrock uses a
-different nesting (:toolConfig :tools) and is not yet supported."
+  6. Re-serialize the provider's request tools via `gptel--parse-tools'
+     when anything changed."
   (let ((info (gptel-fsm-info fsm)))
     (when-let* ((ctx (mevedel-tools--deferred-context-for fsm)))
       (let* ((used (mevedel-tools--ctx-deferred-used ctx))
@@ -402,9 +431,7 @@ different nesting (:toolConfig :tools) and is not yet supported."
         (setf (mevedel-tools--ctx-deferred-expired ctx) expired)
         ;; Phase 6: re-serialize when the active tool list changed.
         (when changed
-          (plist-put (plist-get info :data) :tools
-                     (gptel--parse-tools (plist-get info :backend)
-                                         (plist-get info :tools))))))))
+          (mevedel-tools--request-data-set-tools info))))))
 
 ;;
 ;;; Deferred Tool Loading -- Search and ToolSearch tool

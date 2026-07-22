@@ -78,6 +78,7 @@
                   (&optional buffer))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-workspace "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-name "mevedel-structs" (cl-x) t)
@@ -127,6 +128,7 @@
                   "mevedel-view-composer" (&optional mode))
 (declare-function mevedel-view--permission-mode-display
                   "mevedel-view-composer" (mode))
+(declare-function mevedel-view--plan-mode-p "mevedel-view-composer" ())
 (declare-function mevedel-view--position-in-input-region-p
                   "mevedel-view-composer" (position))
 (declare-function mevedel-view-abort "mevedel-view-composer" ())
@@ -347,6 +349,11 @@
 (defface mevedel-view-permission-mode-full-auto
   '((t :inherit error :weight bold))
   "Face for the full-auto permission mode prompt label."
+  :group 'mevedel)
+
+(defface mevedel-view-plan-mode
+  '((t :inherit font-lock-keyword-face :weight bold))
+  "Face for the active Plan workflow label."
   :group 'mevedel)
 
 (defface mevedel-view-zone-separator
@@ -779,8 +786,12 @@ Kills the associated view buffer."
                   (file-name-as-directory
                    (or (and workspace (mevedel-workspace-root workspace))
                        (with-current-buffer data-buffer default-directory)))))
-           (mode (car (mevedel-view--permission-mode-display
-                       (mevedel-view--effective-permission-mode))))
+           (permission-label
+            (car (mevedel-view--permission-mode-display
+                  (mevedel-view--effective-permission-mode))))
+           (mode (if (and session (mevedel-session-plan-mode session))
+                     (format "Plan/%s" permission-label)
+                   permission-label))
            (state (mevedel-request-state-label data-buffer))
            (model-label (mevedel-model-current-label data-buffer))
            (model (if (string= model-label "none")

@@ -200,6 +200,7 @@ workspace."
   permission-rules  ; session-scoped permission rules
   resource-grants   ; session-scoped exact path/access permission plists
   permission-mode   ; current permission mode
+  plan-mode         ; non-nil during a sticky Plan conversation
   preset-name       ; selected mevedel preset symbol
   preset-settings   ; alist of resolved buffer-local mevedel variables
   turn-count        ; integer: for reminder throttling

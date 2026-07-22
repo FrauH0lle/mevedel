@@ -41,6 +41,8 @@
                   (context owner body))
 
 ;; `mevedel-agents'
+(declare-function mevedel-agent-invocation-parent-session
+                  "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-skill-permission-rules
                   "mevedel-agents" (cl-x) t)
 (defvar mevedel--agent-invocation)
@@ -79,6 +81,9 @@
 (declare-function mevedel-permission--prompt-async-eval
                   "mevedel-permission-prompt"
                   (content cont &optional count entry))
+
+;; `mevedel-plan'
+(declare-function mevedel-plan-mode-active-p "mevedel-plan" (&optional session))
 
 ;; `mevedel-permission-queue'
 (declare-function mevedel-permission--enqueue "mevedel-permission-queue"
@@ -1118,6 +1123,17 @@ authorize dangerous or complex syntax."
              (plist-get (mevedel-tool-exec--analyze-bash segment) :class))
            segments)))
     (when (mevedel-tool-exec--bash-explicit-deny-p buckets command analysis)
+      (cl-return-from mevedel-tools--check-bash-permission 'deny))
+
+    (when (and (fboundp 'mevedel-plan-mode-active-p)
+               (mevedel-plan-mode-active-p
+                (or (plist-get permission-context :session)
+                    (and (boundp 'mevedel--session) mevedel--session)
+                    (and (boundp 'mevedel--agent-invocation)
+                         mevedel--agent-invocation
+                         (mevedel-agent-invocation-parent-session
+                          mevedel--agent-invocation))))
+               (not (eq class 'read-only)))
       (cl-return-from mevedel-tools--check-bash-permission 'deny))
 
     (when (and (not (plist-get permission-context

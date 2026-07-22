@@ -175,6 +175,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :forked-from-session-id nil
                :forked-from-turn nil
                :permission-mode 'ask
+               :plan-mode nil
                :permission-rules nil
                :resource-grants nil
                :preset-name nil
@@ -463,7 +464,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect
         (let* ((session (test-mevedel-session-persistence--make-session root))
-               (_ (setf (mevedel-session-preset-name session) 'test-preset
+               (_ (setf (mevedel-session-plan-mode session) t
+                        (mevedel-session-preset-name session) 'test-preset
                         (mevedel-session-preset-settings session)
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
@@ -485,6 +487,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                           (file-name-concat root "packages" "api"))
                          (plist-get plist :working-directory)))
           (should (equal 'ask (plist-get plist :permission-mode)))
+          (should (eq t (plist-get plist :plan-mode)))
           (should (eq 'test-preset (plist-get plist :preset-name)))
           (should (equal '((mevedel-model-tiers
                             (strong :provider "Test:test-model" :effort high))
@@ -580,8 +583,18 @@ ROOT is a temporary directory owned and cleaned up by the caller."
     (dolist (mode '(default accept-edits trust-all edit))
       (should-error
        (mevedel-session-persistence--validate-current-sidecar
-        (plist-put plist :permission-mode mode))
+       (plist-put plist :permission-mode mode))
        :type 'error)))
+  :doc "accepts only boolean persisted Plan mode"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (dolist (mode '(nil t))
+      (should (eq plist
+                  (mevedel-session-persistence--validate-current-sidecar
+                   (plist-put plist :plan-mode mode)))))
+    (should-error
+     (mevedel-session-persistence--validate-current-sidecar
+      (plist-put plist :plan-mode 'plan))
+     :type 'error))
   :doc "rejects prompt entries without current turn coordinates"
   (let ((plist
          (test-mevedel-session-persistence--complete-sidecar
@@ -597,7 +610,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
   (let ((root (make-temp-file "mevedel-test-proj-" t)))
     (unwind-protect
         (let* ((source (test-mevedel-session-persistence--make-session root))
-               (_ (setf (mevedel-session-preset-name source) 'test-preset
+               (_ (setf (mevedel-session-plan-mode source) t
+                        (mevedel-session-preset-name source) 'test-preset
                         (mevedel-session-preset-settings source)
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
@@ -617,6 +631,7 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal "main-2026-04-23T14-30-a9f2"
                          (mevedel-session-session-id session)))
           (should (eq 'ask (mevedel-session-permission-mode session)))
+          (should (mevedel-session-plan-mode session))
           (should (eq 'test-preset (mevedel-session-preset-name session)))
           (should (equal '((mevedel-model-tiers
                             (strong :provider "Test:test-model" :effort high))

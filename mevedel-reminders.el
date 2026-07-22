@@ -147,6 +147,7 @@ only when a frozen agent template must survive a cold session resume."
 
 (defvar mevedel-reminders--recipe-schemas
   '((mode-constraints mevedel-reminders-make-mode-constraints interval)
+    (plan-mode mevedel-reminders-make-plan-mode no-args)
     (full-auto-mode mevedel-reminders-make-full-auto-mode interval)
     (full-auto-mode-exit mevedel-reminders-make-full-auto-mode-exit no-args)
     (plan-reference mevedel-reminders-make-plan-reference no-args)
@@ -514,6 +515,16 @@ sessions rather than spamming every turn."
                 (or (alist-get mode mevedel-reminders--mode-constraint-messages)
                     (format "Permission mode: `%s'." mode))))
    :interval (or interval 5)))
+
+(defun mevedel-reminders-make-plan-mode ()
+  "Create the every-turn Plan conversation reminder."
+  (mevedel-reminder-create
+   :type 'plan-mode
+   :recipe '(plan-mode)
+   :trigger #'mevedel-session-plan-mode
+   :content
+   (lambda (_session)
+     "Plan mode is active. Inspect and discuss the project without editing files. Bash is limited to commands classified as read-only; Eval and other tools retain normal permission policy. When the plan is complete, emit exactly one line-oriented <proposed_plan>...</proposed_plan> block.")))
 
 (defun mevedel-reminders-make-full-auto-mode (&optional interval)
   "Create the `full-auto-mode' reminder with INTERVAL.
@@ -1369,6 +1380,9 @@ with the same type are not added twice."
     (unless (memq 'mode-constraints existing)
       (mevedel-session-add-reminder session
                                     (mevedel-reminders-make-mode-constraints)))
+    (unless (memq 'plan-mode existing)
+      (mevedel-session-add-reminder session
+                                    (mevedel-reminders-make-plan-mode)))
     (unless (memq 'diagnostics existing)
       (mevedel-session-add-reminder session
                                     (mevedel-reminders-make-diagnostics)))

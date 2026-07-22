@@ -680,6 +680,60 @@ CTX may be a `mevedel-session' or `mevedel-agent-invocation'."
                         :data (list :tools nil)))))
       (cons buf (gptel-make-fsm :info info)))))
 
+(mevedel-deftest mevedel-tools--handle-plan-tool-filter
+  (:before-each (progn (mevedel-tool-clear-registry)
+                       (mevedel-tool-fs--register))
+   :after-each (mevedel-tool-clear-registry))
+  ,test
+  (test)
+  :doc "removes native edit schemas from a root Plan request"
+  (let* ((session (mevedel-tools-test--make-session))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx session))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (tools (mapcar (lambda (name)
+                          (mevedel-tool-gptel-tool
+                           (mevedel-tool-get name "mevedel")))
+                        '("Read" "Edit" "Write" "MkDir"))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-plan-mode session) t)
+          (plist-put (gptel-fsm-info fsm) :tools tools)
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should (equal '("Read")
+                         (mapcar #'gptel-tool-name
+                                 (plist-get (gptel-fsm-info fsm) :tools))))
+          (let* ((payload (append
+                           (plist-get
+                            (plist-get (gptel-fsm-info fsm) :data)
+                            :tools)
+                           nil)))
+            (should (= 1 (length payload)))
+            (should (equal "Read" (plist-get (car payload) :name)))))
+      (kill-buffer buf)))
+
+  :doc "uses a retained agent's parent Plan session"
+  (let* ((session (mevedel-tools-test--make-session))
+         (agent (mevedel-agent--create :name "worker"))
+         (invocation (mevedel-agent-invocation-create agent))
+         (buf+fsm (mevedel-tools-test--make-fsm-with-ctx invocation))
+         (buf (car buf+fsm))
+         (fsm (cdr buf+fsm))
+         (edit (mevedel-tool-gptel-tool
+                (mevedel-tool-get "Edit" "mevedel"))))
+    (unwind-protect
+        (progn
+          (setf (mevedel-session-plan-mode session) t
+                (mevedel-agent-invocation-parent-session invocation) session)
+          (plist-put (gptel-fsm-info fsm) :tools (list edit))
+          (mevedel-tools--handle-plan-tool-filter fsm)
+          (should-not (plist-get (gptel-fsm-info fsm) :tools))
+          (should (= 0 (length
+                        (plist-get
+                         (plist-get (gptel-fsm-info fsm) :data)
+                         :tools)))))
+      (kill-buffer buf))))
+
 (mevedel-deftest mevedel-tools--handle-deferred-inject
   (:after-each (progn (mevedel-workspace-clear-registry)
                       (setq mevedel-agent--registry nil)))

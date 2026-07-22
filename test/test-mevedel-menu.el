@@ -668,7 +668,22 @@
                         (mevedel-menu--mode-full-auto-description))))
       (should (string= "ask             prompt for edits and uncertain execution"
                        (substring-no-properties
-                        (mevedel-menu--mode-ask-description)))))))
+                        (mevedel-menu--mode-ask-description))))))
+
+  :doc "marks Plan instead of its underlying permission policy"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-plan-mode session) t
+          (mevedel-session-permission-mode session) 'full-auto)
+    (with-current-buffer view-buf
+      (should (string= "Mode      Plan/full-auto"
+                       (substring-no-properties
+                        (mevedel-menu--mode-description))))
+      (should (string= "Plan    current inspect and discuss without direct edits"
+                       (substring-no-properties
+                        (mevedel-menu--mode-plan-description))))
+      (should (string= "full-auto         auto-allow tools"
+                       (substring-no-properties
+                        (mevedel-menu--mode-full-auto-description)))))))
 
 (mevedel-deftest mevedel-menu-help--text ()
   ,test
@@ -714,7 +729,14 @@
     (with-current-buffer data-buf
       (should (eq 'auto
                   (mevedel-session-permission-mode mevedel--session)))
-      (should (eq 'auto mevedel-permission-mode)))))
+      (should (eq 'auto mevedel-permission-mode))))
+
+  :doc "an explicit permission choice exits Plan mode"
+  (mevedel-menu-test--with-buffers
+    (setf (mevedel-session-plan-mode session) t)
+    (with-current-buffer view-buf
+      (mevedel-menu--set-mode 'ask))
+    (should-not (mevedel-session-plan-mode session))))
 
 (mevedel-deftest mevedel-menu--model-surface-description ()
   ,test
