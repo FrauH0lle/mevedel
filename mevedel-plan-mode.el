@@ -26,6 +26,8 @@
 (declare-function mevedel--compact-run "mevedel-compact" (&rest args))
 
 ;; `mevedel-goal'
+(declare-function mevedel-goal-create "mevedel-goal"
+		  (objective &optional session plan-reference id))
 (declare-function mevedel-plan-approval-abort "mevedel-goal"
 		  (&optional session outcome))
 (declare-function mevedel-plan-approval-present "mevedel-goal"
@@ -97,6 +99,7 @@
 		  (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
+(defvar mevedel-goal-token-budget)
 
 ;; `mevedel-transcript'
 (declare-function mevedel-transcript-segments "mevedel-transcript"
@@ -145,6 +148,17 @@
 (defconst mevedel-plan-mode--implementation-modes '(ask auto full-auto)
   "Permission modes selectable for accepted Plan implementation.")
 
+(defconst mevedel-plan-mode--accepted-goal-objective
+  (concat
+   "Implement the accepted plan referenced by this Goal. Read it before acting. "
+   "Treat its stated outcomes, constraints, and acceptance criteria as the "
+   "completion contract; its implementation mechanics remain revisable. Use "
+   "its named validation commands and artifacts to verify progress, and keep "
+   "the Goal active until current evidence proves the full contract. Where the "
+   "mechanics are silent or conflict with current repository evidence, preserve "
+   "the completion contract and use the safest effective implementation.")
+  "Deterministic objective for a Goal created from an accepted Plan.")
+
 
 ;;
 ;;; Plan conversation mode
@@ -171,6 +185,11 @@
     (when-let* ((goal (mevedel-session-goal session)))
       (unless (eq (mevedel-goal-status goal) 'complete)
         (user-error "Finish or clear the current Goal before entering Plan")))
+    (unless (mevedel-session-plan-mode session)
+      (let ((metadata (copy-sequence
+                       (or (mevedel-session-plan-metadata session) nil))))
+        (cl-remf metadata :selection)
+        (setf (mevedel-session-plan-metadata session) metadata)))
     (setf (mevedel-session-plan-mode session) t)
     (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
       (mevedel-skills--refresh-view-input-prompt))
@@ -199,7 +218,7 @@
   (force-mode-line-update t))
 
 (defun mevedel-plan-mode--selection-valid-p (selection)
-  "Return non-nil when SELECTION is a supported Phase 1 selection."
+  "Return non-nil when SELECTION is a supported Plan handoff selection."
   (and (proper-list-p selection)
        (let ((location (plist-get selection :location))
              (context (plist-get selection :context)))
@@ -207,7 +226,7 @@
                        (memq context '(current fresh summary)))
                   (and (eq location 'worktree)
                        (memq context '(fresh summary))))
-              (eq (plist-get selection :execution) 'direct)
+              (memq (plist-get selection :execution) '(direct goal))
               (memq (plist-get selection :mode)
                     mevedel-plan-mode--implementation-modes)))))
 
@@ -260,6 +279,10 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (or (cadr (memq mode mevedel-plan-mode--implementation-modes))
       (car mevedel-plan-mode--implementation-modes)))
 
+(defun mevedel-plan-mode--next-execution (execution)
+  "Return the Plan execution choice after EXECUTION."
+  (if (eq execution 'direct) 'goal 'direct))
+
 (defun mevedel-plan-mode--next-context (location context)
   "Return the implementation context after CONTEXT at LOCATION."
   (if (eq location 'worktree)
@@ -283,6 +306,17 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
     ('fresh "start with setup context and the accepted plan")
     ('summary "generate a compact handoff, then start with it and the accepted plan (additional model request)")))
 
+(defun mevedel-plan-mode--execution-description (execution)
+  "Return the compact UI description for EXECUTION."
+  (if (eq execution 'goal)
+      "continue automatically until complete, genuinely blocked, paused, or budget-limited"
+    "one ordinary implementation turn"))
+
+(defun mevedel-plan-mode--effective-goal-budget (buffer)
+  "Return the Goal budget effective in BUFFER, or nil when unbounded."
+  (and (boundp 'mevedel-goal-token-budget)
+       (buffer-local-value 'mevedel-goal-token-budget buffer)))
+
 (defun mevedel-plan-mode--implementation-prompt
     (accepted-artifact plan-markdown)
   "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
@@ -291,12 +325,21 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
    (plist-get accepted-artifact :absolute-path)
    plan-markdown))
 
+(defun mevedel-plan-mode--goal-kickoff-prompt
+    (accepted-artifact plan-markdown)
+  "Return the Goal kickoff for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
+  (format
+   "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
+   (plist-get accepted-artifact :absolute-path)
+   plan-markdown))
+
 (defun mevedel-plan-mode--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
   (require 'mevedel-session-persistence)
   (mevedel-session-persistence-save session chat-buffer))
 
-(defun mevedel-plan-mode--implementation-record (selection accepted)
+(defun mevedel-plan-mode--implementation-record
+    (selection accepted &optional goal-token-budget)
   "Return retry state for SELECTION and ACCEPTED artifact."
   (list :step (pcase (plist-get selection :context)
                 ('summary 'prepare-summary)
@@ -305,7 +348,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                           'prepare-context))
                 (_ 'submit))
         :selection (copy-tree selection)
-        :accepted (copy-tree accepted)))
+        :accepted (copy-tree accepted)
+        :goal-token-budget goal-token-budget))
 
 (defun mevedel-plan-mode--accepted-body (artifact)
   "Return ARTIFACT's validated immutable accepted-plan body."
@@ -394,6 +438,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                 :accepted-absolute-path (plist-get accepted :absolute-path)
                 :accepted-hash (plist-get accepted :hash)))
     (with-current-buffer target-buffer
+      (when (eq (plist-get selection :execution) 'goal)
+        (setq-local mevedel-goal-token-budget
+                    (plist-get record :goal-token-budget)))
       (require 'mevedel-presets)
       (require 'mevedel-permissions)
       (mevedel-preset-restore-session target-session target-buffer)
@@ -550,7 +597,8 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                    (error "No accepted plan implementation to retry"))))
              (selection (plist-get record :selection))
              (location (plist-get selection :location))
-             (context (plist-get selection :context)))
+             (context (plist-get selection :context))
+             (execution (plist-get selection :execution)))
         (unless (mevedel-plan-mode--selection-valid-p selection)
           (error "Invalid accepted plan implementation selection"))
         (unless (memq (plist-get record :step)
@@ -625,14 +673,24 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                        (if (eq location 'worktree)
                            (mevedel-plan-mode--worktree-target-buffer record)
                          chat-buffer))
+                      (target-session
+                       (buffer-local-value 'mevedel--session target-buffer))
                       (accepted
                        (plist-get record
                                   (if (eq location 'worktree)
                                       :target-accepted
                                     :accepted)))
                       (body (mevedel-plan-mode--accepted-body accepted))
-                      (prompt (mevedel-plan-mode--implementation-prompt
-                               accepted body))
+                      (prompt
+                       (if (eq execution 'goal)
+                           (mevedel-plan-mode--goal-kickoff-prompt
+                            accepted body)
+                         (mevedel-plan-mode--implementation-prompt
+                          accepted body)))
+                      (display-text
+                       (if (eq execution 'goal)
+                           "Implement accepted plan as Goal"
+                         "Implement accepted plan"))
                       (view-buffer
                        (mevedel-view--interaction-target-buffer
                         target-buffer)))
@@ -640,11 +698,27 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                   result
                   (with-current-buffer view-buffer
                     (mevedel-view--run-prompt-submit-hook
-                     prompt "Implement accepted plan"
+                     prompt display-text
                      (lambda (submission)
                        (condition-case dispatch-error
                            (progn
                              (with-current-buffer target-buffer
+                               (when (eq execution 'goal)
+                                 (require 'mevedel-goal)
+                                 (when-let* ((current
+                                              (mevedel-session-goal
+                                               target-session))
+                                             ((not
+                                               (eq (mevedel-goal-status current)
+                                                   'complete))))
+                                   (error "Target session already has an unfinished Goal"))
+                                 (setq-local
+                                  mevedel-goal-token-budget
+                                  (plist-get record :goal-token-budget))
+                                 (mevedel-goal-create
+                                  mevedel-plan-mode--accepted-goal-objective
+                                  target-session
+                                  (plist-get accepted :path)))
                                (mevedel--implement-plan
                                 (list
                                  :context 'current
@@ -652,6 +726,7 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                                  (plist-get accepted :absolute-path)
                                  :permission-mode
                                  (plist-get selection :mode)
+                                 :display-text display-text
                                  :prompt-submission submission)))
                              (mevedel-plan-mode--implementation-started
                               session chat-buffer))
@@ -699,7 +774,9 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
     (mevedel-plan--metadata-put session :selection selection)
     (mevedel-plan--metadata-put
      session :implementation-retry
-     (mevedel-plan-mode--implementation-record selection accepted))
+     (mevedel-plan-mode--implementation-record
+      selection accepted
+      (mevedel-plan-mode--effective-goal-budget chat-buffer)))
     (mevedel-plan-mode--deactivate session)
     (when-let* ((view-buffer
                  (ignore-errors
@@ -810,6 +887,14 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
            (mevedel-plan--metadata-put
             (plist-get entry :session) :selection selection)
            (mevedel-plan-approval-render (plist-get entry :session)))
+         (cycle-execution ()
+           (interactive)
+           (plist-put selection :execution
+                      (mevedel-plan-mode--next-execution
+                       (plist-get selection :execution)))
+           (mevedel-plan--metadata-put
+            (plist-get entry :session) :selection selection)
+           (mevedel-plan-approval-render (plist-get entry :session)))
          (cycle-location ()
            (interactive)
            (mevedel-plan-mode--next-location selection)
@@ -822,9 +907,12 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
         (with-current-buffer target
           (let* ((keymap (make-sparse-keymap))
                  (warning (mevedel-plan-mode--worktree-warning entry))
+                 (execution (plist-get selection :execution))
+                 (budget
+                  (mevedel-plan-mode--effective-goal-budget chat-buffer))
                  (body
                   (format
-                   "\n%s\n\nLocation   %s\nContext    %s — %s\nExecution  Direct\nMode       %s\n%s\n%s\n"
+                   "\n%s\n\nLocation   %s\nContext    %s — %s\nExecution  %s — %s\n%sMode       %s\n%s\n%s\n"
                    (if (fboundp 'mevedel-view--fontify-as)
                        (mevedel-view--fontify-as
                         (plist-get entry :body) 'markdown-mode)
@@ -833,10 +921,18 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                    (capitalize (symbol-name (plist-get selection :context)))
                    (mevedel-plan-mode--context-description
                     (plist-get selection :context))
+                   (capitalize (symbol-name execution))
+                   (mevedel-plan-mode--execution-description execution)
+                   (if (eq execution 'goal)
+                       (format "Goal budget %s\n"
+                               (if budget
+                                   (format "%d tokens" budget)
+                                 "Unlimited"))
+                     "")
                    (plist-get selection :mode)
                    (if warning (concat "\n" warning "\n") "")
                    (concat
-                    "Keys: RET implement  l location  c context  TAB/m mode  "
+                    "Keys: RET implement  l location  c context  e execution  TAB/m mode  "
                     "f feedback draft  q cancel"))))
             (define-key keymap (kbd "RET") #'accept)
             (define-key keymap (kbd "<return>") #'accept)
@@ -844,6 +940,7 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
             (define-key keymap (kbd "TAB") #'cycle-mode)
             (define-key keymap (kbd "<tab>") #'cycle-mode)
             (define-key keymap (kbd "m") #'cycle-mode)
+            (define-key keymap (kbd "e") #'cycle-execution)
             (define-key keymap (kbd "l") #'cycle-location)
             (define-key keymap (kbd "c") #'cycle-context)
             (define-key keymap (kbd "f") #'feedback)

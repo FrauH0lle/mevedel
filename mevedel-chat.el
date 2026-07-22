@@ -1462,6 +1462,7 @@ ACTION-PLIST is a plist with keys:
   :plan-file     - Path to the saved plan file
   :permission-mode - Permission mode for implementation
   :goal-context   - Optional authoritative persisted Goal context
+  :display-text   - Optional compact transcript display text
   :prompt-submission - Accepted prompt transaction for Direct execution
 
 For `full', the plan is inserted into the chat buffer as a user message and
@@ -1474,6 +1475,8 @@ without prior conversation context."
          (permission-mode (plist-get action-plist :permission-mode))
          (context (plist-get action-plist :context))
          (goal-context (plist-get action-plist :goal-context))
+         (display-text (or (plist-get action-plist :display-text)
+                           "Implement accepted plan"))
          (prompt-submission (plist-get action-plist :prompt-submission))
          (chat-buffer (current-buffer))
          (plan-content (with-temp-buffer
@@ -1496,10 +1499,10 @@ without prior conversation context."
             (pcase context
               ('current
                (mevedel--submit-generated-turn
-                prompt "Implement accepted plan" prompt-submission))
+                prompt display-text prompt-submission))
               ('full
                (mevedel--send-plan-implementation-turn
-                prompt "Implement accepted plan"
+                prompt display-text
                 #'mevedel--gptel-send-request))
               ('focused
                (mevedel--send-plan-implementation-turn

@@ -6,6 +6,7 @@
 
 (require 'mevedel-plan)
 (require 'mevedel-plan-mode)
+(require 'mevedel-goal)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permissions)
 (require 'mevedel-prompt-submission)
@@ -63,7 +64,28 @@
   (let ((session
          (mevedel-session--create
           :name "test" :goal (mevedel-goal--create :status 'complete))))
-    (should (mevedel-plan-mode-enter session))))
+    (should (mevedel-plan-mode-enter session)))
+
+  :doc "new Plan conversations discard an earlier execution selection"
+  (let ((session
+         (mevedel-session--create
+          :name "test" :plan-metadata
+          '(:status accepted :selection (:execution goal)))))
+    (mevedel-plan-mode-enter session)
+    (should-not
+     (plist-member (mevedel-session-plan-metadata session) :selection)))
+
+  :doc "re-entering an active Plan preserves its proposal selection"
+  (let* ((selection '(:location here :context current
+                      :execution goal :mode auto))
+         (session
+          (mevedel-session--create
+           :name "test" :plan-mode t
+           :plan-metadata (list :status 'proposed :selection selection))))
+    (mevedel-plan-mode-enter session)
+    (should (equal selection
+                   (plist-get (mevedel-session-plan-metadata session)
+                              :selection)))))
 
 (mevedel-deftest mevedel-plan-mode-exit
   (:doc "leaves Plan without changing the underlying permission mode")
@@ -77,7 +99,7 @@
 
   :doc "cancels a proposal into a draft and discards its selection"
   (let* ((selection '(:location here :context current
-                      :execution direct :mode auto))
+                      :execution goal :mode auto))
          (session (mevedel-session--create
                    :name "test" :plan-mode t
                    :plan-metadata
@@ -131,7 +153,7 @@
       (should (eq 'invalidated outcome)))))
 
 (mevedel-deftest mevedel-plan-mode--render-approval
-  (:doc "renders compact Direct axes without applying Mode before acceptance")
+  (:doc "renders and toggles execution without applying Mode before acceptance")
   ,test
   (test)
   (let* ((session (mevedel-session--create
@@ -161,8 +183,14 @@
           (let ((body (plist-get descriptor :body))
                 (keymap (plist-get descriptor :keymap)))
             (dolist (text '("Location   Here" "Context    Current"
-                            "Execution  Direct" "Mode       auto"))
+                            "Execution  Direct"
+                            "one ordinary implementation turn"
+                            "Mode       auto"))
               (should (string-match-p text body)))
+            (call-interactively (lookup-key keymap (kbd "e")))
+            (should (eq 'goal (plist-get selection :execution)))
+            (should rerendered)
+            (setq rerendered nil)
             (call-interactively (lookup-key keymap (kbd "c")))
             (should (eq 'fresh (plist-get selection :context)))
             (call-interactively (lookup-key keymap (kbd "c")))
@@ -189,11 +217,44 @@
             (call-interactively (lookup-key keymap (kbd "RET")))
             (should (equal '(:accept t
                              :selection (:location worktree :context fresh
-                                         :execution direct :mode full-auto
+                                         :execution goal :mode full-auto
                                          :branch "plan/topic"))
                            outcome))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "shows selected Goal execution and its read-only effective budget"
+  (dolist (case '((nil "Unlimited") (200000 "200000 tokens")))
+    (let* ((session (mevedel-session--create :name "test"))
+           (data-buffer (generate-new-buffer " *plan-goal-budget-data*"))
+           (view-buffer (generate-new-buffer " *plan-goal-budget-view*"))
+           (selection '(:location here :context current
+                        :execution goal :mode ask))
+           (entry (mevedel-plan-mode--approval-entry
+                   "# Plan" data-buffer session selection))
+           descriptor)
+      (unwind-protect
+          (progn
+            (with-current-buffer data-buffer
+              (setq-local mevedel-goal-token-budget (car case)))
+            (cl-letf (((symbol-function
+                        'mevedel-view--interaction-target-buffer)
+                       (lambda (_buffer) view-buffer))
+                      ((symbol-function 'mevedel-view--fontify-as)
+                       (lambda (text _mode) text))
+                      ((symbol-function 'mevedel-view--interaction-register)
+                       (lambda (value)
+                         (setq descriptor value)
+                         (make-overlay (point-min) (point-min)))))
+              (mevedel-plan-mode--render-approval entry))
+            (let ((body (plist-get descriptor :body)))
+              (should (string-match-p "Execution  Goal" body))
+              (should (string-match-p
+                       "continue automatically until complete" body))
+              (should (string-match-p
+                       (format "Goal budget %s" (cadr case)) body))))
+        (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+        (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
   :doc "warns for dirty Worktree state and cancellation keeps approval pending"
   (let* ((session (mevedel-session--create
@@ -348,7 +409,7 @@
       (should-not presented))))
 
 (mevedel-deftest mevedel-plan-mode-restore-pending-approval
-  (:doc "restores a matching durable proposal without changing the composer")
+  (:doc "restores a selected Goal proposal without changing the composer")
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-restore-" t))
@@ -356,7 +417,7 @@
          (plan "# Restored plan")
          (hash (mevedel-plan-hash plan))
          (selection '(:location here :context current
-                      :execution direct :mode auto))
+                      :execution goal :mode auto))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir :plan-mode t
@@ -463,6 +524,62 @@
                            (plist-get implementation :plan-file)))
             (should-not (plist-member metadata :implementation-retry))
             (should-not (mevedel-session-goal session))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
+      (delete-directory save-dir t)))
+
+  :doc "constructs Here Goal with immutable contract and canonical kickoff"
+  (let* ((save-dir (make-temp-file "mevedel-plan-goal-" t))
+         (session (mevedel-session--create
+                   :name "test" :save-path save-dir
+                   :permission-mode 'auto :plan-mode t))
+         (data-buffer (generate-new-buffer " *plan-goal-data*"))
+         (view-buffer (generate-new-buffer " *plan-goal-view*"))
+         (mevedel-goal-token-budget 1234)
+         hook-input hook-display implementation)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session
+                        mevedel-permission-mode 'auto
+                        mevedel-goal-token-budget 1234))
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (_buffer) view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input display callback &rest _)
+                       (setq hook-input input hook-display display)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function 'mevedel-session-persistence-save)
+                     #'ignore)
+                    ((symbol-function 'mevedel--implement-plan)
+                     (lambda (action) (setq implementation action))))
+            (mevedel-plan-mode--approval-callback
+             "Free-form accepted plan." data-buffer session
+             '(:accept t
+               :selection (:location here :context current
+                           :execution goal :mode full-auto))))
+          (let* ((metadata (mevedel-session-plan-metadata session))
+                 (goal (mevedel-session-goal session))
+                 (accepted (plist-get metadata :accepted-absolute-path)))
+            (should (equal mevedel-plan-mode--accepted-goal-objective
+                           (mevedel-goal-objective goal)))
+            (should (equal (plist-get metadata :accepted-path)
+                           (mevedel-goal-plan-reference goal)))
+            (should (= 1234 (mevedel-goal-token-budget goal)))
+            (should (string-match-p (regexp-quote accepted) hook-input))
+            (should (string-match-p "Free-form accepted plan" hook-input))
+            (should (string-match-p "Begin the active Goal" hook-input))
+            (should-not (string-match-p
+                         (regexp-quote accepted)
+                         (mevedel-goal-objective goal)))
+            (should (equal "Implement accepted plan as Goal" hook-display))
+            (should (equal hook-display
+                           (plist-get implementation :display-text)))
+            (should (eq 'current (plist-get implementation :context)))
+            (should-not (plist-member metadata :implementation-retry))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
       (delete-directory save-dir t)))
@@ -648,6 +765,72 @@
             (should (eq 'prepare-context (plist-get retry :step)))
             (should (equal "Rotation failed" (plist-get retry :failure)))))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "constructs a prepared Worktree Goal only in the target session"
+  (let* ((source-save (make-temp-file "mevedel-plan-goal-source-" t))
+         (target-save (make-temp-file "mevedel-plan-goal-target-" t))
+         (target-path (file-name-concat target-save "plans" "accepted.md"))
+         (body "Worktree Goal plan")
+         (selection '(:location worktree :context fresh
+                      :execution goal :mode full-auto :branch "plan/goal"))
+         (record
+          (list :step 'submit :selection selection :goal-token-budget 7000
+                :target-save-path target-save :target-session-id "target"
+                :target-directory default-directory
+                :target-accepted
+                (list :path "plans/accepted.md" :absolute-path target-path
+                      :hash (mevedel-plan-hash body))))
+         (source-session
+          (mevedel-session--create
+           :name "source" :save-path source-save :permission-mode 'ask
+           :plan-metadata
+           (list :status 'accepted :implementation-retry record)))
+         (target-session
+          (mevedel-session--create
+           :name "target" :session-id "target" :save-path target-save
+           :working-directory default-directory :permission-mode 'full-auto))
+         (source-buffer (generate-new-buffer " *plan-goal-source*"))
+         (target-buffer (generate-new-buffer " *plan-goal-target*"))
+         (view-buffer (generate-new-buffer " *plan-goal-target-view*")))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory target-path) t)
+          (write-region body nil target-path nil 'silent)
+          (with-current-buffer source-buffer
+            (setq-local mevedel--session source-session))
+          (with-current-buffer target-buffer
+            (setq-local mevedel--session target-session
+                        mevedel-goal-token-budget 7000))
+          (cl-letf (((symbol-function
+                      'mevedel-plan-mode--worktree-target-buffer)
+                     (lambda (_record) target-buffer))
+                    ((symbol-function 'mevedel-view--interaction-target-buffer)
+                     (lambda (buffer)
+                       (should (eq target-buffer buffer))
+                       view-buffer))
+                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
+                     (lambda (input _display callback &rest _)
+                       (funcall callback
+                                (mevedel-prompt-submission-create
+                                 :input input :state 'committed))))
+                    ((symbol-function 'mevedel-session-persistence-save)
+                     #'ignore)
+                    ((symbol-function 'mevedel-plan-mode--persist) #'ignore)
+                    ((symbol-function 'mevedel--implement-plan) #'ignore))
+            (mevedel-plan-mode--dispatch-accepted
+             source-session source-buffer))
+          (should-not (mevedel-session-goal source-session))
+          (let ((goal (mevedel-session-goal target-session)))
+            (should goal)
+            (should (= 7000 (mevedel-goal-token-budget goal)))
+            (should (equal "plans/accepted.md"
+                           (mevedel-goal-plan-reference goal))))
+          (should (eq 'ask
+                      (mevedel-session-permission-mode source-session))))
+      (dolist (buffer (list view-buffer target-buffer source-buffer))
+        (when (buffer-live-p buffer) (kill-buffer buffer)))
+      (delete-directory target-save t)
+      (delete-directory source-save t)))
 
   :doc "Here/Summary caches one zero-tail compaction across dispatch retry"
   (let* ((save-dir (make-temp-file "mevedel-plan-summary-" t))
@@ -1121,13 +1304,36 @@
            '((:location here :context current :execution direct :mode ask)
              (:location here :context fresh :execution direct :mode auto)
              (:location worktree :context summary :execution direct
-                        :mode full-auto)))
+                        :mode full-auto)
+             (:location here :context current :execution goal :mode ask)
+             (:location here :context fresh :execution goal :mode ask)
+             (:location here :context summary :execution goal :mode ask)
+             (:location worktree :context fresh :execution goal :mode ask)
+             (:location worktree :context summary :execution goal :mode ask)))
     (should (mevedel-plan-mode--selection-valid-p selection)))
   (dolist (selection
            '((:location worktree :context current :execution direct :mode ask)
-             (:location here :context current :execution goal :mode ask)
+             (:location here :context current :execution other :mode ask)
              (:location here :context current :execution direct :mode plan)))
     (should-not (mevedel-plan-mode--selection-valid-p selection))))
+
+(mevedel-deftest mevedel-plan-mode--next-execution
+  (:doc "toggles only Direct and Goal")
+  ,test
+  (test)
+  (should (eq 'goal (mevedel-plan-mode--next-execution 'direct)))
+  (should (eq 'direct (mevedel-plan-mode--next-execution 'goal))))
+
+(mevedel-deftest mevedel-plan-mode--execution-description
+  (:doc "describes one-turn and durable execution compactly")
+  ,test
+  (test)
+  (should (string-match-p
+           "one ordinary implementation turn"
+           (mevedel-plan-mode--execution-description 'direct)))
+  (should (string-match-p
+           "continue automatically until complete"
+           (mevedel-plan-mode--execution-description 'goal))))
 
 (mevedel-deftest mevedel-plan-mode--demote-proposal
   (:doc "demotes proposals and optionally discards their selection")
@@ -1194,6 +1400,20 @@
     (should (string-match-p "/tmp/accepted.md" prompt))
     (should (string-match-p "# Accepted" prompt))
     (should (string-match-p "Implement the accepted plan" prompt))))
+
+(mevedel-deftest mevedel-plan-mode--goal-kickoff-prompt
+  (:doc "includes the artifact and plan before the compact kickoff")
+  ,test
+  (test)
+  (let* ((artifact '(:absolute-path "/tmp/accepted.md"))
+         (body "Free-form plan")
+         (prompt (mevedel-plan-mode--goal-kickoff-prompt artifact body)))
+    (should (< (string-search "/tmp/accepted.md" prompt)
+               (string-search body prompt)
+               (string-search "Begin the active Goal" prompt)))
+    (should-not
+     (string-match-p "/tmp/accepted.md"
+                     mevedel-plan-mode--accepted-goal-objective))))
 
 (mevedel-deftest mevedel-plan-mode--implementation-record
   (:doc "chooses the first unfinished preparation step")
@@ -1440,7 +1660,8 @@
             (let* ((record
                     (list :selection
                           '(:location worktree :context fresh
-                            :execution direct :mode full-auto)
+                            :execution goal :mode full-auto)
+                          :goal-token-budget 4321
                           :accepted
                           (list :path "plans/source.md"
                                 :absolute-path path
@@ -1450,6 +1671,9 @@
                      source-session source-buffer record)))
               (should (eq 'submit (plist-get prepared :step)))
               (should (eq 'full-auto mode))
+              (should (= 4321
+                         (buffer-local-value
+                          'mevedel-goal-token-budget target-buffer)))
               (should (eq 'source-preset
                           (mevedel-session-preset-name target-session)))
               (should (equal "/tmp/target-accepted.md"

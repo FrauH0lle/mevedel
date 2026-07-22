@@ -130,6 +130,21 @@ A new Goal cannot replace an unfinished Goal or start while accepted Plan
 implementation is preparing or retryable. Plan mode cannot start while the
 session owns an unfinished Goal.
 
+An accepted Plan may select Goal execution after Here/Current, Here/Fresh,
+Here/Summary, Worktree/Fresh, or Worktree/Summary preparation. The prepared
+target owns the resulting Goal and immutable accepted artifact. Construction
+uses a deterministic objective that preserves the plan's outcomes, constraints,
+acceptance criteria, and validation evidence as the completion contract without
+parsing Markdown headings. The first ordinary Goal turn receives the prepared
+context, resolved artifact path, full plan, and kickoff; later turns use the
+small request-local Goal context and may reread the validated artifact.
+
+The Plan-selected permission mode applies to the target session. A Worktree
+target also inherits the source buffer's ordinary Goal budget, while the source
+session's permission mode and Goal state remain unchanged. Derived artifact
+authority exists only while the target Goal is unfinished and never alters
+user grants.
+
 The cockpit and status surface show only objective, status/reason, accounting,
 elapsed time, and accepted-plan reference. Their redraws preserve the active
 composer draft.
