@@ -547,9 +547,10 @@
                       :execution direct :mode full-auto))
          (record
           (list :step 'prepare-context :selection selection
-                :accepted-path "plans/accepted.md"
-                :accepted-absolute-path accepted-path
-                :accepted-hash (mevedel-plan-hash body)))
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path accepted-path
+                      :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir :permission-mode 'full-auto
@@ -625,9 +626,9 @@
           '(:step prepare-context
             :selection (:location here :context fresh
                         :execution direct :mode auto)
-            :accepted-path "plans/accepted.md"
-            :accepted-absolute-path "/tmp/accepted.md"
-            :accepted-hash "hash"))
+            :accepted (:path "plans/accepted.md"
+                       :absolute-path "/tmp/accepted.md"
+                       :hash "hash")))
          (session
           (mevedel-session--create
            :name "test"
@@ -655,9 +656,10 @@
                       :execution direct :mode auto))
          (record
           (list :step 'prepare-summary :selection selection
-                :accepted-path "plans/accepted.md"
-                :accepted-absolute-path accepted-path
-                :accepted-hash (mevedel-plan-hash body)))
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path accepted-path
+                      :hash (mevedel-plan-hash body))))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir
@@ -789,9 +791,10 @@
                       :branch "plan/topic"))
          (record
           (list :step 'prepare-worktree :selection selection
-                :accepted-path "plans/accepted.md"
-                :accepted-absolute-path source-path
-                :accepted-hash (mevedel-plan-hash body)))
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path source-path
+                      :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
            :name "source" :save-path source-save :permission-mode 'ask
@@ -870,7 +873,8 @@
                      (mevedel-session-plan-metadata source-session)
                      :implementation-retry))
                    (target-path
-                    (plist-get retry :target-accepted-absolute-path)))
+                    (plist-get (plist-get retry :target-accepted)
+                               :absolute-path)))
               (should (= 1 creates))
               (should (= 1 archives))
               (should (eq 'submit (plist-get retry :step)))
@@ -927,9 +931,10 @@
                       :execution direct :mode auto :branch "plan/summary"))
          (record
           (list :step 'prepare-summary :selection selection
-                :accepted-path "plans/accepted.md"
-                :accepted-absolute-path source-path
-                :accepted-hash (mevedel-plan-hash body)))
+                :accepted
+                (list :path "plans/accepted.md"
+                      :absolute-path source-path
+                      :hash (mevedel-plan-hash body))))
          (source-session
           (mevedel-session--create
            :name "source" :save-path source-save
@@ -1048,7 +1053,9 @@
                                        (point-min) (point-max)))))
               (let ((path-position
                      (string-search
-                      (plist-get retry :target-accepted-absolute-path) prompt))
+                      (plist-get (plist-get retry :target-accepted)
+                                 :absolute-path)
+                      prompt))
                     (plan-position (string-search body prompt))
                     (instruction-position
                      (string-search "Implementation instructions:" prompt)))
@@ -1224,12 +1231,12 @@
           (write-region "# Accepted" nil path nil 'silent)
           (should (equal "# Accepted"
                          (mevedel-plan-mode--accepted-body
-                          (list :accepted-absolute-path path
-                                :accepted-hash
+                          (list :absolute-path path
+                                :hash
                                 (mevedel-plan-hash "# Accepted")))))
           (should-error
            (mevedel-plan-mode--accepted-body
-            (list :accepted-absolute-path path :accepted-hash "wrong"))))
+            (list :absolute-path path :hash "wrong"))))
       (delete-file path))))
 
 (mevedel-deftest mevedel-plan-mode--summary-instructions
@@ -1433,9 +1440,10 @@
                     (list :selection
                           '(:location worktree :context fresh
                             :execution direct :mode full-auto)
-                          :accepted-path "plans/source.md"
-                          :accepted-absolute-path path
-                          :accepted-hash (mevedel-plan-hash "# Accepted")))
+                          :accepted
+                          (list :path "plans/source.md"
+                                :absolute-path path
+                                :hash (mevedel-plan-hash "# Accepted"))))
                    (prepared
                     (mevedel-plan-mode--prepare-worktree-target
                      source-session source-buffer record)))
@@ -1444,8 +1452,9 @@
               (should (eq 'source-preset
                           (mevedel-session-preset-name target-session)))
               (should (equal "/tmp/target-accepted.md"
-                             (plist-get prepared
-                                        :target-accepted-absolute-path))))))
+                             (plist-get
+                              (plist-get prepared :target-accepted)
+                              :absolute-path))))))
       (kill-buffer target-buffer)
       (kill-buffer source-buffer)
       (delete-file path))))
@@ -1482,8 +1491,9 @@
              (list :selection
                    '(:location worktree :context summary
                      :execution direct :mode ask)
-                   :accepted-absolute-path path
-                   :accepted-hash (mevedel-plan-hash "# Accepted"))))
+                   :accepted
+                   (list :absolute-path path
+                         :hash (mevedel-plan-hash "# Accepted")))))
           (let* ((retry
                   (plist-get (mevedel-session-plan-metadata session)
                              :implementation-retry))

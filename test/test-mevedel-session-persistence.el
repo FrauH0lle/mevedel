@@ -749,9 +749,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           '(:step submit
             :selection (:location here :context summary
                         :execution direct :mode auto)
-            :accepted-path "plans/accepted.md"
-            :accepted-absolute-path "/tmp/session/plans/accepted.md"
-            :accepted-hash "abc" :summary "# Handoff"
+            :accepted (:path "plans/accepted.md"
+                       :absolute-path "/tmp/session/plans/accepted.md"
+                       :hash "abc")
+            :summary "# Handoff"
             :failure "Transport refused"))
          (metadata (list :status 'accepted :implementation-retry retry))
          (result
@@ -767,16 +768,16 @@ ROOT is a temporary directory owned and cleaned up by the caller."
             :selection (:location worktree :context fresh
                         :execution direct :mode full-auto
                         :branch "plan/topic")
-            :accepted-path "plans/source.md"
-            :accepted-absolute-path "/tmp/source/plans/source.md"
-            :accepted-hash "abc"
+            :accepted (:path "plans/source.md"
+                       :absolute-path "/tmp/source/plans/source.md"
+                       :hash "abc")
             :target-directory "/tmp/repo/.worktrees/topic/"
             :target-save-path "/tmp/repo/.mevedel/target/"
             :target-session-id "target-id"
-            :target-accepted-path "plans/accepted.md"
-            :target-accepted-absolute-path
-            "/tmp/repo/.mevedel/target/plans/accepted.md"
-            :target-accepted-hash "abc"))
+            :target-accepted
+            (:path "plans/accepted.md"
+             :absolute-path "/tmp/repo/.mevedel/target/plans/accepted.md"
+             :hash "abc")))
          (metadata (list :status 'accepted :implementation-retry retry))
          (result
           (mevedel-session-persistence-deserialize
