@@ -770,7 +770,7 @@
     (should (string-match-p "verifier"
                             (funcall (mevedel-reminder-content r) session))))
 
-  :doc "still fires after approved-plan verification is cleared"
+  :doc "still fires after accepted-plan verification is cleared"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -778,14 +778,14 @@
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
     (setf (mevedel-session-plan-metadata session)
-          '(:status approved :verification-pending nil))
+          '(:status accepted :verification-pending nil))
     (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
     (should (funcall (mevedel-reminder-trigger r) session))
     (should-not (string-match-p
-                 "approved plan"
+                 "accepted plan"
                  (funcall (mevedel-reminder-content r) session))))
 
-  :doc "fires for rejected/cancelled/presented plan metadata without approved wording"
+  :doc "fires for rejected/cancelled/presented metadata without accepted wording"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -798,10 +798,10 @@
             (list :status status :verification-pending t))
       (should (funcall (mevedel-reminder-trigger r) session))
       (should-not (string-match-p
-                   "approved plan"
+                   "accepted plan"
                    (funcall (mevedel-reminder-content r) session)))))
 
-  :doc "fires for touched files while approved-plan verification is pending"
+  :doc "fires for touched files while accepted-plan verification is pending"
   (let* ((tmp (make-temp-file "mevedel-vs-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -809,7 +809,7 @@
          (session (mevedel-session-create "main" ws))
          (r (mevedel-reminders-make-verification-suggestion)))
     (setf (mevedel-session-plan-metadata session)
-          '(:status approved :verification-pending t))
+          '(:status accepted :verification-pending t))
     (puthash "/tmp/example.el" t (mevedel-session-touched-files session))
     (should (funcall (mevedel-reminder-trigger r) session))
     (should (string-match-p "plan"
@@ -821,7 +821,7 @@
   ,test
   (test)
 
-  :doc "surfaces approved plan contents from the session artifact"
+  :doc "surfaces accepted plan contents from the session artifact"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -834,13 +834,13 @@
     (setf (mevedel-session-save-path session) tmp)
     (setf (mevedel-session-turn-count session) 6)
     (setf (mevedel-session-plan-metadata session)
-          '(:path "plans/current.md" :status approved :approved-turn 5))
+          '(:path "plans/current.md" :status accepted :accepted-turn 5))
     (should (funcall (mevedel-reminder-trigger r) session))
     (let ((content (funcall (mevedel-reminder-content r) session)))
       (should (string-match-p "plans/current.md" content))
       (should (string-match-p "# Plan" content))))
 
-  :doc "waits until after the approval turn before firing"
+  :doc "waits until after the acceptance turn before firing"
   (let* ((tmp (make-temp-file "mevedel-plan-ref-" t))
          (ws (mevedel-workspace-get-or-create
               'project (file-name-as-directory tmp)
@@ -853,7 +853,7 @@
     (setf (mevedel-session-save-path session) tmp)
     (setf (mevedel-session-turn-count session) 5)
     (setf (mevedel-session-plan-metadata session)
-          '(:path "plans/current.md" :status approved :approved-turn 5))
+          '(:path "plans/current.md" :status accepted :accepted-turn 5))
     (should-not (funcall (mevedel-reminder-trigger r) session))
     (setf (mevedel-session-turn-count session) 6)
     (should (funcall (mevedel-reminder-trigger r) session))))

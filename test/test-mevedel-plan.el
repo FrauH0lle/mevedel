@@ -7,8 +7,11 @@
 (require 'mevedel-plan)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-prompt-submission)
+(require 'mevedel-session-persistence)
 (require 'mevedel-structs)
+(require 'mevedel-view)
 (require 'mevedel-view-composer)
+(require 'mevedel-view-interaction)
 (require 'helpers
          (file-name-concat
           (file-name-directory
@@ -58,7 +61,28 @@
                   :name "test" :permission-mode 'auto :plan-mode t)))
     (mevedel-plan-mode-exit session)
     (should-not (mevedel-session-plan-mode session))
-    (should (eq 'auto (mevedel-session-permission-mode session)))))
+    (should (eq 'auto (mevedel-session-permission-mode session))))
+
+  :doc "cancels a proposal into a draft and discards its selection"
+  (let* ((selection '(:location here :context current
+                      :execution direct :mode auto))
+         (session (mevedel-session--create
+                   :name "test" :plan-mode t
+                   :plan-metadata
+                   (list :status 'proposed :proposal-id '(1 2 "h")
+                         :selection selection)))
+         outcome
+         (entry (list :session session
+                      :callback (lambda (value) (setq outcome value)))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-mode-exit session)
+    (let ((metadata (mevedel-session-plan-metadata session)))
+      (should-not (mevedel-session-plan-mode session))
+      (should-not (mevedel-session-pending-plan-approval session))
+      (should (eq 'draft (plist-get metadata :status)))
+      (should-not (plist-member metadata :proposal-id))
+      (should-not (plist-member metadata :selection))
+      (should (eq 'plan-exit outcome)))))
 
 (mevedel-deftest mevedel-plan-mode--default-selection
   (:doc "defaults to Here, Current, Direct, and the underlying mode")
@@ -70,6 +94,29 @@
                      :execution direct :mode auto)
                    (mevedel-plan-mode--default-selection session)))
     (should (eq 'auto (mevedel-session-permission-mode session)))))
+
+(mevedel-deftest mevedel-plan-mode--invalidate-proposal
+  (:doc "demotes an actionable proposal while preserving its selection")
+  ,test
+  (test)
+  (let* ((selection '(:location here :context current
+                      :execution direct :mode auto))
+         (session (mevedel-session--create
+                   :name "test" :plan-mode t
+                   :plan-metadata
+                   (list :status 'proposed :proposal-id '(1 2 "h")
+                         :selection selection)))
+         outcome
+         (entry (list :session session
+                      :callback (lambda (value) (setq outcome value)))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (should (mevedel-plan-mode--invalidate-proposal session))
+    (let ((metadata (mevedel-session-plan-metadata session)))
+      (should (eq 'draft (plist-get metadata :status)))
+      (should (equal selection (plist-get metadata :selection)))
+      (should-not (plist-member metadata :proposal-id))
+      (should-not (mevedel-session-pending-plan-approval session))
+      (should (eq 'invalidated outcome)))))
 
 (mevedel-deftest mevedel-plan-mode--render-approval
   (:doc "renders compact Direct axes without applying Mode before acceptance")
@@ -114,14 +161,38 @@
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-plan-mode--feedback-draft
+  (:doc "replaces the composer with an editable replacement-plan request")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "test" :plan-mode t
+            :plan-metadata '(:path "plans/current.md" :status draft))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft "old draft"))
+      (mevedel-plan-mode--feedback-draft data-buf session)
+      (with-current-buffer view-buf
+        (let ((draft (mevedel-view--input-text)))
+          (should (string-match-p "Plan feedback:" draft))
+          (should (string-match-p "complete replacement" draft))
+          (should (string-match-p "plans/current.md" draft))
+          (should-not (string-match-p "old draft" draft)))))))
+
 (mevedel-deftest mevedel-plan-mode--post-response
   (:doc "only root-assistant prose creates one proposal per rendered turn")
   ,test
   (test)
   (let* ((save-dir (make-temp-file "mevedel-plan-proposal-" t))
          (session (mevedel-session--create
-                   :name "test" :save-path save-dir :plan-mode t))
-         entries)
+                   :name "test" :save-path save-dir :plan-mode t
+                   :plan-metadata
+                   '(:selection (:location here :context current
+                                 :execution direct :mode auto)))))
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
@@ -131,16 +202,28 @@
           (let ((start (point)))
             (insert "<proposed_plan>\n# Tool\n</proposed_plan>\n")
             (add-text-properties start (point) '(gptel (tool . "call-1"))))
-          (cl-letf (((symbol-function 'mevedel-plan-approval-present)
-                     (lambda (entry &optional _session) (push entry entries))))
+          (cl-letf (((symbol-function 'mevedel-plan-approval-render) #'ignore))
             (mevedel-plan-mode--post-response (point-min) (point-max))
-            (mevedel-plan-mode--post-response (point-min) (point-max)))
-          (should (= 1 (length entries)))
+            (let ((first
+                   (mevedel-session-pending-plan-approval session)))
+              (mevedel-plan-mode--post-response (point-min) (point-max))
+              (should (eq first
+                          (mevedel-session-pending-plan-approval session)))
+              (let ((later-start (point)))
+                (insert "<proposed_plan>\n# Root\n<detail>keep</detail>\n</proposed_plan>\n")
+                (add-text-properties later-start (point) '(gptel response))
+                (mevedel-plan-mode--post-response later-start (point)))
+              (should-not
+               (eq first (mevedel-session-pending-plan-approval session)))))
           (should (equal "# Root\n<detail>keep</detail>"
-                         (plist-get (car entries) :body)))
+                         (plist-get
+                          (mevedel-session-pending-plan-approval session)
+                          :body)))
           (should (equal '(:location here :context current
-                           :execution direct :mode ask)
-                         (plist-get (car entries) :selection)))
+                           :execution direct :mode auto)
+                         (plist-get
+                          (mevedel-session-pending-plan-approval session)
+                          :selection)))
           (should (equal 'proposed
                          (plist-get (mevedel-session-plan-metadata session)
                                     :status))))
@@ -172,6 +255,75 @@
                  (lambda (&rest _) (setq presented t))))
         (mevedel-plan-mode--post-response (point-min) (point-max)))
       (should-not presented))))
+
+(mevedel-deftest mevedel-plan-mode-restore-pending-approval
+  (:doc "restores a matching durable proposal without changing the composer")
+  ,test
+  (test)
+  (let* ((save-dir (make-temp-file "mevedel-plan-restore-" t))
+         (path (file-name-concat save-dir "plans" "current.md"))
+         (plan "# Restored plan")
+         (hash (mevedel-plan-hash plan))
+         (selection '(:location here :context current
+                      :execution direct :mode auto))
+         (session
+          (mevedel-session--create
+           :name "test" :save-path save-dir :plan-mode t
+           :plan-metadata
+           (list :path "plans/current.md" :hash hash :status 'proposed
+                 :proposal-id (list 10 20 hash) :selection selection))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory path) t)
+          (write-region plan nil path nil 'silent)
+          (mevedel-view-test--with-buffers
+            (with-current-buffer data-buf
+              (setq-local mevedel--session session))
+            (with-current-buffer view-buf
+              (setq-local mevedel--session session)
+              (mevedel-view-test--insert-composer-draft
+               "> first\nsecond"))
+            (with-current-buffer data-buf
+              (should (mevedel-plan-mode-restore-pending-approval
+                       session data-buf)))
+            (should (equal plan
+                           (plist-get
+                            (mevedel-session-pending-plan-approval session)
+                            :body)))
+            (should (equal selection
+                           (plist-get
+                            (mevedel-session-pending-plan-approval session)
+                            :selection)))
+            (with-current-buffer view-buf
+              (should (equal "> first\nsecond"
+                             (mevedel-view--input-text))))))
+      (delete-directory save-dir t)))
+
+  :doc "demotes a proposed artifact whose durable identity no longer agrees"
+  (let* ((save-dir (make-temp-file "mevedel-plan-restore-bad-" t))
+         (path (file-name-concat save-dir "plans" "current.md"))
+         (hash (mevedel-plan-hash "# Original"))
+         (session
+          (mevedel-session--create
+           :name "test" :save-path save-dir :plan-mode t
+           :plan-metadata
+           (list :path "plans/current.md" :hash hash :status 'proposed
+                 :proposal-id (list 1 2 hash)
+                 :selection '(:location here :context current
+                              :execution direct :mode ask)))))
+    (unwind-protect
+        (progn
+          (make-directory (file-name-directory path) t)
+          (write-region "# Tampered" nil path nil 'silent)
+          (should-not
+           (mevedel-plan-mode-restore-pending-approval session))
+          (should (eq 'draft
+                      (plist-get (mevedel-session-plan-metadata session)
+                                 :status)))
+          (should-not
+           (plist-member (mevedel-session-plan-metadata session)
+                         :proposal-id)))
+      (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-mode--approval-callback
   (:doc "accepts immutably and starts one canonical Direct turn")
@@ -209,7 +361,7 @@
             (should-not (mevedel-session-plan-mode session))
             (should (eq 'full-auto
                         (mevedel-session-permission-mode session)))
-            (should (eq 'approved (plist-get metadata :status)))
+            (should (eq 'accepted (plist-get metadata :status)))
             (should-not (plist-member metadata :verification-pending))
             (should (file-exists-p accepted))
             (should (string-match-p (regexp-quote accepted) hook-input))
@@ -220,7 +372,41 @@
             (should-not (mevedel-session-goal session))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))
-      (delete-directory save-dir t))))
+      (delete-directory save-dir t)))
+
+  :doc "feedback preserves Plan and selection while requiring a replacement"
+  (let* ((selection '(:location here :context current
+                      :execution direct :mode auto))
+         (session (mevedel-session--create
+                   :name "test" :plan-mode t
+                   :plan-metadata
+                   (list :status 'proposed :proposal-id '(1 2 "h")
+                         :selection selection)))
+         drafted)
+    (cl-letf (((symbol-function 'mevedel-plan-mode--feedback-draft)
+               (lambda (&rest _) (setq drafted t))))
+      (mevedel-plan-mode--approval-callback
+       "# Plan" (current-buffer) session 'feedback-draft))
+    (let ((metadata (mevedel-session-plan-metadata session)))
+      (should (mevedel-session-plan-mode session))
+      (should drafted)
+      (should (eq 'draft (plist-get metadata :status)))
+      (should (equal selection (plist-get metadata :selection)))
+      (should-not (plist-member metadata :proposal-id))))
+
+  :doc "cancellation retains a draft but discards approval selection"
+  (let* ((session (mevedel-session--create
+                   :name "test" :plan-mode t
+                   :plan-metadata
+                   '(:status proposed :proposal-id (1 2 "h")
+                     :selection (:location here :context current
+                                 :execution direct :mode ask)))))
+    (mevedel-plan-mode--approval-callback
+     "# Plan" (current-buffer) session 'aborted)
+    (let ((metadata (mevedel-session-plan-metadata session)))
+      (should (mevedel-session-plan-mode session))
+      (should (eq 'draft (plist-get metadata :status)))
+      (should-not (plist-member metadata :selection)))))
 
 (mevedel-deftest mevedel-plan-validate
   (:doc "normalizes nonblank plans and rejects invalid input")
@@ -278,19 +464,6 @@
   (should (equal (mevedel-plan-hash "# Plan")
                  (mevedel-plan-hash "# Plan\n"))))
 
-(mevedel-deftest mevedel-plan-known-p
-  (:doc "recognizes a hash recorded in session metadata")
-  ,test
-  (test)
-  (let* ((plan "# Plan")
-         (session
-          (mevedel-session--create
-           :name "test"
-           :plan-metadata
-           (list :presented-plan-hashes (list (mevedel-plan-hash plan))))))
-    (should (mevedel-plan-known-p plan session))
-    (should-not (mevedel-plan-known-p "# Other" session))))
-
 (mevedel-deftest mevedel-plan-current-path
   (:doc "returns the current artifact path below the session directory")
   ,test
@@ -342,7 +515,10 @@
             (should
              (equal (mevedel-plan-hash "# Plan")
                     (plist-get (mevedel-session-plan-metadata session)
-                               :hash)))))
+                               :hash)))
+            (should-not
+             (plist-member (mevedel-session-plan-metadata session)
+                           :presented-plan-hashes))))
       (delete-directory save-dir t))))
 
 (mevedel-deftest mevedel-plan-archive-accepted
@@ -412,18 +588,19 @@
           (should (mevedel-plan-current-exists-p session)))
       (delete-directory save-dir t))))
 
-(mevedel-deftest mevedel-plan-mark-approved
+(mevedel-deftest mevedel-plan-mark-accepted
   (:doc "records current and accepted artifact descriptors")
   ,test
   (test)
   (let ((session (mevedel-session--create :name "test" :turn-count 3)))
-    (mevedel-plan-mark-approved
+    (mevedel-plan-mark-accepted
      session '(:path "current.md" :absolute-path "/tmp/current.md")
-     '(:path "accepted.md" :absolute-path "/tmp/accepted.md"))
+     '(:path "accepted.md" :absolute-path "/tmp/accepted.md" :hash "h"))
     (let ((metadata (mevedel-session-plan-metadata session)))
-      (should (eq 'approved (plist-get metadata :status)))
-      (should (= 3 (plist-get metadata :approved-turn)))
-      (should (equal "accepted.md" (plist-get metadata :accepted-path))))))
+      (should (eq 'accepted (plist-get metadata :status)))
+      (should (= 3 (plist-get metadata :accepted-turn)))
+      (should (equal "accepted.md" (plist-get metadata :accepted-path)))
+      (should (equal "h" (plist-get metadata :accepted-hash))))))
 
 (mevedel-deftest mevedel-plan-accept
   (:doc "accepts a plan without depending on Goal controller state")
@@ -445,7 +622,7 @@
                    (current (plist-get result :current))
                    (accepted (plist-get result :accepted))
                    (metadata (mevedel-session-plan-metadata session)))
-              (should (eq 'approved (plist-get metadata :status)))
+              (should (eq 'accepted (plist-get metadata :status)))
               (should (file-exists-p
                        (plist-get current :absolute-path)))
               (should (file-exists-p
@@ -480,18 +657,6 @@
            (mevedel-plan-implementation-input
             'full (list :absolute-path path) 'ask nil)))
       (delete-file path))))
-
-(mevedel-deftest mevedel-plan-clear-verification-pending
-  (:doc "clears the approved-plan verification flag")
-  ,test
-  (test)
-  (let ((session
-         (mevedel-session--create
-          :name "test" :plan-metadata '(:verification-pending t))))
-    (mevedel-plan-clear-verification-pending session)
-    (should-not
-     (plist-get (mevedel-session-plan-metadata session)
-                :verification-pending))))
 
 (provide 'test-mevedel-plan)
 ;;; test-mevedel-plan.el ends here

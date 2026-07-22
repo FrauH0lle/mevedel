@@ -95,6 +95,10 @@
                   (mode))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-plan'
+(declare-function mevedel-plan-mode--invalidate-proposal
+                  "mevedel-plan" (&optional session))
+
 ;; `mevedel-prompt-submission'
 (declare-function mevedel-prompt-submission-audits
                   "mevedel-prompt-submission" (cl-x) t)
@@ -1923,6 +1927,8 @@ input."
                               (audit
                                (mevedel-view--prompt-rewrite-audit-record
                                 'UserPromptSubmit input submitted decision)))
+                         (when (fboundp 'mevedel-plan-mode--invalidate-proposal)
+                           (mevedel-plan-mode--invalidate-proposal session))
                          (funcall
                           callback
                           (mevedel-prompt-submission-create

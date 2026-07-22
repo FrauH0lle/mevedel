@@ -20,6 +20,8 @@
                   "mevedel-goal" (entry &optional session))
 (declare-function mevedel-plan-approval-render
                   "mevedel-goal" (&optional session))
+(declare-function mevedel-plan-approval-abort
+                  "mevedel-goal" (&optional session outcome))
 (declare-function mevedel-plan-approval-settle
                   "mevedel-goal" (entry outcome))
 
@@ -40,12 +42,14 @@
                   "mevedel-skills-ui" ())
 
 ;; `mevedel-structs'
-(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-turn-count "mevedel-structs" (cl-x) t)
-(declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
 (defvar mevedel--data-buffer)
 (defvar mevedel--session)
 
@@ -58,6 +62,8 @@
                   "mevedel-utilities" (text))
 
 ;; `mevedel-view-composer'
+(declare-function mevedel-view--clear-input "mevedel-view-composer" ())
+(declare-function mevedel-view--input-start "mevedel-view-composer" ())
 (declare-function mevedel-view--run-prompt-submit-hook
                   "mevedel-view-composer"
                   (input display-text callback
@@ -122,11 +128,12 @@
   "Leave the Plan conversation for SESSION."
   (interactive)
   (let ((session (mevedel-plan--current-session session)))
-    (when session
-      (setf (mevedel-session-plan-mode session) nil)
-      (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
-        (mevedel-skills--refresh-view-input-prompt))
-      (force-mode-line-update t))
+    (when (and session (mevedel-session-plan-mode session))
+      (mevedel-plan-mode--demote-proposal session t)
+      (when (mevedel-session-pending-plan-approval session)
+        (require 'mevedel-goal)
+        (mevedel-plan-approval-abort session 'plan-exit))
+      (mevedel-plan-mode--deactivate session))
     nil))
 
 (defun mevedel-plan-validate (plan-markdown)
@@ -195,6 +202,47 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
 ;;
 ;;; Plan proposals
 
+(defun mevedel-plan-mode--deactivate (session)
+  "Leave Plan in SESSION without changing proposal metadata."
+  (setf (mevedel-session-plan-mode session) nil)
+  (when (fboundp 'mevedel-skills--refresh-view-input-prompt)
+    (mevedel-skills--refresh-view-input-prompt))
+  (force-mode-line-update t))
+
+(defun mevedel-plan-mode--selection-valid-p (selection)
+  "Return non-nil when SELECTION is a supported Phase 1 selection."
+  (and (proper-list-p selection)
+       (eq (plist-get selection :location) 'here)
+       (eq (plist-get selection :context) 'current)
+       (eq (plist-get selection :execution) 'direct)
+       (memq (plist-get selection :mode)
+             mevedel-plan-mode--implementation-modes)))
+
+(defun mevedel-plan-mode--demote-proposal (session discard-selection)
+  "Make SESSION's proposal a draft.
+When DISCARD-SELECTION is non-nil, discard its approval selection too."
+  (let ((metadata (copy-sequence
+                   (or (mevedel-session-plan-metadata session) nil))))
+    (when (eq (plist-get metadata :status) 'proposed)
+      (setq metadata (plist-put metadata :status 'draft)))
+    (cl-remf metadata :proposal-id)
+    (when discard-selection
+      (cl-remf metadata :selection))
+    (setf (mevedel-session-plan-metadata session) metadata)
+    metadata))
+
+(defun mevedel-plan-mode--invalidate-proposal (&optional session)
+  "Demote and dismiss SESSION's actionable proposal, preserving selection."
+  (when-let* ((session (mevedel-plan--current-session session))
+              ((mevedel-session-plan-mode session))
+              ((eq (plist-get (mevedel-session-plan-metadata session) :status)
+                   'proposed)))
+    (mevedel-plan-mode--demote-proposal session nil)
+    (when (mevedel-session-pending-plan-approval session)
+      (require 'mevedel-goal)
+      (mevedel-plan-approval-abort session 'invalidated))
+    t))
+
 (defun mevedel-plan-mode--assistant-prose (start end)
   "Return root-assistant prose in START..END, excluding tool evidence."
   (require 'mevedel-transcript)
@@ -232,11 +280,7 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
   "Accept PLAN-MARKDOWN and dispatch SELECTION from CHAT-BUFFER SESSION."
   (require 'mevedel-permissions)
   (require 'mevedel-view-composer)
-  (unless (and (eq (plist-get selection :location) 'here)
-               (eq (plist-get selection :context) 'current)
-               (eq (plist-get selection :execution) 'direct)
-               (memq (plist-get selection :mode)
-                     mevedel-plan-mode--implementation-modes))
+  (unless (mevedel-plan-mode--selection-valid-p selection)
     (error "Unsupported Plan implementation selection: %S" selection))
   (let* ((mode (plist-get selection :mode))
          (artifacts (mevedel-plan-accept
@@ -246,7 +290,7 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
                   accepted plan-markdown))
          (view-buffer (mevedel-view--interaction-target-buffer chat-buffer)))
     (mevedel-plan--metadata-put session :selection selection)
-    (mevedel-plan-mode-exit session)
+    (mevedel-plan-mode--deactivate session)
     (with-current-buffer chat-buffer
       (mevedel-permission-mode-transition mode))
     (with-current-buffer view-buffer
@@ -261,13 +305,35 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
                     :permission-mode mode
                     :prompt-submission submission)))))))))
 
+(defun mevedel-plan-mode--feedback-draft (chat-buffer session)
+  "Insert an editable replacement-plan request for CHAT-BUFFER SESSION."
+  (let ((target (mevedel-view--interaction-target-buffer chat-buffer))
+        (path (plist-get (mevedel-session-plan-metadata session) :path)))
+    (with-current-buffer target
+      (mevedel-view--clear-input)
+      (goto-char (mevedel-view--input-start))
+      (let ((start (point)))
+        (insert
+         (format
+          "Plan feedback:\n\n\n\nRevise the proposal to address this feedback. Emit one complete replacement <proposed_plan> block; the current draft is reference-only.\n\nCurrent plan artifact: %s"
+          (or path "plans/current.md")))
+        (goto-char start)
+        (forward-line 2)))))
+
 (defun mevedel-plan-mode--approval-callback
     (plan-markdown chat-buffer session outcome)
   "Handle Plan proposal OUTCOME for PLAN-MARKDOWN in CHAT-BUFFER SESSION."
-  (if (and (proper-list-p outcome) (plist-get outcome :accept))
-      (mevedel-plan-mode--accept
-       plan-markdown chat-buffer session (plist-get outcome :selection))
-    (message "mevedel: Plan proposal left pending as a draft")))
+  (cond
+   ((and (proper-list-p outcome) (plist-get outcome :accept))
+    (mevedel-plan-mode--accept
+     plan-markdown chat-buffer session (plist-get outcome :selection)))
+   ((eq outcome 'feedback-draft)
+    (mevedel-plan-mode--demote-proposal session nil)
+    (mevedel-plan-mode--feedback-draft chat-buffer session))
+   ((eq outcome 'aborted)
+    (mevedel-plan-mode--demote-proposal session t))
+   ((memq outcome '(invalidated plan-exit superseded)) nil)
+   (t (message "mevedel: unknown Plan proposal outcome %S" outcome))))
 
 (defun mevedel-plan-mode--approval-entry
     (plan-markdown chat-buffer session selection)
@@ -366,17 +432,48 @@ Only exact line-oriented `<proposed_plan>' blocks are recognized."
             plan (current-buffer) session selection)
            session))))))
 
+(defun mevedel-plan-mode-restore-pending-approval
+    (&optional session chat-buffer)
+  "Restore SESSION's genuine pending Plan proposal in CHAT-BUFFER."
+  (let* ((session (mevedel-plan--current-session session))
+         (chat-buffer (or chat-buffer (current-buffer)))
+         (metadata (and session (mevedel-session-plan-metadata session)))
+         (proposal-id (plist-get metadata :proposal-id))
+         (selection (plist-get metadata :selection))
+         (hash (plist-get metadata :hash))
+         (plan (and session
+                    (ignore-errors (mevedel-plan-current-body session))))
+         (valid
+          (and session
+               (mevedel-session-plan-mode session)
+               (eq (plist-get metadata :status) 'proposed)
+               (proper-list-p proposal-id)
+               (= (length proposal-id) 3)
+               (integerp (nth 0 proposal-id))
+               (integerp (nth 1 proposal-id))
+               (stringp (nth 2 proposal-id))
+               (equal hash (nth 2 proposal-id))
+               (mevedel-plan-mode--selection-valid-p selection)
+               (stringp plan)
+               (equal hash (mevedel-plan-hash plan)))))
+    (cond
+     ((and valid (not (mevedel-session-pending-plan-approval session)))
+      (require 'mevedel-goal)
+      (mevedel-plan-approval-present
+       (mevedel-plan-mode--approval-entry
+        plan chat-buffer session selection)
+       session)
+      t)
+     ((and session
+           (mevedel-session-plan-mode session)
+           (eq (plist-get metadata :status) 'proposed)
+           (not valid))
+      (mevedel-plan-mode--demote-proposal session nil)
+      nil))))
+
 (defun mevedel-plan-hash (plan-markdown)
   "Return a stable hash for PLAN-MARKDOWN."
   (secure-hash 'sha256 (string-trim-right (or plan-markdown ""))))
-
-(defun mevedel-plan-known-p (plan-markdown &optional session)
-  "Return non-nil if PLAN-MARKDOWN was presented in SESSION."
-  (require 'mevedel-structs)
-  (when-let* ((session (or session mevedel--session))
-              (hashes (plist-get (mevedel-session-plan-metadata session)
-                                 :presented-plan-hashes)))
-    (member (mevedel-plan-hash plan-markdown) hashes)))
 
 (defun mevedel-plan-current-path (&optional session buffer relative-path)
   "Return the session-local current plan path for SESSION.
@@ -430,14 +527,12 @@ Return an explicit artifact plist containing `:path', `:absolute-path', and
       (setq metadata (plist-put metadata :updated-turn turn))
       (setq metadata (plist-put metadata :updated-at
                                 (format-time-string "%FT%H-%M-%S")))
-      (setq metadata
-            (plist-put metadata :presented-plan-hashes
-                       (delete-dups
-                        (cons hash
-                              (plist-get metadata :presented-plan-hashes)))))
+      (cl-remf metadata :accepted-path)
+      (cl-remf metadata :accepted-absolute-path)
+      (cl-remf metadata :accepted-hash)
       (setq metadata (plist-put metadata :verification-pending nil))
-      (setq metadata (plist-put metadata :approved-turn nil))
-      (setq metadata (plist-put metadata :approved-at nil))
+      (setq metadata (plist-put metadata :accepted-turn nil))
+      (setq metadata (plist-put metadata :accepted-at nil))
       (setf (mevedel-session-plan-metadata session) metadata))
     (list :path relative-path
           :absolute-path path
@@ -497,9 +592,9 @@ Return a plist containing `:path', `:absolute-path', and `:hash'."
     (let ((path (mevedel-plan--metadata-path session)))
       (and path (file-exists-p path)))))
 
-(defun mevedel-plan-mark-approved
+(defun mevedel-plan-mark-accepted
     (session current-artifact accepted-artifact &optional skip-verification)
-  "Mark SESSION's CURRENT-ARTIFACT as approved.
+  "Mark SESSION's CURRENT-ARTIFACT as accepted.
 ACCEPTED-ARTIFACT identifies the immutable archived plan.  When
 SKIP-VERIFICATION is non-nil, do not leave verification pending."
   (require 'mevedel-structs)
@@ -507,10 +602,10 @@ SKIP-VERIFICATION is non-nil, do not leave verification pending."
                                      nil))))
     (setq metadata (plist-put metadata :path
                               (plist-get current-artifact :path)))
-    (setq metadata (plist-put metadata :status 'approved))
-    (setq metadata (plist-put metadata :approved-turn
+    (setq metadata (plist-put metadata :status 'accepted))
+    (setq metadata (plist-put metadata :accepted-turn
                               (or (mevedel-session-turn-count session) 0)))
-    (setq metadata (plist-put metadata :approved-at
+    (setq metadata (plist-put metadata :accepted-at
                               (format-time-string "%FT%H-%M-%S")))
     (if skip-verification
         (cl-remf metadata :verification-pending)
@@ -521,20 +616,22 @@ SKIP-VERIFICATION is non-nil, do not leave verification pending."
                               (plist-get accepted-artifact :path)))
     (setq metadata (plist-put metadata :accepted-absolute-path
                               (plist-get accepted-artifact :absolute-path)))
+    (setq metadata (plist-put metadata :accepted-hash
+                              (plist-get accepted-artifact :hash)))
     (setf (mevedel-session-plan-metadata session) metadata)
     metadata))
 
 (defun mevedel-plan-accept
     (plan-markdown session buffer &optional skip-verification
                    current-relative-path accepted-relative-path)
-  "Persist and approve PLAN-MARKDOWN for SESSION and BUFFER.
+  "Persist and accept PLAN-MARKDOWN for SESSION and BUFFER.
 CURRENT-RELATIVE-PATH and ACCEPTED-RELATIVE-PATH override artifact locations.
 Return `(:current ARTIFACT :accepted ARTIFACT)' for later dispatch."
   (let* ((current (mevedel-plan-write-current
                    plan-markdown session buffer current-relative-path))
          (accepted (mevedel-plan-archive-accepted
                     current session accepted-relative-path)))
-    (mevedel-plan-mark-approved
+    (mevedel-plan-mark-accepted
      session current accepted skip-verification)
     (list :current current :accepted accepted)))
 
@@ -557,12 +654,6 @@ mode.  GOAL-CONTEXT is the authoritative persisted lifecycle fragment."
           :plan-file path
           :permission-mode permission-mode
           :goal-context goal-context)))
-
-(defun mevedel-plan-clear-verification-pending (&optional session)
-  "Clear SESSION's approved-plan verification pending flag."
-  (when-let* ((session (or session (and (boundp 'mevedel--session)
-                                        mevedel--session))))
-    (mevedel-plan--metadata-put session :verification-pending nil)))
 
 (provide 'mevedel-plan)
 ;;; mevedel-plan.el ends here
