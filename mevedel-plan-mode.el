@@ -305,14 +305,12 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                           'prepare-context))
                 (_ 'submit))
         :selection (copy-tree selection)
-        :accepted-path (plist-get accepted :path)
-        :accepted-absolute-path (plist-get accepted :absolute-path)
-        :accepted-hash (plist-get accepted :hash)))
+        :accepted (copy-tree accepted)))
 
-(defun mevedel-plan-mode--accepted-body (record)
-  "Return RECORD's validated immutable accepted-plan body."
-  (let ((path (plist-get record :accepted-absolute-path))
-        (hash (plist-get record :accepted-hash)))
+(defun mevedel-plan-mode--accepted-body (artifact)
+  "Return ARTIFACT's validated immutable accepted-plan body."
+  (let ((path (plist-get artifact :absolute-path))
+        (hash (plist-get artifact :hash)))
     (unless (and (stringp path) (file-exists-p path) (stringp hash))
       (error "Accepted plan artifact is unavailable"))
     (with-temp-buffer
@@ -378,11 +376,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
          (target-buffer (mevedel-plan-mode--worktree-target-buffer record))
          (target-session
           (buffer-local-value 'mevedel--session target-buffer))
-         (_body (mevedel-plan-mode--accepted-body record))
-         (source-artifact
-          (list :path (plist-get record :accepted-path)
-                :absolute-path (plist-get record :accepted-absolute-path)
-                :hash (plist-get record :accepted-hash)))
+         (_body
+          (mevedel-plan-mode--accepted-body (plist-get record :accepted)))
+         (source-artifact (plist-get record :accepted))
          (accepted
           (mevedel-plan-archive-accepted
            source-artifact target-session
@@ -416,12 +412,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                (mevedel-session-persistence--summary-block summary)))))))
       (mevedel-plan-mode--persist target-session target-buffer))
     (setq prepared (plist-put prepared :step 'submit))
-    (setq prepared (plist-put prepared :target-accepted-path
-                              (plist-get accepted :path)))
-    (setq prepared (plist-put prepared :target-accepted-absolute-path
-                              (plist-get accepted :absolute-path)))
-    (setq prepared (plist-put prepared :target-accepted-hash
-                              (plist-get accepted :hash)))
+    (setq prepared (plist-put prepared :target-accepted accepted))
     (mevedel-plan--metadata-put session :implementation-retry prepared)
     (mevedel-plan-mode--persist session chat-buffer)
     prepared))
@@ -449,7 +440,8 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
   (with-current-buffer chat-buffer
     (let* ((selection (plist-get record :selection))
            (worktree-p (eq (plist-get selection :location) 'worktree))
-           (plan (mevedel-plan-mode--accepted-body record))
+           (plan
+            (mevedel-plan-mode--accepted-body (plist-get record :accepted)))
            (target (mevedel--compact-main-target))
            (apply-function (plist-get target :apply)))
       (setq target
@@ -625,27 +617,12 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                 (if (eq location 'worktree)
                     (mevedel-plan-mode--worktree-target-buffer record)
                   chat-buffer))
-               (target-record
-                (if (eq location 'worktree)
-                    (let ((target-record (copy-tree record)))
-                      (setq target-record
-                            (plist-put
-                             target-record :accepted-path
-                             (plist-get record :target-accepted-path)))
-                      (setq target-record
-                            (plist-put
-                             target-record :accepted-absolute-path
-                             (plist-get record
-                                        :target-accepted-absolute-path)))
-                      (plist-put target-record :accepted-hash
-                                 (plist-get record :target-accepted-hash)))
-                  record))
-               (body (mevedel-plan-mode--accepted-body target-record))
                (accepted
-                (list :path (plist-get target-record :accepted-path)
-                      :absolute-path
-                      (plist-get target-record :accepted-absolute-path)
-                      :hash (plist-get target-record :accepted-hash)))
+                (plist-get record
+                           (if (eq location 'worktree)
+                               :target-accepted
+                             :accepted)))
+               (body (mevedel-plan-mode--accepted-body accepted))
                (prompt (mevedel-plan-mode--implementation-prompt
                         accepted body))
                (view-buffer
@@ -660,8 +637,7 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
                        (mevedel--implement-plan
                         (list :context 'current
                               :plan-file
-                              (plist-get target-record
-                                         :accepted-absolute-path)
+                              (plist-get accepted :absolute-path)
                               :permission-mode (plist-get selection :mode)
                               :prompt-submission submission)))
                      (mevedel-plan-mode--implementation-started
