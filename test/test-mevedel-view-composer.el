@@ -3511,8 +3511,46 @@ Each spec is (NAME CONTEXT BODY &optional EXTRA-FRONTMATTER)."
                    (mevedel-prompt-submission-context submission))
              (mevedel-prompt-submission-commit submission))))
         (should (string-match-p "blocked context" accepted-context))
-        (should (string-match-p "UserPromptSubmit" accepted-context))
-        (should-not (mevedel-session-hook-context-pending session)))))
+      (should (string-match-p "UserPromptSubmit" accepted-context))
+      (should-not (mevedel-session-hook-context-pending session)))))
+
+  :doc "accepted Plan follow-up input immediately invalidates stale approval"
+  (mevedel-view-test--with-buffers
+    (let* ((workspace (mevedel-workspace--create
+                       :type 'test :id "plan-follow-up" :root "/tmp"
+                       :name "plan-follow-up"))
+           (selection '(:location here :context current
+                        :execution direct :mode auto))
+           (session
+            (mevedel-session--create
+             :name "main" :workspace workspace :plan-mode t
+             :plan-metadata
+             (list :status 'proposed :proposal-id '(1 2 "h")
+                   :selection selection)))
+           status-at-callback)
+      (setf (mevedel-session-pending-plan-approval session)
+            (list :session session :callback #'ignore))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session
+                    mevedel--workspace workspace))
+      (cl-letf (((symbol-function 'mevedel-hooks-run-event)
+                 (lambda (_event _payload callback &rest _)
+                   (funcall callback nil))))
+        (with-current-buffer view-buf
+          (mevedel-view--run-prompt-submit-hook
+           "Refine this" "Refine this"
+           (lambda (_submission)
+             (setq status-at-callback
+                   (plist-get (mevedel-session-plan-metadata session)
+                              :status))))))
+      (let ((metadata (mevedel-session-plan-metadata session)))
+        (should (eq 'draft status-at-callback))
+        (should-not (mevedel-session-pending-plan-approval session))
+        (should (equal selection (plist-get metadata :selection)))
+        (should-not (plist-member metadata :proposal-id)))))
 
   :doc "first skill turn orders start, expansion, then submit context"
   (mevedel-view-test--with-buffers

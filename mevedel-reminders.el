@@ -580,12 +580,12 @@ sparsely while that mode remains active."
    :trigger (lambda (session)
               (let ((metadata (mevedel-session-plan-metadata session)))
                 (and metadata
-                     (eq (plist-get metadata :status) 'approved)
-                     (let ((approved-turn
-                            (plist-get metadata :approved-turn)))
-                       (or (not (integerp approved-turn))
+                     (eq (plist-get metadata :status) 'accepted)
+                     (let ((accepted-turn
+                            (plist-get metadata :accepted-turn)))
+                       (or (not (integerp accepted-turn))
                            (> (or (mevedel-session-turn-count session) 0)
-                              approved-turn)))
+                              accepted-turn)))
                      (not (eq (mevedel-reminders--session-mode session)
                               'plan))
                      (mevedel-reminders--plan-reference-content session))))
@@ -595,7 +595,7 @@ sparsely while that mode remains active."
                     (content (mevedel-reminders--plan-reference-content
                               session)))
                 (format
-                 "An approved plan may be relevant to this turn. Plan artifact: %s\n\n%s\n\nContinue from this plan only if it matches the current user request; otherwise treat it as historical context."
+                 "An accepted plan may be relevant to this turn. Plan artifact: %s\n\n%s\n\nContinue from this plan only if it matches the current user request; otherwise treat it as historical context."
                  path
                  (or content ""))))
    :interval 'one-shot))
@@ -1331,9 +1331,9 @@ non-trivial work complete."
                "Consider spawning the verifier agent before reporting \
 completion on non-trivial implementations."
                (let ((metadata (mevedel-session-plan-metadata session)))
-                 (when (and (eq (plist-get metadata :status) 'approved)
+                 (when (and (eq (plist-get metadata :status) 'accepted)
                             (plist-get metadata :verification-pending))
-                   " Since you are implementing an approved plan, verify \
+                   " Since you are implementing an accepted plan, verify \
 that the plan was actually executed, not merely that tests pass."))
                " Adversarial verification often catches regressions \
 that pass local tests."))

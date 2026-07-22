@@ -1012,7 +1012,7 @@ Each binding is (NAME KEYS)."
                    "main" (test-mevedel-goal--workspace root)))
          (previous (mevedel-goal--create
                     :status 'complete :phase 'reviewing :objective "Old"))
-         (metadata '(:status approved)))
+         (metadata '(:status accepted)))
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
@@ -2641,6 +2641,24 @@ Each binding is (NAME KEYS)."
          (warning-minimum-level :emergency))
     (setf (mevedel-session-pending-plan-approval session) entry)
     (mevedel-plan-approval-settle entry 'accepted)
+    (should (eq entry
+                (mevedel-session-pending-plan-approval session))))
+
+  :doc "blocks Direct acceptance while root user input is queued"
+  (let* ((session (mevedel-session--create
+                   :name "main" :queued-user-messages '((:input "later"))))
+         called
+         (entry (list :session session
+                      :callback (lambda (_outcome) (setq called t)))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (should-error
+     (mevedel-plan-approval-settle
+      entry
+      '(:accept t
+        :selection (:location here :context current
+                    :execution direct :mode ask)))
+     :type 'user-error)
+    (should-not called)
     (should (eq entry
                 (mevedel-session-pending-plan-approval session)))))
 

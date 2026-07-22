@@ -189,6 +189,8 @@
 ;; `mevedel-plan'
 (declare-function mevedel-plan-mode--post-response
                   "mevedel-plan" (start end))
+(declare-function mevedel-plan-mode-restore-pending-approval
+                  "mevedel-plan" (&optional session chat-buffer))
 
 ;; `mevedel-utilities'
 (declare-function mevedel--clear-user-turn-gptel-properties
@@ -490,6 +492,8 @@ session struct. SOURCE is `startup' or `resume' as a string."
     ;; Create the companion view buffer
     (require 'mevedel-view)
     (mevedel-view--ensure buf)
+    (when (fboundp 'mevedel-plan-mode-restore-pending-approval)
+      (mevedel-plan-mode-restore-pending-approval mevedel--session buf))
     (when (fboundp 'mevedel-goal-restore-pending-approval)
       (mevedel-goal-restore-pending-approval mevedel--session buf))
     (mevedel--run-session-start-hooks source)))

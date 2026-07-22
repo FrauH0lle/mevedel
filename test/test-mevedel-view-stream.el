@@ -3365,7 +3365,7 @@
           (should-not (string-match-p "VERDICT: PASS" text))
           (should-not (string-match-p "</agent-result>" text))))))
 
-  :doc "hides proposed-plan wrappers outside Goal planning"
+  :doc "hides complete proposed-plan protocol outside Goal planning"
   (mevedel-view-stream-test--with-buffers
     (let ((session (mevedel-session--create
                     :name "test"
@@ -3385,7 +3385,9 @@
         (let ((text (buffer-substring-no-properties
                      (point-min) mevedel-view--input-marker)))
           (should-not (string-match-p "<proposed_plan>" text))
-          (should (string-match-p "# Plan" text))))))
+          (should-not (string-match-p "# Plan" text))
+          (should (string-match-p "Normal" text))
+          (should (string-match-p "After" text))))))
 
   :doc "strips proposed-plan tags from visible Goal planning responses"
   (mevedel-view-stream-test--with-buffers
@@ -3435,8 +3437,6 @@
   (mevedel-view-stream-test--with-buffers
     (let* ((tmp (make-temp-file "mevedel-view-plan-" t))
            (plan-path (file-name-concat tmp "plans" "current.md"))
-           (old-plan-hash
-            (mevedel-plan-hash "# Old plan\n"))
            (session (mevedel-session--create
                      :name "test"
                      :workspace nil
@@ -3444,9 +3444,7 @@
                      :permission-mode 'ask
                      :plan-metadata
                      (list :path "plans/current.md"
-                           :status 'approved
-                           :presented-plan-hashes
-                           (list old-plan-hash)))))
+                           :status 'accepted))))
       (unwind-protect
           (progn
             (make-directory (file-name-directory plan-path) t)

@@ -57,6 +57,7 @@
                   "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-pending-plan-approval
                   "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (defvar mevedel--agent-invocation)
 (defvar mevedel--current-request)
 (defvar mevedel--data-buffer)
@@ -65,8 +66,6 @@
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-extract-proposed "mevedel-plan" (text))
-(declare-function mevedel-plan-known-p
-                  "mevedel-plan" (plan-markdown &optional session))
 (declare-function mevedel-plan-strip-proposed "mevedel-plan" (text))
 
 ;; `mevedel-tool-registry'
@@ -2052,20 +2051,16 @@ or org scaffolding markers)."
 
 (defun mevedel-view--strip-proposed-plans-p (text)
   "Return non-nil when TEXT's proposed-plan protocol blocks should be hidden.
-Goal planning responses are hidden live.  Full rerenders also hide previously
-presented plan bodies so protocol markup does not leak into the view."
-  (and (boundp 'mevedel--session)
-       mevedel--session
-       (or (when-let* ((goal (mevedel-session-goal mevedel--session)))
-             (and (eq (mevedel-goal-status goal) 'active)
-                  (eq (mevedel-goal-phase goal) 'planning)))
-           (and (fboundp 'mevedel-plan-extract-proposed)
-                (fboundp 'mevedel-plan-known-p)
-                (let ((proposed
-                       (mevedel-plan-extract-proposed text)))
-                  (and proposed
-                       (mevedel-plan-known-p
-                        proposed mevedel--session)))))))
+Active planning hides incomplete streamed blocks.  Complete protocol blocks
+stay hidden on later full rerenders without session-global hash history."
+  (or (and (boundp 'mevedel--session)
+           mevedel--session
+           (or (mevedel-session-plan-mode mevedel--session)
+               (when-let* ((goal (mevedel-session-goal mevedel--session)))
+                 (and (eq (mevedel-goal-status goal) 'active)
+                      (eq (mevedel-goal-phase goal) 'planning)))))
+      (and (fboundp 'mevedel-plan-extract-proposed)
+           (mevedel-plan-extract-proposed text))))
 
 (defun mevedel-view--current-render-insertion-marker ()
   "Return the marker render helpers should insert at."

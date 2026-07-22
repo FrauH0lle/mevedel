@@ -1830,16 +1830,13 @@ response folding along with a dangerous best-guess preview path)."
         (should (string-match-p "Second line" text))
         (should (string-match-p "Third line" text)))))
 
-  :doc "response collapse and expand keep known proposed-plan blocks hidden"
+  :doc "response collapse and expand keep complete proposed-plan blocks hidden"
   (mevedel-view-test--with-buffers
     (let* ((old-plan "# Hidden plan\n")
            (session (mevedel-session--create
                      :name "test"
                      :workspace nil
-                     :permission-mode 'ask
-                     :plan-metadata
-                     (list :presented-plan-hashes
-                           (list (mevedel-plan-hash old-plan))))))
+                     :permission-mode 'ask)))
       (with-current-buffer data-buf
         (setq-local mevedel--session session))
       (with-current-buffer view-buf
@@ -3819,14 +3816,14 @@ state of its inner sections"
 (mevedel-deftest mevedel-view--visible-response-text ()
   ,test
   (test)
-  :doc "Goal protocol wrapper tags stay out of rendered responses"
+  :doc "Goal protocol blocks stay out of rendered responses"
   (let ((text
          (mevedel-view--visible-response-text
           (concat "Implemented.\n<proposed_plan>\n"
                   "Transition to review.\n</proposed_plan>\n"
                   "<goal_review>\nverdict: complete\n"
                   "summary: Done.\n</goal_review>\n"))))
-    (should (string-match-p "Transition to review" text))
+    (should-not (string-match-p "Transition to review" text))
     (should (string-match-p "verdict: complete" text))
     (should-not (string-match-p "proposed_plan" text))
     (should-not (string-match-p "goal_review" text))))
