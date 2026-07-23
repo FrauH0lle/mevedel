@@ -315,16 +315,21 @@
           (cl-letf (((symbol-function 'mevedel-tool-get)
                      (lambda (_name &optional _cat) fake-tool)))
             (with-temp-buffer
-              (setq mevedel--session session)
+              (setq-local mevedel--session session)
+              (setq-local mevedel--current-request
+                          (mevedel-request--create :id "request-1"
+                                                   :session session))
               (mevedel-skills--post-tool-activate
                (list :name "Read" :args '(:path "lib/foo.el")))
               (should (mevedel-skill-active-p skill))
               (should (mevedel-skill-active-p user-only))
               (should-not (mevedel-skill-active-p disabled))
-              (should (= 1 (length (mevedel-session-pending-reminders
-                                    session))))
-              (let ((reminder (car (mevedel-session-pending-reminders
-                                    session))))
+              (should (= 1 (length
+                            (plist-get mevedel-reminders--turn-events
+                                       :items))))
+              (let ((reminder
+                     (cdar (plist-get mevedel-reminders--turn-events
+                                      :items))))
                 (should (string-match-p "lib/foo\\.el" reminder))
                 (should (string-match-p "elisp" reminder))
                 (should-not (string-match-p "user-only" reminder))

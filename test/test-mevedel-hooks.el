@@ -1158,30 +1158,43 @@
   (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
          (session (mevedel-hooks-test--session root)))
     (unwind-protect
-        (let ((mevedel-pre-tool-use-functions
-               '(mevedel-hooks-test--deny-fn)))
-          (mevedel-hooks-test--await
-           (lambda (cb)
-             (mevedel-hooks-run-event
-              'PreToolUse
-              '(:tool-name "Bash" :tool-input (:command "echo hi"))
-              cb session)))
-          (let ((body (car (mevedel-session-pending-reminders session))))
-            (should (string-match-p "PreToolUse hook blocked" body))
-            (should (string-match-p "blocked" body))))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :id "request-1"
+                                               :session session))
+          (let ((mevedel-pre-tool-use-functions
+                 '(mevedel-hooks-test--deny-fn)))
+            (mevedel-hooks-test--await
+             (lambda (cb)
+               (mevedel-hooks-run-event
+                'PreToolUse
+                '(:tool-name "Bash" :tool-input (:command "echo hi"))
+                cb session)))
+            (let ((body
+                   (cdar (plist-get mevedel-reminders--turn-events
+                                    :items))))
+              (should (string-match-p "PreToolUse hook blocked" body))
+              (should (string-match-p "blocked" body)))))
       (delete-directory root t)))
   (let* ((root (make-temp-file "mevedel-hooks-reminders" t))
          (session (mevedel-hooks-test--session root)))
     (unwind-protect
-        (let ((mevedel-post-tool-use-functions
-               '(mevedel-hooks-test--system-message-fn)))
-          (mevedel-hooks-test--await
-           (lambda (cb)
-             (mevedel-hooks-run-event
-              'PostToolUse
-              '(:tool-name "Read" :tool-result "ok")
-              cb session)))
-          (should-not (mevedel-session-pending-reminders session)))
+        (with-temp-buffer
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request
+                      (mevedel-request--create :id "request-1"
+                                               :session session))
+          (let ((mevedel-post-tool-use-functions
+                 '(mevedel-hooks-test--system-message-fn)))
+            (mevedel-hooks-test--await
+             (lambda (cb)
+               (mevedel-hooks-run-event
+                'PostToolUse
+                '(:tool-name "Read" :tool-result "ok")
+                cb session)))
+            (should-not
+             (plist-get mevedel-reminders--turn-events :items))))
       (delete-directory root t))))
 
 (mevedel-deftest mevedel-hooks-run-event/command

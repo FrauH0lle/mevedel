@@ -79,6 +79,12 @@ fire-count and payload."
 
   :doc "WAIT routes continuations through the shared compaction gate"
   (let ((wait-entry (assq 'WAIT mevedel-agent-exec--handlers)))
+    (should (member #'mevedel-reminders--handle-inject
+                    (cdr wait-entry)))
+    (should
+     (< (cl-position #'mevedel-reminders--handle-inject (cdr wait-entry))
+        (cl-position #'mevedel-tools--handle-agent-roster-inject
+                     (cdr wait-entry))))
     (should (member #'mevedel--compact-handle-agent-wait
                     (cdr wait-entry)))
     (should-not (member #'gptel--handle-wait (cdr wait-entry)))))

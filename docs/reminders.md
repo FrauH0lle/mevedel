@@ -1,9 +1,9 @@
 # System reminders
 
 System reminders are model-visible, user-hidden guidance injected into
-the prompt stream as `<system-reminder>` blocks. `mevedel-reminders.el`
+the request stream as `<system-reminder>` blocks. `mevedel-reminders.el`
 owns the reminder struct, firing policy, session and agent scoped
-reminder lists, and prompt-transform injection. The base system prompt
+reminder lists, and request-time injection. The base system prompt
 teaches the model that these blocks are system context, not user text or
 tool output.
 
@@ -19,11 +19,25 @@ flowchart TD
     A[Session, agent, or runtime event] --> B[Evaluate reminder policy]
     B --> C{Should fire now?}
     C -- No --> D[Keep or throttle reminder]
-    C -- Yes --> E[Render system-reminder block]
-    E --> F[Inject through prompt transform or inline event path]
-    F --> G[Update last-fired or consume FIFO event]
-    G --> H[Model receives hidden guidance]
+    C -- Yes --> E[Stage or queue reminder by request owner]
+    E --> F[Coalesce at the next WAIT]
+    F --> G[Inject one synthetic user-role message]
+    G --> H[Model receives hidden system-reminder blocks]
 ```
+
+Initial reminders are staged by the prompt transform without changing the
+accepted user prompt. At the first request `WAIT`, all staged blocks are
+injected in one synthetic user-role message immediately before the actual user
+message. Observations produced while tools run are buffer-local and bound to
+the active root request or retained-agent invocation. Repeated observations
+with the same key coalesce and are injected at the next `WAIT` owned by that
+same turn. They are discarded when the owner changes and are never carried
+into the next user turn.
+
+Explicit lifecycle events that intentionally survive a request boundary still
+use the session pending-event FIFO. Durable state reminders are regenerated
+from session state rather than persisted as transient observations. Root and
+retained-agent queues remain isolated.
 
 ## Implemented
 
@@ -133,14 +147,34 @@ guidance in the rejection reminder.
   that budget status changes. The prompt section itself still carries the
   roster budget note; this reminder is only the event-shaped nudge.
 - **Path-scoped skill activation:** tool activity that touches a matching
-  path can activate dormant enabled path-scoped skills. When activated
-  skills are model-invocable, a pending event names the triggering path
-  and a capped list of newly active skills.
+  path can activate dormant enabled path-scoped skills. When activated skills
+  are model-invocable, a turn-scoped observation names the triggering path and
+  a capped list of newly active skills.
 - **Hook outcome:** hooks record blocking outcomes through
-  `mevedel-hooks-record-session-reminder`, consumed by `pending-events`;
+  `mevedel-hooks-record-session-reminder` as a turn-scoped observation;
   standalone `:system-message` remains a transient notification and hook-log
   entry. Additional hook context still uses `<hook-context>`.
+
+### Edit diagnostics
+
+Diagnostics are observed only after a successful `Write` or approved `Edit`.
+Before the first edit of a visited file in a request, mevedel captures that
+file's current Flymake and Flycheck diagnostics as its baseline. After the
+edit, an unmodified stale buffer is safely reverted, active checkers are
+started, and the tool callback waits for fresh results or a fixed 30-second
+timeout. Modified stale buffers are never reverted, and rejected or failed
+edits produce no diagnostic observation.
+
+The first fresh result is compared with the baseline: new or changed
+diagnostics are completion work, while pre-existing diagnostics are context
+only unless they block the requested work. Later edits compare with the last
+fresh result and do not repeat the pre-existing category. Resolved diagnostics
+are telemetry only. Model-visible output prioritizes new diagnostics, sorts by
+severity, caps output at 10 diagnostics per file and 30 total, and reports one
+aggregate omitted count. Telemetry records counts and outcomes, never
+diagnostic text or file paths.
+
 Default session reminders are installed idempotently through
-`mevedel-reminders-install-defaults`. Event-shaped reminders use the
-session pending-reminder FIFO and the `pending-events` reminder unless
-they are injected inline by the view layer.
+`mevedel-reminders-install-defaults`. Lifecycle events use the session
+pending-reminder FIFO and `pending-events`; observations use the owner-bound
+turn queue.

@@ -5,6 +5,7 @@
 ;;; Code:
 
 (require 'gptel)
+(require 'gptel-gemini)
 (require 'gptel-request)
 (require 'mevedel-structs)
 (require 'mevedel-workspace)
@@ -404,7 +405,7 @@
    :after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-  :doc "`mevedel-reminders--transform' prepends blocks to the prompt via FSM"
+  :doc "`mevedel-reminders--transform' leaves user text intact and stages blocks"
   (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
          (session (mevedel-session-create "main" ws))
          (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
@@ -426,28 +427,14 @@
             (insert "user prompt body")
             (mevedel-reminders--transform fsm)
             (should
-             (string-match-p
-              "<system-reminder>\nREMIND\n</system-reminder>\n\n<hook-context>\n<hook-event name=\"SessionStart\">\nHOOK\n</hook-event>\n</hook-context>\nuser prompt body"
+             (equal
+              "\n<hook-context>\n<hook-event name=\"SessionStart\">\nHOOK\n</hook-event>\n</hook-context>\nuser prompt body"
               (buffer-string)))
-            (dolist (block '("<hook-context>" "<system-reminder>"))
-              (save-excursion
-                (goto-char (point-min))
-                (should (search-forward block nil t))
-                (let ((start (match-beginning 0)))
-                  (search-forward
-                   (if (equal block "<hook-context>")
-                       "</hook-context>"
-                     "</system-reminder>"))
-                  (dolist (prop '(gptel front-sticky))
-                    (let ((pos start)
-                          found)
-                      (while (and (< pos (point)) (not found))
-                        (when (get-text-property pos prop)
-                          (setq found t))
-                        (setq pos (or (next-single-property-change
-                                       pos prop nil (point))
-                                      (point))))
-                      (should-not found))))))))
+            (should
+             (equal
+              '("<system-reminder>\nREMIND\n</system-reminder>")
+              (plist-get (gptel-fsm-info fsm)
+                         :mevedel-reminder-blocks)))))
       (kill-buffer chat-buf)
       (kill-buffer prompt-buf)))
 
@@ -479,6 +466,114 @@
             (should (equal "untouched" (buffer-string)))))
       (kill-buffer chat-buf)
       (kill-buffer prompt-buf))))
+
+(mevedel-deftest mevedel-reminders--handle-inject
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "injects staged reminders before the untouched current user message"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (backend (gptel-make-openai
+                   "reminder-openai" :key "test" :host "example.test"
+                   :models '(test)))
+         (data (list :messages
+                     [(:role "assistant" :content "old")
+                      (:role "user" :content "actual task")]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :backend backend :data data
+                           :mevedel-reminder-blocks
+                           '("<system-reminder>\none\n</system-reminder>"
+                             "<system-reminder>\ntwo\n</system-reminder>")))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (mevedel-reminders--handle-inject fsm)
+          (let ((messages (plist-get data :messages)))
+            (should (= 3 (length messages)))
+            (should (equal "actual task"
+                           (plist-get (aref messages 2) :content)))
+            (should
+             (equal
+              "<system-reminder>\none\n</system-reminder>\n<system-reminder>\ntwo\n</system-reminder>"
+              (plist-get (aref messages 1) :content))))
+          (should-not (plist-get (gptel-fsm-info fsm)
+                                 :mevedel-reminder-blocks))
+          (mevedel-reminders--handle-inject fsm)
+          (should (= 3 (length (plist-get data :messages)))))
+      (kill-buffer chat-buf)))
+
+  :doc "formats synthetic reminder messages for the active backend"
+  (let* ((ws (mevedel-workspace-get-or-create
+              'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (backend (gptel-make-gemini
+                   "reminder-gemini" :key "test" :models '(test)))
+         (data (list :contents
+                     [(:role "model" :parts [(:text "old")])
+                      (:role "user" :parts [(:text "actual task")])]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :backend backend :data data
+                           :mevedel-reminder-blocks
+                           '("<system-reminder>\ncontext\n</system-reminder>")))))
+    (unwind-protect
+        (progn
+          (with-current-buffer chat-buf
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (mevedel-reminders--handle-inject fsm)
+          (let* ((contents (plist-get data :contents))
+                 (reminder (aref contents 1)))
+            (should (= 3 (length contents)))
+            (should-not (plist-member reminder :content))
+            (should
+             (equal "<system-reminder>\ncontext\n</system-reminder>"
+                    (plist-get (aref (plist-get reminder :parts) 0)
+                               :text)))))
+      (kill-buffer chat-buf))))
+
+(mevedel-deftest mevedel-reminders-queue-turn-event
+  (:before-each (mevedel-workspace-clear-registry)
+   :after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "coalesces same-turn events and drops them when their owner changes"
+  (let* ((ws (mevedel-workspace-get-or-create 'project "/tmp/p/" "/tmp/p/" "p"))
+         (session (mevedel-session-create "main" ws))
+         (chat-buf (generate-new-buffer " *mevedel-test-chat*"))
+         (request-1 (mevedel-request--create :id "request-1" :session session))
+         (request-2 (mevedel-request--create :id "request-2" :session session))
+         (backend (gptel-make-openai
+                   "reminder-events" :key "test" :host "example.test"
+                   :models '(test)))
+         (data (list :messages [(:role "user" :content "task")]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat-buf :backend backend :data data))))
+    (unwind-protect
+        (with-current-buffer chat-buf
+          (setq-local mevedel--session session)
+          (setq-local mevedel--current-request request-1)
+          (mevedel-reminders-queue-turn-event chat-buf 'diagnostics "old")
+          (mevedel-reminders-queue-turn-event chat-buf 'diagnostics "new")
+          (mevedel-reminders--handle-inject fsm)
+          (should (= 2 (length (plist-get data :messages))))
+          (should
+           (equal "<system-reminder>\nnew\n</system-reminder>"
+                  (plist-get (aref (plist-get data :messages) 1) :content)))
+          (mevedel-reminders-queue-turn-event chat-buf 'diagnostics "late")
+          (setq-local mevedel--current-request request-2)
+          (mevedel-reminders--handle-inject fsm)
+          (should (= 2 (length (plist-get data :messages)))))
+      (kill-buffer chat-buf))))
 
 
 ;;
@@ -984,117 +1079,273 @@
                      (mevedel-session-reminders session)))))
 
 
-(mevedel-deftest mevedel-reminders-make-diagnostics
+(mevedel-deftest mevedel-reminders--diagnostics-record-current
   (:after-each (mevedel-workspace-clear-registry))
   ,test
   (test)
-
-  :doc "does not fire when no workspace buffers have diagnostics"
-  (let* ((tmp (make-temp-file "mevedel-diag-" t))
-         (ws (mevedel-workspace-get-or-create
-              'project (file-name-as-directory tmp)
-              (file-name-as-directory tmp) "diag"))
+  :doc "classifies the first refresh against baseline and later refreshes against the last report"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-diag-" t)))
+         (file (file-name-concat root "sample.el"))
+         (ws (mevedel-workspace-get-or-create 'project root root "diag"))
          (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-diagnostics)))
+         (chat (generate-new-buffer " *mevedel-diag-chat*"))
+         (source nil)
+         (backend (gptel-make-openai
+                   "reminder-diagnostics" :key "test" :host "example.test"
+                   :models '(test)))
+         (data (list :messages [(:role "user" :content "task")]))
+         (fsm (gptel-make-fsm
+               :info (list :buffer chat :backend backend :data data)))
+         (old nil)
+         (fixed nil)
+         (new nil))
     (unwind-protect
-        (should-not (mevedel-reminders--should-fire-p r 0 session))
-      (delete-directory tmp t)))
-
-  :doc "fires and formats when a workspace buffer has Flymake diagnostics"
-  (let* ((tmp (make-temp-file "mevedel-diag-" t))
-         (file (expand-file-name "foo.el" tmp))
+        (progn
+          (write-region "(message \"ok\")\n" nil file nil 'silent)
+          (setq source (find-file-noselect file)
+                old (list file 1 "error" "old")
+                fixed (list file 2 "warning" "fixed")
+                new (list file 3 "warning" "new"))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda () (list old fixed))))
+            (mevedel-reminders-diagnostics-before-edit chat file))
+          (mevedel-reminders--diagnostics-record-current
+           chat file (list old new))
+          (mevedel-reminders--handle-inject fsm)
+          (let ((body (plist-get
+                       (aref (plist-get data :messages) 1) :content)))
+            (should (string-match-p "New or changed diagnostics" body))
+            (should (string-match-p "new" body))
+            (should (string-match-p "Pre-existing diagnostics" body))
+            (should (string-match-p "old" body))
+            (should-not (string-match-p "fixed" body)))
+          (mevedel-reminders--diagnostics-record-current
+           chat file (list (list file 1 "error" "changed")))
+          (mevedel-reminders--handle-inject fsm)
+          (let ((body (plist-get
+                       (aref (plist-get data :messages) 2) :content)))
+            (should (string-match-p "changed" body))
+            (should-not (string-match-p "Pre-existing diagnostics" body))
+            (should-not (string-match-p "\\[error\\] old" body))))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (delete-directory root t))))
+(mevedel-deftest mevedel-reminders-diagnostics-after-edit
+  (:after-each (mevedel-workspace-clear-registry))
+  ,test
+  (test)
+  :doc "starts active checkers and continues after their fresh results are recorded"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-diag-" t)))
+         (file (file-name-concat root "source.el"))
          (ws (mevedel-workspace-get-or-create
-              'project (file-name-as-directory tmp)
-              (file-name-as-directory tmp) "diag"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-diagnostics))
-         (buf (find-file-noselect file)))
+              'project root root "diagnostics"))
+         (session (mevedel-session-create "main" ws root))
+         (chat (generate-new-buffer " *mevedel-diag-chat*"))
+         source
+         started
+         telemetry
+         continued)
     (unwind-protect
-        (with-current-buffer buf
-          ;; Emulate flymake-mode being active with one diagnostic
-          (setq-local flymake-mode t)
-          (cl-letf (((symbol-function 'flymake-diagnostics)
-                     (lambda (&rest _)
-                       (list (list 'mock-diag)))))
-            (cl-letf (((symbol-function 'flymake-diagnostic-beg)
-                       (lambda (_) (point-min)))
-                      ((symbol-function 'flymake-diagnostic-type)
-                       (lambda (_) :error))
-                      ((symbol-function 'flymake-diagnostic-text)
-                       (lambda (_) "bad thing")))
-              (should (mevedel-reminders--should-fire-p r 0 session))
-              (let ((content (funcall (mevedel-reminder-content r) session)))
-                (should (string-match-p "bad thing" content))
-                (should (string-match-p "error" content))
-                (should (string-match-p "foo\\.el" content))))))
-      (kill-buffer buf)
-      (delete-directory tmp t)))
-
-  :doc "fires and formats when a workspace buffer has Flycheck errors"
-  (let* ((tmp (make-temp-file "mevedel-diag-" t))
-         (file (expand-file-name "bar.el" tmp))
+        (progn
+          (write-region "(message \"old\")\n" nil file nil 'silent)
+          (setq source (find-file-noselect file))
+          (with-current-buffer source
+            (setq-local flymake-mode t))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda () nil)))
+            (mevedel-reminders-diagnostics-before-edit chat file))
+          (cl-letf (((symbol-function 'flymake-start)
+                     (lambda (&rest _) (setq started t)))
+                    ((symbol-function 'flymake-running-backends)
+                     (lambda () nil))
+                    ((symbol-function 'mevedel-telemetry-current-session)
+                     (lambda (&optional _buffer) session))
+                    ((symbol-function 'mevedel-telemetry-record)
+                     (lambda (_session _event &rest props)
+                       (push (plist-get props :outcome) telemetry)))
+                    ((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda () (list (list file 1 "error" "fresh")))))
+            (mevedel-reminders-diagnostics-after-edit
+             chat file (lambda () (setq continued t))))
+          (should started)
+          (should continued)
+          (should (equal '(started ready) (nreverse telemetry)))
+          (with-current-buffer chat
+            (should (assq 'diagnostics
+                          (plist-get mevedel-reminders--turn-events
+                                     :items)))))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (delete-directory root t)))
+  :doc "restarts an in-flight Flycheck run before collecting results"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-diag-" t)))
+         (file (file-name-concat root "source.el"))
          (ws (mevedel-workspace-get-or-create
-              'project (file-name-as-directory tmp)
-              (file-name-as-directory tmp) "diag"))
-         (session (mevedel-session-create "main" ws))
-         (r (mevedel-reminders-make-diagnostics))
-         (buf (find-file-noselect file)))
+              'project root root "diagnostics"))
+         (session (mevedel-session-create "main" ws root))
+         (chat (generate-new-buffer " *mevedel-diag-chat*"))
+         source
+         events
+         continued)
     (unwind-protect
-        (with-current-buffer buf
-          (setq-local flycheck-mode t)
-          (cl-letf (((symbol-function 'flycheck-overlay-errors-in)
-                     (lambda (&rest _) (list (list 'mock-err))))
-                    ((symbol-function 'flycheck-error-line)
-                     (lambda (_) 42))
-                    ((symbol-function 'flycheck-error-level)
-                     (lambda (_) 'warning))
-                    ((symbol-function 'flycheck-error-message)
-                     (lambda (_) "style nit")))
-            (should (mevedel-reminders--should-fire-p r 0 session))
-            (let ((content (funcall (mevedel-reminder-content r) session)))
-              (should (string-match-p "style nit" content))
-              (should (string-match-p "warning" content))
-              (should (string-match-p "42" content))
-              (should (string-match-p "bar\\.el" content)))))
-      (kill-buffer buf)
-      (delete-directory tmp t)))
-
-  :doc "merges Flymake and Flycheck output from the same buffer"
-  (let* ((tmp (make-temp-file "mevedel-diag-" t))
-         (file (expand-file-name "both.el" tmp))
+        (progn
+          (write-region "(message \"old\")\n" nil file nil 'silent)
+          (setq source (find-file-noselect file))
+          (with-current-buffer source
+            (setq-local flycheck-mode t))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda () nil)))
+            (mevedel-reminders-diagnostics-before-edit chat file))
+          (cl-letf (((symbol-function 'flycheck-stop)
+                     (lambda () (push 'stop events)))
+                    ((symbol-function 'flycheck-buffer)
+                     (lambda () (push 'start events)))
+                    ((symbol-function 'flycheck-running-p)
+                     (lambda () nil))
+                    ((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda ()
+                       (push 'collect events)
+                       nil)))
+            (mevedel-reminders-diagnostics-after-edit
+             chat file (lambda () (setq continued t))))
+          (should continued)
+          (should (equal '(stop start collect) (nreverse events))))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (delete-directory root t)))
+  :doc "continues without collecting stale overlays when checker startup fails"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-diag-" t)))
+         (file (file-name-concat root "source.el"))
          (ws (mevedel-workspace-get-or-create
-              'project (file-name-as-directory tmp)
-              (file-name-as-directory tmp) "diag"))
-         (session (mevedel-session-create "main" ws))
-         (buf (find-file-noselect file)))
+              'project root root "diagnostics"))
+         (session (mevedel-session-create "main" ws root))
+         (chat (generate-new-buffer " *mevedel-diag-chat*"))
+         source
+         collected
+         continued)
     (unwind-protect
-        (with-current-buffer buf
-          (setq-local flymake-mode t)
-          (setq-local flycheck-mode t)
-          (cl-letf (((symbol-function 'flymake-diagnostics)
-                     (lambda (&rest _) (list 'fm)))
-                    ((symbol-function 'flymake-diagnostic-beg)
-                     (lambda (_) (point-min)))
-                    ((symbol-function 'flymake-diagnostic-type)
-                     (lambda (_) :error))
-                    ((symbol-function 'flymake-diagnostic-text)
-                     (lambda (_) "flymake-msg"))
-                    ((symbol-function 'flycheck-overlay-errors-in)
-                     (lambda (&rest _) (list 'fc)))
-                    ((symbol-function 'flycheck-error-line)
-                     (lambda (_) 7))
-                    ((symbol-function 'flycheck-error-level)
-                     (lambda (_) 'warning))
-                    ((symbol-function 'flycheck-error-message)
-                     (lambda (_) "flycheck-msg")))
-            (let ((diags (mevedel-reminders--collect-diagnostics session)))
-              (should (= 2 (length diags)))
-              (should (cl-some (lambda (d) (string-match-p "flymake-msg" (nth 3 d)))
-                               diags))
-              (should (cl-some (lambda (d) (string-match-p "flycheck-msg" (nth 3 d)))
-                               diags)))))
-      (kill-buffer buf)
-      (delete-directory tmp t))))
+        (progn
+          (write-region "(message \"old\")\n" nil file nil 'silent)
+          (setq source (find-file-noselect file))
+          (with-current-buffer source
+            (setq-local flycheck-mode t))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda () nil)))
+            (mevedel-reminders-diagnostics-before-edit chat file))
+          (cl-letf (((symbol-function 'flycheck-stop) #'ignore)
+                    ((symbol-function 'flycheck-buffer)
+                     (lambda () (error "Cannot start checker")))
+                    ((symbol-function 'flycheck-running-p)
+                     (lambda () nil))
+                    ((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda ()
+                       (setq collected t)
+                       nil)))
+            (mevedel-reminders-diagnostics-after-edit
+             chat file (lambda () (setq continued t))))
+          (should continued)
+          (should-not collected))
+      (when (buffer-live-p source) (kill-buffer source))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (delete-directory root t)))
+  :doc "does not discard an unsaved buffer when the edited file changed on disk"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-diag-" t)))
+         (file (file-name-concat root "source.el"))
+         (ws (mevedel-workspace-get-or-create
+              'project root root "diagnostics"))
+         (session (mevedel-session-create "main" ws root))
+         (chat (generate-new-buffer " *mevedel-diag-chat*"))
+         source
+         started
+         continued)
+    (unwind-protect
+        (progn
+          (write-region "old\n" nil file nil 'silent)
+          (setq source (find-file-noselect file))
+          (with-current-buffer source
+            (setq-local flymake-mode t)
+            (goto-char (point-max))
+            (insert "unsaved\n"))
+          (with-current-buffer chat
+            (setq-local mevedel--session session)
+            (setq-local mevedel--current-request
+                        (mevedel-request--create :id "request-1"
+                                                 :session session)))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders--collect-diagnostics-in-buffer)
+                     (lambda () nil)))
+            (mevedel-reminders-diagnostics-before-edit chat file))
+          (with-temp-buffer
+            (insert "external\n")
+            (write-region nil nil file nil 'silent))
+          (cl-letf (((symbol-function 'flymake-start)
+                     (lambda (&rest _) (setq started t))))
+            (mevedel-reminders-diagnostics-after-edit
+             chat file (lambda () (setq continued t))))
+          (should continued)
+          (should-not started)
+          (with-current-buffer source
+            (should (string-match-p "unsaved" (buffer-string)))))
+      (when (buffer-live-p source)
+        (with-current-buffer source
+          (set-buffer-modified-p nil))
+        (kill-buffer source))
+      (when (buffer-live-p chat) (kill-buffer chat))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-reminders--format-diagnostic-reports
+  ()
+  ,test
+  (test)
+  :doc "prioritizes new diagnostics and enforces per-file and total limits"
+  (let* ((files '("/tmp/a.el" "/tmp/b.el" "/tmp/c.el" "/tmp/d.el"))
+         (reports
+          (mapcar
+           (lambda (file)
+             (list :path file
+                   :new
+                   (cl-loop for line from 1 to 12
+                            collect (list file line "error"
+                                          (format "problem-%d" line)))
+                   :preexisting nil))
+           files))
+         (body (mevedel-reminders--format-diagnostic-reports reports)))
+    (should (= 30 (with-temp-buffer
+                    (insert body)
+                    (goto-char (point-min))
+                    (how-many "^  "))))
+    (should (= 18 (get-text-property
+                   0 'mevedel-diagnostics-omitted body)))
+    (should (string-match-p "18 diagnostics omitted" body))
+    (should (string-match-p "New or changed diagnostics" body))
+    (should-not (string-match-p "Pre-existing diagnostics" body))))
 
 
 (mevedel-deftest mevedel-reminders-make-edited-file
@@ -1613,7 +1864,7 @@
       (should (memq 'elisp-introspection-available types))
       (should (memq 'mode-constraints types))
       (should (memq 'plan-mode types))
-      (should (memq 'diagnostics types))
+      (should-not (memq 'diagnostics types))
       (should (memq 'edited-file types))
       (should (memq 'deferred-tools-roster types))
       (should (memq 'deferred-tools-expired types))
@@ -1638,7 +1889,6 @@
            (elisp-count (cl-count 'elisp-introspection-available types))
            (mode-count (cl-count 'mode-constraints types))
            (plan-mode-count (cl-count 'plan-mode types))
-           (diag-count (cl-count 'diagnostics types))
            (edit-count (cl-count 'edited-file types))
            (roster-count (cl-count 'deferred-tools-roster types))
            (expired-count (cl-count 'deferred-tools-expired types))
@@ -1655,7 +1905,6 @@
       (should (= 1 elisp-count))
       (should (= 1 mode-count))
       (should (= 1 plan-mode-count))
-      (should (= 1 diag-count))
       (should (= 1 edit-count))
       (should (= 1 roster-count))
       (should (= 1 expired-count))
