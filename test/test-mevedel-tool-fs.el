@@ -110,7 +110,17 @@
     (should
      (eq 'string
          (cadr (assq 'glob
-                     (mevedel-tool-args (mevedel-tool-get "Grep"))))))))
+                     (mevedel-tool-args (mevedel-tool-get "Grep"))))))
+    (should
+     (string-match-p
+      "explicit inclusion"
+      (nth 3 (assq 'glob
+                   (mevedel-tool-args (mevedel-tool-get "Grep"))))))
+    (should
+     (string-match-p
+      "explicitly selected ignored path"
+      (nth 3 (assq 'path
+                   (mevedel-tool-args (mevedel-tool-get "Grep"))))))))
 
 (defun test-mevedel-tool-fs--await-callback (fn args)
   "Call async tool handler FN with ARGS and return its callback result."
@@ -1319,7 +1329,7 @@
                               rg-args))))
           (should (string-match-p (regexp-quote tmp) result)))
       (delete-file tmp)))
-  :doc "narrows directory-qualified globs and keeps ignore rules"
+  :doc "lets explicit scope select ignored content while ordinary traversal does not"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (docs (file-name-concat tmp-dir "docs"))
          (nested-docs (file-name-concat tmp-dir "nested" "docs"))
@@ -1331,10 +1341,12 @@
           (make-directory (file-name-concat docs "ignored") t)
           (make-directory nested-docs t)
           (with-temp-file (file-name-concat tmp-dir ".gitignore")
-            (insert "docs/ignored/\n"))
+            (insert "docs/ignored/\ndocs/selected.md\n"))
           (with-temp-file (file-name-concat docs ".hidden" "visible.md")
             (insert "needle\n"))
           (with-temp-file (file-name-concat docs "ignored" "ignored.md")
+            (insert "needle\n"))
+          (with-temp-file (file-name-concat docs "selected.md")
             (insert "needle\n"))
           (with-temp-file (file-name-concat nested-docs "wrong.md")
             (insert "needle\n"))
@@ -1346,12 +1358,26 @@
           (setq result
                 (test-mevedel-tool-fs--await-callback
                  #'mevedel-tool-fs--grep
+                 (list :pattern "needle" :path tmp-dir)))
+          (should (string-match-p "visible\\.md" result))
+          (should-not (string-match-p "selected\\.md" result))
+          (should-not (string-match-p "ignored\\.md" result))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
                  (list :pattern "needle" :path tmp-dir
                        :glob "docs/**/*.md")))
           (should (string-match-p "visible\\.md" result))
+          (should (string-match-p "selected\\.md" result))
           (should-not (string-match-p "ignored\\.md" result))
           (should-not (string-match-p "excluded\\.md" result))
-          (should-not (string-match-p "wrong\\.md" result)))
+          (should-not (string-match-p "wrong\\.md" result))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "needle"
+                       :path (file-name-concat docs "ignored"))))
+          (should (string-match-p "ignored\\.md" result)))
       (delete-directory tmp-dir t)))
   :doc "reports partial output before interpreting timeout exit codes"
   (let ((tmp-dir (make-temp-file "mevedel-test-" t)))

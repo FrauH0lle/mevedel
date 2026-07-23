@@ -403,8 +403,10 @@ Absolute patterns, parent traversal, and existing symlink escapes are
 rejected. Missing qualified directories settle as ordinary no-match results.
 Both tools search hidden
 files and exclude `.git`, `.svn`, `.hg`, `.bzr`, `.jj`, and `.sl` metadata at
-any depth. Glob deliberately ignores ignore files; Grep respects them. Neither
-sorts results or follows symlinks. Both share
+any depth. Glob deliberately ignores ignore files. Grep respects ignore rules
+during ordinary traversal, while an explicit `path` or positive `glob` may
+select ignored content; explicit scope takes precedence. Neither sorts results
+or follows symlinks. Both share
 `mevedel-tool-fs-search-timeout` (20 seconds by default). Error, timeout, and
 output-limit facts are settled before exit codes, with captured timeout or
 output-limit text labeled partial and passed through the existing result
