@@ -328,6 +328,12 @@ The payload is exactly one proper keyword plist.  Marker-looking text with a
 non-plist payload, trailing Lisp data, or unreadable data is ordinary visible
 tool output and is preserved verbatim.
 
+Child-process settlement may add a model-hidden `:sandbox-summary` to this
+same payload. It contains only logical attempt/start/refusal counts, boundary
+symbols, and aggregate additional read/write mount counts. Default confined
+execution is omitted. Paths, commands, and raw launcher reasons are never
+copied into the summary.
+
 Tool renderer input is derived from the data buffer on each rerender; it
 must not depend on durable state stored only in view overlays or text
 properties. View-local fragment metadata, collapse state, and renderer caches
@@ -393,6 +399,9 @@ stdin is closed immediately.
 The current external-helper inventory is `diff`; `rg` for Read directory
 listings, Glob, and Grep; `pdfinfo` and `pdftoppm`; and ImageMagick's `magick`
 or `convert`. Their sandbox facts stay out of successful model-visible results.
+Non-default facts are aggregated per owning tool invocation and persisted in
+its hidden render-data, so short-lived additional mounts remain inspectable
+after the status-zone row returns to the default.
 Native filesystem permission checks remain the authorization boundary; helper
 confinement limits effects after that authorization.
 
@@ -454,7 +463,9 @@ never create transcript turns. Events carry the originating data buffer and
 durable tool-use ID, so the matching main or agent view is selected directly.
 Terminal settlement replaces the original row's hidden render-data side channel
 in the authoritative transcript with the bounded whole-artifact head-and-tail
-preview plus exit, outcome, duration, and omitted-output facts. The provider
+preview plus exit, outcome, duration, omitted-output facts, and any noteworthy
+sandbox summary. Polling, input, and stop tools never duplicate that disclosure
+on their own rows. The provider
 scrubber keeps that durable UI state model-hidden, while transcript persistence
 keeps it stable across cache turnover and resume. Parallel completion may beat
 gptel's insertion of the original row; a bounded data-buffer queue retains that
@@ -549,6 +560,8 @@ The main view keeps the child sandbox, filesystem, and network boundary visible
 in its status zone. It shows the selected default while idle, switches to the
 actual boundary for the lifetime of a Bash, batch-Eval, or external-helper
 child, and returns to the default on settlement. Bash and batch-Eval results
-also record the boundary that applied to their invocation. Additive filesystem
+also record the boundary that applied to their invocation. The settled owning
+tool row retains a compact disclosure for non-default boundaries, additional
+mounts, refusals, and children that never started. Additive filesystem
 state includes read and write grant counts; concurrent children are summarized
 without hiding their least-confined active dimensions.

@@ -1036,7 +1036,8 @@
            :conversation-location "agents/worker.chat.org"))
          runtime-required
          captured-agent
-         captured-configuration)
+         captured-configuration
+         captured-tool-use-id)
     (setf (mevedel-agent-invocation-agent-id turn) "worker--retained"
           (mevedel-agent-invocation-path turn) "/root/worker"
           (mevedel-agent-invocation-buffer turn) buffer
@@ -1061,15 +1062,18 @@
                                '(mevedel-agent-runtime-dispatch)))
                      (setq captured-agent seen-agent
                            captured-configuration
-                           (plist-get keys :frozen-configuration))
+                           (plist-get keys :frozen-configuration)
+                           captured-tool-use-id
+                           (plist-get keys :parent-tool-use-id))
                      (funcall (plist-get keys :on-invocation) turn)
                      t)))
           (mevedel-agent-control--dispatch-followup
-           session record "Continue."))
+           session record "Continue." "call_followup"))
       (kill-buffer buffer))
     (should runtime-required)
     (should-not captured-agent)
     (should (eq configuration captured-configuration))
+    (should (equal "call_followup" captured-tool-use-id))
     (should (= 1 (length (mevedel-session-agent-registry session))))))
 
 (mevedel-deftest mevedel-agent-control--normalize-fork-turns

@@ -16,7 +16,9 @@
 (require 'mevedel-skills-prompt)
 (require 'mevedel-structs)
 (require 'mevedel-tool-repair)
+(require 'mevedel-view)
 (require 'mevedel-view-agent)
+(require 'mevedel-view-stream)
 (require 'mevedel-workspace)
 (require 'helpers
          (file-name-concat
@@ -856,6 +858,135 @@
 		   (should (eq invocation saved))
 		   (should-not
 		    (mevedel-agent-invocation-transcript-save-timer invocation))))
+
+(mevedel-deftest mevedel-agent-conversation-refresh ()
+  ,test
+  (test)
+  :doc "patches a noteworthy direct-child summary into its exact parent row"
+  (let* ((parent (generate-new-buffer " *agent-summary-parent*"))
+         (view (generate-new-buffer " *agent-summary-view*"))
+         (summary
+          '(:attempt-count 1 :started-count 1 :refused-count 0
+            :sandbox bubblewrap :filesystem workspace-write
+            :network isolated :proc fresh
+            :additional-read-count 2 :additional-write-count 0))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "default--summary"
+           :path "/root/summary"
+           :parent-data-buffer parent
+           :parent-tool-use-id "call_summary"
+           :sandbox-summary-cell (list summary)))
+         patched rerendered)
+    (unwind-protect
+        (progn
+          (with-current-buffer parent
+            (setq-local mevedel--view-buffer view))
+          (cl-letf
+              (((symbol-function 'mevedel-agent-conversation--sync-entry)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-agent-conversation--render-data-bounds)
+                (lambda (&rest _) nil))
+               ((symbol-function 'mevedel-pipeline-update-tool-render-data)
+                (lambda (buffer tool-use-id updates)
+                  (setq patched (list buffer tool-use-id updates))
+                  t))
+               ((symbol-function 'mevedel-view-rerender)
+                (lambda (buffer) (setq rerendered buffer)))
+               ((symbol-function 'mevedel-view-refresh-agent-rendering)
+                (lambda (&rest _)
+                  (error "Targeted refresh used after summary patch"))))
+            (mevedel-agent-conversation-refresh invocation))
+          (should (eq parent (nth 0 patched)))
+          (should (equal "call_summary" (nth 1 patched)))
+          (should
+           (equal summary
+                  (plist-get (nth 2 patched) :sandbox-summary)))
+          (should (eq view rerendered)))
+      (kill-buffer parent)
+      (kill-buffer view)))
+  :doc "summary redraw preserves a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let* ((draft "> quoted\nsecond line")
+           (summary
+            '(:attempt-count 1 :started-count 1 :refused-count 0
+              :sandbox bubblewrap :filesystem workspace-write
+              :network isolated :proc fresh
+              :additional-read-count 2 :additional-write-count 0))
+           (invocation
+            (mevedel-agent-invocation--create
+             :agent-id "default--summary"
+             :path "/root/summary"
+             :parent-data-buffer data-buf
+             :parent-tool-use-id "call_summary"
+             :sandbox-summary-cell (list summary)))
+           (mevedel-view-rerender-debounce 0))
+      (with-current-buffer data-buf
+        (insert "#+begin_tool (Agent :task_name \"summary\")\n")
+        (let ((start (point)))
+          (insert
+           "(:name \"Agent\" :args (:task_name \"summary\"))\n\nstarted\n")
+          (put-text-property start (point) 'gptel
+                             '(tool . "call_summary")))
+        (insert "#+end_tool\n"))
+      (with-current-buffer view-buf
+        (mevedel-view--full-rerender)
+        (mevedel-view-test--insert-composer-draft draft 4))
+      (cl-letf
+          (((symbol-function 'mevedel-agent-conversation--sync-entry)
+            #'ignore)
+           ((symbol-function 'mevedel-agent-conversation--render-data-bounds)
+            (lambda (&rest _) nil)))
+        (mevedel-agent-conversation-refresh invocation))
+      (with-current-buffer view-buf
+        (should (equal draft (mevedel-view--input-text)))
+        (should (= (point) (+ (mevedel-view--input-start) 4)))
+        (should-not
+         (get-text-property (mevedel-view--input-start) 'read-only)))))
+  :doc "queues a fast settlement until the exact parent row is inserted"
+  (let* ((parent (generate-new-buffer " *agent-summary-race*"))
+         (summary
+          '(:attempt-count 1 :started-count 1 :refused-count 0
+            :sandbox bubblewrap :filesystem workspace-write
+            :network isolated :proc fresh
+            :additional-read-count 1 :additional-write-count 0))
+         (invocation
+          (mevedel-agent-invocation--create
+           :agent-id "default--race"
+           :path "/root/race"
+           :parent-data-buffer parent
+           :parent-tool-use-id "call_race"
+           :sandbox-summary-cell (list summary))))
+    (unwind-protect
+        (progn
+          (cl-letf
+              (((symbol-function 'mevedel-agent-conversation--sync-entry)
+                #'ignore)
+               ((symbol-function
+                 'mevedel-agent-conversation--render-data-bounds)
+                (lambda (&rest _) nil)))
+            (mevedel-agent-conversation-refresh invocation))
+          (with-current-buffer parent
+            (should
+             (gethash "call_race"
+                      mevedel-view-stream--pending-execution-terminals))
+            (let ((start (point)))
+              (insert
+               "(:name \"Agent\" :args (:task_name \"race\"))\n\nstarted\n")
+              (put-text-property start (point) 'gptel
+                                 '(tool . "call_race")))
+            (mevedel-view-stream-retry-execution-terminals)
+            (should-not
+             (gethash "call_race"
+                      mevedel-view-stream--pending-execution-terminals))
+            (should
+             (equal
+              summary
+              (plist-get
+               (mevedel-pipeline-tool-render-data parent "call_race")
+               :sandbox-summary)))))
+      (kill-buffer parent))))
 
 
 

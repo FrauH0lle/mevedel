@@ -50,6 +50,14 @@ identity and is consumed once by its next accepted task. Every completed,
 errored, or interrupted turn runs one observational `SubagentStop` without
 removing the retained identity.
 
+Each invocation aggregates only its own direct operating-system children.
+After those children are stopped or settled, noteworthy confinement facts are
+patched into the exact `Agent` row that started a new conversation or the
+exact idle `FollowupAgent` row that activated the retained turn. Descendant
+agents, earlier turns, and steering messages sent to an already-running agent
+are excluded. The rollup uses hidden transcript render-data and is not added
+to agent sidecars or model-visible results.
+
 The built-in role configurations are:
 
 - **worker**: broad implementation, execution, navigation, skill, task, and

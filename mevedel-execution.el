@@ -18,6 +18,9 @@
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-runtime-settled-p
                   "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-sandbox-summary-cell
+                  "mevedel-agents" (cl-x) t)
+(defvar mevedel--agent-invocation)
 
 ;; `mevedel-execution-scheduler'
 (declare-function mevedel-execution-scheduler-cancel
@@ -140,6 +143,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   data-buffer
   owner
   owner-context
+  sandbox-summary-cell
   session
   tool-args
   tool-use-id)
@@ -178,6 +182,7 @@ Values below 0.25 are clamped so the UI receives at most four per second."
   sandbox-active-token
   sandbox-facts
   sandbox-preparation
+  sandbox-summary-cell
   scheduler-lease
   settle-timer
   spool-path
@@ -228,6 +233,9 @@ are contained by the execution module.")
 The function receives an immutable event plist and its private owner context,
 then returns non-nil only after durable delivery.  This is deliberately
 separate from passive event hooks; the context is never published to them.")
+
+(defvar mevedel-execution--sandbox-summary-cell nil
+  "Dynamically bound cell collecting child confinement for one tool call.")
 
 
 ;;
@@ -642,6 +650,100 @@ Delete its spool unless PRESERVE-SPOOL is non-nil."
         :additional-read-count (plist-get facts :additional-filesystem-read)
         :additional-write-count (plist-get facts :additional-filesystem-write)))
 
+(defun mevedel-execution--sandbox-summary-merge
+    (summary facts started-p refused-p)
+  "Merge one logical child attempt into SUMMARY.
+FACTS contains non-sensitive confinement facts.  STARTED-P records whether the
+requested command started, and REFUSED-P records a policy refusal."
+  (let* ((attempts (1+ (or (plist-get summary :attempt-count) 0)))
+         (started (+ (or (plist-get summary :started-count) 0)
+                     (if started-p 1 0)))
+         (refused (+ (or (plist-get summary :refused-count) 0)
+                     (if refused-p 1 0)))
+         (sandbox (plist-get facts :sandbox))
+         (filesystem (plist-get facts :filesystem))
+         (network (plist-get facts :network))
+         (proc (plist-get facts :proc))
+         (current-sandbox (plist-get summary :sandbox))
+         (current-filesystem (plist-get summary :filesystem))
+         (current-network (plist-get summary :network)))
+    (list
+     :attempt-count attempts
+     :started-count started
+     :refused-count refused
+     :sandbox
+     (cond
+      ((eq current-sandbox 'refused) current-sandbox)
+      ((eq sandbox 'refused) sandbox)
+      ((and current-sandbox (not (eq current-sandbox 'bubblewrap)))
+       current-sandbox)
+      (sandbox sandbox)
+      (t current-sandbox))
+     :filesystem
+     (cond
+      ((or (eq current-filesystem 'unrestricted)
+           (eq filesystem 'unrestricted))
+       'unrestricted)
+      ((or (eq current-filesystem 'unavailable)
+           (eq filesystem 'unavailable))
+       'unavailable)
+      (filesystem filesystem)
+      (t current-filesystem))
+     :network
+     (cond
+      ((or (eq current-network 'unrestricted)
+           (eq network 'unrestricted))
+       'unrestricted)
+      ((or (eq current-network 'unavailable)
+           (eq network 'unavailable))
+       'unavailable)
+      (network network)
+      (t current-network))
+     :proc (if (or (eq (plist-get summary :proc) 'host)
+                   (eq proc 'host))
+               'host
+             (or proc (plist-get summary :proc)))
+     :additional-read-count
+     (+ (or (plist-get summary :additional-read-count) 0)
+        (or (plist-get facts :additional-filesystem-read) 0))
+     :additional-write-count
+     (+ (or (plist-get summary :additional-write-count) 0)
+        (or (plist-get facts :additional-filesystem-write) 0)))))
+
+(defun mevedel-execution--record-sandbox-attempt
+    (facts started-p refused-p &rest cells)
+  "Record one logical child attempt in each unique mutable cell in CELLS."
+  (let (seen)
+    (dolist (cell cells)
+      (when (and (consp cell) (not (memq cell seen)))
+        (push cell seen)
+        (setcar cell
+                (mevedel-execution--sandbox-summary-merge
+                 (car cell) facts started-p refused-p))))))
+
+(defun mevedel-execution-sandbox-summary-class (summary)
+  "Return SUMMARY's disclosure class: `warning', `metadata', or nil."
+  (and summary
+       (let ((attempts (or (plist-get summary :attempt-count) 0)))
+         (cond
+          ((or (> (or (plist-get summary :additional-write-count) 0) 0)
+               (> (or (plist-get summary :refused-count) 0) 0)
+               (< (or (plist-get summary :started-count) 0) attempts)
+               (not (eq (plist-get summary :sandbox) 'bubblewrap))
+               (not (eq (plist-get summary :filesystem) 'workspace-write))
+               (not (eq (plist-get summary :network) 'isolated))
+               (eq (plist-get summary :proc) 'host))
+           'warning)
+          ((> (or (plist-get summary :additional-read-count) 0) 0)
+           'metadata)))))
+
+(defun mevedel-execution--agent-sandbox-summary-cell (invocation)
+  "Return INVOCATION's direct-child summary cell, or nil."
+  (and invocation
+       (fboundp 'mevedel-agent-invocation-p)
+       (mevedel-agent-invocation-p invocation)
+       (mevedel-agent-invocation-sandbox-summary-cell invocation)))
+
 (defun mevedel-execution--eask-command-p (command)
   "Return non-nil when COMMAND invokes Eask directly or through npx."
   (and (stringp command)
@@ -1021,6 +1123,9 @@ PROJECT-UNCONSUMED includes RANGE's omission in facts before commitment."
     (list :output (plist-get range :output)
           :facts facts
           :sandbox-facts (mevedel-execution--record-sandbox-facts record)
+          :sandbox-summary
+          (copy-tree
+           (car (mevedel-execution--record-sandbox-summary-cell record)))
           :error (mevedel-execution--record-error-data record)
           :claimed-final-p (and claimed t))))
 
@@ -1210,6 +1315,19 @@ it briefly so repeated owner polls return the same result."
         (when preparation
           (mevedel-sandbox-cleanup preparation))
         (setf (mevedel-execution--record-finished-p record) t)
+        (let* ((facts (mevedel-execution--record-sandbox-facts record))
+               (refused-p (eq (plist-get facts :sandbox) 'refused))
+               (started-p
+                (and (not refused-p)
+                     (not launch-failed)
+                     (processp (mevedel-execution--record-process record))))
+               (origin (mevedel-execution--record-origin record)))
+          (mevedel-execution--record-sandbox-attempt
+           facts started-p refused-p
+           (mevedel-execution--record-sandbox-summary-cell record)
+           (mevedel-execution--origin-sandbox-summary-cell origin)
+           (mevedel-execution--agent-sandbox-summary-cell
+            (mevedel-execution--origin-owner-context origin))))
         (apply #'mevedel-execution--telemetry
                record 'execution-finished
                :exit-code (mevedel-execution--record-exit-code record)
@@ -1430,6 +1548,7 @@ terminal settlement."
               :data-buffer data-buffer
               :owner (or owner "/root")
               :owner-context owner-context
+              :sandbox-summary-cell mevedel-execution--sandbox-summary-cell
               :session session
               :tool-args tool-args
               :tool-use-id tool-use-id)
@@ -1437,6 +1556,7 @@ terminal settlement."
              :output-chars 0 :output-head "" :output-tail ""
              :read-offset 0
              :resource-report-path (plist-get resource-capture :report)
+             :sandbox-summary-cell (list nil)
              :spool-path
              (make-temp-file
               (file-name-concat artifact-directory "execution-") nil ".log")
@@ -1864,7 +1984,17 @@ confinement inputs.  SESSION and OWNER fix the transient ownership boundary.
 TEARDOWN-FUNCTION releases caller-owned resources when lifecycle destruction
 discards the process without invoking CALLBACK."
   (require 'mevedel-sandbox)
-  (let* ((telemetry-span
+  (let* ((summary-cell (list nil))
+         (pipeline-summary-cell mevedel-execution--sandbox-summary-cell)
+         (invocation
+          (and (boundp 'mevedel--agent-invocation)
+               mevedel--agent-invocation))
+         (agent-summary-cell
+          (mevedel-execution--agent-sandbox-summary-cell invocation))
+         (attempt-recorded-p nil)
+         (started-p nil)
+         (current-facts nil)
+         (telemetry-span
           (and session
                (fboundp 'mevedel-telemetry-start)
                (mevedel-telemetry-start
@@ -1880,7 +2010,16 @@ discards the process without invoking CALLBACK."
         ((show-active (facts)
            (when active-token
              (mevedel-sandbox-track-active session active-token facts)))
+         (record-attempt ()
+           (unless attempt-recorded-p
+             (setq attempt-recorded-p t)
+             (mevedel-execution--record-sandbox-attempt
+              current-facts started-p
+              (eq (plist-get current-facts :sandbox) 'refused)
+              summary-cell pipeline-summary-cell agent-summary-cell)))
          (finish (child-result facts)
+           (setq current-facts facts)
+           (record-attempt)
            (when active-token
              (mevedel-sandbox-track-active session active-token nil))
            (when telemetry-span
@@ -1895,9 +2034,12 @@ discards the process without invoking CALLBACK."
                     :timed-out (and (plist-get child-result :timed-out-p) t)
                     (mevedel-execution--telemetry-facts facts)))
            (funcall callback
-                    (plist-put (copy-sequence child-result)
-                               :sandbox-facts facts)))
+                    (let ((result (copy-sequence child-result)))
+                      (setq result (plist-put result :sandbox-facts facts))
+                      (plist-put result :sandbox-summary
+                                 (copy-tree (car summary-cell))))))
          (teardown ()
+           (record-attempt)
            (when active-token
              (mevedel-sandbox-track-active session active-token nil))
            (mevedel-sandbox-cleanup preparation)
@@ -1905,6 +2047,8 @@ discards the process without invoking CALLBACK."
              (funcall teardown-function))))
       (pcase (plist-get preparation :state)
         ('refused
+         (setq current-facts (plist-get preparation :facts))
+         (record-attempt)
          (when telemetry-span
            (apply #'mevedel-telemetry-finish
                   telemetry-span :outcome 'refused
@@ -1919,9 +2063,11 @@ discards the process without invoking CALLBACK."
                 :output-limit-p nil
                 :wall-time-seconds 0.0
                 :error (list 'error (plist-get preparation :error))
-                :sandbox-facts (plist-get preparation :facts)))
+                :sandbox-facts (plist-get preparation :facts)
+                :sandbox-summary (copy-tree (car summary-cell))))
          nil)
         ('unrestricted
+         (setq current-facts (plist-get preparation :facts))
          (when (and session (fboundp 'mevedel-telemetry-record))
            (apply #'mevedel-telemetry-record
                   session 'execution-unrestricted
@@ -1932,55 +2078,73 @@ discards the process without invoking CALLBACK."
                   (mevedel-execution--telemetry-facts
                    (plist-get preparation :facts))))
          (show-active (plist-get preparation :facts))
-         (mevedel-execution--start-process
-          (lambda (child-result)
-            (finish child-result (plist-get preparation :facts)))
-          name (plist-get preparation :command) workdir timeout session owner
-          #'teardown))
+         (setq started-p
+               (processp
+                (mevedel-execution--start-process
+                 (lambda (child-result)
+                   (finish child-result (plist-get preparation :facts)))
+                 name (plist-get preparation :command) workdir timeout
+                 session owner #'teardown))))
         ('confined
+         (setq current-facts (plist-get preparation :facts))
          (show-active (plist-get preparation :facts))
-         (mevedel-execution--start-process
-          (lambda (child-result)
-            (if (and (plist-get preparation :fallback-p)
+         (setq
+          started-p
+          (processp
+           (mevedel-execution--start-process
+            (lambda (child-result)
+              (let ((launch-failed
                      (mevedel-sandbox-launch-failed-p
-                      preparation child-result))
-                (let ((facts
-                       (mevedel-sandbox--record-launch-failure child-result)))
-                  (when (and session (fboundp 'mevedel-telemetry-record))
-                    (apply #'mevedel-telemetry-record
-                           session 'sandbox-fallback
-                           :name name :owner owner
-                           :launch-failure-stage 'before-command-start
-                           :launch-failure-reason-class
-                           'sandbox-launch-failure
-                           :fallback-offered t
-                           :full-execution-approval-offered nil
-                           (mevedel-execution--telemetry-facts facts)))
-                  (when (and session (fboundp 'mevedel-telemetry-record))
-                    (apply #'mevedel-telemetry-record
-                           session 'execution-unrestricted
-                           :name name :owner owner
-                           :reason-class 'sandbox-launch-failure
-                           :after-confined-launch-failure t
-                           (mevedel-execution--telemetry-facts facts)))
-                  (show-active facts)
-                  (mevedel-sandbox-cleanup preparation)
-                  (mevedel-execution--start-process
-                   (lambda (fallback-result)
-                     (finish fallback-result facts))
-                   name (plist-get preparation :original-command)
-                   workdir timeout session owner #'teardown))
-              (let ((facts
-                     (if (mevedel-sandbox-launch-failed-p
-                          preparation child-result)
-                         (mevedel-sandbox--record-launch-failure child-result)
-                       (plist-get preparation :facts)))
-                    (clean-result
-                     (mevedel-sandbox-strip-marker preparation child-result)))
-                (mevedel-sandbox-cleanup preparation)
-                (finish clean-result facts))))
-          name (plist-get preparation :command) workdir timeout session owner
-          #'teardown))
+                      preparation child-result)))
+                (if (and (plist-get preparation :fallback-p) launch-failed)
+                    (let ((facts
+                           (mevedel-sandbox--record-launch-failure
+                            child-result)))
+                      (setq started-p nil
+                            current-facts facts)
+                      (when (and session
+                                 (fboundp 'mevedel-telemetry-record))
+                        (apply #'mevedel-telemetry-record
+                               session 'sandbox-fallback
+                               :name name :owner owner
+                               :launch-failure-stage 'before-command-start
+                               :launch-failure-reason-class
+                               'sandbox-launch-failure
+                               :fallback-offered t
+                               :full-execution-approval-offered nil
+                               (mevedel-execution--telemetry-facts facts)))
+                      (when (and session
+                                 (fboundp 'mevedel-telemetry-record))
+                        (apply #'mevedel-telemetry-record
+                               session 'execution-unrestricted
+                               :name name :owner owner
+                               :reason-class 'sandbox-launch-failure
+                               :after-confined-launch-failure t
+                               (mevedel-execution--telemetry-facts facts)))
+                      (show-active facts)
+                      (mevedel-sandbox-cleanup preparation)
+                      (setq
+                       started-p
+                       (processp
+                        (mevedel-execution--start-process
+                         (lambda (fallback-result)
+                           (finish fallback-result facts))
+                         name (plist-get preparation :original-command)
+                         workdir timeout session owner #'teardown))))
+                  (let ((facts
+                         (if launch-failed
+                             (mevedel-sandbox--record-launch-failure
+                              child-result)
+                           (plist-get preparation :facts)))
+                        (clean-result
+                         (mevedel-sandbox-strip-marker
+                          preparation child-result)))
+                    (setq started-p (not launch-failed)
+                          current-facts facts)
+                    (mevedel-sandbox-cleanup preparation)
+                    (finish clean-result facts)))))
+            name (plist-get preparation :command) workdir timeout session owner
+            #'teardown))))
         (_ (error "Unknown sandbox preparation state: %s"
                   (plist-get preparation :state))))
       nil)))

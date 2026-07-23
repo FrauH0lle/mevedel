@@ -281,6 +281,15 @@ fragment updates should not bypass the data-buffer transcript.
 Revisit source-backed transcript fragments only as a separate design after a
 concrete performance or correctness problem is identified.
 
+When an owning tool or agent turn used a non-default child boundary, its
+source-backed row includes a durable `Sandbox:` line directly below the normal
+header in collapsed, expanded, and compact-event forms. Read-only additional
+mounts use the subtle `◇` marker; writes, unrestricted or unavailable
+boundaries, host `/proc`, refusals, and no-start outcomes use `!`. Default
+Bubblewrap/workspace-write/isolated/fresh-proc execution remains silent. The
+line is reconstructed from hidden transcript render-data, not from the
+transient status zone or view-only state.
+
 High-level zone markers still define layout order in `mevedel-view.el`.
 `mevedel-view-interaction.el` turns the interaction marker into managed
 fragments; producers do not own managed overlays, preservation wrappers, or

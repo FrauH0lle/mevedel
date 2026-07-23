@@ -779,7 +779,8 @@ it queued for ordinary parent delivery."
   (setf (mevedel-agent-record-hook-context-pending record)
         (copy-tree entries)))
 
-(defun mevedel-agent-control--dispatch-followup (session record message)
+(defun mevedel-agent-control--dispatch-followup
+    (session record message &optional parent-tool-use-id)
   "Dispatch MESSAGE as RECORD's next provider turn in SESSION."
   (let ((buffer (mevedel-agent-record-conversation-buffer record)))
     (unless (buffer-live-p buffer)
@@ -802,6 +803,7 @@ it queued for ordinary parent delivery."
            (mevedel-agent-record-conversation-location record)
            :pending-hook-context
            (mevedel-agent-record-hook-context-pending record)
+           :parent-tool-use-id parent-tool-use-id
            :on-hook-context
            (apply-partially
             #'mevedel-agent-control--set-hook-context record)
@@ -817,7 +819,8 @@ it queued for ordinary parent delivery."
     (mevedel-agent-control--persist-session session)
     record))
 
-(defun mevedel-agent-control-followup (session target message)
+(cl-defun mevedel-agent-control-followup
+    (session target message &key parent-tool-use-id)
   "Start or steer TARGET with MESSAGE in SESSION and return its record."
   (unless (and (stringp message) (not (string-empty-p message)))
     (user-error "FollowupAgent message must be non-empty plain text"))
@@ -842,7 +845,8 @@ it queued for ordinary parent delivery."
           (user-error "Agent tree is at its active-turn capacity"))
         (setf (mevedel-agent-record-activity record) 'starting)
         (condition-case err
-            (mevedel-agent-control--dispatch-followup session record message)
+            (mevedel-agent-control--dispatch-followup
+             session record message parent-tool-use-id)
           (error
            (setf (mevedel-agent-record-activity record) 'idle)
            (setf (mevedel-agent-record-invocation record) nil)
@@ -872,7 +876,7 @@ it queued for ordinary parent delivery."
     (session task-name message
              &key role agent fork-turns model effort model-policy
              description on-invocation result-handler
-             skill-permission-rules skill-hook-rules)
+             skill-permission-rules skill-hook-rules parent-tool-use-id)
   "Spawn TASK-NAME with MESSAGE and optional controls in SESSION.
 Return the committed retained record."
   (mevedel-agent-control--validate-spawn session task-name message)
@@ -921,6 +925,7 @@ Return the committed retained record."
                :context-snapshot context-snapshot
                :model-policy model-policy
                :skill-permission-rules skill-permission-rules
+               :parent-tool-use-id parent-tool-use-id
                :path (mevedel-agent-record-path record)
                :on-invocation
                (lambda (invocation)

@@ -3547,7 +3547,7 @@
 		       out)
 		   (mevedel-pipeline--step-attach-render-data
 		    ctx (lambda (c) (setq out c)) #'ignore)
-		   (should (null (plist-get out :result)))))
+		   (should (null (plist-get out :result))))
 		 :doc "serializes explicit handler status with render-data"
 		 (let ((ctx (list :result "failed"
 				  :status 'error
@@ -3569,6 +3569,37 @@
 			 (cdr (mevedel-pipeline-extract-render-data
 			       (plist-get out :result)))
 			 :status))))
+		 :doc "serializes noteworthy sandbox summaries beside existing data"
+		 (let* ((summary
+			 '(:attempt-count 1 :started-count 1 :refused-count 0
+			   :sandbox bubblewrap :filesystem workspace-write
+			   :network isolated :proc fresh
+			   :additional-read-count 3 :additional-write-count 0))
+			(ctx (list :result "ok"
+				   :render-data '(:kind helper)
+				   :sandbox-summary-cell (list summary)))
+			out)
+		   (mevedel-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (let ((data (cdr (mevedel-pipeline-extract-render-data
+				  (plist-get out :result)))))
+		     (should (eq 'helper (plist-get data :kind)))
+		     (should (equal summary
+				    (plist-get data :sandbox-summary)))))
+		 :doc "omits default sandbox summaries"
+		 (let ((ctx
+			(list
+			 :result "ok"
+			 :sandbox-summary-cell
+			 (list
+			  '(:attempt-count 1 :started-count 1 :refused-count 0
+			    :sandbox bubblewrap :filesystem workspace-write
+			    :network isolated :proc fresh
+			    :additional-read-count 0 :additional-write-count 0))))
+		       out)
+		   (mevedel-pipeline--step-attach-render-data
+		    ctx (lambda (c) (setq out c)) #'ignore)
+		   (should (equal "ok" (plist-get out :result)))))
 
 (mevedel-deftest mevedel-pipeline--step-attach-media-data ()
 		 ,test
