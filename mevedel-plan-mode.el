@@ -13,6 +13,10 @@
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle "mevedel-interaction-prompt"
 		  (overlay outcome))
+(declare-function mevedel--prompt-framed-body
+                  "mevedel-interaction-prompt" (content face))
+(declare-function mevedel--prompt-key
+                  "mevedel-interaction-prompt" (key))
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-accept "mevedel-plan"
@@ -226,15 +230,15 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
 (defun mevedel-plan-mode--context-description (context)
   "Return the compact UI description for CONTEXT."
   (pcase context
-    ('current "keep the complete planning transcript")
-    ('fresh "start with setup context and the accepted plan")
-    ('summary "generate a compact handoff, then start with it and the accepted plan (additional model request)")))
+    ('current "full planning transcript")
+    ('fresh "setup context + accepted plan")
+    ('summary "compact handoff + accepted plan (additional model request)")))
 
 (defun mevedel-plan-mode--execution-description (execution)
   "Return the compact UI description for EXECUTION."
   (if (eq execution 'goal)
-      "continue automatically until complete, genuinely blocked, paused, or budget-limited"
-    "one ordinary implementation turn"))
+      "continue until complete, blocked, paused, or budget-limited"
+    "one implementation turn"))
 
 (defun mevedel-plan-mode--effective-goal-budget (buffer)
   "Return the Goal budget effective in BUFFER, or nil when unbounded."
@@ -377,29 +381,70 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                  (budget
                   (mevedel-plan-mode--effective-goal-budget chat-buffer))
                  (body
-                  (format
-                   "\n%s\n\nLocation   %s\nContext    %s — %s\nExecution  %s — %s\n%sMode       %s\n%s\n%s\n"
-                   (if (fboundp 'mevedel-view--fontify-as)
-                       (mevedel-view--fontify-as
-                        (plist-get entry :body) 'markdown-mode)
-                     (plist-get entry :body))
-                   (capitalize (symbol-name (plist-get selection :location)))
-                   (capitalize (symbol-name (plist-get selection :context)))
-                   (mevedel-plan-mode--context-description
-                    (plist-get selection :context))
-                   (capitalize (symbol-name execution))
-                   (mevedel-plan-mode--execution-description execution)
-                   (if (eq execution 'goal)
-                       (format "Goal budget %s\n"
-                               (if budget
-                                   (format "%d tokens" budget)
-                                 "Unlimited"))
-                     "")
-                   (plist-get selection :mode)
-                   (if warning (concat "\n" warning "\n") "")
+                  (mevedel--prompt-framed-body
                    (concat
-                    "Keys: RET implement  l location  c context  e execution  TAB/m mode  "
-                    "f feedback draft  q cancel"))))
+                    (if (fboundp 'mevedel-view--fontify-as)
+                        (mevedel-view--fontify-as
+                         (plist-get entry :body) 'markdown-mode)
+                      (plist-get entry :body))
+                    "\n\n"
+                    (propertize "Implementation"
+                                'font-lock-face 'mevedel-view-plan-mode)
+                    "\n\n"
+                    (mevedel--prompt-key "l")
+                    "  Location    "
+                    (propertize
+                     (capitalize
+                      (symbol-name (plist-get selection :location)))
+                     'font-lock-face 'bold)
+                    "\n"
+                    (mevedel--prompt-key "c")
+                    "  Context     "
+                    (propertize
+                     (capitalize
+                      (symbol-name (plist-get selection :context)))
+                     'font-lock-face 'bold)
+                    " — "
+                    (mevedel-plan-mode--context-description
+                     (plist-get selection :context))
+                    "\n"
+                    (mevedel--prompt-key "e")
+                    "  Execution   "
+                    (propertize
+                     (capitalize (symbol-name execution))
+                     'font-lock-face 'bold)
+                    " — "
+                    (mevedel-plan-mode--execution-description execution)
+                    "\n"
+                    (when (eq execution 'goal)
+                      (concat
+                       "     Budget      "
+                       (propertize
+                        (if budget
+                            (format "%d tokens" budget)
+                          "Unlimited")
+                        'font-lock-face 'bold)
+                       "\n"))
+                    (mevedel--prompt-key "m")
+                    "  Mode        "
+                    (propertize
+                     (capitalize
+                      (symbol-name (plist-get selection :mode)))
+                     'font-lock-face 'bold)
+                    "\n"
+                    (when warning
+                      (concat "\n"
+                              (propertize warning
+                                          'font-lock-face 'warning)
+                              "\n"))
+                    "\n"
+                    (mevedel--prompt-key "RET")
+                    " implement    "
+                    (mevedel--prompt-key "f")
+                    " feedback    "
+                    (mevedel--prompt-key "q")
+                    " cancel\n")
+                   'mevedel-view-plan-mode)))
             (define-key keymap (kbd "RET") #'accept)
             (define-key keymap (kbd "<return>") #'accept)
             (define-key keymap (kbd "C-c C-c") #'accept)

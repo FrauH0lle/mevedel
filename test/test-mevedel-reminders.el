@@ -613,7 +613,22 @@
   ,test
   (test)
   (let* ((session (mevedel-session--create :name "main" :plan-mode t))
-         (reminder (mevedel-reminders-make-plan-mode)))
+         (reminder (mevedel-reminders-make-plan-mode))
+         (skeleton
+          (concat
+           "<proposed_plan>\n"
+           "# Concrete Plan Title\n\n"
+           "## Summary\n"
+           "- State the root cause or goal, intended behavior change, and important non-goals.\n\n"
+           "## Key Changes\n"
+           "- Group implementation bullets by subsystem or behavior, not by file inventory. Mention files, public APIs, interfaces, or data shape changes only when needed to remove ambiguity.\n\n"
+           "## Regression Coverage\n"
+           "- List the user-visible flows, edge cases, and failure scenarios that tests must cover.\n\n"
+           "## Validation\n"
+           "- List exact focused test/build commands to run.\n\n"
+           "## Assumptions\n"
+           "- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n"
+           "</proposed_plan>")))
     (should (funcall (mevedel-reminder-trigger reminder) session))
     (should-not (mevedel-reminder-interval reminder))
     (let ((content (funcall (mevedel-reminder-content reminder) session)))
@@ -623,7 +638,14 @@
                       "genuine user preferences"
                       "replaces the previous proposal completely"
                       "Do not ask whether you should proceed"))
-        (should (string-match-p text content))))
+        (should (string-match-p text content)))
+      (should (string-match-p (regexp-quote skeleton) content)))
+    (setf (mevedel-reminder-last-fired reminder) 1)
+    (should (mevedel-reminders--should-fire-p reminder 2 session))
+    (should
+     (string-match-p
+      (regexp-quote skeleton)
+      (funcall (mevedel-reminder-content reminder) session)))
     (setf (mevedel-session-plan-mode session) nil)
     (should-not (funcall (mevedel-reminder-trigger reminder) session))))
 
