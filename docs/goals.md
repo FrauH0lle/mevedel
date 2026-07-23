@@ -141,11 +141,10 @@ parsing Markdown headings. The first ordinary Goal turn receives the prepared
 context, resolved artifact path, full plan, and kickoff; later turns use the
 small request-local Goal context and may reread the validated artifact.
 
-The Plan-selected permission mode applies to the target session. A Worktree
-target also inherits the source buffer's ordinary Goal budget, while the source
-session's permission mode and Goal state remain unchanged. Derived artifact
-authority exists only while the target Goal is unfinished and never alters
-user grants.
+The Plan-selected permission mode and Goal budget apply to the target session.
+The source session's permission mode and Goal state remain unchanged. Derived
+artifact authority exists only while the target Goal is unfinished and never
+alters user grants.
 
 Plan approval reserves the Goal identity before asynchronous preparation. The
 source retry record blocks a competing Here Goal; a prepared Worktree target

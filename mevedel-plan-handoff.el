@@ -134,14 +134,17 @@ reservation while its prepared kickoff has not started."
   "Return non-nil when SELECTION is a supported Plan handoff selection."
   (and (proper-list-p selection)
        (let ((location (plist-get selection :location))
-             (context (plist-get selection :context)))
+             (context (plist-get selection :context))
+             (budget (plist-get selection :goal-token-budget)))
          (and (or (and (eq location 'here)
                        (memq context '(current fresh summary)))
                   (and (eq location 'worktree)
                        (memq context '(fresh summary))))
               (memq (plist-get selection :execution) '(direct goal))
               (memq (plist-get selection :mode)
-                    mevedel-plan-handoff-implementation-modes)))))
+                    mevedel-plan-handoff-implementation-modes)
+              (or (null budget)
+                  (and (integerp budget) (> budget 0)))))))
 
 (defun mevedel-plan-handoff--implementation-prompt
     (accepted-artifact plan-markdown)
@@ -164,8 +167,7 @@ reservation while its prepared kickoff has not started."
   (require 'mevedel-session-persistence)
   (mevedel-session-persistence-save session chat-buffer))
 
-(defun mevedel-plan-handoff--implementation-record
-    (selection accepted &optional goal-token-budget)
+(defun mevedel-plan-handoff--implementation-record (selection accepted)
   "Return retry state for SELECTION and ACCEPTED artifact."
   (let ((record
          (list :step (pcase (plist-get selection :context)
@@ -176,8 +178,7 @@ reservation while its prepared kickoff has not started."
                           'prepare-context))
                        (_ 'submit))
                :selection (copy-tree selection)
-               :accepted (copy-tree accepted)
-               :goal-token-budget goal-token-budget)))
+               :accepted (copy-tree accepted))))
     (when (eq (plist-get selection :execution) 'goal)
       (require 'mevedel-goal)
       (setq record (plist-put record :goal-id (mevedel-goal-new-id))))
@@ -290,7 +291,7 @@ reservation while its prepared kickoff has not started."
       (with-current-buffer target-buffer
         (when (eq (plist-get selection :execution) 'goal)
           (setq-local mevedel-goal-token-budget
-                      (plist-get record :goal-token-budget)))
+                      (plist-get selection :goal-token-budget)))
         (require 'mevedel-presets)
         (require 'mevedel-permissions)
         (mevedel-preset-restore-session target-session target-buffer)
@@ -484,7 +485,8 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
   "Construct RECORD's Goal and durably finish SESSION's Plan handoff."
   (with-current-buffer target-buffer
     (setq-local mevedel-goal-token-budget
-                (plist-get record :goal-token-budget))
+                (plist-get
+                 (plist-get record :selection) :goal-token-budget))
     (require 'mevedel-goal)
     (mevedel-goal-ensure
      mevedel-plan-handoff--accepted-goal-objective
@@ -644,13 +646,13 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
       session chat-buffer (error-message-string err)))))
 
 (defun mevedel-plan-handoff-start
-    (session chat-buffer selection accepted goal-token-budget)
+    (session chat-buffer selection accepted)
   "Start durable accepted-plan handoff for SESSION from CHAT-BUFFER."
   (unless (mevedel-plan-handoff-selection-valid-p selection)
     (error "Unsupported Plan implementation selection: %S" selection))
   (let ((record
          (mevedel-plan-handoff--implementation-record
-          selection accepted goal-token-budget)))
+          selection accepted)))
     (mevedel-plan--metadata-put session :selection selection)
     (mevedel-plan--metadata-put session :implementation-retry record)
     (when (eq (plist-get selection :execution) 'goal)

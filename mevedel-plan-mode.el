@@ -32,7 +32,7 @@
 (declare-function mevedel-plan-handoff-selection-valid-p
                   "mevedel-plan-handoff" (selection))
 (declare-function mevedel-plan-handoff-start "mevedel-plan-handoff"
-                  (session chat-buffer selection accepted goal-token-budget))
+                  (session chat-buffer selection accepted))
 (defvar mevedel-plan-handoff-implementation-modes)
 
 ;; `mevedel-queue'
@@ -199,7 +199,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
   (list :location 'here
         :context 'current
         :execution 'direct
-        :mode (or (mevedel-session-permission-mode session) 'ask)))
+        :mode (or (mevedel-session-permission-mode session) 'ask)
+        :goal-token-budget
+        (mevedel-plan-mode--effective-goal-budget (current-buffer))))
 
 (defun mevedel-plan-mode--next-mode (mode)
   "Return the Plan implementation mode after MODE."
@@ -257,8 +259,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
          (accepted (plist-get artifacts :accepted)))
     (mevedel-plan-mode--deactivate session)
     (mevedel-plan-handoff-start
-     session chat-buffer selection accepted
-     (mevedel-plan-mode--effective-goal-budget chat-buffer))))
+     session chat-buffer selection accepted)))
 
 (defun mevedel-plan-mode--feedback-draft (chat-buffer session)
   "Insert an editable replacement-plan request for CHAT-BUFFER SESSION."
@@ -371,6 +372,27 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
            (mevedel-plan--metadata-put
             (plist-get entry :session) :selection selection)
            (mevedel-plan-approval-render (plist-get entry :session)))
+         (edit-budget ()
+           (interactive)
+           (let* ((current (plist-get selection :goal-token-budget))
+                  (input
+                   (read-string
+                    "Goal token budget (empty for Unlimited): "
+                    (and current (number-to-string current))))
+                  (budget
+                   (cond
+                    ((string-match-p "\\`[[:space:]]*\\'" input) nil)
+                    ((string-match
+                      "\\`[[:space:]]*\\([1-9][0-9]*\\)[[:space:]]*\\'"
+                      input)
+                     (string-to-number (match-string 1 input)))
+                    (t
+                     (user-error
+                      "Goal token budget must be a positive integer or empty")))))
+             (plist-put selection :goal-token-budget budget)
+             (mevedel-plan--metadata-put
+              (plist-get entry :session) :selection selection)
+             (mevedel-plan-approval-render (plist-get entry :session))))
          (feedback () (interactive) (settle 'feedback-draft))
          (cancel () (interactive) (settle 'aborted)))
       (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
@@ -378,8 +400,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
           (let* ((keymap (make-sparse-keymap))
                  (warning (mevedel-plan-mode--worktree-warning entry))
                  (execution (plist-get selection :execution))
-                 (budget
-                  (mevedel-plan-mode--effective-goal-budget chat-buffer))
+                 (budget (plist-get selection :goal-token-budget))
                  (body
                   (mevedel--prompt-framed-body
                    (concat
@@ -418,7 +439,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                     "\n"
                     (when (eq execution 'goal)
                       (concat
-                       "     Budget      "
+                       (mevedel--prompt-key "b")
+                       "  Budget      "
                        (propertize
                         (if budget
                             (format "%d tokens" budget)
@@ -454,6 +476,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (define-key keymap (kbd "e") #'cycle-execution)
             (define-key keymap (kbd "l") #'cycle-location)
             (define-key keymap (kbd "c") #'cycle-context)
+            (when (eq execution 'goal)
+              (define-key keymap (kbd "b") #'edit-budget))
             (define-key keymap (kbd "f") #'feedback)
             (define-key keymap (kbd "q") #'cancel)
             (define-key keymap (kbd "C-g") #'cancel)
