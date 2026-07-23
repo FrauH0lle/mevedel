@@ -6,6 +6,7 @@
 
 (require 'gptel-request)
 (require 'gptel-agent-tools)
+(require 'mevedel-chat)
 (require 'mevedel-plan)
 (require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
@@ -521,8 +522,10 @@
                       (mevedel-view-zone-fragment-bounds 'interaction id)
                       :start)))
           (should (string= draft (mevedel-view--input-text)))
-          (call-interactively
-           (lookup-key (plist-get descriptor :keymap) (kbd "C-g")))
+          (goto-char (point-max))
+          (condition-case nil
+              (call-interactively (key-binding (kbd "C-g")))
+            (quit nil))
           (should-not (mevedel-session-pending-plan-approval session))
           (should-not
            (string-match-p "plan pending" (buffer-string)))
