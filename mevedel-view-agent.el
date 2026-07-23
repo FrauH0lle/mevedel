@@ -535,7 +535,8 @@ Also kill retained conversation data when KILL-RETAINED is non-nil."
         (when (and (consp source) (integerp (car source)))
           (mevedel-view--set-in-flight-turn-start last-assistant)
           (setq mevedel-view--data-turn-start
-                (copy-marker (car source) nil)))))
+                (with-current-buffer mevedel--data-buffer
+                  (copy-marker (car source) nil))))))
     (unless (mevedel-view--in-flight-turn-start-position)
       (mevedel-view--set-in-flight-turn-start mevedel-view--input-marker)
       (setq mevedel-view--data-turn-start

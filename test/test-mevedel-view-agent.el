@@ -175,6 +175,46 @@
       (when (buffer-live-p data-buffer)
         (kill-buffer data-buffer)))))
 
+(mevedel-deftest mevedel-view--agent-transcript-start-streaming
+  (:doc "anchors live rendering in agent data without duplicating history")
+  ,test
+  (test)
+  (let ((data-buffer (generate-new-buffer " *test-agent-stream-data*"))
+        (view-buffer (generate-new-buffer " *test-agent-stream-view*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (org-mode)
+            (setq-local mevedel--agent-invocation
+                        (mevedel-agent-invocation--create
+                         :transcript-status 'running))
+            (insert "Original prompt\n"
+                    "<hook-context>\n"
+                    (make-string 2000 ?x)
+                    "\n</hook-context>\n")
+            (let ((start (point)))
+              (insert "Assistant response\n")
+              (put-text-property start (point) 'gptel 'response)))
+          (mevedel-view--setup
+           view-buffer data-buffer
+           '(:agent-transcript-p t
+             :agent-path "/root/streaming"
+             :preserve-data-view-buffer t
+             :transcript-info (:live-buffer t :status running)))
+          (with-current-buffer view-buffer
+            (mevedel-view--full-rerender)
+            (mevedel-view--agent-transcript-start-streaming)
+            (should (eq data-buffer
+                        (marker-buffer mevedel-view--data-turn-start)))
+            (mevedel-view--render-incremental data-buffer)
+            (should (= 1
+                       (mevedel-view-test--count-substring
+                        "Original prompt" (buffer-string))))))
+      (when (buffer-live-p view-buffer)
+        (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer)
+        (kill-buffer data-buffer)))))
+
 (mevedel-deftest mevedel-view-agent-cleanup-parent
   (:doc "cleans up saved transcript views without tearing down the session")
   ,test
