@@ -1884,9 +1884,9 @@ ARGS is a plist with :path."
     :args ((pattern string :required
                    "The regular expression pattern to search for in file contents.")
            (path path :optional
-                 "File or directory to search in (rg PATH). Defaults to the session working directory. Relative paths are resolved from the session working directory.")
+                 "File or directory to search in (rg PATH). Defaults to the session working directory. Relative paths are resolved from the session working directory. An explicitly selected ignored path is searched.")
            (glob string :optional
-                 "Glob pattern to filter files (e.g. \"*.el\", \"*.{ts,tsx}\") -- maps to rg --glob.")
+                 "Explicit inclusion glob for files (e.g. \"*.el\", \"*.{ts,tsx}\") -- maps to rg --glob and may select otherwise ignored files.")
            (output_mode string :optional
                         "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"files_with_matches\".")
            (head_limit integer :optional
