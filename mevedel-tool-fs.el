@@ -10,7 +10,8 @@
 
 (eval-when-compile
   (require 'cl-lib)
-  (require 'mevedel-tool-registry))
+  (require 'mevedel-tool-registry)
+  (require 'subr-x))
 
 ;; `diff-mode'
 (declare-function diff-setup-buffer-type "diff-mode" ())
@@ -515,6 +516,37 @@ cut at the last complete line and a guidance message is appended.")
 
 (defconst mevedel-tool-fs--glob-max-output-bytes (* 30 1024)
   "Hard cap on Glob tool output size in bytes.")
+
+(defconst mevedel-tool-fs--vcs-directory-names
+  '(".git" ".svn" ".hg" ".bzr" ".jj" ".sl")
+  "Version-control metadata directory names excluded from searches.")
+
+(defconst mevedel-tool-fs--rg-vcs-exclusions
+  (mapcar (lambda (name)
+            (format "--glob=!**/%s" name))
+          mevedel-tool-fs--vcs-directory-names)
+  "Ripgrep arguments excluding version-control metadata directories.")
+
+(defcustom mevedel-tool-fs-search-timeout 20
+  "Seconds before a Glob or Grep helper is terminated."
+  :type 'number
+  :group 'mevedel)
+
+(defun mevedel-tool-fs--rg-outcome (child-result)
+  "Classify CHILD-RESULT with termination facts before its exit code."
+  (cond
+   ((plist-get child-result :error) 'error)
+   ((plist-get child-result :timed-out-p) 'timeout)
+   ((plist-get child-result :output-limit-p) 'output-limit)
+   ((= (plist-get child-result :exit-code) 0) 'success)
+   ((= (plist-get child-result :exit-code) 1) 'no-match)
+   (t 'failure)))
+
+(defun mevedel-tool-fs--vcs-metadata-path-p (path)
+  "Return non-nil when PATH resolves inside VCS metadata."
+  (seq-some (lambda (component)
+              (member component mevedel-tool-fs--vcs-directory-names))
+            (file-name-split (file-truename path))))
 
 (defun mevedel-tool-fs--binary-extension-p (filename)
   "Return non-nil if FILENAME has a binary file extension."
@@ -1341,6 +1373,59 @@ content, not a read failure.\n</system-reminder>" filename))
              (/ mevedel-tool-fs--glob-max-output-bytes 1024))))
   (buffer-string))
 
+(defun mevedel-tool-fs--normalize-rg-glob (root pattern)
+  "Return a narrowed `(ROOT . PATTERN)' for ripgrep.
+Reject absolute PATTERNs, parent traversal, and existing symlink escapes.
+Return nil when the literal directory prefix does not exist."
+  (when (file-name-absolute-p pattern)
+    (error "Glob pattern must be relative"))
+  (let* ((components (split-string pattern "/" t))
+         (relative-components
+          (seq-remove (lambda (component)
+                        (string= component "."))
+                      components))
+         prefix)
+    (when (member ".." relative-components)
+      (error "Glob pattern must not traverse parent directories"))
+    (while (and (cdr relative-components)
+                (not (string-match-p "[][?*{]"
+                                     (car relative-components))))
+      (push (pop relative-components) prefix))
+    (if (null prefix)
+        (cons root pattern)
+      (setq prefix (nreverse prefix))
+      (unless (seq-some (lambda (component)
+                          (member component
+                                  mevedel-tool-fs--vcs-directory-names))
+                        prefix)
+        (let ((directory
+               (expand-file-name (string-join prefix "/") root)))
+          (when (and (file-directory-p directory)
+                     (not (mevedel-tool-fs--vcs-metadata-path-p
+                           directory)))
+            (let ((true-root (file-name-as-directory (file-truename root)))
+                  (true-directory
+                   (file-name-as-directory (file-truename directory))))
+              (unless (or (string= true-root true-directory)
+                          (file-in-directory-p true-directory true-root))
+                (error "Glob pattern escapes the search root"))
+              (cons directory
+                    (string-join relative-components "/")))))))))
+
+(defun mevedel-tool-fs--prepend-partial-warning
+    (warning result maximum-size)
+  "Prepend WARNING to RESULT without exceeding MAXIMUM-SIZE.
+Return RESULT unchanged when WARNING is nil."
+  (if (null warning)
+      result
+    (with-temp-buffer
+      (insert warning result)
+      (when (> (buffer-size) maximum-size)
+        (goto-char (+ (point-min) maximum-size))
+        (beginning-of-line)
+        (delete-region (point) (point-max)))
+      (buffer-string))))
+
 (defun mevedel-tool-fs--glob (callback args)
   "Find files matching a glob pattern using ripgrep.
 CALLBACK receives the result envelope.  ARGS is a plist with :pattern
@@ -1354,36 +1439,61 @@ and optional :path."
     (setq path (expand-file-name (substitute-in-file-name (or path "."))))
     (unless (and (file-readable-p path) (file-directory-p path))
       (error "Path %s is not a readable directory" path))
-    (let* ((session (bound-and-true-p mevedel--session))
-           (rg-args (list "--files" "--hidden" "--color=never"
-                          "--follow" "--sort" "modified"
-                          "--iglob" pattern
-                          path)))
-      (require 'mevedel-execution)
-      (mevedel-execution-start-helper
-       (lambda (child-result)
-         (with-temp-buffer
-           (insert (plist-get child-result :output))
-           (let ((exit-code (plist-get child-result :exit-code))
-                 (error-data (plist-get child-result :error)))
-             (cond
-              (error-data
-               (erase-buffer)
-               (insert (format "Error: glob failed to start: %s"
-                               (error-message-string error-data))))
-              ((= exit-code 0) nil)
-              ((= exit-code 1)
-               (erase-buffer)
-               (insert "No files found matching pattern"))
-              (t
-               (goto-char (point-min))
-               (insert (format "Error: glob failed (exit code %d)\n\n"
-                               exit-code))))
-             (funcall callback
-                      (mevedel-tool-fs--handler-result
-                       (mevedel-tool-fs--finalize-glob-buffer))))))
-       "mevedel-glob" (cons "rg" rg-args) (list path) nil
-       :session session :owner (mevedel-current-origin)))))
+    (if-let ((normalized
+              (and (not (mevedel-tool-fs--vcs-metadata-path-p path))
+                   (mevedel-tool-fs--normalize-rg-glob path pattern))))
+        (let* ((path (car normalized))
+               (pattern (cdr normalized))
+               (session (bound-and-true-p mevedel--session))
+               (rg-args
+                (append (list "--files" "--hidden" "--no-ignore"
+                              "--color=never" "--iglob" pattern)
+                        mevedel-tool-fs--rg-vcs-exclusions
+                        (list path))))
+          (require 'mevedel-execution)
+          (mevedel-execution-start-helper
+           (lambda (child-result)
+             (with-temp-buffer
+               (let ((output (or (plist-get child-result :output) ""))
+                     (exit-code (plist-get child-result :exit-code))
+                     (error-data (plist-get child-result :error))
+                     partial-warning)
+                 (insert output)
+                 (pcase (mevedel-tool-fs--rg-outcome child-result)
+                  ('error
+                   (erase-buffer)
+                   (insert (format "Error: glob failed to start: %s"
+                                   (error-message-string error-data))))
+                  ('timeout
+                   (if (string-empty-p output)
+                       (insert "Error: glob timed out; narrow the search")
+                     (setq partial-warning
+                           "Warning: glob timed out; results are partial. Narrow the search.\n\n")))
+                  ('output-limit
+                   (if (string-empty-p output)
+                       (insert "Error: glob reached its output limit; narrow the search")
+                     (setq partial-warning
+                           "Warning: glob reached its output limit; results are partial. Narrow the search.\n\n")))
+                  ('success nil)
+                  ('no-match
+                   (erase-buffer)
+                   (insert "No files found matching pattern"))
+                  ('failure
+                   (goto-char (point-min))
+                   (insert (format "Error: glob failed (exit code %d). Narrow :path or :pattern.\n\n"
+                                   exit-code))))
+                 (let ((result (mevedel-tool-fs--finalize-glob-buffer)))
+                   (funcall callback
+                            (mevedel-tool-fs--handler-result
+                             (mevedel-tool-fs--prepend-partial-warning
+                              partial-warning result
+                              mevedel-tool-fs--glob-max-output-bytes)))))))
+           "mevedel-glob" (cons "rg" rg-args) (list path) nil
+           :session session :owner (mevedel-current-origin)
+           :timeout mevedel-tool-fs-search-timeout))
+      (funcall callback
+               (mevedel-tool-fs--handler-result
+                "No files found matching pattern")))))
 
 (defun mevedel-tool-fs--grep (callback args)
   "Search file contents with ripgrep.
@@ -1417,91 +1527,129 @@ optional :path, :glob, :output_mode, :head_limit, :offset, :-i, :-n,
     (setq path (expand-file-name (substitute-in-file-name path)))
     (unless (file-readable-p path)
       (error "Path %s is not readable" path))
-    (let ((rg-args nil)
-          (session (bound-and-true-p mevedel--session)))
-      ;; Output mode flags
-      (pcase output-mode
-        ("content"
-         (when line-numbers (push "--line-number" rg-args))
-         (push "--heading" rg-args)
-         (when ctx-after (push (format "-A%d" ctx-after) rg-args))
-         (when ctx-before (push (format "-B%d" ctx-before) rg-args))
-         (when ctx-around (push (format "-C%d" ctx-around) rg-args))
-         (push "--max-count=1000" rg-args)
-         ;; Truncate long lines to prevent log files and other
-         ;; long-line sources from blowing up tool result size.
-         (push "--max-columns=2000" rg-args)
-         (push "--max-columns-preview" rg-args))
-        ("files_with_matches"
-         (push "--files-with-matches" rg-args)
-         (push "--sort=modified" rg-args))
-        ("count"
-         (push "--count" rg-args)))
-      ;; Common flags
-      (when case-fold (push "-i" rg-args))
-      (when multiline (push "-U" rg-args) (push "--multiline-dotall" rg-args))
-      (when file-glob (push (format "--glob=%s" file-glob) rg-args))
-      (when file-type (push (format "--type=%s" file-type) rg-args))
-      ;; Pattern and path
-      (push "-e" rg-args)
-      (push pattern rg-args)
-      (push path rg-args)
-      (setq rg-args (nreverse rg-args))
-      (require 'mevedel-execution)
-      (mevedel-execution-start-helper
-       (lambda (child-result)
-         (with-temp-buffer
-           (insert (plist-get child-result :output))
-           (let ((exit-code (plist-get child-result :exit-code))
-                 (error-data (plist-get child-result :error)))
-             (cond
-              (error-data
-               (erase-buffer)
-               (insert (format "Error: search failed to start: %s"
-                               (error-message-string error-data))))
-              ((= exit-code 0) nil)
-              ((= exit-code 1)
-               (erase-buffer)
-               (insert "No matches found"))
-              (t
-               (goto-char (point-min))
-               (insert
-                (format "Error: search failed (exit code %d)\n\n"
-                        exit-code))))
-             ;; Apply offset and head_limit.
-             (when (or (> offset 0) head-limit)
-               (goto-char (point-min))
-               (let ((total-lines (count-lines (point-min) (point-max))))
-                 (when (> offset 0)
-                   (forward-line offset)
-                   (delete-region (point-min) (point))
-                   (cl-decf total-lines offset))
-                 (when (and head-limit (> total-lines head-limit))
+    (let* ((search-root path)
+           (vcs-metadata-p (mevedel-tool-fs--vcs-metadata-path-p path))
+           (normalized (and (not vcs-metadata-p)
+                            file-glob
+                            (file-directory-p path)
+                            (mevedel-tool-fs--normalize-rg-glob
+                             path file-glob))))
+      (when vcs-metadata-p
+        (setq path nil))
+      (when (and path file-glob (file-directory-p path))
+        (if normalized
+            (setq path (car normalized)
+                  file-glob (cdr normalized))
+          (setq path nil)))
+      (if (null path)
+          (funcall callback
+                   (mevedel-tool-fs--handler-result "No matches found"))
+        (let ((rg-args (list "--hidden" "--no-require-git"))
+              (session (bound-and-true-p mevedel--session)))
+          ;; Output mode flags
+          (pcase output-mode
+            ("content"
+             (when line-numbers (push "--line-number" rg-args))
+             (push "--heading" rg-args)
+             (when ctx-after (push (format "-A%d" ctx-after) rg-args))
+             (when ctx-before (push (format "-B%d" ctx-before) rg-args))
+             (when ctx-around (push (format "-C%d" ctx-around) rg-args))
+             (push "--max-count=1000" rg-args)
+             ;; Truncate long lines to prevent log files and other
+             ;; long-line sources from blowing up tool result size.
+             (push "--max-columns=2000" rg-args)
+             (push "--max-columns-preview" rg-args))
+            ("files_with_matches"
+             (push "--files-with-matches" rg-args))
+            ("count"
+             (push "--count" rg-args)))
+          ;; Common flags
+          (when case-fold (push "-i" rg-args))
+          (when multiline (push "-U" rg-args) (push "--multiline-dotall" rg-args))
+          (when file-glob (push (format "--glob=%s" file-glob) rg-args))
+          (when file-type (push (format "--type=%s" file-type) rg-args))
+          (setq rg-args (nreverse rg-args))
+          (setq rg-args
+                (append
+                 rg-args
+                 mevedel-tool-fs--rg-vcs-exclusions
+                 (list "-e" pattern path)))
+          (require 'mevedel-execution)
+          (mevedel-execution-start-helper
+           (lambda (child-result)
+             (with-temp-buffer
+               (let ((output (or (plist-get child-result :output) ""))
+                     (exit-code (plist-get child-result :exit-code))
+                     (error-data (plist-get child-result :error))
+                     partial-warning
+                     pageable-output-p)
+                 (insert output)
+                 (pcase (mevedel-tool-fs--rg-outcome child-result)
+                  ('error
+                   (erase-buffer)
+                   (insert (format "Error: search failed to start: %s"
+                                   (error-message-string error-data))))
+                  ('timeout
+                   (if (string-empty-p output)
+                       (insert "Error: search timed out; narrow the search")
+                     (setq partial-warning
+                           "Warning: search timed out; results are partial. Narrow the search.\n\n"
+                           pageable-output-p t)))
+                  ('output-limit
+                   (if (string-empty-p output)
+                       (insert "Error: search reached its output limit; narrow the search")
+                     (setq partial-warning
+                           "Warning: search reached its output limit; results are partial. Narrow the search.\n\n"
+                           pageable-output-p t)))
+                  ('success
+                   (setq pageable-output-p t))
+                  ('no-match
+                   (erase-buffer)
+                   (insert "No matches found"))
+                  ('failure
                    (goto-char (point-min))
-                   (forward-line head-limit)
+                   (insert
+                    (format "Error: search failed (exit code %d). Narrow :path, :glob, :type, or :pattern.\n\n"
+                            exit-code))))
+                 ;; Apply offset and head_limit.
+                 (when (and pageable-output-p
+                            (or (> offset 0) head-limit))
+                   (goto-char (point-min))
+                   (let ((total-lines (count-lines (point-min) (point-max))))
+                     (when (> offset 0)
+                       (forward-line offset)
+                       (delete-region (point-min) (point))
+                       (cl-decf total-lines offset))
+                     (when (and head-limit (> total-lines head-limit))
+                       (goto-char (point-min))
+                       (forward-line head-limit)
+                       (delete-region (point) (point-max))
+                       (goto-char (point-max))
+                       (insert
+                        (format "\n... Results truncated (limit: %d, offset: %d)"
+                                head-limit offset)))))
+                 ;; Bound total output even after line-count truncation.
+                 (when (> (buffer-size) mevedel-tool-fs--grep-max-output-bytes)
+                   (goto-char (point-min))
+                   (forward-char mevedel-tool-fs--grep-max-output-bytes)
+                   (beginning-of-line)
                    (delete-region (point) (point-max))
                    (goto-char (point-max))
                    (insert
-                    (format "\n... Results truncated (limit: %d, offset: %d)"
-                            head-limit offset)))))
-             ;; Bound total output even after line-count truncation.
-             (when (> (buffer-size) mevedel-tool-fs--grep-max-output-bytes)
-               (goto-char (point-min))
-               (forward-char mevedel-tool-fs--grep-max-output-bytes)
-               (beginning-of-line)
-               (delete-region (point) (point-max))
-               (goto-char (point-max))
-               (insert
-                (format "\n... Output truncated at %dK byte limit. \
+                    (format "\n... Output truncated at %dK byte limit. \
 Narrow your search with :glob, :type, or a more specific :pattern."
-                        (/ mevedel-tool-fs--grep-max-output-bytes 1024))))
-             (funcall
-              callback
-              (mevedel-tool-fs--handler-result
-               (replace-regexp-in-string "\r\n?" "\n"
-                                         (buffer-string)))))))
-       "mevedel-grep" (cons "rg" rg-args) (list path) nil
-       :session session :owner (mevedel-current-origin)))))
+                            (/ mevedel-tool-fs--grep-max-output-bytes 1024))))
+                 (funcall
+                  callback
+                  (mevedel-tool-fs--handler-result
+                   (mevedel-tool-fs--prepend-partial-warning
+                    partial-warning
+                    (replace-regexp-in-string "\r\n?" "\n"
+                                              (buffer-string))
+                    mevedel-tool-fs--grep-max-output-bytes))))))
+           "mevedel-grep" (cons "rg" rg-args) (list search-root) nil
+           :session session :owner (mevedel-current-origin)
+           :timeout mevedel-tool-fs-search-timeout))))))
 
 
 ;;

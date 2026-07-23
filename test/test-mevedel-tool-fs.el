@@ -1000,6 +1000,112 @@
 ;;
 ;;; Glob handler
 
+(mevedel-deftest mevedel-tool-fs--rg-outcome ()
+  ,test
+  (test)
+  :doc "classifies structured termination facts before exit codes"
+  (should
+   (eq 'error
+       (mevedel-tool-fs--rg-outcome
+        '(:error (error "start") :timed-out-p t :exit-code 1))))
+  (should
+   (eq 'timeout
+       (mevedel-tool-fs--rg-outcome
+        '(:timed-out-p t :output-limit-p t :exit-code 1))))
+  (should
+   (eq 'output-limit
+       (mevedel-tool-fs--rg-outcome
+        '(:output-limit-p t :exit-code 1))))
+  (should (eq 'success
+              (mevedel-tool-fs--rg-outcome '(:exit-code 0))))
+  (should (eq 'no-match
+              (mevedel-tool-fs--rg-outcome '(:exit-code 1))))
+  (should (eq 'failure
+              (mevedel-tool-fs--rg-outcome '(:exit-code 2)))))
+
+(mevedel-deftest mevedel-tool-fs--vcs-metadata-path-p ()
+  ,test
+  (test)
+  :doc "recognizes direct and symlinked VCS metadata paths"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-vcs-" t)))
+         (metadata (file-name-concat root ".git"))
+         (alias (file-name-concat root "metadata")))
+    (unwind-protect
+        (progn
+          (make-directory metadata)
+          (make-symbolic-link metadata alias)
+          (should (mevedel-tool-fs--vcs-metadata-path-p metadata))
+          (should (mevedel-tool-fs--vcs-metadata-path-p alias))
+          (should-not (mevedel-tool-fs--vcs-metadata-path-p root)))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs--normalize-rg-glob ()
+  ,test
+  (test)
+  :doc "narrows leading literal directories and leaves the final component"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-rg-" t)))
+         (docs (file-name-concat root "docs")))
+    (unwind-protect
+        (progn
+          (make-directory docs)
+          (should (equal (cons docs "**/*.md")
+                         (mevedel-tool-fs--normalize-rg-glob
+                          root "docs/**/*.md")))
+          (should (equal (cons root "*.md")
+                         (mevedel-tool-fs--normalize-rg-glob root "*.md"))))
+      (delete-directory root t)))
+  :doc "does not narrow through version-control metadata directories"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-rg-" t)))
+         (metadata (file-name-concat root ".git"))
+         (alias (file-name-concat root "metadata")))
+    (unwind-protect
+        (progn
+          (make-directory metadata)
+          (make-symbolic-link metadata alias)
+          (should-not
+           (mevedel-tool-fs--normalize-rg-glob
+            root ".git/**/*.el"))
+          (should-not
+           (mevedel-tool-fs--normalize-rg-glob
+            root "metadata/**/*.el")))
+      (delete-directory root t)))
+  :doc "rejects absolute paths, parent traversal, and symlink escapes"
+  (let* ((root (file-name-as-directory (make-temp-file "mevedel-rg-" t)))
+         (outside (file-name-as-directory
+                   (make-temp-file "mevedel-rg-outside-" t))))
+    (unwind-protect
+        (progn
+          (make-symbolic-link outside (file-name-concat root "escape"))
+          (should-error
+           (mevedel-tool-fs--normalize-rg-glob root "/tmp/*.el"))
+          (should-error
+           (mevedel-tool-fs--normalize-rg-glob root "../*.el"))
+          (should-error
+           (mevedel-tool-fs--normalize-rg-glob root "escape/*.el")))
+      (delete-directory root t)
+      (delete-directory outside t)))
+  :doc "treats a missing narrowed directory as no matches"
+  (let ((root (file-name-as-directory (make-temp-file "mevedel-rg-" t))))
+    (unwind-protect
+        (should-not
+         (mevedel-tool-fs--normalize-rg-glob root "missing/*.el"))
+      (delete-directory root t))))
+
+(mevedel-deftest mevedel-tool-fs--prepend-partial-warning ()
+  ,test
+  (test)
+  :doc "preserves normal results and bounds warning-prefixed partial results"
+  (should
+   (equal "result"
+          (mevedel-tool-fs--prepend-partial-warning nil "result" 20)))
+  (let ((result
+         (mevedel-tool-fs--prepend-partial-warning
+          "Warning: partial.\n\n"
+          (concat "first\n" (make-string 100 ?x))
+          40)))
+    (should (string-prefix-p "Warning: partial." result))
+    (should (<= (length result) 40))))
+
 (mevedel-deftest mevedel-tool-fs--finalize-glob-buffer ()
   ,test
   (test)
@@ -1049,7 +1155,61 @@
                      (list :pattern "*.el" :path tmp-dir)))))
           (should (equal (list tmp-dir) (nth 3 captured)))
           (should (eq session (nth 6 captured)))
+          (should (= mevedel-tool-fs-search-timeout
+                     (plist-get (nthcdr 5 captured) :timeout)))
+          (let ((rg-args (cdr (nth 2 captured))))
+            (should (member "--hidden" rg-args))
+            (should (member "--no-ignore" rg-args))
+            (should-not (member "--follow" rg-args))
+            (should-not (member "--sort" rg-args))
+            (dolist (directory '(".git" ".svn" ".hg" ".bzr" ".jj" ".sl"))
+              (should (member (format "--glob=!**/%s" directory)
+                              rg-args))))
           (should (string-match-p "found\\.el" result)))
+      (delete-directory tmp-dir t)))
+  :doc "finds nested and ignored hidden files while excluding VCS metadata"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (docs (file-name-concat tmp-dir "docs"))
+         result)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat tmp-dir ".git"))
+          (make-directory (file-name-concat docs ".hidden") t)
+          (with-temp-file (file-name-concat tmp-dir ".gitignore")
+            (insert "docs/.hidden/\n"))
+          (with-temp-file (file-name-concat docs ".hidden" "found.md")
+            (insert "content"))
+          (dolist (directory '(".git" ".svn" ".hg" ".bzr" ".jj" ".sl"))
+            (make-directory (file-name-concat docs directory) t)
+            (with-temp-file
+                (file-name-concat docs directory "excluded.md")
+              (insert "content")))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--glob
+                 (list :pattern "docs/**/*.md" :path tmp-dir)))
+          (should (string-match-p "found\\.md" result))
+          (should-not (string-match-p "excluded\\.md" result)))
+      (delete-directory tmp-dir t)))
+  :doc "reports bounded partial output for timeout and output limits"
+  (let ((tmp-dir (make-temp-file "mevedel-test-" t)))
+    (unwind-protect
+        (cl-labels
+            ((run (facts)
+               (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                          (lambda (callback &rest _)
+                            (funcall callback facts))))
+                 (test-mevedel-tool-fs--await-callback
+                  #'mevedel-tool-fs--glob
+                  (list :pattern "*.el" :path tmp-dir)))))
+          (should (string-match-p
+                   "timed out.*partial"
+                   (run '(:exit-code 1 :output "partial.el\n"
+                          :timed-out-p t :output-limit-p nil))))
+          (should (string-match-p
+                   "output limit.*partial"
+                   (run '(:exit-code 1 :output "partial.el\n"
+                          :timed-out-p nil :output-limit-p t)))))
       (delete-directory tmp-dir t)))
   :doc "finds files matching pattern"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
@@ -1148,8 +1308,77 @@
                      (list :pattern "needle" :path tmp)))))
           (should (equal (list tmp) (nth 3 captured)))
           (should (eq session (nth 6 captured)))
+          (should (= mevedel-tool-fs-search-timeout
+                     (plist-get (nthcdr 5 captured) :timeout)))
+          (let ((rg-args (cdr (nth 2 captured))))
+            (should (member "--hidden" rg-args))
+            (should-not (member "--no-ignore" rg-args))
+            (should-not (member "--sort=modified" rg-args))
+            (dolist (directory '(".git" ".svn" ".hg" ".bzr" ".jj" ".sl"))
+              (should (member (format "--glob=!**/%s" directory)
+                              rg-args))))
           (should (string-match-p (regexp-quote tmp) result)))
       (delete-file tmp)))
+  :doc "narrows directory-qualified globs and keeps ignore rules"
+  (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
+         (docs (file-name-concat tmp-dir "docs"))
+         (nested-docs (file-name-concat tmp-dir "nested" "docs"))
+         result)
+    (unwind-protect
+        (progn
+          (make-directory (file-name-concat tmp-dir ".git"))
+          (make-directory (file-name-concat docs ".hidden") t)
+          (make-directory (file-name-concat docs "ignored") t)
+          (make-directory nested-docs t)
+          (with-temp-file (file-name-concat tmp-dir ".gitignore")
+            (insert "docs/ignored/\n"))
+          (with-temp-file (file-name-concat docs ".hidden" "visible.md")
+            (insert "needle\n"))
+          (with-temp-file (file-name-concat docs "ignored" "ignored.md")
+            (insert "needle\n"))
+          (with-temp-file (file-name-concat nested-docs "wrong.md")
+            (insert "needle\n"))
+          (dolist (directory '(".git" ".svn" ".hg" ".bzr" ".jj" ".sl"))
+            (make-directory (file-name-concat docs directory) t)
+            (with-temp-file
+                (file-name-concat docs directory "excluded.md")
+              (insert "needle\n")))
+          (setq result
+                (test-mevedel-tool-fs--await-callback
+                 #'mevedel-tool-fs--grep
+                 (list :pattern "needle" :path tmp-dir
+                       :glob "docs/**/*.md")))
+          (should (string-match-p "visible\\.md" result))
+          (should-not (string-match-p "ignored\\.md" result))
+          (should-not (string-match-p "excluded\\.md" result))
+          (should-not (string-match-p "wrong\\.md" result)))
+      (delete-directory tmp-dir t)))
+  :doc "reports partial output before interpreting timeout exit codes"
+  (let ((tmp-dir (make-temp-file "mevedel-test-" t)))
+    (unwind-protect
+        (cl-labels
+            ((run (facts &optional offset)
+               (cl-letf (((symbol-function 'mevedel-execution-start-helper)
+                          (lambda (callback &rest _)
+                            (funcall callback facts))))
+                 (test-mevedel-tool-fs--await-callback
+                  #'mevedel-tool-fs--grep
+                  (list :pattern "needle" :path tmp-dir
+                        :offset (or offset 0))))))
+          (should (string-match-p
+                   "timed out.*partial"
+                   (run '(:exit-code 1 :output "partial.txt\n"
+                          :timed-out-p t :output-limit-p nil))))
+          (should (string-match-p
+                   "output limit.*partial"
+                   (run '(:exit-code 1 :output "partial.txt\n"
+                          :timed-out-p nil :output-limit-p t))))
+          (should (string-match-p
+                   "timed out"
+                   (run '(:exit-code 1 :output ""
+                          :timed-out-p t :output-limit-p nil)
+                        1))))
+      (delete-directory tmp-dir t)))
   :doc "files_with_matches: returns matching file paths"
   (let* ((tmp-dir (make-temp-file "mevedel-test-" t))
          (result nil))

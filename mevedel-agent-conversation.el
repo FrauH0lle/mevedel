@@ -104,6 +104,9 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-save-path "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-working-directory
+                  "mevedel-structs" (cl-x) t)
+(declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
 (defvar mevedel--session)
 (defvar mevedel--view-buffer)
 (defvar mevedel--workspace)
@@ -181,6 +184,14 @@ A non-positive value saves immediately.  Terminal paths always save now."
 ;;
 ;;; Buffer lifecycle
 
+(defun mevedel-agent-conversation--working-directory (session workspace)
+  "Return the project directory for SESSION and WORKSPACE."
+  (file-name-as-directory
+   (expand-file-name
+    (or (and session (mevedel-session-working-directory session))
+        (and workspace (mevedel-workspace-root workspace))
+        default-directory))))
+
 (defun mevedel-agent-conversation-open (invocation parent-data-buffer)
   "Create and configure INVOCATION's conversation below PARENT-DATA-BUFFER."
   (let* ((agent-id (mevedel-agent-invocation-agent-id invocation))
@@ -204,6 +215,13 @@ A non-positive value saves immediately.  Terminal paths always save now."
           (and (buffer-live-p parent-data-buffer)
                (mevedel-agents-specs parent-data-buffer))))
     (with-current-buffer buffer
+      (when parent-session
+        (setq-local mevedel--session parent-session))
+      (when parent-workspace
+        (setq-local mevedel--workspace parent-workspace))
+      (setq default-directory
+            (mevedel-agent-conversation--working-directory
+             parent-session parent-workspace))
       (let ((org-element-use-cache nil)
             (org-element-cache-persistent nil))
         (require 'mevedel-utilities)
@@ -226,10 +244,6 @@ A non-positive value saves immediately.  Terminal paths always save now."
         (error
          (kill-buffer buffer)
          (signal (car err) (cdr err))))
-      (when parent-session
-        (setq-local mevedel--session parent-session))
-      (when parent-workspace
-        (setq-local mevedel--workspace parent-workspace))
       (when (and parent-view (buffer-live-p parent-view))
         (setq-local mevedel--view-buffer parent-view))
       (when parent-specs
@@ -346,6 +360,10 @@ BUFFER defaults to INVOCATION's retained conversation buffer."
       (error "Agent request configuration is not frozen"))
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
+        (setq default-directory
+              (mevedel-agent-conversation--working-directory
+               (mevedel-agent-invocation-parent-session invocation)
+               (and (boundp 'mevedel--workspace) mevedel--workspace)))
         (dolist (entry
                  (mevedel-agent-configuration-request-locals configuration))
           (set (make-local-variable (car entry)) (cdr entry)))))))

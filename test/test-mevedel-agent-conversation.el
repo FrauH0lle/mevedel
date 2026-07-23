@@ -24,6 +24,33 @@
            (or buffer-file-name load-file-name byte-compile-current-file))
           "helpers"))
 
+(mevedel-deftest mevedel-agent-conversation--working-directory ()
+  ,test
+  (test)
+  :doc "prefers the session directory and falls back to the workspace root"
+  (let* ((session-root
+          (file-name-as-directory (make-temp-file "mevedel-agent-cwd-" t)))
+         (workspace-root
+          (file-name-as-directory
+           (make-temp-file "mevedel-agent-workspace-" t)))
+         (workspace
+          (mevedel-workspace--create
+           :type 'project :id workspace-root :root workspace-root
+           :name "agent"))
+         (session (mevedel-session-create "main" workspace session-root)))
+    (unwind-protect
+        (progn
+          (should
+           (equal session-root
+                  (mevedel-agent-conversation--working-directory
+                   session workspace)))
+          (should
+           (equal workspace-root
+                  (mevedel-agent-conversation--working-directory
+                   nil workspace))))
+      (delete-directory session-root t)
+      (delete-directory workspace-root t))))
+
 
 (mevedel-deftest mevedel-agent-conversation-configure ()
 		 ,test
@@ -57,18 +84,30 @@
 
 		 :doc "accepts the provider's explicit buffer before it is retained"
 		 (let* ((buffer (generate-new-buffer " *agent-conversation-dispatch*"))
+			(root (file-name-as-directory
+			       (make-temp-file "mevedel-agent-cwd-" t)))
+			(workspace (mevedel-workspace--create
+				    :type 'project :id root :root root :name "agent"))
+			(session (mevedel-session-create "main" workspace root))
 			(agent (mevedel-agent--create :name "default"))
 			(invocation (mevedel-agent-invocation-create agent)))
 		   (unwind-protect
 		       (progn
-			 (setf (mevedel-agent-invocation-frozen-configuration invocation)
+			 (setf (mevedel-agent-invocation-parent-session invocation)
+			       session
+			       (mevedel-agent-invocation-frozen-configuration invocation)
 			       (mevedel-agent-configuration--create
 				:agent agent
 				:request-locals '((gptel-system-prompt . "agent system"))))
+			 (with-current-buffer buffer
+			   (setq default-directory temporary-file-directory))
 			 (mevedel-agent-conversation-configure invocation buffer)
 			 (should (equal "agent system"
-					(buffer-local-value 'gptel-system-prompt buffer))))
-		     (kill-buffer buffer))))
+					(buffer-local-value 'gptel-system-prompt buffer)))
+			 (should (equal root
+					(buffer-local-value 'default-directory buffer))))
+		     (kill-buffer buffer)
+		     (delete-directory root t))))
 
 (mevedel-deftest mevedel-agent-conversation--reject-terminal-tool-call ()
 		 ,test
@@ -238,6 +277,7 @@
 			   (should (derived-mode-p 'org-mode))
 			   (should (eq mevedel--session session))
 			   (should (eq mevedel--agent-invocation inv))
+			   (should (equal root default-directory))
 			   (should (equal "/root/test_agent"
 				          (mevedel-agent-invocation-path inv)))
 			   (should-not gptel-org-branching-context)))
@@ -446,7 +486,11 @@
 				    :type 'project :id root :root root :name "agent"))
 			(session (mevedel-session-create "main" workspace root))
 			(parent-buffer (generate-new-buffer " *mev-agent-parent*"))
-			(transcript (expand-file-name "agent.chat.org" root))
+			(transcript-dir (file-name-as-directory
+					 (make-temp-file
+					  "mevedel-agent-transcript-" t)))
+			(transcript (expand-file-name "agent.chat.org"
+						 transcript-dir))
 			(agent (mevedel-agent--create :name "worker"))
 			(invocation
 			 (mevedel-agent-invocation--create
@@ -474,6 +518,7 @@
 				invocation parent-buffer transcript))
 			 (with-current-buffer buffer
 			   (should (equal "Frozen worker prompt" gptel-system-prompt))
+			   (should (equal root default-directory))
 			   (should-not (org-entry-get (point-min) "GPTEL_SYSTEM"))
 			   (should-not (buffer-modified-p))))
 		     (when (buffer-live-p buffer)
@@ -483,6 +528,7 @@
 		       (kill-buffer buffer))
 		     (when (buffer-live-p parent-buffer)
 		       (kill-buffer parent-buffer))
+		     (delete-directory transcript-dir t)
 		     (delete-directory root t))))
 
 
