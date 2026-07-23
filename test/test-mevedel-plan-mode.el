@@ -5,7 +5,9 @@
 ;;; Code:
 
 (require 'gptel-request)
+(require 'gptel-agent-tools)
 (require 'mevedel-plan)
+(require 'mevedel-plan-handoff)
 (require 'mevedel-plan-mode)
 (require 'mevedel-goal)
 (require 'mevedel-interaction-prompt)
@@ -179,15 +181,47 @@
                   ((symbol-function 'mevedel-plan-approval-render)
                    (lambda (&rest _) (setq rerendered t)))
                   ((symbol-function 'mevedel-plan-mode--read-worktree-branch)
-                   (lambda (_entry) "plan/topic")))
+                   (lambda (_entry) "plan/topic"))
+                  ((symbol-function 'gptel-agent--block-bg)
+                   (lambda () 'mevedel-test-block-bg)))
           (mevedel-plan-mode--render-approval entry)
           (let ((body (plist-get descriptor :body))
                 (keymap (plist-get descriptor :keymap)))
-            (dolist (text '("Location   Here" "Context    Current"
-                            "Execution  Direct"
-                            "one ordinary implementation turn"
-                            "Mode       auto"))
+            (dolist (text '("Implementation"
+                            "Location    Here"
+                            "Context     Current — full planning transcript"
+                            "Execution   Direct — one implementation turn"
+                            "Mode        Auto"))
               (should (string-match-p text body)))
+            (should
+             (memq 'mevedel-view-plan-mode
+                   (flatten-tree
+                    (get-text-property 1 'font-lock-face body))))
+            (should
+             (memq 'mevedel-test-block-bg
+                   (flatten-tree
+                    (get-text-property 1 'font-lock-face body))))
+            (dolist (key-row '(("l" . "  Location")
+                               ("c" . "  Context")
+                               ("e" . "  Execution")
+                               ("m" . "  Mode")
+                               ("RET" . " implement")
+                               ("f" . " feedback")
+                               ("q" . " cancel")))
+              (let ((position
+                     (string-match
+                      (regexp-quote (concat (car key-row) (cdr key-row)))
+                      body)))
+                (should position)
+                (should
+                 (memq 'help-key-binding
+                       (flatten-tree
+                        (get-text-property
+                         position 'font-lock-face body))))))
+            (should (eq (lookup-key keymap (kbd "m"))
+                        (lookup-key keymap (kbd "TAB"))))
+            (should (eq (lookup-key keymap (kbd "m"))
+                        (lookup-key keymap (kbd "<tab>"))))
             (call-interactively (lookup-key keymap (kbd "e")))
             (should (eq 'goal (plist-get selection :execution)))
             (should rerendered)
@@ -249,11 +283,11 @@
                          (make-overlay (point-min) (point-min)))))
               (mevedel-plan-mode--render-approval entry))
             (let ((body (plist-get descriptor :body)))
-              (should (string-match-p "Execution  Goal" body))
+              (should (string-match-p "Execution   Goal" body))
               (should (string-match-p
-                       "continue automatically until complete" body))
+                       "continue until complete, blocked" body))
               (should (string-match-p
-                       (format "Goal budget %s" (cadr case)) body))))
+                       (format "Budget      %s" (cadr case)) body))))
         (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
         (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
 
@@ -284,6 +318,14 @@
           (should (string-match-p
                    "Worktree starts at HEAD; uncommitted changes are not included\\."
                    (plist-get descriptor :body)))
+          (let* ((body (plist-get descriptor :body))
+                 (warning-position
+                  (string-match "Worktree starts at HEAD" body)))
+            (should
+             (memq 'warning
+                   (flatten-tree
+                    (get-text-property
+                     warning-position 'font-lock-face body)))))
           (should
            (eq 'quit
                (condition-case nil
@@ -292,7 +334,34 @@
                  (quit 'quit))))
           (should-not outcome))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
-      (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "cycling a setting preserves a multiline leading-> composer draft"
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create
+                     :name "test" :permission-mode 'auto))
+           (selection (mevedel-plan-mode--default-selection session))
+           (entry (mevedel-plan-mode--approval-entry
+                   "# Plan" data-buf session selection))
+           (draft "> first line\nsecond line")
+           (point-offset (length "> first")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view-test--insert-composer-draft draft point-offset))
+      (setf (mevedel-session-pending-plan-approval session) entry)
+      (with-current-buffer data-buf
+        (mevedel-plan-approval-render session))
+      (with-current-buffer view-buf
+        (let* ((descriptor
+                (gethash (plist-get entry :interaction-id)
+                         mevedel-view--interaction-descriptors))
+               (keymap (plist-get descriptor :keymap)))
+          (call-interactively (lookup-key keymap (kbd "c")))
+          (should (string= draft (mevedel-view--input-text)))
+          (should (= (point)
+                     (+ (mevedel-view--input-start) point-offset))))))))
 
 (mevedel-deftest mevedel-plan-mode--feedback-draft
   (:doc "replaces the composer with an editable replacement-plan request")
@@ -707,10 +776,10 @@
   ,test
   (test)
   (should (string-match-p
-           "one ordinary implementation turn"
+           "one implementation turn"
            (mevedel-plan-mode--execution-description 'direct)))
   (should (string-match-p
-           "continue automatically until complete"
+           "continue until complete"
            (mevedel-plan-mode--execution-description 'goal))))
 
 (mevedel-deftest mevedel-plan-mode--demote-proposal

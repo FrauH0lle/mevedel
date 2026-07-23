@@ -524,7 +524,21 @@ sessions rather than spamming every turn."
    :trigger #'mevedel-session-plan-mode
    :content
    (lambda (_session)
-     "Plan mode is active. Inspect and discuss the project without editing files. Bash is limited to commands classified as read-only; Eval and other tools retain normal permission policy. Treat an implementation request as a request to produce or revise the plan, not to edit. Explore available evidence before asking questions; ask only about genuine user preferences that repository evidence cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. When the plan is complete, emit exactly one line-oriented <proposed_plan>...</proposed_plan> block.")))
+     (concat
+      "Plan mode is active. Inspect and discuss the project without editing files. Bash is limited to commands classified as read-only; Eval and other tools retain normal permission policy. Treat an implementation request as a request to produce or revise the plan, not to edit. Explore available evidence before asking questions; ask only about genuine user preferences that repository evidence cannot resolve. Every new <proposed_plan> block replaces the previous proposal completely. Do not ask whether you should proceed with implementation. When the plan is complete, emit exactly one line-oriented block with this structure:\n\n"
+      "<proposed_plan>\n"
+      "# Concrete Plan Title\n\n"
+      "## Summary\n"
+      "- State the root cause or goal, intended behavior change, and important non-goals.\n\n"
+      "## Key Changes\n"
+      "- Group implementation bullets by subsystem or behavior, not by file inventory. Mention files, public APIs, interfaces, or data shape changes only when needed to remove ambiguity.\n\n"
+      "## Regression Coverage\n"
+      "- List the user-visible flows, edge cases, and failure scenarios that tests must cover.\n\n"
+      "## Validation\n"
+      "- List exact focused test/build commands to run.\n\n"
+      "## Assumptions\n"
+      "- Record defaults, compatibility assumptions, and intentionally unchanged behavior.\n"
+      "</proposed_plan>\n\n"))))
 
 (defun mevedel-reminders-make-full-auto-mode (&optional interval)
   "Create the `full-auto-mode' reminder with INTERVAL.

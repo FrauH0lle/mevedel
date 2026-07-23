@@ -27,6 +27,14 @@ flowchart TD
 
 ## Implemented
 
+### Plan-mode workflow
+
+The every-turn `plan-mode` reminder reinforces Plan's read-only boundary,
+exploration-first behavior, replacement semantics, and exact proposal tags. It
+also includes the preferred title, Summary, Key Changes, Regression Coverage,
+Validation, and Assumptions shape on every firing so revised proposals retain
+the same structure.
+
 ### Plan-file reference reminder
 
 Accepted plans are recorded in session `plan-metadata` and persisted as an

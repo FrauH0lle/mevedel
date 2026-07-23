@@ -27,6 +27,11 @@ becomes the one actionable proposal. A later proposal replaces it; an accepted
 user follow-up demotes it to a non-actionable draft while preserving the
 selected axes.
 
+Every Plan turn includes the preferred proposal shape: a concrete title,
+Summary, Key Changes, Regression Coverage, Validation, and Assumptions. This
+is model guidance rather than a parser-enforced schema; the proposal parser
+continues to accept any nonblank Markdown inside the exact line-oriented tags.
+
 The approval interaction has these axes:
 
 | Location | Current | Fresh | Summary |
@@ -45,6 +50,10 @@ for Mode, `RET` to accept, `f` for an editable feedback draft, and `q` or
 `C-g` to cancel. Selecting Worktree while Current is selected changes the
 context to Fresh. A dirty source checkout is not copied or stashed; Worktree
 starts at `HEAD`.
+
+The approval card keeps the Markdown proposal expanded above a compact
+Implementation section. Cycle keys appear beside their settings; accept,
+feedback, and cancel remain in the action footer.
 
 Direct remains the default and sends one ordinary implementation turn. Goal is
 an explicit opt-in that continues automatically until complete, genuinely
