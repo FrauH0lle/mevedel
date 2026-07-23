@@ -203,6 +203,9 @@
                    (mevedel-agent-invocation-transcript-relative-path
                     invocation)
                    "agents/explorer.chat.org")))
+               ((symbol-function 'mevedel-agent-conversation-configure)
+                (lambda (&rest _)
+                  (push 'conversation-configure events)))
                ((symbol-function
                  'mevedel-agent-conversation-save)
                 (lambda (&rest _)
@@ -239,7 +242,8 @@
               (should (equal "/root/explore"
                              (mevedel-agent-invocation-path invocation)))
               (should
-               (equal '(transcript-setup transcript-save invocation-published)
+               (equal '(transcript-setup conversation-configure
+                         transcript-save invocation-published)
                       (nreverse events)))
               (with-current-buffer agent-buffer
                 (should (string-match-p "Prior context" (buffer-string)))

@@ -396,6 +396,21 @@ or `convert`. Their sandbox facts stay out of successful model-visible results.
 Native filesystem permission checks remain the authorization boundary; helper
 confinement limits effects after that authorization.
 
+Glob and Grep keep the helper's private scratch working directory and pass
+absolute authorized search roots to ripgrep. Both narrow a
+directory-qualified pattern by its leading literal components.
+Absolute patterns, parent traversal, and existing symlink escapes are
+rejected. Missing qualified directories settle as ordinary no-match results.
+Both tools search hidden
+files and exclude `.git`, `.svn`, `.hg`, `.bzr`, `.jj`, and `.sl` metadata at
+any depth. Glob deliberately ignores ignore files; Grep respects them. Neither
+sorts results or follows symlinks. Both share
+`mevedel-tool-fs-search-timeout` (20 seconds by default). Error, timeout, and
+output-limit facts are settled before exit codes, with captured timeout or
+output-limit text labeled partial and passed through the existing result
+bounds. Result ordering is unspecified. Incomplete and failed searches tell
+the model which path or expression fields to narrow before retrying.
+
 ## Managed Bash execution
 
 Bash source runs through `bash -lc`, so login-shell initialization contributes

@@ -856,7 +856,6 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
              (mevedel-agent-conversation-open
               invocation parent-buffer))))
       (setf (mevedel-agent-invocation-buffer invocation) buffer)
-      (mevedel-agent-conversation-configure invocation buffer)
       (if retained-p
           (progn
             (setf (mevedel-agent-invocation-transcript-relative-path invocation)
@@ -864,6 +863,7 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
             (with-current-buffer buffer
               (setq-local mevedel--agent-invocation invocation)))
         (mevedel-agent-runtime--setup-transcript invocation buffer))
+      (mevedel-agent-conversation-configure invocation buffer)
       (let (published-p)
         (condition-case err
             (let ((turn

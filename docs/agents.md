@@ -232,6 +232,9 @@ handles, without exposing the hidden bookkeeping block to the model.
 
 Each retained agent runs in its own gptel conversation buffer backed by a
 canonical transcript under the root session's `agents/` directory. The
+buffer's `default-directory` remains the session working directory (falling
+back to the workspace root), including after transcript attachment and cold
+hydration; transcript storage location never becomes tool cwd. The
 sidecar persists an explicit registry record for its canonical and parent
 paths, role and frozen configuration, activity, unread mailbox, pending
 conversation-local hook context, conversation location, and internal storage

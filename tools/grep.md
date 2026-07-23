@@ -12,6 +12,12 @@ A powerful search tool built on ripgrep.
     cross-line patterns like `struct \{[\s\S]*?field`, use `multiline: true`
   - Searches from the session working directory by default. Relative `path`
     values are resolved from the session working directory.
+  - Searches hidden files while respecting ignore rules, and always excludes
+    version-control metadata directories.
+  - Result ordering is unspecified.
+  - Stops after `mevedel-tool-fs-search-timeout` seconds (20 by default) and
+    labels any captured output as partial; narrow the path, glob, or pattern
+    after a timeout.
 
 ### When to use Grep
 
@@ -35,6 +41,8 @@ A powerful search tool built on ripgrep.
 
 - Supports full regex syntax
 - Can specify glob pattern to narrow scope
+- Directory-qualified glob filters narrow the search below `path`; absolute
+  filters and parent traversal are rejected.
 - Use context, -A, -B for context lines around matches
 - Use output_mode to control result format
 - You can call multiple tools in a single response. It is always better to
