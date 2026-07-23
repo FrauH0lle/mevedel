@@ -48,13 +48,16 @@ The approval interaction has these axes:
 
 Keys are `l` for Location, `c` for Context, `e` for Execution, `m` or `TAB`
 for Mode, and—when Goal is selected—`b` for Budget. `RET` accepts, `f` opens
-an editable feedback draft, and `q` or `C-g` cancels. Selecting Worktree while
-Current is selected changes the context to Fresh. A dirty source checkout is
-not copied or stashed; Worktree starts at `HEAD`.
+an editable feedback draft, `q` hides the approval, and `C-g` cancels.
+Selecting Worktree while Current is selected changes the context to Fresh. A
+dirty source checkout is not copied or stashed; Worktree starts at `HEAD`.
 
 The approval card keeps the Markdown proposal expanded above a compact
 Implementation section. Cycle keys appear beside their settings; accept,
-feedback, and cancel remain in the action footer.
+feedback, hide, and cancel remain in the action footer. A hidden approval stays
+pending and hidden across live-session redraws. `RET` or a mouse click on its
+`1 plan` interaction-counter segment shows the card again; resuming a persisted
+session also shows it because hidden state is not persisted.
 
 Direct remains the default and sends one ordinary implementation turn. Goal is
 an explicit opt-in that continues automatically until complete, genuinely

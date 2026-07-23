@@ -37,6 +37,8 @@
 
 ;; `mevedel-queue'
 (declare-function mevedel-queue--current-session "mevedel-queue" ())
+(declare-function mevedel-queue--entry-metadata-put
+                  "mevedel-queue" (entry key value))
 (declare-function mevedel-queue--unregister-entry-interaction
                   "mevedel-queue" (entry))
 
@@ -88,6 +90,8 @@
 		  "mevedel-view-interaction" (descriptor))
 (declare-function mevedel-view--interaction-target-buffer
 		  "mevedel-view-interaction" (chat-buffer))
+(declare-function mevedel-view--interaction-unregister
+                  "mevedel-view-interaction" (id))
 
 ;; `mevedel-view-markdown'
 (declare-function mevedel-view--fontify-as "mevedel-view-markdown"
@@ -332,7 +336,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         (selection (plist-get entry :selection))
         overlay)
     (cl-labels
-        ((settle (outcome)
+        ((deliver (outcome)
+           (mevedel-plan-approval-settle entry outcome))
+         (settle (outcome)
            (when overlay (mevedel--prompt--settle overlay outcome)))
          (accept ()
            (interactive)
@@ -394,8 +400,21 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
               (plist-get entry :session) :selection selection)
              (mevedel-plan-approval-render (plist-get entry :session))))
          (feedback () (interactive) (settle 'feedback-draft))
+         (hide ()
+           (interactive)
+           (plist-put entry :hidden t)
+           (mevedel-view--interaction-unregister
+            (plist-get entry :interaction-id))
+           (when-let* ((position
+                        (text-property-any
+                         (point-min) (point-max)
+                         'mevedel-view-pending-plan t)))
+             (goto-char position)))
          (cancel () (interactive) (settle 'aborted)))
       (let ((target (mevedel-view--interaction-target-buffer chat-buffer)))
+        (mevedel-queue--entry-metadata-put
+         entry :interaction-id (plist-get entry :interaction-id))
+        (mevedel-queue--entry-metadata-put entry :view-buffer target)
         (with-current-buffer target
           (let* ((keymap (make-sparse-keymap))
                  (warning (mevedel-plan-mode--worktree-warning entry))
@@ -465,6 +484,8 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                     (mevedel--prompt-key "f")
                     " feedback    "
                     (mevedel--prompt-key "q")
+                    " hide    "
+                    (mevedel--prompt-key "C-g")
                     " cancel\n")
                    'mevedel-view-plan-mode)))
             (define-key keymap (kbd "RET") #'accept)
@@ -479,7 +500,7 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (when (eq execution 'goal)
               (define-key keymap (kbd "b") #'edit-budget))
             (define-key keymap (kbd "f") #'feedback)
-            (define-key keymap (kbd "q") #'cancel)
+            (define-key keymap (kbd "q") #'hide)
             (define-key keymap (kbd "C-g") #'cancel)
             (setq overlay
                   (mevedel-view--interaction-register
@@ -490,11 +511,10 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                          :priority 200
                          :keymap keymap
                          :entry entry
-                         :activate
-                         (lambda (outcome)
-                           (mevedel-plan-approval-settle entry outcome)))))
+                         :activate #'deliver)))
             (overlay-put overlay 'mevedel-plan t)
             (overlay-put overlay 'mevedel-user-request t)
+            (overlay-put overlay 'mevedel--callback #'deliver)
             (overlay-put overlay 'keymap keymap)))))))
 
 (defun mevedel-plan-mode--post-response (start end)
@@ -595,7 +615,8 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
 (defun mevedel-plan-approval-render (&optional session)
   "Render SESSION's pending Plan approval."
   (when-let* ((session (or session (mevedel-plan-approval--current-session)))
-              (entry (mevedel-session-pending-plan-approval session)))
+              (entry (mevedel-session-pending-plan-approval session))
+              ((not (plist-get entry :hidden))))
     (condition-case err
         (if-let* ((renderer (plist-get entry :renderer)))
             (funcall renderer entry)
@@ -618,9 +639,12 @@ When RETAIN is non-nil, keep ENTRY's interaction after a callback error."
     (if (not (eq entry pending))
         (display-warning 'mevedel
                          "Plan approval: stale settlement ignored" :warning)
-      (when (mevedel-plan-approval--deliver entry outcome "settle" t)
+      (setf (mevedel-session-pending-plan-approval session) nil)
+      (unless (mevedel-plan-approval--deliver entry outcome "settle" t)
+        (unless (mevedel-session-pending-plan-approval session)
+          (setf (mevedel-session-pending-plan-approval session) entry))
         (when (eq entry (mevedel-session-pending-plan-approval session))
-          (setf (mevedel-session-pending-plan-approval session) nil))))))
+          (mevedel-plan-approval-render session))))))
 
 (defun mevedel-plan-approval-abort (&optional session outcome)
   "Settle SESSION's pending Plan approval with OUTCOME or `aborted'."

@@ -158,6 +158,35 @@
       (should-not (mevedel-session-pending-plan-approval session))
       (should (eq 'invalidated outcome)))))
 
+(mevedel-deftest mevedel-plan-approval-settle
+  (:doc "clears pending state before delivering the outcome")
+  ,test
+  (test)
+  (let* ((session (mevedel-session--create :name "test"))
+         pending-during-callback
+         (entry
+          (list :session session
+                :callback
+                (lambda (_outcome)
+                  (setq pending-during-callback
+                        (mevedel-session-pending-plan-approval session))))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-approval-settle entry 'aborted)
+    (should-not pending-during-callback)
+    (should-not (mevedel-session-pending-plan-approval session)))
+
+  :doc "restores and rerenders after a callback error"
+  (let* ((session (mevedel-session--create :name "test"))
+         rendered
+         (entry
+          (list :session session
+                :renderer (lambda (_entry) (setq rendered t))
+                :callback (lambda (_outcome) (error "Boom")))))
+    (setf (mevedel-session-pending-plan-approval session) entry)
+    (mevedel-plan-approval-settle entry 'aborted)
+    (should (eq entry (mevedel-session-pending-plan-approval session)))
+    (should rendered)))
+
 (mevedel-deftest mevedel-plan-mode--render-approval
   (:doc "renders and toggles execution without applying Mode before acceptance")
   ,test
@@ -210,7 +239,8 @@
                                ("m" . "  Mode")
                                ("RET" . " implement")
                                ("f" . " feedback")
-                               ("q" . " cancel")))
+                               ("q" . " hide")
+                               ("C-g" . " cancel")))
               (let ((position
                      (string-match
                       (regexp-quote (concat (car key-row) (cdr key-row)))
@@ -430,6 +460,75 @@
           (should (string= draft (mevedel-view--input-text)))
           (should (= (point)
                      (+ (mevedel-view--input-start) point-offset))))))))
+
+  :doc "hides, rebuilds, reopens, and cancels a pending approval"
+  (mevedel-view-test--with-buffers
+    (let* ((selection '(:location here :context current
+                        :execution direct :mode ask
+                        :goal-token-budget nil))
+           (session
+            (mevedel-session--create
+             :name "test"
+             :plan-mode t
+             :plan-metadata
+             (list :status 'proposed :proposal-id '(1 2 "hash")
+                   :selection selection)))
+           (entry
+            (mevedel-plan-mode--approval-entry
+             "# Plan" data-buf session selection))
+           (draft "> first line\nsecond line")
+           (draft-offset (length "> first")))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (mevedel-plan-approval-present entry session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (let* ((id (plist-get entry :interaction-id))
+               (descriptor
+                (gethash id mevedel-view--interaction-descriptors))
+               (keymap (plist-get descriptor :keymap)))
+          (call-interactively (lookup-key keymap (kbd "q")))
+          (should (mevedel-session-pending-plan-approval session))
+          (should (plist-get
+                   (mevedel-session-pending-plan-approval session)
+                   :hidden))
+          (should-not (gethash id mevedel-view--interaction-descriptors))
+          (should (string-match-p "1 plan pending" (buffer-string)))
+          (mevedel-view-test--insert-composer-draft draft draft-offset)
+          (mevedel-view--interaction-rebuild)
+          (should-not (gethash id mevedel-view--interaction-descriptors))
+          (should (string= draft (mevedel-view--input-text)))
+          (should (= (point)
+                     (+ (mevedel-view--input-start) draft-offset)))
+          (goto-char (point-min))
+          (search-forward "1 plan")
+          (let* ((position (match-beginning 0))
+                 (counter-map (get-text-property position 'keymap))
+                 (show (and counter-map
+                            (lookup-key counter-map (kbd "RET")))))
+            (should show)
+            (should (lookup-key counter-map [mouse-1]))
+            (goto-char position)
+            (call-interactively show))
+          (should-not (plist-get
+                       (mevedel-session-pending-plan-approval session)
+                       :hidden))
+          (setq descriptor
+                (gethash id mevedel-view--interaction-descriptors))
+          (should descriptor)
+          (should (= (point)
+                     (plist-get
+                      (mevedel-view-zone-fragment-bounds 'interaction id)
+                      :start)))
+          (should (string= draft (mevedel-view--input-text)))
+          (call-interactively
+           (lookup-key (plist-get descriptor :keymap) (kbd "C-g")))
+          (should-not (mevedel-session-pending-plan-approval session))
+          (should-not
+           (string-match-p "plan pending" (buffer-string)))
+          (let ((metadata (mevedel-session-plan-metadata session)))
+            (should (eq 'draft (plist-get metadata :status)))
+            (should-not (plist-member metadata :selection)))))))
 
 (mevedel-deftest mevedel-plan-mode--feedback-draft
   (:doc "replaces the composer with an editable replacement-plan request")
