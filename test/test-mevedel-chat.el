@@ -423,6 +423,26 @@
       (should (string-match-p "hook-context" model-input))
       (should (equal '(transform) (plist-get request-args :transforms)))))
 
+  :doc "stores the generated prompt while sending prepared skill context"
+  (with-temp-buffer
+    (org-mode)
+    (setq-local gptel-response-separator "\n\n"
+                gptel-prompt-prefix-alist '((org-mode . "* User\n")))
+    (let (model-input)
+      (cl-letf (((symbol-function 'gptel-request)
+                 (lambda (&rest _)
+                   (setq model-input mevedel--pending-model-input))))
+        (mevedel--submit-generated-turn
+         "hook input" "Implement accepted plan"
+         (mevedel-prompt-submission-create :input "hook input")
+         '(:transcript-input "Use $alpha"
+           :model-input "Use [skill:alpha -- attached]\n\nALPHA BODY"
+           :render-data "<!-- mevedel-render-data -->")))
+      (should (string-match-p "Use \\$alpha" (buffer-string)))
+      (should (string-match-p "mevedel-render-data" (buffer-string)))
+      (should (string-match-p "ALPHA BODY" model-input))
+      (should (string-match-p "mevedel-render-data" model-input))))
+
   :doc "commits inserted context before a synchronous request failure"
   (with-temp-buffer
     (org-mode)
@@ -460,7 +480,7 @@
                   'mevedel--implementation-permission-mode-apply)
                  #'ignore)
                 ((symbol-function 'mevedel--submit-generated-turn)
-                 (lambda (prompt display accepted)
+                 (lambda (prompt display accepted &optional _prepared)
                    (setq sent-prompt prompt
                          sent-display display
                          sent-submission accepted))))
@@ -471,7 +491,28 @@
       (should (equal (mevedel-prompt-submission-input submission)
                      sent-prompt))
       (should (equal "Implement accepted plan as Goal" sent-display))
-      (should (eq submission sent-submission)))))
+      (should (eq submission sent-submission))))
+
+  :doc "stages prepared skill request context for the implementation turn"
+  (with-temp-buffer
+    (org-mode)
+    (let* ((submission
+            (mevedel-prompt-submission-create :input "hook input"))
+           (prepared
+            '(:model-input "expanded" :transcript-input "authored"
+              :request-context (:invoked-skills (alpha))))
+           seen)
+      (cl-letf (((symbol-function
+                  'mevedel--implementation-permission-mode-apply)
+                 #'ignore)
+                ((symbol-function 'mevedel--submit-generated-turn)
+                 (lambda (&rest _)
+                   (setq seen mevedel-skills--pending-request-context))))
+        (mevedel--implement-plan
+         (list :permission-mode 'auto
+               :prompt-submission submission
+               :prepared-outcome prepared)))
+      (should (equal '(:invoked-skills (alpha)) seen)))))
 
 
 ;;

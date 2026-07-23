@@ -38,6 +38,7 @@
 (defvar gptel--known-backends)
 (defvar gptel-backend)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 (defvar gptel-tools)
 
 (defmacro mevedel-menu-test--with-model-backends (&rest body)
@@ -678,11 +679,26 @@
     (mevedel-menu-test--with-buffers
       (with-current-buffer data-buf
         (setq-local gptel-backend (gptel-get-backend "Fast"))
-        (setq-local gptel-model 'fast-model))
+        (setq-local gptel-model 'fast-model)
+        (setq-local gptel-reasoning-effort 'high))
       (with-current-buffer view-buf
-        (should (string= "Current model: Fast:fast-model"
+        (should (string= "Current model: Fast:fast-model · effort high"
                          (substring-no-properties
                           (mevedel-menu--model-surface-description))))))))
+
+(mevedel-deftest mevedel-menu--refresh-plan-approval ()
+  ,test
+  (test)
+  :doc "rerenders only when the session owns a pending Plan approval"
+  (let ((session (mevedel-session--create :name "main"))
+        rendered)
+    (cl-letf (((symbol-function 'mevedel-plan-approval-render)
+               (lambda (value) (setq rendered value))))
+      (mevedel-menu--refresh-plan-approval session)
+      (should-not rendered)
+      (setf (mevedel-session-pending-plan-approval session) '(:pending t))
+      (mevedel-menu--refresh-plan-approval session)
+      (should (eq session rendered)))))
 
 (mevedel-deftest mevedel-menu--select-model ()
   ,test
@@ -696,13 +712,65 @@
           (mevedel-menu--select-model)))
       (with-current-buffer data-buf
         (should (equal "Balanced" (gptel-backend-name gptel-backend)))
-        (should (eq 'balanced-model gptel-model)))))
+        (should (eq 'balanced-model gptel-model))
+        (should (equal "Balanced:balanced-model"
+                       (mevedel-session-model-provider session))))))
 
   :doc "model selector rejects an empty model registry"
   (let ((gptel--known-backends nil))
     (mevedel-menu-test--with-buffers
       (with-current-buffer view-buf
         (should-error (mevedel-menu--select-model) :type 'user-error)))))
+
+(mevedel-deftest mevedel-menu--select-effort
+  ()
+  ,test
+  (test)
+
+  :doc "offers supported efforts and stores the selected session value"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (let ((old-effort (get 'fast-model :reasoning-effort))
+            seen)
+        (unwind-protect
+            (progn
+              (put 'fast-model :reasoning-effort '(member low high))
+              (with-current-buffer data-buf
+                (setq-local gptel-backend (gptel-get-backend "Fast"))
+                (setq-local gptel-model 'fast-model))
+              (cl-letf (((symbol-function 'completing-read)
+                         (lambda (_prompt candidates &rest _)
+                           (setq seen candidates)
+                           "high")))
+                (with-current-buffer view-buf
+                  (mevedel-menu--select-effort)))
+              (should (equal '("default" "low" "high") seen))
+              (with-current-buffer data-buf
+                (should (eq 'high gptel-reasoning-effort))
+                (should (eq 'high
+                            (mevedel-session-reasoning-effort session)))))
+          (put 'fast-model :reasoning-effort old-effort)))))
+
+  :doc "default clears explicit effort"
+  (mevedel-menu-test--with-model-backends
+    (mevedel-menu-test--with-buffers
+      (let ((old-effort (get 'fast-model :reasoning-effort)))
+        (unwind-protect
+            (progn
+              (put 'fast-model :reasoning-effort '(member low high))
+              (with-current-buffer data-buf
+                (setq-local gptel-backend (gptel-get-backend "Fast"))
+                (setq-local gptel-model 'fast-model)
+                (setq-local gptel-reasoning-effort 'high))
+              (cl-letf (((symbol-function 'completing-read)
+                         (lambda (&rest _) "default")))
+                (with-current-buffer view-buf
+                  (mevedel-menu--select-effort)))
+              (with-current-buffer data-buf
+                (should-not gptel-reasoning-effort)
+                (should-not
+                 (mevedel-session-reasoning-effort session))))
+          (put 'fast-model :reasoning-effort old-effort))))))
 
 (mevedel-deftest mevedel-menu--send ()
   ,test

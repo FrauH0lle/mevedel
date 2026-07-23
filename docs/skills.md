@@ -299,6 +299,15 @@ Instruction preparation always receives empty
 arguments and ignores `context`, model, effort, agent, and declared skill
 hooks. Its allowed-tool rules exist only while preparing body injections.
 
+Accepted Plan implementation uses this same planner. The approval's `s`
+selector stores exact canonical sources and emits argument-free instruction
+mentions in the generated implementation prompt. Live `$skill` mentions in
+the approval's `i` instructions editor are bound and prepared identically, so
+they deduplicate with `s` selections by canonical source. Unlike an ordinary
+soft-unavailable prose mention, an explicitly bound Plan implementation skill
+blocks the retryable handoff before request startup when its source is missing,
+disabled, malformed, or no longer user-invocable.
+
 Quoted `"$foo"` / `'$foo'`, escaped `\$foo`, Markdown code spans and fences,
 and unknown `$foo` names remain literal. A bound or known skill that is
 missing, disabled, malformed on disk, or no longer user-invocable emits a
@@ -463,6 +472,7 @@ Policy is applied only at a request-owner boundary:
 | User- or model-origin fork command | Applied to the dedicated child request |
 | Two or more leading inline commands | Ignored; the request retains session policy |
 | Instruction mention in user prose | Ignored; the request retains session policy |
+| Plan implementation skill or instruction mention | Ignored; the accepted session snapshot applies |
 | Model-side inline `Skill` call | Ignored; the parent request is already realized |
 
 Mevedel resolves and validates provider-dependent policy only for the first two

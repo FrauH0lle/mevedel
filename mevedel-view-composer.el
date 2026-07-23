@@ -412,8 +412,8 @@ handler whose command exists is used by `mevedel-view-yank-dwim'."
        (mevedel-session-plan-mode mevedel--session)))
 
 (defconst mevedel-view--permission-mode-cycle
-  '(ask auto full-auto plan)
-  "Workflow states cycled by `mevedel-view-cycle-permission-mode'.")
+  '(ask auto full-auto)
+  "Permission states cycled by `mevedel-view-cycle-permission-mode'.")
 
 (defun mevedel-view--next-permission-mode (&optional mode)
   "Return the permission mode after MODE in the view cycle.
@@ -1016,24 +1016,37 @@ follows `mevedel-view--input-marker'."
                            (buffer-local-value 'mevedel--session data-buf)))))
     (unless (and data-buf session)
       (user-error "No mevedel session for permission mode cycling"))
-    (let* ((current (if (mevedel-session-plan-mode session)
-                        'plan
-                      (or (mevedel-session-permission-mode session) 'ask)))
-           (next (mevedel-view--next-permission-mode current)))
+    (let ((next
+           (mevedel-view--next-permission-mode
+            (or (mevedel-session-permission-mode session) 'ask))))
       (with-current-buffer data-buf
-        (if (eq next 'plan)
-            (progn
-              (require 'mevedel-plan-mode)
-              (mevedel-plan-mode-enter session))
-          (require 'mevedel-permissions)
-          (mevedel-permission-mode-transition next)))
+        (require 'mevedel-permissions)
+        (mevedel-permission-mode-transition next))
       (mevedel-view-refresh-input-prompt)
-      (message "mevedel: %s"
-               (if (eq next 'plan)
-                   "Plan mode"
-                 (format "permission mode %s"
-                         (car (mevedel-view--permission-mode-display next)))))
+      (message "mevedel: permission mode %s"
+               (car (mevedel-view--permission-mode-display next)))
       next)))
+
+(defun mevedel-view-toggle-plan-mode ()
+  "Toggle Plan for the current session without changing permissions."
+  (interactive)
+  (let* ((data-buf (and (boundp 'mevedel--data-buffer)
+                        mevedel--data-buffer
+                        (buffer-live-p mevedel--data-buffer)
+                        mevedel--data-buffer))
+         (session (or (and (boundp 'mevedel--session) mevedel--session)
+                      (and data-buf
+                           (buffer-local-value 'mevedel--session data-buf)))))
+    (unless (and data-buf session)
+      (user-error "No mevedel session for Plan mode"))
+    (require 'mevedel-plan-mode)
+    (if (mevedel-session-plan-mode session)
+        (mevedel-plan-mode-exit session)
+      (mevedel-plan-mode-enter session))
+    (mevedel-view-refresh-input-prompt)
+    (message "mevedel: Plan mode %s"
+             (if (mevedel-session-plan-mode session) "on" "off"))
+    (mevedel-session-plan-mode session)))
 
 (defun mevedel-view--input-text ()
   "Return the user's composer text, trimmed."

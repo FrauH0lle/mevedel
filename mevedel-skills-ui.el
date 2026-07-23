@@ -245,10 +245,13 @@ current buffer belongs to a live session pair."
   (if (and args (not (string-blank-p args)))
       (let ((trimmed (string-trim args)))
         (if-let* ((provider (mevedel-model-resolve-provider trimmed t)))
-            (let ((backend (plist-get provider :backend))
-                  (model (plist-get provider :model)))
-              (setq-local gptel-backend backend)
-              (setq-local gptel-model model)
+            (let ((session (and (boundp 'mevedel--session)
+                                mevedel--session)))
+              (if session
+                  (mevedel-model-set-session-provider
+                   session provider (current-buffer))
+                (setq-local gptel-backend (plist-get provider :backend)
+                            gptel-model (plist-get provider :model)))
               (message "Model set to %s" trimmed))
           (let ((model (intern trimmed)))
             (setq-local gptel-model model)

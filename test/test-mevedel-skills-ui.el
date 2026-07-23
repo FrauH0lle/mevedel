@@ -2023,9 +2023,14 @@ spanning lines")))
   :doc "with provider args sets buffer-local backend and model"
   (mevedel-skills-test--with-model-backends
     (with-temp-buffer
-      (mevedel-cmd--model "Fast:fast-model")
-      (should (equal "Fast" (gptel-backend-name gptel-backend)))
-      (should (eq 'fast-model gptel-model))))
+      (let ((mevedel--session
+             (mevedel-session--create :name "main")))
+        (mevedel-cmd--model "Fast:fast-model")
+        (should (equal "Fast" (gptel-backend-name gptel-backend)))
+        (should (eq 'fast-model gptel-model))
+        (should (equal "Fast:fast-model"
+                       (mevedel-session-model-provider
+                        mevedel--session))))))
 
   :doc "with blank args does not change the model"
   (with-temp-buffer

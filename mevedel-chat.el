@@ -80,6 +80,10 @@
 		  (event event-plist callback &optional session
 			 workspace request invocation))
 
+;; `mevedel-models'
+(declare-function mevedel-model-apply-session-policy
+                  "mevedel-models" (session &optional buffer))
+
 ;; `mevedel-overlays'
 (declare-function mevedel--child-instructions "mevedel-overlays"
 		  (instruction))
@@ -164,6 +168,7 @@
 		  "mevedel-skills-core" nil)
 (declare-function mevedel-skills-install "mevedel-skills-core"
 		  (session &optional buffer))
+(defvar mevedel-skills--pending-request-context)
 
 ;; `mevedel-skills-prompt'
 (declare-function mevedel-skills-install-activation-hook
@@ -414,6 +419,8 @@ session struct. SOURCE is `startup' or `resume' as a string."
     (setq-local gptel-org-convert-response nil)
     (setq-local gptel-org-branching-context nil)
     (mevedel-preset-restore-session mevedel--session buf)
+    (require 'mevedel-models)
+    (mevedel-model-apply-session-policy mevedel--session buf)
     (mevedel-reminders-install-defaults mevedel--session)
     (require 'mevedel-goal)
     ;; Install the mevedel-augmented FSM handler chain as the buffer-local
@@ -1400,25 +1407,33 @@ with NO-SPINNER forwarded when non-nil."
     data-turn-start))
 
 (defun mevedel--submit-generated-turn
-    (prompt &optional display-text prompt-submission)
+    (prompt &optional display-text prompt-submission prepared-outcome)
   "Insert and send generated PROMPT through the canonical request path.
 DISPLAY-TEXT is shown in the view instead of PROMPT.  PROMPT-SUBMISSION owns
-accepted hook context until the turn is inserted."
+accepted hook context until the turn is inserted.  PREPARED-OUTCOME carries
+skill-expanded model input and transcript render data."
   (when prompt-submission
     (require 'mevedel-prompt-submission))
   (let* ((hook-context
           (and prompt-submission
                (mevedel-prompt-submission-context prompt-submission)))
          (stored-prompt
-          (if hook-context
-              (concat prompt "\n\n" hook-context)
-            prompt)))
+          (if prepared-outcome
+              (concat (plist-get prepared-outcome :transcript-input)
+                      (or (plist-get prepared-outcome :render-data) ""))
+            (if hook-context
+                (concat prompt "\n\n" hook-context)
+              prompt)))
+         (model-input
+          (and prepared-outcome
+               (concat (plist-get prepared-outcome :model-input)
+                       (or (plist-get prepared-outcome :render-data) "")))))
     (mevedel--insert-local-user-turn
      stored-prompt display-text nil hook-context)
     (when prompt-submission
       (mevedel-prompt-submission-commit prompt-submission))
     (mevedel--gptel-send-request
-     (and hook-context stored-prompt))))
+     (or model-input (and hook-context stored-prompt)))))
 
 (defun mevedel--gptel-send-request (&optional model-input)
   "Send the current gptel prompt and return its standard send FSM.
@@ -1439,12 +1454,14 @@ MODEL-INPUT replaces the stored prompt for this request only."
 ACTION-PLIST is a plist with keys:
   :permission-mode - Permission mode for implementation
   :display-text   - Optional compact transcript display text
-  :prompt-submission - Accepted prompt transaction."
+  :prompt-submission - Accepted prompt transaction
+  :prepared-outcome - Prepared skill and transcript components."
   (require 'mevedel-utilities)
   (let* ((permission-mode (plist-get action-plist :permission-mode))
          (display-text (or (plist-get action-plist :display-text)
                            "Implement accepted plan"))
          (prompt-submission (plist-get action-plist :prompt-submission))
+         (prepared-outcome (plist-get action-plist :prepared-outcome))
          (prompt (and prompt-submission
                       (mevedel-prompt-submission-input prompt-submission))))
     (unless prompt
@@ -1454,9 +1471,13 @@ ACTION-PLIST is a plist with keys:
           (mevedel--implementation-permission-mode-apply permission-mode)
           ;; Close any unclosed fenced code blocks (e.g., ``` reasoning)
           (mevedel--close-unclosed-blocks)
+          (when prepared-outcome
+            (setq-local mevedel-skills--pending-request-context
+                        (plist-get prepared-outcome :request-context)))
           (mevedel--submit-generated-turn
-           prompt display-text prompt-submission))
+           prompt display-text prompt-submission prepared-outcome))
       (error
+       (setq-local mevedel-skills--pending-request-context nil)
        (mevedel--implementation-permission-mode-restore)
        (signal (car err) (cdr err))))))
 

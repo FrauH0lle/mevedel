@@ -22,6 +22,14 @@
 (defvar gptel-model)
 (defvar gptel-reasoning-effort)
 
+;; `mevedel-structs'
+(declare-function mevedel-session-model-provider "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-reasoning-effort "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-set-model-provider
+                  "mevedel-structs" (session provider))
+(declare-function mevedel-session-set-reasoning-effort
+                  "mevedel-structs" (session effort))
+
 
 ;;
 ;;; Customization
@@ -148,6 +156,69 @@ NOERROR is non-nil, return nil instead of signaling `user-error'."
      (if noerror
          nil
        (signal (car err) (cdr err))))))
+
+(defun mevedel-model--provider-label (provider)
+  "Return the exact serializable label for resolved PROVIDER."
+  (format "%s:%s"
+          (gptel-backend-name (plist-get provider :backend))
+          (gptel--model-name (plist-get provider :model))))
+
+(defun mevedel-model-supported-efforts (model)
+  "Return MODEL's declared reasoning effort symbols."
+  (let ((type (and (symbolp model) (get model :reasoning-effort))))
+    (and (consp type)
+         (eq (car type) 'member)
+         (cl-remove-if-not #'symbolp (cdr type)))))
+
+(defun mevedel-model-set-session-provider (session provider &optional buffer)
+  "Set SESSION's resolved PROVIDER in BUFFER.
+Keep the current reasoning effort when PROVIDER supports it; otherwise reset
+the effort to its default and report the reset."
+  (let ((buffer (or buffer (current-buffer)))
+        (backend (plist-get provider :backend))
+        (model (plist-get provider :model)))
+    (unless (and backend model)
+      (user-error "Invalid model provider"))
+    (with-current-buffer buffer
+      (let ((effort (and (boundp 'gptel-reasoning-effort)
+                         gptel-reasoning-effort)))
+        (when (and effort
+                   (condition-case nil
+                       (progn
+                         (mevedel-model-validate-effort model effort)
+                         nil)
+                     (user-error t)))
+          (setq effort nil)
+          (message "mevedel: reasoning effort reset to default for %s"
+                   (gptel--model-name model)))
+        (setq-local gptel-backend backend)
+        (setq-local gptel-model model)
+        (setq-local gptel-reasoning-effort effort)
+        (mevedel-session-set-model-provider
+         session (mevedel-model--provider-label provider))
+        (mevedel-session-set-reasoning-effort session effort)))
+    provider))
+
+(defun mevedel-model-set-session-effort (session effort &optional buffer)
+  "Set SESSION's reasoning EFFORT in BUFFER.
+Nil selects the model's default effort."
+  (with-current-buffer (or buffer (current-buffer))
+    (mevedel-model-validate-effort gptel-model effort)
+    (setq-local gptel-reasoning-effort effort)
+    (mevedel-session-set-reasoning-effort session effort))
+  effort)
+
+(defun mevedel-model-apply-session-policy (session &optional buffer)
+  "Restore SESSION's model provider and effort into BUFFER."
+  (with-current-buffer (or buffer (current-buffer))
+    (when-let* ((selector (mevedel-session-model-provider session))
+                (provider (mevedel-model-resolve-provider selector)))
+      (setq-local gptel-backend (plist-get provider :backend))
+      (setq-local gptel-model (plist-get provider :model)))
+    (let ((effort (mevedel-session-reasoning-effort session)))
+      (mevedel-model-validate-effort gptel-model effort)
+      (setq-local gptel-reasoning-effort effort)))
+  session)
 
 
 ;;
@@ -281,8 +352,6 @@ happens here only when the caller has established request ownership."
 (defun mevedel-model-validate-effort (model effort)
   "Return EFFORT when gptel says MODEL supports it, or signal an error."
   (when effort
-    (unless (get 'gptel-reasoning-effort 'custom-type)
-      (user-error "Installed gptel does not support reasoning effort"))
     (let ((type (and (symbolp model) (get model :reasoning-effort))))
       (unless type
         (user-error "Model %s does not support reasoning effort"

@@ -331,7 +331,7 @@ add more, and we don't want to act on actions we don't understand).")
     :last-task-write-turn :task-status-notes :first-user-message
     :latest-user-message :forked-from-session-id :forked-from-turn
     :permission-mode :plan-mode :permission-rules :resource-grants
-    :preset-name :preset-settings
+    :preset-name :preset-settings :model-provider :reasoning-effort
     :last-observed-date
     :agent-types-snapshot :skills-snapshot :additional-roots :tasks
     :prompt-index :file-snapshots :agent-transcripts :agent-registry
@@ -593,6 +593,8 @@ The resulting plist is round-trippable via
    :resource-grants        (mevedel-session-resource-grants session)
    :preset-name            (mevedel-session-preset-name session)
    :preset-settings        (mevedel-session-preset-settings session)
+   :model-provider         (mevedel-session-model-provider session)
+   :reasoning-effort       (mevedel-session-reasoning-effort session)
    :last-observed-date     (mevedel-session-last-observed-date session)
    :agent-types-snapshot   (mevedel-session-agent-types-snapshot session)
    :skills-snapshot        (mevedel-session-skills-snapshot session)
@@ -625,6 +627,17 @@ The resulting plist is round-trippable via
            (plist-get plist :permission-mode)))
   (unless (booleanp (plist-get plist :plan-mode))
     (error "Invalid persisted Plan mode: %S" (plist-get plist :plan-mode)))
+  (unless (or (null (plist-get plist :model-provider))
+              (and (stringp (plist-get plist :model-provider))
+                   (string-match-p
+                    "\\`[^:]+:.+\\'"
+                    (plist-get plist :model-provider))))
+    (error "Invalid persisted model provider: %S"
+           (plist-get plist :model-provider)))
+  (unless (or (null (plist-get plist :reasoning-effort))
+              (symbolp (plist-get plist :reasoning-effort)))
+    (error "Invalid persisted reasoning effort: %S"
+           (plist-get plist :reasoning-effort)))
   (unless (and (integerp (plist-get plist :agent-turn-capacity))
                (> (plist-get plist :agent-turn-capacity) 0))
     (error "Invalid persisted agent turn capacity: %S"
@@ -715,6 +728,8 @@ their hygiene filters."
                      :preset-name      (plist-get plist :preset-name)
                      :preset-settings  (copy-tree
                                         (plist-get plist :preset-settings))
+                     :model-provider   (plist-get plist :model-provider)
+                     :reasoning-effort (plist-get plist :reasoning-effort)
                      :turn-count       (plist-get plist :total-turn-count)
                      :last-observed-date (plist-get plist :last-observed-date)
                      :agent-types-snapshot

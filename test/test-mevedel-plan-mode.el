@@ -132,7 +132,8 @@
       (setq-local mevedel-goal-token-budget 1234)
       (should (equal '(:location here :context current
                        :execution direct :mode auto
-                       :goal-token-budget 1234)
+                       :goal-token-budget 1234
+                       :skills nil :instructions nil)
                      (mevedel-plan-mode--default-selection session))))
     (should (eq 'auto (mevedel-session-permission-mode session)))))
 
@@ -201,8 +202,15 @@
                  "# Plan" data-buffer session selection))
          descriptor outcome rerendered)
     (unwind-protect
-        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local gptel-reasoning-effort 'high))
+          (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                    (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-model-current-provider-label)
+                   (lambda (&optional _buffer) "OpenAI:gpt-5"))
+                  ((symbol-function 'mevedel-model-resolve-provider)
+                   (lambda (&rest _) t))
                   ((symbol-function 'mevedel-view--fontify-as)
                    (lambda (text _mode) text))
                   ((symbol-function 'mevedel-view--interaction-register)
@@ -224,7 +232,10 @@
                             "Location    Here"
                             "Context     Current — full planning transcript"
                             "Execution   Direct — one implementation turn"
-                            "Mode        Auto"))
+                            "Mode        Auto"
+                            "Model       OpenAI:gpt-5 · effort high"
+                            "Skills      None"
+                            "Instructions None"))
               (should (string-match-p text body)))
             (should
              (memq 'mevedel-view-plan-mode
@@ -238,6 +249,9 @@
                                ("c" . "  Context")
                                ("e" . "  Execution")
                                ("m" . "  Mode")
+                               ("M" . "  Model")
+                               ("s" . "  Skills")
+                               ("i" . "  Instructions")
                                ("RET" . " implement")
                                ("f" . " feedback")
                                ("q" . " hide")
@@ -290,8 +304,92 @@
                              :selection (:location worktree :context fresh
                                          :execution goal :mode full-auto
                                          :goal-token-budget nil
-                                         :branch "plan/topic"))
-                           outcome))))
+                                         :skills nil :instructions nil
+                                         :branch "plan/topic"
+                                         :model-provider "OpenAI:gpt-5"
+                                         :reasoning-effort high))
+                           outcome)))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "keeps approval pending when the current model is unregistered"
+  (let* ((session (mevedel-session--create :name "test"))
+         (data-buffer (generate-new-buffer " *plan-model-data*"))
+         (view-buffer (generate-new-buffer " *plan-model-view*"))
+         (selection (mevedel-plan-mode--default-selection session))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         descriptor outcome)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-model-current-provider-label)
+                   (lambda (&optional _buffer) "Missing:model"))
+                  ((symbol-function 'mevedel-model-resolve-provider)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'mevedel-view--fontify-as)
+                   (lambda (text _mode) text))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value)
+                     (make-overlay (point-min) (point-min))))
+                  ((symbol-function 'mevedel--prompt--settle)
+                   (lambda (_overlay value) (setq outcome value)))
+                  ((symbol-function 'gptel-agent--block-bg)
+                   (lambda () 'mevedel-test-block-bg)))
+          (mevedel-plan-mode--render-approval entry)
+          (should-error
+           (call-interactively
+            (lookup-key (plist-get descriptor :keymap) (kbd "RET")))
+           :type 'user-error)
+          (should-not outcome))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
+
+  :doc "toggles canonical skills and saves multiline implementation instructions"
+  (let* ((session (mevedel-session--create :name "test"))
+         (data-buffer (generate-new-buffer " *plan-extras-data*"))
+         (view-buffer (generate-new-buffer " *plan-extras-view*"))
+         (selection (mevedel-plan-mode--default-selection session))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         (skill (mevedel-skill--create
+                 :name "alpha" :display-name "Alpha"
+                 :source-file "/tmp/alpha/SKILL.md"
+                 :user-invocable-p t :active-p t))
+         descriptor editor)
+    (unwind-protect
+        (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
+                   (lambda (_buffer) view-buffer))
+                  ((symbol-function 'mevedel-view--interaction-register)
+                   (lambda (value)
+                     (setq descriptor value)
+                     (make-overlay (point-min) (point-min))))
+                  ((symbol-function 'mevedel-plan-approval-render)
+                   #'ignore)
+                  ((symbol-function 'mevedel-skills--user-visible-skills)
+                   (lambda (&rest _) (list skill)))
+                  ((symbol-function 'completing-read)
+                   (lambda (&rest _) "alpha"))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (buffer &rest _) (setq editor buffer))))
+          (mevedel-plan-mode--render-approval entry)
+          (let ((keymap (plist-get descriptor :keymap)))
+            (call-interactively (lookup-key keymap (kbd "s")))
+            (should (equal '((:name "alpha"
+                              :source-file "/tmp/alpha/SKILL.md"))
+                           (plist-get selection :skills)))
+            (call-interactively (lookup-key keymap (kbd "s")))
+            (should-not (plist-get selection :skills))
+            (call-interactively (lookup-key keymap (kbd "i")))
+            (should (buffer-live-p editor))
+            (with-current-buffer editor
+              (insert "Use $alpha.\nRun focused tests.")
+              (call-interactively (key-binding (kbd "C-c C-c"))))
+            (should (equal "Use $alpha.\nRun focused tests."
+                           (plist-get selection :instructions)))
+            (should-not (buffer-live-p editor))))
+      (when (buffer-live-p editor) (kill-buffer editor))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
@@ -738,12 +836,18 @@
                         mevedel-permission-mode 'auto))
           (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (setq hook-input input)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
+                    ((symbol-function
+                      'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action) (setq implementation action))))
@@ -751,7 +855,8 @@
              "# Accepted\n\nDo it." data-buffer session
              '(:accept t
                :selection (:location here :context current
-                           :execution direct :mode full-auto))))
+                           :execution direct :mode full-auto
+                           :model-provider "OpenAI:gpt-5"))))
           (let* ((metadata (mevedel-session-plan-metadata session))
                  (accepted (plist-get metadata :accepted-absolute-path)))
             (should-not (mevedel-session-plan-mode session))
@@ -785,12 +890,19 @@
                         mevedel-goal-token-budget 1234))
           (cl-letf (((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input display callback &rest _)
-                       (setq hook-input input hook-display display)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
+                       (setq hook-input input
+                             hook-display "Implement accepted plan as Goal")
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
+                    ((symbol-function
+                      'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--persist)
                      (lambda (saved-session _buffer)
                        (when (and (not (mevedel-session-goal saved-session))
@@ -812,7 +924,8 @@
              '(:accept t
                :selection (:location here :context current
                            :execution goal :mode full-auto
-                           :goal-token-budget 4321))))
+                           :goal-token-budget 4321
+                           :model-provider "OpenAI:gpt-5"))))
           (let* ((metadata (mevedel-session-plan-metadata session))
                  (goal (mevedel-session-goal session))
                  (accepted (plist-get metadata :accepted-absolute-path)))

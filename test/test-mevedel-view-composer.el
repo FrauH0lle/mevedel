@@ -287,12 +287,12 @@
   (should (eq 'full-auto
               (mevedel-view--next-permission-mode 'auto)))
 
-  :doc "full-auto mode moves to Plan"
-  (should (eq 'plan
+  :doc "full-auto mode wraps to ask"
+  (should (eq 'ask
               (mevedel-view--next-permission-mode 'full-auto)))
 
-  :doc "Plan wraps to ask"
-  (should (eq 'ask
+  :doc "unknown workflow states start at auto"
+  (should (eq 'auto
               (mevedel-view--next-permission-mode 'plan)))
 
   :doc "nil mode starts at auto"
@@ -356,20 +356,8 @@
               (should (memq 'full-auto-mode
                             (mapcar #'mevedel-reminder-type
                                     (mevedel-session-reminders session))))
-              (should (eq 'plan
-                          (mevedel-view-cycle-permission-mode)))
-              (should (mevedel-session-plan-mode session))
-              (should (eq 'full-auto
-                          (mevedel-session-permission-mode session)))
-              (should (string= "\n[Plan · full-auto] > "
-                               (buffer-substring-no-properties
-                                mevedel-view--input-marker
-                                (mevedel-view--input-start))))
-              (should (equal "> first\nsecond"
-                             (mevedel-view--input-text)))
               (should (eq 'ask
                           (mevedel-view-cycle-permission-mode)))
-              (should-not (mevedel-session-plan-mode session))
               (let ((types (mapcar #'mevedel-reminder-type
                                    (mevedel-session-reminders session))))
                 (should-not (memq 'full-auto-mode types))
@@ -379,6 +367,38 @@
               (should (equal "> first\nsecond"
                              (mevedel-view--input-text))))))
       (set-default-toplevel-value 'mevedel-permission-mode saved))))
+
+(mevedel-deftest mevedel-view-toggle-plan-mode
+  (:doc "toggles Plan independently while retaining permission mode and draft")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let ((session (mevedel-session--create
+                    :name "main"
+                    :permission-mode 'full-auto)))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session)
+        (setq-local mevedel--view-buffer view-buf))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (goto-char (mevedel-view--input-start))
+        (insert "> first\nsecond")
+        (should (mevedel-view-toggle-plan-mode))
+        (should (mevedel-session-plan-mode session))
+        (should (eq 'full-auto
+                    (mevedel-session-permission-mode session)))
+        (should (string= "\n[Plan · full-auto] > "
+                         (buffer-substring-no-properties
+                          mevedel-view--input-marker
+                          (mevedel-view--input-start))))
+        (should (equal "> first\nsecond"
+                       (mevedel-view--input-text)))
+        (should-not (mevedel-view-toggle-plan-mode))
+        (should-not (mevedel-session-plan-mode session))
+        (should (eq 'full-auto
+                    (mevedel-session-permission-mode session)))
+        (should (equal "> first\nsecond"
+                       (mevedel-view--input-text)))))))
 
 (mevedel-deftest mevedel-view-refresh-input-prompt
   (:doc "updates the prompt prefix without disturbing draft input")

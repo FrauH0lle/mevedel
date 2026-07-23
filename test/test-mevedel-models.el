@@ -75,6 +75,129 @@
         (should (eq gptel-backend (plist-get policy :backend)))
         (should (eq gptel-model (plist-get policy :model)))))))
 
+(mevedel-deftest mevedel-model-supported-efforts
+  ()
+  ,test
+  (test)
+
+  :doc "returns only symbolic values from member metadata"
+  (let ((old-effort (get 'test-model :reasoning-effort)))
+    (unwind-protect
+        (progn
+          (put 'test-model :reasoning-effort '(member low "bad" high))
+          (should (equal '(low high)
+                         (mevedel-model-supported-efforts 'test-model))))
+      (put 'test-model :reasoning-effort old-effort)))
+
+  :doc "returns nil for unsupported metadata shapes"
+  (let ((old-effort (get 'test-model :reasoning-effort)))
+    (unwind-protect
+        (progn
+          (put 'test-model :reasoning-effort '(choice low high))
+          (should-not (mevedel-model-supported-efforts 'test-model)))
+      (put 'test-model :reasoning-effort old-effort))))
+
+(mevedel-deftest mevedel-model-set-session-provider
+  ()
+  ,test
+  (test)
+
+  :doc "stores an exact session provider and preserves supported effort"
+  (mevedel-models-test--with-backends
+    (let* ((session (mevedel-session--create :name "test"))
+           (buffer (generate-new-buffer " *mevedel-model-provider*"))
+           (old-effort (get 'fast-model :reasoning-effort)))
+      (unwind-protect
+          (progn
+            (put 'fast-model :reasoning-effort '(member low high))
+            (with-current-buffer buffer
+              (setq-local gptel-reasoning-effort 'high))
+            (mevedel-model-set-session-provider
+             session
+             (mevedel-model-resolve-provider "Fast:fast-model")
+             buffer)
+            (should (equal "Fast:fast-model"
+                           (mevedel-session-model-provider session)))
+            (should (eq 'high
+                        (mevedel-session-reasoning-effort session)))
+            (with-current-buffer buffer
+              (should (equal "Fast" (gptel-backend-name gptel-backend)))
+              (should (eq 'fast-model gptel-model))
+              (should (eq 'high gptel-reasoning-effort))))
+        (put 'fast-model :reasoning-effort old-effort)
+        (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+  :doc "resets unsupported effort when the model changes"
+  (mevedel-models-test--with-backends
+    (let* ((session (mevedel-session--create :name "test"))
+           (buffer (generate-new-buffer " *mevedel-model-reset*"))
+           (old-effort (get 'balanced-model :reasoning-effort)))
+      (unwind-protect
+          (progn
+            (put 'balanced-model :reasoning-effort '(member low))
+            (with-current-buffer buffer
+              (setq-local gptel-reasoning-effort 'high))
+            (mevedel-model-set-session-provider
+             session
+             (mevedel-model-resolve-provider "Balanced:balanced-model")
+             buffer)
+            (should-not (mevedel-session-reasoning-effort session))
+            (with-current-buffer buffer
+              (should-not gptel-reasoning-effort)))
+        (put 'balanced-model :reasoning-effort old-effort)
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(mevedel-deftest mevedel-model-set-session-effort
+  ()
+  ,test
+  (test)
+
+  :doc "validates and stores the selected session effort"
+  (mevedel-models-test--with-backends
+    (let* ((session (mevedel-session--create :name "test"))
+           (buffer (generate-new-buffer " *mevedel-model-effort*"))
+           (old-effort (get 'fast-model :reasoning-effort)))
+      (unwind-protect
+          (progn
+            (put 'fast-model :reasoning-effort '(member low high))
+            (with-current-buffer buffer
+              (setq-local gptel-backend (gptel-get-backend "Fast"))
+              (setq-local gptel-model 'fast-model))
+            (mevedel-model-set-session-effort session 'high buffer)
+            (should (eq 'high
+                        (mevedel-session-reasoning-effort session)))
+            (with-current-buffer buffer
+              (should (eq 'high gptel-reasoning-effort)))
+            (should-error
+             (mevedel-model-set-session-effort session 'medium buffer)
+             :type 'user-error))
+        (put 'fast-model :reasoning-effort old-effort)
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(mevedel-deftest mevedel-model-apply-session-policy
+  ()
+  ,test
+  (test)
+
+  :doc "restores the persisted provider and effort into a live buffer"
+  (mevedel-models-test--with-backends
+    (let* ((session
+            (mevedel-session--create
+             :name "test" :model-provider "Fast:fast-model"
+             :reasoning-effort 'high))
+           (buffer (generate-new-buffer " *mevedel-model-restore*"))
+           (old-effort (get 'fast-model :reasoning-effort)))
+      (unwind-protect
+          (progn
+            (put 'fast-model :reasoning-effort '(member low high))
+            (mevedel-model-apply-session-policy session buffer)
+            (with-current-buffer buffer
+              (should (equal "Fast" (gptel-backend-name gptel-backend)))
+              (should (eq 'fast-model gptel-model))
+              (should (eq 'high gptel-reasoning-effort))))
+        (put 'fast-model :reasoning-effort old-effort)
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
 (mevedel-deftest mevedel-model--merge-map
   ()
   ,test
