@@ -24,6 +24,8 @@
 ;; `cl-seq'
 (declare-function cl-find-if "cl-seq" (cl-pred cl-list &rest cl-keys))
 (declare-function cl-remove-if-not "cl-seq" (cl-pred cl-list &rest cl-keys))
+(declare-function cl-some "cl-seq" (cl-pred cl-seq &rest cl-rest))
+(declare-function cl-delete-duplicates "cl-seq" (cl-seq &rest cl-keys))
 
 ;; `gptel'
 (declare-function gptel-get-tool "ext:gptel" (name))
