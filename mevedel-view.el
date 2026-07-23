@@ -474,6 +474,7 @@ above `mevedel-view--input-marker'."
 
 (defvar-keymap mevedel-view-mode-map
   :doc "Keymap for `mevedel-view-mode'."
+  "C-g" #'mevedel-view-abort
   "C-c RET" #'mevedel-view-send
   "C-c C-k" #'mevedel-view-abort
   "C-c C-o" #'mevedel-menu
