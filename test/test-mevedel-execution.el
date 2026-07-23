@@ -8,6 +8,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'mevedel-agents)
 (require 'mevedel-execution)
 (require 'mevedel-sandbox)
 (require 'mevedel-structs)
@@ -127,6 +128,12 @@
       (should-not (plist-get result :timed-out-p))
       (should-not (plist-get result :output-limit-p))
       (should (numberp (plist-get result :wall-time-seconds)))
+      (should
+       (equal '(:attempt-count 1 :started-count 1 :refused-count 0
+                :sandbox off :filesystem unrestricted
+                :network unrestricted :proc nil
+                :additional-read-count 0 :additional-write-count 0)
+              (plist-get result :sandbox-summary)))
       (should-not (plist-member result :process))))
   :doc "owner teardown settles a synchronous one-shot caller"
   (let* ((root (make-temp-file "mevedel-one-shot-teardown-" t))
@@ -617,6 +624,67 @@
     (should (= 4 (plist-get facts :protected-path-count)))
     (should (= 2 (plist-get facts :additional-read-count)))
     (should-not (plist-member facts :reason))))
+
+(mevedel-deftest mevedel-execution--sandbox-summary-merge
+  (:doc "aggregates logical attempts and keeps the most permissive dimensions")
+  (let* ((first
+          (mevedel-execution--sandbox-summary-merge
+           nil
+           '(:sandbox bubblewrap :filesystem workspace-write
+             :network isolated :proc fresh
+             :additional-filesystem-read 2
+             :additional-filesystem-write 0)
+           t nil))
+         (merged
+          (mevedel-execution--sandbox-summary-merge
+           first
+           '(:sandbox escalated :filesystem unrestricted
+             :network unrestricted :proc host
+             :additional-filesystem-read 0
+             :additional-filesystem-write 1)
+           t nil)))
+    (should (= 2 (plist-get merged :attempt-count)))
+    (should (= 2 (plist-get merged :started-count)))
+    (should (eq 'escalated (plist-get merged :sandbox)))
+    (should (eq 'unrestricted (plist-get merged :filesystem)))
+    (should (eq 'host (plist-get merged :proc)))
+    (should (= 2 (plist-get merged :additional-read-count)))
+    (should (= 1 (plist-get merged :additional-write-count)))))
+
+(mevedel-deftest mevedel-execution--record-sandbox-attempt
+  (:doc "updates duplicate cells once per logical attempt")
+  (let ((cell (list nil)))
+    (mevedel-execution--record-sandbox-attempt
+     '(:sandbox refused :filesystem unavailable :network unavailable)
+     nil t cell cell)
+    (should (= 1 (plist-get (car cell) :attempt-count)))
+    (should (= 1 (plist-get (car cell) :refused-count)))))
+
+(mevedel-deftest mevedel-execution-sandbox-summary-class
+  (:doc "classifies default, read-only, and warning disclosures")
+  (let ((default
+         '(:attempt-count 1 :started-count 1 :refused-count 0
+           :sandbox bubblewrap :filesystem workspace-write
+           :network isolated :proc fresh
+           :additional-read-count 0 :additional-write-count 0)))
+    (should-not (mevedel-execution-sandbox-summary-class default))
+    (should
+     (eq 'metadata
+         (mevedel-execution-sandbox-summary-class
+          (plist-put (copy-sequence default) :additional-read-count 1))))
+    (should
+     (eq 'warning
+         (mevedel-execution-sandbox-summary-class
+          (plist-put (copy-sequence default) :started-count 0))))))
+
+(mevedel-deftest mevedel-execution--agent-sandbox-summary-cell
+  (:doc "returns only an invocation's private direct-child aggregation cell")
+  (let* ((cell (list nil))
+         (invocation
+          (mevedel-agent-invocation--create :sandbox-summary-cell cell)))
+    (should (eq cell
+                (mevedel-execution--agent-sandbox-summary-cell invocation)))
+    (should-not (mevedel-execution--agent-sandbox-summary-cell nil))))
 
 (provide 'test-mevedel-execution)
 ;;; test-mevedel-execution.el ends here

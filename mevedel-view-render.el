@@ -33,6 +33,10 @@
 (declare-function mevedel-agent-invocation-transcript-status
 		  "mevedel-agents" (cl-x) t)
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-sandbox-summary-class
+                  "mevedel-execution" (summary))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline--format-render-data-block
 		  "mevedel-pipeline" (render-data))
@@ -1528,13 +1532,86 @@ Return nil when HEADER is not a `Tool: argument' style line."
              line (plist-get rendering :agent-path))
           line)))))
 
+(defun mevedel-view--sandbox-summary-line (summary)
+  "Return a durable disclosure line for noteworthy sandbox SUMMARY."
+  (when-let* ((class
+               (and summary
+                    (progn
+                      (require 'mevedel-execution)
+                      (mevedel-execution-sandbox-summary-class summary)))))
+    (let* ((attempts (or (plist-get summary :attempt-count) 0))
+           (started (or (plist-get summary :started-count) 0))
+           (refused (or (plist-get summary :refused-count) 0))
+           (reads (or (plist-get summary :additional-read-count) 0))
+           (writes (or (plist-get summary :additional-write-count) 0))
+           (sandbox (plist-get summary :sandbox))
+           (filesystem (plist-get summary :filesystem))
+           (network (plist-get summary :network))
+           (proc (plist-get summary :proc))
+           (all-refused (and (> attempts 0)
+                             (= refused attempts)
+                             (zerop started)))
+           (warning-p (eq class 'warning))
+           details)
+      (if all-refused
+          (setq details '("refused" "no child started"))
+        (when (and sandbox (not (eq sandbox 'bubblewrap)))
+          (push (pcase sandbox
+                  ('escalated "escalated")
+                  ('off "sandbox off")
+                  ('unavailable "sandbox unavailable")
+                  ('refused "refused")
+                  (_ (format "sandbox %s" sandbox)))
+                details))
+        (when (and filesystem (not (eq filesystem 'workspace-write)))
+          (push (format "filesystem %s" filesystem) details))
+        (when (and network (not (eq network 'isolated)))
+          (push (format "network %s" network) details))
+        (when (eq proc 'host)
+          (push "proc host" details))
+        (when (> (+ reads writes) 0)
+          (push (format "additional filesystem: %d read, %d write"
+                        reads writes)
+                details))
+        (when (< started attempts)
+          (push (format "%d %s did not start"
+                        (- attempts started)
+                        (if (= (- attempts started) 1)
+                            "child"
+                          "children"))
+                details))
+        (when (> attempts 1)
+          (push (format "%d executions" attempts) details))
+        (setq details (nreverse details)))
+      (mevedel-view--operation-line
+       (if warning-p "!" "◇")
+       (if warning-p
+           'mevedel-view-tool-warning
+         'mevedel-view-tool-metadata)
+       "Sandbox:"
+       (string-join details " · ")
+       nil
+       (if warning-p
+           'mevedel-view-tool-warning
+         'mevedel-view-tool-metadata)))))
+
+(defun mevedel-view--rendering-header-block (rendering)
+  "Return RENDERING's header plus any durable sandbox disclosure."
+  (let ((header (mevedel-view--rendering-header-line rendering))
+        (sandbox
+         (mevedel-view--sandbox-summary-line
+          (plist-get rendering :sandbox-summary))))
+    (if sandbox
+        (concat header "\n" sandbox)
+      header)))
+
 (defun mevedel-view--render-collapsed-header (rendering source)
   "Insert the collapsed header for RENDERING with SOURCE coordinates.
 RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
   (let* ((vtype (or (plist-get rendering :vtype) 'tool-summary))
          (ins-start (point)))
     (mevedel-view--insert-summary-region
-     (mevedel-view--rendering-header-line rendering)
+     (mevedel-view--rendering-header-block rendering)
      `(mevedel-view-type ,vtype
        mevedel-view-collapsed t
        mevedel-view-source ,source
@@ -1551,7 +1628,7 @@ RENDERING is a rendering plist.  SOURCE is (DATA-START . DATA-END)."
          (body-mode (plist-get rendering :body-mode))
          (vtype (or (plist-get rendering :vtype) 'tool-summary))
          (fontified (mevedel-view--fontify-as body body-mode))
-         (header-line (mevedel-view--rendering-header-line rendering))
+         (header-line (mevedel-view--rendering-header-block rendering))
          (ins-start (point))
          body-start)
     (insert header-line "\n")
@@ -1592,7 +1669,7 @@ the raw tool segment."
              (not (plist-get rendering :expandable-p)))
         (let ((ins-start (point)))
           (mevedel-view--insert-summary-region
-           (mevedel-view--rendering-header-line
+           (mevedel-view--rendering-header-block
             (plist-put (copy-sequence rendering) :vtype 'tool-event))
            '(mevedel-view-type tool-event
              mevedel-view-rendered t))
@@ -1698,6 +1775,9 @@ RAW is an optional precomputed expanded tool segment text."
       (when-let* (((eq (plist-get rendering :vtype) 'agent-handle))
                   (path (plist-get render-data :path)))
         (setq rendering (plist-put rendering :agent-path path)))
+      (when-let* ((summary (plist-get render-data :sandbox-summary)))
+        (setq rendering
+              (plist-put rendering :sandbox-summary (copy-tree summary))))
       (when-let* ((audits (append (plist-get rendering :hook-audits)
                                   (plist-get call :hook-audits))))
         (setq rendering (plist-put rendering :hook-audits audits)))

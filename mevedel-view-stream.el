@@ -24,6 +24,10 @@
 ;; `mevedel-compact'
 (defvar mevedel--compaction-in-flight)
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-sandbox-summary-class
+                  "mevedel-execution" (summary))
+
 ;; `mevedel-pipeline'
 (declare-function mevedel-pipeline-tool-render-data
                   "mevedel-pipeline" (buffer tool-use-id))
@@ -182,13 +186,13 @@ tools are in flight in parallel.")
   "Latest transient Bash event keyed by durable tool-use id.")
 
 (defvar-local mevedel-view-stream--pending-execution-terminals nil
-  "Terminal Bash render data waiting for its transcript row.")
+  "Tool render-data updates waiting for their transcript rows.")
 
 (defvar-local mevedel-view-stream--archived-execution-rows nil
   "Execution tool-use ids whose rows were explicitly removed by compaction.")
 
 (defconst mevedel-view-stream--pending-execution-terminal-limit 64
-  "Maximum terminal Bash updates retained while rows are unavailable.")
+  "Maximum render-data updates retained while rows are unavailable.")
 
 (defcustom mevedel-view-stream-render-delay 0.4
   "Seconds to wait before rendering a batch of stream chunks.
@@ -1031,17 +1035,27 @@ POSITION may be an integer or marker."
 
 (defun mevedel-view-stream--terminal-render-data (event)
   "Return durable terminal render data projected from EVENT."
-  (let ((facts (copy-tree (plist-get event :facts))))
-    (append
-     facts
-     (list :status (mevedel-view-stream--execution-status facts)
-           :live-execution-p nil
-           :timeout-seconds (plist-get event :timeout-seconds)
-           :sandbox-facts
-           (copy-tree
-            (plist-get (plist-get event :observation) :sandbox-facts))
-           :execution-output
-           (copy-sequence (or (plist-get event :whole-output) ""))))))
+  (let* ((facts (copy-tree (plist-get event :facts)))
+         (summary
+          (copy-tree
+           (plist-get (plist-get event :observation) :sandbox-summary)))
+         (render-data
+          (append
+           facts
+           (list :status (mevedel-view-stream--execution-status facts)
+                 :live-execution-p nil
+                 :timeout-seconds (plist-get event :timeout-seconds)
+                 :sandbox-facts
+                 (copy-tree
+                  (plist-get (plist-get event :observation) :sandbox-facts))
+                 :execution-output
+                 (copy-sequence (or (plist-get event :whole-output) ""))))))
+    (if (and summary
+             (progn
+               (require 'mevedel-execution)
+               (mevedel-execution-sandbox-summary-class summary)))
+        (plist-put render-data :sandbox-summary summary)
+      render-data)))
 
 (defun mevedel-view-stream--replace-archived-execution-record
     (tool-use-id replacement)
@@ -1212,7 +1226,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
 
 (defun mevedel-view-stream--store-pending-execution-terminal
     (data-buffer event render-data)
-  "Retain terminal EVENT and RENDER-DATA until its durable row is ready."
+  "Retain EVENT's RENDER-DATA until its durable row is ready."
   (when-let* ((table
                (mevedel-view-stream--pending-execution-table data-buffer)))
     (let ((tool-use-id (plist-get event :tool-use-id)))
@@ -1227,14 +1241,14 @@ RENDER-DATA is retained in the hidden transcript audit record."
             (remhash evicted table)
             (display-warning
              'mevedel
-             (format "Discarding stale terminal update for tool %s" evicted)
+             (format "Discarding stale render-data update for tool %s" evicted)
              :warning))))
       (puthash tool-use-id
                (list :event event :render-data render-data)
                table))))
 
 (defun mevedel-view-stream--retry-pending-execution-terminals (data-buffer)
-  "Persist pending terminal Bash updates whose rows exist in DATA-BUFFER."
+  "Persist pending tool updates whose rows exist in DATA-BUFFER."
   (when (buffer-live-p data-buffer)
     (with-current-buffer data-buffer
       (when (hash-table-p mevedel-view-stream--pending-execution-terminals)
@@ -1248,8 +1262,9 @@ RENDER-DATA is retained in the hidden transcript audit record."
                 ((mevedel-pipeline-update-tool-render-data
                   data-buffer tool-use-id render-data)
                  (push tool-use-id settled))
-                ((mevedel-view-stream--archived-execution-row-p
-                  data-buffer tool-use-id)
+                ((and (eq (plist-get event :type) 'terminal)
+                      (mevedel-view-stream--archived-execution-row-p
+                       data-buffer tool-use-id))
                  (condition-case err
                      (progn
                        (mevedel-view-stream--record-archived-execution-terminal
@@ -1267,7 +1282,7 @@ RENDER-DATA is retained in the hidden transcript audit record."
                      mevedel-view-stream--pending-execution-terminals)))))))
 
 (defun mevedel-view-stream-retry-execution-terminals (&rest _args)
-  "Persist pending terminal Bash updates in the current data buffer."
+  "Persist pending tool updates in the current data buffer."
   (mevedel-view-stream--retry-pending-execution-terminals (current-buffer))
   nil)
 

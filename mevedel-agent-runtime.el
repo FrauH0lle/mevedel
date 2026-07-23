@@ -787,7 +787,7 @@ HOOK-AUDITS are hidden transcript records associated with this user turn."
            &key context-snapshot model-policy skill-permission-rules
            on-invocation on-settle path frozen-configuration
            retained-id retained-buffer retained-transcript
-           pending-hook-context on-hook-context)
+           pending-hook-context on-hook-context parent-tool-use-id)
   "Start one asynchronous retained agent turn and return its invocation.
 AGENT starts a new conversation; FROZEN-CONFIGURATION and the three retained
 identity values continue one.  PATH is the conversation's canonical address.
@@ -826,6 +826,10 @@ ON-SETTLE receives (INVOCATION RESPONSE EVENT) exactly once."
           (mevedel-agent-invocation-parent-data-buffer invocation) parent-buffer
           (mevedel-agent-invocation-parent-turn invocation)
           (1+ (or (and session (mevedel-session-turn-count session)) 0))
+          (mevedel-agent-invocation-parent-tool-use-id invocation)
+          parent-tool-use-id
+          (mevedel-agent-invocation-sandbox-summary-cell invocation)
+          (list nil)
           (mevedel-agent-invocation-transcript-status invocation) 'running
           (mevedel-agent-invocation-runtime-settle-callback invocation)
           on-settle)

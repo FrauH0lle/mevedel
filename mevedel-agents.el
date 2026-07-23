@@ -426,6 +426,8 @@ and render-data markers are runtime-only caches for cheap live updates."
   (transcript-save-timer nil)
   (render-data-start-marker nil)
   (render-data-end-marker nil)
+  (parent-tool-use-id nil :type (or null string))
+  (sandbox-summary-cell nil :type list)
   ;; Runtime-only provider-turn state.  Durable identity and unread mail live
   ;; on the root session's `mevedel-agent-record'.
   runtime-fsm

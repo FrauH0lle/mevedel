@@ -2939,6 +2939,57 @@ state of its inner sections"
     (should-not (mevedel-view--segment-rendering
                  (current-buffer) (point-min) (point-max)))))
 
+(mevedel-deftest mevedel-view--sandbox-summary-line
+  ()
+  ,test
+  (test)
+  :doc "omits the default sandbox boundary"
+  (should-not
+   (mevedel-view--sandbox-summary-line
+    '(:attempt-count 1 :started-count 1 :refused-count 0
+      :sandbox bubblewrap :filesystem workspace-write
+      :network isolated :proc fresh
+      :additional-read-count 0 :additional-write-count 0)))
+  :doc "shows additive reads as subtle durable metadata"
+  (let ((line
+         (mevedel-view--sandbox-summary-line
+          '(:attempt-count 2 :started-count 2 :refused-count 0
+            :sandbox bubblewrap :filesystem workspace-write
+            :network isolated :proc fresh
+            :additional-read-count 6 :additional-write-count 0))))
+    (should (string-match-p "◇ Sandbox:" line))
+    (should (string-match-p
+             "additional filesystem: 6 read, 0 write · 2 executions"
+             line)))
+  :doc "shows a total refusal as a warning without a raw reason"
+  (let ((line
+         (mevedel-view--sandbox-summary-line
+          '(:attempt-count 1 :started-count 0 :refused-count 1
+            :sandbox refused :filesystem unavailable
+            :network unavailable :proc nil
+            :additional-read-count 0 :additional-write-count 0))))
+    (should (string-match-p "! Sandbox:" line))
+    (should (string-match-p "refused · no child started" line)))
+  :doc "shows a queued child that never started without nil policy fields"
+  (let ((line
+         (mevedel-view--sandbox-summary-line
+          '(:attempt-count 1 :started-count 0 :refused-count 0
+            :additional-read-count 0 :additional-write-count 0))))
+    (should (string-match-p "1 child did not start" line))
+    (should-not (string-match-p "nil" line))))
+
+(mevedel-deftest mevedel-view--rendering-header-block
+  (:doc "places a durable sandbox disclosure directly below the tool header")
+  (let ((block
+         (mevedel-view--rendering-header-block
+          '(:header "Read: file.pdf"
+            :sandbox-summary
+            (:attempt-count 1 :started-count 1 :refused-count 0
+             :sandbox bubblewrap :filesystem workspace-write
+             :network isolated :proc fresh
+             :additional-read-count 1 :additional-write-count 0)))))
+    (should (string-match-p "Read: file\\.pdf\n.*Sandbox:" block))))
+
 (mevedel-deftest mevedel-view--render-expanded-body ()
   ,test
   (test)
@@ -2949,10 +3000,17 @@ state of its inner sections"
       (mevedel-view--render-expanded-body
        '(:header "Read: file.el"
          :body "body text\n```elisp\n(+ 1 2)\n```\n"
-         :body-mode markdown-mode)
+         :body-mode markdown-mode
+         :sandbox-summary
+         (:attempt-count 1 :started-count 1 :refused-count 0
+          :sandbox bubblewrap :filesystem workspace-write
+          :network isolated :proc fresh
+          :additional-read-count 1 :additional-write-count 0))
        (cons 1 10)))
     (goto-char (point-min))
     (should (looking-at-p "  ✓ Read: file\\.el"))
+    (search-forward "Sandbox:")
+    (should-not (get-text-property (match-beginning 0) 'line-prefix))
     (search-forward "body text")
     (let ((body-start (match-beginning 0)))
       (should (equal "    " (get-text-property body-start 'line-prefix)))
@@ -2974,13 +3032,22 @@ state of its inner sections"
   :doc "non-expandable renderings do not carry source state"
   (with-temp-buffer
     (mevedel-view-mode)
-    (let ((rendering '(:header "TaskCreate: Created 1 task"
-                       :expandable-p nil))
+    (let ((rendering
+           '(:header "TaskCreate: Created 1 task"
+             :expandable-p nil
+             :sandbox-summary
+             (:attempt-count 1 :started-count 0 :refused-count 1
+              :sandbox refused :filesystem unavailable
+              :network unavailable :proc nil
+              :additional-read-count 0 :additional-write-count 0)))
           (inhibit-read-only t))
       (mevedel-view--insert-rendered-tool rendering (cons 1 10))
       (goto-char (point-min))
       (should (eq 'tool-event
                   (get-text-property (point) 'mevedel-view-type)))
+      (should (string-match-p
+               "Sandbox:.*refused · no child started"
+               (buffer-substring-no-properties (point-min) (point-max))))
       (should-not (get-text-property (point) 'mevedel-view-source))
       (let ((before (buffer-string)))
         (should-error (mevedel-view-toggle-section))

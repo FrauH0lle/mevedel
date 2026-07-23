@@ -70,6 +70,11 @@
 (defvar mevedel-pipeline--active-tool-use-id nil
   "Tool-use id dynamically visible while a handler starts its work.")
 
+;; `mevedel-execution'
+(declare-function mevedel-execution-sandbox-summary-class
+                  "mevedel-execution" (summary))
+(defvar mevedel-execution--sandbox-summary-cell)
+
 ;; `gptel-request'
 (declare-function gptel-fsm-info "ext:gptel-request" (fsm))
 (defvar gptel-backend)
@@ -1258,7 +1263,9 @@ buffer."
          (invoke
           (lambda ()
             (let ((mevedel-pipeline--active-tool-use-id
-                   (plist-get context :tool-use-id)))
+                   (plist-get context :tool-use-id))
+                  (mevedel-execution--sandbox-summary-cell
+                   (plist-get context :sandbox-summary-cell)))
               (mevedel-tool-repair-mark-executed repair-entry)
               (mevedel-pipeline--record-use tool)
               (condition-case err
@@ -1887,6 +1894,17 @@ When neither was produced, passes CONTEXT through unchanged."
   (let* ((result (plist-get context :result))
          (status (plist-get context :status))
          (render-data (plist-get context :render-data))
+         (sandbox-summary
+          (car (plist-get context :sandbox-summary-cell)))
+         (render-data
+          (if (and sandbox-summary
+                   (progn
+                     (require 'mevedel-execution)
+                     (mevedel-execution-sandbox-summary-class
+                      sandbox-summary)))
+              (plist-put (copy-sequence render-data)
+                         :sandbox-summary (copy-tree sandbox-summary))
+            render-data))
          (render-data
           (if status
               (plist-put (copy-sequence render-data) :status status)
@@ -2152,6 +2170,7 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
           (mevedel-tool-repair-consume-ledger-entry tool args))
          (steps (mevedel-pipeline--build-steps tool))
          (cancel-cell (list nil))
+         (sandbox-summary-cell (list nil))
          (context (list :tool tool :args args
                         :session session :workspace workspace
                         :request request :invocation invocation :fsm fsm
@@ -2176,7 +2195,8 @@ logged so a misbehaving CALLBACK cannot strand the pipeline."
                         :origin (mevedel-current-origin)
                         :buffer dispatch-buffer
                         :default-directory workdir
-                        :cancel-cell cancel-cell))
+                        :cancel-cell cancel-cell
+                        :sandbox-summary-cell sandbox-summary-cell))
          (called nil)
          (once-callback
           (lambda (result)

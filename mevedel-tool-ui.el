@@ -36,6 +36,10 @@
 (declare-function mevedel-agent-record-path
                   "mevedel-agent-control" (cl-x) t)
 
+;; `mevedel-pipeline'
+(declare-function mevedel-pipeline-active-tool-use-id
+                  "mevedel-pipeline" ())
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller
                   "mevedel-structs" (request canceller))
@@ -82,7 +86,9 @@
              :role role
              :fork-turns fork-turns
              :model model
-             :effort effort))
+             :effort effort
+             :parent-tool-use-id
+             (mevedel-pipeline-active-tool-use-id)))
            (path (mevedel-agent-record-path record)))
       (mevedel-tool-ui--deliver-result
        callback
@@ -103,7 +109,9 @@
           (mevedel-agent-control-followup
            mevedel--session
            (plist-get args :target)
-           (plist-get args :message)))
+           (plist-get args :message)
+           :parent-tool-use-id
+           (mevedel-pipeline-active-tool-use-id)))
          (path (mevedel-agent-record-path record)))
     (list :result ""
           :render-data
