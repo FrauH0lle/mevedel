@@ -97,6 +97,13 @@
 (defvar-local mevedel-view--interaction-telemetry-opened nil
   "Hash table of interaction lifecycle metadata retained across redraws.")
 
+(defvar-keymap mevedel-view--pending-plan-map
+  :doc "Keymap on the pending Plan segment in the interaction counter."
+  "RET" #'mevedel-view--show-pending-plan
+  "<return>" #'mevedel-view--show-pending-plan
+  "<mouse-1>" #'mevedel-view--show-pending-plan
+  "<mouse-2>" #'mevedel-view--show-pending-plan)
+
 
 (defun mevedel-view-interaction-initialize ()
   "Initialize interaction descriptor state in the current view buffer."
@@ -367,13 +374,45 @@ OVERLAY is stored on the text as the descriptor's callback handle."
     (mevedel-view--interaction-apply-overlay-properties overlay descriptor)
     overlay))
 
+(defun mevedel-view--show-pending-plan (&optional event)
+  "Show and focus the current session's pending Plan approval."
+  (interactive (list last-nonmenu-event))
+  (when (mouse-event-p event)
+    (mouse-set-point event))
+  (when-let* ((session (mevedel-view--session))
+              (entry (mevedel-session-pending-plan-approval session))
+              (id (plist-get entry :interaction-id)))
+    (let ((bounds (mevedel-view-zone-fragment-bounds 'interaction id)))
+      (unless bounds
+        (plist-put entry :hidden nil)
+        (require 'mevedel-plan-mode)
+        (mevedel-plan-approval-render session)
+        (setq bounds
+              (mevedel-view-zone-fragment-bounds 'interaction id)))
+      (when bounds
+        (goto-char (plist-get bounds :start))))))
+
 (defun mevedel-view--interaction-separator-fragment (label)
   "Return the non-navigatable interaction separator fragment for LABEL."
-  (list :namespace 'interaction
-        :id :separator
-        :priority 1000
-        :body (mevedel-view--zone-separator label)
-        :navigatable nil))
+  (let ((body (mevedel-view--zone-separator label)))
+    (when (and (mevedel-view--session)
+               (mevedel-session-pending-plan-approval
+                (mevedel-view--session))
+               (string-match "\\b[0-9]+ plans?\\b" body))
+      (add-text-properties
+       (match-beginning 0) (match-end 0)
+       `(face link
+         keymap ,mevedel-view--pending-plan-map
+         mouse-face highlight
+         follow-link t
+         help-echo "Show pending plan"
+         mevedel-view-pending-plan t)
+       body))
+    (list :namespace 'interaction
+          :id :separator
+          :priority 1000
+          :body body
+          :navigatable nil)))
 
 (defun mevedel-view--interaction-fragment (id descriptor)
   "Return a fragment plist for interaction DESCRIPTOR ID."

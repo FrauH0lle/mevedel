@@ -64,6 +64,57 @@
     (should (= 0 (hash-table-count mevedel-view--interaction-descriptors)))
     (should (= 0 (hash-table-count mevedel-view--interaction-overlays)))))
 
+(mevedel-deftest mevedel-view--show-pending-plan
+  (:doc "uses the clicked view and focuses hidden or visible approvals")
+  ,test
+  (test)
+  (mevedel-view-test--with-buffers
+    (let* ((session (mevedel-session--create :name "test"))
+           (render-count 0)
+           (entry
+            (list
+             :session session
+             :interaction-id 'plan
+             :hidden t
+             :renderer
+             (lambda (_entry)
+               (cl-incf render-count)
+               (mevedel-view--interaction-register
+                '(:kind plan :id plan :count 1 :body "approval\n"))))))
+      (setf (mevedel-session-pending-plan-approval session) entry)
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-rebuild))
+      (save-window-excursion
+        (let* ((source-window (selected-window))
+               (view-window (split-window source-window))
+               position)
+          (set-window-buffer source-window data-buf)
+          (set-window-buffer view-window view-buf)
+          (with-current-buffer view-buf
+            (setq position
+                  (text-property-any
+                   (point-min) (point-max)
+                   'mevedel-view-pending-plan t)))
+          (select-window source-window)
+          (mevedel-view--show-pending-plan
+           (list 'mouse-1 (list view-window position '(0 . 0) 0)))
+          (should (eq view-window (selected-window)))
+          (should (eq view-buf (current-buffer)))
+          (should-not (plist-get entry :hidden))
+          (should (= 1 render-count))
+          (let ((start
+                 (plist-get
+                  (mevedel-view-zone-fragment-bounds 'interaction 'plan)
+                  :start)))
+            (should (= start (point)))
+            (goto-char (point-max))
+            (mevedel-view--show-pending-plan 13)
+            (should (= start (point)))
+            (should (= 1 render-count))))))))
+
 (mevedel-deftest mevedel-view-interaction-pending-p
   (:doc "reports pending view-owned user interactions")
   ,test
@@ -272,6 +323,36 @@
                       (overlay-start overlay)
                       'mouse-face)))
        mevedel-view--interaction-overlays)))
+
+  :doc "only the pending Plan counter segment is actionable"
+  (mevedel-view-test--with-buffers
+    (let ((session
+           (mevedel-session--create
+            :name "test"
+            :pending-plan-approval
+            '(:interaction-id plan :hidden t))))
+      (with-current-buffer data-buf
+        (setq-local mevedel--session session))
+      (with-current-buffer view-buf
+        (setq-local mevedel--session session)
+        (mevedel-view--interaction-register
+         (list :kind 'permission :id 'permission :count 2
+               :body "permission\n" :entry 'permission-entry
+               :activate #'ignore))
+        (goto-char (point-min))
+        (search-forward "1 plan · 2 permissions pending")
+        (let* ((plan-position (match-beginning 0))
+               (permission-position
+                (+ plan-position (length "1 plan · 2 ")))
+               (map (get-text-property plan-position 'keymap)))
+          (should (eq 'mevedel-view--show-pending-plan
+                      (lookup-key map (kbd "RET"))))
+          (should (lookup-key map [mouse-1]))
+          (should (eq 'link (get-text-property plan-position 'face)))
+          (should-not (get-text-property permission-position 'keymap))
+          (should-not
+           (get-text-property permission-position
+                              'mevedel-view-pending-plan))))))
 
   :doc "shared activation does not call interaction descriptor callbacks"
   (mevedel-view-test--with-buffers
