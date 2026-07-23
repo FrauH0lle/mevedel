@@ -13,6 +13,7 @@
 (require 'mevedel-goal)
 (require 'mevedel-interaction-prompt)
 (require 'mevedel-permissions)
+(require 'mevedel-presets)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
 (require 'mevedel-structs)
@@ -319,9 +320,9 @@
             (let* ((record
                     (list :selection
                           '(:location worktree :context fresh
-                            :execution goal :mode full-auto)
+                            :execution goal :mode full-auto
+                            :goal-token-budget 4321)
                           :goal-id "reserved-goal"
-                          :goal-token-budget 4321
                           :accepted
                           (list :path "plans/source.md"
                                 :absolute-path path
@@ -360,9 +361,9 @@
          (record
           (list :step 'prepare-target
                 :selection '(:location worktree :context fresh
-                              :execution goal :mode full-auto)
+                              :execution goal :mode full-auto
+                              :goal-token-budget 4321)
                 :goal-id "reserved"
-                :goal-token-budget 4321
                 :accepted
                 (list :path "plans/source.md"
                       :absolute-path source-path
@@ -489,7 +490,8 @@
              (:location here :context fresh :execution direct :mode auto)
              (:location worktree :context summary :execution direct
                         :mode full-auto)
-             (:location here :context current :execution goal :mode ask)
+             (:location here :context current :execution goal :mode ask
+                        :goal-token-budget 1000)
              (:location here :context fresh :execution goal :mode ask)
              (:location here :context summary :execution goal :mode ask)
              (:location worktree :context fresh :execution goal :mode ask)
@@ -498,7 +500,11 @@
   (dolist (selection
            '((:location worktree :context current :execution direct :mode ask)
              (:location here :context current :execution other :mode ask)
-             (:location here :context current :execution direct :mode plan)))
+             (:location here :context current :execution direct :mode plan)
+             (:location here :context current :execution goal :mode ask
+                        :goal-token-budget 0)
+             (:location here :context current :execution goal :mode ask
+                        :goal-token-budget "1000")))
     (should-not (mevedel-plan-handoff-selection-valid-p selection))))
 
 (provide 'test-mevedel-plan-handoff)

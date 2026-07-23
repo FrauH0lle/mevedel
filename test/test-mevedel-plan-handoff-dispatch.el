@@ -143,10 +143,10 @@
          (target-path (file-name-concat target-save "plans" "accepted.md"))
          (body "Worktree Goal plan")
          (selection '(:location worktree :context fresh
-                      :execution goal :mode full-auto :branch "plan/goal"))
+                      :execution goal :mode full-auto :branch "plan/goal"
+                      :goal-token-budget 7000))
          (record
           (list :step 'submit :selection selection :goal-id "reserved-goal"
-                :goal-token-budget 7000
                 :target-save-path target-save :target-session-id "target"
                 :target-directory default-directory
                 :target-accepted
@@ -172,7 +172,7 @@
             (setq-local mevedel--session source-session))
           (with-current-buffer target-buffer
             (setq-local mevedel--session target-session
-                        mevedel-goal-token-budget 7000))
+                        mevedel-goal-token-budget 1234))
           (cl-letf (((symbol-function
                       'mevedel-plan-handoff--worktree-target-buffer)
                      (lambda (_record) target-buffer))

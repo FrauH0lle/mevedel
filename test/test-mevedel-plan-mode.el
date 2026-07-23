@@ -122,14 +122,17 @@
       (should (eq 'plan-exit outcome)))))
 
 (mevedel-deftest mevedel-plan-mode--default-selection
-  (:doc "defaults to Here, Current, Direct, and the underlying mode")
+  (:doc "defaults to Here, Current, Direct, Mode, and the effective Goal budget")
   ,test
   (test)
   (let ((session (mevedel-session--create
                   :name "test" :permission-mode 'auto)))
-    (should (equal '(:location here :context current
-                     :execution direct :mode auto)
-                   (mevedel-plan-mode--default-selection session)))
+    (with-temp-buffer
+      (setq-local mevedel-goal-token-budget 1234)
+      (should (equal '(:location here :context current
+                       :execution direct :mode auto
+                       :goal-token-budget 1234)
+                     (mevedel-plan-mode--default-selection session))))
     (should (eq 'auto (mevedel-session-permission-mode session)))))
 
 (mevedel-deftest mevedel-plan-mode--invalidate-proposal
@@ -222,6 +225,8 @@
                         (lookup-key keymap (kbd "TAB"))))
             (should (eq (lookup-key keymap (kbd "m"))
                         (lookup-key keymap (kbd "<tab>"))))
+            (should-not (lookup-key keymap (kbd "b")))
+            (should-not (string-match-p "Budget" body))
             (call-interactively (lookup-key keymap (kbd "e")))
             (should (eq 'goal (plist-get selection :execution)))
             (should rerendered)
@@ -253,25 +258,27 @@
             (should (equal '(:accept t
                              :selection (:location worktree :context fresh
                                          :execution goal :mode full-auto
+                                         :goal-token-budget nil
                                          :branch "plan/topic"))
                            outcome))))
       (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
       (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
-  :doc "shows selected Goal execution and its read-only effective budget"
+  :doc "shows selected Goal execution and its editable proposal budget"
   (dolist (case '((nil "Unlimited") (200000 "200000 tokens")))
     (let* ((session (mevedel-session--create :name "test"))
            (data-buffer (generate-new-buffer " *plan-goal-budget-data*"))
            (view-buffer (generate-new-buffer " *plan-goal-budget-view*"))
-           (selection '(:location here :context current
-                        :execution goal :mode ask))
+           (selection (list :location 'here :context 'current
+                            :execution 'goal :mode 'ask
+                            :goal-token-budget (car case)))
            (entry (mevedel-plan-mode--approval-entry
                    "# Plan" data-buffer session selection))
            descriptor)
       (unwind-protect
           (progn
             (with-current-buffer data-buffer
-              (setq-local mevedel-goal-token-budget (car case)))
+              (setq-local mevedel-goal-token-budget 999))
             (cl-letf (((symbol-function
                         'mevedel-view--interaction-target-buffer)
                        (lambda (_buffer) view-buffer))
@@ -287,9 +294,70 @@
               (should (string-match-p
                        "continue until complete, blocked" body))
               (should (string-match-p
-                       (format "Budget      %s" (cadr case)) body))))
+                       (format "^b  Budget      %s" (cadr case)) body))))
         (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
         (when (buffer-live-p data-buffer) (kill-buffer data-buffer)))))
+
+  :doc "edits Goal budget proposal-locally and preserves it across execution"
+  (let* ((session (mevedel-session--create :name "test"))
+         (data-buffer (generate-new-buffer " *plan-edit-budget-data*"))
+         (view-buffer (generate-new-buffer " *plan-edit-budget-view*"))
+         (selection '(:location here :context current
+                      :execution goal :mode ask :goal-token-budget 100))
+         (entry (mevedel-plan-mode--approval-entry
+                 "# Plan" data-buffer session selection))
+         (input " 200000 ")
+         descriptor rerendered)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel-goal-token-budget 999))
+          (cl-letf (((symbol-function
+                      'mevedel-view--interaction-target-buffer)
+                     (lambda (_buffer) view-buffer))
+                    ((symbol-function 'mevedel-view--interaction-register)
+                     (lambda (value)
+                       (setq descriptor value)
+                       (make-overlay (point-min) (point-min))))
+                    ((symbol-function 'mevedel-plan-approval-render)
+                     (lambda (&rest _) (setq rerendered t)))
+                    ((symbol-function 'read-string)
+                     (lambda (&rest _) input)))
+            (mevedel-plan-mode--render-approval entry)
+            (let* ((body (plist-get descriptor :body))
+                   (keymap (plist-get descriptor :keymap))
+                   (budget-position (string-match "b  Budget" body)))
+              (should budget-position)
+              (should
+               (memq 'help-key-binding
+                     (flatten-tree
+                      (get-text-property
+                       budget-position 'font-lock-face body))))
+              (call-interactively (lookup-key keymap (kbd "b")))
+              (should (= 200000
+                         (plist-get selection :goal-token-budget)))
+              (should (= 999
+                         (buffer-local-value
+                          'mevedel-goal-token-budget data-buffer)))
+              (should rerendered)
+              (should (equal selection
+                             (plist-get
+                              (mevedel-session-plan-metadata session)
+                              :selection)))
+              (call-interactively (lookup-key keymap (kbd "e")))
+              (call-interactively (lookup-key keymap (kbd "e")))
+              (should (= 200000
+                         (plist-get selection :goal-token-budget)))
+              (setq input "")
+              (call-interactively (lookup-key keymap (kbd "b")))
+              (should-not (plist-get selection :goal-token-budget))
+              (setq input "0")
+              (should-error
+               (call-interactively (lookup-key keymap (kbd "b")))
+               :type 'user-error)
+              (should-not (plist-get selection :goal-token-budget)))))
+      (when (buffer-live-p view-buffer) (kill-buffer view-buffer))
+      (when (buffer-live-p data-buffer) (kill-buffer data-buffer))))
 
   :doc "warns for dirty Worktree state and cancellation keeps approval pending"
   (let* ((session (mevedel-session--create
@@ -414,7 +482,8 @@
                    :name "test" :save-path save-dir :plan-mode t
                    :plan-metadata
                    '(:selection (:location here :context current
-                                 :execution direct :mode auto)))))
+                                 :execution goal :mode auto
+                                 :goal-token-budget 2468)))))
     (unwind-protect
         (with-temp-buffer
           (setq-local mevedel--session session)
@@ -442,7 +511,8 @@
                           (mevedel-session-pending-plan-approval session)
                           :body)))
           (should (equal '(:location here :context current
-                           :execution direct :mode auto)
+                           :execution goal :mode auto
+                           :goal-token-budget 2468)
                          (plist-get
                           (mevedel-session-pending-plan-approval session)
                           :selection)))
@@ -487,7 +557,8 @@
          (plan "# Restored plan")
          (hash (mevedel-plan-hash plan))
          (selection '(:location here :context current
-                      :execution goal :mode auto))
+                      :execution goal :mode auto
+                      :goal-token-budget 1357))
          (session
           (mevedel-session--create
            :name "test" :save-path save-dir :plan-mode t
@@ -638,7 +709,8 @@
              "Free-form accepted plan." data-buffer session
              '(:accept t
                :selection (:location here :context current
-                           :execution goal :mode full-auto))))
+                           :execution goal :mode full-auto
+                           :goal-token-budget 4321))))
           (let* ((metadata (mevedel-session-plan-metadata session))
                  (goal (mevedel-session-goal session))
                  (accepted (plist-get metadata :accepted-absolute-path)))
@@ -647,7 +719,7 @@
             (should (equal reserved-id (mevedel-goal-id goal)))
             (should (equal (plist-get metadata :accepted-path)
                            (mevedel-goal-plan-reference goal)))
-            (should (= 1234 (mevedel-goal-token-budget goal)))
+            (should (= 4321 (mevedel-goal-token-budget goal)))
             (should (string-match-p (regexp-quote accepted) hook-input))
             (should (string-match-p "Free-form accepted plan" hook-input))
             (should (string-match-p "Begin the active Goal" hook-input))
@@ -683,7 +755,8 @@
              "# Accepted" data-buffer session
              '(:accept t
                :selection (:location worktree :context fresh
-                           :execution direct :mode full-auto
+                           :execution goal :mode full-auto
+                           :goal-token-budget 7000
                            :branch "plan/topic"))))
           (let ((retry
                  (plist-get (mevedel-session-plan-metadata session)
@@ -691,6 +764,10 @@
             (should dispatched)
             (should (eq 'ask (mevedel-session-permission-mode session)))
             (should (eq 'prepare-worktree (plist-get retry :step)))
+            (should-not (plist-member retry :goal-token-budget))
+            (should (= 7000
+                       (plist-get (plist-get retry :selection)
+                                  :goal-token-budget)))
             (should (equal "plan/topic"
                            (plist-get (plist-get retry :selection)
                                       :branch)))))
@@ -699,7 +776,8 @@
 
   :doc "feedback preserves Plan and selection while requiring a replacement"
   (let* ((selection '(:location here :context current
-                      :execution direct :mode auto))
+                      :execution goal :mode auto
+                      :goal-token-budget 4321))
          (session (mevedel-session--create
                    :name "test" :plan-mode t
                    :plan-metadata
@@ -723,7 +801,8 @@
                    :plan-metadata
                    '(:status proposed :proposal-id (1 2 "h")
                      :selection (:location here :context current
-                                 :execution direct :mode ask)))))
+                                 :execution goal :mode ask
+                                 :goal-token-budget 4321)))))
     (mevedel-plan-mode--approval-callback
      "# Plan" (current-buffer) session 'aborted)
     (let ((metadata (mevedel-session-plan-metadata session)))

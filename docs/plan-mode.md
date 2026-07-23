@@ -43,13 +43,14 @@ The approval interaction has these axes:
 - Context: Current, Fresh, or Summary. Summary costs one additional model
   request.
 - Execution: Direct or Goal.
+- Budget: a positive Goal token limit, or Unlimited.
 - Mode: Ask, Auto, or Full-auto.
 
 Keys are `l` for Location, `c` for Context, `e` for Execution, `m` or `TAB`
-for Mode, `RET` to accept, `f` for an editable feedback draft, and `q` or
-`C-g` to cancel. Selecting Worktree while Current is selected changes the
-context to Fresh. A dirty source checkout is not copied or stashed; Worktree
-starts at `HEAD`.
+for Mode, and—when Goal is selected—`b` for Budget. `RET` accepts, `f` opens
+an editable feedback draft, and `q` or `C-g` cancels. Selecting Worktree while
+Current is selected changes the context to Fresh. A dirty source checkout is
+not copied or stashed; Worktree starts at `HEAD`.
 
 The approval card keeps the Markdown proposal expanded above a compact
 Implementation section. Cycle keys appear beside their settings; accept,
@@ -58,9 +59,11 @@ feedback, and cancel remain in the action footer.
 Direct remains the default and sends one ordinary implementation turn. Goal is
 an explicit opt-in that continues automatically until complete, genuinely
 blocked, paused, or budget-limited. When Goal is selected, the approval shows
-the effective target token budget as read-only information; it is not another
-selection axis. Revised proposals preserve the selected execution, while
-cancellation or Plan exit discards it.
+the proposal's target token budget. `b` accepts a positive integer; empty input
+means Unlimited. The setting starts from the effective session default, stays
+local to the pending proposal, survives Execution toggles and revised
+proposals, and applies only on acceptance. Cancellation or Plan exit discards
+the selection.
 
 ## Acceptance and recovery
 
@@ -73,7 +76,7 @@ clean target session and install the accepted artifact there.
 After any valid location/context preparation, Direct submits its ordinary
 one-turn instruction. Goal instead constructs a phase-free Goal in the prepared
 target session, using the target-owned immutable accepted-plan path and the
-target's ordinary Goal budget. Its deterministic objective treats plan
+Plan-selected Goal budget. Its deterministic objective treats plan
 outcomes, constraints, and acceptance criteria as the completion contract while
 allowing mechanics to follow current repository evidence. The first canonical
 turn receives the prepared context, resolved artifact path, full accepted plan,
@@ -81,7 +84,7 @@ and compact kickoff; the transcript stores that full input while the view shows
 `Implement accepted plan as Goal`.
 
 For Worktree execution, the target session owns the Goal, accepted artifact,
-selected permission mode, and inherited Goal budget. The source session keeps
+selected permission mode, and selected Goal budget. The source session keeps
 its original permission mode and remains otherwise unchanged. Later Goal turns
 derive exact read authority only for the validated target-local artifact.
 
