@@ -134,6 +134,8 @@
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-cycle-permission-mode
                   "mevedel-view-composer" ())
+(declare-function mevedel-view-toggle-plan-mode
+                  "mevedel-view-composer" ())
 (declare-function mevedel-view-edit-last-queued-message
                   "mevedel-view-composer" ())
 (declare-function mevedel-view-send "mevedel-view-composer" ())
@@ -511,6 +513,8 @@ navigation and activation fallbacks."
             #'mevedel-view-cycle-permission-mode)
 (define-key mevedel-view-mode-map (kbd "S-TAB")
             #'mevedel-view-cycle-permission-mode)
+(define-key mevedel-view-mode-map (kbd "C-<tab>")
+            #'mevedel-view-toggle-plan-mode)
 
 (defun mevedel-view--enforce-ephemeral (&rest _)
   "Keep the current view buffer out of Emacs save machinery."

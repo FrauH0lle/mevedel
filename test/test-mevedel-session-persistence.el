@@ -180,6 +180,8 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                :resource-grants nil
                :preset-name nil
                :preset-settings nil
+               :model-provider nil
+               :reasoning-effort nil
                :last-observed-date "2026-01-01"
                :agent-types-snapshot :uninitialized
                :skills-snapshot :uninitialized
@@ -434,6 +436,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (let* ((session (test-mevedel-session-persistence--make-session root))
                (_ (setf (mevedel-session-plan-mode session) t
                         (mevedel-session-preset-name session) 'test-preset
+                        (mevedel-session-model-provider session)
+                        "Test:test-model"
+                        (mevedel-session-reasoning-effort session) 'high
                         (mevedel-session-preset-settings session)
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
@@ -454,6 +459,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (equal 'ask (plist-get plist :permission-mode)))
           (should (eq t (plist-get plist :plan-mode)))
           (should (eq 'test-preset (plist-get plist :preset-name)))
+          (should (equal "Test:test-model"
+                         (plist-get plist :model-provider)))
+          (should (eq 'high (plist-get plist :reasoning-effort)))
           (should (equal '((mevedel-model-tiers
                             (strong :provider "Test:test-model" :effort high))
                            (mevedel-model-workloads
@@ -555,8 +563,24 @@ ROOT is a temporary directory owned and cleaned up by the caller."
                    (plist-put plist :plan-mode mode)))))
     (should-error
      (mevedel-session-persistence--validate-current-sidecar
-      (plist-put plist :plan-mode 'plan))
+     (plist-put plist :plan-mode 'plan))
      :type 'error))
+  :doc "accepts only exact model labels and symbolic effort"
+  (let ((plist (test-mevedel-session-persistence--complete-sidecar nil)))
+    (should
+     (mevedel-session-persistence--validate-current-sidecar
+      (plist-put
+       (plist-put plist :model-provider "OpenAI:gpt-5")
+       :reasoning-effort 'high)))
+    (dolist (provider '("gpt-5" openai 42))
+      (should-error
+       (mevedel-session-persistence--validate-current-sidecar
+        (plist-put plist :model-provider provider))))
+    (should-error
+     (mevedel-session-persistence--validate-current-sidecar
+      (plist-put
+       (plist-put plist :model-provider nil)
+       :reasoning-effort "high"))))
   :doc "rejects prompt entries without current turn coordinates"
   (let ((plist
          (test-mevedel-session-persistence--complete-sidecar
@@ -574,6 +598,9 @@ ROOT is a temporary directory owned and cleaned up by the caller."
         (let* ((source (test-mevedel-session-persistence--make-session root))
                (_ (setf (mevedel-session-plan-mode source) t
                         (mevedel-session-preset-name source) 'test-preset
+                        (mevedel-session-model-provider source)
+                        "Test:test-model"
+                        (mevedel-session-reasoning-effort source) 'high
                         (mevedel-session-preset-settings source)
                         '((mevedel-model-tiers
                            (strong :provider "Test:test-model" :effort high))
@@ -595,6 +622,10 @@ ROOT is a temporary directory owned and cleaned up by the caller."
           (should (eq 'ask (mevedel-session-permission-mode session)))
           (should (mevedel-session-plan-mode session))
           (should (eq 'test-preset (mevedel-session-preset-name session)))
+          (should (equal "Test:test-model"
+                         (mevedel-session-model-provider session)))
+          (should (eq 'high
+                      (mevedel-session-reasoning-effort session)))
           (should (equal '((mevedel-model-tiers
                             (strong :provider "Test:test-model" :effort high))
                            (mevedel-model-workloads

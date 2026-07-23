@@ -16,6 +16,7 @@
 (defvar gptel--known-backends)
 (defvar gptel-backend)
 (defvar gptel-model)
+(defvar gptel-reasoning-effort)
 
 ;; `gptel-request'
 (declare-function gptel-backend-models "ext:gptel-request" (cl-x) t)
@@ -67,6 +68,11 @@
                   (&optional buffer))
 (declare-function mevedel-model-current-provider-label "mevedel-models"
                   (&optional buffer))
+(declare-function mevedel-model-set-session-effort "mevedel-models"
+                  (session effort &optional buffer))
+(declare-function mevedel-model-set-session-provider "mevedel-models"
+                  (session provider &optional buffer))
+(declare-function mevedel-model-supported-efforts "mevedel-models" (model))
 (declare-function mevedel-model-resolve-workload "mevedel-models"
                   (workload &optional explicit-selector explicit-effort))
 (defvar mevedel-model-tiers)
@@ -83,6 +89,8 @@
 (defvar mevedel-permission-mode)
 
 ;; `mevedel-plan-mode'
+(declare-function mevedel-plan-approval-render
+                  "mevedel-plan-mode" (&optional session))
 (declare-function mevedel-plan-mode-enter
                   "mevedel-plan-mode" (&optional session))
 
@@ -120,6 +128,8 @@
                   (&optional buffer))
 (declare-function mevedel-session-goal "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-name "mevedel-structs" (cl-x) t)
+(declare-function mevedel-session-pending-plan-approval
+                  "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-plan-mode "mevedel-structs" (cl-x) t)
 (declare-function mevedel-session-preset-name "mevedel-structs" (cl-x) t)
 (declare-function mevedel-workspace-root "mevedel-structs" (cl-x) t)
@@ -284,13 +294,18 @@
 (defun mevedel-menu--model-surface-description ()
   "Return the model surface description."
   (require 'mevedel-models)
-  (let ((model (mevedel-model-current-provider-label
-                (mevedel-cockpit-context-data-buffer
-                 (mevedel-menu--context)))))
+  (let* ((buffer (mevedel-cockpit-context-data-buffer
+                  (mevedel-menu--context)))
+         (model (mevedel-model-current-provider-label buffer))
+         (effort
+          (with-current-buffer buffer
+            (and (boundp 'gptel-reasoning-effort)
+                 gptel-reasoning-effort))))
     (concat (mevedel-menu--face "Current model: " 'transient-heading)
             (if (string= model "none")
                 (mevedel-menu--inactive-value model)
-              (mevedel-menu--value model)))))
+              (mevedel-menu--value model))
+            (format " · effort %s" (or effort "default")))))
 
 (defun mevedel-menu--tools-description ()
   "Return the top-level tools row description."
@@ -497,6 +512,12 @@
 ;;
 ;;; Model surface
 
+(defun mevedel-menu--refresh-plan-approval (session)
+  "Refresh SESSION's visible Plan approval when one is pending."
+  (when (and (mevedel-session-pending-plan-approval session)
+             (fboundp 'mevedel-plan-approval-render))
+    (mevedel-plan-approval-render session)))
+
 (defun mevedel-menu--model-candidates ()
   "Return registered model candidates as (LABEL . PROVIDER) pairs."
   (let (candidates)
@@ -515,12 +536,14 @@
 
 (defun mevedel-menu--set-model (provider)
   "Set the current data buffer's gptel PROVIDER."
-  (let ((backend (plist-get provider :backend))
-        (model (plist-get provider :model)))
-    (with-current-buffer
-        (mevedel-cockpit-context-data-buffer (mevedel-menu--context))
-      (setq-local gptel-backend backend)
-      (setq-local gptel-model model))
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (buffer (mevedel-cockpit-context-data-buffer context))
+         (backend (plist-get provider :backend))
+         (model (plist-get provider :model)))
+    (require 'mevedel-models)
+    (mevedel-model-set-session-provider session provider buffer)
+    (mevedel-menu--refresh-plan-approval session)
     (force-mode-line-update t)
     (message "mevedel: model set to %s:%s"
              (gptel-backend-name backend)
@@ -534,6 +557,24 @@
       (user-error "No registered gptel models"))
     (let ((label (completing-read "Model: " candidates nil t)))
       (mevedel-menu--set-model (cdr (assoc label candidates))))))
+
+(defun mevedel-menu--select-effort ()
+  "Select reasoning effort for the current session model."
+  (interactive)
+  (let* ((context (mevedel-menu--context))
+         (session (mevedel-cockpit-context-session context))
+         (buffer (mevedel-cockpit-context-data-buffer context))
+         (model (buffer-local-value 'gptel-model buffer))
+         (candidates
+          (cons "default"
+                (mapcar #'symbol-name
+                        (mevedel-model-supported-efforts model))))
+         (choice (completing-read "Effort: " candidates nil t))
+         (effort (unless (string= choice "default") (intern choice))))
+    (mevedel-model-set-session-effort session effort buffer)
+    (mevedel-menu--refresh-plan-approval session)
+    (force-mode-line-update t)
+    (message "mevedel: reasoning effort set to %s" (or effort "default"))))
 
 ;;
 ;;; Commands
@@ -871,6 +912,7 @@ AREA is `top' for the main cockpit, or a named cockpit surface."
    ["Model"
     :pad-keys t
     ("RET" "Select model" mevedel-menu--select-model)
+    ("e" "Select effort" mevedel-menu--select-effort)
     ("g" "gptel menu" mevedel-menu--open-gptel)]
    ["Navigation"
     :pad-keys t

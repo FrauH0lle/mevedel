@@ -2,7 +2,9 @@
 
 Plan mode is a sticky planning workflow independent of the session's stored
 `ask`, `auto`, or `full-auto` permission mode. Enter it with `/plan`,
-`/plan PROMPT`, the cockpit, or the Shift-Tab mode cycle. A session with an
+`/plan PROMPT`, the cockpit, or `C-<tab>`. `Shift-TAB` continues to cycle only
+`ask` -> `auto` -> `full-auto` -> `ask`, including while Plan is active. The
+composer displays both dimensions as `[Plan · MODE]`. A session with an
 unfinished Goal cannot enter Plan; a completed Goal is historical and does not
 block it.
 
@@ -45,10 +47,16 @@ The approval interaction has these axes:
 - Execution: Direct or Goal.
 - Budget: a positive Goal token limit, or Unlimited.
 - Mode: Ask, Auto, or Full-auto.
+- Model: the ambient session backend/model and reasoning effort.
+- Skills: canonical user-invocable skills attached to implementation.
+- Instructions: free-form multiline implementation-only guidance.
 
 Keys are `l` for Location, `c` for Context, `e` for Execution, `m` or `TAB`
-for Mode, and—when Goal is selected—`b` for Budget. `RET` accepts, `f` opens
-an editable feedback draft, `q` hides the approval, and `C-g` cancels.
+for Mode, `M` for the shared model/effort cockpit, `s` to toggle skills, `i`
+to edit implementation instructions, and—when Goal is selected—`b` for
+Budget. The instructions editor saves with `C-c C-c` and cancels with
+`C-c C-k`. `RET` accepts, `f` opens an editable feedback draft, `q` hides the
+approval, and `C-g` cancels.
 Selecting Worktree while Current is selected changes the context to Fresh. A
 dirty source checkout is not copied or stashed; Worktree starts at `HEAD`.
 
@@ -66,7 +74,10 @@ the proposal's target token budget. `b` accepts a positive integer; empty input
 means Unlimited. The setting starts from the effective session default, stays
 local to the pending proposal, survives Execution toggles and revised
 proposals, and applies only on acceptance. Cancellation or Plan exit discards
-the selection.
+the selection, including skills and implementation instructions. Model and
+effort are ambient session settings: changes through `M` affect later Plan
+turns and are not reverted by cancellation. Acceptance snapshots the exact
+backend/model and effort for every implementation target and retry.
 
 ## Acceptance and recovery
 
@@ -86,10 +97,22 @@ turn receives the prepared context, resolved artifact path, full accepted plan,
 and compact kickoff; the transcript stores that full input while the view shows
 `Implement accepted plan as Goal`.
 
+The generated implementation turn goes through the ordinary deterministic
+skill planner. Skills selected with `s` are stored by canonical `SKILL.md`
+source and attached as argument-free instruction mentions. Live `$skill`
+mentions written in the `i` instructions editor use the same semantics and
+deduplicate with selected skills. Instruction attachments ignore skill
+model/effort, agent, hooks, and request permission policy. Their current source
+is reloaded at dispatch and retry; an explicitly bound skill that is missing,
+disabled, malformed, or no longer user-invocable leaves the accepted handoff
+retryable and starts no request. The transcript stores the full generated
+prompt while the rendered view keeps the compact implementation label.
+
 For Worktree execution, the target session owns the Goal, accepted artifact,
-selected permission mode, and selected Goal budget. The source session keeps
-its original permission mode and remains otherwise unchanged. Later Goal turns
-derive exact read authority only for the validated target-local artifact.
+selected permission mode, accepted model/effort snapshot, and selected Goal
+budget. The source session keeps its original permission mode and remains
+otherwise unchanged. Later Goal turns derive exact read authority only for the
+validated target-local artifact.
 
 Acceptance is final even if preparation fails. The source session persists a
 bounded retry record, and `mevedel-retry-plan-implementation` resumes from the

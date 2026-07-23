@@ -476,7 +476,8 @@ completion, prompt submission, and integration with that history ring:
 - `C-c C-l`: browse history
 - `C-c C-u`: clear current input
 - `C-a`: beginning of input line
-- `Shift-TAB` / `<backtab>`: cycle the session permission mode
+- `Shift-TAB` / `<backtab>`: cycle `ask`, `auto`, and `full-auto`
+- `C-<tab>`: toggle Plan without changing the permission mode
 
 History persists at the workspace level as
 `<workspace-root>/.mevedel/input-history.el`, so new and resumed

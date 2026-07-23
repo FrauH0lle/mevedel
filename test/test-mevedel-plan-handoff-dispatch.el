@@ -36,7 +36,8 @@
          (current-path (file-name-concat save-dir "plans" "current.md"))
          (body "# Immutable accepted plan")
          (selection '(:location here :context fresh
-                      :execution direct :mode full-auto))
+                      :execution direct :mode full-auto
+                      :model-provider "Test:test-model"))
          (record
           (list :step 'prepare-context :selection selection
                 :accepted
@@ -72,12 +73,17 @@
                      (lambda (source) (setq hook-source source)))
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (push input prompts)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action)
                        (cl-incf attempts)
@@ -114,7 +120,8 @@
   (let* ((record
           '(:step prepare-context
             :selection (:location here :context fresh
-                        :execution direct :mode auto)
+                        :execution direct :mode auto
+                        :model-provider "Test:test-model")
             :accepted (:path "plans/accepted.md"
                        :absolute-path "/tmp/accepted.md"
                        :hash "hash")))
@@ -144,6 +151,7 @@
          (body "Worktree Goal plan")
          (selection '(:location worktree :context fresh
                       :execution goal :mode full-auto :branch "plan/goal"
+                      :model-provider "Test:test-model"
                       :goal-token-budget 7000))
          (record
           (list :step 'submit :selection selection :goal-id "reserved-goal"
@@ -180,11 +188,16 @@
                      (lambda (buffer)
                        (should (eq target-buffer buffer))
                        view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel-session-persistence-save)
                      #'ignore)
                     ((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
@@ -214,7 +227,8 @@
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
-                              :execution goal :mode auto)
+                              :execution goal :mode auto
+                              :model-provider "Test:test-model")
                 :accepted
                 (list :path "plans/accepted.md"
                       :absolute-path accepted-path
@@ -237,11 +251,16 @@
                     ((symbol-function 'mevedel-session-persistence-save) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel-goal-create)
                      (lambda (&rest _) (ert-fail "Constructed duplicate Goal")))
                     ((symbol-function 'mevedel--implement-plan)
@@ -268,7 +287,8 @@
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
-                              :execution goal :mode auto)
+                              :execution goal :mode auto
+                              :model-provider "Test:test-model")
                 :accepted
                 (list :path "plans/accepted.md"
                       :absolute-path accepted-path
@@ -289,11 +309,16 @@
           (cl-letf (((symbol-function 'mevedel-plan-handoff--persist) #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (_) (ert-fail "Started conflicting Goal"))))
             (mevedel-plan-handoff--dispatch-accepted session data-buffer))
@@ -318,7 +343,8 @@
          (record
           (list :step 'submit :goal-id "reserved"
                 :selection '(:location here :context current
-                              :execution goal :mode auto)
+                              :execution goal :mode auto
+                              :model-provider "Test:test-model")
                 :accepted
                 (list :path "plans/accepted.md"
                       :absolute-path accepted-path
@@ -344,11 +370,16 @@
                      #'ignore)
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (_) (error "Transport offline"))))
             (mevedel-plan-handoff--dispatch-accepted session data-buffer))
@@ -390,7 +421,8 @@
          (accepted-path (file-name-concat save-dir "plans" "accepted.md"))
          (body "# Accepted plan\n\nImplement the endpoint.")
          (selection '(:location here :context summary
-                      :execution direct :mode auto))
+                      :execution direct :mode auto
+                      :model-provider "Test:test-model"))
          (record
           (list :step 'prepare-summary :selection selection
                 :accepted
@@ -459,12 +491,17 @@
                                      (error-message-string err)))))))
                     ((symbol-function 'mevedel-view--interaction-target-buffer)
                      (lambda (_buffer) view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (push input prompts)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (_action)
                        (cl-incf attempts)
@@ -525,6 +562,7 @@
          (body "# Worktree plan\n\nImplement it.")
          (selection '(:location worktree :context fresh
                       :execution direct :mode full-auto
+                      :model-provider "Test:test-model"
                       :branch "plan/topic"))
          (record
           (list :step 'prepare-worktree :selection selection
@@ -586,12 +624,17 @@
                      (lambda (buffer)
                        (should (eq target-buffer buffer))
                        view-buffer))
-                    ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                     (lambda (input _display callback &rest _)
+                    ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                     #'ignore)
+                    ((symbol-function 'mevedel-view--submit-planned-input)
+                     (lambda (input _before _blocked callback &optional _after)
                        (push input prompts)
                        (funcall callback
                                 (mevedel-prompt-submission-create
-                                 :input input :state 'committed))))
+                                 :input input :state 'committed
+                                 :outcome
+                                 (list :model-input input
+                                       :transcript-input input)))))
                     ((symbol-function 'mevedel--implement-plan)
                      (lambda (action)
                        (should (eq target-buffer (current-buffer)))
@@ -661,7 +704,8 @@
          (source-path (file-name-concat source-save "plans" "accepted.md"))
          (body "# Worktree summary plan\n\nImplement it.")
          (selection '(:location worktree :context summary
-                      :execution direct :mode auto :branch "plan/summary"))
+                      :execution direct :mode auto :branch "plan/summary"
+                      :model-provider "Test:test-model"))
          (record
           (list :step 'prepare-summary :selection selection
                 :accepted
@@ -751,12 +795,17 @@
                 (lambda (buffer)
                   (should (eq target-buffer buffer))
                   view-buffer))
-               ((symbol-function 'mevedel-view--run-prompt-submit-hook)
-                (lambda (input _display callback &rest _)
+               ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                #'ignore)
+               ((symbol-function 'mevedel-view--submit-planned-input)
+                (lambda (input _before _blocked callback &optional _after)
                   (push input prompts)
                   (funcall callback
                            (mevedel-prompt-submission-create
-                            :input input :state 'committed))))
+                            :input input :state 'committed
+                            :outcome
+                            (list :model-input input
+                                  :transcript-input input)))))
                ((symbol-function 'mevedel--implement-plan)
                 (lambda (_action)
                   (should (eq target-buffer (current-buffer)))

@@ -73,9 +73,10 @@ fork lineage (`:forked-from-session-id` / `:forked-from-turn`), and
 `:agent-transcripts` presentation metadata and the explicit `:agent-registry`
 containing retained paths, frozen configurations, activity, mailboxes, and
 conversation locations. It also records `:preset-name` and the resolved
-buffer-local mevedel variables in `:preset-settings`; resume restores those
+buffer-local mevedel variables in `:preset-settings`, plus the session's exact
+`:model-provider` and explicit `:reasoning-effort`; resume restores those
 settings, and a normal fork deep-copies them so parent and child can diverge.
-gptel's own buffer-local settings continue to use its Org persistence.
+gptel's other buffer-local settings continue to use its Org persistence.
 
 Standalone Plan state lives in the same sidecar and session directory.
 Here/Fresh finalizes the planning segment through the `/clear` rotation path
@@ -84,8 +85,9 @@ uses aggressive root compaction with no preserved tail and records the compact
 handoff in the new segment.  Both contexts then submit the immutable accepted
 path and full plan through the ordinary prompt and request lifecycle.  If
 preparation or request startup fails, the sidecar keeps the accepted artifact,
-selected context and permission mode, and the first incomplete step for
-`mevedel-retry-plan-implementation`.  It also keeps a completed Summary
+selected context, permission mode, model/effort snapshot, canonical skill
+references, implementation instructions, and the first incomplete step for
+`mevedel-retry-plan-implementation`. It also keeps a completed Summary
 handoff, so retry repeats neither a finished Fresh rotation nor a successful
 summary request.  Direct clears the record after request startup. Goal instead
 stores a reserved Goal ID before preparation and clears the record after the
@@ -97,8 +99,8 @@ approval pending.  A dirty source checkout remains eligible, but the approval
 warns that the linked worktree starts at `HEAD` and excludes uncommitted
 changes.  Preparation never copies, stashes, or applies those changes.
 The source keeps its approval archive, permission mode, and durable retry
-record.  The new session inherits the source preset, model settings, and
-ordinary Goal budget, gets the selected permission mode, and owns a
+record. The new session inherits the source preset and ordinary Goal budget,
+gets the accepted model/effort snapshot and selected permission mode, and owns a
 byte-identical immutable accepted artifact. Completed Worktree creation and
 target-artifact steps are recorded by target session identity and path, so
 retry restores that same target and does not create another worktree, session,
@@ -109,7 +111,8 @@ without compacting or rotating it.  The cached handoff converts source-checkout
 file references to repository-relative paths, and the new clean target segment
 stores that summary before the target artifact path, full plan, and Direct
 implementation instruction.  Retry reuses the summary, validated branch,
-worktree, target artifact, inherited settings, and selected mode.
+worktree, target artifact, accepted model/effort, implementation attachments,
+and selected mode.
 
 When approval selects Goal instead of Direct, Goal construction happens only
 after the chosen segment, summary, Worktree, target settings, and target-local

@@ -12,10 +12,12 @@
 (require 'mevedel-plan-mode)
 (require 'mevedel-goal)
 (require 'mevedel-interaction-prompt)
+(require 'mevedel-mention-bindings)
 (require 'mevedel-permissions)
 (require 'mevedel-presets)
 (require 'mevedel-prompt-submission)
 (require 'mevedel-session-persistence)
+(require 'mevedel-skills-invoke)
 (require 'mevedel-structs)
 (require 'mevedel-view)
 (require 'mevedel-view-composer)
@@ -65,7 +67,33 @@
           '(:absolute-path "/tmp/accepted.md") "# Accepted")))
     (should (string-match-p "/tmp/accepted.md" prompt))
     (should (string-match-p "# Accepted" prompt))
-    (should (string-match-p "Implement the accepted plan" prompt))))
+    (should (string-match-p "Implement the accepted plan" prompt)))
+
+  :doc "appends bound selected skills and preserves bound instruction mentions"
+  (let ((instructions "Also use $beta."))
+    (mevedel-mention-bindings-set
+     9 14
+     '(:kind skill :token "$beta"
+       :source-file "/tmp/beta/SKILL.md")
+     instructions)
+    (let* ((prompt
+            (mevedel-plan-handoff--implementation-prompt
+             '(:absolute-path "/tmp/accepted.md") "# Accepted"
+             (list
+              :skills
+              '((:name "alpha"
+                 :source-file "/tmp/alpha/SKILL.md"))
+              :instructions instructions)))
+           (bindings
+            (mapcar
+             (lambda (range)
+               (plist-get (plist-get range :binding) :source-file))
+             (mevedel-mention-bindings-ranges prompt))))
+      (should (string-match-p "Use \\$alpha during implementation" prompt))
+      (should (string-match-p "Also use \\$beta" prompt))
+      (should (equal '("/tmp/alpha/SKILL.md"
+                       "/tmp/beta/SKILL.md")
+                     bindings)))))
 
 (mevedel-deftest mevedel-plan-handoff--goal-kickoff-prompt
   (:doc "includes the artifact and plan before the compact kickoff")
@@ -489,7 +517,12 @@
            '((:location here :context current :execution direct :mode ask)
              (:location here :context fresh :execution direct :mode auto)
              (:location worktree :context summary :execution direct
-                        :mode full-auto)
+                        :mode full-auto
+                        :skills ((:name "alpha"
+                                  :source-file "/tmp/alpha/SKILL.md"))
+                        :instructions "Run tests"
+                        :model-provider "OpenAI:gpt-5"
+                        :reasoning-effort high)
              (:location here :context current :execution goal :mode ask
                         :goal-token-budget 1000)
              (:location here :context fresh :execution goal :mode ask)
@@ -505,7 +538,91 @@
                         :goal-token-budget 0)
              (:location here :context current :execution goal :mode ask
                         :goal-token-budget "1000")))
+    (should-not (mevedel-plan-handoff-selection-valid-p selection)))
+
+  :doc "rejects malformed implementation extras"
+  (dolist
+      (selection
+       '((:location here :context current :execution direct :mode ask
+                    :skills ((:name "alpha" :source-file "relative")))
+         (:location here :context current :execution direct :mode ask
+                    :instructions 42)
+         (:location here :context current :execution direct :mode ask
+                    :model-provider openai)
+         (:location here :context current :execution direct :mode ask
+                    :reasoning-effort "high")))
     (should-not (mevedel-plan-handoff-selection-valid-p selection))))
+
+(mevedel-deftest mevedel-plan-handoff--submit
+  (:doc "routes the generated handoff through planned skill submission")
+  ,test
+  (test)
+  (let* ((session (mevedel-session--create :name "main"))
+         (data-buffer (generate-new-buffer " *plan-submit-data*"))
+         (view-buffer (generate-new-buffer " *plan-submit-view*"))
+         (selection
+          '(:location here :context current :execution direct :mode auto
+            :model-provider "OpenAI:gpt-5" :reasoning-effort high
+            :instructions "Use $alpha"))
+         (record
+          (list :selection selection
+                :accepted '(:absolute-path "/tmp/accepted.md" :hash "h")))
+         planned dispatched)
+    (unwind-protect
+        (progn
+          (with-current-buffer data-buffer
+            (setq-local mevedel--session session))
+          (cl-letf
+              (((symbol-function 'mevedel-plan-handoff--accepted-body)
+                (lambda (_) "# Accepted"))
+               ((symbol-function 'mevedel-view--interaction-target-buffer)
+                (lambda (_) view-buffer))
+               ((symbol-function 'mevedel-plan-handoff--apply-model-policy)
+                #'ignore)
+               ((symbol-function 'mevedel-skills-prepare-user-input)
+                (lambda (input _) input))
+               ((symbol-function
+                 'mevedel-plan-handoff--validate-skill-bindings)
+                #'ignore)
+               ((symbol-function 'mevedel-view--submit-planned-input)
+                (lambda (input _before _blocked dispatch &optional _after)
+                  (setq planned input)
+                  (funcall
+                   dispatch
+                   (mevedel-prompt-submission-create
+                    :input input :outcome '(:model-input "expanded")))))
+               ((symbol-function
+                 'mevedel-plan-handoff--dispatch-submission)
+                (lambda (&rest args) (setq dispatched args))))
+            (mevedel-plan-handoff--submit
+             session data-buffer record))
+          (should (string-match-p "# Accepted" planned))
+          (should (string-match-p "Use \\$alpha" planned))
+          (should dispatched))
+      (kill-buffer view-buffer)
+      (kill-buffer data-buffer))))
+
+(mevedel-deftest mevedel-plan-handoff--validate-skill-bindings
+  (:doc "accepts available canonical skills and rejects missing targets")
+  ,test
+  (test)
+  (let* ((source "/tmp/alpha/SKILL.md")
+         (skill
+          (mevedel-skill--create
+           :name "alpha" :source-file source
+           :user-invocable-p t :active-p t))
+         (session
+          (mevedel-session--create :name "main" :skills (list skill)))
+         (prompt "Use $alpha"))
+    (mevedel-mention-bindings-set
+     4 10
+     (list :kind 'skill :token "$alpha" :source-file source)
+     prompt)
+    (should-not
+     (mevedel-plan-handoff--validate-skill-bindings prompt session))
+    (setf (mevedel-session-skills session) nil)
+    (should-error
+     (mevedel-plan-handoff--validate-skill-bindings prompt session))))
 
 (provide 'test-mevedel-plan-handoff)
 ;;; test-mevedel-plan-handoff.el ends here

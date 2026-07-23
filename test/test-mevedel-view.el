@@ -835,7 +835,11 @@
 
   :doc "S-TAB is bound"
   (should (eq (lookup-key mevedel-view-mode-map (kbd "S-TAB"))
-              #'mevedel-view-cycle-permission-mode)))
+              #'mevedel-view-cycle-permission-mode))
+
+  :doc "control TAB toggles Plan"
+  (should (eq (lookup-key mevedel-view-mode-map (kbd "C-<tab>"))
+              #'mevedel-view-toggle-plan-mode)))
 
 (mevedel-deftest mevedel-view-mode-map ()
   ,test

@@ -203,6 +203,8 @@ workspace."
   plan-mode         ; non-nil during a sticky Plan conversation
   preset-name       ; selected mevedel preset symbol
   preset-settings   ; alist of resolved buffer-local mevedel variables
+  model-provider    ; exact "BACKEND:MODEL" session selector or nil
+  reasoning-effort  ; explicit session effort symbol or nil for default
   turn-count        ; integer: for reminder throttling
   reminders         ; list of active mevedel-reminder structs
   last-observed-date ; YYYY-MM-DD string last advertised to the model
@@ -406,6 +408,14 @@ workspace root and is kept stable for the lifetime of the session."
 (defun mevedel-session-set-hook-context-pending (session entries)
   "Set SESSION's pending hook context ENTRIES."
   (setf (mevedel-session-hook-context-pending session) entries))
+
+(defun mevedel-session-set-model-provider (session provider)
+  "Set SESSION's serialized model PROVIDER."
+  (setf (mevedel-session-model-provider session) provider))
+
+(defun mevedel-session-set-reasoning-effort (session effort)
+  "Set SESSION's reasoning EFFORT."
+  (setf (mevedel-session-reasoning-effort session) effort))
 
 (defun mevedel-session--set-agent-registry (session registry)
   "Store retained agent REGISTRY on SESSION."

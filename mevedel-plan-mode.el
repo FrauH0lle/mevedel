@@ -10,6 +10,9 @@
   (require 'cl-lib)
   (require 'mevedel-structs))
 
+;; `gptel'
+(defvar gptel-reasoning-effort)
+
 ;; `mevedel-interaction-prompt'
 (declare-function mevedel--prompt--settle "mevedel-interaction-prompt"
 		  (overlay outcome))
@@ -17,6 +20,15 @@
                   "mevedel-interaction-prompt" (content face))
 (declare-function mevedel--prompt-key
                   "mevedel-interaction-prompt" (key))
+
+;; `mevedel-menu'
+(declare-function mevedel-menu-open "mevedel-menu" (area))
+
+;; `mevedel-models'
+(declare-function mevedel-model-current-provider-label
+                  "mevedel-models" (&optional buffer))
+(declare-function mevedel-model-resolve-provider
+                  "mevedel-models" (spec &optional noerror))
 
 ;; `mevedel-plan'
 (declare-function mevedel-plan-accept "mevedel-plan"
@@ -42,9 +54,19 @@
 (declare-function mevedel-queue--unregister-entry-interaction
                   "mevedel-queue" (entry))
 
+;; `mevedel-skills-core'
+(declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-source-file "mevedel-skills-core" (cl-x) t)
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-prepare-user-input
+                  "mevedel-skills-invoke" (text session))
+
 ;; `mevedel-skills-ui'
 (declare-function mevedel-skills--refresh-view-input-prompt
 		  "mevedel-skills-ui" nil)
+(declare-function mevedel-skills--user-visible-skills
+                  "mevedel-skills-ui" (session &optional inline-only))
 
 ;; `mevedel-structs'
 (declare-function mevedel-goal-status "mevedel-structs" (cl-x) t)
@@ -205,7 +227,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
         :execution 'direct
         :mode (or (mevedel-session-permission-mode session) 'ask)
         :goal-token-budget
-        (mevedel-plan-mode--effective-goal-budget (current-buffer))))
+        (mevedel-plan-mode--effective-goal-budget (current-buffer))
+        :skills nil
+        :instructions nil))
 
 (defun mevedel-plan-mode--next-mode (mode)
   "Return the Plan implementation mode after MODE."
@@ -329,6 +353,102 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
       (when (plist-get (mevedel-worktree--collect-status) :dirty-p)
         "Worktree starts at HEAD; uncommitted changes are not included."))))
 
+(defvar-local mevedel-plan-mode--instructions-entry nil
+  "Plan approval entry edited by the current instructions buffer.")
+
+(defun mevedel-plan-mode--save-instructions ()
+  "Save the current Plan implementation instructions and close the editor."
+  (interactive)
+  (unless mevedel-plan-mode--instructions-entry
+    (user-error "No Plan implementation instructions to save"))
+  (require 'subr-x)
+  (let* ((entry mevedel-plan-mode--instructions-entry)
+         (session (plist-get entry :session))
+         (selection (plist-get entry :selection))
+         (instructions (string-trim
+                        (buffer-substring-no-properties
+                         (point-min) (point-max))))
+         (instructions
+          (unless (string-empty-p instructions)
+            (with-current-buffer (plist-get entry :chat-buffer)
+              (require 'mevedel-skills-invoke)
+              (mevedel-skills-prepare-user-input
+               instructions session)))))
+    (plist-put selection :instructions
+               instructions)
+    (mevedel-plan--metadata-put session :selection selection)
+    (kill-buffer (current-buffer))
+    (mevedel-plan-approval-render session)))
+
+(defun mevedel-plan-mode--cancel-instructions ()
+  "Close the current Plan instructions editor without saving."
+  (interactive)
+  (kill-buffer (current-buffer)))
+
+(defun mevedel-plan-mode--edit-instructions (entry)
+  "Edit implementation instructions for Plan approval ENTRY."
+  (let* ((selection (plist-get entry :selection))
+         (buffer (generate-new-buffer "*mevedel Plan instructions*")))
+    (with-current-buffer buffer
+      (text-mode)
+      (use-local-map (copy-keymap text-mode-map))
+      (local-set-key (kbd "C-c C-c")
+                     #'mevedel-plan-mode--save-instructions)
+      (local-set-key (kbd "C-c C-k")
+                     #'mevedel-plan-mode--cancel-instructions)
+      (setq-local mevedel-plan-mode--instructions-entry entry)
+      (insert (or (plist-get selection :instructions) ""))
+      (goto-char (point-max)))
+    (pop-to-buffer buffer)))
+
+(defun mevedel-plan-mode--toggle-skill (entry)
+  "Toggle one user-invocable implementation skill for approval ENTRY."
+  (require 'mevedel-skills-ui)
+  (let* ((selection (plist-get entry :selection))
+         (skills
+          (mevedel-skills--user-visible-skills
+           (plist-get entry :session)))
+         (candidates
+          (mapcar
+           (lambda (skill)
+             (cons (mevedel-skill-name skill) skill))
+           skills)))
+    (unless candidates
+      (user-error "No user-invocable skills available"))
+    (let* ((choice (completing-read "Toggle implementation skill: "
+                                    candidates nil t))
+           (skill (cdr (assoc choice candidates)))
+           (source-file (mevedel-skill-source-file skill))
+           (selected (plist-get selection :skills))
+           (existing
+            (cl-find source-file selected
+                     :key (lambda (item) (plist-get item :source-file))
+                     :test #'equal)))
+      (plist-put
+       selection :skills
+       (if existing
+           (delete existing selected)
+         (append selected
+                 (list (list :name (mevedel-skill-name skill)
+                             :source-file source-file)))))
+      (mevedel-plan--metadata-put
+       (plist-get entry :session) :selection selection)
+      (mevedel-plan-approval-render (plist-get entry :session)))))
+
+(defun mevedel-plan-mode--skills-label (selection)
+  "Return the compact selected-skills label for SELECTION."
+  (if-let* ((skills (plist-get selection :skills)))
+      (mapconcat (lambda (skill) (plist-get skill :name)) skills ", ")
+    "None"))
+
+(defun mevedel-plan-mode--instructions-label (selection)
+  "Return the compact instructions label for SELECTION."
+  (if-let* ((instructions (plist-get selection :instructions)))
+      (format "%d line%s"
+              (length (string-lines instructions))
+              (if (string-match-p "\n" instructions) "s" ""))
+    "None"))
+
 (defun mevedel-plan-mode--render-approval (entry)
   "Render standalone Plan approval ENTRY in the interaction zone."
   (require 'mevedel-interaction-prompt)
@@ -342,10 +462,23 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
            (when overlay (mevedel--prompt--settle overlay outcome)))
          (accept ()
            (interactive)
-           (let ((accepted (copy-sequence selection)))
+           (require 'mevedel-models)
+           (let ((accepted (copy-tree selection))
+                 (provider
+                  (mevedel-model-current-provider-label chat-buffer)))
              (when (eq (plist-get accepted :location) 'worktree)
                (plist-put accepted :branch
                           (mevedel-plan-mode--read-worktree-branch entry)))
+             (unless (string-match-p "\\`[^:]+:.+\\'" provider)
+               (user-error "Select a registered model before implementing"))
+             (unless (mevedel-model-resolve-provider provider t)
+               (user-error "Select a registered model before implementing"))
+             (plist-put accepted :model-provider provider)
+             (plist-put
+              accepted :reasoning-effort
+              (with-current-buffer chat-buffer
+                (and (boundp 'gptel-reasoning-effort)
+                     gptel-reasoning-effort)))
              (settle (list :accept t :selection accepted))))
          (cycle-mode ()
            (interactive)
@@ -399,6 +532,16 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
              (mevedel-plan--metadata-put
               (plist-get entry :session) :selection selection)
              (mevedel-plan-approval-render (plist-get entry :session))))
+         (open-model ()
+           (interactive)
+           (require 'mevedel-menu)
+           (mevedel-menu-open 'model))
+         (toggle-skill ()
+           (interactive)
+           (mevedel-plan-mode--toggle-skill entry))
+         (edit-instructions ()
+           (interactive)
+           (mevedel-plan-mode--edit-instructions entry))
          (feedback () (interactive) (settle 'feedback-draft))
          (hide ()
            (interactive)
@@ -473,6 +616,32 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
                       (symbol-name (plist-get selection :mode)))
                      'font-lock-face 'bold)
                     "\n"
+                    (mevedel--prompt-key "M")
+                    "  Model       "
+                    (propertize
+                     (format
+                      "%s · effort %s"
+                      (progn
+                        (require 'mevedel-models)
+                        (mevedel-model-current-provider-label chat-buffer))
+                      (with-current-buffer chat-buffer
+                        (or (and (boundp 'gptel-reasoning-effort)
+                                 gptel-reasoning-effort)
+                            "default")))
+                     'font-lock-face 'bold)
+                    "\n"
+                    (mevedel--prompt-key "s")
+                    "  Skills      "
+                    (propertize
+                     (mevedel-plan-mode--skills-label selection)
+                     'font-lock-face 'bold)
+                    "\n"
+                    (mevedel--prompt-key "i")
+                    "  Instructions "
+                    (propertize
+                     (mevedel-plan-mode--instructions-label selection)
+                     'font-lock-face 'bold)
+                    "\n"
                     (when warning
                       (concat "\n"
                               (propertize warning
@@ -494,6 +663,9 @@ When DISCARD-SELECTION is non-nil, discard its approval selection too."
             (define-key keymap (kbd "TAB") #'cycle-mode)
             (define-key keymap (kbd "<tab>") #'cycle-mode)
             (define-key keymap (kbd "m") #'cycle-mode)
+            (define-key keymap (kbd "M") #'open-model)
+            (define-key keymap (kbd "s") #'toggle-skill)
+            (define-key keymap (kbd "i") #'edit-instructions)
             (define-key keymap (kbd "e") #'cycle-execution)
             (define-key keymap (kbd "l") #'cycle-location)
             (define-key keymap (kbd "c") #'cycle-context)

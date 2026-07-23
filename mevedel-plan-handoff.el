@@ -31,6 +31,21 @@
 (declare-function mevedel-goal-pause-runtime-failure "mevedel-goal"
                   (buffer reason))
 
+;; `mevedel-mention-bindings'
+(declare-function mevedel-mention-bindings-ranges
+                  "mevedel-mention-bindings" (text))
+(declare-function mevedel-mention-bindings-set
+                  "mevedel-mention-bindings"
+                  (start end binding &optional object))
+
+;; `mevedel-models'
+(declare-function mevedel-model-resolve-provider
+                  "mevedel-models" (spec &optional noerror))
+(declare-function mevedel-model-set-session-effort
+                  "mevedel-models" (session effort &optional buffer))
+(declare-function mevedel-model-set-session-provider
+                  "mevedel-models" (session provider &optional buffer))
+
 ;; `mevedel-permissions'
 (declare-function mevedel-permission-mode-transition
                   "mevedel-permissions" (mode))
@@ -46,6 +61,10 @@
 (declare-function mevedel-preset-restore-session "mevedel-presets"
                   (session &optional buffer))
 
+;; `mevedel-prompt-submission'
+(declare-function mevedel-prompt-submission-outcome
+                  "mevedel-prompt-submission" (cl-x) t)
+
 ;; `mevedel-session-persistence'
 (declare-function mevedel-session-persistence--summary-block
                   "mevedel-session-persistence" (summary))
@@ -57,6 +76,19 @@
                   "mevedel-session-persistence" (session buffer))
 (declare-function mevedel-session-persistence-start-fresh-segment
                   "mevedel-session-persistence" (session buffer &rest args))
+
+;; `mevedel-skills-core'
+(declare-function mevedel-session-get-skill-by-source
+                  "mevedel-skills-core" (session source-file))
+(declare-function mevedel-skill-name "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skill-user-invocable-p
+                  "mevedel-skills-core" (cl-x) t)
+(declare-function mevedel-skills--skill-enabled-p
+                  "mevedel-skills-core" (skill))
+
+;; `mevedel-skills-invoke'
+(declare-function mevedel-skills-prepare-user-input
+                  "mevedel-skills-invoke" (text session))
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
@@ -72,10 +104,9 @@
 (declare-function mevedel--normalize-message-text "mevedel-utilities" (text))
 
 ;; `mevedel-view-composer'
-(declare-function mevedel-view--run-prompt-submit-hook
+(declare-function mevedel-view--submit-planned-input
                   "mevedel-view-composer"
-                  (input display-text callback &optional blocked-callback
-                         prior-context))
+                  (input &optional before-send on-block dispatch after-insert))
 
 ;; `mevedel-view-interaction'
 (declare-function mevedel-view--interaction-target-buffer
@@ -135,7 +166,11 @@ reservation while its prepared kickoff has not started."
   (and (proper-list-p selection)
        (let ((location (plist-get selection :location))
              (context (plist-get selection :context))
-             (budget (plist-get selection :goal-token-budget)))
+             (budget (plist-get selection :goal-token-budget))
+             (skills (plist-get selection :skills))
+             (instructions (plist-get selection :instructions))
+             (provider (plist-get selection :model-provider))
+             (effort (plist-get selection :reasoning-effort)))
          (and (or (and (eq location 'here)
                        (memq context '(current fresh summary)))
                   (and (eq location 'worktree)
@@ -144,28 +179,96 @@ reservation while its prepared kickoff has not started."
               (memq (plist-get selection :mode)
                     mevedel-plan-handoff-implementation-modes)
               (or (null budget)
-                  (and (integerp budget) (> budget 0)))))))
+                  (and (integerp budget) (> budget 0)))
+              (or (null skills)
+                  (and
+                   (proper-list-p skills)
+                   (cl-every
+                    (lambda (skill)
+                      (and (proper-list-p skill)
+                           (stringp (plist-get skill :name))
+                           (file-name-absolute-p
+                            (or (plist-get skill :source-file) ""))))
+                    skills)))
+              (or (null instructions) (stringp instructions))
+              (or (null provider) (stringp provider))
+              (or (null effort) (symbolp effort))))))
+
+(defun mevedel-plan-handoff--append-implementation-input
+    (prompt selection)
+  "Append SELECTION's skills and instructions to PROMPT."
+  (let ((result prompt))
+    (when-let* ((skills (plist-get selection :skills)))
+      (setq result (concat result "\n\nImplementation skills:\n"))
+      (dolist (skill skills)
+        (let* ((token (concat "$" (plist-get skill :name)))
+               (start (+ (length result) 4)))
+          (setq result
+                (concat result "Use " token " during implementation.\n"))
+          (require 'mevedel-mention-bindings)
+          (mevedel-mention-bindings-set
+           start (+ start (length token))
+           (list :kind 'skill :token token
+                 :source-file (plist-get skill :source-file))
+           result))))
+    (when-let* ((instructions (plist-get selection :instructions)))
+      (setq result
+            (concat result
+                    "\n\nAdditional implementation instructions:\n"
+                    instructions)))
+    result))
 
 (defun mevedel-plan-handoff--implementation-prompt
-    (accepted-artifact plan-markdown)
+    (accepted-artifact plan-markdown &optional selection)
   "Return the Direct prompt for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
-  (format
-   "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
-   (plist-get accepted-artifact :absolute-path)
-   plan-markdown))
+  (mevedel-plan-handoff--append-implementation-input
+   (format
+    "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nImplementation instructions:\nImplement the accepted plan against the current repository state. Preserve its stated outcomes and acceptance criteria while using repository evidence to choose the safest effective mechanics."
+    (plist-get accepted-artifact :absolute-path)
+    plan-markdown)
+   selection))
 
 (defun mevedel-plan-handoff--goal-kickoff-prompt
-    (accepted-artifact plan-markdown)
+    (accepted-artifact plan-markdown &optional selection)
   "Return the Goal kickoff for ACCEPTED-ARTIFACT and PLAN-MARKDOWN."
-  (format
-   "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
-   (plist-get accepted-artifact :absolute-path)
-   plan-markdown))
+  (mevedel-plan-handoff--append-implementation-input
+   (format
+    "Accepted plan artifact: %s\n\nAccepted plan:\n%s\n\nGoal kickoff:\nBegin the active Goal. Read the accepted plan supplied above before acting."
+    (plist-get accepted-artifact :absolute-path)
+    plan-markdown)
+   selection))
 
 (defun mevedel-plan-handoff--persist (session chat-buffer)
   "Persist SESSION from CHAT-BUFFER."
-  (require 'mevedel-session-persistence)
+(require 'mevedel-session-persistence)
   (mevedel-session-persistence-save session chat-buffer))
+
+(defun mevedel-plan-handoff--apply-model-policy
+    (selection session buffer)
+  "Apply SELECTION's accepted model policy to SESSION in BUFFER."
+  (when-let* ((label (plist-get selection :model-provider)))
+    (require 'mevedel-models)
+    (mevedel-model-set-session-provider
+     session (mevedel-model-resolve-provider label) buffer)
+    (mevedel-model-set-session-effort
+     session (plist-get selection :reasoning-effort) buffer)))
+
+(defun mevedel-plan-handoff--validate-skill-bindings (prompt session)
+  "Signal when an explicit skill binding in PROMPT is unavailable in SESSION."
+  (require 'mevedel-mention-bindings)
+  (require 'mevedel-skills-core)
+  (dolist (range (mevedel-mention-bindings-ranges prompt))
+    (let* ((binding (plist-get range :binding))
+           (source (and (eq (plist-get binding :kind) 'skill)
+                        (plist-get binding :source-file)))
+           (skill (and source
+                       (mevedel-session-get-skill-by-source session source))))
+      (when source
+        (unless (and skill
+                     (mevedel-skills--skill-enabled-p skill)
+                     (mevedel-skill-user-invocable-p skill))
+          (error "Implementation skill %s is unavailable"
+                 (plist-get binding :token)))))))
 
 (defun mevedel-plan-handoff--implementation-record (selection accepted)
   "Return retry state for SELECTION and ACCEPTED artifact."
@@ -295,6 +398,8 @@ reservation while its prepared kickoff has not started."
         (require 'mevedel-presets)
         (require 'mevedel-permissions)
         (mevedel-preset-restore-session target-session target-buffer)
+        (mevedel-plan-handoff--apply-model-policy
+         selection target-session target-buffer)
         (mevedel-permission-mode-transition mode)
         (when-let* (((eq (plist-get selection :context) 'summary))
                     (summary (plist-get record :summary)))
@@ -516,7 +621,9 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
             (mevedel--implement-plan
              (list :permission-mode (plist-get selection :mode)
                    :display-text display-text
-                   :prompt-submission submission)))
+                   :prompt-submission submission
+                   :prepared-outcome
+                   (mevedel-prompt-submission-outcome submission))))
           (unless goal-p
             (mevedel-plan-handoff--implementation-started
              session chat-buffer)))
@@ -558,24 +665,34 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
            (body (mevedel-plan-handoff--accepted-body accepted))
            (prompt
             (if goal-p
-                (mevedel-plan-handoff--goal-kickoff-prompt accepted body)
-              (mevedel-plan-handoff--implementation-prompt accepted body)))
+                (mevedel-plan-handoff--goal-kickoff-prompt
+                 accepted body selection)
+              (mevedel-plan-handoff--implementation-prompt
+               accepted body selection)))
            (display-text
             (if goal-p
                 "Implement accepted plan as Goal"
               "Implement accepted plan"))
            (view-buffer
             (mevedel-view--interaction-target-buffer target-buffer)))
+      (mevedel-plan-handoff--apply-model-policy
+       selection target-session target-buffer)
+      (with-current-buffer target-buffer
+        (require 'mevedel-skills-invoke)
+        (setq prompt
+              (mevedel-skills-prepare-user-input prompt target-session))
+        (mevedel-plan-handoff--validate-skill-bindings
+         prompt target-session))
       (with-current-buffer view-buffer
-        (mevedel-view--run-prompt-submit-hook
-         prompt display-text
+        (mevedel-view--submit-planned-input
+         prompt nil
+         (lambda ()
+           (mevedel-plan-handoff--implementation-failed
+            session chat-buffer "Prompt submission was blocked"))
          (lambda (submission)
            (mevedel-plan-handoff--dispatch-submission
             session chat-buffer record selection accepted target-session
-            target-buffer display-text submission))
-         (lambda ()
-           (mevedel-plan-handoff--implementation-failed
-            session chat-buffer "Prompt submission was blocked")))))))
+            target-buffer display-text submission)))))))
 
 (defun mevedel-plan-handoff--validate-record (record)
   "Validate durable handoff RECORD and return its selection."
@@ -583,6 +700,11 @@ When PORTABLE-PATHS is non-nil, require repository-relative file references."
          (location (plist-get selection :location)))
     (unless (mevedel-plan-handoff-selection-valid-p selection)
       (error "Invalid accepted plan implementation selection"))
+    (unless (and (stringp (plist-get selection :model-provider))
+                 (string-match-p
+                  "\\`[^:]+:.+\\'"
+                  (plist-get selection :model-provider)))
+      (error "Accepted plan implementation lacks a model snapshot"))
     (unless (memq (plist-get record :step)
                   '(prepare-context prepare-summary prepare-worktree
                     prepare-target submit))
