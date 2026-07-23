@@ -141,6 +141,10 @@
 (defvar mevedel-model-tiers)
 (defvar mevedel-model-workloads)
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders--handle-inject
+                  "mevedel-reminders" (fsm))
+
 ;; `mevedel-tools'
 (declare-function mevedel-tools--handle-agent-roster-inject
                   "mevedel-tools" (fsm))
@@ -293,7 +297,8 @@ render-data badge can show e.g. `✗ error · 429: rate_limit_error'."
                          :fallback-partial fallback-partial)))))))
 
 (defvar mevedel-agent-exec--handlers
-  `((WAIT ,#'mevedel-tools--handle-agent-roster-inject
+  `((WAIT ,#'mevedel-reminders--handle-inject
+     ,#'mevedel-tools--handle-agent-roster-inject
      ,#'mevedel-tools--handle-message-inject
      ,#'mevedel-tools--handle-plan-tool-filter
      ,#'mevedel-agent-exec--handle-wait-activity
@@ -325,7 +330,8 @@ Modelled after the upstream `gptel-agent-request--handlers' table.
 
 Additions:
 
-- `WAIT' injects the caller's compact direct-child roster before sampling.
+- `WAIT' injects the caller's compact direct-child roster, inbound messages,
+  and system reminders before sampling.
 - `TRET' gains `mevedel-agent-exec--handle-tret-save' so transcripts are durable
   across long tool loops (gptel's post-response hook fires only at DONE/ABRT,
   not TRET).

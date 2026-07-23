@@ -37,6 +37,10 @@
 (declare-function mevedel-plugins-plugin-data-dir "mevedel-plugins"
                   (plugin-name &optional workspace))
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-queue-turn-event
+                  "mevedel-reminders" (buffer key body))
+
 ;; `mevedel-telemetry'
 (declare-function mevedel-telemetry-finish "mevedel-telemetry" (span &rest props))
 (declare-function mevedel-telemetry-record
@@ -1043,8 +1047,9 @@ slot unchanged and returns nil."
   (when-let* ((session session)
               (decision (mevedel-hooks--safe-decision decision)))
     (when (mevedel-hooks--decision-blocking-p decision)
-      (mevedel-session-enqueue-pending-reminder
-       session
+      (require 'mevedel-reminders)
+      (mevedel-reminders-queue-turn-event
+       (current-buffer) (list 'hook event)
        (format "%s hook blocked the previous operation: %s. Adapt your next action to respect this hook decision instead of retrying the same blocked operation unchanged."
                event
                (or (mevedel-hooks-decision-reason decision)

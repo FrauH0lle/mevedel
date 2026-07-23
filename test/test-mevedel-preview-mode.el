@@ -279,15 +279,28 @@ cleanup."
   :doc "calls apply-fn, fires callback with (:result :render-data) plist, unregisters"
   (with-temp-buffer
     (let* ((result nil)
-           (applied nil)
+           events
            (ov (mevedel-preview-test--make-overlay
                 (current-buffer)
-                `((mevedel--real-path . "/tmp/fake.txt")
-                  (mevedel--final-callback . ,(lambda (r) (setq result r)))
-                  (mevedel--apply-fn . ,(lambda () (setq applied t)))))))
+                (list
+                 (cons 'mevedel--real-path "/tmp/fake.txt")
+                 (cons 'mevedel--final-callback
+                       (lambda (r)
+                         (push 'callback events)
+                         (setq result r)))
+                 (cons 'mevedel--apply-fn
+                       (lambda () (push 'apply events)))))))
       (mevedel-preview-mode--register ov)
-      (mevedel-preview-mode--approve-overlay ov)
-      (should applied)
+      (cl-letf (((symbol-function
+                  'mevedel-reminders-diagnostics-before-edit)
+                 (lambda (&rest _) (push 'before events)))
+                ((symbol-function
+                  'mevedel-reminders-diagnostics-after-edit)
+                 (lambda (_buffer _path continuation)
+                   (push 'after events)
+                   (funcall continuation))))
+        (mevedel-preview-mode--approve-overlay ov))
+      (should (equal '(before apply after callback) (nreverse events)))
       (should (listp result))
       (should (string-match-p "approved and applied to /tmp/fake.txt"
                               (plist-get result :result)))
@@ -297,15 +310,26 @@ cleanup."
   :doc "apply-fn error is reported via callback as plain string without throwing"
   (with-temp-buffer
     (let* ((result nil)
+           after-called
            (ov (mevedel-preview-test--make-overlay
                 (current-buffer)
-                `((mevedel--real-path . "/tmp/fake.txt")
-                  (mevedel--final-callback . ,(lambda (r) (setq result r)))
-	                  (mevedel--apply-fn . ,(lambda () (signal 'error '("boom"))))))))
+                (list
+                 (cons 'mevedel--real-path "/tmp/fake.txt")
+                 (cons 'mevedel--final-callback
+                       (lambda (r) (setq result r)))
+                 (cons 'mevedel--apply-fn
+                       (lambda () (signal 'error '("boom"))))))))
       (mevedel-preview-mode--register ov)
-      (mevedel-preview-mode--approve-overlay ov)
+      (cl-letf (((symbol-function
+                  'mevedel-reminders-diagnostics-before-edit)
+                 #'ignore)
+                ((symbol-function
+                  'mevedel-reminders-diagnostics-after-edit)
+                 (lambda (&rest _) (setq after-called t))))
+        (mevedel-preview-mode--approve-overlay ov))
       (should (stringp result))
       (should (string-match-p "Error applying changes: boom" result))
+      (should-not after-called)
       (should-not mevedel-preview-mode--pending))))
 
 (mevedel-deftest mevedel-preview-mode--reject-overlay ()
@@ -765,15 +789,29 @@ cleanup."
   (let* ((tmp (make-temp-file "mev-auto-src-" nil ".txt" "new body\n"))
          (real (make-temp-file "mev-auto-dst-" nil ".txt" "old body\n"))
          (chat (mevedel-preview-test--make-auto-apply-buffer real))
+         events
          result)
     (unwind-protect
         (progn
-          (with-current-buffer chat
-            (mevedel-preview-mode--auto-apply
-             tmp real
-             (lambda (r) (setq result r))
-             (lambda () (copy-file tmp real t))
-             "Write"))
+          (cl-letf (((symbol-function
+                      'mevedel-reminders-diagnostics-before-edit)
+                     (lambda (&rest _) (push 'before events)))
+                    ((symbol-function
+                      'mevedel-reminders-diagnostics-after-edit)
+                     (lambda (_buffer _path continuation)
+                       (push 'after events)
+                       (funcall continuation))))
+            (with-current-buffer chat
+              (mevedel-preview-mode--auto-apply
+               tmp real
+               (lambda (r)
+                 (push 'callback events)
+                 (setq result r))
+               (lambda ()
+                 (push 'apply events)
+                 (copy-file tmp real t))
+               "Write")))
+          (should (equal '(before apply after callback) (nreverse events)))
           (should (listp result))
           (should (string-match-p "auto-applied" (plist-get result :result)))
           (let ((rd (plist-get result :render-data)))

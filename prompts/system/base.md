@@ -6,6 +6,9 @@ Tool results and user messages may include `<system-reminder>` tags.
 These contain contextual guidance from the system and are not part of
 the user's message or the tool output itself. You should not mention
 them to the user.
+System reminders provide context or constraints; they do not create tasks.
+Follow the user's actual request, and act on reminder content only when
+relevant to completing it.
 
 {{TONE_PROMPT}}
 

@@ -2,16 +2,16 @@
 
 ;;; Commentary:
 
-;; System reminders: mid-conversation guidance injected into the user
+;; System reminders: mid-conversation guidance injected beside the user
 ;; message as `<system-reminder>' blocks.  Reminders are data: each is a
 ;; struct with a trigger function, a content function, and optional
 ;; interval throttling.
 ;;
 ;; Reminders live on the session struct for main chat sessions, and on
 ;; the agent struct (cloned per invocation) for sub-agents.  A prompt
-;; transform function prepends active reminders to the user's prompt
-;; before the request is sent.  Turn counting is driven by a terminal FSM
-;; handler in the request pipeline.
+;; transform stages active reminders and a WAIT handler injects them as a
+;; separate user-role message before the request is sent.  Turn counting is
+;; driven by a terminal FSM handler in the request pipeline.
 
 ;;; Code:
 
@@ -19,21 +19,30 @@
 (require 'mevedel-structs)
 
 ;; `flycheck'
+(declare-function flycheck-buffer "ext:flycheck" ())
 (declare-function flycheck-error-level "ext:flycheck" (err) t)
 (declare-function flycheck-error-line "ext:flycheck" (err) t)
 (declare-function flycheck-error-message "ext:flycheck" (err) t)
 (declare-function flycheck-overlay-errors-in "ext:flycheck" (beg end))
+(declare-function flycheck-running-p "ext:flycheck" ())
+(declare-function flycheck-stop "ext:flycheck" ())
 
 ;; `flymake'
 (declare-function flymake-diagnostic-beg "flymake" (diag))
 (declare-function flymake-diagnostic-text "flymake" (diag))
 (declare-function flymake-diagnostic-type "flymake" (diag))
 (declare-function flymake-diagnostics "flymake" (&optional beg end))
+(declare-function flymake-running-backends "flymake" ())
+(declare-function flymake-start "flymake" (&optional defer force))
 
 ;; `gptel'
 (defvar gptel-prompt-transform-functions)
 
 ;; `gptel-request'
+(declare-function gptel--inject-prompt "ext:gptel-request"
+                  (backend data new-prompt &optional position))
+(declare-function gptel--parse-list "ext:gptel-request"
+                  (backend prompt-list))
 (declare-function gptel-fsm-info "ext:gptel-request" (cl-x) t)
 
 ;; `imenu'
@@ -51,6 +60,8 @@
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-p "mevedel-agents" (cl-x))
 (declare-function mevedel-agent-invocation-parent-data-buffer
+                  "mevedel-agents" (cl-x) t)
+(declare-function mevedel-agent-invocation-runtime-settled-p
                   "mevedel-agents" (cl-x) t)
 (declare-function mevedel-agent-invocation-set-deferred-expired
                   "mevedel-agents" (invocation value))
@@ -82,6 +93,12 @@
 
 ;; `mevedel-structs'
 (declare-function mevedel-session-plan-metadata "mevedel-structs" (cl-x) t)
+
+;; `mevedel-telemetry'
+(declare-function mevedel-telemetry-current-session
+                  "mevedel-telemetry" (&optional buffer))
+(declare-function mevedel-telemetry-record
+                  "mevedel-telemetry" (session event &rest props))
 
 ;; `mevedel-tool-fs'
 (declare-function mevedel-tools--generate-diff
@@ -116,6 +133,13 @@
 Bound dynamically by `mevedel-reminders--transform' so reminder
 triggers can distinguish the real chat buffer from gptel's temporary
 prompt buffer.")
+
+(defvar-local mevedel-reminders--turn-events nil
+  "Owner-bound reminder events for the current model turn.
+The value is `(:owner OWNER :items ((KEY . BODY) ...))'.")
+
+(defvar-local mevedel-reminders--diagnostic-state nil
+  "Per-owner edit diagnostic baselines and pending reports.")
 
 
 ;;
@@ -160,7 +184,6 @@ only when a frozen agent template must survive a cold session resume."
      mevedel-reminders-make-agent-listing-delta no-args)
     (max-turns-warning mevedel-reminders-make-max-turns-warning ratio)
     (edited-file mevedel-reminders-make-edited-file count)
-    (diagnostics mevedel-reminders-make-diagnostics interval)
     (xref-available mevedel-reminders-make-xref-available no-args)
     (imenu-available mevedel-reminders-make-imenu-available no-args)
     (treesitter-available
@@ -440,10 +463,81 @@ the current chat buffer has no request-local agent roster yet."
 
 
 ;;
-;;; Prompt transform
+;;; Prompt delivery
+
+(defun mevedel-reminders--turn-owner (&optional buffer)
+  "Return the active model-turn owner for BUFFER."
+  (with-current-buffer (or buffer (current-buffer))
+    (or (and (boundp 'mevedel--agent-invocation)
+             (mevedel-agent-invocation-p mevedel--agent-invocation)
+             (not (mevedel-agent-invocation-runtime-settled-p
+                   mevedel--agent-invocation))
+             mevedel--agent-invocation)
+        (and (boundp 'mevedel--current-request)
+             mevedel--current-request))))
+
+(defun mevedel-reminders-queue-turn-event (buffer key body)
+  "Queue BODY under KEY for BUFFER's current model turn.
+Replacing an existing KEY coalesces repeated observations.  Return non-nil
+when BUFFER has a live request or agent invocation that owns the event."
+  (when (and (buffer-live-p buffer)
+             (stringp body)
+             (not (string-empty-p body)))
+    (with-current-buffer buffer
+      (when-let* ((owner (mevedel-reminders--turn-owner buffer)))
+        (unless (eq owner (plist-get mevedel-reminders--turn-events :owner))
+          (setq mevedel-reminders--turn-events
+                (list :owner owner :items nil)))
+        (let ((items (plist-get mevedel-reminders--turn-events :items)))
+          (setq items (append (assoc-delete-all key items)
+                              (list (cons key body))))
+          (setq mevedel-reminders--turn-events
+                (plist-put mevedel-reminders--turn-events :items items)))
+        t))))
+
+(defun mevedel-reminders--take-turn-event-blocks (buffer)
+  "Return and clear live turn-event blocks queued for BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((owner (mevedel-reminders--turn-owner buffer)))
+        (if (not (eq owner
+                     (plist-get mevedel-reminders--turn-events :owner)))
+            (progn
+              (setq mevedel-reminders--turn-events nil)
+              nil)
+          (let ((items (plist-get mevedel-reminders--turn-events :items)))
+            (prog1
+                (mapcar (lambda (entry)
+                          (mevedel-reminders--format-block (cdr entry)))
+                        items)
+              (when (assq 'diagnostics items)
+                (mevedel-reminders--diagnostics-clear-pending buffer))
+              (setq mevedel-reminders--turn-events nil))))))))
+
+(defun mevedel-reminders--handle-inject (fsm)
+  "Inject staged and same-turn reminders into FSM's request payload."
+  (let* ((info (gptel-fsm-info fsm))
+         (buffer (plist-get info :buffer))
+         (data (plist-get info :data))
+         (initial (plist-get info :mevedel-reminder-blocks)))
+    (when (and data (buffer-live-p buffer))
+      (let ((blocks (append initial
+                            (mevedel-reminders--take-turn-event-blocks
+                             buffer))))
+        (when blocks
+          (let* ((backend (plist-get info :backend))
+                 (message
+                  (car (gptel--parse-list
+                        backend
+                        (list (cons 'prompt (string-join blocks "\n")))))))
+            (gptel--inject-prompt
+             backend data message (and initial -1))))
+        (when initial
+          (setf (gptel-fsm-info fsm)
+                (plist-put info :mevedel-reminder-blocks nil)))))))
 
 (defun mevedel-reminders--transform (fsm)
-  "Prepend system reminders to the current user prompt.
+  "Stage system reminders for separate injection into FSM.
 
 Operates on the current buffer, which is the temporary prompt buffer
 passed by `gptel-prompt-transform-functions'.  The session lives on the
@@ -454,9 +548,8 @@ FSM is mandatory (not `&optional') so that
 function's minimum arity -- passes the FSM argument rather than invoking
 the transform with zero arguments.
 
-Only the last user prompt is modified.  Runs after
-`mevedel--transform-expand-mentions' so reminders sit above the expanded
-prompt text."
+The prompt text itself is left unchanged except for existing hook context.
+Runs after `mevedel--transform-expand-mentions'."
   (when-let* ((chat-buffer (plist-get (gptel-fsm-info fsm) :buffer))
               ((buffer-live-p chat-buffer))
               (session (buffer-local-value 'mevedel--session chat-buffer)))
@@ -472,16 +565,13 @@ prompt text."
           (remove-text-properties
            start (point)
            '(gptel nil response nil invisible nil front-sticky nil))))
-      (when-let* ((blocks (mevedel-reminders--collect-from
-                           (mevedel-session-reminders session)
-                           (mevedel-session-turn-count session)
-                           session)))
-        (goto-char (mevedel-transcript-prompt-transform-start))
-        (let ((start (point)))
-          (insert "\n" (string-join blocks "\n") "\n")
-          (remove-text-properties
-           start (point)
-           '(gptel nil response nil invisible nil front-sticky nil)))))))
+      (let ((blocks (mevedel-reminders--collect-from
+                     (mevedel-session-reminders session)
+                     (mevedel-session-turn-count session)
+                     session))
+            (info (gptel-fsm-info fsm)))
+        (setf (gptel-fsm-info fsm)
+              (plist-put info :mevedel-reminder-blocks blocks))))))
 
 
 ;;
@@ -868,7 +958,7 @@ enough to surface immediately rather than throttle."
 
 
 ;;
-;;; Diagnostics integration
+;;; Edit diagnostics
 
 (defun mevedel-reminders--workspace-buffers (session)
   "Return live buffers visiting files under SESSION's workspace root."
@@ -876,8 +966,8 @@ enough to surface immediately rather than throttle."
               (root (file-name-as-directory
                      (expand-file-name (mevedel-workspace-root ws)))))
     (cl-remove-if-not
-     (lambda (buf)
-       (when-let* ((file (buffer-file-name buf)))
+     (lambda (buffer)
+       (when-let* ((file (buffer-file-name buffer)))
          (or (file-in-directory-p file root)
              (let ((true-root (ignore-errors
                                 (file-name-as-directory
@@ -919,46 +1009,292 @@ Scans the current buffer."
               result))
       (nreverse result))))
 
-(defun mevedel-reminders--collect-diagnostics (session)
-  "Collect diagnostics across SESSION's workspace buffers.
-Returns a list of (FILE LINE LEVEL MSG) tuples, merging Flymake and
-Flycheck output from any buffer that has either checker active."
-  (let (results)
-    (dolist (buf (mevedel-reminders--workspace-buffers session))
-      (with-current-buffer buf
-        (setq results
-              (append results
-                      (mevedel-reminders--collect-flymake-in-buffer)
-                      (mevedel-reminders--collect-flycheck-in-buffer)))))
-    results))
+(defun mevedel-reminders--collect-diagnostics-in-buffer ()
+  "Return deduplicated Flymake and Flycheck diagnostics in this buffer."
+  (delete-dups
+   (append (mevedel-reminders--collect-flymake-in-buffer)
+           (mevedel-reminders--collect-flycheck-in-buffer))))
 
-(defun mevedel-reminders--format-diagnostics (diags)
-  "Format DIAGS as a reminder block body."
-  (concat "Diagnostics reported in workspace files:\n"
-          (mapconcat
-           (lambda (d)
-             (pcase-let ((`(,file ,line ,level ,msg) d))
-               (format "  %s:%d [%s] %s"
-                       (if file (file-name-nondirectory file) "?")
-                       (or line 0) level msg)))
-           diags "\n")))
+(defun mevedel-reminders--diagnostics-files (buffer)
+  "Return BUFFER's live diagnostic file table for its current owner."
+  (with-current-buffer buffer
+    (when-let* ((owner (mevedel-reminders--turn-owner buffer)))
+      (unless (eq owner
+                  (plist-get mevedel-reminders--diagnostic-state :owner))
+        (setq mevedel-reminders--diagnostic-state
+              (list :owner owner :files (make-hash-table :test #'equal))))
+      (plist-get mevedel-reminders--diagnostic-state :files))))
 
-(defun mevedel-reminders-make-diagnostics (&optional interval)
-  "Create the diagnostics reminder.
+(defun mevedel-reminders-diagnostics-before-edit (buffer path)
+  "Capture BUFFER's diagnostic baseline for PATH before its first edit."
+  (when (buffer-live-p buffer)
+    (when-let* ((files (mevedel-reminders--diagnostics-files buffer))
+                (path (expand-file-name path))
+                ((not (gethash path files)))
+                (source (find-buffer-visiting path)))
+      (puthash
+       path
+       (list :baseline
+             (with-current-buffer source
+               (mevedel-reminders--collect-diagnostics-in-buffer))
+             :reported nil :last nil :pending nil)
+       files))))
 
-Scans workspace buffers for Flymake and Flycheck output on every turn
-and fires when diagnostics are present.  INTERVAL defaults to nil so
-the reminder fires every turn there is something to report; pass an
-integer to throttle."
-  (mevedel-reminder-create
-   :type 'diagnostics
-   :recipe (list 'diagnostics interval)
-   :trigger (lambda (session)
-              (mevedel-reminders--collect-diagnostics session))
-   :content (lambda (session)
-              (mevedel-reminders--format-diagnostics
-               (mevedel-reminders--collect-diagnostics session)))
-   :interval interval))
+(defun mevedel-reminders--diagnostic-rank (diagnostic)
+  "Return the severity rank for DIAGNOSTIC."
+  (pcase (downcase (format "%s" (nth 2 diagnostic)))
+    ("error" 0)
+    ("warning" 1)
+    ("note" 2)
+    (_ 3)))
+
+(defun mevedel-reminders--diagnostic-less-p (left right)
+  "Return non-nil when diagnostic LEFT should sort before RIGHT."
+  (let ((left-rank (mevedel-reminders--diagnostic-rank left))
+        (right-rank (mevedel-reminders--diagnostic-rank right)))
+    (cond
+     ((/= left-rank right-rank) (< left-rank right-rank))
+     ((not (equal (car left) (car right)))
+      (string< (or (car left) "") (or (car right) "")))
+     ((/= (or (nth 1 left) 0) (or (nth 1 right) 0))
+      (< (or (nth 1 left) 0) (or (nth 1 right) 0)))
+     (t (string< (or (nth 3 left) "") (or (nth 3 right) ""))))))
+
+(defun mevedel-reminders--format-diagnostic-line (diagnostic)
+  "Format one DIAGNOSTIC for model-visible output."
+  (pcase-let ((`(,file ,line ,level ,message) diagnostic))
+    (format "  %s:%d [%s] %s"
+            (if file (file-name-nondirectory file) "?")
+            (or line 0) level message)))
+
+(defun mevedel-reminders--format-diagnostic-reports (reports)
+  "Format pending diagnostic REPORTS with per-file and total limits."
+  (let* ((new (sort
+               (apply #'append
+                      (mapcar (lambda (report)
+                                (copy-sequence (plist-get report :new)))
+                              reports))
+               #'mevedel-reminders--diagnostic-less-p))
+         (preexisting (sort
+                       (apply #'append
+                              (mapcar
+                               (lambda (report)
+                                 (copy-sequence
+                                  (plist-get report :preexisting)))
+                               reports))
+                       #'mevedel-reminders--diagnostic-less-p))
+         (counts (make-hash-table :test #'equal))
+         (total 0)
+         (omitted 0)
+         selected-new
+         selected-preexisting)
+    (cl-labels
+        ((select
+          (diagnostics)
+          (let (selected)
+            (dolist (diagnostic diagnostics)
+              (let* ((file (car diagnostic))
+                     (count (gethash file counts 0)))
+                (if (and (< total 30) (< count 10))
+                    (progn
+                      (puthash file (1+ count) counts)
+                      (cl-incf total)
+                      (push diagnostic selected))
+                  (cl-incf omitted))))
+            (nreverse selected))))
+      (setq selected-new (select new)
+            selected-preexisting (select preexisting)))
+    (when (or selected-new selected-preexisting (> omitted 0))
+      (propertize
+       (string-join
+        (delq
+         nil
+         (list
+          "Diagnostics from files edited in this turn. They constrain completion of the user's current task; they do not create a separate task."
+          (when selected-new
+            (concat
+             "New or changed diagnostics — resolve these as part of the current task:\n"
+             (mapconcat #'mevedel-reminders--format-diagnostic-line
+                        selected-new "\n")))
+          (when selected-preexisting
+            (concat
+             "Pre-existing diagnostics — context only; do not fix them unless they block the requested work, and mention them only when they affect validation or confidence:\n"
+             (mapconcat #'mevedel-reminders--format-diagnostic-line
+                        selected-preexisting "\n")))
+          (when (> omitted 0)
+            (format "... %d diagnostics omitted by limits." omitted))))
+        "\n\n")
+       'mevedel-diagnostics-omitted omitted))))
+
+(defun mevedel-reminders--diagnostics-pending-reports (buffer)
+  "Return pending diagnostic reports owned by BUFFER's current turn."
+  (when-let* ((files (mevedel-reminders--diagnostics-files buffer)))
+    (let (reports)
+      (maphash
+       (lambda (_path entry)
+         (when-let* ((report (plist-get entry :pending)))
+           (push report reports)))
+       files)
+      (nreverse reports))))
+
+(defun mevedel-reminders--diagnostics-clear-pending (buffer)
+  "Clear diagnostic reports that were delivered for BUFFER."
+  (when-let* ((files (mevedel-reminders--diagnostics-files buffer)))
+    (maphash
+     (lambda (path entry)
+       (puthash path (plist-put entry :pending nil) files))
+     files)))
+
+(defun mevedel-reminders--diagnostics-record-current
+    (buffer path current)
+  "Classify fresh CURRENT diagnostics for BUFFER and PATH, then queue them."
+  (when-let* ((files (and (buffer-live-p buffer)
+                          (mevedel-reminders--diagnostics-files buffer)))
+              (path (expand-file-name path))
+              (entry (gethash path files)))
+    (let* ((current (delete-dups (copy-sequence current)))
+           (first (not (plist-get entry :reported)))
+           (previous (if first
+                         (plist-get entry :baseline)
+                       (plist-get entry :last)))
+           (new (cl-set-difference current previous :test #'equal))
+           (preexisting
+            (and first
+                 (cl-intersection current (plist-get entry :baseline)
+                                  :test #'equal)))
+           (resolved (cl-set-difference previous current :test #'equal))
+           (report (list :path path :new new :preexisting preexisting
+                         :resolved resolved)))
+      (setq entry (plist-put entry :reported t)
+            entry (plist-put entry :last current)
+            entry (plist-put entry :pending report))
+      (puthash path entry files)
+      (when-let* ((body
+                   (mevedel-reminders--format-diagnostic-reports
+                    (mevedel-reminders--diagnostics-pending-reports buffer))))
+        (setq report
+              (plist-put report :omitted
+                         (get-text-property
+                          0 'mevedel-diagnostics-omitted body))
+              entry (plist-put entry :pending report))
+        (puthash path entry files)
+        (mevedel-reminders-queue-turn-event
+         buffer 'diagnostics body))
+      report)))
+
+(defun mevedel-reminders--record-diagnostic-telemetry
+    (buffer outcome &optional report)
+  "Record count-only diagnostic OUTCOME for BUFFER and REPORT."
+  (unless (and (fboundp 'mevedel-telemetry-current-session)
+               (fboundp 'mevedel-telemetry-record))
+    (require 'mevedel-telemetry nil t))
+  (when-let* ((session
+               (and (fboundp 'mevedel-telemetry-current-session)
+                    (fboundp 'mevedel-telemetry-record)
+                    (mevedel-telemetry-current-session buffer))))
+    (mevedel-telemetry-record
+     session 'edit-diagnostics
+     :outcome outcome
+     :new-count (length (plist-get report :new))
+     :preexisting-count (length (plist-get report :preexisting))
+     :resolved-count (length (plist-get report :resolved))
+     :omitted-count (or (plist-get report :omitted) 0))))
+
+(defun mevedel-reminders-diagnostics-after-edit (buffer path continuation)
+  "Refresh diagnostics for PATH, then call CONTINUATION.
+Only an existing visited buffer is checked.  Active Flymake and Flycheck
+checkers get up to 30 seconds to finish."
+  (let* ((path (expand-file-name path))
+         (files (and (buffer-live-p buffer)
+                     (mevedel-reminders--diagnostics-files buffer)))
+         (entry (and files (gethash path files)))
+         (source (and entry (find-buffer-visiting path)))
+         (owner (and source (mevedel-reminders--turn-owner buffer))))
+    (if (not (and source owner))
+        (funcall continuation)
+      (let (flymake-p flycheck-p timer)
+        (with-current-buffer source
+          (if (and (not (verify-visited-file-modtime source))
+                   (buffer-modified-p source))
+              (setq source nil)
+            (unless (verify-visited-file-modtime source)
+              (condition-case nil
+                  (revert-buffer t t t)
+                (error (setq source nil))))
+            (when source
+              (setq flymake-p
+                    (and (bound-and-true-p flymake-mode)
+                         (fboundp 'flymake-start)
+                         (fboundp 'flymake-running-backends))
+                    flycheck-p
+                    (and (bound-and-true-p flycheck-mode)
+                         (fboundp 'flycheck-buffer)
+                         (fboundp 'flycheck-running-p)
+                         (fboundp 'flycheck-stop))))))
+        (if (or (not source) (not (or flymake-p flycheck-p)))
+            (funcall continuation)
+          (cl-labels
+              ((finish
+                (outcome collect-p)
+                (when timer
+                  (cancel-timer timer)
+                  (setq timer nil))
+                (let* ((live-owner
+                        (and (buffer-live-p buffer)
+                             (eq owner
+                                 (mevedel-reminders--turn-owner buffer))))
+                       (report
+                        (when (and live-owner collect-p
+                                   (buffer-live-p source))
+                          (mevedel-reminders--diagnostics-record-current
+                           buffer path
+                           (with-current-buffer source
+                             (mevedel-reminders--collect-diagnostics-in-buffer))))))
+                  (mevedel-reminders--record-diagnostic-telemetry
+                   buffer outcome report)
+                  (when live-owner
+                    (funcall continuation)))))
+            (with-current-buffer source
+              (when flymake-p
+                (condition-case nil
+                    (flymake-start nil t)
+                  (error (setq flymake-p nil))))
+              (when flycheck-p
+                (condition-case nil
+                    (progn
+                      (flycheck-stop)
+                      (flycheck-buffer))
+                  (error (setq flycheck-p nil)))))
+            (if (not (or flymake-p flycheck-p))
+                (funcall continuation)
+              (mevedel-reminders--record-diagnostic-telemetry
+               buffer 'started)
+              (if (with-current-buffer source
+                    (and (or (not flymake-p)
+                             (not (flymake-running-backends)))
+                         (or (not flycheck-p)
+                             (not (flycheck-running-p)))))
+                  (finish 'ready t)
+                (let ((deadline (+ (float-time) 30)))
+                  (setq timer
+                        (run-at-time
+                         0.05 0.05
+                         (lambda ()
+                           (cond
+                            ((or (not (buffer-live-p source))
+                                 (not (buffer-live-p buffer))
+                                 (not (eq owner
+                                          (mevedel-reminders--turn-owner
+                                           buffer))))
+                             (finish 'stale nil))
+                            ((with-current-buffer source
+                               (and (or (not flymake-p)
+                                        (not (flymake-running-backends)))
+                                    (or (not flycheck-p)
+                                        (not (flycheck-running-p)))))
+                             (finish 'ready t))
+                            ((>= (float-time) deadline)
+                             (finish 'timeout nil)))))))))))))))
 
 
 ;;
@@ -1396,9 +1732,6 @@ with the same type are not added twice."
     (unless (memq 'plan-mode existing)
       (mevedel-session-add-reminder session
                                     (mevedel-reminders-make-plan-mode)))
-    (unless (memq 'diagnostics existing)
-      (mevedel-session-add-reminder session
-                                    (mevedel-reminders-make-diagnostics)))
     (unless (memq 'edited-file existing)
       (mevedel-session-add-reminder session
                                     (mevedel-reminders-make-edited-file)))

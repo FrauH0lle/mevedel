@@ -41,6 +41,12 @@
                   (mode &optional prompt display-text hook-context))
 (defvar mevedel-permission-mode)
 
+;; `mevedel-reminders'
+(declare-function mevedel-reminders-diagnostics-after-edit
+                  "mevedel-reminders" (buffer path continuation))
+(declare-function mevedel-reminders-diagnostics-before-edit
+                  "mevedel-reminders" (buffer path))
+
 ;; `mevedel-structs'
 (declare-function mevedel-request-push-canceller "mevedel-structs" (request canceller))
 (declare-function mevedel-session-permission-mode "mevedel-structs" (cl-x) t)
@@ -328,6 +334,8 @@ string so the LLM still sees a descriptive failure."
                        temp-file path workspace root data-buffer))
          (patch (with-current-buffer diff-buffer (buffer-string)))
          (err-string nil))
+    (require 'mevedel-reminders)
+    (mevedel-reminders-diagnostics-before-edit data-buffer path)
     (unwind-protect
         (condition-case err
             (progn
@@ -344,15 +352,19 @@ string so the LLM still sees a descriptive failure."
         (kill-buffer diff-buffer))
       (when (and temp-file (file-exists-p temp-file))
         (ignore-errors (delete-file temp-file))))
-    (funcall callback
-             (if err-string
-                 (format "Error: Auto-applying changes to %s failed: %s"
-                         path err-string)
-               (list :result (format "Changes auto-applied to %s" path)
-                     :render-data (list :kind 'diff
-                                        :patch patch
-                                        :path path
-                                        :rel-path rel-path))))))
+    (let ((result
+           (if err-string
+               (format "Error: Auto-applying changes to %s failed: %s"
+                       path err-string)
+             (list :result (format "Changes auto-applied to %s" path)
+                   :render-data (list :kind 'diff
+                                      :patch patch
+                                      :path path
+                                      :rel-path rel-path)))))
+      (if err-string
+          (funcall callback result)
+        (mevedel-reminders-diagnostics-after-edit
+         data-buffer path (lambda () (funcall callback result)))))))
 
 (defun mevedel-preview-mode--should-collapse-p (diff-string chat-buffer)
   "Return non-nil when DIFF-STRING should start collapsed in CHAT-BUFFER.
@@ -717,7 +729,12 @@ from `mevedel-preview-mode--apply-overlay'; on error it receives a plain
 error string.  The pipeline splits either shape.  Does not invoke
 `mevedel-abort'."
   (let ((final-callback (overlay-get ov 'mevedel--final-callback))
+        (data-buffer (or (overlay-get ov 'mevedel--data-buffer)
+                         (current-buffer)))
+        (path (overlay-get ov 'mevedel--real-path))
         (result nil))
+    (require 'mevedel-reminders)
+    (mevedel-reminders-diagnostics-before-edit data-buffer path)
     (condition-case err
         (setq result (mevedel-preview-mode--apply-overlay ov))
       (error
@@ -725,7 +742,11 @@ error string.  The pipeline splits either shape.  Does not invoke
                             (error-message-string err)))))
     (mevedel-preview-mode--cleanup-overlay ov)
     (when final-callback
-      (funcall final-callback result))))
+      (if (stringp result)
+          (funcall final-callback result)
+        (mevedel-reminders-diagnostics-after-edit
+         data-buffer path
+         (lambda () (funcall final-callback result)))))))
 
 (defun mevedel-preview-mode--reject-overlay (ov &optional feedback)
   "Reject OV: fire callback with rejection message, clean up.

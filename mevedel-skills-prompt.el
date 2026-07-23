@@ -353,14 +353,15 @@ and again if that budget status changes."
          (format ", and %d more" more)
        ""))))
 
-(defun mevedel-skills--queue-activation-reminder (session path skills)
-  "Queue a path activation reminder for SESSION and SKILLS."
+(defun mevedel-skills--queue-activation-reminder (buffer session path skills)
+  "Queue a path activation reminder for BUFFER, SESSION, and SKILLS."
   (when-let* ((visible (cl-remove-if-not
                         (lambda (skill)
                           (mevedel-skills--model-visible-p skill t))
                         skills)))
-    (mevedel-session-enqueue-pending-reminder
-     session (mevedel-skills--activation-reminder path visible))
+    (mevedel-reminders-queue-turn-event
+     buffer 'skill-activation
+     (mevedel-skills--activation-reminder path visible))
     (setf (mevedel-session-skills-snapshot session)
           (mevedel-skills--skill-snapshot session))))
 
@@ -379,7 +380,7 @@ to `mevedel-skills--maybe-activate'."
               (get-path-fn (mevedel-tool-get-path tool)))
     (when-let* ((path (ignore-errors (funcall get-path-fn args))))
       (mevedel-skills--queue-activation-reminder
-       session path
+       (current-buffer) session path
        (mevedel-skills--maybe-activate session path))))
   nil)
 
