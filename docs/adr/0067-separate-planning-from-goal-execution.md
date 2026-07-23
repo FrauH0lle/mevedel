@@ -1,0 +1,5 @@
+# Separate planning from Goal execution
+
+Status: accepted
+
+Plan mode is an independent, user-approved workflow that produces a plan without requiring a Goal. It withholds direct file-editing capabilities and limits Bash to the existing recognized-read-only classification, while Eval and other tools continue through ordinary session permissions; it is not an OS-enforced sandbox. Plan is orthogonal to the session's `ask`, `auto`, or `full-auto` permission mode, and a session with an unfinished Goal cannot enter it. An accepted plan may execute directly or as a Goal, here or in a worktree, with fresh or summarized context and—when staying here—current context. When a plan seeds a Goal, its stated outcomes, constraints, and achievement criteria are binding unless a later Goal-objective edit amends them, while its implementation mechanics remain revisable. The plan belongs to none of those execution state machines. This reverses the earlier design that embedded planning and approval inside Goals: the separation gives planning and persistent execution one responsibility each, at the cost of an explicit handoff between them.
