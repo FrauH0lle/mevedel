@@ -289,13 +289,15 @@
   ,test
   (test)
   :doc "requires a successful process-group probe"
-  (let ((record (mevedel-execution--record-create :group-id 42)))
-    (cl-letf (((symbol-function 'signal-process)
-               (lambda (_group _signal) -1)))
-      (should-not (mevedel-execution--group-live-p record)))
-    (cl-letf (((symbol-function 'signal-process)
-               (lambda (_group _signal) 0)))
-      (should (mevedel-execution--group-live-p record)))))
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (let ((record (mevedel-execution--record-create :group-id 42)))
+      (cl-letf (((symbol-function 'signal-process)
+                 (lambda (_group _signal) -1)))
+        (should-not (mevedel-execution--group-live-p record)))
+      (cl-letf (((symbol-function 'signal-process)
+                 (lambda (_group _signal) 0)))
+        (should (mevedel-execution--group-live-p record))))))
 
 (mevedel-deftest mevedel-execution--utf8-prefix ()
   ,test
@@ -411,7 +413,8 @@
           (setq initial
                 (test-mevedel-execution--start-managed
                  session root
-                 '("sh" "-c" "printf one; sleep .1; printf two")))
+                 '("sh" "-c" "printf one; sleep 1; printf two")
+                 :yield-time-ms 250))
           (setq id (plist-get (plist-get initial :facts) :execution-id))
           (mevedel-execution-observe
            session "main" id (lambda (value) (setq abandoned value))

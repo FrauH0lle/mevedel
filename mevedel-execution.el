@@ -410,8 +410,7 @@ When SESSION is nil, use the module-owned state for direct non-session calls."
       (cancel-timer timer)))
   (when-let* ((process (mevedel-execution--record-process record)))
     (set-process-query-on-exit-flag process nil)
-    (when (process-live-p process)
-      (ignore-errors (delete-process process))))
+    (ignore-errors (delete-process process)))
   (when-let* ((active-token
               (mevedel-execution--record-sandbox-active-token record)))
     (mevedel-sandbox-track-active

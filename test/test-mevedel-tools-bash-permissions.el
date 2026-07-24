@@ -1757,7 +1757,7 @@ default Bash keeps bare dot inspection automatic"
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec--check-permission-async
-       nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r))))
+       nil '(:command "rm foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'allow))
     (should-not enqueued))
   :doc "full-auto deny-only guardian can block suspicious Bash"
@@ -1776,7 +1776,7 @@ default Bash keeps bare dot inspection automatic"
                (lambda (&rest _)
                  (setq enqueued t))))
       (mevedel-tool-exec--check-permission-async
-       nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r))))
+       nil '(:command "rm foo") (lambda (r) (setq outcome r))))
     (should (eq outcome 'deny))
     (should-not enqueued))
   :doc "request cancellation prevents a late full-auto guardian continuation"
@@ -1795,7 +1795,7 @@ default Bash keeps bare dot inspection automatic"
         (setq-local mevedel--current-request request)
         (mevedel-tool-exec--check-permission-async
          nil
-         `(:command "rm /tmp/foo"
+         `(:command "rm foo"
            :permission-context (:request ,request :mode full-auto))
          (lambda (result) (setq outcome result)))))
     (should guardian-callback)
@@ -1815,7 +1815,7 @@ default Bash keeps bare dot inspection automatic"
            (funcall callback nil)))
         outcome)
     (mevedel-tool-exec--check-permission-async
-     nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r)))
+     nil '(:command "rm foo") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
   :doc "full-auto deny-only guardian treats ask as advisory"
   (let ((mevedel-permission-mode 'full-auto)
@@ -1829,7 +1829,7 @@ default Bash keeps bare dot inspection automatic"
                       :reason "The target is ambiguous."))))
         outcome)
     (mevedel-tool-exec--check-permission-async
-     nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r)))
+     nil '(:command "rm foo") (lambda (r) (setq outcome r)))
     (should (eq outcome 'allow)))
   :doc "full-auto deny-only guardian function timeout allows"
   (let ((mevedel-permission-mode 'full-auto)
@@ -1841,7 +1841,7 @@ default Bash keeps bare dot inspection automatic"
            nil))
         outcome)
     (mevedel-tool-exec--check-permission-async
-     nil '(:command "rm /tmp/foo") (lambda (r) (setq outcome r)))
+     nil '(:command "rm foo") (lambda (r) (setq outcome r)))
     (with-timeout (1 (error "Timed out"))
       (while (not outcome)
         (accept-process-output nil 0.01)))

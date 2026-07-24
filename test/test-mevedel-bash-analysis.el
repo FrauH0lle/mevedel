@@ -70,10 +70,11 @@
 `mevedel-bash-analysis-analyze' returns shell-accurate plain argv"
   (cl-letf (((symbol-function 'treesit-language-available-p)
              (lambda (_language) nil)))
-    (should (equal '(("echo" "foo bar"))
-                   (plist-get
-                    (mevedel-bash-analysis-analyze "echo foo\\ bar")
-                    :commands))))
+    (let ((shell-file-name-quote-list nil))
+      (should (equal '(("echo" "foo bar"))
+                     (plist-get
+                      (mevedel-bash-analysis-analyze "echo foo\\ bar")
+                      :commands)))))
   :doc "line continuation:
 `mevedel-bash-analysis-analyze' removes Bash backslash-newline pairs"
   (cl-letf (((symbol-function 'treesit-language-available-p)
@@ -163,11 +164,12 @@ cat file"
 `mevedel-bash-analysis-analyze' preserves literal protected-path candidates"
   (cl-letf (((symbol-function 'treesit-language-available-p)
              (lambda (_language) nil)))
-    (should (equal '("~/.ssh/my key" ".git/config")
-                   (plist-get
-                    (mevedel-bash-analysis-analyze
-                     "FOO=bar cat ~/.ssh/my\\ key >.git/config")
-                    :resources))))
+    (let ((shell-file-name-quote-list nil))
+      (should (equal '("~/.ssh/my key" ".git/config")
+                     (plist-get
+                      (mevedel-bash-analysis-analyze
+                       "FOO=bar cat ~/.ssh/my\\ key >.git/config")
+                      :resources)))))
   :doc "substitution resource harvesting:
 `mevedel-bash-analysis-analyze' preserves paths inside quoted substitutions"
   (cl-letf (((symbol-function 'treesit-language-available-p)

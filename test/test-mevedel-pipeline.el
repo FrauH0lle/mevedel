@@ -1423,7 +1423,7 @@
 			       'mevedel-permission-queue--render-head)
 			      #'ignore))
 		     (mevedel-pipeline--step-permission
-		      (list :tool tool :args '(:command "rm /tmp/file")
+		      (list :tool tool :args '(:command "rm file")
 			    :session session)
 		      (lambda (_context) (setq next-called t))
 		      (lambda (reason) (setq fail-reason reason))))
@@ -1466,7 +1466,7 @@
 				 'mevedel-permission-queue--render-head)
 				#'ignore))
 		       (mevedel-pipeline--step-permission
-			(list :tool tool :args '(:command "rm /tmp/file")
+			(list :tool tool :args '(:command "rm file")
 			      :session session)
 			(lambda (_context) (setq next-called t))
 			(lambda (reason) (setq fail-reason reason))))
@@ -1502,7 +1502,7 @@
 				 'mevedel-permission-queue--render-head)
 				#'ignore))
 		       (mevedel-pipeline--step-permission
-			(list :tool tool :args '(:command "rm /tmp/file")
+			(list :tool tool :args '(:command "rm file")
 			      :session session)
 			(lambda (_context) (setq next-called t))
 			(lambda (reason) (setq fail-reason reason))))
@@ -1534,7 +1534,7 @@
 				    :filesystem workspace-write
 				    :network isolated))))
 		       (mevedel-pipeline--step-permission
-			(list :tool tool :args '(:command "rm /tmp/file")
+			(list :tool tool :args '(:command "rm file")
 			      :session session)
 			(lambda (_context) (setq next-called t))
 			(lambda (reason) (setq fail-reason reason))))

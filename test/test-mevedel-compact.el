@@ -1481,36 +1481,39 @@ missing or zero prompt-side usage cannot become the active baseline"
                        (buffer-string))))))
 
   :doc "leaves live and canonical transcripts unchanged on archive failure"
-  (test-mevedel-compact--with-persisted-agent
-      (agent-buffer invocation session canonical-path parent-buffer)
-    (test-mevedel-compact--insert-agent-task
-     invocation "inspect" "Keep this task.")
-    (let ((start (point)))
-      (insert "Old response.\n")
-      (put-text-property start (point) 'gptel 'response))
-    (basic-save-buffer)
-    (let* ((target (mevedel--compact-agent-target invocation))
-           (directory (file-name-directory canonical-path))
-           (original-live (buffer-string))
-           (original-canonical
-            (with-temp-buffer
-              (insert-file-contents canonical-path)
-              (buffer-string))))
-      (unwind-protect
-          (progn
-            (set-file-modes directory #o500)
-            (should-error
-             (mevedel--compact-agent-apply
-              target "## Goal\n- Continue" nil nil nil)
-             :type 'file-error))
-        (set-file-modes directory #o700))
-      (should (equal original-live (buffer-string)))
-      (should (equal original-canonical
-                     (with-temp-buffer
-                       (insert-file-contents canonical-path)
-                       (buffer-string))))
-      (should-not
-       (directory-files directory nil "\\.compact-[0-9]+\\.chat\\.org\\'"))))
+  (progn
+    (skip-unless (not (eq system-type 'windows-nt)))
+    (test-mevedel-compact--with-persisted-agent
+        (agent-buffer invocation session canonical-path parent-buffer)
+      (test-mevedel-compact--insert-agent-task
+       invocation "inspect" "Keep this task.")
+      (let ((start (point)))
+        (insert "Old response.\n")
+        (put-text-property start (point) 'gptel 'response))
+      (basic-save-buffer)
+      (let* ((target (mevedel--compact-agent-target invocation))
+             (directory (file-name-directory canonical-path))
+             (original-live (buffer-string))
+             (original-canonical
+              (with-temp-buffer
+                (insert-file-contents canonical-path)
+                (buffer-string))))
+        (unwind-protect
+            (progn
+              (set-file-modes directory #o500)
+              (should-error
+               (mevedel--compact-agent-apply
+                target "## Goal\n- Continue" nil nil nil)
+               :type 'file-error))
+          (set-file-modes directory #o700))
+        (should (equal original-live (buffer-string)))
+        (should (equal original-canonical
+                       (with-temp-buffer
+                         (insert-file-contents canonical-path)
+                         (buffer-string))))
+        (should-not
+         (directory-files directory nil
+                          "\\.compact-[0-9]+\\.chat\\.org\\'")))))
 
   :doc "retains the full archive when canonical application later fails"
   (test-mevedel-compact--with-persisted-agent
@@ -2000,7 +2003,7 @@ missing or zero prompt-side usage cannot become the active baseline"
                          (with-temp-buffer
                            (insert-file-contents (car archives))
                            (buffer-string))))
-          (should (equal canonical-path buffer-file-name))
+          (should (mevedel--same-file-p canonical-path buffer-file-name))
           (should (string-prefix-p task canonical))
           (should (string-match-p "#\\+begin_summary" canonical))
           (should (string-match-p "Continue the agent task" canonical))
@@ -2202,7 +2205,7 @@ missing or zero prompt-side usage cannot become the active baseline"
           (should (string-match-p "First retained fact" (car systems)))
           (should (string-match-p "New user five" (car bodies)))
           (should-not (string-match-p "Latest user seven" (car bodies)))
-          (should (equal canonical-path buffer-file-name))))))
+          (should (mevedel--same-file-p canonical-path buffer-file-name))))))
 
   :doc "does not inspect or compact an agent's initial WAIT"
   (let* ((agent-buffer (generate-new-buffer " *mevedel-agent-initial-wait*"))
@@ -3174,7 +3177,13 @@ missing or zero prompt-side usage cannot become the active baseline"
             (setq buffer-file-name
                   (mevedel-session-persistence--segment-path tempdir 1))
             (setq-local mevedel--session session)
-            (should-not (mevedel--compact-current-persisted-p))))
+            (should-not (mevedel--compact-current-persisted-p)))
+          (with-temp-buffer
+            (setq buffer-file-name "aliased-segment")
+            (setq-local mevedel--session session)
+            (cl-letf (((symbol-function 'mevedel--same-file-p)
+                       (lambda (_left _right) t)))
+              (should (mevedel--compact-current-persisted-p)))))
       (mevedel-workspace-clear-registry)
       (delete-directory tempdir t))))
 
